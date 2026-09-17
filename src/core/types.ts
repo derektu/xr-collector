@@ -101,6 +101,26 @@ export interface ChannelRun {
   completedAt: string | null;
 }
 
+export type ChannelScheduleStatus = 'paused' | 'scheduled' | 'running' | 'waiting_for_run';
+
+export interface ChannelScheduleLastResult {
+  runId: string | null;
+  created: number;
+  existing: number;
+  failed: number;
+  error?: string;
+}
+
+export interface ChannelSchedule {
+  enabled: boolean;
+  intervalMinutes: number;
+  status: ChannelScheduleStatus;
+  lastAttemptAt: string | null;
+  lastCompletedAt: string | null;
+  nextRunAt: string | null;
+  lastResult: ChannelScheduleLastResult | null;
+}
+
 export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
 
 export interface SearchStatus {

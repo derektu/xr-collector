@@ -40,6 +40,7 @@ export class ChannelCollector {
   private readonly initialVideoLimit: number;
   private readonly createId: () => string;
   private readonly runs = new Map<string, ChannelRun>();
+  private startingRun: Promise<ChannelRun> | null = null;
 
   constructor(
     private readonly source: YouTubeChannelSource,
@@ -82,7 +83,28 @@ export class ChannelCollector {
     }
   }
 
-  async startRun(channelIds?: string[]): Promise<ChannelRun> {
+  startRun(channelIds?: string[]): Promise<ChannelRun> {
+    const active = this.getActiveRun();
+    if (active) return Promise.resolve(active);
+    if (this.startingRun) return this.startingRun.then((run) => this.snapshot(run));
+
+    const operation = this.createRun(channelIds);
+    this.startingRun = operation;
+    const clearStartingRun = () => {
+      if (this.startingRun === operation) this.startingRun = null;
+    };
+    void operation.then(clearStartingRun, clearStartingRun);
+    return operation;
+  }
+
+  getActiveRun(): ChannelRun | null {
+    for (const run of this.runs.values()) {
+      if (run.status !== 'completed') return this.snapshot(run);
+    }
+    return null;
+  }
+
+  private async createRun(channelIds?: string[]): Promise<ChannelRun> {
     const allChannels = await this.store.list();
     let selected: YouTubeChannel[];
     if (channelIds) {
