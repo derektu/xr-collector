@@ -1,4 +1,10 @@
-import type { CollectResult, DocumentSummary, SavedDocument, YouTubeVideoRef } from './types.js';
+import type {
+  CollectResult,
+  DocumentSummary,
+  SavedDocument,
+  TranscriptSearch,
+  YouTubeVideoRef,
+} from './types.js';
 import { CollectorError } from './types.js';
 import { parseYouTubeVideoUrl } from './video-url.js';
 
@@ -19,6 +25,7 @@ export class Collector {
   constructor(
     private readonly capture: YouTubeCapture,
     private readonly vault: DocumentVault,
+    private readonly search?: Pick<TranscriptSearch, 'index' | 'status'>,
   ) {}
 
   async collect(inputUrl: string): Promise<CollectResult> {
@@ -47,10 +54,29 @@ export class Collector {
 
   private async collectOnce(video: YouTubeVideoRef): Promise<CollectResult> {
     const existing = await this.vault.getBySourceId(video.videoId);
-    if (existing) return { status: 'existing', document: existing };
+    if (existing) return this.finishCollection('existing', existing);
 
     const captured = await this.capture.capture(video);
     const document = await this.vault.add(captured);
-    return { status: 'created', document };
+    return this.finishCollection('created', document);
+  }
+
+  private async finishCollection(
+    status: CollectResult['status'],
+    document: SavedDocument,
+  ): Promise<CollectResult> {
+    if (this.search) {
+      try {
+        await this.search.index(document);
+      } catch {
+        // The vault is authoritative. Search status reports the failed derived update.
+      }
+    }
+    const searchStatus = this.search?.status() ?? {
+      state: 'error' as const,
+      indexedDocuments: 0,
+      message: '搜尋服務尚未啟用。',
+    };
+    return { status, document, searchStatus };
   }
 }

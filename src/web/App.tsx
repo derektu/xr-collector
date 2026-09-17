@@ -1,5 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import type { DocumentSummary, SavedDocument } from '../core/types.js';
+import type {
+  DocumentSummary,
+  SavedDocument,
+  SearchHit,
+  SearchState,
+  SearchStatus,
+} from '../core/types.js';
 import { api } from './api-client.js';
 
 function formatDate(value: string | null): string {
@@ -15,6 +21,16 @@ function formatDate(value: string | null): string {
 
 export default function App() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchHit[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [channel, setChannel] = useState('');
+  const [publishedFrom, setPublishedFrom] = useState('');
+  const [publishedTo, setPublishedTo] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>({
+    state: 'starting',
+    indexedDocuments: 0,
+  });
   const [selected, setSelected] = useState<SavedDocument | null>(null);
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(true);
@@ -24,6 +40,11 @@ export default function App() {
 
   const selectedId = selected?.id ?? null;
   const documentCount = useMemo(() => documents.length, [documents]);
+  const channels = useMemo(
+    () => [...new Set(documents.map((document) => document.channelTitle))].sort((left, right) => left.localeCompare(right, 'zh-Hant')),
+    [documents],
+  );
+  const visibleDocuments = searchResults ?? documents;
 
   async function refreshDocuments(preferredId?: string): Promise<void> {
     const items = await api.listDocuments();
@@ -40,6 +61,30 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    let stopped = false;
+    async function refreshSearchStatus(): Promise<void> {
+      try {
+        const nextStatus = await api.getSearchStatus();
+        if (!stopped) setSearchStatus(nextStatus);
+      } catch (caught) {
+        if (!stopped) {
+          setSearchStatus({
+            state: 'error',
+            indexedDocuments: 0,
+            message: caught instanceof Error ? caught.message : '無法讀取搜尋狀態。',
+          });
+        }
+      }
+    }
+    void refreshSearchStatus();
+    const timer = window.setInterval(() => void refreshSearchStatus(), 2_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setCollecting(true);
@@ -49,8 +94,16 @@ export default function App() {
       const result = await api.collectYouTube(url);
       setUrl('');
       setSelected(result.document);
+      setSearchStatus(result.searchStatus);
       await refreshDocuments(result.document.id);
-      setMessage(result.status === 'created' ? '字幕已保存到本機 vault。' : '這支影片已經收集過，已開啟既有文件。');
+      setSearchResults(null);
+      setMessage(
+        result.searchStatus.state === 'error'
+          ? '字幕已保存到 vault，但搜尋索引更新失敗。'
+          : result.status === 'created'
+            ? '字幕已保存到本機 vault 並完成索引。'
+            : '這支影片已經收集過，已開啟既有文件。',
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '字幕取得失敗。');
     } finally {
@@ -64,6 +117,49 @@ export default function App() {
       setSelected(await api.readDocument(id));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '無法開啟文件。');
+    }
+  }
+
+  async function submitSearch(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setSearching(true);
+    setError(null);
+    try {
+      const result = await api.searchDocuments({
+        query: searchQuery.trim(),
+        ...(channel ? { channel } : {}),
+        ...(publishedFrom ? { publishedFrom } : {}),
+        ...(publishedTo ? { publishedTo } : {}),
+      });
+      setSearchResults(result.hits);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '搜尋失敗。');
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function clearSearch(): void {
+    setSearchQuery('');
+    setChannel('');
+    setPublishedFrom('');
+    setPublishedTo('');
+    setSearchResults(null);
+  }
+
+  async function rebuildSearch(): Promise<void> {
+    setError(null);
+    setSearchStatus((current) => ({ ...current, state: 'rebuilding', message: undefined }));
+    try {
+      setSearchStatus(await api.rebuildSearch());
+      setMessage('搜尋索引已從 vault 重建。');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法重建搜尋索引。');
+      setSearchStatus(await api.getSearchStatus().catch(() => ({
+        state: 'error' as const,
+        indexedDocuments: 0,
+        message: '無法重建搜尋索引。',
+      })));
     }
   }
 
@@ -115,13 +211,73 @@ export default function App() {
                 <h2>已保存</h2>
               </div>
             </div>
+            <form className="search-panel" onSubmit={(event) => void submitSearch(event)}>
+              <label htmlFor="transcript-search">搜尋字幕</label>
+              <div className="search-row">
+                <input
+                  id="transcript-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="輸入字詞"
+                  disabled={searchStatus.state !== 'ready' || searching}
+                />
+                <button type="submit" disabled={searchStatus.state !== 'ready' || searching}>
+                  {searching ? '搜尋中…' : '搜尋'}
+                </button>
+              </div>
+              <div className="search-filters">
+                <select
+                  aria-label="頻道"
+                  value={channel}
+                  onChange={(event) => setChannel(event.target.value)}
+                  disabled={searchStatus.state !== 'ready' || searching}
+                >
+                  <option value="">所有頻道</option>
+                  {channels.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
+                <label>
+                  <span>從</span>
+                  <input
+                    type="date"
+                    value={publishedFrom}
+                    onChange={(event) => setPublishedFrom(event.target.value)}
+                    disabled={searchStatus.state !== 'ready' || searching}
+                  />
+                </label>
+                <label>
+                  <span>到</span>
+                  <input
+                    type="date"
+                    value={publishedTo}
+                    onChange={(event) => setPublishedTo(event.target.value)}
+                    disabled={searchStatus.state !== 'ready' || searching}
+                  />
+                </label>
+              </div>
+              {searchResults && (
+                <button className="clear-search" type="button" onClick={clearSearch}>
+                  清除搜尋
+                </button>
+              )}
+            </form>
+            <SearchStatusPanel status={searchStatus} onRebuild={() => void rebuildSearch()} />
+            {searchResults && (
+              <div className="result-count" role="status">
+                找到 {searchResults.length} 份文件
+              </div>
+            )}
             {loading ? (
               <p className="empty-state">正在讀取 vault…</p>
-            ) : documents.length === 0 ? (
+            ) : visibleDocuments.length === 0 ? (
+              searchResults ? (
+                <p className="empty-state">沒有符合這些條件的字幕。</p>
+              ) : (
               <p className="empty-state">尚未保存字幕。從上方貼入第一支影片網址。</p>
+              )
             ) : (
               <ul className="document-list">
-                {documents.map((document) => (
+                {visibleDocuments.map((document) => (
                   <li key={document.id}>
                     <button
                       className={document.id === selectedId ? 'document-card active' : 'document-card'}
@@ -132,6 +288,9 @@ export default function App() {
                       <span className="document-meta">
                         {formatDate(document.publishedAt)} · {document.languageCode}
                       </span>
+                      {isSearchHit(document) && (
+                        <span className="result-snippet">{document.snippet}</span>
+                      )}
                     </button>
                   </li>
                 ))}
@@ -172,6 +331,38 @@ export default function App() {
           </article>
         </section>
       </main>
+    </div>
+  );
+}
+
+function isSearchHit(document: DocumentSummary | SearchHit): document is SearchHit {
+  return 'snippet' in document;
+}
+
+function SearchStatusPanel({
+  status,
+  onRebuild,
+}: {
+  status: SearchStatus;
+  onRebuild: () => void;
+}) {
+  const labels: Record<SearchState, string> = {
+    starting: '正在啟動搜尋',
+    updating: '正在更新索引',
+    rebuilding: '正在從 vault 重建索引',
+    ready: `搜尋已就緒 · ${status.indexedDocuments} 份`,
+    error: '搜尋索引發生錯誤',
+  };
+  return (
+    <div className={`search-status ${status.state}`} role="status">
+      <span className="status-dot" aria-hidden="true" />
+      <span>
+        <strong>{labels[status.state]}</strong>
+        {status.message && <small>{status.message}</small>}
+      </span>
+      {status.state === 'error' && (
+        <button type="button" onClick={onRebuild}>重建</button>
+      )}
     </div>
   );
 }

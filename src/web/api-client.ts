@@ -2,6 +2,9 @@ import type {
   CollectResult,
   DocumentSummary,
   SavedDocument,
+  SearchQuery,
+  SearchResponse,
+  SearchStatus,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -57,5 +60,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     });
+  },
+
+  searchDocuments(query: SearchQuery): Promise<SearchResponse> {
+    const parameters = new URLSearchParams({ q: query.query });
+    if (query.channel) parameters.set('channel', query.channel);
+    if (query.publishedFrom) parameters.set('publishedFrom', query.publishedFrom);
+    if (query.publishedTo) parameters.set('publishedTo', query.publishedTo);
+    return request<SearchResponse>(`/api/search?${parameters.toString()}`);
+  },
+
+  async getSearchStatus(): Promise<SearchStatus> {
+    const result = await request<{ status: SearchStatus }>('/api/search/status');
+    return result.status;
+  },
+
+  async rebuildSearch(): Promise<SearchStatus> {
+    const result = await request<{ status: SearchStatus }>('/api/search/rebuild', {
+      method: 'POST',
+    });
+    return result.status;
   },
 };

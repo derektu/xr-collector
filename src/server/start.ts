@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import type { TranscriptSearch } from '../core/types.js';
 import { createHttpApp } from './app.js';
 
 export interface StartServerOptions {
   collector: Collector;
+  search?: TranscriptSearch;
   port: number;
   host?: string;
   webRoot?: string;
@@ -19,6 +21,7 @@ export interface RunningServer {
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
     collector: options.collector,
+    ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
   });
   const host = options.host ?? '127.0.0.1';

@@ -4,18 +4,28 @@ import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { Collector } from '../core/collector.js';
 import type { RunningServer } from '../server/start.js';
 import { startServer } from '../server/start.js';
+import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from '../vault/markdown-vault.js';
 
 let mainWindow: BrowserWindow | null = null;
 let server: RunningServer | null = null;
+let searchRuntime: SearchRuntime | null = null;
 let isQuitting = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
-function runtimePath(name: 'yt-dlp' | 'deno'): string {
+function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
   if (app.isPackaged) return path.join(process.resourcesPath, 'bin', name);
-  return process.env[name === 'yt-dlp' ? 'XR_COLLECTOR_YTDLP' : 'XR_COLLECTOR_DENO'] ?? name;
+  const environmentName = name === 'yt-dlp'
+    ? 'XR_COLLECTOR_YTDLP'
+    : name === 'deno'
+      ? 'XR_COLLECTOR_DENO'
+      : 'XR_COLLECTOR_MEILISEARCH';
+  return process.env[environmentName]
+    ?? (name === 'meilisearch'
+      ? path.join(app.getAppPath(), 'resources', 'bin', 'mac', name)
+      : name);
 }
 
 async function createWindow(): Promise<void> {
@@ -63,9 +73,16 @@ app.whenReady().then(async () => {
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
   });
-  const collector = new Collector(capture, new MarkdownVault(vaultRoot));
+  const vault = new MarkdownVault(vaultRoot);
+  searchRuntime = await startSearchRuntime({
+    vault,
+    binaryPath: runtimePath('meilisearch'),
+    databasePath: path.join(app.getPath('userData'), 'search'),
+  });
+  const collector = new Collector(capture, vault, searchRuntime.search);
   server = await startServer({
     collector,
+    search: searchRuntime.search,
     port: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
@@ -92,6 +109,10 @@ app.on('before-quit', (event) => {
   mainWindow?.destroy();
   mainWindow = null;
   const activeServer = server;
+  const activeSearchRuntime = searchRuntime;
   server = null;
-  void activeServer.close().finally(() => app.quit());
+  searchRuntime = null;
+  void activeServer.close()
+    .then(() => activeSearchRuntime?.close())
+    .finally(() => app.quit());
 });

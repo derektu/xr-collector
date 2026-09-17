@@ -51,6 +51,82 @@ function makeCollector(captureFailure?: CollectorError): Collector {
 }
 
 describe('HTTP app', () => {
+  it('searches transcript text with channel and published-date filters', async () => {
+    const searchRequests: unknown[] = [];
+    const search = {
+      status: () => ({ state: 'ready' as const, indexedDocuments: 2 }),
+      index: async () => undefined,
+      search: async (request: unknown) => {
+        searchRequests.push(request);
+        return {
+          hits: [
+            {
+              id: 'youtube:dQw4w9WgXcQ',
+              title: '搜尋結果',
+              channelTitle: '測試頻道',
+              publishedAt: '2026-09-12T00:00:00.000Z',
+              languageCode: 'zh-Hant',
+              subtitleKind: 'manual' as const,
+              snippet: '…符合條件的字幕內容…',
+            },
+          ],
+          estimatedTotalHits: 1,
+        };
+      },
+      rebuild: async () => undefined,
+    };
+    const app = await createHttpApp({ collector: makeCollector(), search });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/search?q=%E6%A2%9D%E4%BB%B6&channel=%E6%B8%AC%E8%A9%A6%E9%A0%BB%E9%81%93&publishedFrom=2026-09-01&publishedTo=2026-09-30',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(searchRequests).toEqual([
+      {
+        query: '條件',
+        channel: '測試頻道',
+        publishedFrom: '2026-09-01',
+        publishedTo: '2026-09-30',
+      },
+    ]);
+    expect(response.json()).toEqual({
+      hits: [
+        expect.objectContaining({
+          id: 'youtube:dQw4w9WgXcQ',
+          snippet: '…符合條件的字幕內容…',
+        }),
+      ],
+      estimatedTotalHits: 1,
+    });
+    await app.close();
+  });
+
+  it('rejects an invalid published-date filter before searching', async () => {
+    let searchCount = 0;
+    const search = {
+      status: () => ({ state: 'ready' as const, indexedDocuments: 0 }),
+      search: async () => {
+        searchCount += 1;
+        return { hits: [], estimatedTotalHits: 0 };
+      },
+      index: async () => undefined,
+      rebuild: async () => undefined,
+    };
+    const app = await createHttpApp({ collector: makeCollector(), search });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/search?q=test&publishedFrom=not-a-date',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('invalid_request');
+    expect(searchCount).toBe(0);
+    await app.close();
+  });
+
   it('collects a video through the public HTTP interface', async () => {
     const app = await createHttpApp({ collector: makeCollector() });
     const response = await app.inject({
