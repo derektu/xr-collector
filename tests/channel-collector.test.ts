@@ -148,6 +148,42 @@ describe('ChannelCollector', () => {
     await channels.removeChannel('one');
     expect(await channels.listChannels()).toEqual([]);
   });
+
+  it('coalesces overlapping collection requests into the active run', async () => {
+    const store = new MemoryChannelStore();
+    store.channels.push(channel('one', true));
+    let releaseDiscovery: (() => void) | undefined;
+    const discoveryBlocked = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    let discoveryCount = 0;
+    const channels = new ChannelCollector({
+      resolve: async () => {
+        throw new Error('not used');
+      },
+      listVideos: async () => {
+        discoveryCount += 1;
+        await discoveryBlocked;
+        return [];
+      },
+    }, store, {
+      collect: async () => {
+        throw new Error('not used');
+      },
+    }, {
+      createId: () => 'run-shared',
+    });
+
+    const first = await channels.startRun();
+    const overlapping = await channels.startRun(['one']);
+
+    expect(overlapping.id).toBe(first.id);
+    expect(discoveryCount).toBe(1);
+    releaseDiscovery?.();
+    while (channels.getRun(first.id).status !== 'completed') {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
 });
 
 function channel(id: string, enabled: boolean): YouTubeChannel {

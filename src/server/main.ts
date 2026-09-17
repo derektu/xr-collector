@@ -3,6 +3,8 @@ import path from 'node:path';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { ChannelCollector } from '../channels/channel-collector.js';
+import { ChannelScheduler } from '../channels/channel-scheduler.js';
+import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { Collector } from '../core/collector.js';
 import { startSearchRuntime } from '../search/runtime.js';
@@ -38,9 +40,12 @@ const searchRuntime = await startSearchRuntime({
 });
 const collector = new Collector(capture, vault, searchRuntime.search);
 const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
+const schedule = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
+await schedule.start();
 const server = await startServer({
   collector,
   channels,
+  schedule,
   search: searchRuntime.search,
   port,
   ...(existsSync(webRoot) ? { webRoot } : {}),
@@ -53,6 +58,7 @@ let stopping = false;
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
+  await schedule.close();
   await server.close();
   await searchRuntime.close();
   process.exit(0);

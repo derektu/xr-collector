@@ -8,6 +8,7 @@ import type {
   YouTubeChannel,
   AddChannelResult,
   ChannelRun,
+  ChannelSchedule,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -46,6 +47,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async getChannelSchedule(): Promise<ChannelSchedule> {
+    const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule');
+    return result.schedule;
+  },
+
+  async updateChannelSchedule(enabled: boolean, intervalMinutes: number): Promise<ChannelSchedule> {
+    const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, intervalMinutes }),
+    });
+    return result.schedule;
+  },
+
   async listChannels(): Promise<YouTubeChannel[]> {
     const result = await request<{ channels: YouTubeChannel[] }>('/api/youtube/channels');
     return result.channels;

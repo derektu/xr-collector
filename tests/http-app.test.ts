@@ -51,6 +51,48 @@ function makeCollector(captureFailure?: CollectorError): Collector {
 }
 
 describe('HTTP app', () => {
+  it('reads and updates the channel schedule through HTTP', async () => {
+    const calls: unknown[] = [];
+    const scheduleValue = {
+      enabled: true,
+      intervalMinutes: 15,
+      status: 'scheduled' as const,
+      lastAttemptAt: null,
+      lastCompletedAt: null,
+      nextRunAt: '2026-09-17T00:15:00.000Z',
+      lastResult: null,
+    };
+    const schedule = {
+      getSchedule: async () => scheduleValue,
+      updateSchedule: async (input: { enabled: boolean; intervalMinutes: number }) => {
+        calls.push(input);
+        return { ...scheduleValue, ...input };
+      },
+    };
+    const app = await createHttpApp({ collector: makeCollector(), schedule });
+
+    const read = await app.inject({ method: 'GET', url: '/api/youtube/schedule' });
+    const updated = await app.inject({
+      method: 'PUT',
+      url: '/api/youtube/schedule',
+      payload: { enabled: false, intervalMinutes: 60 },
+    });
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/api/youtube/schedule',
+      payload: { enabled: true, intervalMinutes: 0 },
+    });
+
+    expect(read.json()).toEqual({ schedule: scheduleValue });
+    expect(updated.json()).toMatchObject({
+      schedule: { enabled: false, intervalMinutes: 60 },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe('invalid_request');
+    expect(calls).toEqual([{ enabled: false, intervalMinutes: 60 }]);
+    await app.close();
+  });
+
   it('manages channels and starts a channel collection run through HTTP', async () => {
     const savedChannel = {
       id: 'UC-channel-one',

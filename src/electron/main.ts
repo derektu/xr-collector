@@ -1,8 +1,10 @@
 import path from 'node:path';
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { ChannelCollector } from '../channels/channel-collector.js';
+import { ChannelScheduler } from '../channels/channel-scheduler.js';
+import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { Collector } from '../core/collector.js';
 import type { RunningServer } from '../server/start.js';
@@ -13,6 +15,7 @@ import { MarkdownVault } from '../vault/markdown-vault.js';
 let mainWindow: BrowserWindow | null = null;
 let server: RunningServer | null = null;
 let searchRuntime: SearchRuntime | null = null;
+let channelScheduler: ChannelScheduler | null = null;
 let isQuitting = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -88,14 +91,19 @@ app.whenReady().then(async () => {
   });
   const collector = new Collector(capture, vault, searchRuntime.search);
   const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
+  channelScheduler = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
+  await channelScheduler.start();
   server = await startServer({
     collector,
     channels,
+    schedule: channelScheduler,
     search: searchRuntime.search,
     port: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
   await createWindow();
+
+  powerMonitor.on('resume', checkScheduleAfterResume);
 
   app.on('activate', () => {
     if (!mainWindow && server && !isQuitting) {
@@ -111,17 +119,26 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+function checkScheduleAfterResume(): void {
+  void channelScheduler?.checkNow().catch((error) => console.error(error));
+}
+
 app.on('before-quit', (event) => {
-  if (!server) return;
+  if (!server && !searchRuntime && !channelScheduler) return;
   event.preventDefault();
   isQuitting = true;
+  powerMonitor.removeListener('resume', checkScheduleAfterResume);
   mainWindow?.destroy();
   mainWindow = null;
   const activeServer = server;
   const activeSearchRuntime = searchRuntime;
+  const activeChannelScheduler = channelScheduler;
   server = null;
   searchRuntime = null;
-  void activeServer.close()
+  channelScheduler = null;
+  void Promise.resolve()
+    .then(() => activeChannelScheduler?.close())
+    .then(() => activeServer?.close())
     .then(() => activeSearchRuntime?.close())
     .finally(() => app.quit());
 });

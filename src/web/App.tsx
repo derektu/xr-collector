@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   DocumentSummary,
   SavedDocument,
@@ -7,8 +7,10 @@ import type {
   SearchStatus,
   YouTubeChannel,
   ChannelRun,
+  ChannelSchedule,
 } from '../core/types.js';
 import { api } from './api-client.js';
+import { scheduleDocumentRefresh } from './schedule-document-refresh.js';
 
 function formatDate(value: string | null): string {
   if (!value) return '發布時間未知';
@@ -18,6 +20,19 @@ function formatDate(value: string | null): string {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+  }).format(date);
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return '尚無';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-TW', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   }).format(date);
 }
 
@@ -43,6 +58,10 @@ export default function App() {
   const [channelUrl, setChannelUrl] = useState('');
   const [channelAction, setChannelAction] = useState(false);
   const [activeRun, setActiveRun] = useState<ChannelRun | null>(null);
+  const [schedule, setSchedule] = useState<ChannelSchedule | null>(null);
+  const [scheduleInterval, setScheduleInterval] = useState(60);
+  const [scheduleAction, setScheduleAction] = useState(false);
+  const observedScheduleCompletion = useRef<string | null>(null);
 
   const selectedId = selected?.id ?? null;
   const documentCount = useMemo(() => documents.length, [documents]);
@@ -51,6 +70,7 @@ export default function App() {
     [documents],
   );
   const visibleDocuments = searchResults ?? documents;
+  const scheduleTiming = schedule ? scheduleTimingLabels(schedule) : null;
 
   async function refreshDocuments(preferredId?: string): Promise<void> {
     const items = await api.listDocuments();
@@ -65,6 +85,39 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : '無法載入文件。');
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    let loaded = false;
+    async function refreshSchedule(): Promise<void> {
+      try {
+        const next = await api.getChannelSchedule();
+        if (stopped) return;
+        setSchedule(next);
+        if (!loaded) setScheduleInterval(next.intervalMinutes);
+        loaded = true;
+        const documentRefresh = scheduleDocumentRefresh(observedScheduleCompletion.current, next);
+        if (documentRefresh === 'completion') {
+          await refreshDocuments();
+          setSearchResults(null);
+          setSearchStatus(await api.getSearchStatus());
+        } else if (documentRefresh === 'progress') {
+          setDocuments(await api.listDocuments());
+        }
+        observedScheduleCompletion.current = next.lastCompletedAt;
+      } catch (caught) {
+        if (!stopped && !loaded) {
+          setError(caught instanceof Error ? caught.message : '無法載入頻道排程。');
+        }
+      }
+    }
+    void refreshSchedule();
+    const timer = window.setInterval(() => void refreshSchedule(), 2_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -182,6 +235,22 @@ export default function App() {
       setActiveRun(await api.startChannelRun(channelIds));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '無法開始頻道收集。');
+    }
+  }
+
+  async function saveSchedule(enabled: boolean): Promise<void> {
+    setScheduleAction(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const updated = await api.updateChannelSchedule(enabled, scheduleInterval);
+      setSchedule(updated);
+      setScheduleInterval(updated.intervalMinutes);
+      setMessage(enabled ? '自動抓取排程已更新。' : '自動抓取已暫停。');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法更新頻道排程。');
+    } finally {
+      setScheduleAction(false);
     }
   }
 
@@ -369,6 +438,56 @@ export default function App() {
               ))}
             </ul>
           )}
+          <div className="schedule-panel">
+            <div className="schedule-heading">
+              <div>
+                <strong>自動抓取</strong>
+                <span>{schedule ? scheduleStatusLabel(schedule) : '正在讀取排程…'}</span>
+              </div>
+              {schedule?.enabled && (
+                <button
+                  type="button"
+                  className="pause-schedule"
+                  onClick={() => void saveSchedule(false)}
+                  disabled={scheduleAction}
+                >暫停排程</button>
+              )}
+            </div>
+            <div className="schedule-controls">
+              <label htmlFor="schedule-interval">抓取週期</label>
+              <select
+                id="schedule-interval"
+                value={scheduleInterval}
+                onChange={(event) => setScheduleInterval(Number(event.target.value))}
+                disabled={scheduleAction}
+              >
+                <option value={1}>每 1 分鐘（示範）</option>
+                <option value={5}>每 5 分鐘</option>
+                <option value={15}>每 15 分鐘</option>
+                <option value={60}>每 1 小時</option>
+                <option value={360}>每 6 小時</option>
+                <option value={1440}>每天</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => void saveSchedule(true)}
+                disabled={scheduleAction || !schedule || channels.length === 0}
+              >{schedule?.enabled ? '更新週期' : '啟用排程'}</button>
+            </div>
+            {schedule && scheduleTiming && (
+              <div className="schedule-details">
+                <span>{scheduleTiming.startLabel}：{formatDateTime(schedule.lastAttemptAt)}</span>
+                <span>{scheduleTiming.completionLabel}：{formatDateTime(schedule.lastCompletedAt)}</span>
+                <span>下次執行：{scheduleTiming.nextRunLabel}</span>
+                {schedule.lastResult && (
+                  <span className={schedule.lastResult.failed > 0 ? 'schedule-result warning' : 'schedule-result'}>
+                    上次結果：新增 {schedule.lastResult.created}、略過 {schedule.lastResult.existing}、失敗 {schedule.lastResult.failed}
+                    {schedule.lastResult.error ? ` · ${schedule.lastResult.error}` : ''}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           {activeRun && (
             <div className="channel-run" aria-live="polite">
               <div className="run-summary">
@@ -530,6 +649,43 @@ export default function App() {
 
 function isSearchHit(document: DocumentSummary | SearchHit): document is SearchHit {
   return 'snippet' in document;
+}
+
+function scheduleStatusLabel(schedule: ChannelSchedule): string {
+  switch (schedule.status) {
+    case 'paused': return '已暫停';
+    case 'scheduled': return '等待下一次執行';
+    case 'running': return '正在自動抓取';
+    case 'waiting_for_run': return '等待目前抓取完成';
+  }
+}
+
+export function scheduleTimingLabels(schedule: ChannelSchedule): {
+  startLabel: string;
+  completionLabel: string;
+  nextRunLabel: string;
+} {
+  const running = schedule.status === 'running';
+  return {
+    startLabel: running ? '本次開始' : '上次開始',
+    completionLabel: running ? '前次完成' : '上次完成',
+    nextRunLabel: scheduleNextRunLabel(schedule),
+  };
+}
+
+function scheduleNextRunLabel(schedule: ChannelSchedule): string {
+  switch (schedule.status) {
+    case 'paused': return '已暫停';
+    case 'running': return `本次完成 ${formatScheduleInterval(schedule.intervalMinutes)}後`;
+    case 'waiting_for_run': return '目前抓取完成後執行';
+    case 'scheduled': return formatDateTime(schedule.nextRunAt);
+  }
+}
+
+function formatScheduleInterval(minutes: number): string {
+  if (minutes === 1440) return '1 天';
+  if (minutes % 60 === 0) return `${minutes / 60} 小時`;
+  return `${minutes} 分鐘`;
 }
 
 function SearchStatusPanel({

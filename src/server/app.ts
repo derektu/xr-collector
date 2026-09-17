@@ -7,6 +7,7 @@ import {
   CollectorError,
   type AddChannelResult,
   type ChannelRun,
+  type ChannelSchedule,
   type TranscriptSearch,
   type YouTubeChannel,
 } from '../core/types.js';
@@ -20,9 +21,15 @@ export interface ChannelCollection {
   getRun(id: string): ChannelRun;
 }
 
+export interface ChannelScheduleManagement {
+  getSchedule(): Promise<ChannelSchedule>;
+  updateSchedule(input: { enabled: boolean; intervalMinutes: number }): Promise<ChannelSchedule>;
+}
+
 export interface HttpAppOptions {
   collector: Collector;
   channels?: ChannelCollection;
+  schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
   webRoot?: string;
 }
@@ -125,6 +132,33 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
     return options.collector.collect(request.body.url);
   });
+
+  if (options.schedule) {
+    const schedule = options.schedule;
+    app.get('/api/youtube/schedule', async () => ({
+      schedule: await schedule.getSchedule(),
+    }));
+
+    app.put<{
+      Body: { enabled?: unknown; intervalMinutes?: unknown };
+    }>('/api/youtube/schedule', async (request) => {
+      const { enabled, intervalMinutes } = request.body ?? {};
+      if (
+        typeof enabled !== 'boolean'
+        || !Number.isInteger(intervalMinutes)
+        || (intervalMinutes as number) < 1
+        || (intervalMinutes as number) > 10_080
+      ) {
+        throw new CollectorError('invalid_request', '排程設定無效。');
+      }
+      return {
+        schedule: await schedule.updateSchedule({
+          enabled,
+          intervalMinutes: intervalMinutes as number,
+        }),
+      };
+    });
+  }
 
   if (options.channels) {
     const channels = options.channels;

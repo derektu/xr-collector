@@ -175,6 +175,29 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
 .channel-actions { display: flex; gap: 7px; }
 .channel-actions button { padding: 7px 11px; font-size: 12px; }
 .channel-actions .remove-channel { color: #7a3934; background: #f5e6e3; }
+.schedule-panel { margin-top: 20px; padding: 15px; border: 1px solid #dbe3d8; border-radius: 13px; background: #f5f8f2; }
+.schedule-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.schedule-heading > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.schedule-heading strong { color: #263a2e; }
+.schedule-heading span { color: #66746c; font-size: 12px; }
+.schedule-heading button, .schedule-controls button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: #22563b;
+  font-weight: 700;
+  cursor: pointer;
+}
+.schedule-heading .pause-schedule { color: #7a514d; background: #f2e7e4; }
+.schedule-heading button:disabled, .schedule-controls button:disabled { opacity: .5; cursor: not-allowed; }
+.schedule-controls { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
+.schedule-controls label { color: #4e5e55; font-size: 12px; font-weight: 700; }
+.schedule-controls select { min-height: 36px; padding: 0 9px; border: 1px solid #cbd3ca; border-radius: 9px; color: #243129; background: #fff; }
+.schedule-details { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; color: #6f7c74; font-size: 12px; }
+.schedule-details .schedule-result { flex-basis: 100%; color: #466c53; }
+.schedule-details .schedule-result.warning { color: #8b4a43; }
 .channel-run { margin-top: 18px; padding: 14px; border-radius: 12px; background: #eef3ec; }
 .run-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; color: #58665e; font-size: 13px; }
 .run-summary strong { color: #263a2e; }
@@ -294,6 +317,8 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
   .channels-heading > button, .channel-form button { min-height: 42px; }
   .channel-form > div { flex-direction: column; }
   .channel-actions button { flex: 1; }
+  .schedule-heading, .schedule-heading > div, .schedule-controls { align-items: stretch; flex-direction: column; }
+  .schedule-controls button, .schedule-controls select { width: 100%; }
   .workspace { grid-template-columns: 1fr; }
   .library { border-right: 0; border-bottom: 1px solid #e1e5de; }
   .reader { padding: 28px 22px; }
