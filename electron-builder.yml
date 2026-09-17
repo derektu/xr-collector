@@ -1,0 +1,24 @@
+appId: com.moneydj.xrcollector
+productName: XR Collector
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/node/**
+  - dist/web/**
+  - package.json
+  - node_modules/**
+asar: true
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.productivity
+  identity: null
+  extraResources:
+    - from: resources/bin/mac/yt-dlp
+      to: bin/yt-dlp
+    - from: resources/bin/mac/deno
+      to: bin/deno
