@@ -1,0 +1,46 @@
+{
+  "name": "xr-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first collector for YouTube transcripts",
+  "main": "dist/node/electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch src/server/main.ts",
+    "dev:web": "vite --host 127.0.0.1 --port 7176 --strictPort",
+    "build": "npm run typecheck && npm run build:node && npm run build:web",
+    "build:node": "tsc -p tsconfig.node.json",
+    "build:web": "vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "start": "node dist/node/server/main.js",
+    "electron": "npm run build && electron .",
+    "download:runtime": "node scripts/download-runtime.mjs mac",
+    "package:mac": "npm run download:runtime && npm run build && electron-builder --mac",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@fastify/static": "10.1.4",
+    "fastify": "5.12.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "electron": "44.4.1",
+    "electron-builder": "26.15.3",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
