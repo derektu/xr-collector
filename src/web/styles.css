@@ -115,6 +115,78 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
 .notice.success { color: #245238; background: #e8f4e9; }
 .notice.error { color: #8b332d; background: #fbe9e6; }
 
+.channels-panel {
+  max-width: 1440px;
+  margin: 0 auto 26px;
+  padding: 24px 30px;
+  border: 1px solid #d9e2d5;
+  border-radius: 22px;
+  background: rgba(252, 253, 249, .92);
+  box-shadow: 0 18px 60px rgba(44, 61, 50, .06);
+}
+.channels-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.channels-heading h2 { font-size: 24px; }
+.channels-heading p:last-child { margin: 8px 0 0; color: #617068; font-size: 13px; }
+.channels-heading > button, .channel-form button, .channel-actions button {
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: #22563b;
+  font-weight: 700;
+  cursor: pointer;
+}
+.channels-heading > button { min-height: 40px; padding: 0 16px; white-space: nowrap; }
+.channels-heading button:disabled, .channel-form button:disabled, .channel-actions button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.channel-form { max-width: 720px; margin-top: 20px; }
+.channel-form > label { display: block; margin-bottom: 7px; color: #4e5e55; font-size: 12px; font-weight: 700; }
+.channel-form > div { display: flex; gap: 8px; }
+.channel-form input {
+  min-width: 0;
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid #cbd3ca;
+  border-radius: 9px;
+  color: #243129;
+  background: #fff;
+  outline: none;
+}
+.channel-form input:focus { border-color: #4b8665; box-shadow: 0 0 0 2px rgba(75, 134, 101, .12); }
+.channel-form button { padding: 0 15px; }
+.channel-empty { margin: 20px 0 0; color: #748078; }
+.channel-list { margin: 20px 0 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.channel-list li {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e0e5dc;
+  border-radius: 12px;
+  background: #f8f9f5;
+}
+.channel-toggle { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.channel-toggle input { width: 17px; height: 17px; accent-color: #22563b; }
+.channel-toggle span, .channel-toggle strong, .channel-toggle small { min-width: 0; display: block; }
+.channel-toggle strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-toggle small { margin-top: 3px; color: #7a867f; }
+.channel-actions { display: flex; gap: 7px; }
+.channel-actions button { padding: 7px 11px; font-size: 12px; }
+.channel-actions .remove-channel { color: #7a3934; background: #f5e6e3; }
+.channel-run { margin-top: 18px; padding: 14px; border-radius: 12px; background: #eef3ec; }
+.run-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; color: #58665e; font-size: 13px; }
+.run-summary strong { color: #263a2e; }
+.run-results { max-height: 260px; margin: 12px 0 0; padding: 0; overflow: auto; list-style: none; }
+.run-results li { padding: 8px 4px; display: flex; align-items: flex-start; gap: 10px; border-top: 1px solid #dce4da; }
+.run-results li > span { min-width: 34px; color: #477056; font-size: 11px; font-weight: 800; }
+.run-results li.failed > span { color: #a1453e; }
+.run-results li div, .run-results li strong, .run-results li small { min-width: 0; display: block; }
+.run-results li strong { font-size: 13px; }
+.run-results li small { margin-top: 2px; color: #738078; font-size: 11px; line-height: 1.4; }
+.run-retry-hint { margin: 10px 0 0; color: #7a514d; font-size: 12px; }
+
 .workspace {
   max-width: 1440px;
   min-height: 620px;
@@ -217,6 +289,11 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
   .notice { grid-column: 1; }
   .collect-row { flex-direction: column; }
   .collect-row button { min-height: 46px; }
+  .channels-panel { padding: 22px; }
+  .channels-heading, .channel-list li { align-items: stretch; flex-direction: column; }
+  .channels-heading > button, .channel-form button { min-height: 42px; }
+  .channel-form > div { flex-direction: column; }
+  .channel-actions button { flex: 1; }
   .workspace { grid-template-columns: 1fr; }
   .library { border-right: 0; border-bottom: 1px solid #e1e5de; }
   .reader { padding: 28px 22px; }

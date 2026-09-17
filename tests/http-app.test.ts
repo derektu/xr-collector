@@ -51,6 +51,99 @@ function makeCollector(captureFailure?: CollectorError): Collector {
 }
 
 describe('HTTP app', () => {
+  it('manages channels and starts a channel collection run through HTTP', async () => {
+    const savedChannel = {
+      id: 'UC-channel-one',
+      title: '頻道一',
+      url: 'https://www.youtube.com/channel/UC-channel-one/videos',
+      enabled: true,
+      addedAt: '2026-09-17T00:00:00.000Z',
+    };
+    const run = {
+      id: 'run-1',
+      status: 'running' as const,
+      channelIds: [savedChannel.id],
+      currentChannelId: savedChannel.id,
+      totalVideos: 2,
+      processedVideos: 1,
+      created: 1,
+      existing: 0,
+      failed: 0,
+      results: [],
+      startedAt: '2026-09-17T00:00:00.000Z',
+      completedAt: null,
+    };
+    const calls: unknown[] = [];
+    const channels = {
+      listChannels: async () => [savedChannel],
+      addChannel: async (url: string) => {
+        calls.push(['add', url]);
+        return { status: 'created' as const, channel: savedChannel };
+      },
+      setChannelEnabled: async (id: string, enabled: boolean) => {
+        calls.push(['enabled', id, enabled]);
+        return { ...savedChannel, enabled };
+      },
+      removeChannel: async (id: string) => {
+        calls.push(['remove', id]);
+      },
+      startRun: async (ids?: string[]) => {
+        calls.push(['run', ids]);
+        return run;
+      },
+      getRun: (id: string) => {
+        calls.push(['getRun', id]);
+        return run;
+      },
+    };
+    const app = await createHttpApp({ collector: makeCollector(), channels });
+
+    const added = await app.inject({
+      method: 'POST',
+      url: '/api/youtube/channels',
+      payload: { url: 'https://www.youtube.com/@channel-one' },
+    });
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/api/youtube/channels',
+    });
+    const disabled = await app.inject({
+      method: 'PATCH',
+      url: `/api/youtube/channels/${savedChannel.id}`,
+      payload: { enabled: false },
+    });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/youtube/channel-runs',
+      payload: { channelIds: [savedChannel.id] },
+    });
+    const progress = await app.inject({
+      method: 'GET',
+      url: '/api/youtube/channel-runs/run-1',
+    });
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/api/youtube/channels/${savedChannel.id}`,
+    });
+
+    expect(added.statusCode).toBe(200);
+    expect(added.json()).toMatchObject({ status: 'created', channel: { id: savedChannel.id } });
+    expect(listed.json()).toEqual({ channels: [savedChannel] });
+    expect(disabled.json()).toMatchObject({ channel: { id: savedChannel.id, enabled: false } });
+    expect(started.statusCode).toBe(202);
+    expect(started.json()).toMatchObject({ run: { id: 'run-1', status: 'running' } });
+    expect(progress.json()).toMatchObject({ run: { processedVideos: 1, totalVideos: 2 } });
+    expect(removed.json()).toEqual({ removed: true });
+    expect(calls).toEqual([
+      ['add', 'https://www.youtube.com/@channel-one'],
+      ['enabled', savedChannel.id, false],
+      ['run', [savedChannel.id]],
+      ['getRun', 'run-1'],
+      ['remove', savedChannel.id],
+    ]);
+    await app.close();
+  });
+
   it('searches transcript text with channel and published-date filters', async () => {
     const searchRequests: unknown[] = [];
     const search = {

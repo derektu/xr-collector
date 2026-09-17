@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify';
+import type { ChannelCollection } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
 import { createHttpApp } from './app.js';
 
 export interface StartServerOptions {
   collector: Collector;
+  channels?: ChannelCollection;
   search?: TranscriptSearch;
   port: number;
   host?: string;
@@ -21,6 +23,7 @@ export interface RunningServer {
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
     collector: options.collector,
+    ...(options.channels ? { channels: options.channels } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
   });

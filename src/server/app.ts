@@ -3,19 +3,38 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
-import { CollectorError, type TranscriptSearch } from '../core/types.js';
+import {
+  CollectorError,
+  type AddChannelResult,
+  type ChannelRun,
+  type TranscriptSearch,
+  type YouTubeChannel,
+} from '../core/types.js';
+
+export interface ChannelCollection {
+  listChannels(): Promise<YouTubeChannel[]>;
+  addChannel(url: string): Promise<AddChannelResult>;
+  setChannelEnabled(id: string, enabled: boolean): Promise<YouTubeChannel>;
+  removeChannel(id: string): Promise<void>;
+  startRun(channelIds?: string[]): Promise<ChannelRun>;
+  getRun(id: string): ChannelRun;
+}
 
 export interface HttpAppOptions {
   collector: Collector;
+  channels?: ChannelCollection;
   search?: TranscriptSearch;
   webRoot?: string;
 }
 
 const ERROR_STATUS: Record<CollectorError['code'], number> = {
   invalid_url: 400,
+  invalid_channel: 400,
   invalid_request: 400,
   document_not_found: 404,
   search_unavailable: 503,
+  channel_not_found: 404,
+  channel_run_not_found: 404,
   no_subtitles: 422,
   video_unavailable: 422,
   capture_failed: 502,
@@ -106,6 +125,56 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
     return options.collector.collect(request.body.url);
   });
+
+  if (options.channels) {
+    const channels = options.channels;
+    app.get('/api/youtube/channels', async () => ({
+      channels: await channels.listChannels(),
+    }));
+
+    app.post<{ Body: { url?: unknown } }>('/api/youtube/channels', async (request) => {
+      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+        throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
+      }
+      return channels.addChannel(request.body.url);
+    });
+
+    app.patch<{
+      Params: { id: string };
+      Body: { enabled?: unknown };
+    }>('/api/youtube/channels/:id', async (request) => {
+      if (typeof request.body?.enabled !== 'boolean') {
+        throw new CollectorError('invalid_request', '頻道啟用設定無效。');
+      }
+      return {
+        channel: await channels.setChannelEnabled(request.params.id, request.body.enabled),
+      };
+    });
+
+    app.delete<{ Params: { id: string } }>('/api/youtube/channels/:id', async (request) => {
+      await channels.removeChannel(request.params.id);
+      return { removed: true };
+    });
+
+    app.post<{ Body?: { channelIds?: unknown } }>('/api/youtube/channel-runs', async (request, reply) => {
+      const channelIds = request.body?.channelIds;
+      if (
+        channelIds !== undefined
+        && (!Array.isArray(channelIds)
+          || channelIds.length === 0
+          || !channelIds.every((id) => typeof id === 'string' && id.length > 0))
+      ) {
+        throw new CollectorError('invalid_request', '頻道執行範圍無效。');
+      }
+      const run = await channels.startRun(channelIds as string[] | undefined);
+      void reply.code(202);
+      return { run };
+    });
+
+    app.get<{ Params: { id: string } }>('/api/youtube/channel-runs/:id', async (request) => ({
+      run: channels.getRun(request.params.id),
+    }));
+  }
 
   if (options.webRoot && existsSync(options.webRoot)) {
     await app.register(fastifyStatic, {

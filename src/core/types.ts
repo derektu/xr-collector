@@ -60,6 +60,47 @@ export interface SearchResponse {
   estimatedTotalHits: number;
 }
 
+export interface YouTubeChannel {
+  id: string;
+  title: string;
+  url: string;
+  enabled: boolean;
+  addedAt: string;
+}
+
+export interface AddChannelResult {
+  status: 'created' | 'existing';
+  channel: YouTubeChannel;
+}
+
+export interface ChannelRunResult {
+  channelId: string;
+  channelTitle: string;
+  videoId: string | null;
+  videoTitle: string;
+  url: string;
+  status: 'created' | 'existing' | 'failed';
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export interface ChannelRun {
+  id: string;
+  status: 'queued' | 'running' | 'completed';
+  channelIds: string[];
+  currentChannelId: string | null;
+  totalVideos: number;
+  processedVideos: number;
+  created: number;
+  existing: number;
+  failed: number;
+  results: ChannelRunResult[];
+  startedAt: string;
+  completedAt: string | null;
+}
+
 export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
 
 export interface SearchStatus {
@@ -83,12 +124,15 @@ export interface CollectResult {
 
 export type CollectorErrorCode =
   | 'invalid_url'
+  | 'invalid_channel'
   | 'no_subtitles'
   | 'video_unavailable'
   | 'network_error'
   | 'capture_failed'
   | 'document_not_found'
   | 'search_unavailable'
+  | 'channel_not_found'
+  | 'channel_run_not_found'
   | 'invalid_request';
 
 export class CollectorError extends Error {
