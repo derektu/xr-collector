@@ -1,8 +1,12 @@
 # XR Collector 整體架構
 
+> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitLab #1](https://gitscr1.moneydj.com/km/xr-collector/-/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+
 ## 文件定位
 
 本文件記錄 XR Collector 已確認的架構方向與待設計事項。產品定位與交付範圍見 [Product Brief](product-brief.md)。具體框架、API schema、文件欄位與互動流程在對應設計階段確認。
+
+資料保存、完整備份、跨機還原、vault 合併與搜尋索引的概念草案見 [資料儲存、備份、合併與搜尋](storage-and-search.md)。
 
 ## Desktop 與 Web Server
 
@@ -65,7 +69,7 @@ Meilisearch 提供文字搜尋。文件介面支援依時間、資料源類型�
 
 兩者都能滿足不另外安裝的要求，但是否允許獨立 process 尚待確認。Meilisearch 的底層 `milli` 管理單一 index，完整 Meilisearch 的上層能力並非直接嵌入 `milli` 即可取得；採用 library 的成本需另行驗證。
 
-文件作為正式資料、搜尋索引可重建，以及以獨立狀態儲存保存設定與收集進度，是待確認的內部資料管理提案。SQLite 與具體 process 配置尚未選定。
+第一版以 vault 保存文件及正式管理資料，支援完整備份、跨機還原與 vault 合併，不依賴同步或版本協調 server。各裝置的 Meilisearch 索引跟隨 vault 增量更新，並可重建。管理資料格式、本機 database、Git 是否作為版本管理實作及具體 process 配置尚未選定，範圍與待收斂事項見 [概念草案](storage-and-search.md)。
 
 ## 外部 Agent 存取
 

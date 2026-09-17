@@ -1,5 +1,7 @@
 # XR Collector Product Brief
 
+> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitLab #1](https://gitscr1.moneydj.com/km/xr-collector/-/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+
 ## 產品定位
 
 XR Collector 是支援 macOS 與 Windows 的個人資料收集與存取 Desktop application，讓使用者擁有一個自動彙整資料、可瀏覽、可搜尋，也能交給 Agent 使用的工具。
