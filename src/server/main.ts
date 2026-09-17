@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
+import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
+import { ChannelCollector } from '../channels/channel-collector.js';
+import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { Collector } from '../core/collector.js';
 import { startSearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from '../vault/markdown-vault.js';
@@ -19,6 +22,10 @@ const capture = new YtDlpCapture({
   binaryPath: process.env.XR_COLLECTOR_YTDLP ?? path.join(runtimeRoot, 'yt-dlp'),
   javaScriptRuntimePath: process.env.XR_COLLECTOR_DENO ?? path.join(runtimeRoot, 'deno'),
 });
+const channelSource = new YtDlpChannelSource({
+  binaryPath: process.env.XR_COLLECTOR_YTDLP ?? path.join(runtimeRoot, 'yt-dlp'),
+  javaScriptRuntimePath: process.env.XR_COLLECTOR_DENO ?? path.join(runtimeRoot, 'deno'),
+});
 const vault = new MarkdownVault(vaultRoot);
 const searchRuntime = await startSearchRuntime({
   vault,
@@ -30,8 +37,10 @@ const searchRuntime = await startSearchRuntime({
   port: searchPort,
 });
 const collector = new Collector(capture, vault, searchRuntime.search);
+const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
 const server = await startServer({
   collector,
+  channels,
   search: searchRuntime.search,
   port,
   ...(existsSync(webRoot) ? { webRoot } : {}),

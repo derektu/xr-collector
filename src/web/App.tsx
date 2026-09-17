@@ -5,6 +5,8 @@ import type {
   SearchHit,
   SearchState,
   SearchStatus,
+  YouTubeChannel,
+  ChannelRun,
 } from '../core/types.js';
 import { api } from './api-client.js';
 
@@ -37,10 +39,14 @@ export default function App() {
   const [collecting, setCollecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [channels, setChannels] = useState<YouTubeChannel[]>([]);
+  const [channelUrl, setChannelUrl] = useState('');
+  const [channelAction, setChannelAction] = useState(false);
+  const [activeRun, setActiveRun] = useState<ChannelRun | null>(null);
 
   const selectedId = selected?.id ?? null;
   const documentCount = useMemo(() => documents.length, [documents]);
-  const channels = useMemo(
+  const documentChannels = useMemo(
     () => [...new Set(documents.map((document) => document.channelTitle))].sort((left, right) => left.localeCompare(right, 'zh-Hant')),
     [documents],
   );
@@ -59,6 +65,14 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : '無法載入文件。');
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    api.listChannels()
+      .then(setChannels)
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : '無法載入頻道清單。');
+      });
   }, []);
 
   useEffect(() => {
@@ -84,6 +98,92 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeRun || activeRun.status === 'completed') return;
+    let stopped = false;
+    const timer = window.setInterval(() => void poll(), 500);
+    async function poll(): Promise<void> {
+      try {
+        const next = await api.getChannelRun(activeRun!.id);
+        if (stopped) return;
+        setActiveRun(next);
+        if (next.status === 'completed') {
+          window.clearInterval(timer);
+          await refreshDocuments();
+          setSearchResults(null);
+          setSearchStatus(await api.getSearchStatus());
+          setMessage(`頻道收集完成：新增 ${next.created}、略過 ${next.existing}、失敗 ${next.failed}。`);
+        }
+      } catch (caught) {
+        if (!stopped) {
+          setError(caught instanceof Error ? caught.message : '無法讀取頻道收集進度。');
+          window.clearInterval(timer);
+        }
+      }
+    }
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRun?.id, activeRun?.status]);
+
+  async function addChannel(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setChannelAction(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await api.addChannel(channelUrl);
+      setChannelUrl('');
+      setChannels(await api.listChannels());
+      setMessage(result.status === 'created' ? '頻道已加入清單。' : '這個頻道已經在清單中。');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法新增頻道。');
+    } finally {
+      setChannelAction(false);
+    }
+  }
+
+  async function setChannelEnabled(channelId: string, enabled: boolean): Promise<void> {
+    setChannelAction(true);
+    setError(null);
+    try {
+      const updated = await api.setChannelEnabled(channelId, enabled);
+      setChannels((current) => current.map((channel) => (
+        channel.id === updated.id ? updated : channel
+      )));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法更新頻道設定。');
+    } finally {
+      setChannelAction(false);
+    }
+  }
+
+  async function removeChannel(channelId: string): Promise<void> {
+    setChannelAction(true);
+    setError(null);
+    try {
+      await api.removeChannel(channelId);
+      setChannels((current) => current.filter((channel) => channel.id !== channelId));
+      setMessage('頻道已從清單移除；既有字幕文件仍保留。');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法移除頻道。');
+    } finally {
+      setChannelAction(false);
+    }
+  }
+
+  async function startChannelRun(channelIds?: string[]): Promise<void> {
+    setError(null);
+    setMessage(null);
+    try {
+      setActiveRun(await api.startChannelRun(channelIds));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '無法開始頻道收集。');
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -203,6 +303,99 @@ export default function App() {
           {error && <div className="notice error" role="alert">{error}</div>}
         </section>
 
+        <section className="channels-panel" aria-labelledby="channels-title">
+          <div className="channels-heading">
+            <div>
+              <p className="eyebrow">CHANNELS</p>
+              <h2 id="channels-title">追蹤頻道</h2>
+              <p>每次抓取各頻道最近 10 支影片；已收集的影片會略過。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void startChannelRun()}
+              disabled={channelAction || activeRun?.status === 'running' || !channels.some((item) => item.enabled)}
+            >
+              {activeRun?.status === 'running' ? '抓取中…' : '抓取已啟用頻道'}
+            </button>
+          </div>
+          <form className="channel-form" onSubmit={(event) => void addChannel(event)}>
+            <label htmlFor="youtube-channel-url">YouTube 頻道網址或 @handle</label>
+            <div>
+              <input
+                id="youtube-channel-url"
+                value={channelUrl}
+                onChange={(event) => setChannelUrl(event.target.value)}
+                placeholder="https://www.youtube.com/@…"
+                disabled={channelAction}
+                required
+              />
+              <button type="submit" disabled={channelAction || !channelUrl.trim()}>
+                {channelAction ? '處理中…' : '新增頻道'}
+              </button>
+            </div>
+          </form>
+          {channels.length === 0 ? (
+            <p className="channel-empty">尚未加入頻道。</p>
+          ) : (
+            <ul className="channel-list">
+              {channels.map((item) => (
+                <li key={item.id}>
+                  <label className="channel-toggle">
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      onChange={(event) => void setChannelEnabled(item.id, event.target.checked)}
+                      disabled={channelAction || activeRun?.status === 'running'}
+                    />
+                    <span>
+                      <strong>{item.title}</strong>
+                      <small>{item.id}</small>
+                    </span>
+                  </label>
+                  <div className="channel-actions">
+                    <button
+                      type="button"
+                      onClick={() => void startChannelRun([item.id])}
+                      disabled={channelAction || activeRun?.status === 'running'}
+                    >立即抓取</button>
+                    <button
+                      className="remove-channel"
+                      type="button"
+                      onClick={() => void removeChannel(item.id)}
+                      disabled={channelAction || activeRun?.status === 'running'}
+                    >移除</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {activeRun && (
+            <div className="channel-run" aria-live="polite">
+              <div className="run-summary">
+                <strong>{activeRun.status === 'completed' ? '本次結果' : '正在抓取頻道'}</strong>
+                <span>已處理 {activeRun.processedVideos}／目前發現 {activeRun.totalVideos}</span>
+                <span>新增 {activeRun.created} · 略過 {activeRun.existing} · 失敗 {activeRun.failed}</span>
+              </div>
+              {activeRun.results.length > 0 && (
+                <ul className="run-results">
+                  {activeRun.results.map((result, index) => (
+                    <li key={`${result.channelId}:${result.videoId ?? 'channel'}:${index}`} className={result.status}>
+                      <span>{result.status === 'created' ? '新增' : result.status === 'existing' ? '略過' : '失敗'}</span>
+                      <div>
+                        <strong>{result.videoTitle}</strong>
+                        <small>{result.channelTitle}{result.error ? ` · ${result.error.message}` : ''}</small>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {activeRun.failed > 0 && activeRun.status === 'completed' && (
+                <p className="run-retry-hint">可再次執行該頻道；已取得的影片會略過，只重試尚未成功的項目。</p>
+              )}
+            </div>
+          )}
+        </section>
+
         <section className="workspace">
           <aside className="library" aria-label="已保存的影片">
             <div className="section-heading">
@@ -234,7 +427,7 @@ export default function App() {
                   disabled={searchStatus.state !== 'ready' || searching}
                 >
                   <option value="">所有頻道</option>
-                  {channels.map((name) => <option key={name} value={name}>{name}</option>)}
+                  {documentChannels.map((name) => <option key={name} value={name}>{name}</option>)}
                 </select>
                 <label>
                   <span>從</span>

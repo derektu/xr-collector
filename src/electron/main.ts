@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { app, BrowserWindow, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
+import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
+import { ChannelCollector } from '../channels/channel-collector.js';
+import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { Collector } from '../core/collector.js';
 import type { RunningServer } from '../server/start.js';
 import { startServer } from '../server/start.js';
@@ -73,6 +76,10 @@ app.whenReady().then(async () => {
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
   });
+  const channelSource = new YtDlpChannelSource({
+    binaryPath: runtimePath('yt-dlp'),
+    javaScriptRuntimePath: runtimePath('deno'),
+  });
   const vault = new MarkdownVault(vaultRoot);
   searchRuntime = await startSearchRuntime({
     vault,
@@ -80,8 +87,10 @@ app.whenReady().then(async () => {
     databasePath: path.join(app.getPath('userData'), 'search'),
   });
   const collector = new Collector(capture, vault, searchRuntime.search);
+  const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
   server = await startServer({
     collector,
+    channels,
     search: searchRuntime.search,
     port: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),

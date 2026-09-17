@@ -16,6 +16,7 @@
   },
   "include": [
     "src/core/**/*.ts",
+    "src/channels/**/*.ts",
     "src/capture/**/*.ts",
     "src/vault/**/*.ts",
     "src/server/**/*.ts",

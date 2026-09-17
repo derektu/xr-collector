@@ -5,6 +5,9 @@ import type {
   SearchQuery,
   SearchResponse,
   SearchStatus,
+  YouTubeChannel,
+  AddChannelResult,
+  ChannelRun,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -43,6 +46,50 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async listChannels(): Promise<YouTubeChannel[]> {
+    const result = await request<{ channels: YouTubeChannel[] }>('/api/youtube/channels');
+    return result.channels;
+  },
+
+  addChannel(url: string): Promise<AddChannelResult> {
+    return request<AddChannelResult>('/api/youtube/channels', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  },
+
+  async setChannelEnabled(id: string, enabled: boolean): Promise<YouTubeChannel> {
+    const result = await request<{ channel: YouTubeChannel }>(
+      `/api/youtube/channels/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    return result.channel;
+  },
+
+  async removeChannel(id: string): Promise<void> {
+    await request<{ removed: true }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async startChannelRun(channelIds?: string[]): Promise<ChannelRun> {
+    const result = await request<{ run: ChannelRun }>('/api/youtube/channel-runs', {
+      method: 'POST',
+      body: JSON.stringify(channelIds ? { channelIds } : {}),
+    });
+    return result.run;
+  },
+
+  async getChannelRun(id: string): Promise<ChannelRun> {
+    const result = await request<{ run: ChannelRun }>(
+      `/api/youtube/channel-runs/${encodeURIComponent(id)}`,
+    );
+    return result.run;
+  },
+
   async listDocuments(): Promise<DocumentSummary[]> {
     const result = await request<{ documents: DocumentSummary[] }>('/api/documents');
     return result.documents;

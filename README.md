@@ -1,8 +1,8 @@
 # XR Collector
 
-XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者貼上 YouTube 影片網址後，系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
+XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
-本 repository 的可執行交付範圍對應 GitLab Issue #4：單支影片收集、重複辨識、錯誤回報、文件保存，以及字幕全文搜尋、頻道／發布日期篩選、命中片段與索引重建。頻道清單收集、排程、Agent 存取及跨機還原由後續 tickets 交付。
+本 repository 的可執行交付範圍對應 GitLab Issue #5：單支影片收集、文件保存與搜尋，以及頻道新增、移除、啟用設定、單一／整份清單立即抓取、逐片結果與重試。週期排程、Agent 存取及跨機還原由後續 tickets 交付。
 
 ## 執行模式
 
@@ -50,7 +50,7 @@ npm run typecheck
 npm run build
 ```
 
-單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址操作。
+單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址或加入頻道操作。
 
 macOS arm64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
 
@@ -76,6 +76,14 @@ npm run package:mac
 - Electron 安裝版：Electron application data 目錄下的 `vault`
 
 開發或測試可以用 `XR_COLLECTOR_VAULT` 指定其他位置。
+
+## 頻道清單與立即抓取
+
+頻道可以用 YouTube 頻道網址或 `@handle` 加入。設定保存在 `<vault>/settings/youtube-channels.json`；重新啟動後會保留清單與啟用狀態。移除頻道只刪除追蹤設定，不刪除已保存的字幕文件。
+
+「抓取已啟用頻道」處理清單中所有已啟用頻道；每個頻道也可以不受啟用狀態限制而手動執行。每次執行探索該頻道最近 10 支影片，不預設回溯完整歷史。影片依序沿用單支影片的收集、vault 保存與搜尋索引流程，因此相同 video ID 經不同入口或重複執行都會略過既有文件。
+
+畫面顯示目前頻道、已發現及已處理數量，以及每支影片的新增、略過或失敗結果。單支影片或單一頻道探索失敗不會中止其餘清單。無字幕影片以可辨認的失敗項目呈現，不啟動語音轉寫；再次執行該頻道會略過成功項目並重試失敗項目。
 
 ## 搜尋與索引
 
