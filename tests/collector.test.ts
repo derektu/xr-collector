@@ -56,6 +56,37 @@ class MemoryVault implements DocumentVault {
 }
 
 describe('Collector', () => {
+  it('keeps a newly saved document when its search-index update fails', async () => {
+    const vault = new MemoryVault();
+    const capture: YouTubeCapture = {
+      capture: async () => captureResult,
+    };
+    let indexAttempted = false;
+    const search = {
+      status: () => ({
+        state: indexAttempted ? 'error' as const : 'ready' as const,
+        indexedDocuments: 0,
+        ...(indexAttempted ? { message: '無法更新搜尋索引。' } : {}),
+      }),
+      index: async () => {
+        indexAttempted = true;
+        throw new Error('index unavailable');
+      },
+    };
+    const collector = new Collector(capture, vault, search);
+
+    const result = await collector.collect(captureResult.sourceUrl);
+
+    expect(indexAttempted).toBe(true);
+    expect(vault.document?.title).toBe('測試影片');
+    expect(result.document.id).toBe('youtube:dQw4w9WgXcQ');
+    expect(result.searchStatus).toEqual({
+      state: 'error',
+      indexedDocuments: 0,
+      message: '無法更新搜尋索引。',
+    });
+  });
+
   it('returns the existing document without calling YouTube again', async () => {
     const vault = new MemoryVault();
     await vault.add(captureResult);

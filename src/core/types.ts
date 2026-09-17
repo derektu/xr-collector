@@ -44,9 +44,42 @@ export interface DocumentSummary {
   subtitleKind: SubtitleKind;
 }
 
-export type CollectResult =
-  | { status: 'created'; document: SavedDocument }
-  | { status: 'existing'; document: SavedDocument };
+export interface SearchQuery {
+  query: string;
+  channel?: string;
+  publishedFrom?: string;
+  publishedTo?: string;
+}
+
+export interface SearchHit extends DocumentSummary {
+  snippet: string;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  estimatedTotalHits: number;
+}
+
+export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
+
+export interface SearchStatus {
+  state: SearchState;
+  indexedDocuments: number;
+  message?: string;
+}
+
+export interface TranscriptSearch {
+  status(): SearchStatus;
+  index(document: SavedDocument): Promise<void>;
+  search(query: SearchQuery): Promise<SearchResponse>;
+  rebuild(): Promise<void>;
+}
+
+export interface CollectResult {
+  status: 'created' | 'existing';
+  document: SavedDocument;
+  searchStatus: SearchStatus;
+}
 
 export type CollectorErrorCode =
   | 'invalid_url'
@@ -55,6 +88,7 @@ export type CollectorErrorCode =
   | 'network_error'
   | 'capture_failed'
   | 'document_not_found'
+  | 'search_unavailable'
   | 'invalid_request';
 
 export class CollectorError extends Error {

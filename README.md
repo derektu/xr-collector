@@ -1,8 +1,8 @@
 # XR Collector
 
-XR Collector 是 local-first 的 YouTube 字幕收集工具。使用者貼上 YouTube 影片網址後，系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供閱讀介面。
+XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者貼上 YouTube 影片網址後，系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
-目前交付範圍對應 GitLab Issue #3：單支影片收集、重複辨識、錯誤回報、文件保存與重啟後讀取。頻道清單、排程、搜尋、Agent 存取及跨機還原由後續 tickets 交付。
+本 repository 的可執行交付範圍對應 GitLab Issue #4：單支影片收集、重複辨識、錯誤回報、文件保存，以及字幕全文搜尋、頻道／發布日期篩選、命中片段與索引重建。頻道清單收集、排程、Agent 存取及跨機還原由後續 tickets 交付。
 
 ## 執行模式
 
@@ -16,31 +16,27 @@ XR Collector 是 local-first 的 YouTube 字幕收集工具。使用者貼上 Yo
 
 - Node.js 22.12 或更新版本
 - npm
-- 開發機可執行的 `yt-dlp`
-- Deno；用於執行 YouTube 擷取所需的 JavaScript runtime
+- macOS arm64 開發環境
 
 安裝套件：
 
 ```bash
 npm install
+npm run download:runtime
 ```
 
 啟動 Web UI 與 API：
 
 ```bash
-XR_COLLECTOR_YTDLP=/path/to/yt-dlp \
-XR_COLLECTOR_DENO=/path/to/deno \
 npm run dev
 ```
 
-瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`；開發資料保存在 `.data/dev-vault`。
+瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，開發用 Meilisearch 只監聽 `127.0.0.1:7177`。正式文件保存在 `.data/dev-vault`，可重建的搜尋資料保存在 `.data/dev-search`。
 
 已完成 production build 時，也可以只啟動單一 Web Server：
 
 ```bash
 npm run build
-XR_COLLECTOR_YTDLP=/path/to/yt-dlp \
-XR_COLLECTOR_DENO=/path/to/deno \
 npm start
 ```
 
@@ -54,9 +50,9 @@ npm run typecheck
 npm run build
 ```
 
-單元與 HTTP 整合測試不存取 YouTube。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址操作。
+單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址操作。
 
-macOS arm64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp` 與 Deno：
+macOS arm64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
 
 ```bash
 npm run package:mac
@@ -81,7 +77,15 @@ npm run package:mac
 
 開發或測試可以用 `XR_COLLECTOR_VAULT` 指定其他位置。
 
-## 目前收集規則
+## 搜尋與索引
+
+Markdown vault 是正式資料，Meilisearch 是每台裝置上可重建的搜尋投影。收集流程先保存 vault，再更新該份文件的索引。索引更新失敗不會刪除或回滾已保存的 Markdown；畫面會顯示錯誤並提供重建操作。
+
+搜尋索引包含影片標題、頻道名稱與字幕正文。結果依 Meilisearch 關聯性排序，顯示命中位置附近的字幕片段，可以再以頻道和影片發布日期篩選。點選結果後，畫面以文件 ID 透過 `GET /api/documents/:id` 讀取完整文件。
+
+Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追蹤「啟動中、更新中、重建中、已就緒、錯誤」狀態。搜尋資料目錄不存在時，Collector 從 vault 重建全部索引；目錄存在且文件數一致時，重啟直接沿用持久化索引。繁簡轉換與進階中文調校不屬於 Issue #4 搜尋契約。
+
+## 收集規則
 
 - 接受 `youtube.com/watch`、`youtu.be`、`youtube.com/shorts` 與 `youtube.com/embed` 的單支影片網址。
 - 語言依序偏好繁體中文、簡體中文、英文，再選其他可用語言。

@@ -18,6 +18,7 @@
     "download:runtime": "node scripts/download-runtime.mjs mac",
     "package:mac": "npm run download:runtime && npm run build && electron-builder --mac",
     "test": "vitest run --config vitest.config.ts",
+    "test:meilisearch": "npm run download:runtime && vitest run --config vitest.config.ts tests/meilisearch-integration.test.ts",
     "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {
