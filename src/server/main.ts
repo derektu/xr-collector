@@ -10,6 +10,7 @@ import { Collector } from '../core/collector.js';
 import { startSearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from '../vault/markdown-vault.js';
 import { startServer } from './start.js';
+import { startAgentAccess } from './agent-access.js';
 
 const projectRoot = process.cwd();
 const vaultRoot = path.resolve(
@@ -39,6 +40,12 @@ const searchRuntime = await startSearchRuntime({
   port: searchPort,
 });
 const collector = new Collector(capture, vault, searchRuntime.search);
+const agentAccess = await startAgentAccess({
+  collector,
+  search: searchRuntime.search,
+  connectionFile: path.join(projectRoot, '.data', 'agent-connection.json'),
+  skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
+});
 const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
 const schedule = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
 await schedule.start();
@@ -48,6 +55,7 @@ const server = await startServer({
   schedule,
   search: searchRuntime.search,
   port,
+  agentInfo: agentAccess.info,
   ...(existsSync(webRoot) ? { webRoot } : {}),
 });
 
@@ -60,6 +68,7 @@ async function stop(): Promise<void> {
   stopping = true;
   await schedule.close();
   await server.close();
+  await agentAccess.close();
   await searchRuntime.close();
   process.exit(0);
 }

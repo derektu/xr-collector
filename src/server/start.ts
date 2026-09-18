@@ -12,6 +12,8 @@ export interface StartServerOptions {
   port: number;
   host?: string;
   webRoot?: string;
+  agentToken?: string;
+  agentInfo?: { connectionFile: string; skillPath: string; url: string };
 }
 
 export interface RunningServer {
@@ -28,6 +30,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
+    ...(options.agentToken !== undefined ? { agentToken: options.agentToken } : {}),
+    ...(options.agentInfo ? { agentInfo: options.agentInfo } : {}),
   });
   const host = options.host ?? '127.0.0.1';
   await app.listen({ host, port: options.port });

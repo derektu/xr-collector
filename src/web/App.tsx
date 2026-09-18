@@ -37,6 +37,8 @@ function formatDateTime(value: string | null): string {
 }
 
 export default function App() {
+  const [agentInfo, setAgentInfo] = useState<Awaited<ReturnType<typeof api.agentConnection>> | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [searchResults, setSearchResults] = useState<SearchHit[] | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -71,6 +73,10 @@ export default function App() {
   );
   const visibleDocuments = searchResults ?? documents;
   const scheduleTiming = schedule ? scheduleTimingLabels(schedule) : null;
+
+  useEffect(() => {
+    void api.agentConnection().then(setAgentInfo).catch(() => setAgentError('無法取得 Agent 連線資訊，請重新啟動程式。'));
+  }, []);
 
   async function refreshDocuments(preferredId?: string): Promise<void> {
     const items = await api.listDocuments();
@@ -344,6 +350,18 @@ export default function App() {
       </header>
 
       <main>
+        <details className="agent-panel">
+          <summary>Agent 存取 · 僅供本機讀取</summary>
+          <p>讓 Agent 使用下方 Skill 瀏覽、搜尋與讀取這份知識庫。連線檔含只讀 token，每次啟動會更新；請保留在本機。</p>
+          {agentInfo ? (
+            <dl>
+              <dt>HTTP 位址</dt><dd>{agentInfo.url}</dd>
+              <dt>連線檔</dt><dd>{agentInfo.connectionFile}</dd>
+              <dt>Skill 目錄</dt><dd>{agentInfo.skillPath}</dd>
+            </dl>
+          ) : <p role="status">{agentError ?? '正在讀取連線資訊…'}</p>}
+          <p>把 Skill 目錄交給支援 Skill 的本機 Agent，並指定上方連線檔。程式需保持開啟。</p>
+        </details>
         <section className="collect-panel" aria-labelledby="collect-title">
           <div>
             <p className="eyebrow">COLLECT</p>

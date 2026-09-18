@@ -9,11 +9,13 @@ import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { Collector } from '../core/collector.js';
 import type { RunningServer } from '../server/start.js';
 import { startServer } from '../server/start.js';
+import { startAgentAccess } from '../server/agent-access.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from '../vault/markdown-vault.js';
 
 let mainWindow: BrowserWindow | null = null;
 let server: RunningServer | null = null;
+let agentAccess: Awaited<ReturnType<typeof startAgentAccess>> | null = null;
 let searchRuntime: SearchRuntime | null = null;
 let channelScheduler: ChannelScheduler | null = null;
 let isQuitting = false;
@@ -90,6 +92,12 @@ app.whenReady().then(async () => {
     databasePath: path.join(app.getPath('userData'), 'search'),
   });
   const collector = new Collector(capture, vault, searchRuntime.search);
+  agentAccess = await startAgentAccess({
+    collector,
+    search: searchRuntime.search,
+    connectionFile: path.join(app.getPath('userData'), 'agent-connection.json'),
+    skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
+  });
   const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
   channelScheduler = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
   await channelScheduler.start();
@@ -99,6 +107,7 @@ app.whenReady().then(async () => {
     schedule: channelScheduler,
     search: searchRuntime.search,
     port: 0,
+    agentInfo: agentAccess.info,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
   await createWindow();
@@ -124,13 +133,15 @@ function checkScheduleAfterResume(): void {
 }
 
 app.on('before-quit', (event) => {
-  if (!server && !searchRuntime && !channelScheduler) return;
+  if (!server && !searchRuntime && !channelScheduler && !agentAccess) return;
   event.preventDefault();
   isQuitting = true;
   powerMonitor.removeListener('resume', checkScheduleAfterResume);
   mainWindow?.destroy();
   mainWindow = null;
   const activeServer = server;
+  const activeAgentAccess = agentAccess;
+  agentAccess = null;
   const activeSearchRuntime = searchRuntime;
   const activeChannelScheduler = channelScheduler;
   server = null;
@@ -139,6 +150,7 @@ app.on('before-quit', (event) => {
   void Promise.resolve()
     .then(() => activeChannelScheduler?.close())
     .then(() => activeServer?.close())
+    .then(() => activeAgentAccess?.close())
     .then(() => activeSearchRuntime?.close())
     .finally(() => app.quit());
 });

@@ -52,6 +52,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 main { padding: 32px 4vw 48px; }
 
+.agent-panel { max-width: 1440px; margin: 0 auto 22px; padding: 16px 22px; border: 1px solid #d9e2d5; border-radius: 14px; background: #fcfdf9; font-size: 13px; }
+.agent-panel summary { cursor: pointer; font-weight: 650; }
+.agent-panel p { color: #59675f; line-height: 1.6; }
+.agent-panel dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; }
+.agent-panel dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+
 .collect-panel {
   max-width: 1440px;
   margin: 0 auto 26px;

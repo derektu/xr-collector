@@ -47,6 +47,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  agentConnection(): Promise<{ url: string; connectionFile: string; skillPath: string }> {
+    return request('/api/agent/connection');
+  },
   async getChannelSchedule(): Promise<ChannelSchedule> {
     const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule');
     return result.schedule;
