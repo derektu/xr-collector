@@ -90,6 +90,7 @@ app.whenReady().then(async () => {
   const { collector, channels, schedule, search } = workspace;
   channelScheduler = schedule;
   agentAccess = await startAgentAccess({
+    transfer: workspace,
     collector,
     search,
     connectionFile: path.join(app.getPath('userData'), 'agent-connection.json'),

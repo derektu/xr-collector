@@ -9,6 +9,7 @@ import type { Collector } from '../core/collector.js';
 import {
   CollectorError,
   type AddChannelResult,
+  type MergeChoice,
   type ChannelRun,
   type ChannelSchedule,
   type TranscriptSearch,
@@ -83,6 +84,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const transfer = options.transfer;
     const writes = new WeakMap<object, () => void>();
     app.addHook('preHandler', async (request) => {
+      if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/api/')
+        && request.routeOptions.url !== '/api/vault/status') transfer.assertReadable();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
         && !request.routeOptions.url?.startsWith('/api/vault/')) {
         writes.set(request, transfer.enterWrite());
@@ -97,6 +100,17 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const buffer = await transfer.export();
       return reply.type('application/octet-stream')
         .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(buffer);
+    });
+    app.post<{ Body: Buffer }>('/api/vault/merge/preview', { bodyLimit: PACKAGE_LIMIT }, async (request) => {
+      if (!Buffer.isBuffer(request.body)) throw new CollectorError('invalid_request', '請上傳 .xr-vault 資料包。');
+      return transfer.previewMerge(request.body);
+    });
+    app.post<{ Body: { id: string; choices: Record<string, MergeChoice> } }>('/api/vault/merge/apply', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
+      return reply.code(202).send(transfer.applyMerge(request.body?.id, request.body?.choices));
+    });
+    app.post<{ Body: { id: string } }>('/api/vault/merge/cancel', async (request) => {
+      transfer.cancelMerge(request.body?.id);
+      return { cancelled: true };
     });
     app.post<{ Body: Buffer }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
       if (!Buffer.isBuffer(request.body)) throw new CollectorError('invalid_request', '請上傳 .xr-vault 資料包。');

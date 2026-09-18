@@ -1,3 +1,4 @@
+import { VaultMerge } from './VaultMerge.js';
 import { useEffect, useState } from 'react';
 import type { TransferStatus } from '../core/types.js';
 
@@ -68,7 +69,7 @@ export function VaultTransfer() {
   }
 
   return <details className="agent-panel">
-    <summary>資料匯出與還原</summary>
+    <summary>資料匯出、還原與合併</summary>
     <p>匯出文件、保留附件及頻道設定。還原會建立並切換到獨立 vault，原 vault 保留，排程先暫停。</p>
     <p className="vault-path">目前 vault：{status?.vaultPath ?? '讀取中…'}</p>
     <div className="vault-actions">
@@ -76,6 +77,7 @@ export function VaultTransfer() {
       <label>選擇資料包 <input aria-label="選擇資料包" type="file" accept=".xr-vault" disabled={busy || active(status)} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
       <button type="button" disabled={!file || busy || active(status)} onClick={() => void restoreData()}>還原成新 vault 並切換</button>
     </div>
+    <VaultMerge file={file} disabled={busy || active(status)} onBusy={setBusy} onStatus={(next) => { setStatus(next); setMessage(''); }} />
     <p>上限：128 MiB 資料包、80 MiB 檔案內容、10000 個檔案。搜尋索引與裝置憑證不包含在資料包中。</p>
     {(message || status?.message) && <p role="status">{message || status?.message}
       {status?.state === 'extracting' ? `（${status.completedFiles} / ${status.totalFiles}）` : ''}

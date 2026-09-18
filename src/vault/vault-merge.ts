@@ -1,0 +1,111 @@
+import { createHash } from 'node:crypto';
+import { parse } from 'yaml';
+import { CollectorError, type MergeItem, type MergeChoice } from '../core/types.js';
+
+export type Files = Map<string, Buffer>;
+export const fingerprint = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+// Packages reach this module only after unpackVault validates their contents.
+export function packageFiles(buffer: Buffer): Files {
+  const value = JSON.parse(buffer.toString()) as { files: { path: string; data: string }[] };
+  return new Map(value.files.map((file) => [file.path, Buffer.from(file.data, 'base64')]));
+}
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function document(bytes: Buffer) {
+  const match = bytes.toString().replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u);
+  if (!match) throw new CollectorError('invalid_request', '文件格式無效。');
+  const metadata = parse(match[1]!) as Record<string, unknown> & { collector: Record<string, unknown> };
+  const time = String(metadata.collector.updated_at ?? metadata.collector.collected_at ?? '未提供');
+  delete metadata.collector.collected_at;
+  delete metadata.collector.updated_at;
+  return { content: `${canonical(metadata)}\n${match[2]!.trim()}`, time, title: String(metadata.title) };
+}
+function view(bytes: Buffer | undefined): string {
+  if (!bytes) return '';
+  const text = bytes.toString('utf8');
+  if (text.includes('\0') || !Buffer.from(text).equals(bytes)) return `二進位檔案 · ${bytes.length} bytes · SHA-256 ${fingerprint(bytes)}`;
+  return text.length > 100_000 ? `${text.slice(0, 100_000)}\n…（僅顯示前 100000 字元；比較使用完整內容）` : text;
+}
+const CHANNELS = 'settings/youtube-channels.json';
+const SCHEDULE = 'settings/youtube-schedule.json';
+function channels(files: Files): Map<string, Record<string, unknown>> {
+  const rows = JSON.parse(files.get(CHANNELS)?.toString() ?? '[]') as Record<string, unknown>[];
+  const result = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const id = String(row.id);
+    if (result.has(id)) throw new CollectorError('invalid_request', `頻道 ID 重複：${id}`);
+    result.set(id, row);
+  }
+  return result;
+}
+function schedule(bytes: Buffer): { enabled: boolean; intervalMinutes: number } {
+  const value = JSON.parse(bytes.toString()) as { enabled: boolean; intervalMinutes: number };
+  return { enabled: value.enabled, intervalMinutes: value.intervalMinutes };
+}
+export function compareFiles(local: Files, incoming: Files): MergeItem[] {
+  const items: MergeItem[] = [];
+  for (const [file, bytes] of incoming) {
+    if (file === CHANNELS) continue;
+    const before = local.get(file);
+    let equal = before?.equals(bytes) ?? false;
+    let label = file;
+    let localTime: string | null = null; let incomingTime: string | null = null;
+    let localText = view(before); let incomingText = view(bytes);
+    if (file.startsWith('documents/')) {
+      const right = document(bytes); const left = before ? document(before) : null;
+      label = `${right.title} (${file.split('/').pop()})`;
+      equal = left?.content === right.content; localTime = left?.time ?? null; incomingTime = right.time;
+    } else if (file === SCHEDULE) {
+      equal = !!before && canonical(schedule(before)) === canonical(schedule(bytes));
+      localText = before ? JSON.stringify(schedule(before), null, 2) : '';
+      incomingText = JSON.stringify(schedule(bytes), null, 2);
+    }
+    items.push({ key: file, kind: file.startsWith('documents/') ? 'document' : file === SCHEDULE ? 'schedule' : 'file',
+      label, state: !before ? 'new' : equal ? 'same' : 'conflict', localTime, incomingTime, localText, incomingText });
+  }
+  const left = channels(local);
+  for (const [id, row] of channels(incoming)) {
+    const before = left.get(id);
+    const content = ({ addedAt: _time, ...rest }: Record<string, unknown>) => canonical(rest);
+    items.push({ key: `channel:${id}`, kind: 'channel', label: `${row.title} (${id})`,
+      state: !before ? 'new' : content(before) === content(row) ? 'same' : 'conflict',
+      localTime: before ? String(before.addedAt) : null, incomingTime: String(row.addedAt),
+      localText: before ? JSON.stringify(before, null, 2) : '', incomingText: JSON.stringify(row, null, 2) });
+  }
+  // A cross-package path collision cannot be resolved with a file-level choice.
+  const paths = [...new Set([...local.keys(), ...incoming.keys()])];
+  const lower = new Map<string, string>();
+  for (const file of paths) {
+    const key = file.toLowerCase();
+    if (lower.has(key) && lower.get(key) !== file) throw new CollectorError('invalid_request', `兩份 vault 的路徑大小寫衝突：${file}`);
+    lower.set(key, file);
+  }
+  for (const file of lower.keys()) {
+    const parts = file.split('/');
+    while (parts.length > 1) { parts.pop(); if (lower.has(parts.join('/'))) throw new CollectorError('invalid_request', `兩份 vault 的檔案與目錄衝突：${file}`); }
+  }
+  return items;
+}
+export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], choices: Record<string, MergeChoice>): Files {
+  const conflicts = new Set(items.filter((item) => item.state === 'conflict').map((item) => item.key));
+  if (Object.keys(choices).some((key) => !conflicts.has(key)) || [...conflicts].some((key) => choices[key] !== 'local' && choices[key] !== 'incoming')) {
+    throw new CollectorError('invalid_request', '請為每一項差異選擇保留本機或採用匯入版本。');
+  }
+  const result = new Map(local); const rows = channels(local); const incomingRows = channels(incoming);
+  let channelsChanged = false;
+  for (const item of items) {
+    if (item.state === 'same' || (item.state === 'conflict' && choices[item.key] === 'local')) continue;
+    if (item.kind === 'channel') { rows.set(item.key.slice(8), incomingRows.get(item.key.slice(8))!); channelsChanged = true; }
+    else if (item.kind === 'schedule') {
+      // Run history belongs to this device. Imported scheduling never triggers collection automatically.
+      const previous = JSON.parse(local.get(SCHEDULE)?.toString() ?? '{}') as Record<string, unknown>;
+      result.set(SCHEDULE, Buffer.from(JSON.stringify({ version: 1, lastAttemptAt: null, lastCompletedAt: null, lastResult: null,
+        ...previous, intervalMinutes: schedule(incoming.get(SCHEDULE)!).intervalMinutes, enabled: false, nextRunAt: null }, null, 2) + '\n'));
+    } else result.set(item.key, incoming.get(item.key)!);
+  }
+  if (channelsChanged) result.set(CHANNELS, Buffer.from(JSON.stringify([...rows.values()], null, 2) + '\n'));
+  return new Map([...result].filter(([key, value]) => !local.get(key)?.equals(value)));
+}

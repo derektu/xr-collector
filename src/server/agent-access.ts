@@ -6,6 +6,7 @@ import { startServer, type StartServerOptions } from './start.js';
 /** A separate listener shares the UI's services, but authorizes only document reads. */
 export async function startAgentAccess(options: {
   collector: StartServerOptions['collector'];
+  transfer?: StartServerOptions['transfer'];
   search: NonNullable<StartServerOptions['search']>;
   connectionFile: string;
   skillPath: string;
@@ -13,6 +14,7 @@ export async function startAgentAccess(options: {
   const token = randomBytes(32).toString('hex');
   const server = await startServer({
     collector: options.collector,
+    ...(options.transfer ? { transfer: options.transfer } : {}),
     search: options.search,
     agentToken: token,
     port: 0,

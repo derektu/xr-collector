@@ -332,3 +332,12 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
 
 .vault-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .vault-path { overflow-wrap: anywhere; }
+
+.vault-merge { margin-top: 1rem; }
+.merge-item { margin: .6rem 0; border: 1px solid #ccd2da; border-radius: 6px; padding: .6rem; }
+.merge-item summary { cursor: pointer; overflow-wrap: anywhere; }
+.merge-item fieldset { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: .8rem; }
+.merge-diff { max-height: 28rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.merge-diff span { display: block; min-height: 1em; }
+.diff-removed { background: #ffe8e8; color: #812424; }
+.diff-added { background: #def5e3; color: #185b2a; }

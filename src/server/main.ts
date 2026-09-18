@@ -31,6 +31,7 @@ const workspace = await VaultWorkspace.open({
 });
 const { collector, channels, schedule, search } = workspace;
 const agentAccess = await startAgentAccess({
+  transfer: workspace,
   collector,
   search,
   connectionFile: path.join(projectRoot, '.data', 'agent-connection.json'),
