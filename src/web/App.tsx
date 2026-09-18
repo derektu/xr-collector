@@ -481,6 +481,8 @@ export default function App() {
                 onChange={(event) => setScheduleInterval(Number(event.target.value))}
                 disabled={scheduleAction}
               >
+                {![1, 5, 15, 60, 360, 1440].includes(scheduleInterval) &&
+                  <option value={scheduleInterval}>每 {formatScheduleInterval(scheduleInterval)}</option>}
                 <option value={1}>每 1 分鐘（示範）</option>
                 <option value={5}>每 5 分鐘</option>
                 <option value={15}>每 15 分鐘</option>

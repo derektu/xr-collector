@@ -175,3 +175,19 @@ export interface TransferStatus {
   totalFiles: number;
   vaultPath: string;
 }
+
+export type MergeChoice = 'local' | 'incoming';
+export interface MergeItem {
+  key: string;
+  kind: 'document' | 'channel' | 'schedule' | 'file';
+  label: string;
+  state: 'new' | 'same' | 'conflict';
+  localTime: string | null;
+  incomingTime: string | null;
+  localText: string;
+  incomingText: string;
+}
+export interface MergePreview {
+  id: string;
+  items: MergeItem[];
+}

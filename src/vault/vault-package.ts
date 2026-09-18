@@ -18,7 +18,7 @@ function invalid(message: string): never {
   throw new CollectorError('invalid_request', message);
 }
 
-function safePath(value: string): boolean {
+export function safePath(value: string): boolean {
   if (value.length > 500 || value !== value.normalize('NFC')) return false;
   const segments = value.split('/');
   if (segments.some((part) => !part || part === '.' || part === '..'
@@ -67,7 +67,7 @@ export async function exportVault(root: string): Promise<Buffer> {
   return buffer;
 }
 
-export async function unpackVault(buffer: Buffer, destination: string, progress: (done: number, total: number) => void): Promise<void> {
+export async function unpackVault(buffer: Buffer, destination: string, progress: (done: number, total: number) => void, pauseSchedule = true): Promise<void> {
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
   let parsed: VaultPackage;
   try { parsed = JSON.parse(buffer.toString('utf8')) as VaultPackage; } catch { invalid('資料包不是有效的 JSON。'); }
@@ -123,7 +123,7 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
     await new JsonChannelStore(destination).list();
     const store = new JsonChannelScheduleStore(destination);
     const schedule = await store.load();
-    await store.save({ ...schedule, enabled: false, nextRunAt: null });
+    if (pauseSchedule) await store.save({ ...schedule, enabled: false, nextRunAt: null });
   } catch {
     invalid('資料包中的文件、頻道或排程資料格式無效。');
   }

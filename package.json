@@ -20,7 +20,8 @@
     "test": "vitest run --config vitest.config.ts",
     "test:meilisearch": "npm run download:runtime && vitest run --config vitest.config.ts tests/meilisearch-integration.test.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "prepare:transfer-demo": "npm run build:node && node scripts/prepare-transfer-demo.mjs"
+    "prepare:transfer-demo": "npm run build:node && node scripts/prepare-transfer-demo.mjs",
+    "prepare:merge-demo": "npm run build:node && node scripts/prepare-merge-demo.mjs"
   },
   "dependencies": {
     "@fastify/static": "10.1.4",
