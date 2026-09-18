@@ -150,7 +150,8 @@ export class MeilisearchBackend implements SearchBackend {
         method: 'POST',
         body: JSON.stringify({
           q: query.query,
-          limit: 50,
+          limit: query.limit ?? 50,
+          offset: query.offset ?? 0,
           attributesToRetrieve: [
             'id',
             'title',

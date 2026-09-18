@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
@@ -32,6 +33,8 @@ export interface HttpAppOptions {
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
   webRoot?: string;
+  agentToken?: string;
+  agentInfo?: { connectionFile: string; skillPath: string; url: string };
 }
 
 const ERROR_STATUS: Record<CollectorError['code'], number> = {
@@ -50,6 +53,27 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+
+  if (options.agentToken !== undefined) {
+    if (!options.agentToken) throw new Error('Agent token must not be empty');
+    const expected = Buffer.from(`Bearer ${options.agentToken}`);
+    app.addHook('onRequest', async (request, reply) => {
+      const supplied = Buffer.from(request.headers.authorization ?? '');
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
+          error: { code: 'unauthorized', message: '請使用目前連線檔中的 Agent token。' },
+        });
+      }
+      const route = request.routeOptions.url;
+      if (request.method !== 'GET' || ![
+        '/api/health', '/api/documents', '/api/documents/:id', '/api/search', '/api/search/status',
+      ].includes(route ?? '')) {
+        return reply.code(403).send({
+          error: { code: 'read_only', message: 'Agent 僅能列出、搜尋及讀取文件。' },
+        });
+      }
+    });
+  }
 
   app.addHook('onSend', async (_request, reply, payload) => {
     reply.header('Cache-Control', 'no-store');
@@ -73,7 +97,25 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
-  app.get('/api/documents', async () => ({ documents: await options.collector.list() }));
+  if (options.agentInfo && options.agentToken === undefined) {
+    app.get('/api/agent/connection', async () => options.agentInfo);
+  }
+
+  app.get<{ Querystring: { offset?: string; limit?: string } }>('/api/documents', async (request) => {
+    const documents = await options.collector.list();
+    documents.sort((a, b) => b.collectedAt.localeCompare(a.collectedAt) || a.id.localeCompare(b.id));
+    if (options.agentToken === undefined && request.query.offset === undefined && request.query.limit === undefined) {
+      return { documents };
+    }
+    const { offset, limit } = pagination(request.query);
+    return {
+      documents: documents.slice(offset, offset + limit),
+      total: documents.length,
+      offset,
+      limit,
+      nextOffset: offset + limit < documents.length ? offset + limit : null,
+    };
+  });
 
   app.get<{
     Querystring: {
@@ -81,10 +123,17 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       channel?: string;
       publishedFrom?: string;
       publishedTo?: string;
+      offset?: string;
+      limit?: string;
     };
   }>('/api/search', async (request) => {
     if (!options.search) {
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
+    }
+    for (const value of Object.values(request.query)) {
+      if (typeof value !== 'string') {
+        throw new CollectorError('invalid_request', '每個搜尋參數只能提供一個值。');
+      }
     }
     const query = request.query.q?.trim() ?? '';
     const { channel, publishedFrom, publishedTo } = request.query;
@@ -103,6 +152,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       ...(channel ? { channel } : {}),
       ...(publishedFrom ? { publishedFrom } : {}),
       ...(publishedTo ? { publishedTo } : {}),
+      ...((request.query.offset !== undefined || request.query.limit !== undefined)
+        ? pagination(request.query) : {}),
     });
   });
 
@@ -234,4 +285,19 @@ function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+function pagination(query: { offset?: string; limit?: string }): { offset: number; limit: number } {
+  const parse = (value: string | undefined, fallback: number, min: number, max: number): number => {
+    if (value === undefined) return fallback;
+    if (typeof value !== 'string' || !/^\d+$/u.test(value)) {
+      throw new CollectorError('invalid_request', '分頁參數必須是整數。');
+    }
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < min || number > max) {
+      throw new CollectorError('invalid_request', 'offset 必須介於 0 到 1000000，limit 必須介於 1 到 100。');
+    }
+    return number;
+  };
+  return { offset: parse(query.offset, 0, 0, 1_000_000), limit: parse(query.limit, 50, 1, 100) };
 }

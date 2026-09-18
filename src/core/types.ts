@@ -46,6 +46,8 @@ export interface DocumentSummary {
 
 export interface SearchQuery {
   query: string;
+  offset?: number;
+  limit?: number;
   channel?: string;
   publishedFrom?: string;
   publishedTo?: string;

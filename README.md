@@ -2,7 +2,7 @@
 
 XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即或定時抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
-本 repository 的可執行交付範圍對應 GitLab Issue #6：單支影片收集、文件保存與搜尋、頻道清單與立即抓取，以及應用程式執行期間的週期排程。已收集內容管理、Agent 存取及跨機還原由後續 tickets 交付。
+本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，以及 Issue #7 的 Agent 只讀存取。已收集內容管理及跨機還原由其他 tickets 交付。
 
 ## 執行模式
 
@@ -100,6 +100,28 @@ Markdown vault 是正式資料，Meilisearch 是每台裝置上可重建的搜�
 搜尋索引包含影片標題、頻道名稱與字幕正文。結果依 Meilisearch 關聯性排序，顯示命中位置附近的字幕片段，可以再以頻道和影片發布日期篩選。點選結果後，畫面以文件 ID 透過 `GET /api/documents/:id` 讀取完整文件。
 
 Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追蹤「啟動中、更新中、重建中、已就緒、錯誤」狀態。搜尋資料目錄不存在時，Collector 從 vault 重建全部索引；目錄存在且文件數一致時，重啟直接沿用持久化索引。繁簡轉換與進階中文調校不屬於 Issue #4 搜尋契約。
+
+## Agent 存取
+
+應用程式啟動時建立獨立的 loopback HTTP 入口，與 UI 共用同一個 Collector、vault 與搜尋服務。Agent 入口只允許帶 Bearer token 的文件列表、搜尋、全文及索引狀態讀取；所有寫入與其他 routes 回傳 403。這是 Agent API 的權限邊界，不是對本機使用者或 UI 的作業系統隔離。UI 本身的收集與排程操作仍由既有本機入口提供。
+
+畫面上方「Agent 存取」顯示 HTTP 位址、連線檔及 Skill 目錄。每次啟動重新產生 port 與 token，連線檔原子更新且在 macOS 限定目前使用者讀寫（0600）。連線檔位於 vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 連線失敗時會重新讀取一次並提示確認程式狀態。
+
+- Web 開發／standalone：`.data/agent-connection.json`；Skill 位於 repository 的 `skills/xr-collector-agent`。
+- 安裝版：Electron application data 目錄下的 `agent-connection.json`；Skill 隨安裝包放在 `XR Collector.app/Contents/Resources/skills/xr-collector-agent`。實際位置以畫面為準。
+
+Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。Agent 使用自身已有的工具讀取本機連線檔、解析 JSON，並向 loopback HTTP 發送帶 Authorization header 的 GET 請求。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
+
+可以直接請 Agent 讀取 Skill 目錄中的 `SKILL.md`，並提供畫面上的連線檔位置；也可以把整個 `xr-collector-agent` 目錄複製到該 Agent 的 Skill 安裝目錄。操作與 HTTP 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約，路徑由畫面提供；跨平台契約不代表 Windows 安裝版已完成驗證。
+
+試用時可以交給本機 Agent 以下要求，並把路徑替換為畫面顯示的位置：
+
+```text
+請使用 <Skill 目錄>/SKILL.md，連線檔是 <連線檔路徑>。
+先列出已保存文件，再搜尋 math，讀取一份命中文件並附上來源。
+```
+
+列表預設每頁 50 份，回傳下一頁 offset；收集期間列表可能移動，跨頁使用穩定文件 ID 去重。搜尋與 UI 使用相同關聯性排序及篩選，支援 offset/limit；搜尋命中數是估計值，Meilisearch 預設可翻閱前 1000 個命中。索引未就緒時搜尋回報 503，列表與全文仍直接讀取 vault。第一版不提供 MCP，也不透過 Agent 啟動收集或修改資料。
 
 ## 收集規則
 
