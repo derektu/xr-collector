@@ -1,3 +1,5 @@
+import type { VaultWorkspace } from '../vault/workspace.js';
+import { PACKAGE_LIMIT } from '../vault/vault-package.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
@@ -29,6 +31,7 @@ export interface ChannelScheduleManagement {
 
 export interface HttpAppOptions {
   collector: Collector;
+  transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
@@ -38,6 +41,7 @@ export interface HttpAppOptions {
 }
 
 const ERROR_STATUS: Record<CollectorError['code'], number> = {
+  vault_busy: 409,
   invalid_url: 400,
   invalid_channel: 400,
   invalid_request: 400,
@@ -75,6 +79,32 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   }
 
+  if (options.transfer) {
+    const transfer = options.transfer;
+    const writes = new WeakMap<object, () => void>();
+    app.addHook('preHandler', async (request) => {
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+        && !request.routeOptions.url?.startsWith('/api/vault/')) {
+        writes.set(request, transfer.enterWrite());
+      }
+    });
+    app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
+    app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
+    app.addHook('onError', async (request) => { writes.get(request)?.(); });
+    app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: PACKAGE_LIMIT }, (_request, body, done) => done(null, body));
+    app.get('/api/vault/status', async () => transfer.status());
+    app.post('/api/vault/export', async (_request, reply) => {
+      const buffer = await transfer.export();
+      return reply.type('application/octet-stream')
+        .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(buffer);
+    });
+    app.post<{ Body: Buffer }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
+      if (!Buffer.isBuffer(request.body)) throw new CollectorError('invalid_request', '請上傳 .xr-vault 資料包。');
+      const status = transfer.restore(request.body);
+      return reply.code(202).send(status);
+    });
+  }
+
   app.addHook('onSend', async (_request, reply, payload) => {
     reply.header('Cache-Control', 'no-store');
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -87,6 +117,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       void reply.status(ERROR_STATUS[error.code]).send({
         error: { code: error.code, message: error.message },
       });
+      return;
+    }
+    if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 413) {
+      void reply.status(413).send({ error: { code: 'invalid_request', message: '資料包超過 128 MiB。' } });
       return;
     }
     app.log.error(error);

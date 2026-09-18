@@ -40,6 +40,10 @@ export class Collector {
     return task;
   }
 
+  isBusy(): boolean {
+    return this.inFlight.size > 0;
+  }
+
   list(): Promise<DocumentSummary[]> {
     return this.vault.list();
   }

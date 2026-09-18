@@ -2,23 +2,20 @@ import path from 'node:path';
 import { app, BrowserWindow, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
-import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
-import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
-import { JsonChannelStore } from '../channels/json-channel-store.js';
-import { Collector } from '../core/collector.js';
 import type { RunningServer } from '../server/start.js';
 import { startServer } from '../server/start.js';
 import { startAgentAccess } from '../server/agent-access.js';
-import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
-import { MarkdownVault } from '../vault/markdown-vault.js';
+import { VaultWorkspace } from '../vault/workspace.js';
 
 let mainWindow: BrowserWindow | null = null;
 let server: RunningServer | null = null;
 let agentAccess: Awaited<ReturnType<typeof startAgentAccess>> | null = null;
-let searchRuntime: SearchRuntime | null = null;
+let workspace: VaultWorkspace | null = null;
 let channelScheduler: ChannelScheduler | null = null;
 let isQuitting = false;
+
+if (process.env.XR_COLLECTOR_PROFILE) app.setPath('userData', path.resolve(process.env.XR_COLLECTOR_PROFILE));
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
@@ -85,27 +82,25 @@ app.whenReady().then(async () => {
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
   });
-  const vault = new MarkdownVault(vaultRoot);
-  searchRuntime = await startSearchRuntime({
-    vault,
-    binaryPath: runtimePath('meilisearch'),
-    databasePath: path.join(app.getPath('userData'), 'search'),
+  workspace = await VaultWorkspace.open({
+    defaultRoot: vaultRoot, capture, channelSource,
+    searchBinary: runtimePath('meilisearch'),
+    searchData: path.join(app.getPath('userData'), 'search'),
   });
-  const collector = new Collector(capture, vault, searchRuntime.search);
+  const { collector, channels, schedule, search } = workspace;
+  channelScheduler = schedule;
   agentAccess = await startAgentAccess({
     collector,
-    search: searchRuntime.search,
+    search,
     connectionFile: path.join(app.getPath('userData'), 'agent-connection.json'),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
   });
-  const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
-  channelScheduler = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
-  await channelScheduler.start();
   server = await startServer({
     collector,
+    transfer: workspace,
     channels,
     schedule: channelScheduler,
-    search: searchRuntime.search,
+    search,
     port: 0,
     agentInfo: agentAccess.info,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
@@ -133,7 +128,7 @@ function checkScheduleAfterResume(): void {
 }
 
 app.on('before-quit', (event) => {
-  if (!server && !searchRuntime && !channelScheduler && !agentAccess) return;
+  if (!server && !workspace && !channelScheduler && !agentAccess) return;
   event.preventDefault();
   isQuitting = true;
   powerMonitor.removeListener('resume', checkScheduleAfterResume);
@@ -142,15 +137,15 @@ app.on('before-quit', (event) => {
   const activeServer = server;
   const activeAgentAccess = agentAccess;
   agentAccess = null;
-  const activeSearchRuntime = searchRuntime;
+  const activeWorkspace = workspace;
   const activeChannelScheduler = channelScheduler;
   server = null;
-  searchRuntime = null;
+  workspace = null;
   channelScheduler = null;
   void Promise.resolve()
     .then(() => activeChannelScheduler?.close())
     .then(() => activeServer?.close())
     .then(() => activeAgentAccess?.close())
-    .then(() => activeSearchRuntime?.close())
+    .then(() => activeWorkspace?.close())
     .finally(() => app.quit());
 });

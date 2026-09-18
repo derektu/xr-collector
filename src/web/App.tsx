@@ -9,6 +9,7 @@ import type {
   ChannelRun,
   ChannelSchedule,
 } from '../core/types.js';
+import { VaultTransfer } from './VaultTransfer.js';
 import { api } from './api-client.js';
 import { scheduleDocumentRefresh } from './schedule-document-refresh.js';
 
@@ -350,6 +351,7 @@ export default function App() {
       </header>
 
       <main>
+        <VaultTransfer />
         <details className="agent-panel">
           <summary>Agent 存取 · 僅供本機讀取</summary>
           <p>讓 Agent 使用下方 Skill 瀏覽、搜尋與讀取這份知識庫。連線檔含只讀 token，每次啟動會更新；請保留在本機。</p>
