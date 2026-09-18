@@ -97,6 +97,10 @@ export class ChannelCollector {
     return operation;
   }
 
+  isBusy(): boolean {
+    return this.startingRun !== null || this.getActiveRun() !== null;
+  }
+
   getActiveRun(): ChannelRun | null {
     for (const run of this.runs.values()) {
       if (run.status !== 'completed') return this.snapshot(run);

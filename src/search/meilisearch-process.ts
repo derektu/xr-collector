@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -27,7 +28,7 @@ export async function startMeilisearchProcess(
     options.binaryPath,
     [
       '--db-path',
-      options.databasePath,
+      path.resolve(options.databasePath),
       '--http-addr',
       `127.0.0.1:${port}`,
       '--env',
@@ -35,6 +36,7 @@ export async function startMeilisearchProcess(
       '--no-analytics',
     ],
     {
+      cwd: path.dirname(path.resolve(options.databasePath)),
       env: {
         ...process.env,
         MEILI_MASTER_KEY: apiKey,

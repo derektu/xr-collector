@@ -43,6 +43,7 @@ export class ChannelScheduler {
   private schedule: StoredChannelSchedule | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking: Promise<void> | null = null;
+  private suspended = false;
   private scheduledRunId: string | null = null;
 
   constructor(
@@ -93,7 +94,16 @@ export class ChannelScheduler {
     return this.snapshot(current);
   }
 
+  setSuspended(suspended: boolean): void {
+    this.suspended = suspended;
+  }
+
+  isBusy(): boolean {
+    return this.checking !== null;
+  }
+
   checkNow(): Promise<void> {
+    if (this.suspended) return Promise.resolve();
     if (this.checking) return this.checking;
     const operation = this.runDueSchedule();
     this.checking = operation;

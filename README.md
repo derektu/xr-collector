@@ -2,7 +2,7 @@
 
 XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即或定時抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
-本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，以及 Issue #7 的 Agent 只讀存取。已收集內容管理及跨機還原由其他 tickets 交付。
+本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，Agent 只讀存取，以及完整資料包匯出與還原。已收集內容管理及 vault 合併由其他 tickets 交付。
 
 ## 執行模式
 
@@ -76,6 +76,37 @@ npm run package:mac
 - Electron 安裝版：Electron application data 目錄下的 `vault`
 
 開發或測試可以用 `XR_COLLECTOR_VAULT` 指定其他位置。
+
+## 資料匯出與還原
+
+畫面上方「資料匯出與還原」提供完整 `.xr-vault` 資料包下載及檔案上傳。還原會建立獨立 vault，完成檢查與搜尋索引重建後自動切換畫面；原 vault 保留，不覆寫或合併。程式重新啟動後繼續使用還原的 vault。
+
+資料包包含 `documents/youtube/*.md`、`attachments/`、保留的 `versions/`、`management/`，以及 `settings/youtube-channels.json`、`settings/youtube-schedule.json`。頻道清單與啟用狀態保留，還原的排程先暫停，須由使用者啟用。Meilisearch 資料庫、Agent token、帳號憑證及裝置設定不納入資料包。
+
+匯出與還原需等待收集及設定操作完成，執行期間禁止新的寫入並暫停排程觸發。這個一致性保證涵蓋目前程式管理的操作；請勿讓另一個程式同時寫入同一 vault，或在搬移期間手動修改檔案。
+
+資料包是 version 1 JSON，檔案以 Base64 保存，檔案內容與清單各自以 SHA-256 檢查完整性。校驗碼用於偵測損壞，不是來源簽章。上限為 128 MiB 資料包、80 MiB 解碼內容及 10000 個檔案。系統拒絕不安全路徑、重複與大小寫衝突路徑、不支援的版本、損壞內容及格式錯誤；匯出時拒絕資料目錄中的符號連結。
+
+還原先寫入 `<預設 vault>.restored/vault-<唯一值>`，顯示檔案進度，再建立獨立搜尋索引。資料或索引準備失敗時不切換 vault；原 vault、原索引與使用設定保留。成功後以 vault 之外的 `<預設 vault>.active.json` 記錄目前選擇。畫面顯示實際使用中的 vault 路徑。
+
+### 在一台電腦模擬 A → B
+
+安裝版可透過 `XR_COLLECTOR_PROFILE` 指定獨立的 application data 目錄。A、B 各有自己的 vault、搜尋索引、Agent 連線檔與裝置設定，不影響平常使用的資料。
+
+```bash
+npm run package:mac
+npm run prepare:transfer-demo
+```
+
+第二個命令建立全新的 `.data/transfer-demo/<時間>/`，包含 `open-A.command`、`open-B.command` 和兩份獨立 profile。A 有兩份合成測試文件、一個頻道、啟用但尚未到期的排程與二進位附件；B 有一份自己的文件。測試資料不需連線 YouTube，頻道只作為設定搬移驗證。
+
+1. 執行 `open-A.command`，展開「資料匯出與還原」，匯出並保存資料包。
+2. 用 Cmd+Q 結束 A，再執行 `open-B.command`。
+3. B 選擇 A 的 `.xr-vault`，按「還原成新 vault 並切換」。等待檔案還原及索引完成。
+4. 確認顯示 A 的兩份文件，搜尋「森林觀測」或 `orchid` 並閱讀全文；確認頻道保留、排程顯示暫停。B 原先的文件應留在 B 原 vault，不混入還原後的列表。
+5. 結束並重新執行 `open-B.command`，確認資料與搜尋仍可用。可在 A 關閉後把 A 的 profile 移到另一個位置，再做 B 的驗證，確認沒有依賴 A 的目錄。
+
+這是同一台電腦的隔離環境模擬，並非另一台實體電腦或另一種作業系統的驗收。自動化測試也會移除 A 的目錄，再還原到 B、啟動實際 Meilisearch，驗證 B 重啟後仍可搜尋。
 
 ## 頻道清單與立即抓取
 

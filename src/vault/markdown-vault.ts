@@ -36,8 +36,12 @@ interface StoredMetadata {
 function parseFrontmatter(content: string): { metadata: StoredMetadata; body: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match?.[1]) throw new Error('Invalid document frontmatter');
+  const metadata = parse(match[1]) as StoredMetadata;
+  if (metadata?.type !== 'Transcript' || metadata?.collector?.source !== 'youtube') {
+    throw new Error('Unsupported document format');
+  }
   return {
-    metadata: parse(match[1]) as StoredMetadata,
+    metadata,
     body: match[2] ?? '',
   };
 }

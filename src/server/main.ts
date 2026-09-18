@@ -2,13 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
-import { ChannelCollector } from '../channels/channel-collector.js';
-import { ChannelScheduler } from '../channels/channel-scheduler.js';
-import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
-import { JsonChannelStore } from '../channels/json-channel-store.js';
-import { Collector } from '../core/collector.js';
-import { startSearchRuntime } from '../search/runtime.js';
-import { MarkdownVault } from '../vault/markdown-vault.js';
+import { VaultWorkspace } from '../vault/workspace.js';
 import { startServer } from './start.js';
 import { startAgentAccess } from './agent-access.js';
 
@@ -29,31 +23,25 @@ const channelSource = new YtDlpChannelSource({
   binaryPath: process.env.XR_COLLECTOR_YTDLP ?? path.join(runtimeRoot, 'yt-dlp'),
   javaScriptRuntimePath: process.env.XR_COLLECTOR_DENO ?? path.join(runtimeRoot, 'deno'),
 });
-const vault = new MarkdownVault(vaultRoot);
-const searchRuntime = await startSearchRuntime({
-  vault,
-  binaryPath: process.env.XR_COLLECTOR_MEILISEARCH
-    ?? path.join(runtimeRoot, 'meilisearch'),
-  databasePath: path.resolve(
-    process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(projectRoot, '.data', 'dev-search'),
-  ),
-  port: searchPort,
+const workspace = await VaultWorkspace.open({
+  defaultRoot: vaultRoot, capture, channelSource,
+  searchBinary: process.env.XR_COLLECTOR_MEILISEARCH ?? path.join(runtimeRoot, 'meilisearch'),
+  searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(projectRoot, '.data', 'dev-search')),
+  searchPort,
 });
-const collector = new Collector(capture, vault, searchRuntime.search);
+const { collector, channels, schedule, search } = workspace;
 const agentAccess = await startAgentAccess({
   collector,
-  search: searchRuntime.search,
+  search,
   connectionFile: path.join(projectRoot, '.data', 'agent-connection.json'),
   skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
 });
-const channels = new ChannelCollector(channelSource, new JsonChannelStore(vaultRoot), collector);
-const schedule = new ChannelScheduler(channels, new JsonChannelScheduleStore(vaultRoot));
-await schedule.start();
 const server = await startServer({
   collector,
+  transfer: workspace,
   channels,
   schedule,
-  search: searchRuntime.search,
+  search,
   port,
   agentInfo: agentAccess.info,
   ...(existsSync(webRoot) ? { webRoot } : {}),
@@ -69,7 +57,7 @@ async function stop(): Promise<void> {
   await schedule.close();
   await server.close();
   await agentAccess.close();
-  await searchRuntime.close();
+  await workspace.close();
   process.exit(0);
 }
 

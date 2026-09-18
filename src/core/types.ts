@@ -145,6 +145,7 @@ export interface CollectResult {
 }
 
 export type CollectorErrorCode =
+  | 'vault_busy'
   | 'invalid_url'
   | 'invalid_channel'
   | 'no_subtitles'
@@ -165,4 +166,12 @@ export class CollectorError extends Error {
     this.name = 'CollectorError';
     this.code = code;
   }
+}
+
+export interface TransferStatus {
+  state: 'idle' | 'exporting' | 'validating' | 'extracting' | 'indexing' | 'completed' | 'error';
+  message: string;
+  completedFiles: number;
+  totalFiles: number;
+  vaultPath: string;
 }

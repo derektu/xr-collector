@@ -329,3 +329,6 @@ h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.14; }
   .library { border-right: 0; border-bottom: 1px solid #e1e5de; }
   .reader { padding: 28px 22px; }
 }
+
+.vault-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.vault-path { overflow-wrap: anywhere; }
