@@ -353,7 +353,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 **範圍**：
 
 - 建立 GitHub Actions workflow：可重現安裝、typecheck、必要測試與 build，記錄 commit 及產物。
-- 一般 CI 使用 GitHub-hosted Linux Runner；Mac／Windows 原生驗證與建置環境由 packaging 及平台驗證工作承接。
+- 一般 CI 使用 GitHub-hosted Linux Runner；#25 提供跨 session 共用的原生 PR 驗證入口、隔離資料與證據規範。依 PR 功能影響決定驗證平台；共用功能可在 Mac 或 Windows 任一平台完成，平台專屬功能須由對應平台完成，兩平台皆受影響時兩者皆需；本機缺少的平台由其他機器補驗。判斷與步驟見 [開發驗證流程](../development-validation.md)。平台打包／簽署由 #34 負責。
 - 測試／建置失敗回報明確，供後續 Release gate 使用；外部依賴固定版本及校驗。
 
 **驗收介面**：GitHub Actions workflow／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitHub 截圖。

@@ -21,7 +21,8 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
 function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
-  if (app.isPackaged) return path.join(process.resourcesPath, 'bin', name);
+  const executable = process.platform === 'win32' ? `${name}.exe` : name;
+  if (app.isPackaged) return path.join(process.resourcesPath, 'bin', executable);
   const environmentName = name === 'yt-dlp'
     ? 'XR_COLLECTOR_YTDLP'
     : name === 'deno'
@@ -29,8 +30,8 @@ function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
       : 'XR_COLLECTOR_MEILISEARCH';
   return process.env[environmentName]
     ?? (name === 'meilisearch'
-      ? path.join(app.getAppPath(), 'resources', 'bin', 'mac', name)
-      : name);
+      ? path.join(app.getAppPath(), 'resources', 'bin', process.platform === 'win32' ? 'win' : 'mac', executable)
+      : executable);
 }
 
 async function createWindow(): Promise<void> {

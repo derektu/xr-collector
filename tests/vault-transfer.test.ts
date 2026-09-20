@@ -101,7 +101,9 @@ describe('portable vault package', () => {
   });
   it('rejects symlinks during export', async () => {
     const root = await temp(); await mkdir(path.join(root, 'attachments'));
-    await symlink('/etc/hosts', path.join(root, 'attachments/link'));
+    const target = await temp();
+    await writeFile(path.join(target, 'outside.txt'), 'outside vault');
+    await symlink(target, path.join(root, 'attachments/link'), process.platform === 'win32' ? 'junction' : 'dir');
     await expect(exportVault(root)).rejects.toThrow('符號連結');
   });
   it('rejects duplicate, case-collision and file/directory collision paths before writing', async () => {

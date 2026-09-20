@@ -18,13 +18,15 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 
 - Node.js 22.12 或更新版本
 - npm
-- macOS arm64 開發環境
+- 下列 Web 開發範例以 macOS arm64 為準；原生驗證／打包支援 Mac arm64 與 Windows x64 Node（含 Windows ARM 上的 x64 模擬執行）
 
 安裝套件：
 
 ```bash
-npm install
+npm ci
+# Mac
 npm run download:runtime
+# Windows 改用 npm run download:runtime:win
 ```
 
 啟動 Web UI 與 API：
@@ -65,13 +67,16 @@ npm run build
 
 單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址或加入頻道操作。
 
-macOS arm64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
+原生 PR 驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。`npm run validation -- doctor` 檢查本機能力，`prepare` 自動建立指定版本的獨立 worktree。跨機證據彙整與完整命令見 [開發驗證流程](docs/development-validation.md)。
+
+macOS arm64／Windows x64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
 
 ```bash
-npm run package:mac
+npm run package:mac  # 在 Mac 執行
+npm run package:win  # 在 Windows 執行
 ```
 
-產物輸出至 `release/`。MVP 安裝包未簽章，並使用預設 Electron 圖示。
+產物輸出至 `release/`，不自動發布。MVP 安裝包未簽章，並使用預設 Electron 圖示。兩平台從同一個版本 commit 建置，驗收後再上傳至同一個 GitHub Release；詳細責任分工見開發驗證流程。
 
 ## 資料保存
 
