@@ -1,5 +1,7 @@
 # Crabbox：Windows Desktop E2E 與截圖可行性
 
+> 本文保留 Crabbox 研究與當時的試驗提案。現行決策使用 Mac 與 Parallels 原生工具，不以 Crabbox 為前置依賴；已實作的入口與後續 agent 操作以 [開發驗證流程](../development-validation.md) 為準。
+
 查核日期：2026-09-20。本輪閱讀官方文件與公開原始碼，未安裝 Crabbox、建立雲端資源或執行 XR Collector Windows E2E。以下是候選驗證架構，不代表已採用或已驗收。
 
 ## 判斷

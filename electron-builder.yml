@@ -26,3 +26,21 @@ mac:
       to: bin/deno
     - from: resources/bin/mac/meilisearch
       to: bin/meilisearch
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: XR-Collector-${version}-win-${arch}-setup.${ext}
+  extraResources:
+    - from: skills
+      to: skills
+    - from: resources/bin/win
+      to: bin
+      filter: ['*.exe']
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: false
+  deleteAppDataOnUninstall: false
