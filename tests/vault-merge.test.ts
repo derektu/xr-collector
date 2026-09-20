@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile, readdir, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -275,7 +276,7 @@ describe('transaction and HTTP', () => {
   });
 });
 
-it('updates real Meilisearch incrementally, removes old terms, and keeps results after restart', async () => {
+it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('updates real Meilisearch incrementally, removes old terms, and keeps results after restart', async () => {
   const { incoming, workspace, options } = await fixture(true);
   await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
   expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(1);
