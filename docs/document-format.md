@@ -1,6 +1,6 @@
 # 文件格式與生命週期
 
-> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitLab #1](https://gitscr1.moneydj.com/km/xr-collector/-/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitHub #1](https://github.com/derektu/xr-collector/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
 
 本文件為 Issue #2 的規格草案，供討論與 review，尚未作為實作定案。文件模型適用於 XQ 新聞／研報、YouTube 字幕、RSS 與網頁收集。OKF 依據與限制見 [研究筆記](research/okf.md)。
 

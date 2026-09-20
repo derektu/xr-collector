@@ -1,6 +1,6 @@
 # 資料儲存、備份、合併與搜尋
 
-> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitLab #1](https://gitscr1.moneydj.com/km/xr-collector/-/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitHub #1](https://github.com/derektu/xr-collector/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
 
 ## 文件定位
 

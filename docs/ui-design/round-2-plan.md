@@ -1,8 +1,8 @@
 # XR Collector 第二輪介面與開發計畫
 
-狀態：產品流程依 2026-09-20 討論結論規劃；執行票與 GitLab 同步，詳細驗收計畫於各票開發前擬定。架構與實作細節為開發提案。需求依據為 [UI Design Spec](README.md)、六份 HTML wireframe，以及 GitLab [#17](https://gitscr1.moneydj.com/km/xr-collector/-/issues/17)、[#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18)、[#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20)、[#23](https://gitscr1.moneydj.com/km/xr-collector/-/issues/23)。程式檢視基準為 2026-09-19、commit `ca50294`；`docs/ui-design/` 當時為工作目錄中的未追蹤文件。
+狀態：產品流程依 2026-09-20 討論結論規劃；執行票與 GitHub 同步，詳細驗收計畫於各票開發前擬定。架構與實作細節為開發提案。需求依據為 [UI Design Spec](README.md)、六份 HTML wireframe，以及 GitHub [#17](https://github.com/derektu/xr-collector/issues/17)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#23](https://github.com/derektu/xr-collector/issues/23)。程式檢視基準為 2026-09-19、commit `ca50294`；`docs/ui-design/` 當時為工作目錄中的未追蹤文件。
 
-本文集中保存需求分析、已確認的產品流程、程式現況與建議順序。已確認決策彙整於第 7 節；其餘建議仍須於對應實作階段收斂。執行總覽為 [#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)；第 6 節記錄每張 ticket 的範圍、依賴與驗收介面。票已建立不代表功能已實作。
+本文集中保存需求分析、已確認的產品流程、程式現況與建議順序。已確認決策彙整於第 7 節；其餘建議仍須於對應實作階段收斂。執行總覽為 [#24](https://github.com/derektu/xr-collector/issues/24)；第 6 節記錄每張 ticket 的範圍、依賴與驗收介面。票已建立不代表功能已實作。
 
 ## 1. 第二輪的產品成果
 
@@ -275,13 +275,13 @@ Collector 核心負責 HTTP、Vault、scheduler、worker、搜尋 process 及記
 - 檢查結果分為「已是最新版」、「有新版本」及「檢查失敗」。新版顯示版本號、更新說明與「更新」按鈕；失敗提供原因與重試入口。
 - 自動及手動檢查共用狀態；重複點擊不建立並行的檢查或下載。手動檢查本身不代表同意安裝。
 
-初期由內部 `gitscr1.moneydj.com` 的 XR Collector GitLab Releases 管理版本與 Release；安裝檔及更新 metadata 放在公司網路內所有測試者可存取、無須登入或 token 的下載位置，Release 可連結至該處。下載網址於交付時指定，後續移至公開發布位置。更新來源位置與業務功能分開設定，避免散落於 UI 或收集邏輯。遷移計畫須涵蓋已安裝版本如何取得新的更新來源，不能只修改新版本的網址。
+版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 的免登入下載位置、存取網路及發布方式於 #35 確認；private GitHub repository 的 Release 不視為匿名下載來源。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
 
-macOS 由使用者在自己的 Mac 分別建置 arm64 與 x64 安裝包，內附工具依目標架構準備。Windows x64 優先使用公司 GitLab Runner 建置；實作時驗證 Runner 是否可用，不可行時改由另一台 Windows 電腦建置。CI 共用檢查與本機 Release script 使用相同版本來源，手動 Mac 建置也須記錄驗證結果。公司已有 Windows 程式碼簽署憑證，實作時確認建置環境的使用方式；Apple Developer 帳號應該有，Mac 簽署及公證能力仍需確認。下載位置的部署與發布方式及 updater 選型於交付票確認。驗收時由沒有 GitLab 登入狀態或 token 的客戶端，在公司網路內完成版本檢查與安裝檔下載；離開可存取的網路時，更新檢查失敗不影響收集。
+macOS 由使用者在自己的 Mac 分別建置 arm64 與 x64 安裝包，內附工具依目標架構準備。Windows x64 建置環境於 #34 確認；使用者的 Parallels Windows ARM VM 先作驗證試點，不能視為 x64 原生驗收。CI 共用檢查與本機 Release script 使用相同版本來源，手動 Mac 建置也須記錄驗證結果。公司已有 Windows 程式碼簽署憑證，實作時確認建置環境的使用方式；Apple Developer 帳號應該有，Mac 簽署及公證能力仍需確認。下載位置的部署與發布方式及 updater 選型於交付票確認。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
 
 ## 6. Tickets、依賴與驗收方式
 
-Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)。共 20 張執行票，其中 8 張沿用既有 tickets、12 張新增。總覽只追蹤範圍與完成度，沒有額外一套功能實作。
+Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 20 張執行票，其中 8 張沿用既有 tickets、12 張新增。總覽只追蹤範圍與完成度，沒有額外一套功能實作。
 
 ### 6.1 每張票的開發與驗收契約
 
@@ -291,13 +291,13 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 - **在任何功能實作開始前**，於各 ticket 的 issue description「驗收計畫」寫好本次計畫，再開始實作。此處先定功能驗收範圍，詳細 scenario 不在拆票時凍結。
 - 可視功能逐項編 scenario ID、前置資料／環境、操作步驟、預期可見結果、需拍攝的狀態及平台／視窗／主題。必要時用前後多張截圖證明流程，不能只拍最終空畫面。
-- agent 實作後實際操作、拍攝並逐項比對預期，修正不符項目；將 screenshots 上傳為 GitLab issue／MR 可持久檢視的附件，在驗收結果按 scenario ID 直接嵌圖，附短圖說、結果與版本／commit／平台。使用者可只看圖與短圖說完成視覺 review，不必自行跑測試。
+- agent 實作後實際操作、拍攝並逐項比對預期，修正不符項目；將 screenshots 上傳為 GitHub issue／PR 可持久檢視的附件，在驗收結果按 scenario ID 直接嵌圖，附短圖說、結果與版本／commit／平台。使用者可只看圖與短圖說完成視覺 review，不必自行跑測試。
 - 截圖必須來自該 commit 的實際執行畫面；design 票可用渲染 wireframe，但需清楚標示設計證據。Desktop 原生功能需真實原生 UI 證據，瀏覽器 mock 不替代。重現資料可控制，須標示，不冒充真實來源整合。
-- API／持久化／去重／中斷／升級等不可見行為仍須必要自動化或整合驗證，附可追溯結果；截圖不取代正確性證據。不為純技術票硬造產品畫面；有 GitLab／安裝器等可視介面時仍記錄。
+- API／持久化／去重／中斷／升級等不可見行為仍須必要自動化或整合驗證，附可追溯結果；截圖不取代正確性證據。不為純技術票硬造產品畫面；有 GitHub／安裝器等可視介面時仍記錄。
 - 開發中需求或 scenario 調整時，先更新計畫及預期、記錄原因，再驗證對應版本；無法執行的 scenario 標為未驗證，不能以 build 成功或舊截圖宣稱通過。產品範圍變更需同步 Plan／相關票。
 - 每張票擁有自己的截圖與結果；最終整合票只彙整／補驗整合差異。沒有本票適用的驗收結果及證據時，不標示完成。
 
-驗收計畫採一份可維護的 issue description 區塊；MR 連結至該區塊及驗收結果。建議 scenario 欄位為「ID／目的／前置資料與環境／操作／預期結果／截圖點／非視覺證據」，實際內容在開發前填寫。計畫變更記錄與結果可放 issue／MR，但必須有單一明確入口，不依賴暫存 artifact 或本機絕對路徑。
+驗收計畫採一份可維護的 issue description 區塊；PR 連結至該區塊及驗收結果。建議 scenario 欄位為「ID／目的／前置資料與環境／操作／預期結果／截圖點／非視覺證據」，實際內容在開發前填寫。計畫變更記錄與結果可放 issue／PR，但必須有單一明確入口，不依賴暫存 artifact 或本機絕對路徑。
 
 所有新業務 API 隨該功能票同步開放 Agent 並更新 Skill。#22 建立完整共用入口，#21 負責發現；它們不是最後補接其他功能的集中票。每票亦需維持已交付的備份／合併能力，新增正式管理資料時一併提供最低相容處理。
 
@@ -307,26 +307,26 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 | Ticket | 功能 | 前置依賴 | 獨立驗收入口 |
 |---|---|---|---|
-| [#25](https://gitscr1.moneydj.com/km/xr-collector/-/issues/25) | CI 基本檢查與本機等價驗證 | 無 | GitLab pipeline／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitLab 截圖。 |
-| [#23](https://gitscr1.moneydj.com/km/xr-collector/-/issues/23) | 畫面與主要流程設計基準 | 無 | 實際渲染的設計畫面／導覽流程；截圖明示為 wireframe，不當作產品完成證據。 |
-| [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19) | App Shell、來源入口與共用外觀 | [#23](https://gitscr1.moneydj.com/km/xr-collector/-/issues/23) | 四入口導覽、主題切換、設定外觀與目前已具備的收集／文件功能。 |
-| [#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22) | 共用服務 runtime 與 Agent 完整 API 操作 | 無 | 獨立 Agent process → 真實 HTTP API → UI／Vault 可觀察的結果；先以既有 API 驗收，新增 API 隨各票驗收。 |
-| [#21](https://gitscr1.moneydj.com/km/xr-collector/-/issues/21) | Agent 自動發現本機 Collector | [#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22) | 獨立 Agent 僅從 Skill 及平台規則尋址，呼叫現有 API；服務重啟後重新尋址。 |
-| [#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20) | Onboarding、Vault 選址與重新定位 | [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22) | Onboarding／設定中的 Vault 路徑，加上對應 setup／open API 與重啟結果。 |
-| [#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18) | 非同步收集工作、進度與有界派工 | [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22)、[#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20) | 來源頁 URL 提交、工作進度／結果與 jobs API；同時操作另一頻道或瀏覽文件。 |
-| [#26](https://gitscr1.moneydj.com/km/xr-collector/-/issues/26) | 文件列表、搜尋與 Markdown 閱讀 | [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22)、[#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18) | 文件／搜尋頁、Reader、設定索引狀態與相同 list／read／search API。 |
-| [#27](https://gitscr1.moneydj.com/km/xr-collector/-/issues/27) | 頻道訂閱、Global 設定與補收政策 | [#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18) | 來源頁訂閱清單、確認摘要、暫停／恢復、設定頁 Global 控制與相關 API。 |
-| [#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28) | 收集中斷接續與有限次重試 | [#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18)、[#27](https://gitscr1.moneydj.com/km/xr-collector/-/issues/27) | 同一 job 在服務重啟前後的進度與結果、來源頁結果、對應 API 及持久證據。 |
-| [#29](https://gitscr1.moneydj.com/km/xr-collector/-/issues/29) | 活動記錄、工作查詢與 30 天保留 | [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28) | 活動頁、來源頁「查看此次工作」、Agent jobs／activity 查詢。 |
-| [#17](https://gitscr1.moneydj.com/km/xr-collector/-/issues/17) | 刪除文件、避免抓回與明確重新收集 | [#26](https://gitscr1.moneydj.com/km/xr-collector/-/issues/26)、[#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28)、[#29](https://gitscr1.moneydj.com/km/xr-collector/-/issues/29) | 文件列表／Reader 的刪除與重收結果、搜尋、Agent delete／read／search 及後續頻道抓取。 |
-| [#30](https://gitscr1.moneydj.com/km/xr-collector/-/issues/30) | Vault 匯出、還原與合併完整流程 | [#17](https://gitscr1.moneydj.com/km/xr-collector/-/issues/17)、[#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20) | 設定的匯出／還原／合併流程、差異預覽、資料包及相同 Agent API。 |
-| [#31](https://gitscr1.moneydj.com/km/xr-collector/-/issues/31) | 安全搬移 Vault 與接續排隊工作 | [#30](https://gitscr1.moneydj.com/km/xr-collector/-/issues/30)、[#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28)、[#21](https://gitscr1.moneydj.com/km/xr-collector/-/issues/21) | 設定頁搬移流程／位置、工作佇列接續、Agent move／status 與搬移後文件／搜尋。 |
-| [#32](https://gitscr1.moneydj.com/km/xr-collector/-/issues/32) | 系統匣／選單列常駐與收集進度 | [#29](https://gitscr1.moneydj.com/km/xr-collector/-/issues/29)、[#21](https://gitscr1.moneydj.com/km/xr-collector/-/issues/21) | 真實 Desktop 原生常駐選單／面板、主視窗關閉前後的進度及 Agent 可存取性。 |
-| [#33](https://gitscr1.moneydj.com/km/xr-collector/-/issues/33) | 登入自動啟動設定 | [#32](https://gitscr1.moneydj.com/km/xr-collector/-/issues/32) | 設定開關、實際登出／登入後的桌面常駐與服務狀態。 |
-| [#34](https://gitscr1.moneydj.com/km/xr-collector/-/issues/34) | 三平台安裝包與可重現簽署建置 | [#25](https://gitscr1.moneydj.com/km/xr-collector/-/issues/25)、[#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22) | 三平台實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄簽署與架構。 |
-| [#35](https://gitscr1.moneydj.com/km/xr-collector/-/issues/35) | 版本 Release 與免登入下載來源 | [#34](https://gitscr1.moneydj.com/km/xr-collector/-/issues/34) | GitLab Release 頁與公司網路內匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。 |
-| [#36](https://gitscr1.moneydj.com/km/xr-collector/-/issues/36) | 自動／手動檢查與使用者觸發更新 | [#35](https://gitscr1.moneydj.com/km/xr-collector/-/issues/35)、[#31](https://gitscr1.moneydj.com/km/xr-collector/-/issues/31)、[#32](https://gitscr1.moneydj.com/km/xr-collector/-/issues/32)、[#33](https://gitscr1.moneydj.com/km/xr-collector/-/issues/33) | 設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。 |
-| [#10](https://gitscr1.moneydj.com/km/xr-collector/-/issues/10) | 三平台整體交付與截圖驗收 | [#25](https://gitscr1.moneydj.com/km/xr-collector/-/issues/25)、[#23](https://gitscr1.moneydj.com/km/xr-collector/-/issues/23)、[#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19)、[#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22)、[#21](https://gitscr1.moneydj.com/km/xr-collector/-/issues/21)、[#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20)、[#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18)、[#26](https://gitscr1.moneydj.com/km/xr-collector/-/issues/26)、[#27](https://gitscr1.moneydj.com/km/xr-collector/-/issues/27)、[#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28)、[#29](https://gitscr1.moneydj.com/km/xr-collector/-/issues/29)、[#17](https://gitscr1.moneydj.com/km/xr-collector/-/issues/17)、[#30](https://gitscr1.moneydj.com/km/xr-collector/-/issues/30)、[#31](https://gitscr1.moneydj.com/km/xr-collector/-/issues/31)、[#32](https://gitscr1.moneydj.com/km/xr-collector/-/issues/32)、[#33](https://gitscr1.moneydj.com/km/xr-collector/-/issues/33)、[#34](https://gitscr1.moneydj.com/km/xr-collector/-/issues/34)、[#35](https://gitscr1.moneydj.com/km/xr-collector/-/issues/35)、[#36](https://gitscr1.moneydj.com/km/xr-collector/-/issues/36) | 最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
+| [#25](https://github.com/derektu/xr-collector/issues/25) | CI 基本檢查與本機等價驗證 | 無 | GitHub Actions workflow／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitHub 截圖。 |
+| [#23](https://github.com/derektu/xr-collector/issues/23) | 畫面與主要流程設計基準 | 無 | 實際渲染的設計畫面／導覽流程；截圖明示為 wireframe，不當作產品完成證據。 |
+| [#19](https://github.com/derektu/xr-collector/issues/19) | App Shell、來源入口與共用外觀 | [#23](https://github.com/derektu/xr-collector/issues/23) | 四入口導覽、主題切換、設定外觀與目前已具備的收集／文件功能。 |
+| [#22](https://github.com/derektu/xr-collector/issues/22) | 共用服務 runtime 與 Agent 完整 API 操作 | 無 | 獨立 Agent process → 真實 HTTP API → UI／Vault 可觀察的結果；先以既有 API 驗收，新增 API 隨各票驗收。 |
+| [#21](https://github.com/derektu/xr-collector/issues/21) | Agent 自動發現本機 Collector | [#22](https://github.com/derektu/xr-collector/issues/22) | 獨立 Agent 僅從 Skill 及平台規則尋址，呼叫現有 API；服務重啟後重新尋址。 |
+| [#20](https://github.com/derektu/xr-collector/issues/20) | Onboarding、Vault 選址與重新定位 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22) | Onboarding／設定中的 Vault 路徑，加上對應 setup／open API 與重啟結果。 |
+| [#18](https://github.com/derektu/xr-collector/issues/18) | 非同步收集工作、進度與有界派工 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#20](https://github.com/derektu/xr-collector/issues/20) | 來源頁 URL 提交、工作進度／結果與 jobs API；同時操作另一頻道或瀏覽文件。 |
+| [#26](https://github.com/derektu/xr-collector/issues/26) | 文件列表、搜尋與 Markdown 閱讀 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#18](https://github.com/derektu/xr-collector/issues/18) | 文件／搜尋頁、Reader、設定索引狀態與相同 list／read／search API。 |
+| [#27](https://github.com/derektu/xr-collector/issues/27) | 頻道訂閱、Global 設定與補收政策 | [#18](https://github.com/derektu/xr-collector/issues/18) | 來源頁訂閱清單、確認摘要、暫停／恢復、設定頁 Global 控制與相關 API。 |
+| [#28](https://github.com/derektu/xr-collector/issues/28) | 收集中斷接續與有限次重試 | [#18](https://github.com/derektu/xr-collector/issues/18)、[#27](https://github.com/derektu/xr-collector/issues/27) | 同一 job 在服務重啟前後的進度與結果、來源頁結果、對應 API 及持久證據。 |
+| [#29](https://github.com/derektu/xr-collector/issues/29) | 活動記錄、工作查詢與 30 天保留 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#28](https://github.com/derektu/xr-collector/issues/28) | 活動頁、來源頁「查看此次工作」、Agent jobs／activity 查詢。 |
+| [#17](https://github.com/derektu/xr-collector/issues/17) | 刪除文件、避免抓回與明確重新收集 | [#26](https://github.com/derektu/xr-collector/issues/26)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29) | 文件列表／Reader 的刪除與重收結果、搜尋、Agent delete／read／search 及後續頻道抓取。 |
+| [#30](https://github.com/derektu/xr-collector/issues/30) | Vault 匯出、還原與合併完整流程 | [#17](https://github.com/derektu/xr-collector/issues/17)、[#20](https://github.com/derektu/xr-collector/issues/20) | 設定的匯出／還原／合併流程、差異預覽、資料包及相同 Agent API。 |
+| [#31](https://github.com/derektu/xr-collector/issues/31) | 安全搬移 Vault 與接續排隊工作 | [#30](https://github.com/derektu/xr-collector/issues/30)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#21](https://github.com/derektu/xr-collector/issues/21) | 設定頁搬移流程／位置、工作佇列接續、Agent move／status 與搬移後文件／搜尋。 |
+| [#32](https://github.com/derektu/xr-collector/issues/32) | 系統匣／選單列常駐與收集進度 | [#29](https://github.com/derektu/xr-collector/issues/29)、[#21](https://github.com/derektu/xr-collector/issues/21) | 真實 Desktop 原生常駐選單／面板、主視窗關閉前後的進度及 Agent 可存取性。 |
+| [#33](https://github.com/derektu/xr-collector/issues/33) | 登入自動啟動設定 | [#32](https://github.com/derektu/xr-collector/issues/32) | 設定開關、實際登出／登入後的桌面常駐與服務狀態。 |
+| [#34](https://github.com/derektu/xr-collector/issues/34) | 三平台安裝包與可重現簽署建置 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22) | 三平台實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄簽署與架構。 |
+| [#35](https://github.com/derektu/xr-collector/issues/35) | 版本 Release 與免登入下載來源 | [#34](https://github.com/derektu/xr-collector/issues/34) | GitHub Release 頁與另定的匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。 |
+| [#36](https://github.com/derektu/xr-collector/issues/36) | 自動／手動檢查與使用者觸發更新 | [#35](https://github.com/derektu/xr-collector/issues/35)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33) | 設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。 |
+| [#10](https://github.com/derektu/xr-collector/issues/10) | 三平台整體交付與截圖驗收 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#23](https://github.com/derektu/xr-collector/issues/23)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#21](https://github.com/derektu/xr-collector/issues/21)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29)、[#17](https://github.com/derektu/xr-collector/issues/17)、[#30](https://github.com/derektu/xr-collector/issues/30)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33)、[#34](https://github.com/derektu/xr-collector/issues/34)、[#35](https://github.com/derektu/xr-collector/issues/35)、[#36](https://github.com/derektu/xr-collector/issues/36) | 最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
 
 ### 6.3 既有 tickets 的責任接續
 
@@ -344,7 +344,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 ### 6.4 各票功能範圍
 
-#### [#25](https://gitscr1.moneydj.com/km/xr-collector/-/issues/25) CI 基本檢查與本機等價驗證
+#### [#25](https://github.com/derektu/xr-collector/issues/25) CI 基本檢查與本機等價驗證
 
 **成果**：每次變更都有可追溯的檢查結果；本機與 CI 使用相同驗證入口。
 
@@ -352,17 +352,17 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **範圍**：
 
-- 建立 GitLab pipeline：可重現安裝、typecheck、必要測試與 build，記錄 commit 及產物。
-- 核實 Windows Runner 能力；Mac 不要求新增 Runner，由使用者本機驗證。Windows 打包 fallback 由 packaging 票承接。
+- 建立 GitHub Actions workflow：可重現安裝、typecheck、必要測試與 build，記錄 commit 及產物。
+- 一般 CI 使用 GitHub-hosted Linux Runner；Mac／Windows 原生驗證與建置環境由 packaging 及平台驗證工作承接。
 - 測試／建置失敗回報明確，供後續 Release gate 使用；外部依賴固定版本及校驗。
 
-**驗收介面**：GitLab pipeline／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitLab 截圖。
+**驗收介面**：GitHub Actions workflow／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitHub 截圖。
 
 **責任分工**：只負責驗證入口與 gate，平台簽署／安裝包由 #34 負責，發布由 #35 負責。
 
 **開工時收斂**：Runner、快取、artifact 保留與不可用平台的如實標示。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#23](https://gitscr1.moneydj.com/km/xr-collector/-/issues/23) 畫面與主要流程設計基準
+#### [#23](https://github.com/derektu/xr-collector/issues/23) 畫面與主要流程設計基準
 
 **成果**：主要入口與產品操作語意一致，後續每張功能票有可依循的畫面設計。
 
@@ -381,7 +381,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：各畫面資訊層級、設計狀態涵蓋範圍與最小視窗；不預先凍結所有後續 scenario。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#19](https://gitscr1.moneydj.com/km/xr-collector/-/issues/19) App Shell、來源入口與共用外觀
+#### [#19](https://github.com/derektu/xr-collector/issues/19) App Shell、來源入口與共用外觀
 
 **成果**：使用者透過收集來源、文件、設定、活動記錄四個入口操作同一套產品。
 
@@ -399,7 +399,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：頁面路由、窄視窗與鍵盤焦點、主題保存位置。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#22](https://gitscr1.moneydj.com/km/xr-collector/-/issues/22) 共用服務 runtime 與 Agent 完整 API 操作
+#### [#22](https://github.com/derektu/xr-collector/issues/22) 共用服務 runtime 與 Agent 完整 API 操作
 
 **成果**：獨立 Agent 不開主視窗，也能透過同一個服務完成所有已交付的業務操作。
 
@@ -418,7 +418,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：runtime interface、授權遷移、啟動／關閉／未選址狀態與 Skill 表達；不將新版 Agent 限為唯讀。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#21](https://gitscr1.moneydj.com/km/xr-collector/-/issues/21) Agent 自動發現本機 Collector
+#### [#21](https://github.com/derektu/xr-collector/issues/21) Agent 自動發現本機 Collector
 
 **成果**：Agent 取得 Skill 後可找到本機服務，不必由使用者從 UI 複製 port 或 Vault 路徑。
 
@@ -436,7 +436,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：各平台 discovery 路徑、錯誤回報及所需 helper。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#20](https://gitscr1.moneydj.com/km/xr-collector/-/issues/20) Onboarding、Vault 選址與重新定位
+#### [#20](https://github.com/derektu/xr-collector/issues/20) Onboarding、Vault 選址與重新定位
 
 **成果**：首次使用可建立或開啟自己的 Vault，重啟後接續相同位置，路徑不可用時可恢復。
 
@@ -455,7 +455,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：Vault 身分、設定保存、非空目錄驗證、未選址生命週期與平台目錄選擇。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#18](https://gitscr1.moneydj.com/km/xr-collector/-/issues/18) 非同步收集工作、進度與有界派工
+#### [#18](https://github.com/derektu/xr-collector/issues/18) 非同步收集工作、進度與有界派工
 
 **成果**：收集與頻道解析立即回報已接受，使用者可繼續操作並查詢實際進度。
 
@@ -475,7 +475,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：job 狀態與持久格式、工作身分、併發／queue 上限、公平派工與來源介面。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#26](https://gitscr1.moneydj.com/km/xr-collector/-/issues/26) 文件列表、搜尋與 Markdown 閱讀
+#### [#26](https://github.com/derektu/xr-collector/issues/26) 文件列表、搜尋與 Markdown 閱讀
 
 **成果**：使用者能按穩定來源篩選、搜尋與完整閱讀文件，Reader 返回後保留瀏覽位置。
 
@@ -495,7 +495,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：分頁／日期語意、Markdown 呈現、索引異動追蹤與遷移、同篇數不同內容驗證。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#27](https://gitscr1.moneydj.com/km/xr-collector/-/issues/27) 頻道訂閱、Global 設定與補收政策
+#### [#27](https://github.com/derektu/xr-collector/issues/27) 頻道訂閱、Global 設定與補收政策
 
 **成果**：訂閱立即取得少量近期內容，之後持續收新內容；設定範圍明確為所有訂閱共用。
 
@@ -515,7 +515,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：月份／時區／發布日期邊界、休眠或長期斷網的補收判定、發現游標、設定上限、停用與排隊工作的收斂。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#28](https://gitscr1.moneydj.com/km/xr-collector/-/issues/28) 收集中斷接續與有限次重試
+#### [#28](https://github.com/derektu/xr-collector/issues/28) 收集中斷接續與有限次重試
 
 **成果**：重啟自動接續已接受工作，暫時性失敗會有限次重試，已保存內容不重新下載。
 
@@ -534,7 +534,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：checkpoint、重試分類／退避／次數、可重入階段與中斷注入方式。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#29](https://gitscr1.moneydj.com/km/xr-collector/-/issues/29) 活動記錄、工作查詢與 30 天保留
+#### [#29](https://github.com/derektu/xr-collector/issues/29) 活動記錄、工作查詢與 30 天保留
 
 **成果**：使用者與 Agent 可以看出發生什麼、哪一步失敗、文件是否已保存。
 
@@ -554,7 +554,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：事件欄位、篩選、輪替、資訊遮蔽、截圖所需可重現狀態。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#17](https://gitscr1.moneydj.com/km/xr-collector/-/issues/17) 刪除文件、避免抓回與明確重新收集
+#### [#17](https://github.com/derektu/xr-collector/issues/17) 刪除文件、避免抓回與明確重新收集
 
 **成果**：刪除文件後 UI／搜尋／Agent 不再回傳，自動收集也不會抓回。
 
@@ -573,7 +573,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：刪除交易與索引一致性、tombstone／重收互斥、package 版本及明確刪除衝突的最小處理。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#30](https://gitscr1.moneydj.com/km/xr-collector/-/issues/30) Vault 匯出、還原與合併完整流程
+#### [#30](https://github.com/derektu/xr-collector/issues/30) Vault 匯出、還原與合併完整流程
 
 **成果**：使用者能清楚選擇備份、還原成另一份知識庫或合併，正式設定與刪除意圖完整保留。
 
@@ -593,7 +593,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：package／migration schema、衝突粒度、排隊工作與還原／合併互斥及恢復策略。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#31](https://gitscr1.moneydj.com/km/xr-collector/-/issues/31) 安全搬移 Vault 與接續排隊工作
+#### [#31](https://github.com/derektu/xr-collector/issues/31) 安全搬移 Vault 與接續排隊工作
 
 **成果**：搬到新位置後文件、設定與工作接續可用，成功前原資料安全保留。
 
@@ -613,7 +613,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：路徑／symlink 驗證、同庫識別、切換提交點、清理恢復與失敗注入。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#32](https://gitscr1.moneydj.com/km/xr-collector/-/issues/32) 系統匣／選單列常駐與收集進度
+#### [#32](https://github.com/derektu/xr-collector/issues/32) 系統匣／選單列常駐與收集進度
 
 **成果**：關閉主視窗後繼續收集，常駐入口可查看進度、開啟 UI 或明確退出。
 
@@ -632,7 +632,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：平台呈現、視窗 close／quit 生命週期、單一 instance、平台可驗證環境。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#33](https://gitscr1.moneydj.com/km/xr-collector/-/issues/33) 登入自動啟動設定
+#### [#33](https://github.com/derektu/xr-collector/issues/33) 登入自動啟動設定
 
 **成果**：使用者可選擇登入電腦後背景啟動，預設不啟用且不彈出主視窗。
 
@@ -650,7 +650,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：平台登入註冊、安裝位置改變、設定失敗回復與可驗證帳號環境。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#34](https://gitscr1.moneydj.com/km/xr-collector/-/issues/34) 三平台安裝包與可重現簽署建置
+#### [#34](https://github.com/derektu/xr-collector/issues/34) 三平台安裝包與可重現簽署建置
 
 **成果**：相同版本可產出 Windows x64、Mac arm64／x64 安裝包，使用者不需開發環境。
 
@@ -658,7 +658,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **範圍**：
 
-- Mac 由使用者電腦分別建置 arm64／x64；Windows 優先公司 Runner，不可用改另一台 Windows 電腦。
+- Mac 由使用者電腦建置；Windows 建置環境另行確認。使用者的 Parallels Windows ARM VM 是待測驗證環境，不等同 Windows x64 原生驗收。
 - 內附 yt-dlp、Deno、Meilisearch、Agent Skill 依目標架構打包；版本／完整性與 runtime 路徑驗證。
 - 公司 Windows 憑證使用方式實作時確認；Apple Developer 帳號與 Mac 簽署／公證需核實；本機與 CI 使用相同 scripts。
 - 固定 commit／版本，產出安裝包與 updater 所需 metadata；做各目標環境安裝、啟動及基礎收集／搜尋驗證。
@@ -669,26 +669,26 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：Runner 可用性、憑證使用、target 格式、更新包相容要求及 Intel 實機驗證來源。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#35](https://gitscr1.moneydj.com/km/xr-collector/-/issues/35) 版本 Release 與免登入下載來源
+#### [#35](https://github.com/derektu/xr-collector/issues/35) 版本 Release 與免登入下載來源
 
-**成果**：測試者可取得與版本相符的安裝檔與更新資訊，不必有 GitLab 帳號。
+**成果**：測試者可取得與版本相符的安裝檔與更新資訊，不必有 GitHub 帳號。
 
 **依賴**：#34。
 
 **範圍**：
 
-- GitLab Releases 管理 tag、固定 commit、release notes 與下載連結；安裝檔及更新 metadata 發布到公司網路內免登入／token 位置。
+- GitHub Releases 管理 tag、固定 commit、release notes 與下載連結；安裝檔及更新 metadata 的免登入下載位置與網路可達範圍於 #35 確認；private repository 的 Release 不視為匿名下載來源。
 - CI 檢查結果與手動平台驗證可追溯；驗證通過的產物才發布，避免 metadata 指到缺漏或不同版本檔案。
-- 定義發布 script／流程、本機 Mac 產物上傳、Windows 產物接入與版本索引；不在安裝包放 GitLab token。
-- 更新來源可替換，設計已安裝版本移往 public 位置的接續路徑；本輪不實際搬到 public。
+- 定義發布 script／流程、本機 Mac 產物上傳、Windows 產物接入與版本索引；不在安裝包放 GitHub token。
+- 更新來源可替換，設計已安裝版本接續來源變更的路徑；發布位置於本票確認。
 
-**驗收介面**：GitLab Release 頁與公司網路內匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。
+**驗收介面**：GitHub Release 頁與另定的匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。
 
 **責任分工**：主機與實際網址實作時確認；不把發布連結與 updater 客戶端視為同一票。
 
 **開工時收斂**：下載主機、發布權限、metadata／產物原子發布、來源遷移與失敗撤回方式。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#36](https://gitscr1.moneydj.com/km/xr-collector/-/issues/36) 自動／手動檢查與使用者觸發更新
+#### [#36](https://github.com/derektu/xr-collector/issues/36) 自動／手動檢查與使用者觸發更新
 
 **成果**：系統發現新版先通知，使用者可手動檢查，選擇更新後才下載、安裝與重啟。
 
@@ -699,7 +699,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 - 啟動與定期檢查；設定→關於與更新、常駐選單→檢查更新，共用服務狀態與 Agent API。
 - 顯示目前版本、最新版／有新版／失敗、版本說明及更新按鈕；未明確觸發不下載安裝。
 - 協調停派、工作保存與 Vault 搬移／合併，避免寫入中直接重啟；更新後接續工作及原設定。
-- 驗證三平台從前一版本升級、下載／安裝失敗、離線不阻塞收集；更新來源不依賴 GitLab 登入。
+- 驗證三平台從前一版本升級、下載／安裝失敗、離線不阻塞收集；更新來源不依賴 GitHub 登入。
 - Agent 可查詢／明確觸發同一更新操作；僅查詢不表示同意安裝。
 
 **驗收介面**：設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。
@@ -708,7 +708,7 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 **開工時收斂**：updater 選型、檢查頻率、更新互斥與恢復、舊資料格式相容及測試版本。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#10](https://gitscr1.moneydj.com/km/xr-collector/-/issues/10) 三平台整體交付與截圖驗收
+#### [#10](https://github.com/derektu/xr-collector/issues/10) 三平台整體交付與截圖驗收
 
 **成果**：使用者只看有索引的驗收截圖即可確認可視流程，三個平台有真實可追溯的交付結果。
 
@@ -778,10 +778,10 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 | 桌面常駐 | 關閉主視窗後最小化／隱藏至常駐入口，服務繼續執行；入口提供進度 UI |
 | 登入自動啟動 | 設定頁提供開關；預設關閉；啟用後登入時背景常駐，不開啟主視窗 |
 | 交付平台 | Windows x64、macOS Apple Silicon（arm64）、Intel Mac（x64） |
-| 建置環境 | 使用者的 Mac 分別建置 arm64／x64；Windows 優先使用公司 GitLab Runner，不可行時改用另一台 Windows 電腦 |
+| 建置環境 | 使用者的 Mac 分別建置 arm64／x64；Windows 建置環境另定；Parallels Windows ARM VM 先作驗證試點，不替代 x64 原生驗收 |
 | 簽署資源 | 公司已有 Windows 程式碼簽署憑證；Apple Developer 帳號應該有，Mac 簽署與公證能力於實作時確認 |
 | 交付與更新 | 本輪包含 CI、Release、自動及手動檢查更新；發現新版先通知，使用者按下更新後才下載、安裝與重啟 |
-| 發布位置 | GitLab Releases 管理版本；安裝檔與更新資訊放在公司網路內免登入／token 的下載位置，後續移至公開位置並讓已安裝版本接續更新 |
+| 發布位置 | GitHub Releases 管理版本；免登入下載位置及存取範圍於 #35 確認，private repo 的 Release 不代表匿名下載 |
 
 工作併發、重試次數及退避方式、Global 設定可接受的數值範圍、時間邊界、休眠恢復判定、列表頁大小與持久狀態格式在實作票訂定。這些細節須滿足以上行為，不把範例或測試值當成額外產品承諾。
 
@@ -797,4 +797,4 @@ Round 2 總覽：[#24](https://gitscr1.moneydj.com/km/xr-collector/-/issues/24)�
 
 目前交付的是規劃與 issues。每票的詳細驗收計畫及實作 screenshots 尚待該票開發時產生，本次不宣稱產品功能或新測試已完成。
 
-GitLab 同步核對：#24 總覽及 20 張執行票已讀回核對標題、描述與依賴；本機功能範圍與遠端一致，依賴圖無循環。#1 加入 Round 2 入口並保留第一輪原文；已完成與本輪之外的 tickets 未變更。此核對僅涵蓋規劃內容，不代表執行票驗收完成。
+GitHub 同步核對：#24 總覽及 20 張執行票已讀回核對標題、描述與依賴；本機功能範圍與遠端一致，依賴圖無循環。#1 加入 Round 2 入口並保留第一輪原文；已完成與本輪之外的 tickets 未變更。此核對僅涵蓋規劃內容，不代表執行票驗收完成。

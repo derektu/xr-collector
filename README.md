@@ -1,5 +1,7 @@
 # XR Collector
 
+程式與 tickets：[GitHub repository](https://github.com/derektu/xr-collector)。執行規劃見 [Round 2 總覽 #24](https://github.com/derektu/xr-collector/issues/24)。
+
 XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即或定時抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
 本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，Agent 只讀存取，以及完整資料包匯出、還原與比對合併。已收集內容管理由其他 tickets 交付。
@@ -43,6 +45,17 @@ npm start
 此模式由 `http://127.0.0.1:7175/` 同時提供 UI 與 API。
 
 ## 測試與建置
+
+GitHub Actions 在 main push、pull request 與手動觸發時，使用 Ubuntu 24.04、`.nvmrc` 指定的 Node 版本執行共用驗證入口：
+
+```bash
+npm ci
+npm run verify
+```
+
+`verify` 執行 Vitest（含 JUnit 報告）、typecheck 與 Node／Web build。CI 以 commit SHA 標示報告與 build artifacts，保留 7 天。缺少 macOS bundled Meilisearch binary 的平台會跳過對應的整合測試；JUnit 的 skipped 數量是驗證邊界，不能視為跨平台 runtime 已通過。CI 不包含 Desktop E2E、畫面截圖或 Release 打包。
+
+各檢查亦可單獨執行：
 
 ```bash
 npm test

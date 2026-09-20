@@ -21,7 +21,9 @@
     "test:meilisearch": "npm run download:runtime && vitest run --config vitest.config.ts tests/meilisearch-integration.test.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "prepare:transfer-demo": "npm run build:node && node scripts/prepare-transfer-demo.mjs",
-    "prepare:merge-demo": "npm run build:node && node scripts/prepare-merge-demo.mjs"
+    "prepare:merge-demo": "npm run build:node && node scripts/prepare-merge-demo.mjs",
+    "test:ci": "vitest run --config vitest.config.ts --reporter=default --reporter=junit --outputFile.junit=.data/ci/junit.xml",
+    "verify": "npm run test:ci && npm run build"
   },
   "dependencies": {
     "@fastify/static": "10.1.4",

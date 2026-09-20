@@ -4,20 +4,20 @@
 
 XR Collector 是可安裝的 macOS／Windows 程式。第一版只處理 YouTube：使用者設定頻道清單，立即或定時收集字幕，在本機保存、瀏覽與搜尋，並讓 Agent 使用同一份資料。Vault 可完整打包、跨機還原及基本比對合併。
 
-工作追蹤與順序以 [GitLab 總覽 #1](https://gitscr1.moneydj.com/km/xr-collector/-/issues/1) 及其子 tickets 為準。
+工作追蹤與順序以 [GitHub 總覽 #1](https://github.com/derektu/xr-collector/issues/1) 及其子 tickets 為準。
 
 ## 每一步可看到的成果
 
 | 順序 | Ticket | 可操作的成果 |
 |---|---|---|
-| 1 | [#3](https://gitscr1.moneydj.com/km/xr-collector/-/issues/3) | 安裝測試包，貼上影片網址，收集真實字幕並閱讀；重啟後資料仍在 |
-| 2 | [#4](https://gitscr1.moneydj.com/km/xr-collector/-/issues/4) | 搜尋字幕、查看結果片段並開啟文件 |
-| 3 | [#5](https://gitscr1.moneydj.com/km/xr-collector/-/issues/5) | 管理頻道清單，立即抓取一個頻道或整份清單 |
-| 4 | [#6](https://gitscr1.moneydj.com/km/xr-collector/-/issues/6) | 設定週期、暫停排程、查看抓取結果 |
-| 5 | [#7](https://gitscr1.moneydj.com/km/xr-collector/-/issues/7) | 外部 Agent 列出、搜尋及讀取已收集的文件 |
-| 6 | [#8](https://gitscr1.moneydj.com/km/xr-collector/-/issues/8) | 匯出完整資料包，在另一台電腦還原並 browse／search |
-| 7 | [#9](https://gitscr1.moneydj.com/km/xr-collector/-/issues/9) | 合併另一份 vault，相同略過、差異由使用者選擇 |
-| 8 | [#10](https://gitscr1.moneydj.com/km/xr-collector/-/issues/10) | macOS／Windows 安裝產物與整條流程驗證 |
+| 1 | [#3](https://github.com/derektu/xr-collector/issues/3) | 安裝測試包，貼上影片網址，收集真實字幕並閱讀；重啟後資料仍在 |
+| 2 | [#4](https://github.com/derektu/xr-collector/issues/4) | 搜尋字幕、查看結果片段並開啟文件 |
+| 3 | [#5](https://github.com/derektu/xr-collector/issues/5) | 管理頻道清單，立即抓取一個頻道或整份清單 |
+| 4 | [#6](https://github.com/derektu/xr-collector/issues/6) | 設定週期、暫停排程、查看抓取結果 |
+| 5 | [#7](https://github.com/derektu/xr-collector/issues/7) | 外部 Agent 列出、搜尋及讀取已收集的文件 |
+| 6 | [#8](https://github.com/derektu/xr-collector/issues/8) | 匯出完整資料包，在另一台電腦還原並 browse／search |
+| 7 | [#9](https://github.com/derektu/xr-collector/issues/9) | 合併另一份 vault，相同略過、差異由使用者選擇 |
+| 8 | [#10](https://github.com/derektu/xr-collector/issues/10) | macOS／Windows 安裝產物與整條流程驗證 |
 
 ## 開發方式
 
