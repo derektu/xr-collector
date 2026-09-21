@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CollectorError } from '../src/core/types.js';
-import { classifyYtDlpError, parseJson3Transcript } from '../src/capture/ytdlp-capture.js';
+import { CollectorError } from '../../src/core/types.js';
+import { classifyYtDlpError, parseJson3Transcript } from '../../src/capture/ytdlp-capture.js';
 
 describe('parseJson3Transcript', () => {
   it('extracts subtitle text and preserves legitimate repetitions', () => {

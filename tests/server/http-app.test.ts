@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Collector, type DocumentVault, type YouTubeCapture } from '../src/core/collector.js';
-import { CollectorError, type CapturedTranscript, type SavedDocument } from '../src/core/types.js';
-import { createHttpApp } from '../src/server/app.js';
+import { Collector, type DocumentVault, type YouTubeCapture } from '../../src/core/collector.js';
+import { CollectorError, type CapturedTranscript, type SavedDocument } from '../../src/core/types.js';
+import { createHttpApp } from '../../src/server/app.js';
 
 const captured: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',

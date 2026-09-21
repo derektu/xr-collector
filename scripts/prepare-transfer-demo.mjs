@@ -1,10 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
+import { exportVault } from '../dist/node/vault/vault-package.js';
 import { MarkdownVault } from '../dist/node/vault/markdown-vault.js';
 import { JsonChannelStore } from '../dist/node/channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../dist/node/channels/json-channel-schedule-store.js';
 
-const root = path.resolve('.data', 'transfer-demo', new Date().toISOString().replace(/[:.]/g, '-'));
+const { values } = parseArgs({ options: { output: { type: 'string' } } });
+const root = values.output ? path.resolve(values.output) : path.resolve('.data', 'transfer-demo', new Date().toISOString().replace(/[:.]/g, '-'));
+await mkdir(path.dirname(root), { recursive: true });
+// A new destination keeps fixture generation separate from existing validation data.
+await mkdir(root);
 const a = path.join(root, 'machine-a');
 const b = path.join(root, 'machine-b');
 const fixture = {
@@ -32,11 +38,6 @@ await new MarkdownVault(path.join(b, 'vault')).add({ ...fixture,
   videoId: '12345678901', sourceUrl: 'https://www.youtube.com/watch?v=12345678901',
   title: 'B：原 vault 保留驗證', bodyMarkdown: '這份文件留在 B 原本的 vault，還原後不應混入 A 的文件列表。',
 });
-await writeFile(path.join(root, 'profiles.json'), JSON.stringify({ a, b }, null, 2));
-const app = path.resolve('release/mac-arm64/XR Collector.app/Contents/MacOS/XR Collector');
-for (const [label, profile] of [['A', a], ['B', b]]) {
-  const script = path.join(root, `open-${label}.command`);
-  await writeFile(script, `#!/bin/zsh\nexport XR_COLLECTOR_PROFILE=${quote(profile)}\nexec ${quote(app)}\n`, { mode: 0o755 });
-}
-console.log(`模擬環境：${root}\nA：${a}\nB：${b}\n依序執行 open-A.command 與 open-B.command。A 匯出後先結束程式，再啟動 B 還原。`);
-function quote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
+await writeFile(path.join(root, 'machine-a.xr-vault'), await exportVault(path.join(a, 'vault')));
+await writeFile(path.join(root, 'machine-b.xr-vault'), await exportVault(path.join(b, 'vault')));
+console.log(`合成資料：${root}\n在各自的 validation 工作區匯入 machine-a.xr-vault／machine-b.xr-vault；還原後排程暫停。`);

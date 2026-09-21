@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { JsonChannelScheduleStore } from '../src/channels/json-channel-schedule-store.js';
+import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 
 const temporaryRoots: string[] = [];
 

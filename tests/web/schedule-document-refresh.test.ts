@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scheduleDocumentRefresh } from '../src/web/schedule-document-refresh.js';
-import type { ChannelSchedule } from '../src/core/types.js';
+import { scheduleDocumentRefresh } from '../../src/web/schedule-document-refresh.js';
+import type { ChannelSchedule } from '../../src/core/types.js';
 
 describe('scheduleDocumentRefresh', () => {
   it('refreshes the visible document list while an automatic collection is running', () => {

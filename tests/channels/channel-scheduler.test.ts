@@ -3,8 +3,8 @@ import {
   ChannelScheduler,
   type ChannelScheduleStore,
   type StoredChannelSchedule,
-} from '../src/channels/channel-scheduler.js';
-import type { ChannelRun } from '../src/core/types.js';
+} from '../../src/channels/channel-scheduler.js';
+import type { ChannelRun } from '../../src/core/types.js';
 
 class MemoryScheduleStore implements ChannelScheduleStore {
   saves: StoredChannelSchedule[] = [];

@@ -1,96 +1,31 @@
-# XR Collector 整體架構
+# XR Collector 架構
 
-> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitHub #1](https://github.com/derektu/xr-collector/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+本文件描述可執行版本的組成。Round 2 的目標模組、服務生命週期與待實作行為集中於 [開發計畫](round-2-plan.md)，避免將規劃視為已交付能力。
 
-## 文件定位
+## 執行與業務邊界
 
-本文件記錄 XR Collector 已確認的架構方向與待設計事項。產品定位與交付範圍見 [Product Brief](product-brief.md)。具體框架、API schema、文件欄位與互動流程在對應設計階段確認。
+Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模式使用 Vite 代理 `/api`。業務畫面透過 HTTP API 操作收集、頻道、排程、文件、搜尋與 Vault，業務邏輯不使用 Electron IPC。
 
-資料保存、完整備份、跨機還原、vault 合併與搜尋索引的概念草案見 [資料儲存、備份、合併與搜尋](storage-and-search.md)。
+| 模組 | 現行責任 |
+| --- | --- |
+| `src/electron` | 主視窗、profile、內附 runtime 路徑與程式生命週期 |
+| `src/server` | UI HTTP 入口、Agent 授權入口與服務組裝 |
+| `src/core`、`src/capture` | YouTube URL／字幕處理、收集去重、yt-dlp 擷取 |
+| `src/channels` | 頻道清單、批次收集及執行期間的週期排程 |
+| `src/vault` | Markdown 保存、active Vault、資料包與合併恢復 |
+| `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
+| `src/web` | React 操作畫面與 HTTP client |
 
-## Desktop 與 Web Server
+UI 與 Agent 共用 Collector、Vault 和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token；現行權限為只讀。完整 Agent 操作由 #22 交付，服務發現由 #21 交付。
 
-XR Collector 採 Electron 支援 macOS 與 Windows。Desktop application 內建標準 Web Server，同時提供 Web 畫面、前端資源與 HTTP API。Electron 視窗載入本機 Web Server 提供的頁面。
+## Runtime 與資料
 
-```text
-Desktop Application
-├─ Electron：桌面視窗、內建 Browser、程式生命週期
-└─ 本機 Web Server
-   ├─ Web 畫面與前端資源
-   └─ HTTP API
-      └─ 來源設定、收集、文件管理、瀏覽與搜尋
-```
+搜尋採完整 Meilisearch binary，由程式管理獨立子程序，監聽 loopback 並使用隨機 key。yt-dlp、Deno 與 Meilisearch 由下載腳本固定版本；安裝包內附所需工具。沒有嵌入 milli library 或要求安裝完整 Agent-Reach／summarize。
 
-來源設定、文件編輯、瀏覽與搜尋等業務功能，均由 Web Server 提供畫面與 HTTP API，不使用 Electron IPC。Electron 專屬能力集中於桌面整合程式，避免前端畫面依賴 Electron。
+Vault 保存正式文件與可攜設定；搜尋 database 是裝置上的可重建資料。profile、憑證與連線資訊不隨 Vault 資料包交換。格式與恢復責任分別見 [文件格式](document-format.md)、[儲存與搜尋](storage-and-search.md)。
 
-## 與 Server 共用應用畫面
+## Round 2 的架構方向
 
-XR 的應用前端以標準 Web 技術實作。同一份前端程式碼可以部署在 Server 的 Web Server，也可以直接部署到 Desktop 內建的 Web Server。
+Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工作與資料能力。Sources、Documents、Jobs、Activity、Search、VaultWorkspace 的責任及遷移順序以 [Round 2 第 5 節](round-2-plan.md#5-建議模組分工) 為準；不要求先建立通用 plugin framework。
 
-兩個環境對共用畫面提供一致的 API 契約，前端不綁定特定主機位址或 Electron 執行環境。只要環境提供畫面需要的 API 與資料，前端程式碼即可直接共用。
-
-| 環境 | 畫面載入位置 | 資料與能力 |
-|---|---|---|
-| Desktop | Electron 載入本機 Web Server | 個人收集的文件、本機整理與搜尋、內建 Browser |
-| Server | 一般瀏覽器載入 Server Web Server | XQ 平台內建知識及 Server 提供的應用能力 |
-
-API 契約一致不要求兩個環境採用相同的資料來源。Server 可服務不自行收集資料的客戶；Desktop 支援個人資料收集與使用。環境特有能力的呈現方式另行設計。
-
-## 資料收集與 Browser
-
-XQ 平台提供 API，供 Collector 直接取得平台內所有新聞、研究報告等 raw data，作為內建來源。具體契約另行提供，不沿用 Research Station 既有的 XQ 擷取方式。外部來源研究聚焦 RSS、YouTube 字幕與 Facebook 粉專貼文，X 不在本版範圍。
-
-各資料來源依其特性取得內容，例如直接存取 RSS，或使用登入後的 Browser 瀏覽網頁。來源取得方式與共用的文件管理能力分開，讓各種來源取得的內容都能接受一致的整理與存取。
-
-內建 Browser 供使用者登入來源平台。Collector 管理持續使用的 Browser Session，包含 cookies 等登入相關狀態，供後續以使用者身分瀏覽與收集內容。實際網站的登入維持與自動操作能力需逐一驗證，不能只以取得 cookies 作為可持續收集的判準。
-
-Browser Extension 提供日常瀏覽時一鍵匯入內容的入口，與 Collector 內建 Browser 的自動收集用途互補。Extension 的內容擷取方式、匯入通道、授權及支援瀏覽器另行設計。
-
-手動建立文件與撰寫內容是候選入口，需進一步確認產品範圍。各入口應共用文件管理與編輯能力。
-
-## 文件與整理流程
-
-資料以 Markdown + YAML frontmatter 保存，供使用者、應用與外部 Agent 直接使用。Metadata 支援來源追溯、時間、資料源類型與 tags 等組織方式。Open Knowledge Format（OKF）作為候選格式基礎，其相容範圍與 Collector 專用欄位尚待確認。
-
-文件支援正文編輯與擷取雜訊清理。設計上需要區分擷取原始內容與使用者編輯內容，並處理重新收集與人工編輯的關係；具體保存結構、版本與復原政策尚未定案。
-
-Research Station 的草稿區提供流程參考：內容先經使用者檢視、清理與調整，再納入知識庫。Collector 的草稿狀態、入庫操作、各入口是否採用相同流程，以及搜尋與 Agent 對草稿的可見範圍，均需另行討論。
-
-## 搜尋與引擎交付
-
-Meilisearch 提供文字搜尋。文件介面支援依時間、資料源類型與 tags 揭示及篩選資料；時間欄位與索引契約另行定義。
-
-搜尋引擎隨 Desktop application 交付，使用者不需另外安裝、設定或管理 Meilisearch。
-
-引擎整合有兩個待評估方向：
-
-- 安裝包內附完整 Meilisearch，由 Desktop 自動管理內部 process。
-- 直接整合底層 engine library，將搜尋能力嵌入程式。
-
-兩者都能滿足不另外安裝的要求，但是否允許獨立 process 尚待確認。Meilisearch 的底層 `milli` 管理單一 index，完整 Meilisearch 的上層能力並非直接嵌入 `milli` 即可取得；採用 library 的成本需另行驗證。
-
-第一版以 vault 保存文件及正式管理資料，支援完整備份、跨機還原與 vault 合併，不依賴同步或版本協調 server。各裝置的 Meilisearch 索引跟隨 vault 增量更新，並可重建。管理資料格式、本機 database、Git 是否作為版本管理實作及具體 process 配置尚未選定，範圍與待收斂事項見 [概念草案](storage-and-search.md)。
-
-## 外部 Agent 存取
-
-XR Collector 提供 HTTP API，並提供 Skill 說明如何存取與使用文件。Web UI 與外部 Agent 使用共用的文件管理及查詢能力。
-
-API 的驗證方式、讀寫權限、是否允許觸發收集，以及草稿與正式知識的可見範圍，另行定義。Skill 的內容隨 API 契約設計。
-
-## 待討論事項
-
-- Web Server 與前端框架、Core 的執行配置，以及關閉視窗後的收集行為。
-- Meilisearch 採完整引擎隨附或 library 內嵌。
-- 文件 metadata、OKF 相容範圍、附件與原始內容保存方式。
-- 草稿、人工編輯、正式入庫及重新收集的流程。
-- Browser Session 的帳號管理、登入失效與來源驗證。
-- Browser Extension 的擷取與匯入方式，以及手動建立文件的交付範圍。
-- API 契約、驗證、權限與 Agent Skill。
-
-## 技術參考
-
-- [Meilisearch](https://github.com/meilisearch/meilisearch)
-- [Meilisearch 底層引擎 milli](https://github.com/meilisearch/meilisearch/tree/main/crates/milli)
-- [Open Knowledge Format 規格](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-- [Electron Session](https://www.electronjs.org/docs/latest/api/session)
-- [Electron WebContentsView](https://www.electronjs.org/docs/latest/api/web-contents-view)
+改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／還原／合併及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。

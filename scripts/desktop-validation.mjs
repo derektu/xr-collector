@@ -14,7 +14,7 @@ const { values } = parseArgs({ options: {
 } });
 const root = path.resolve(values.checkout ?? scriptRoot);
 if (values.help) {
-  console.log('npm run validate:desktop -- --run <scenario-id> --commit <full-SHA> [--allow-dirty]\nnpm run validate:desktop -- --run <scenario-id> --status');
+  console.log('Internal launcher for npm run validation -- start|status --workspace <path>; see docs/development-validation.md.');
   process.exit(0);
 }
 function json(file) { return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -66,7 +66,7 @@ try {
     if (previous.pid && alive(previous.pid)) throw new Error('This run is already running; close its application first');
     if (previous.sourceHash !== source.sourceHash || previous.commit !== source.commit) throw new Error('Run belongs to another source revision; choose a new --run ID');
   }
-  if (!process.env.npm_execpath) throw new Error('Invoke via npm run validate:desktop');
+  if (!process.env.npm_execpath) throw new Error('Invoke via npm run validation');
   const target = process.platform === 'win32' ? 'win' : 'mac';
   await runNode([path.join(root, 'scripts/download-runtime.mjs'), target]);
   await runNode([process.env.npm_execpath, 'run', 'build']);

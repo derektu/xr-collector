@@ -3,14 +3,14 @@ import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Collector } from '../src/core/collector.js';
-import type { CapturedTranscript } from '../src/core/types.js';
-import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../src/search/managed-transcript-search.js';
-import { MeilisearchBackend } from '../src/search/meilisearch-backend.js';
-import { startMeilisearchProcess } from '../src/search/meilisearch-process.js';
-import { createHttpApp } from '../src/server/app.js';
-import { startAgentAccess } from '../src/server/agent-access.js';
-import { MarkdownVault } from '../src/vault/markdown-vault.js';
+import { Collector } from '../../src/core/collector.js';
+import type { CapturedTranscript } from '../../src/core/types.js';
+import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
+import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
+import { startMeilisearchProcess } from '../../src/search/meilisearch-process.js';
+import { createHttpApp } from '../../src/server/app.js';
+import { startAgentAccess } from '../../src/server/agent-access.js';
+import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {

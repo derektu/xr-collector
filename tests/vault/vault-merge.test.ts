@@ -3,16 +3,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile, readdir, rename } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { VaultWorkspace } from '../src/vault/workspace.js';
-import { MarkdownVault } from '../src/vault/markdown-vault.js';
-import { exportVault } from '../src/vault/vault-package.js';
-import { compareFiles, mergeFiles, packageFiles } from '../src/vault/vault-merge.js';
-import { lineDiff } from '../src/web/line-diff.js';
-import { JsonChannelStore } from '../src/channels/json-channel-store.js';
-import { JsonChannelScheduleStore } from '../src/channels/json-channel-schedule-store.js';
-import { startAgentAccess } from '../src/server/agent-access.js';
-import { createHttpApp } from '../src/server/app.js';
-import type { CapturedTranscript, SavedDocument, TranscriptSearch, MergePreview, MergeChoice } from '../src/core/types.js';
+import { VaultWorkspace } from '../../src/vault/workspace.js';
+import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import { exportVault } from '../../src/vault/vault-package.js';
+import { compareFiles, mergeFiles, packageFiles } from '../../src/vault/vault-merge.js';
+import { lineDiff } from '../../src/web/line-diff.js';
+import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
+import { startAgentAccess } from '../../src/server/agent-access.js';
+import { createHttpApp } from '../../src/server/app.js';
+import type { CapturedTranscript, SavedDocument, TranscriptSearch, MergePreview, MergeChoice } from '../../src/core/types.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();

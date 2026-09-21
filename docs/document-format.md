@@ -1,228 +1,36 @@
-# 文件格式與生命週期
+# 現行 YouTube 文件格式
 
-> 第一版交付範圍與開發順序見 [YouTube-only MVP 計畫](mvp-plan.md) 與 [GitHub #1](https://github.com/derektu/xr-collector/issues/1)。本文保留產品背景或設計候選；超出該 MVP 的內容不是開工前置條件。
+本文件描述 `src/vault/markdown-vault.ts` 寫出的格式，供第一輪資料相容及 Round 2 遷移使用。多來源契約的目標見 [Round 2 計畫](round-2-plan.md#51-文件與來源契約)；此格式不代表一般 OKF 文件均可匯入。
 
-本文件為 Issue #2 的規格草案，供討論與 review，尚未作為實作定案。文件模型適用於 XQ 新聞／研報、YouTube 字幕、RSS 與網頁收集。OKF 依據與限制見 [研究筆記](research/okf.md)。
+## 身分與保存
 
-已確認方向包含：使用者可修改正文並保留擷取版本供復原；自動防止可確認的重複收集；偵測跨來源同文並提示。本草案聚焦文件格式與資料分工，欄位命名仍為提案。資料重複、透過介面編輯及直接修改 MD 的具體處理方式列為待討論議題。
+每份文件是 UTF-8 Markdown，前方為 YAML frontmatter。檔案位於 `<vault>/documents/youtube/<video-id>.md`，文件 ID 為 `youtube:<video-id>`。相同 video ID 的收集回傳既有文件，不覆寫內容。
 
-## 保存格式與使用介面
+| 欄位 | 寫入行為 |
+| --- | --- |
+| `type` | `Transcript` |
+| `title`、`resource` | 影片標題與來源 URL |
+| `tags` | 初始為空陣列 |
+| `collector.id` | `youtube:<video-id>` |
+| `collector.source`、`collector.source_id` | `youtube` 與 video ID |
+| `collector.publisher` | 頻道名稱 |
+| `collector.publisher_id` | 有取得頻道 ID 時保存 |
+| `collector.published_at` | 有取得發布時間時保存，未知不以收集時間代替 |
+| `collector.collected_at` | 收集時間，ISO 8601 |
+| `collector.content_extent` | `full`，表示所保存的字幕內容；不表示影片有任何字幕以外的內容被收集 |
+| `collector.subtitle.language_code` | 字幕語言 |
+| `collector.subtitle.language_name` | 有取得時保存 |
+| `collector.subtitle.kind` | `manual` 或 `automatic` |
+| `collector.source_tags` | 初始為空陣列 |
 
-文件以 UTF-8 Markdown + YAML frontmatter 保存。Markdown 是保存與交換格式；UI 將文件解析為閱讀畫面與欄位，不直接把完整檔案當成編輯介面。
+正文是整理過空白與段落的字幕文字，保留原文，不做摘要或改寫，不含逐句 timestamp。來源 URL 放在 frontmatter。
 
-| 資訊 | UI 行為 |
-|---|---|
-| 標題、使用者 tags、正文 | 可編輯 |
-| 原文連結、發布者、發布時間、來源標記、內容完整度 | 唯讀呈現 |
-| 文件 ID、內容類型 | 系統管理；依畫面需要呈現 |
-| 入庫、垃圾桶、復原 | 透過操作執行，由系統更新管理狀態 |
+## 讀取與相容性
 
-系統提供的編輯介面以標題、使用者 tags 與正文為可編輯範圍。UI 的唯讀或 disabled 控制用於呈現系統管理欄位；保存、驗證及直接修改磁碟檔案後的處理流程另行討論。
+現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的 `SavedDocument` 是固定欄位投影，不能假設未知 frontmatter 會透過 API 完整呈現。
 
-## MD 與管理資料的分工
+合併比對完整 frontmatter 與正文；收集／異動時間及序列化差異不單獨形成內容衝突。合併沒有提供一般正文編輯、草稿或垃圾桶生命週期。
 
-MD 保存內容及理解其出處所需的資訊，讓文件被單獨取出後仍可閱讀、辨識及追溯來源。Collector 在 MD 外部保存操作狀態、同步資訊與版本關係。
+Vault 也可攜帶 `attachments/`、`versions/` 與 `management/` 檔案；這不代表程式已實作附件編輯器、版本瀏覽器或 Derived pipeline。完整資料包責任見 [儲存與搜尋](storage-and-search.md)。
 
-| MD 內的文件資料 | MD 外的管理資料 |
-|---|---|
-| 穩定文件 ID、內容類型 | 文件與檔案位置的對應 |
-| 標題、使用者 tags、正文 | 待整理、入庫、垃圾桶狀態 |
-| 原文連結、發布者、發布時間 | 來源平台內部 ID、訂閱與擷取設定 |
-| 來源 tags、全文／摘要／部分內容 | 收集紀錄、擷取版本與目前版本的關係 |
-|  | 檔案變動偵測資訊（例如 hash）；去重與版本管理所需資料另行定義 |
-
-單獨複製 MD 可以攜帶內容與來源資訊；完整備份與復原需包含管理資料、保留版本及附件。搜尋索引可重建，無法取代這些管理資料。
-
-Vault 的完整備份、跨機還原、合併及搜尋增量更新方向見 [資料儲存、備份、合併與搜尋概念草案](storage-and-search.md)。
-
-## Frontmatter 資訊架構提案
-
-提案採用 OKF 的 `type`、`title`、`resource`、`tags`，將 Collector 專用的文件資訊集中於 `collector`。各來源以共同資訊架構呈現內容與出處；下表提出欄位及必填範圍的方向，實際 schema、來源映射與驗證規則在擷取流程設計時確認。
-
-| 欄位 | 提案 |
-|---|---|
-| `type` | 必填，表示內容類型，例如 `News`、`ResearchReport`、`Article`、`Transcript`；RSS 與 YouTube 是取得方式或平台，不作為內容類型 |
-| `title` | 必填、非空字串，使用者可編輯 |
-| `resource` | 有可靠原文連結時保存；未知時省略 |
-| `tags` | 必填字串清單，可為空；由使用者維護 |
-| `collector.id` | 必填、穩定且唯一，由系統配置；不因改標題或移動檔案而改變 |
-| `collector.publisher` | 已知的發布者；未知時省略 |
-| `collector.published_at` | 已知的發布時間，使用含時區的 ISO 8601；未知時省略，不以收集時間補值 |
-| `collector.content_extent` | 必填：`full`、`summary` 或 `partial`，描述擷取內容完整度 |
-| `collector.source_tags` | 必填清單，可為空；每項包含 `name`，來源有提供時保留 `id`、`type` |
-
-本文的 `collector.id` 是應用文件識別；OKF Concept ID 仍依其規格由 bundle 內路徑決定，兩者分開。自訂欄位不改寫 OKF 既有欄位語意。
-
-未知擴充欄位在讀寫時保留。外部 OKF 文件缺少 Collector 必要資訊時的匯入處理，以及正文支援的 Markdown 語法、圖片與附件連結規則，另行討論。
-
-## 文件範例
-
-以下以 XQ 新聞、RSS、YouTube 與網頁四種收集情境，展示預期文件可能的樣貌。內容、名稱、連結與識別值均為假想示例；正文以短篇內容呈現，方便比較 metadata 與正文的組織方式。
-
-範例用於討論共同資訊架構。實際可取得的欄位、內容完整度與正文結構，會依來源提供的資料及擷取流程設計確認。UI 將 metadata 呈現為對應欄位，將正文呈現為可閱讀與編輯的內容。
-
-### XQ 新聞
-
-假設從 XQ 取得一則完整新聞，包含發布資訊及平台提供的商品標記，使用者另加上自己的 tags。
-
-```markdown
----
-type: News
-title: 新禾食品擴建產線，預計明年投產
-resource: https://example.com/news/production-expansion
-tags:
-  - 待追蹤
-  - 食品產業
-collector:
-  id: doc_01
-  publisher: 範例財經新聞
-  published_at: "2026-09-09T10:30:00+08:00"
-  content_extent: full
-  source_tags:
-    - id: "EXAMPLE-STOCK"
-      name: 新禾食品
-      type: 商品
----
-
-新禾食品宣布擴建常溫食品產線，預計明年第三季投產，主要供應國內零售通路。
-
-## 擴產規劃
-
-公司表示，新產線將分階段導入自動化設備，實際產能開出進度仍須配合設備驗收與客戶認證。
-```
-
-### RSS 文章摘要
-
-假設訂閱的 RSS 提供文章標題、連結、發布時間、分類與摘要，尚未取得全文。文件保存 feed 提供的摘要，並保留連往原文章的入口。
-
-```markdown
----
-type: Article
-title: 食品物流業者如何規劃冷鏈設備投資
-resource: https://example.com/articles/cold-chain-investment
-tags:
-  - 研究素材
-collector:
-  id: doc_02
-  publisher: 產業觀察週刊
-  published_at: "2026-09-09T08:00:00+08:00"
-  content_extent: summary
-  source_tags:
-    - name: 物流
-    - name: 冷鏈
----
-
-冷鏈設備投資除了增加倉儲容量，也需要考量用電成本、配送半徑與貨品周轉率。本文訪談物流業者，整理其設備汰換與新據點評估方式。
-```
-
-### YouTube 字幕
-
-假設從 YouTube 影片取得一段字幕，已知影片標題、頻道、發布時間與原始連結，沒有取得來源 tags。文件的內容類型為逐字稿，正文呈現字幕文字。
-
-```markdown
----
-type: Transcript
-title: 本週產業觀察：冷鏈需求與設備投資
-resource: https://example.com/youtube/watch?v=example-video
-tags:
-  - 待閱讀
-  - 產業訪談
-collector:
-  id: doc_03
-  publisher: 產業觀察頻道
-  published_at: "2026-09-09T18:00:00+08:00"
-  content_extent: partial
-  source_tags: []
----
-
-大家好，今天我們談冷鏈物流。最近幾家業者都提到擴充倉儲，但新增面積不一定能直接轉換成獲利，還要看客戶需求與設備使用率。
-
-接下來我們會從用電成本、配送距離和周轉率三個角度，討論業者如何評估投資。
-```
-
-### 網頁文章
-
-假設使用者在瀏覽器匯入一篇文章，取得全文、發布者與原文連結，頁面沒有可辨識的發布時間或分類。正文保留文章的段落、標題與清單結構。
-
-```markdown
----
-type: Article
-title: 冷鏈倉儲的三項規劃重點
-resource: https://example.com/guides/cold-storage
-tags:
-  - 冷鏈
-  - 規劃參考
-collector:
-  id: doc_04
-  publisher: 範例物流研究室
-  content_extent: full
-  source_tags: []
----
-
-冷鏈倉儲規劃需要同時考慮貨品特性與日常營運方式。
-
-## 溫層與動線
-
-不同貨品的保存條件不同，應先確認所需溫層，再安排入庫、揀貨與出貨動線。
-
-## 評估項目
-
-- 貨品所需的保存溫度。
-- 尖峰時段的進出貨量。
-- 設備維護與備援空間。
-```
-
-## 擷取版本與目前內容
-
-擷取版本保存收集時取得並轉換成共同格式的內容，不受使用者編輯覆寫。它不等同於完整 HTTP 回應或原始 HTML；原始附件與回應的保存政策另行定義。
-
-資料模型區分擷取版本與使用者編輯的目前內容，支援後續復原。版本建立時機、保存方式、復原範圍，以及來源更新與使用者編輯的關係，另行討論。
-
-## 檔案 hash 與外部修改
-
-Collector 需要能偵測 MD 是否偏離系統最後接受的版本，例如在 MD 外部管理資料中保存檔案 hash。Hash 用於判斷是否發生變動，無法證明修改者身分、指出異動欄位或自行復原內容。
-
-檔案變動偵測與跨文件去重是不同用途。Hash 的演算法、計算範圍、比對與更新時機，以及偵測到變動後的處理方式，均列為待討論事項。
-
-## 生命週期與去重範圍
-
-生命週期的討論方向包含待整理、入庫與垃圾桶。這些狀態由 Collector 管理，不直接映射成 OKF 的 `verified` 或 `deprecated`。狀態轉換、自動入庫、搜尋與 Agent 可見範圍，以及刪除後再次收集的關係，另行討論。
-
-去重涵蓋兩層：
-
-- 自動防止可確認的重複收集：以可靠來源 ID、可確認的文章 URL 為辨識依據。
-- 偵測跨來源同文並提示。
-
-近似改寫與同事件報導不納入去重範圍。具體判定規則、提示方式及後續處理尚未定義。
-
-## 待討論議題
-
-### 資料重複
-
-- 來源 ID、URL 與跨來源同文的具體判定規則，包括正規化與內容完整度的影響。
-- 重複資訊的提示方式，以及保留、合併或其他整理操作。
-- 重複收集與來源更新、摘要補成全文、刪除後再次收集的關係。
-
-### 透過系統提供的介面編輯
-
-- 保存與驗證時機，以及版本建立與保留方式。
-- 復原範圍，以及標題、tags、正文與擷取版本的關係。
-- 多個編輯操作、來源更新或外部修改同時發生時的衝突處理。
-- 編輯後 UI、搜尋與 Agent 何時使用哪一份內容。
-
-### 直接修改 MD
-
-- 變動偵測方式、時機與比較基準。
-- 只有格式差異、可編輯內容異動、系統欄位或未知擴充欄位異動時，如何驗證及決定是否接受。
-- 格式錯誤、文件 ID 遺失或重複，以及檔案新增、移動、刪除的處理。
-- 與介面編輯或系統寫入衝突時的處理，以及提示與復原方式。
-- 異動尚未處理期間，UI、搜尋與 Agent 使用的內容版本。
-
-### 其他格式與保存議題
-
-- 正文 Markdown 語法、附件規則與原始回應保存政策。
-- 來源只提供發布日期時的時間精度表示，以及字幕語言、時間碼與人工／自動字幕來源如何表達。
-- 外部 OKF 文件的匯入與必要資訊補足方式。
-- 完整備份範圍、管理資料儲存方式與中斷恢復機制。
-
-上述議題需在實作對應的保存、編輯與同步功能前收斂，再訂定處理流程及驗收條件。
+Round 2 改動文件欄位、來源身分或刪除記錄時，須同步定義第一輪文件的讀取與遷移行為，並驗證資料包還原及合併；不得只更換新文件的 writer。

@@ -4,13 +4,13 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MarkdownVault } from '../src/vault/markdown-vault.js';
-import { exportVault, unpackVault } from '../src/vault/vault-package.js';
-import { VaultWorkspace } from '../src/vault/workspace.js';
-import { JsonChannelStore } from '../src/channels/json-channel-store.js';
-import { JsonChannelScheduleStore } from '../src/channels/json-channel-schedule-store.js';
-import { createHttpApp } from '../src/server/app.js';
-import type { CapturedTranscript, SavedDocument, TranscriptSearch } from '../src/core/types.js';
+import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import { exportVault, unpackVault } from '../../src/vault/vault-package.js';
+import { VaultWorkspace } from '../../src/vault/workspace.js';
+import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
+import { createHttpApp } from '../../src/server/app.js';
+import type { CapturedTranscript, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];

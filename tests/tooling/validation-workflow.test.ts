@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, sy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { applicable, validatePlan, planHash, summarize, repositoryId, snapshot, insideFile, digest } from '../scripts/validation/core.mjs';
+import { applicable, validatePlan, planHash, summarize, repositoryId, snapshot, insideFile, digest } from '../../scripts/validation/core.mjs';
 
 const roots: string[] = [];
 function temp() { const p = mkdtempSync(path.join(tmpdir(), 'xr-validation-test-')); roots.push(p); return p; }

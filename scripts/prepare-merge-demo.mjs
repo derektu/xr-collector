@@ -1,11 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
 import { MarkdownVault } from '../dist/node/vault/markdown-vault.js';
 import { JsonChannelStore } from '../dist/node/channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../dist/node/channels/json-channel-schedule-store.js';
 import { exportVault } from '../dist/node/vault/vault-package.js';
 
-const root = path.resolve('.data', 'merge-demo', new Date().toISOString().replace(/[:.]/g, '-'));
+const { values } = parseArgs({ options: { output: { type: 'string' } } });
+const root = values.output ? path.resolve(values.output) : path.resolve('.data', 'merge-demo', new Date().toISOString().replace(/[:.]/g, '-'));
+await mkdir(path.dirname(root), { recursive: true });
+// A new destination keeps fixture generation separate from existing validation data.
+await mkdir(root);
 const local = path.join(root, 'profile', 'vault'); const incoming = path.join(root, 'incoming');
 const fixture = { videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', title: '差異文件：森林或海洋',
   channelId: 'UC-demo', channelTitle: '合成測試頻道', publishedAt: null, languageCode: 'zh-Hant', languageName: '中文', subtitleKind: 'manual' };
@@ -28,7 +33,4 @@ for (const [target, intervalMinutes] of [[local, 60], [incoming, 120]]) {
 }
 await writeFile(path.join(root, 'incoming.xr-vault'), await exportVault(incoming));
 await writeFile(path.join(root, 'local-before.xr-vault'), await exportVault(local));
-const app = path.resolve('release/mac-arm64/XR Collector.app/Contents/MacOS/XR Collector');
-const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-await writeFile(path.join(root, 'open-demo.command'), `#!/bin/zsh\nexport XR_COLLECTOR_PROFILE=${quote(path.join(root, 'profile'))}\nexec ${quote(app)}\n`, { mode: 0o755 });
-console.log(root);
+console.log(`合成資料：${root}\n在 validation 工作區還原 local-before.xr-vault，再選 incoming.xr-vault 比對合併。`);

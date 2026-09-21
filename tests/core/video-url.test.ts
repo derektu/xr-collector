@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CollectorError } from '../src/core/types.js';
-import { parseYouTubeVideoUrl } from '../src/core/video-url.js';
+import { CollectorError } from '../../src/core/types.js';
+import { parseYouTubeVideoUrl } from '../../src/core/video-url.js';
 
 describe('parseYouTubeVideoUrl', () => {
   it.each([
