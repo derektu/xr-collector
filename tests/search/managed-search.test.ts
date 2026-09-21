@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { SavedDocument } from '../src/core/types.js';
+import type { SavedDocument } from '../../src/core/types.js';
 import {
   ManagedTranscriptSearch,
   type SearchBackend,
-} from '../src/search/managed-transcript-search.js';
-import { MeilisearchBackend } from '../src/search/meilisearch-backend.js';
+} from '../../src/search/managed-transcript-search.js';
+import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 
 const documents: SavedDocument[] = [
   {

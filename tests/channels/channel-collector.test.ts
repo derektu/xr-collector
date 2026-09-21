@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ChannelCollector, type YouTubeChannelSource } from '../src/channels/channel-collector.js';
-import type { ChannelStore } from '../src/channels/json-channel-store.js';
-import { CollectorError, type CollectResult, type SavedDocument, type YouTubeChannel } from '../src/core/types.js';
+import { ChannelCollector, type YouTubeChannelSource } from '../../src/channels/channel-collector.js';
+import type { ChannelStore } from '../../src/channels/json-channel-store.js';
+import { CollectorError, type CollectResult, type SavedDocument, type YouTubeChannel } from '../../src/core/types.js';
 
 class MemoryChannelStore implements ChannelStore {
   readonly channels: YouTubeChannel[] = [];

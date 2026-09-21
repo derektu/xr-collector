@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CollectorError } from '../src/core/types.js';
-import { YtDlpChannelSource } from '../src/capture/ytdlp-channel-source.js';
+import { CollectorError } from '../../src/core/types.js';
+import { YtDlpChannelSource } from '../../src/capture/ytdlp-channel-source.js';
 
 describe('YtDlpChannelSource', () => {
   it('resolves channel identity and lists a limited set of video references', async () => {

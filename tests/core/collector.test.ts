@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Collector, type DocumentVault, type YouTubeCapture } from '../src/core/collector.js';
+import { Collector, type DocumentVault, type YouTubeCapture } from '../../src/core/collector.js';
 import type {
   CapturedTranscript,
   DocumentSummary,
   SavedDocument,
   YouTubeVideoRef,
-} from '../src/core/types.js';
+} from '../../src/core/types.js';
 
 const captureResult: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',

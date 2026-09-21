@@ -1,6 +1,6 @@
 # XR Collector UI Design Spec
 
-本目錄的 HTML 是視覺 wireframe；Round 2 的產品行為、ticket 分工與開發前驗收規則以 [Round 2 Plan](round-2-plan.md) 為準。HTML 尚未反映完整 Round 2 流程；已知差異列於 Plan 第 2 節，畫面狀態依各功能票開發前的驗收計畫補齊。
+本目錄的 HTML 是視覺 wireframe；Round 2 的產品行為、ticket 分工與開發前驗收規則以 [Round 2 Plan](../round-2-plan.md) 為準。HTML 尚未反映完整 Round 2 流程；已知差異列於 Plan 第 2 節，畫面狀態依各功能票開發前的驗收計畫補齊。
 
 XR Collector 是 local-first 的資料收集與搜尋桌面工具。第一版支援 YouTube 影片字幕與頻道訂閱，架構上預留其他來源（RSS、網頁）的擴充空間。
 

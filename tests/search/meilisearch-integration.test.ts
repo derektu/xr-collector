@@ -3,13 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SavedDocument } from '../src/core/types.js';
-import { ManagedTranscriptSearch } from '../src/search/managed-transcript-search.js';
-import { MeilisearchBackend } from '../src/search/meilisearch-backend.js';
+import type { SavedDocument } from '../../src/core/types.js';
+import { ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
+import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import {
   startMeilisearchProcess,
   type RunningMeilisearch,
-} from '../src/search/meilisearch-process.js';
+} from '../../src/search/meilisearch-process.js';
 
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();

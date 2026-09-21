@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTranscriptSegments } from '../src/core/transcript.js';
+import { formatTranscriptSegments } from '../../src/core/transcript.js';
 
 describe('formatTranscriptSegments', () => {
   it('normalizes whitespace and preserves repeated text', () => {

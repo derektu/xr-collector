@@ -1,4 +1,6 @@
-# YouTube-only MVP 交付計畫
+# 第一輪 YouTube-only MVP 範圍紀錄
+
+本文件保留第一輪的交付邊界與順序。當前開發依 [Round 2 計畫](../round-2-plan.md) 與 [#24](https://github.com/derektu/xr-collector/issues/24)；例如 Agent 完整操作、背景工作及桌面常駐屬於第二輪，不受下方第一輪只讀／執行期間排程的限制。
 
 ## 目標
 

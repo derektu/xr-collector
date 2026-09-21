@@ -6,6 +6,21 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 
 本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，Agent 只讀存取，以及完整資料包匯出、還原與比對合併。已收集內容管理由其他 tickets 交付。
 
+## 從這裡開始閱讀
+
+目前可執行的是第一輪 YouTube 收集／搜尋／資料交換功能，加上 #25 的 CI 與原生驗證工具。Round 2 正在將其擴充成完整產品流程；設計圖與計畫中的能力不等同已交付功能。
+
+| 想了解什麼 | 文件 |
+| --- | --- |
+| 現在做到哪裡、接下來做什麼 | [Round 2 開發計畫與進度](docs/round-2-plan.md) |
+| 產品目標、本輪包含與排除的範圍 | [產品範圍](docs/product-brief.md) |
+| 目前程式如何組成 | [架構](docs/architecture.md) |
+| 文件格式、Vault 與搜尋資料責任 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
+| 如何開發、測試與交付 PR 證據 | 本頁下方操作、[開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
+| 畫面設計參考 | [UI Design Spec](docs/ui-design/README.md)，wireframe 的行為差異依 Round 2 計畫 |
+
+以下操作說明描述目前程式；即時 ticket 狀態與驗收證據由 [GitHub #24](https://github.com/derektu/xr-collector/issues/24) 追蹤。
+
 ## 執行模式
 
 開發與主要測試使用獨立 Web 模式：一般瀏覽器連到 Web 開發伺服器，前端透過相對路徑 `/api` 呼叫本機 API。這個模式不需要啟動 Electron。
@@ -57,7 +72,7 @@ npm run verify
 
 `verify` 執行 Vitest（含 JUnit 報告）、typecheck 與 Node／Web build。CI 以 commit SHA 標示報告與 build artifacts，保留 7 天。缺少 macOS bundled Meilisearch binary 的平台會跳過對應的整合測試；JUnit 的 skipped 數量是驗證邊界，不能視為跨平台 runtime 已通過。CI 不包含 Desktop E2E、畫面截圖或 Release 打包。
 
-各檢查亦可單獨執行：
+測試分類與條件式 skip 見 [測試說明](tests/README.md)。各檢查亦可單獨執行：
 
 ```bash
 npm test
@@ -107,24 +122,22 @@ npm run package:win  # 在 Windows 執行
 
 還原先寫入 `<預設 vault>.restored/vault-<唯一值>`，顯示檔案進度，再建立獨立搜尋索引。資料或索引準備失敗時不切換 vault；原 vault、原索引與使用設定保留。成功後以 vault 之外的 `<預設 vault>.active.json` 記錄目前選擇。畫面顯示實際使用中的 vault 路徑。
 
-### 在一台電腦模擬 A → B
+### 匯出／還原的合成資料
 
-安裝版可透過 `XR_COLLECTOR_PROFILE` 指定獨立的 application data 目錄。A、B 各有自己的 vault、搜尋索引、Agent 連線檔與裝置設定，不影響平常使用的資料。
+先依 [開發驗證流程](docs/development-validation.md) 建立 A、B 兩個不同 run，使用相同 commit 和已批准的計畫。各自在本機工作區啟動程式，資料與日常 profile 隔離。
 
-```bash
-npm run package:mac
-npm run prepare:transfer-demo
+```sh
+npm run prepare:transfer-demo -- --output <新的資料目錄>
 ```
 
-第二個命令建立全新的 `.data/transfer-demo/<時間>/`，包含 `open-A.command`、`open-B.command` 和兩份獨立 profile。A 有兩份合成測試文件、一個頻道、啟用但尚未到期的排程與二進位附件；B 有一份自己的文件。測試資料不需連線 YouTube，頻道只作為設定搬移驗證。
+命令產生 `machine-a.xr-vault`、`machine-b.xr-vault` 及用於產生資料包的 Vault 目錄。A 有兩份合成字幕、一個頻道及二進位附件；B 有一份自己的文件。輸出目錄必須不存在；省略 `--output` 時使用新的 `.data/transfer-demo/<時間>`。命令不啟動程式、不存取 YouTube。
 
-1. 執行 `open-A.command`，展開「資料匯出、還原與合併」，匯出並保存資料包。
-2. 用 Cmd+Q 結束 A，再執行 `open-B.command`。
-3. B 選擇 A 的 `.xr-vault`，按「還原成新 vault 並切換」。等待檔案還原及索引完成。
-4. 確認顯示 A 的兩份文件，搜尋「森林觀測」或 `orchid` 並閱讀全文；確認頻道保留、排程顯示暫停。B 原先的文件應留在 B 原 vault，不混入還原後的列表。
-5. 結束並重新執行 `open-B.command`，確認資料與搜尋仍可用。可在 A 關閉後把 A 的 profile 移到另一個位置，再做 B 的驗證，確認沒有依賴 A 的目錄。
+1. 在 A 工作區還原 `machine-a.xr-vault` 作為前置資料，再從 UI 匯出資料包。
+2. 在 B 工作區還原 `machine-b.xr-vault` 作為前置資料，再還原 A 從 UI 匯出的包。
+3. 確認 B 顯示 A 的兩份文件，可搜尋「森林觀測」及 `orchid`；頻道保留、排程暫停，B 原文件留在原 Vault。
+4. 正常關閉並重啟 B，檢查 active Vault 與搜尋結果，再依 scenario 收集證據。
 
-這是同一台電腦的隔離環境模擬，並非另一台實體電腦或另一種作業系統的驗收。自動化測試也會移除 A 的目錄，再還原到 B、啟動實際 Meilisearch，驗證 B 重啟後仍可搜尋。
+所有還原都會暫停排程，包含前置資料準備。同機 A／B 驗證是隔離環境模擬，不能替代契約要求的另一種 OS 或實體機器驗收。Development 與 Verifier 各自準備 run 及資料。
 
 ## 合併另一份 vault
 
@@ -140,22 +153,19 @@ npm run prepare:transfer-demo
 
 每次有實際寫入的合併，先在目前 vault 旁保存 `<vault>.before-merge-<唯一值>.xr-vault`，完成訊息顯示備份路徑。可透過「還原成新 vault 並切換」開啟這份備份；還原後排程暫停。失敗時復原文件與搜尋；若復原也失敗，停止寫入與排程並保留 `<vault>.merge-journal.json`，重啟後先復原再開放操作。復原紀錄存在時請保留其指向的備份。與匯出／還原相同，同一 vault 僅供一個程式寫入。
 
-### 合併操作測試
+### 合併的合成資料
 
-```bash
-npm run package:mac
-npm run prepare:merge-demo
+```sh
+npm run prepare:merge-demo -- --output <新的資料目錄>
 ```
 
-第二個命令建立獨立 `.data/merge-demo/<時間>/`，包含 `open-demo.command`、`incoming.xr-vault`、`local-before.xr-vault`，以及隔離 profile，不修改日常資料。
+輸出 `local-before.xr-vault`、`incoming.xr-vault` 及來源 Vault 目錄。省略 `--output` 時使用新的 `.data/merge-demo/<時間>`，既有目錄會拒絕寫入。
 
-1. 執行 `open-demo.command`，選擇同目錄的 `incoming.xr-vault` 並比對。預期新增 2、相同 1、差異 4（文件、頻道、排程、二進位附件）。
-2. 展開文件差異，可看到「森林觀測」與「海洋調查」及前後共同段落。選擇各差異後合併。
-3. 採用匯入文件時，搜尋「海洋調查」可找到文件，「森林觀測」不再命中；新增的「沙漠研究」可搜尋，「山岳考察」本機文件保留。若保留本機文件則結果相反。採用匯入排程時，抓取週期應顯示「每 2 小時」，狀態為暫停。
-4. 再次比對同一資料包，已採用項目顯示相同，未採用的差異仍需選擇；不新增文件副本。也可取消、重啟程式後檢查結果。
-5. 使用 `local-before.xr-vault` 還原成新 vault，可重做不同選擇組合。
+在自己的 validation 工作區，先還原 `local-before.xr-vault`，再選 `incoming.xr-vault` 比對。預期新增 2、相同 1、差異 4（文件、頻道、排程、二進位附件）。文件差異包含「森林觀測」與「海洋調查」。
 
-自動測試涵蓋 diff、新增／相同／衝突、個別選擇、重複匯入、來源缺件、頻道及排程規則、二進位附件、路徑衝突、過期預覽、取消、部分索引失敗與重啟復原，以及實際 Meilisearch 更新與重啟搜尋。
+採用匯入文件後，搜尋「海洋調查」命中、「森林觀測」不再命中；新增的「沙漠研究」可搜尋，本機「山岳考察」保留。採用匯入排程後為每 2 小時且暫停。重複匯入不增加副本，未採用項目保留差異；以正常關閉、重啟確認持久結果。重做案例時依契約重設資料或建立新 run。
+
+這些資料供 UI 操作驗收使用；自動化的資料完整性、失敗恢復與搜尋測試仍須執行，見 [測試說明](tests/README.md)。
 
 ## 頻道清單與立即抓取
 
@@ -213,4 +223,4 @@ Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求
 - 不下載影片或音訊，也不執行語音轉文字。
 - 無字幕、影片無法存取、網路問題與一般擷取失敗以不同錯誤回報。
 
-更完整的產品範圍與架構方向見 [YouTube-only MVP 計畫](docs/mvp-plan.md) 與 [XR Collector 整體架構](docs/architecture.md)。
+目前範圍見 [產品範圍](docs/product-brief.md)，本輪交付依 [Round 2 計畫](docs/round-2-plan.md)。技術現況見 [架構](docs/architecture.md)、[文件格式](docs/document-format.md) 與 [儲存／搜尋](docs/storage-and-search.md)。

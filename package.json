@@ -18,7 +18,6 @@
     "download:runtime": "node scripts/download-runtime.mjs mac",
     "package:mac": "npm run download:runtime && npm run build && electron-builder --mac --publish never",
     "test": "vitest run --config vitest.config.ts",
-    "test:meilisearch": "npm run download:runtime && vitest run --config vitest.config.ts tests/meilisearch-integration.test.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "prepare:transfer-demo": "npm run build:node && node scripts/prepare-transfer-demo.mjs",
     "prepare:merge-demo": "npm run build:node && node scripts/prepare-merge-demo.mjs",
@@ -26,8 +25,8 @@
     "verify": "npm run test:ci && npm run build",
     "download:runtime:win": "node scripts/download-runtime.mjs win",
     "package:win": "npm run download:runtime:win && npm run build && electron-builder --win --x64 --publish never",
-    "validate:desktop": "node scripts/desktop-validation.mjs",
-    "validation": "node scripts/validation.mjs"
+    "validation": "node scripts/validation.mjs",
+    "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts tests/search/meilisearch-integration.test.ts tests/server/agent-access.test.ts tests/vault/vault-transfer.test.ts tests/vault/vault-merge.test.ts"
   },
   "dependencies": {
     "@fastify/static": "10.1.4",

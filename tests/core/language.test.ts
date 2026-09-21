@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseSubtitleTrack, type SubtitleTrack } from '../src/core/language.js';
+import { chooseSubtitleTrack, type SubtitleTrack } from '../../src/core/language.js';
 
 const track = (
   code: string,

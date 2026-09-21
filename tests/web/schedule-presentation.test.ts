@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scheduleTimingLabels } from '../src/web/App.js';
-import type { ChannelSchedule } from '../src/core/types.js';
+import { scheduleTimingLabels } from '../../src/web/App.js';
+import type { ChannelSchedule } from '../../src/core/types.js';
 
 describe('scheduleTimingLabels', () => {
   it('distinguishes the current run start from the previous completion', () => {
