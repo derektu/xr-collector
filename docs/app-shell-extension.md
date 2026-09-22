@@ -4,7 +4,7 @@ The App Shell owns the four stable top-level routes and the shared presentation 
 
 ## Add a source
 
-1. Add a `SourceDefinition` to `sourceRegistry` in `src/web/app-shell.ts`. The registry provides the source to the Sources page.
+1. Add a `SourceDefinition` with its `view` copy to `sourceRegistry` in `src/web/app-shell.ts`. The registry provides the source card and resolves its own source view through `open(id)`.
 2. Use `availability: 'planned'` until the source has a delivered capability. The page labels planned sources as unavailable and provides no successful-looking action.
 3. Register test fixtures with `availability: 'test-only'`. They remain available to direct registry tests but are excluded from `publicSources()` and the product UI.
 4. Put the actual source operation behind the existing shared HTTP API. The Shell is deliberately not an Electron IPC business boundary.

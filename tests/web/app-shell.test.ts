@@ -19,14 +19,14 @@ describe('App Shell routes', () => {
 describe('source registry', () => {
   it('keeps test-only sources out of the public Sources page', () => {
     const registry = createSourceRegistry([
-      { id: 'youtube', label: 'YouTube', availability: 'available' },
-      { id: 'fixture', label: 'Fixture source', availability: 'test-only' },
+      { id: 'youtube', label: 'YouTube', availability: 'available', view: { heading: 'YouTube source', detail: 'available' } },
+      { id: 'fixture', label: 'Fixture source', availability: 'test-only', view: { heading: 'Fixture source view', detail: 'opened through the registry' } },
     ]);
 
     expect(registry.publicSources()).toEqual([
-      { id: 'youtube', label: 'YouTube', availability: 'available' },
+      { id: 'youtube', label: 'YouTube', availability: 'available', view: { heading: 'YouTube source', detail: 'available' } },
     ]);
-    expect(registry.get('fixture')).toMatchObject({ id: 'fixture', availability: 'test-only' });
+    expect(registry.open('fixture')).toMatchObject({ id: 'fixture', view: { heading: 'Fixture source view' } });
   });
 });
 

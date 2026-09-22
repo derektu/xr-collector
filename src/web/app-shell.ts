@@ -22,14 +22,14 @@ export function createElectronThemeStore(bridge: ElectronThemeBridge): ThemeStor
 }
 
 export type SourceAvailability = 'available' | 'planned' | 'test-only';
-export interface SourceDefinition { id: string; label: string; availability: SourceAvailability; description?: string; }
-export interface SourceRegistry { get(id: string): SourceDefinition | undefined; publicSources(): SourceDefinition[]; }
+export interface SourceDefinition { id: string; label: string; availability: SourceAvailability; description?: string; view: { heading: string; detail: string }; }
+export interface SourceRegistry { get(id: string): SourceDefinition | undefined; open(id: string): SourceDefinition | undefined; publicSources(): SourceDefinition[]; }
 export function createSourceRegistry(definitions: SourceDefinition[]): SourceRegistry {
   const byId = new Map(definitions.map((definition) => [definition.id, definition]));
-  return { get: (id) => byId.get(id), publicSources: () => definitions.filter((definition) => definition.availability !== 'test-only') };
+  return { get: (id) => byId.get(id), open: (id) => byId.get(id), publicSources: () => definitions.filter((definition) => definition.availability !== 'test-only') };
 }
 export const sourceRegistry = createSourceRegistry([
-  { id: 'youtube', label: 'YouTube', availability: 'available', description: '影片、頻道與訂閱的操作將由後續工作接入這個來源位置。' },
-  { id: 'rss', label: 'RSS', availability: 'planned', description: '尚未開放的來源。' },
-  { id: 'web', label: '一般網頁', availability: 'planned', description: '尚未開放的來源。' },
+  { id: 'youtube', label: 'YouTube', availability: 'available', description: '影片、頻道與訂閱的操作將由後續工作接入這個來源位置。', view: { heading: 'YouTube 來源', detail: '這是 YouTube 的接入位置；收集與訂閱操作尚未啟用。' } },
+  { id: 'rss', label: 'RSS', availability: 'planned', description: '尚未開放的來源。', view: { heading: 'RSS 來源', detail: 'RSS 尚未開放。' } },
+  { id: 'web', label: '一般網頁', availability: 'planned', description: '尚未開放的來源。', view: { heading: '一般網頁來源', detail: '一般網頁來源尚未開放。' } },
 ]);
