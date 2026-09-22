@@ -69,6 +69,7 @@ export class ChannelScheduler {
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    await this.checking;
   }
 
   async getSchedule(): Promise<ChannelSchedule> {

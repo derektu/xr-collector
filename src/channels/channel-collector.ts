@@ -40,6 +40,7 @@ export class ChannelCollector {
   private readonly initialVideoLimit: number;
   private readonly createId: () => string;
   private readonly runs = new Map<string, ChannelRun>();
+  private readonly running = new Set<Promise<void>>();
   private startingRun: Promise<ChannelRun> | null = null;
 
   constructor(
@@ -101,6 +102,11 @@ export class ChannelCollector {
     return this.startingRun !== null || this.getActiveRun() !== null;
   }
 
+  async whenIdle(): Promise<void> {
+    await this.startingRun?.catch(() => undefined);
+    while (this.running.size > 0) await Promise.allSettled([...this.running]);
+  }
+
   getActiveRun(): ChannelRun | null {
     for (const run of this.runs.values()) {
       if (run.status !== 'completed') return this.snapshot(run);
@@ -142,7 +148,10 @@ export class ChannelCollector {
       completedAt: null,
     };
     this.runs.set(run.id, run);
-    void this.executeRun(run, selected);
+    const execution = this.executeRun(run, selected);
+    this.running.add(execution);
+    const clearRunning = () => this.running.delete(execution);
+    void execution.then(clearRunning, clearRunning);
     return this.snapshot(run);
   }
 

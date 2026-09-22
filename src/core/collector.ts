@@ -44,6 +44,12 @@ export class Collector {
     return this.inFlight.size > 0;
   }
 
+  async whenIdle(): Promise<void> {
+    while (this.inFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight.values()]);
+    }
+  }
+
   list(): Promise<DocumentSummary[]> {
     return this.vault.list();
   }

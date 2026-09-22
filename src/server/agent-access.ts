@@ -3,19 +3,27 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { startServer, type StartServerOptions } from './start.js';
 
-/** A separate listener shares the UI's services, but authorizes only document reads. */
+/** A separate authenticated listener exposes the same business services as the UI listener. */
 export async function startAgentAccess(options: {
-  collector: StartServerOptions['collector'];
+  collector?: StartServerOptions['collector'];
   transfer?: StartServerOptions['transfer'];
-  search: NonNullable<StartServerOptions['search']>;
+  channels?: StartServerOptions['channels'];
+  schedule?: StartServerOptions['schedule'];
+  search?: StartServerOptions['search'];
   connectionFile: string;
   skillPath: string;
+  runtimeStatus?: StartServerOptions['runtimeStatus'];
+  notReadyMessage?: string;
 }) {
   const token = randomBytes(32).toString('hex');
   const server = await startServer({
-    collector: options.collector,
+    ...(options.collector ? { collector: options.collector } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
-    search: options.search,
+    ...(options.channels ? { channels: options.channels } : {}),
+    ...(options.schedule ? { schedule: options.schedule } : {}),
+    ...(options.search ? { search: options.search } : {}),
+    ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
+    ...(options.notReadyMessage ? { notReadyMessage: options.notReadyMessage } : {}),
     agentToken: token,
     port: 0,
   });
@@ -35,3 +43,5 @@ export async function startAgentAccess(options: {
     close: () => server.close(),
   };
 }
+
+export type AgentAccess = Awaited<ReturnType<typeof startAgentAccess>>;

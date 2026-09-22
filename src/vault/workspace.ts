@@ -19,7 +19,7 @@ interface Bundle {
   schedule: ChannelScheduler;
   runtime: SearchRuntime;
 }
-interface WorkspaceOptions {
+export interface WorkspaceOptions {
   defaultRoot: string;
   capture: YouTubeCapture;
   channelSource: YouTubeChannelSource;
@@ -27,6 +27,13 @@ interface WorkspaceOptions {
   searchData: string;
   searchPort?: number;
   createSearch?: (root: string) => Promise<SearchRuntime>;
+}
+
+export class ActiveVaultUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ActiveVaultUnavailableError';
+  }
 }
 
 /** Service references stay stable for both UI and Agent while the active vault changes. */
@@ -73,7 +80,19 @@ export class VaultWorkspace {
       }
       root = path.join(workspace.restoreParent, selection.name);
       // A missing restored vault must never silently become an empty writable vault.
-      if (!(await stat(root)).isDirectory()) throw new Error('Active vault is missing');
+      try {
+        if (!(await stat(root)).isDirectory()) throw new ActiveVaultUnavailableError(
+          '目前選擇的 Vault 不存在。請在 UI Onboarding 重新設定 Vault。',
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT'
+          || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
+          throw new ActiveVaultUnavailableError(
+            '目前選擇的 Vault 不存在。請在 UI Onboarding 重新設定 Vault。',
+          );
+        }
+        throw error;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || root !== options.defaultRoot) throw error;
     }
@@ -83,7 +102,12 @@ export class VaultWorkspace {
       try { await workspace.current.runtime.search.rebuild(); await rm(`${root}.merge-journal.json`); }
       catch (error) { await workspace.current.runtime.close(); throw error; }
     }
-    await workspace.current.schedule.start();
+    try {
+      await workspace.current.schedule.start();
+    } catch (error) {
+      await workspace.current.runtime.close().catch(() => undefined);
+      throw error;
+    }
     return workspace;
   }
 
@@ -202,7 +226,7 @@ export class VaultWorkspace {
 
   cancelMerge(id: string): void {
     if (this.locked) throw new CollectorError('vault_busy', '正在套用合併，請等待結果。');
-    if (this.preview?.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇資料包。');
+    if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇資料包。');
     this.preview = null;
     this.statusValue = { ...this.statusValue, state: 'idle', message: '已取消合併，資料未變更。' };
   }
@@ -346,7 +370,13 @@ export class VaultWorkspace {
 
   async close(): Promise<void> {
     await this.operation;
-    await this.current.schedule.close();
-    await this.current.runtime.close();
+    const drained = await Promise.allSettled([
+      this.current.schedule.close(),
+      this.current.channels.whenIdle(),
+      this.current.collector.whenIdle(),
+    ]);
+    const search = await Promise.allSettled([this.current.runtime.close()]);
+    const failed = [...drained, ...search].find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 }

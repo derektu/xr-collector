@@ -6,6 +6,7 @@ import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import {
   CollectorError,
   type AddChannelResult,
@@ -31,7 +32,7 @@ export interface ChannelScheduleManagement {
 }
 
 export interface HttpAppOptions {
-  collector: Collector;
+  collector?: Collector;
   transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
@@ -39,6 +40,14 @@ export interface HttpAppOptions {
   webRoot?: string;
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
+  runtimeStatus?: () => CollectorRuntimeStatus;
+  notReadyMessage?: string;
+}
+
+const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
+
+export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
+  return appDrains.get(app)?.() ?? Promise.resolve();
 }
 
 const ERROR_STATUS: Record<CollectorError['code'], number> = {
@@ -58,6 +67,25 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+  let activeRequests = 0;
+  const idleWaiters = new Set<() => void>();
+  appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
+  app.addHook('onRoute', (route) => {
+    if (!route.url.startsWith('/api/')) return;
+    const handler = route.handler;
+    route.handler = async function trackedHandler(request, reply) {
+      activeRequests += 1;
+      try {
+        return await handler.call(this, request, reply);
+      } finally {
+        activeRequests -= 1;
+        if (activeRequests === 0) {
+          for (const resolve of idleWaiters) resolve();
+          idleWaiters.clear();
+        }
+      }
+    };
+  });
 
   if (options.agentToken !== undefined) {
     if (!options.agentToken) throw new Error('Agent token must not be empty');
@@ -69,12 +97,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
           error: { code: 'unauthorized', message: '請使用目前連線檔中的 Agent token。' },
         });
       }
-      const route = request.routeOptions.url;
-      if (request.method !== 'GET' || ![
-        '/api/health', '/api/documents', '/api/documents/:id', '/api/search', '/api/search/status',
-      ].includes(route ?? '')) {
-        return reply.code(403).send({
-          error: { code: 'read_only', message: 'Agent 僅能列出、搜尋及讀取文件。' },
+    });
+  }
+
+  if (options.notReadyMessage) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (request.routeOptions.url === '/api/health' || request.routeOptions.url === '/api/agent/connection') return;
+      if (request.url.startsWith('/api/')) {
+        return reply.code(503).send({
+          error: { code: 'vault_not_ready', message: options.notReadyMessage },
         });
       }
     });
@@ -143,14 +174,20 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   });
 
-  app.get('/api/health', async () => ({ status: 'ok' }));
+  app.get('/api/health', async () => {
+    const runtime = options.runtimeStatus?.();
+    return {
+      status: runtime && runtime.state !== 'ready' ? 'unavailable' : 'ok',
+      ...(runtime ? { runtime } : {}),
+    };
+  });
 
   if (options.agentInfo && options.agentToken === undefined) {
     app.get('/api/agent/connection', async () => options.agentInfo);
   }
 
   app.get<{ Querystring: { offset?: string; limit?: string } }>('/api/documents', async (request) => {
-    const documents = await options.collector.list();
+    const documents = await options.collector!.list();
     documents.sort((a, b) => b.collectedAt.localeCompare(a.collectedAt) || a.id.localeCompare(b.id));
     if (options.agentToken === undefined && request.query.offset === undefined && request.query.limit === undefined) {
       return { documents };
@@ -222,14 +259,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   app.get<{ Params: { id: string } }>('/api/documents/:id', async (request) => ({
-    document: await options.collector.read(request.params.id),
+    document: await options.collector!.read(request.params.id),
   }));
 
   app.post<{ Body: { url?: unknown } }>('/api/youtube/collect', async (request) => {
     if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
       throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址。');
     }
-    return options.collector.collect(request.body.url);
+    return options.collector!.collect(request.body.url);
   });
 
   if (options.schedule) {
