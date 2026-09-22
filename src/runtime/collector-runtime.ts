@@ -85,6 +85,7 @@ export class CollectorRuntime {
           schedule: workspace.schedule,
           search: workspace.search,
         } : {}),
+        instanceId,
         connectionFile: options.connectionFile,
         skillPath: options.skillPath,
         runtimeStatus,

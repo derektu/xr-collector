@@ -130,10 +130,15 @@ describe('Agent authenticated HTTP access', () => {
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));
     await search.start();
     const connectionFile = path.join(root, 'agent-connection.json');
-    const options = { collector, search, connectionFile, skillPath: path.resolve('skills/xr-collector-agent') };
+    const options = {
+      collector, search, connectionFile,
+      instanceId: 'agent-access-test-runtime',
+      skillPath: path.resolve('skills/xr-collector-agent'),
+    };
     const access = await startAgentAccess(options);
     cleanup.push(() => access.close());
     const config = JSON.parse(await readFile(connectionFile, 'utf8'));
+    expect(config).toMatchObject({ schemaVersion: 1, instanceId: 'agent-access-test-runtime' });
     expect((await stat(connectionFile)).mode & 0o777).toBe(0o600);
     expect(new URL(config.url).hostname).toBe('127.0.0.1');
     // The development test runner is the HTTP client; no client-side helper is distributed.

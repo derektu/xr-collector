@@ -2,6 +2,7 @@ import path from 'node:path';
 import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
+import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { FileThemePreference, type StoredTheme } from './theme-preference.js';
 
@@ -10,7 +11,9 @@ let runtime: CollectorRuntime | null = null;
 let themePreference: FileThemePreference | null = null;
 let isQuitting = false;
 
-if (process.env.XR_COLLECTOR_PROFILE) app.setPath('userData', path.resolve(process.env.XR_COLLECTOR_PROFILE));
+const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
+const hasExplicitProfile = Boolean(explicitProfile);
+if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
@@ -95,7 +98,14 @@ app.whenReady().then(async () => {
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
     },
-    connectionFile: path.join(app.getPath('userData'), 'agent-connection.json'),
+    connectionFile: agentConnectionFile({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      profilePath: app.getPath('userData'),
+      appDataPath: app.getPath('appData'),
+      ...(process.env.LOCALAPPDATA ? { localAppDataPath: process.env.LOCALAPPDATA } : {}),
+      hasExplicitProfile,
+    }),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
     uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),

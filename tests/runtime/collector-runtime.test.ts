@@ -58,12 +58,18 @@ describe('CollectorRuntime', () => {
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(503);
     expect((await fetch(`${runtime.server.url}/api/agent/connection`)).status).toBe(200);
 
-    const connection = JSON.parse(await readFile(connectionFile, 'utf8')) as { url: string; token: string };
+    const connection = JSON.parse(await readFile(connectionFile, 'utf8')) as {
+      schemaVersion: number; instanceId: string; url: string; token: string;
+    };
+    expect(connection.schemaVersion).toBe(1);
+    expect(connection.instanceId).toBe(runtime.instanceId);
     expect((await fetch(`${connection.url}/api/health`)).status).toBe(401);
     expect((await fetch(`${connection.url}/api/health`, { headers: { authorization: 'Bearer wrong' } })).status).toBe(401);
     const agentHealth = await fetch(`${connection.url}/api/health`, { headers: { authorization: `Bearer ${connection.token}` } });
     expect(agentHealth.status).toBe(200);
-    expect((await agentHealth.json()).status).toBe('unavailable');
+    expect(await agentHealth.json()).toMatchObject({
+      status: 'unavailable', runtime: { instanceId: connection.instanceId },
+    });
     const blocked = await fetch(`${connection.url}/api/youtube/collect`, {
       method: 'POST', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=runtime0001' }),
@@ -145,6 +151,31 @@ describe('CollectorRuntime', () => {
     const setup = await options({ capture: vi.fn() });
     await expect(CollectorRuntime.start({ ...setup.value, uiPort: -1 })).rejects.toThrow();
     expect(setup.closeSearch).toHaveBeenCalledOnce();
+  });
+
+  it('publishes a new authenticated runtime identity when the same profile restarts', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const first = await CollectorRuntime.start(setup.value);
+    const firstConnection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as {
+      schemaVersion: number; instanceId: string; url: string; token: string;
+    };
+    await first.close();
+
+    const second = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => second.close());
+    const secondConnection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as typeof firstConnection;
+    expect(secondConnection).toMatchObject({ schemaVersion: 1, instanceId: second.instanceId });
+    expect(secondConnection.instanceId).not.toBe(firstConnection.instanceId);
+    expect(secondConnection.token).not.toBe(firstConnection.token);
+
+    const health = await fetch(`${secondConnection.url}/api/health`, {
+      headers: { authorization: `Bearer ${secondConnection.token}` },
+    });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ runtime: { instanceId: secondConnection.instanceId } });
+    expect((await fetch(`${secondConnection.url}/api/health`, {
+      headers: { authorization: `Bearer ${firstConnection.token}` },
+    })).status).toBe(401);
   });
 
   it('wires Agent channel and schedule operations to the UI workspace', async () => {
