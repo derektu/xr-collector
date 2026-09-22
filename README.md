@@ -18,6 +18,7 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 | 文件格式、Vault 與搜尋資料責任 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
 | 如何開發、測試與交付 PR 證據 | 本頁下方操作、[開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
 | 畫面設計參考 | [UI Design Spec](docs/ui-design/README.md)，wireframe 的行為差異依 Round 2 計畫 |
+| App Shell 的路由、來源與外觀擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |
 
 以下操作說明描述目前程式；即時 ticket 狀態與驗收證據由 [GitHub #24](https://github.com/derektu/xr-collector/issues/24) 追蹤。
 

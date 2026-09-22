@@ -20,6 +20,7 @@
     "src/capture/**/*.ts",
     "src/vault/**/*.ts",
     "src/server/**/*.ts",
-    "src/electron/**/*.ts"
+    "src/electron/**/*.ts",
+    "src/electron/**/*.cts"
   ]
 }
