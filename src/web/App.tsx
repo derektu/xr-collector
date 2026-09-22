@@ -23,7 +23,8 @@ export default function App() {
   const [page, setPage] = useState<ShellPage>(() => routeForPath(window.location.pathname));
   const [activeSource, setActiveSource] = useState(() => sourceRegistry.open('youtube'));
   const bridge = window.xrCollectorTheme;
-  const store = useMemo<ThemeStore>(() => bridge ? createElectronThemeStore(bridge) : createBrowserThemeStore(window.localStorage), [bridge]);
+  const desktop = navigator.userAgent.includes('Electron');
+  const store = useMemo<ThemeStore | null>(() => bridge ? createElectronThemeStore(bridge) : desktop ? null : createBrowserThemeStore(window.localStorage), [bridge, desktop]);
   const [theme, setTheme] = useState<Theme>(defaultTheme);
   const [themeReady, setThemeReady] = useState(!bridge);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
@@ -31,11 +32,11 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
 
-  useEffect(() => { let active = true; void store.read().then((stored) => { if (active) setTheme(stored); }).catch(() => { if (active) setStorageNotice('無法讀取外觀偏好，已使用深色主題。'); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
+  useEffect(() => { let active = true; if (!store) { setStorageNotice('桌面外觀設定無法使用，尚未保存任何選擇。'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setTheme(stored); }).catch(() => { if (active) setStorageNotice('無法讀取外觀偏好，已使用深色主題。'); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
   useEffect(() => { const onPopState = () => setPage(routeForPath(window.location.pathname)); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { heading.current?.focus(); }, [page]);
   function navigate(next: ShellPage): void { const path = pathForRoute(next); if (window.location.pathname !== path) window.history.pushState({}, '', path); setPage(next); }
-  async function persist(next: Theme): Promise<void> { setTheme(next); setSaving(true); try { await store.write(next); setPendingTheme(null); setStorageNotice(null); } catch { setPendingTheme(next); setStorageNotice('外觀偏好尚未保存。請重試。'); } finally { setSaving(false); } }
+  async function persist(next: Theme): Promise<void> { if (!store) return; setTheme(next); setSaving(true); try { await store.write(next); setPendingTheme(null); setStorageNotice(null); } catch { setPendingTheme(next); setStorageNotice('外觀偏好尚未保存。請重試。'); } finally { setSaving(false); } }
 
   return <div className="shell" data-theme={theme === 'light' ? 'silverblue' : 'duskblue'}><aside className="sidebar" aria-label="主要導覽"><div className="brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div><nav>{navigation.map((item) => <button key={item.page} type="button" className={page === item.page ? 'nav-item active' : 'nav-item'} aria-current={page === item.page ? 'page' : undefined} onClick={() => navigate(item.page)}><span aria-hidden="true">{item.icon}</span>{item.label}</button>)}</nav><fieldset className="theme-control" disabled={!themeReady || saving}><legend>外觀</legend><label><input type="radio" name="theme" checked={theme === 'dark'} onChange={() => void persist('dark')} /> 深色</label><label><input type="radio" name="theme" checked={theme === 'light'} onChange={() => void persist('light')} /> 淺色</label></fieldset><p className="theme-current" aria-live="polite">目前：{theme === 'dark' ? '深色' : '淺色'}{saving ? '，正在保存' : ''}</p></aside><main className="content" aria-busy={!themeReady}>{storageNotice ? <div className="storage-notice" role="alert"><span>{storageNotice}</span>{pendingTheme ? <button type="button" onClick={() => void persist(pendingTheme)} disabled={saving}>重試</button> : null}</div> : null}{themeReady ? <div className="page" data-testid={`page-${page}`}><h1 className="page-title" ref={heading} tabIndex={-1}>{pageTitles[page]}</h1><PageContent page={page} activeSource={activeSource} onOpenSource={(id) => setActiveSource(sourceRegistry.open(id))} /></div> : <p className="loading" role="status">正在載入外觀偏好…</p>}</main></div>;
 }

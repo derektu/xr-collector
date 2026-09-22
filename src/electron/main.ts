@@ -50,7 +50,7 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
-      preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.js'),
+      preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.cjs'),
     },
   });
   window.once('ready-to-show', () => window.show());
