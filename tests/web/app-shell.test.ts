@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { SourceView } from '../../src/web/App.js';
 import {
   createBrowserThemeStore,
   createSourceRegistry,
@@ -26,7 +29,9 @@ describe('source registry', () => {
     expect(registry.publicSources()).toEqual([
       { id: 'youtube', label: 'YouTube', availability: 'available', view: { heading: 'YouTube source', detail: 'available' } },
     ]);
-    expect(registry.open('fixture')).toMatchObject({ id: 'fixture', view: { heading: 'Fixture source view' } });
+    const fixture = registry.open('fixture');
+    expect(fixture).toMatchObject({ id: 'fixture', view: { heading: 'Fixture source view' } });
+    expect(renderToStaticMarkup(createElement(SourceView, { source: fixture! }))).toContain('Fixture source view');
   });
 });
 
