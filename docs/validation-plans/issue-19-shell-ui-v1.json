@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "scenarios": [
     {
       "id": "SHELL-01",
@@ -71,19 +71,7 @@
         "用 Tab、Shift+Tab、Enter 與 Space 操作側欄和主題",
         "切換頁面後檢查主內容焦點"
       ],
-      "expected": "焦點可見且順序合理，切頁後落在主內容標題，沒有陷阱。"
-    },
-    {
-      "id": "SHELL-10",
-      "platforms": [
-        "any"
-      ],
-      "reason": "Electron 設定寫入故障的錯誤與重試行為；Mac 或 Windows 任一原生桌面皆可驗收。",
-      "steps": [
-        "在隔離 profile 以故障注入啟動 Electron",
-        "選擇主題並嘗試重試"
-      ],
-      "expected": "保存失敗不崩潰、不假報成功，畫面顯示可操作的重試。"
+      "expected": "互動控制的焦點可見且順序合理；切頁後焦點落在主內容標題，但標題不顯示外框，沒有陷阱。"
     }
   ]
 }

@@ -12,7 +12,7 @@ export class FileThemePreference {
       const parsed: unknown = JSON.parse(await readFile(this.file, 'utf8'));
       if (typeof parsed === 'object' && parsed !== null && validTheme((parsed as { theme?: unknown }).theme)) return (parsed as { theme: StoredTheme }).theme;
     } catch (error: unknown) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') return 'dark';
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') console.warn('Unable to read theme preference', error);
     }
     return 'dark';
   }

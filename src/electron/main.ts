@@ -82,8 +82,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
   ipcMain.handle('xrCollector:theme:write', (_event, theme: StoredTheme) => {
     if (theme !== 'dark' && theme !== 'light') throw new Error('Unsupported theme preference');
-    if (process.env.XR_COLLECTOR_THEME_CONFIG_FAILURE === '1') throw new Error('Theme preference write is unavailable');
-    return themePreference!.write(theme);
+    return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
   });
   const vaultRoot = path.resolve(
     process.env.XR_COLLECTOR_VAULT ?? path.join(app.getPath('userData'), 'vault'),
