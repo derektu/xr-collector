@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scheduleTimingLabels } from '../../src/web/App.js';
+import { scheduleTimingLabels } from '../../src/web/schedule-presentation.js';
 import type { ChannelSchedule } from '../../src/core/types.js';
 
 describe('scheduleTimingLabels', () => {

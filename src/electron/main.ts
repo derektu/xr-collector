@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { app, BrowserWindow, powerMonitor, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
@@ -7,12 +7,14 @@ import type { RunningServer } from '../server/start.js';
 import { startServer } from '../server/start.js';
 import { startAgentAccess } from '../server/agent-access.js';
 import { VaultWorkspace } from '../vault/workspace.js';
+import { FileThemePreference, type StoredTheme } from './theme-preference.js';
 
 let mainWindow: BrowserWindow | null = null;
 let server: RunningServer | null = null;
 let agentAccess: Awaited<ReturnType<typeof startAgentAccess>> | null = null;
 let workspace: VaultWorkspace | null = null;
 let channelScheduler: ChannelScheduler | null = null;
+let themePreference: FileThemePreference | null = null;
 let isQuitting = false;
 
 if (process.env.XR_COLLECTOR_PROFILE) app.setPath('userData', path.resolve(process.env.XR_COLLECTOR_PROFILE));
@@ -48,6 +50,7 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.js'),
     },
   });
   window.once('ready-to-show', () => window.show());
@@ -72,6 +75,13 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(async () => {
+  themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
+  ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
+  ipcMain.handle('xrCollector:theme:write', (_event, theme: StoredTheme) => {
+    if (theme !== 'dark' && theme !== 'light') throw new Error('Unsupported theme preference');
+    if (process.env.XR_COLLECTOR_THEME_CONFIG_FAILURE === '1') throw new Error('Theme preference write is unavailable');
+    return themePreference!.write(theme);
+  });
   const vaultRoot = path.resolve(
     process.env.XR_COLLECTOR_VAULT ?? path.join(app.getPath('userData'), 'vault'),
   );
