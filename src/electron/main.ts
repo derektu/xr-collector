@@ -39,9 +39,12 @@ function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
 async function createWindow(): Promise<void> {
   if (!server) throw new Error('Server must start before the window');
   const serverUrl = server.url;
+  const validationSize = /^([0-9]+)x([0-9]+)$/.exec(process.env.XR_COLLECTOR_VALIDATION_WINDOW_SIZE ?? '');
+  const width = validationSize ? Number(validationSize[1]!) : 1240;
+  const height = validationSize ? Number(validationSize[2]!) : 820;
   const window = new BrowserWindow({
-    width: 1240,
-    height: 820,
+    width,
+    height,
     minWidth: 880,
     minHeight: 620,
     show: false,
