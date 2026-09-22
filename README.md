@@ -198,19 +198,24 @@ Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追
 
 尚未設定 Vault 或已記錄的 Vault 不存在時，health 顯示 runtime `not_ready` 與原因；業務 API 回傳 503 `vault_not_ready`，且不自動建立替代 Vault。使用者需透過 #20 的 Onboarding 設定 Vault。Agent token 驗證在 Not Ready 狀態仍然生效。
 
-每次啟動重新產生 Agent port 與 token，連線檔原子更新且在 macOS 限定目前使用者讀寫（0600）。連線檔位於 profile 內、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 連線失敗時會重新讀取一次並提示確認程式狀態。
+每次啟動重新產生 Agent runtime instance、port 與 token，連線檔原子更新。macOS／其他 POSIX 環境將檔案 mode 設為 0600；Windows 不把 POSIX mode 視為權限保證，連線檔放在目前使用者的 LocalAppData 並使用該目錄繼承的 ACL，仍需 Windows 原生驗證。連線檔位於裝置資料、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 會以 health 回應核對 instance，連線失敗時重新讀取一次並區分未啟動、過期、損壞及權限問題。
 
 - Web 開發／standalone：`.data/agent-connection.json`；Skill 位於 repository 的 `skills/xr-collector-agent`。
-- 安裝版：Electron application data 目錄下的 `agent-connection.json`；Skill 隨安裝包放在應用程式 resources 的 `skills/xr-collector-agent`。
+- 未打包 Electron 且未指定 profile：Electron userData 下的 `agent-connection.development.json`。
+- macOS 安裝版：`~/Library/Application Support/XR Collector/agent-connection.json`。
+- Windows 安裝版：`%LOCALAPPDATA%\XR Collector\agent-connection.json`。
+- 明確指定 `XR_COLLECTOR_PROFILE` 的開發／驗收執行：該 profile 下的 `agent-connection.json`，不更新正式安裝版入口。
+
+正式安裝版位置只跟目前作業系統使用者有關，不跟程式安裝位置或 Vault 位置連動。未打包 Electron 與 standalone server 也保持 profile-local，避免開發服務覆蓋正式入口。Skill 隨安裝包放在應用程式 resources 的 `skills/xr-collector-agent`。
 
 Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。Agent 使用自身已有的工具讀取本機連線檔、解析 JSON，並向 loopback HTTP 發送帶 Authorization header 的請求。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
 
-可以直接請 Agent 讀取 Skill 目錄中的 `SKILL.md`，並提供畫面上的連線檔位置；也可以把整個 `xr-collector-agent` 目錄複製到該 Agent 的 Skill 安裝目錄。操作與 HTTP 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約，路徑由畫面提供；跨平台契約不代表 Windows 安裝版已完成驗證。
+可以直接請本機 Agent 讀取 Skill 目錄中的 `SKILL.md`；也可以把整個 `xr-collector-agent` 目錄複製到該 Agent 的 Skill 安裝目錄。一般使用不必提供 port、Vault 或連線檔路徑；測試 profile 才明確提供其連線檔。操作與 HTTP 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約；路徑規則的自動化測試不代表兩平台安裝版都已完成原生驗證。
 
-試用時可以交給本機 Agent 以下要求，並把路徑替換為畫面顯示的位置：
+Skill 已安裝到 Agent 時可直接交付以下要求；從 repository 試用時，將 `<Skill 目錄>` 換成此 checkout 的 `skills/xr-collector-agent`：
 
 ```text
-請使用 <Skill 目錄>/SKILL.md，連線檔是 <連線檔路徑>。
+請使用 <Skill 目錄>/SKILL.md，自動尋找這台電腦上的 XR Collector。
 先列出已保存文件，再搜尋 math，讀取一份命中文件並附上來源。
 ```
 

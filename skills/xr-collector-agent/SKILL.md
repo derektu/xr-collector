@@ -9,10 +9,13 @@ description: 操作本機 XR Collector 的收集、頻道、排程、文件、�
 
 ## 連線
 
-1. 從使用者提供的路徑取得連線檔位置。路徑依 profile、平台及安裝位置而異，不猜測固定 home 目錄或 port。
-2. 使用 Agent 現有的本機檔案工具讀取並解析 JSON。檔案含 `url`（例如 `http://127.0.0.1:<port>`）及非空字串 `token`。每次開始操作及重連時重新讀取，因為程式重啟會更新 port/token。將 token 保留於工具的授權參數，不回覆給使用者或另行寫入 log。
+1. 若使用者或驗收環境明確提供連線檔路徑，使用該路徑。否則依目前作業系統讀取正式安裝版的固定入口：macOS 為 `~/Library/Application Support/XR Collector/agent-connection.json`；Windows 為 `%LOCALAPPDATA%\XR Collector\agent-connection.json`。展開目前使用者的 home 或 `LOCALAPPDATA`，不依安裝目錄、Vault、目前工作目錄或猜測的 port 尋址。開發／驗收 profile 的連線檔位於該 profile，必須明確指定，不能覆蓋一般自動發現結果。
+2. 使用 Agent 現有的本機檔案工具讀取並解析 JSON。有效檔案的欄位為 `schemaVersion: 1`、非空字串 `instanceId`、`url`（例如 `http://127.0.0.1:<port>`）及非空字串 `token`。每次開始操作及重連時重新讀取，因為程式重啟會更新 instance、port 及 token。將 token 保留於工具的授權參數，不回覆給使用者或另行寫入 log。
 3. 確認 `url` 使用 `http`、hostname 恰為 `127.0.0.1`，含有效 port，且沒有使用者密碼、query、fragment 或非根路徑。只向此位址附加下列 API path；略過代理且不跟隨 redirect，避免把 token 送往其他位置。
-4. 選用 Agent 已有、能滿足上述條件的 HTTP 工具，設置 `Authorization: Bearer <token>`，發送所需 HTTP method，讀取 HTTP status 與 JSON body。一般查詢逾時設為 15 秒。寫入逾時或斷線時，先查文件、run、schedule、搜尋或 Vault 狀態判斷結果，再決定是否重試；斷線不代表已接受的工作取消。可以使用環境已提供的原生 HTTP 工具或 HTTP 用戶端，具體工具名稱不構成契約；不要求使用者安裝 Python、Node.js、curl 或其他工具。
+4. 以該 token 先呼叫 `GET /api/health`，確認回應的 `runtime.instanceId` 與連線檔完全相同。只有身分相符才執行其他 API。無法連線、逾時、401 或身分不符時，重新讀取同一路徑並再驗證一次；仍不相符便停止，不向該 runtime 發送業務請求。
+5. 選用 Agent 已有、能滿足上述條件的 HTTP 工具，設置 `Authorization: Bearer <token>`，發送所需 HTTP method，讀取 HTTP status 與 JSON body。一般查詢逾時設為 15 秒。寫入逾時或斷線時，先查文件、run、schedule、搜尋或 Vault 狀態判斷結果，再決定是否重試；斷線不代表已接受的工作取消。可以使用環境已提供的原生 HTTP 工具或 HTTP 用戶端，具體工具名稱不構成契約；不要求使用者安裝 Python、Node.js、curl 或其他工具。
+
+正式入口的連線檔不存在代表目前沒有可發現的 Collector，請使用者啟動安裝版；明確指定的開發／驗收連線檔不存在時，則請使用者確認該環境及路徑。檔案存在但 endpoint 無法連線代表資訊已過期或服務已停止。JSON／欄位無效代表連線檔損壞或版本不支援，讀取遭拒則回報權限不足。分別說明原因，不把任何情況解讀成空 Vault，也不在錯誤內容中帶出 token。health 的 `status: "unavailable"` 且 `runtime.state: "not_ready"` 表示已找到正確服務但 Vault 尚未就緒，依 API 的 `vault_not_ready` 提示處理。
 
 若 Agent 只有雲端瀏覽／搜尋工具，不能存取使用者電腦上的 localhost，或其 HTTP 工具無法設定授權 header，請說明缺少的能力並停止連線。不要把本機 token 交給雲端抓取服務，也不要把 Collector 改成對外監聽。
 
@@ -54,7 +57,7 @@ Content-Type: application/json
 - Collect 收集單支影片；Channels 管理頻道並以 channel run 執行批次收集；Schedule 讀取或更新目前排程。`POST /api/youtube/channel-runs` 回傳 202 後，以 run ID 查詢直到 `completed`。移除頻道只移除追蹤設定，不刪除既有文件。
 - `POST /api/search/rebuild` 重建可衍生索引。呼叫後以搜尋狀態確認結果；Vault 文件仍是正式資料。
 - Vault export 回傳 `application/octet-stream`；restore、merge preview 接受同類資料包。Restore 與 merge apply 回傳 202 後，以 `GET /api/vault/status` 追蹤。Merge 必須先 preview，再逐項提供 choice；cancel 不寫入資料。資料包路徑由使用者或本機工具明確提供，不把內容或 token 送往外部服務。
-- GET 無法連線、逾時或 401 `unauthorized`：重新讀取連線檔並重試一次。寫入送出後斷線或逾時時先依第 4 步查狀態，避免重複操作。仍失敗請使用者確認 Collector 正在執行及連線檔位置。檔案不存在或 JSON／欄位無效時，請使用者確認提供的路徑。這些是本機工具錯誤，不是 API 回傳碼。
+- GET 無法連線、逾時或 401 `unauthorized`：依連線流程重新讀取及驗證一次。寫入送出後斷線或逾時時先依第 5 步查狀態，避免重複操作。這些是本機工具錯誤，不是 API 回傳碼。
 - 404 `document_not_found`：文件已不存在，重新 browse/search。404 `channel_not_found`／`channel_run_not_found`：重新取得目前頻道或 run。400 `invalid_request`：依參數限制修正請求。409 `vault_busy`：等待目前收集或資料交換完成後重試。
 - 503 `vault_not_ready`：尚未設定 Vault 或目前選擇不存在。不要建立替代路徑或重試寫入；請使用者在 UI Onboarding 設定 Vault。
 

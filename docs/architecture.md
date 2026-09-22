@@ -17,7 +17,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client |
 
-UI 與 Agent 共用 Collector、Vault、頻道、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token，可操作所有現有業務 routes；跨程序服務發現由 #21 交付。
+UI 與 Agent 共用 Collector、Vault、頻道、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token，可操作所有現有業務 routes；跨程序服務依下述固定裝置入口發現 active runtime。
 
 ## Runtime 與資料
 
@@ -30,5 +30,7 @@ Vault 保存正式文件與可攜設定；搜尋 database 是裝置上的可重�
 Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工作與資料能力。Sources、Documents、Jobs、Activity、Search、VaultWorkspace 的責任及遷移順序以 [Round 2 第 5 節](round-2-plan.md#5-建議模組分工) 為準；不要求先建立通用 plugin framework。
 
 `CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都由同一個 runtime factory 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。關閉時先停止 listeners 並等待已接受的 handler，再等待收集、頻道與資料交換，最後關閉搜尋 process。尚未設定 Vault 或已記錄的 active Vault 不存在時，runtime 進入 `not_ready`，保留 health、Agent 授權與 UI shell，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。選址與恢復 Ready 的 UI 流程由 #20 提供。
+
+安裝版將目前 active runtime 的 Agent 連線資訊發布到每位使用者固定的裝置入口：macOS Application Support 或 Windows LocalAppData 下的 `XR Collector/agent-connection.json`。此入口與安裝目錄及 Vault 分離；未打包執行與明確指定 profile 的執行只寫 profile-local 連線檔，因而不覆蓋正式入口。連線檔包含 schema version、instance ID、loopback URL 與每次啟動重建的 token。Agent 先以 authenticated health 比對 instance ID，才使用業務 API；保留的舊連線檔只表示曾啟動，不表示服務仍存活。
 
 改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／還原／合併及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。

@@ -245,7 +245,11 @@ describe('transaction and HTTP', () => {
   });
   it('exposes preview/apply/cancel over HTTP, blocks concurrent reads/writes during apply and authorizes Agent mutations', async () => {
     const { root, incoming, workspace, search } = await fixture();
-    const access = await startAgentAccess({ collector: workspace.collector, search: workspace.search, transfer: workspace, connectionFile: path.join(root, 'connection.json'), skillPath: root });
+    const access = await startAgentAccess({
+      collector: workspace.collector, search: workspace.search, transfer: workspace,
+      instanceId: 'vault-merge-test-runtime',
+      connectionFile: path.join(root, 'connection.json'), skillPath: root,
+    });
     const connection = JSON.parse(await readFile(access.info.connectionFile, 'utf8'));
     const app = await createHttpApp({ collector: workspace.collector, search: workspace.search, transfer: workspace });
     const agent = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test' });
