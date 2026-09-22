@@ -3,51 +3,86 @@
   "scenarios": [
     {
       "id": "SHELL-01",
-      "platforms": ["macos"],
-      "reason": "四入口的預設頁與原生導覽在 Mac arm64 Electron 實際驗收。",
-      "steps": ["以全新 profile 啟動 Electron", "依序操作四個側欄入口並擷取各頁"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "共用 Shell 的預設頁與導覽；Mac 或 Windows 任一原生桌面皆可實際驗收。",
+      "steps": [
+        "以全新 profile 啟動 Electron",
+        "依序操作四個側欄入口並擷取各頁"
+      ],
       "expected": "預設為收集來源；標題與選取導覽一致。"
     },
     {
       "id": "SHELL-02",
-      "platforms": ["macos"],
-      "reason": "Electron 路由、返回及重新載入由同一個本機 Web Server 提供。",
-      "steps": ["切換頁面", "使用返回、前進與重新載入後查看頁面"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "共用的本機 Web Server 路由、返回及重新載入行為；Mac 或 Windows 任一平台皆可驗收。",
+      "steps": [
+        "切換頁面",
+        "使用返回、前進與重新載入後查看頁面"
+      ],
       "expected": "每個合法路由都回到正確頁面，不出現空白或 404。"
     },
     {
       "id": "SHELL-05",
-      "platforms": ["macos"],
-      "reason": "共用主題需要在原生 Electron 視窗檢查全部頁面的對比與選取狀態。",
-      "steps": ["切換深色與淺色", "查看四個入口與焦點樣式"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "共用主題的頁面對比、選取與焦點狀態；Mac 或 Windows 任一原生桌面皆可驗收。",
+      "steps": [
+        "切換深色與淺色",
+        "查看四個入口與焦點樣式"
+      ],
       "expected": "兩個主題中的背景、文字、元件、選取與焦點均可讀。"
     },
     {
       "id": "SHELL-06",
-      "platforms": ["macos"],
-      "reason": "Electron 裝置設定檔與動態 port 重啟只能以實際桌面程式確認。",
-      "steps": ["選擇主題並完整退出", "以同一隔離 profile 重啟"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "Electron 的裝置外觀設定檔與動態 port 重啟行為；Mac 或 Windows 任一原生桌面皆可驗收。",
+      "steps": [
+        "選擇主題並完整退出",
+        "以同一隔離 profile 重啟"
+      ],
       "expected": "主題從 device profile 還原，且設定檔只含主題值。"
     },
     {
       "id": "SHELL-08",
-      "platforms": ["macos"],
-      "reason": "最小視窗尺寸是 Electron 原生視窗設定與畫面配置共同效果。",
-      "steps": ["把 Electron 視窗縮到 880 × 620", "操作四入口與主題並檢查捲動"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "共用 Shell 在 Electron 最小視窗尺寸下的配置與捲動；Mac 或 Windows 任一原生桌面皆可驗收。",
+      "steps": [
+        "把 Electron 視窗縮到 880 × 620",
+        "操作四入口與主題並檢查捲動"
+      ],
       "expected": "控制不被遮擋，內容可到達，沒有重疊或裁切。"
     },
     {
       "id": "SHELL-09",
-      "platforms": ["macos"],
-      "reason": "鍵盤導覽、焦點與控制名稱需在實際 Electron 視窗操作。",
-      "steps": ["用 Tab、Shift+Tab、Enter 與 Space 操作側欄和主題", "切換頁面後檢查主內容焦點"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "共用鍵盤導覽、焦點與控制名稱；Mac 或 Windows 任一原生桌面皆可驗收。",
+      "steps": [
+        "用 Tab、Shift+Tab、Enter 與 Space 操作側欄和主題",
+        "切換頁面後檢查主內容焦點"
+      ],
       "expected": "焦點可見且順序合理，切頁後落在主內容標題，沒有陷阱。"
     },
     {
       "id": "SHELL-10",
-      "platforms": ["macos"],
-      "reason": "Electron 設定寫入故障需顯示真實錯誤與重試入口。",
-      "steps": ["在隔離 profile 以故障注入啟動 Electron", "選擇主題並嘗試重試"],
+      "platforms": [
+        "any"
+      ],
+      "reason": "Electron 設定寫入故障的錯誤與重試行為；Mac 或 Windows 任一原生桌面皆可驗收。",
+      "steps": [
+        "在隔離 profile 以故障注入啟動 Electron",
+        "選擇主題並嘗試重試"
+      ],
       "expected": "保存失敗不崩潰、不假報成功，畫面顯示可操作的重試。"
     }
   ]
