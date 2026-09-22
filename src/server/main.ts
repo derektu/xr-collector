@@ -2,64 +2,49 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
-import { VaultWorkspace } from '../vault/workspace.js';
-import { startServer } from './start.js';
-import { startAgentAccess } from './agent-access.js';
+import { CollectorRuntime } from '../runtime/collector-runtime.js';
 
 const projectRoot = process.cwd();
-const vaultRoot = path.resolve(
-  process.env.XR_COLLECTOR_VAULT ?? path.join(projectRoot, '.data', 'dev-vault'),
-);
+const profilePath = path.resolve(process.env.XR_COLLECTOR_PROFILE ?? path.join(projectRoot, '.data'));
+const vaultRoot = path.resolve(process.env.XR_COLLECTOR_VAULT ?? path.join(profilePath, 'dev-vault'));
 const webRoot = path.join(projectRoot, 'dist', 'web');
-const runtimeRoot = path.join(projectRoot, 'resources', 'bin', 'mac');
+const platformDirectory = process.platform === 'win32' ? 'win' : 'mac';
+const runtimeRoot = path.join(projectRoot, 'resources', 'bin', platformDirectory);
 const port = Number.parseInt(process.env.XR_COLLECTOR_PORT ?? '7175', 10);
 const searchPort = Number.parseInt(process.env.XR_COLLECTOR_MEILISEARCH_PORT ?? '7177', 10);
+const executable = (name: string) => process.platform === 'win32' ? `${name}.exe` : name;
+const binary = (environmentName: string, name: string) => process.env[environmentName]
+  ?? path.join(runtimeRoot, executable(name));
 
-const capture = new YtDlpCapture({
-  binaryPath: process.env.XR_COLLECTOR_YTDLP ?? path.join(runtimeRoot, 'yt-dlp'),
-  javaScriptRuntimePath: process.env.XR_COLLECTOR_DENO ?? path.join(runtimeRoot, 'deno'),
-});
-const channelSource = new YtDlpChannelSource({
-  binaryPath: process.env.XR_COLLECTOR_YTDLP ?? path.join(runtimeRoot, 'yt-dlp'),
-  javaScriptRuntimePath: process.env.XR_COLLECTOR_DENO ?? path.join(runtimeRoot, 'deno'),
-});
-const workspace = await VaultWorkspace.open({
-  defaultRoot: vaultRoot, capture, channelSource,
-  searchBinary: process.env.XR_COLLECTOR_MEILISEARCH ?? path.join(runtimeRoot, 'meilisearch'),
-  searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(projectRoot, '.data', 'dev-search')),
-  searchPort,
-});
-const { collector, channels, schedule, search } = workspace;
-const agentAccess = await startAgentAccess({
-  transfer: workspace,
-  collector,
-  search,
-  connectionFile: path.join(projectRoot, '.data', 'agent-connection.json'),
+const captureOptions = {
+  binaryPath: binary('XR_COLLECTOR_YTDLP', 'yt-dlp'),
+  javaScriptRuntimePath: binary('XR_COLLECTOR_DENO', 'deno'),
+};
+const runtime = await CollectorRuntime.start({
+  profilePath,
+  workspace: {
+    defaultRoot: vaultRoot,
+    capture: new YtDlpCapture(captureOptions),
+    channelSource: new YtDlpChannelSource(captureOptions),
+    searchBinary: binary('XR_COLLECTOR_MEILISEARCH', 'meilisearch'),
+    searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
+    searchPort,
+  },
+  connectionFile: path.join(profilePath, 'agent-connection.json'),
   skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
-});
-const server = await startServer({
-  collector,
-  transfer: workspace,
-  channels,
-  schedule,
-  search,
-  port,
-  agentInfo: agentAccess.info,
+  uiPort: port,
   ...(existsSync(webRoot) ? { webRoot } : {}),
 });
 
-console.log(`XR Collector API listening at ${server.url}`);
-console.log(`Vault: ${vaultRoot}`);
+console.log(`XR Collector API listening at ${runtime.server.url}`);
+console.log(`Vault: ${runtime.status().vaultPath}`);
 
 let stopping = false;
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
-  await schedule.close();
-  await server.close();
-  await agentAccess.close();
-  await workspace.close();
-  process.exit(0);
+  try { await runtime.close(); process.exitCode = 0; }
+  catch (error) { console.error(error); process.exitCode = 1; }
 }
 
 process.on('SIGINT', () => void stop());

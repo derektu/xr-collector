@@ -197,13 +197,20 @@ describe('workspace transfer through HTTP', () => {
       expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(200);
     } finally { await app.close(); }
   });
-  it('Agent cannot invoke transfer routes', async () => {
+  it('allows an authenticated Agent to invoke transfer routes', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
     const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     try {
-      for (const url of ['/api/vault/export', '/api/vault/restore']) {
-        expect((await app.inject({ method: 'POST', url, headers: { authorization: 'Bearer test-token' } })).statusCode).toBe(403);
-      }
+      const exported = await app.inject({ method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' } });
+      expect(exported.statusCode).toBe(200);
+      const restore = await app.inject({
+        method: 'POST', url: '/api/vault/restore',
+        headers: { authorization: 'Bearer test-token', 'content-type': 'application/octet-stream' },
+        payload: exported.rawPayload,
+      });
+      expect(restore.statusCode).toBe(202);
+      await waitForRestore(workspace);
+      expect(workspace.status().state).toBe('completed');
     } finally { await app.close(); }
   });
 });

@@ -35,12 +35,25 @@ async function fixture() {
   return { root, vault, collector, capture };
 }
 
-describe('Agent read-only HTTP access', () => {
-  it('requires credentials on every route and refuses all writes before side effects', async () => {
+describe('Agent authenticated HTTP access', () => {
+  it('requires credentials on every route and permits existing business writes', async () => {
     const { collector, capture } = await fixture();
-    const search = new UnavailableTranscriptSearch('索引尚未完成');
-    const rebuild = vi.spyOn(search, 'rebuild');
-    const app = await createHttpApp({ collector, search, agentToken: 'test-secret' });
+    const search = {
+      status: () => ({ state: 'ready' as const, indexedDocuments: 3, message: '' }),
+      search: vi.fn(async () => ({ hits: [], estimatedTotalHits: 0 })),
+      index: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+    };
+    const rebuild = search.rebuild;
+    const schedule = {
+      getSchedule: vi.fn(async () => ({ enabled: false, intervalMinutes: 60 })),
+      updateSchedule: vi.fn(async (value) => value),
+    };
+    const channels = {
+      listChannels: vi.fn(async () => []), addChannel: vi.fn(), setChannelEnabled: vi.fn(),
+      removeChannel: vi.fn(), startRun: vi.fn(), getRun: vi.fn(),
+    };
+    const app = await createHttpApp({ collector, search, schedule, channels, agentToken: 'test-secret' });
     cleanup.push(() => app.close());
     for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/']) {
       for (const authorization of ['', 'Bearer wrong', 'Bearer test-secreX']) {
@@ -50,18 +63,18 @@ describe('Agent read-only HTTP access', () => {
       }
     }
     const headers = { authorization: 'Bearer test-secret' };
-    for (const [method, url] of [
-      ['POST', '/api/youtube/collect'], ['POST', '/api/search/rebuild'],
-      ['PUT', '/api/youtube/schedule'], ['PATCH', '/api/youtube/channels/channel'],
-      ['DELETE', '/api/documents/youtube:aaaaaaaaaaa'], ['POST', '/api/youtube/channel-runs'],
-      ['GET', '/api/agent/connection'], ['GET', '/'],
-    ] as const) {
-      const response = await app.inject({ method, url, headers });
-      expect(response.statusCode).toBe(403);
-      expect(response.json().error.code).toBe('read_only');
-    }
+    const rebuildResponse = await app.inject({ method: 'POST', url: '/api/search/rebuild', headers });
+    expect(rebuildResponse.statusCode).toBe(200);
+    expect(rebuild).toHaveBeenCalledOnce();
+    const scheduleResponse = await app.inject({
+      method: 'PUT', url: '/api/youtube/schedule', headers,
+      payload: { enabled: true, intervalMinutes: 30 },
+    });
+    expect(scheduleResponse.statusCode).toBe(200);
+    expect(schedule.updateSchedule).toHaveBeenCalledWith({ enabled: true, intervalMinutes: 30 });
+    expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', headers, payload: {} })).statusCode).toBe(400);
     expect(capture).not.toHaveBeenCalled();
-    expect(rebuild).not.toHaveBeenCalled();
+    expect((await app.inject({ url: '/api/agent/connection', headers })).statusCode).toBe(404);
     expect((await app.inject({ url: '/api/health', headers })).statusCode).toBe(200);
   });
 

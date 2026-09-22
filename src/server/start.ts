@@ -3,10 +3,11 @@ import type { FastifyInstance } from 'fastify';
 import type { ChannelCollection, ChannelScheduleManagement } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
-import { createHttpApp } from './app.js';
+import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import { createHttpApp, waitForHttpAppIdle } from './app.js';
 
 export interface StartServerOptions {
-  collector: Collector;
+  collector?: Collector;
   transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
@@ -16,6 +17,8 @@ export interface StartServerOptions {
   webRoot?: string;
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
+  runtimeStatus?: () => CollectorRuntimeStatus;
+  notReadyMessage?: string;
 }
 
 export interface RunningServer {
@@ -27,7 +30,7 @@ export interface RunningServer {
 
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
-    collector: options.collector,
+    ...(options.collector ? { collector: options.collector } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.channels ? { channels: options.channels } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
@@ -35,6 +38,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
     ...(options.agentToken !== undefined ? { agentToken: options.agentToken } : {}),
     ...(options.agentInfo ? { agentInfo: options.agentInfo } : {}),
+    ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
+    ...(options.notReadyMessage ? { notReadyMessage: options.notReadyMessage } : {}),
   });
   const host = options.host ?? '127.0.0.1';
   await app.listen({ host, port: options.port });
@@ -44,6 +49,9 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     app,
     url: `http://${host}:${address.port}`,
     port: address.port,
-    close: () => app.close(),
+    close: async () => {
+      await app.close();
+      await waitForHttpAppIdle(app);
+    },
   };
 }

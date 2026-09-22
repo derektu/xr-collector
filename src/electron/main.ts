@@ -2,18 +2,11 @@ import path from 'node:path';
 import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
-import { ChannelScheduler } from '../channels/channel-scheduler.js';
-import type { RunningServer } from '../server/start.js';
-import { startServer } from '../server/start.js';
-import { startAgentAccess } from '../server/agent-access.js';
-import { VaultWorkspace } from '../vault/workspace.js';
+import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { FileThemePreference, type StoredTheme } from './theme-preference.js';
 
 let mainWindow: BrowserWindow | null = null;
-let server: RunningServer | null = null;
-let agentAccess: Awaited<ReturnType<typeof startAgentAccess>> | null = null;
-let workspace: VaultWorkspace | null = null;
-let channelScheduler: ChannelScheduler | null = null;
+let runtime: CollectorRuntime | null = null;
 let themePreference: FileThemePreference | null = null;
 let isQuitting = false;
 
@@ -37,8 +30,8 @@ function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
 }
 
 async function createWindow(): Promise<void> {
-  if (!server) throw new Error('Server must start before the window');
-  const serverUrl = server.url;
+  if (!runtime) throw new Error('Runtime must start before the window');
+  const serverUrl = runtime.server.url;
   const validationSize = /^([0-9]+)x([0-9]+)$/.exec(process.env.XR_COLLECTOR_VALIDATION_WINDOW_SIZE ?? '');
   const width = validationSize ? Number(validationSize[1]!) : 1240;
   const height = validationSize ? Number(validationSize[2]!) : 820;
@@ -95,28 +88,16 @@ app.whenReady().then(async () => {
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
   });
-  workspace = await VaultWorkspace.open({
-    defaultRoot: vaultRoot, capture, channelSource,
-    searchBinary: runtimePath('meilisearch'),
-    searchData: path.join(app.getPath('userData'), 'search'),
-  });
-  const { collector, channels, schedule, search } = workspace;
-  channelScheduler = schedule;
-  agentAccess = await startAgentAccess({
-    transfer: workspace,
-    collector,
-    search,
+  runtime = await CollectorRuntime.start({
+    profilePath: app.getPath('userData'),
+    workspace: {
+      defaultRoot: vaultRoot, capture, channelSource,
+      searchBinary: runtimePath('meilisearch'),
+      searchData: path.join(app.getPath('userData'), 'search'),
+    },
     connectionFile: path.join(app.getPath('userData'), 'agent-connection.json'),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
-  });
-  server = await startServer({
-    collector,
-    transfer: workspace,
-    channels,
-    schedule: channelScheduler,
-    search,
-    port: 0,
-    agentInfo: agentAccess.info,
+    uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
   await createWindow();
@@ -124,7 +105,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', checkScheduleAfterResume);
 
   app.on('activate', () => {
-    if (!mainWindow && server && !isQuitting) {
+    if (!mainWindow && runtime && !isQuitting) {
       void createWindow().catch((error) => console.error(error));
     }
   });
@@ -138,28 +119,18 @@ app.on('window-all-closed', () => {
 });
 
 function checkScheduleAfterResume(): void {
-  void channelScheduler?.checkNow().catch((error) => console.error(error));
+  void runtime?.workspace?.schedule.checkNow().catch((error) => console.error(error));
 }
 
 app.on('before-quit', (event) => {
-  if (!server && !workspace && !channelScheduler && !agentAccess) return;
+  if (!runtime) return;
   event.preventDefault();
   isQuitting = true;
   powerMonitor.removeListener('resume', checkScheduleAfterResume);
   mainWindow?.destroy();
   mainWindow = null;
-  const activeServer = server;
-  const activeAgentAccess = agentAccess;
-  agentAccess = null;
-  const activeWorkspace = workspace;
-  const activeChannelScheduler = channelScheduler;
-  server = null;
-  workspace = null;
-  channelScheduler = null;
-  void Promise.resolve()
-    .then(() => activeChannelScheduler?.close())
-    .then(() => activeServer?.close())
-    .then(() => activeAgentAccess?.close())
-    .then(() => activeWorkspace?.close())
+  const activeRuntime = runtime;
+  runtime = null;
+  void activeRuntime.close()
     .finally(() => app.quit());
 });

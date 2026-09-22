@@ -243,7 +243,7 @@ describe('transaction and HTTP', () => {
     await expect(readFile(`${local}.merge-journal.json`)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await restarted.search.search({ query: '森林' })).hits).toHaveLength(1);
   });
-  it('exposes preview/apply/cancel over HTTP, blocks concurrent reads/writes during apply and denies Agent mutations', async () => {
+  it('exposes preview/apply/cancel over HTTP, blocks concurrent reads/writes during apply and authorizes Agent mutations', async () => {
     const { root, incoming, workspace, search } = await fixture();
     const access = await startAgentAccess({ collector: workspace.collector, search: workspace.search, transfer: workspace, connectionFile: path.join(root, 'connection.json'), skillPath: root });
     const connection = JSON.parse(await readFile(access.info.connectionFile, 'utf8'));
@@ -262,7 +262,17 @@ describe('transaction and HTTP', () => {
       expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
       expect((await app.inject({ method: 'POST', url: '/api/vault/merge/cancel', payload: { id: preview.id } })).statusCode).toBe(409);
       release(); await wait(workspace);
-      for (const action of ['preview', 'apply', 'cancel']) expect((await agent.inject({ method: 'POST', url: `/api/vault/merge/${action}`, headers: { authorization: 'Bearer test' }, payload: {} })).statusCode).toBe(403);
+      const agentPreview = await agent.inject({
+        method: 'POST', url: '/api/vault/merge/preview',
+        headers: { authorization: 'Bearer test', 'content-type': 'application/octet-stream' },
+        payload: await exportVault(incoming),
+      });
+      expect(agentPreview.statusCode).toBe(200);
+      const cancelled = await agent.inject({
+        method: 'POST', url: '/api/vault/merge/cancel', headers: { authorization: 'Bearer test' },
+        payload: { id: agentPreview.json().id },
+      });
+      expect(cancelled.statusCode).toBe(200);
       expect((await app.inject('/api/documents')).statusCode).toBe(200);
     } finally { await app.close(); await agent.close(); await access.close(); }
   });

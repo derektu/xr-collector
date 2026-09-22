@@ -4,7 +4,7 @@
 
 XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即或定時抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
 
-本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程，Agent 只讀存取，以及完整資料包匯出、還原與比對合併。已收集內容管理由其他 tickets 交付。
+本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、頻道清單與立即抓取、應用程式執行期間的週期排程、Agent 完整業務操作，以及完整資料包匯出、還原與比對合併。已收集內容管理由其他 tickets 交付。
 
 ## 從這裡開始閱讀
 
@@ -194,14 +194,16 @@ Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追
 
 ## Agent 存取
 
-應用程式啟動時建立獨立的 loopback HTTP 入口，與 UI 共用同一個 Collector、vault 與搜尋服務。Agent 入口只允許帶 Bearer token 的文件列表、搜尋、全文及索引狀態讀取；所有寫入與其他 routes 回傳 403。這是 Agent API 的權限邊界，不是對本機使用者或 UI 的作業系統隔離。UI 本身的收集與排程操作仍由既有本機入口提供。
+應用程式由共用 Collector runtime 建立單一 VaultWorkspace、scheduler 與搜尋 process，再提供 UI 與 Agent 兩個 loopback HTTP listener。Agent listener 需要 Bearer token，並提供與 UI 相同的既有業務 API：收集、頻道、排程、文件、搜尋重建及 Vault 匯出／還原／合併。兩個入口使用同一個 active Vault 與操作鎖；用戶端斷線不取消已接受的操作，runtime 停止時會等待操作完成再關閉搜尋 process。
 
-畫面上方「Agent 存取」顯示 HTTP 位址、連線檔及 Skill 目錄。每次啟動重新產生 port 與 token，連線檔原子更新且在 macOS 限定目前使用者讀寫（0600）。連線檔位於 vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 連線失敗時會重新讀取一次並提示確認程式狀態。
+尚未設定 Vault 或已記錄的 Vault 不存在時，health 顯示 runtime `not_ready` 與原因；業務 API 回傳 503 `vault_not_ready`，且不自動建立替代 Vault。使用者需透過 #20 的 Onboarding 設定 Vault。Agent token 驗證在 Not Ready 狀態仍然生效。
+
+每次啟動重新產生 Agent port 與 token，連線檔原子更新且在 macOS 限定目前使用者讀寫（0600）。連線檔位於 profile 內、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 連線失敗時會重新讀取一次並提示確認程式狀態。
 
 - Web 開發／standalone：`.data/agent-connection.json`；Skill 位於 repository 的 `skills/xr-collector-agent`。
-- 安裝版：Electron application data 目錄下的 `agent-connection.json`；Skill 隨安裝包放在 `XR Collector.app/Contents/Resources/skills/xr-collector-agent`。實際位置以畫面為準。
+- 安裝版：Electron application data 目錄下的 `agent-connection.json`；Skill 隨安裝包放在應用程式 resources 的 `skills/xr-collector-agent`。
 
-Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。Agent 使用自身已有的工具讀取本機連線檔、解析 JSON，並向 loopback HTTP 發送帶 Authorization header 的 GET 請求。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
+Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。Agent 使用自身已有的工具讀取本機連線檔、解析 JSON，並向 loopback HTTP 發送帶 Authorization header 的請求。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
 
 可以直接請 Agent 讀取 Skill 目錄中的 `SKILL.md`，並提供畫面上的連線檔位置；也可以把整個 `xr-collector-agent` 目錄複製到該 Agent 的 Skill 安裝目錄。操作與 HTTP 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約，路徑由畫面提供；跨平台契約不代表 Windows 安裝版已完成驗證。
 
@@ -212,7 +214,7 @@ Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求
 先列出已保存文件，再搜尋 math，讀取一份命中文件並附上來源。
 ```
 
-列表預設每頁 50 份，回傳下一頁 offset；收集期間列表可能移動，跨頁使用穩定文件 ID 去重。搜尋與 UI 使用相同關聯性排序及篩選，支援 offset/limit；搜尋命中數是估計值，Meilisearch 預設可翻閱前 1000 個命中。索引未就緒時搜尋回報 503，列表與全文仍直接讀取 vault。第一版不提供 MCP，也不透過 Agent 啟動收集或修改資料。
+列表預設每頁 50 份，回傳下一頁 offset；收集期間列表可能移動，跨頁使用穩定文件 ID 去重。搜尋與 UI 使用相同關聯性排序及篩選，支援 offset/limit；搜尋命中數是估計值，Meilisearch 預設可翻閱前 1000 個命中。索引未就緒時搜尋回報 503，列表與全文仍直接讀取 vault。第一版不提供 MCP；完整操作契約見 Agent Skill。
 
 ## 收集規則
 
