@@ -311,7 +311,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 - **在任何功能實作開始前**，於各 ticket 的 issue description「驗收計畫」寫好本次計畫，再開始實作。此處先定功能驗收範圍，詳細 scenario 不在拆票時凍結。
 - 可視功能逐項編 scenario ID、前置資料／環境、操作步驟、預期可見結果、需拍攝的狀態及平台／視窗／主題。必要時用前後多張截圖證明流程，不能只拍最終空畫面。
-- agent 實作後實際操作、拍攝並逐項比對預期，修正不符項目；將 screenshots 上傳為 GitHub issue／PR 可持久檢視的附件，在驗收結果按 scenario ID 直接嵌圖，附短圖說、結果與版本／commit／平台。使用者可只看圖與短圖說完成視覺 review，不必自行跑測試。
+- agent 實作後實際操作、拍攝並逐項比對預期，修正不符項目；將 screenshots 以 GitHub 附件上傳到 PR 留言，按 scenario ID 嵌圖並附短圖說；issue 的驗收結果記錄結果與版本／commit／平台，並連到該留言。使用者可只看圖與短圖說完成視覺 review，不必自行跑測試。
 - 截圖必須來自該 commit 的實際執行畫面；design 票可用渲染 wireframe，但需清楚標示設計證據。Desktop 原生功能需真實原生 UI 證據，瀏覽器 mock 不替代。重現資料可控制，須標示，不冒充真實來源整合。
 - API／持久化／去重／中斷／升級等不可見行為仍須必要自動化或整合驗證，附可追溯結果；截圖不取代正確性證據。不為純技術票硬造產品畫面；有 GitHub／安裝器等可視介面時仍記錄。
 - 開發中需求或 scenario 調整時，先更新計畫及預期、記錄原因，再驗證對應版本；無法執行的 scenario 標為未驗證，不能以 build 成功或舊截圖宣稱通過。產品範圍變更需同步 Plan／相關票。

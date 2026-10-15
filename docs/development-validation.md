@@ -116,6 +116,8 @@ summarize 核對 repository、commit、計畫身分與截圖雜湊。共用案�
 
 PR 附需求平台／本機可用平台、每個 scenario 的結果、精確 HEAD、CI 結果（含 skipped）與可持久檢視的截圖／report 連結。缺少平台維持待補；HEAD 更新後針對該版本重跑。只有本機絕對路徑時，遠端 PR 的證據交付仍未完成。
 
+截圖保存在本機 `.local/ticket-artifacts/<issue>/`，結果檔逐個 scenario 列出結果、觀察與要公開的截圖及圖說。公開的截圖以 GitHub 附件上傳到 PR 的一則留言，按 scenario ID 排列；issue 的驗收結果記錄文字並連到該留言。截圖與 report 不提交到 repo，也不放在證據分支或 tag。PR merge 後刪除本機截圖。
+
 ## 5. Windows 的非互動命令與選用 Parallels
 
 一般 Windows 開發者可直接使用前面的命令。從 SSH、Parallels exec 等入口執行時，不保證具有可截圖的使用者桌面。此時可使用 repo 提供的輔助入口，在已登入的使用者桌面排程：
