@@ -31,7 +31,7 @@ describe('source registry', () => {
     ]);
     const fixture = registry.open('fixture');
     expect(fixture).toMatchObject({ id: 'fixture', view: { heading: 'Fixture source view' } });
-    expect(renderToStaticMarkup(createElement(SourceView, { source: fixture! }))).toContain('Fixture source view');
+    expect(renderToStaticMarkup(createElement(SourceView, { source: fixture!, onOpenSettings: () => undefined }))).toContain('Fixture source view');
   });
 });
 

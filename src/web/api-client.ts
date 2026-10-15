@@ -10,7 +10,10 @@ import type {
   SearchResponse,
   SearchStatusReport,
   YouTubeChannel,
+  ChannelPreview,
   ChannelSchedule,
+  CollectionPolicy,
+  Subscription,
   VaultInspection,
   VaultSetupAction,
   VaultSetupResult,
@@ -80,17 +83,25 @@ export const api = {
     return result.schedule;
   },
 
-  async updateChannelSchedule(enabled: boolean, intervalMinutes: number): Promise<ChannelSchedule> {
+  /** Saves the given Global settings; fields left out keep their value. */
+  async updateChannelSchedule(patch: Partial<CollectionPolicy & { enabled: boolean }>): Promise<ChannelSchedule> {
     const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule', {
       method: 'PUT',
-      body: JSON.stringify({ enabled, intervalMinutes }),
+      body: JSON.stringify(patch),
     });
     return result.schedule;
   },
 
-  async listChannels(): Promise<YouTubeChannel[]> {
-    const result = await request<{ channels: YouTubeChannel[] }>('/api/youtube/channels');
+  async listChannels(signal?: AbortSignal): Promise<Subscription[]> {
+    const result = await request<{ channels: Subscription[] }>('/api/youtube/channels', signal ? { signal } : undefined);
     return result.channels;
+  },
+
+  async previewChannel(url: string): Promise<ChannelPreview> {
+    return (await request<{ preview: ChannelPreview }>('/api/youtube/channel-previews', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    })).preview;
   },
 
   addChannel(url: string): Promise<JobSubmission> {
@@ -100,28 +111,25 @@ export const api = {
     });
   },
 
-  async setChannelEnabled(id: string, enabled: boolean): Promise<YouTubeChannel> {
-    const result = await request<{ channel: YouTubeChannel }>(
+  async setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }> {
+    return request<{ channel: YouTubeChannel; submission: JobSubmission | null }>(
       `/api/youtube/channels/${encodeURIComponent(id)}`,
       {
         method: 'PATCH',
         body: JSON.stringify({ enabled }),
       },
     );
-    return result.channel;
   },
 
-  async removeChannel(id: string): Promise<void> {
-    await request<{ removed: true }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
+  async removeChannel(id: string): Promise<{ documentsKept: number }> {
+    return request<{ removed: true; documentsKept: number }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   },
 
-  async startChannelRun(channelIds?: string[]): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', {
-      method: 'POST',
-      body: JSON.stringify(channelIds ? { channelIds } : {}),
-    });
+  /** Checks every enabled subscription now. */
+  async checkAllChannels(): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', { method: 'POST' });
     return result.submissions;
   },
 
