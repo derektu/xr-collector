@@ -367,6 +367,11 @@ export interface JobCheckpoint {
   subscribing?: { channelId: string; title: string; url: string };
   /** A channel job recorded its discovered videos; the subscription cursor follows them. */
   discovered?: { at: string; cursor: ChannelCursor | null; backlog: boolean; cursorSaved: boolean };
+  /**
+   * A channel job retrying the failed videos of an earlier one collects exactly these videos: it
+   * runs no discovery, leaves the subscription cursor alone and applies no backfill bound.
+   */
+  retryItems?: Array<{ sourceId: string; title: string; url: string }>;
 }
 
 /** One discovered video of a channel job and the video job that collects it. */
@@ -670,4 +675,13 @@ export interface MergeItem {
 export interface MergePreview {
   id: string;
   items: MergeItem[];
+}
+
+/**
+ * A top-level job the user can retry: a failed one, or a channel job that completed with some of its
+ * videos failing.
+ */
+export function isRetryable(job: Pick<CollectionJob, 'state' | 'kind' | 'parentId' | 'result'>): boolean {
+  if (job.parentId !== null) return false;
+  return job.state === 'failed' || (job.kind === 'youtube.channel' && job.state === 'completed' && job.result?.outcome === 'partial');
 }

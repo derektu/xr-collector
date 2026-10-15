@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ActivityLogHealth, CollectionJob, JobEvent, JobSummary, Subscription } from '../core/types.js';
+import { isRetryable, type ActivityLogHealth, type ActivityQuery, type CollectionJob, type JobEvent, type JobSummary, type Subscription } from '../core/types.js';
 import {
   activityQuery,
   activityStateSearch,
@@ -98,8 +98,11 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
   // A changed filter starts over; a refresh with the same filter adds new entries above the loaded ones.
   // Refreshes never cancel a request in flight, so frequent progress updates cannot keep the log empty.
+  // The time bounds of a filter are fixed when it is first loaded, so "today" keeps meaning the same
+  // day and cursors stay valid when the page stays open past midnight.
   const currentFilter = useRef(filter);
   currentFilter.current = filter;
+  const filterQuery = useRef<{ filter: string; query: ActivityQuery } | null>(null);
   useEffect(() => {
     setLog(null);
     setLogError(null);
@@ -107,7 +110,8 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
   useEffect(() => {
     const requested = filter;
-    api.activity({ ...activityQuery(state, new Date()), limit: LOG_PAGE }).then((page) => {
+    if (filterQuery.current?.filter !== requested) filterQuery.current = { filter: requested, query: activityQuery(state, new Date()) };
+    api.activity({ ...filterQuery.current.query, limit: LOG_PAGE }).then((page) => {
       if (currentFilter.current !== requested) return;
       setLog((previous) => previous && previous.filter === requested
         ? { ...previous, events: mergeNewest(previous.events, page.events), health: page.log }
@@ -138,7 +142,8 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
     if (!log?.nextCursor) return;
     setLoadingOlder(true);
     try {
-      const page = await api.activity({ ...activityQuery(state, new Date()), limit: LOG_PAGE, cursor: log.nextCursor });
+      const query = filterQuery.current?.filter === filter ? filterQuery.current.query : activityQuery(state, new Date());
+      const page = await api.activity({ ...query, limit: LOG_PAGE, cursor: log.nextCursor });
       setLog((previous) => previous && previous.filter === filter
         ? { ...previous, events: [...previous.events, ...page.events], nextCursor: page.nextCursor, health: page.log }
         : previous);
@@ -251,7 +256,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
 function JobRow({ job, retrying, onShow, onRetry }: { job: CollectionJob; retrying: boolean; onShow: () => void; onRetry: () => void }) {
   const running = job.state === 'queued' || job.state === 'running';
-  const failed = job.state === 'failed';
+  const retryable = isRetryable(job);
   const progress = job.progress;
   return <li className={`activity-job ${job.state}`} data-testid={`job-${job.id}`}>
     <div className="activity-job-main">
@@ -260,9 +265,9 @@ function JobRow({ job, retrying, onShow, onRetry }: { job: CollectionJob; retryi
       <span className={`activity-job-status ${job.state}`}>{jobStatusText(job)}</span>
       <span className="activity-job-actions">
         {running ? null : <span className="muted">{shortTimeLabel(job.finishedAt ?? job.updatedAt)}</span>}
-        {failed && job.retriedBy ? <span className="muted">已重試</span> : null}
+        {retryable && job.retriedBy ? <span className="muted">已重試</span> : null}
         <button type="button" className="button small" onClick={onShow} data-testid="show-log">查看記錄</button>
-        {failed && !job.retriedBy ? <button type="button" className="button small" disabled={retrying} onClick={onRetry} data-testid="retry-job">重試</button> : null}
+        {retryable && !job.retriedBy ? <button type="button" className="button small" disabled={retrying} onClick={onRetry} data-testid="retry-job">重試</button> : null}
       </span>
     </div>
     {running && progress && progress.total > 0

@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -303,6 +303,37 @@ describe('write failures (A-T7)', () => {
     expect(log.health()).toMatchObject({ state: 'ok', pending: 0, dropped: 0 });
     expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第一筆', '第二筆']);
     await log.close();
+  });
+
+  it('keeps a half-written batch from joining the events written after it', async () => {
+    const directory = await tempDirectory();
+    const timers = new Timers();
+    let partial = true;
+    const log = await ActivityLog.open(directory, {
+      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      append: async (file, data) => {
+        if (partial) {
+          partial = false;
+          await appendFile(file, data.slice(0, 40));
+          throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+        }
+        await appendFile(file, data);
+      },
+    });
+    log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
+    await log.flush();
+    expect(log.health()).toMatchObject({ state: 'failing', pending: 1 });
+    timers.fire(30_000);
+    await log.flush();
+    log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
+    await log.close();
+
+    const lines = (await readFile(path.join(directory, 'events', '2026-10-15.jsonl'), 'utf8')).split('\n').filter(Boolean);
+    expect(lines).toHaveLength(3);
+    const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined });
+    expect((await reopened.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
+    expect(reopened.health().skippedLines).toBe(1);
+    await reopened.close();
   });
 
   it('drops the oldest waiting events beyond the limit and names their jobs', async () => {

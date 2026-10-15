@@ -225,7 +225,11 @@ export class ActivityLog {
       const batch = this.pending.slice(0, count);
       try {
         await mkdir(directory, { recursive: true });
-        await this.append(path.join(directory, `${day}.jsonl`), batch.map((event) => `${JSON.stringify(event)}\n`).join(''));
+        const file = path.join(directory, `${day}.jsonl`);
+        // A failed append can leave half a line; the next one starts on a fresh line so that the
+        // half line stays a single unreadable line and the events after it remain readable.
+        const separator = await endsMidLine(file) ? '\n' : '';
+        await this.append(file, separator + batch.map((event) => `${JSON.stringify(event)}\n`).join(''));
       } catch (error) {
         this.healthValue = {
           ...this.healthValue,
@@ -436,4 +440,24 @@ function decodeCursor(cursor: string, filter: string): Pick<JobEvent, 'timestamp
   }
   if (!value || typeof value.t !== 'string' || typeof value.id !== 'string' || value.f !== filter) throw invalid();
   return { timestamp: value.t, eventId: value.id };
+}
+
+/** True when `file` exists and its last byte is not a line break. */
+async function endsMidLine(file: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(file, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  try {
+    const { size } = await handle.stat();
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    await handle.read(last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    await handle.close();
+  }
 }
