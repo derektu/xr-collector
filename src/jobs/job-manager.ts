@@ -475,7 +475,9 @@ export class JobManager {
       }
       return item;
     });
-    if (discovery.backlog) this.backlogJobs.add(job.id);
+    // A video that could not be queued (for example, a full queue) must be found again, so the cursor stays.
+    const allAccepted = items.every((item) => item.jobId !== null);
+    if (discovery.backlog && allAccepted) this.backlogJobs.add(job.id);
     this.update(job, { phase: 'capture', items, progress: progressOf(items) });
     this.event(job, {
       severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} 支影片。`, phase: 'discover',
@@ -488,9 +490,9 @@ export class JobManager {
       return;
     }
     const saved = await this.options.channels.update(channel.id, {
-      ...(discovery.cursor ? { cursor: discovery.cursor } : {}),
+      ...(discovery.cursor && allAccepted ? { cursor: discovery.cursor } : {}),
       lastCheckedAt: this.now().toISOString(),
-      backlog: discovery.backlog,
+      backlog: discovery.backlog && allAccepted,
     });
     if (!saved) this.stopChannel(channel.id, 'subscription_removed');
     else if (!saved.enabled) this.stopChannel(channel.id, 'subscription_paused');
