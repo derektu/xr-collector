@@ -1,4 +1,4 @@
-import type { ChannelSchedule, CollectionJob, CollectionPolicy, SourceEntry, SourceJobRecord, Subscription } from '../core/types.js';
+import type { ChannelSchedule, CollectionJob, CollectionPolicy, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
 import { intervalLabel } from '../channels/collection-policy.js';
 import { backfillPhrase, triggerLabel } from './subscription-presentation.js';
 
@@ -137,4 +137,13 @@ export function sharedPolicySummary(policy: CollectionPolicy & { enabled: boolea
 
 function pad(value: number): string {
   return String(value).padStart(2, '0');
+}
+
+/**
+ * The recognition answer that applies to the address now in the input, with its primary action.
+ * An answer for an earlier address is not returned, so it can never act on the wrong URL.
+ */
+export function currentRecognition(answer: { input: string; recognition: UrlRecognition } | null, input: string): { recognition: UrlRecognition; primary: RecognitionAction | null } | null {
+  if (!answer || answer.input !== input.trim()) return null;
+  return { recognition: answer.recognition, primary: answer.recognition.actions.find((action) => action.primary) ?? null };
 }

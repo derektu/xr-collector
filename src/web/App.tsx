@@ -26,8 +26,11 @@ const navigation: Array<{ page: ShellPage; label: string; icon: string }> = [
   { page: 'activity', label: '活動', icon: 'activity' },
 ];
 
-/** History entries the app pushed itself; Back controls return through them instead of jumping to a fixed page. */
-interface AppHistoryState { returnable?: boolean }
+/**
+ * History entries the app pushed itself; Back controls return through them instead of jumping to a
+ * fixed page. `from` names the page that opened the entry, so its Back control can say where it goes.
+ */
+interface AppHistoryState { returnable?: boolean; from?: 'source' }
 
 export default function App() {
   if (DevelopmentOnboardingPreview) return <Suspense fallback={<p className="loading">正在載入開發預覽…</p>}><DevelopmentOnboardingPreview /></Suspense>;
@@ -68,15 +71,20 @@ export default function App() {
 
   async function loadVault(): Promise<void> { setVaultLoadError(undefined); try { setVault(await api.getVaultSetup()); } catch (error: unknown) { setVaultLoadError(error instanceof Error ? error.message : '無法連線到 Collector 服務。'); } }
   function enterVault(result: VaultSetupResult): void { setVault(result.vault); navigate(result.documentCount > 0 ? 'documents' : 'sources'); }
-  function go(pathname: string, search = '', state: AppHistoryState = {}): void {
-    if (window.location.pathname + window.location.search !== pathname + search) window.history.pushState(state, '', pathname + search);
+  function go(pathname: string, search = '', state: AppHistoryState = {}, replace = false): void {
+    if (replace) window.history.replaceState(state, '', pathname + search);
+    else if (window.location.pathname + window.location.search !== pathname + search) window.history.pushState(state, '', pathname + search);
     setLocation({ pathname, search });
     content.current?.scrollTo({ top: 0 });
   }
-  /** Back control of a page opened from inside the app; a page opened directly returns to `fallback`. */
-  function back(fallback: string): void {
-    if ((window.history.state as AppHistoryState | null)?.returnable) window.history.back();
-    else go(fallback);
+  const historyState = (): AppHistoryState => (window.history.state as AppHistoryState | null) ?? {};
+  /**
+   * Back control of a page opened from inside the app; a page opened directly returns to `fallback`.
+   * `replace` drops the current entry, for a page that no longer exists after the action.
+   */
+  function back(fallback: string, replace = false): void {
+    if (historyState().returnable) window.history.back();
+    else go(fallback, '', {}, replace);
   }
   function navigate(next: ShellPage): void { go(pathForRoute(next)); }
   const scroller = useCallback(() => content.current, []);
@@ -95,7 +103,7 @@ export default function App() {
     window.history.replaceState(window.history.state, '', `/${search}`);
     setLocation({ pathname: '/', search });
   }, []);
-  function openDocument(id: string): void { go(readerPath(id), '', { returnable: true }); }
+  function openDocument(id: string, from?: AppHistoryState['from']): void { go(readerPath(id), '', { returnable: true, ...(from ? { from } : {}) }); }
   function openSource(type: string, id: string): void { go(sourcePath(type, id), '', { returnable: true }); }
   function announce(text: string, tone: 'ok' | 'error' = 'ok'): void {
     setNotice({ tone, text, key: Date.now() });
@@ -122,12 +130,13 @@ export default function App() {
 
   let body;
   if (readerId) {
-    body = <Reader key={readerId} id={readerId} onBack={() => back('/documents')} onOpenSource={openSource} />;
+    const fromSource = historyState().returnable === true && historyState().from === 'source';
+    body = <Reader key={readerId} id={readerId} backLabel={fromSource ? '來源' : '文件'} onBack={() => back('/documents')} onOpenSource={openSource} />;
   } else if (sourceRoute) {
     body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
-      onBack={() => back('/')} onOpenDocument={openDocument} onOpenDocuments={(source) => go('/documents', listStateSearch({ query: '', source, page: 1 }), { returnable: true })}
+      onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onOpenDocuments={(source) => go('/documents', listStateSearch({ query: '', source, page: 1 }), { returnable: true })}
       onOpenActivity={() => navigate('activity')} onOpenSettings={() => navigate('settings')} onChanged={announce}
-      onRemoved={(message) => { announce(message); go('/'); }} />;
+      onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} active={active} schedule={status.schedule} revision={status.revision}
       onAdd={() => setAdding(true)} onOpenSource={openSource} onOpenActivity={() => navigate('activity')} onChanged={announce} />;

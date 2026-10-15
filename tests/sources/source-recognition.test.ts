@@ -61,6 +61,8 @@ describe('URL recognition (T-02 to T-05)', () => {
     'https://youtu.be/dQw4w9WgXcQ?t=12',
     'https://m.youtube.com/shorts/dQw4w9WgXcQ',
     'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc&index=3',
+    'youtube.com/watch?v=dQw4w9WgXcQ',
+    'youtu.be/dQw4w9WgXcQ',
   ])('recognizes %s as one video to collect without resolving anything', async (url) => {
     const { channels, preview } = channelsWith({});
     const response = await recognize(url, channels);
@@ -81,6 +83,7 @@ describe('URL recognition (T-02 to T-05)', () => {
 
   it.each([
     ['@channel-one', 'https://www.youtube.com/@channel-one'],
+    ['www.youtube.com/@channel-one', 'https://www.youtube.com/@channel-one'],
     ['https://www.youtube.com/channel/UCabc/featured', 'https://www.youtube.com/channel/UCabc'],
     ['https://www.youtube.com/c/legacy', 'https://www.youtube.com/c/legacy'],
     ['https://www.youtube.com/user/older', 'https://www.youtube.com/user/older'],
@@ -123,6 +126,9 @@ describe('URL recognition (T-02 to T-05)', () => {
     ['https://www.youtube.com/feed/trending', 'youtube', '不包含可辨識'],
     ['https://example.com/article', null, '目前還不支援這個網站'],
     ['not a url', null, '請貼上完整網址'],
+    ['example.com/article', null, '請貼上完整網址'],
+    ['www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ', null, '請貼上完整網址'],
+    ['youtube', null, '請貼上完整網址'],
   ])('answers %s as unsupported with a reason', async (url, sourceType, reason) => {
     const response = await recognize(url, channelsWith({}).channels);
 

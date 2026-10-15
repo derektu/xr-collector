@@ -16,8 +16,12 @@ import {
   type YouTubeChannel,
 } from '../core/types.js';
 
-/** Job states that end a channel job; the latest of these decides whether a subscription shows an error. */
-const FINISHED = new Set(['completed', 'failed', 'interrupted']);
+/**
+ * Channel job states that decide whether a subscription shows an error: the latest completed or
+ * failed job. An interrupted job (a shutdown or restart) says nothing about the source, so it
+ * neither raises nor clears an error.
+ */
+const DECIDING = new Set(['completed', 'failed']);
 
 /** A channel preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;
@@ -79,15 +83,15 @@ export class ChannelCollector {
     return channels.map((channel) => {
       const job = this.jobs.activeChannelJob(channel.id);
       const totals = counts.get(channel.id);
-      const lastFinished = (history.get(channel.id) ?? []).find((candidate) => FINISHED.has(candidate.state));
-      const failed = channel.enabled && !job && lastFinished?.state === 'failed';
+      const lastDeciding = (history.get(channel.id) ?? []).find((candidate) => DECIDING.has(candidate.state));
+      const failed = channel.enabled && !job && lastDeciding?.state === 'failed';
       return {
         ...channel,
         cursor: channel.cursor ?? null,
         lastCheckedAt: channel.lastCheckedAt ?? null,
         backlog: channel.backlog ?? false,
         status: !channel.enabled ? 'paused' : job ? 'collecting' : failed ? 'error' : 'tracking',
-        lastError: failed ? lastFinished.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
+        lastError: failed ? lastDeciding.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
         activeJob: job ? { id: job.id, done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,

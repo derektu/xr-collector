@@ -81,14 +81,14 @@ Authorization: Bearer <token>
 - **補收**：首次訂閱、恢復訂閱、服務啟動後的第一次檢查，以及距上次成功檢查超過 24 小時（或 3 個週期，取較長者）時，只收補收範圍內、Vault 還沒有的最新影片，最多 `backfillMaxItems` 則。月份依這台電腦的時區以日曆月計算。較舊的影片可用單支影片網址收集。
 - **增量**：持續運作中的檢查收上次進度之後的所有新影片，不套補收上限；一次最多 50 支，剩下的由 `trigger: backlog` 的工作接續。同頻道已有工作時沿用該工作，新影片留給下一次檢查。
 - 修改補收範圍不會重新回溯既有訂閱，只在下一次補收生效；修改頻率會以上次派工時間重算下次檢查。
-- `GET /api/youtube/channels` 每筆含 `status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次結束的頻道工作失敗，原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
+- `GET /api/youtube/channels` 每筆含 `status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次完成或失敗（`completed`／`failed`）的頻道工作是失敗，原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`；`interrupted`（服務關閉或重啟中斷）不改變錯誤狀態。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
 - `PATCH /api/youtube/channels/:id` `{"enabled":false}` 暫停：排隊中的頻道工作與尚未開始的影片結束為 `skipped`，正在擷取的影片會完成保存。`{"enabled":true}` 恢復並立即補收，回傳 `{"channel":...,"submission":...}`。`DELETE` 移除訂閱，回傳 `{"removed":true,"documentsKept":N}`，文件保留。暫停與移除在服務重啟後維持原狀。
 - `POST /api/youtube/channel-runs` 不帶 body 時立即檢查所有啟用中的訂閱，並從此刻重算下次自動檢查；帶 `{"channelIds":[...]}` 只檢查指定訂閱，暫停中的訂閱回 409 `channel_paused`。兩者都回傳 202 `{"submissions":[{"job":...,"deduplicated":...}]}`。Schedule 的 `lastAttemptAt` 是派工時間，`lastCompletedAt` 與 `lastResult` 在這批工作結束後更新。
 
 ## 來源與網址辨識
 
 - `GET /api/source-types` 回傳 `sourceTypes`：每種來源類型的 `id`（目前只有 `youtube`）、`label`、`icon`、`kinds`（`id`、`label`、`capability`：`single` 單篇收集或 `subscription` 訂閱、`itemNoun`）、`requiresLogin` 與收集設定欄位 `settings`（`key`、`label`、`options`）。設定值目前是所有訂閱共用的 Global 設定。
-- 使用者貼上網址而不確定要做什麼時，先呼叫 `POST /api/url-recognitions` `{"url":"..."}`。只有缺少或空白的 `url` 回 400 `invalid_request`；其他情況一律回 200 的 `recognition`，以 `status` 判讀：
+- 使用者貼上網址而不確定要做什麼時，先呼叫 `POST /api/url-recognitions` `{"url":"..."}`。只有缺少或空白的 `url` 回 400 `invalid_request`；其他情況一律回 200 的 `recognition`。沒有 scheme 的 YouTube 網址（`youtube.com/watch?v=…`、`youtu.be/…`、`www.youtube.com/@…`）視為 https://，`recognition.url` 是補上 scheme 後的網址；其他沒有 scheme 的字串為 `unsupported`。以 `status` 判讀：
   - `ready`：可操作。`kind` 為 `video` 或 `channel`，`target` 是影片或頻道（影片不連線查詢，`title` 為 null）。頻道會同步解析（最多約 60 秒），`subscription` 是既有訂閱（`id`、`enabled`），`policy` 是新訂閱會用的設定。
   - `login_required`：該來源類型需要登入，`login` 說明要登入的服務；目前沒有這類來源。
   - `unsupported`：播放清單、其他網站或不是網址，`message` 說明原因。
