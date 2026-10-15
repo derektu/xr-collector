@@ -31,6 +31,15 @@ export function listStateSearch(state: DocumentListState): string {
   return text ? `?${text}` : '';
 }
 
+/**
+ * The search box text after the URL query changes. A draft whose trimmed text already is the query
+ * stays as typed, so a pause after a trailing space does not strip it mid-typing; any other query
+ * (back, reload, clear) replaces the draft.
+ */
+export function draftForQuery(draft: string, query: string): string {
+  return draft.trim() === query ? draft : query;
+}
+
 export function sourceFilter(source: string): DocumentFilter {
   if (!source) return {};
   const separator = source.indexOf(':');

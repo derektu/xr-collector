@@ -4,6 +4,7 @@ import {
   listStateSearch,
   pageItems,
   parseListState,
+  draftForQuery,
   publishedLabel,
   readerIdForPath,
   readerPath,
@@ -19,6 +20,13 @@ describe('document presentation', () => {
     expect(parseListState(listStateSearch(state))).toEqual(state);
     expect(listStateSearch({ query: '', source: '', page: 1 })).toBe('');
     expect(parseListState('?page=-2')).toEqual({ query: '', source: '', page: 1 });
+  });
+
+  it('keeps a trailing space typed before the debounced query lands', () => {
+    // Typing "machine " and pausing writes "machine" to the URL; the box must keep the space.
+    expect(draftForQuery('machine ', 'machine')).toBe('machine ');
+    expect(draftForQuery('machine ', 'learning')).toBe('learning');
+    expect(draftForQuery('machine', '')).toBe('');
   });
 
   it('maps menu values to stable ID filters', () => {
