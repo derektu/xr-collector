@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import type { CollectionJob } from '../core/types.js';
 import { api } from './api-client.js';
 import {
+  jobItemLabel,
   jobKindLabel,
   jobPhaseLabel,
   jobProgressLabel,
   jobResultLabel,
   jobStateLabel,
   jobTitle,
-  skipReasonLabel,
+  recoveryLabel,
+  retryLabel,
 } from './job-presentation.js';
 
 /** Recent collection jobs of the active Vault, newest first; reloads whenever background work changes. */
@@ -42,6 +44,8 @@ function JobRow({ job }: { job: CollectionJob }) {
   const phase = jobPhaseLabel(job);
   const progress = jobProgressLabel(job);
   const result = jobResultLabel(job);
+  const retry = retryLabel(job.retry);
+  const recovery = recoveryLabel(job);
   const warning = job.state === 'completed' && job.result?.indexed === false;
   return <li className={`job-row ${job.state}`} data-testid={`job-${job.id}`}>
     <div className="job-main">
@@ -50,9 +54,11 @@ function JobRow({ job }: { job: CollectionJob }) {
       <span className={`job-state ${job.state}`}>{jobStateLabel(job)}{phase ? `・${phase}` : ''}</span>
     </div>
     {progress ? <p className="job-detail">{progress}</p> : null}
+    {retry ? <p className="job-detail job-problem" data-testid="job-retry">{retry}</p> : null}
+    {recovery ? <p className="job-detail job-note" data-testid="job-recovery">{recovery}</p> : null}
     {result ? <p className={`job-detail ${warning || job.state !== 'completed' ? 'job-problem' : ''}`}>{result}</p> : null}
     {job.items && job.items.length > 0 ? <details className="job-items"><summary>查看影片（{job.items.length}）</summary><ul>
-      {job.items.map((item) => <li key={item.sourceId}><span>{item.title}</span><span className={`job-state ${item.state}`}>{item.outcome === 'created' ? '新增' : item.outcome === 'existing' ? '已存在' : item.outcome === 'skipped' ? `略過・${skipReasonLabel(item.skipReason)}` : jobStateLabel({ ...job, state: item.state })}</span>{item.error ? <span className="job-problem">{item.error.message}</span> : null}</li>)}
+      {job.items.map((item) => <li key={item.sourceId}><span>{item.title}</span><span className={`job-state ${item.state}`}>{jobItemLabel(item)}</span>{item.error ? <span className="job-problem">{item.error.message}</span> : null}</li>)}
     </ul></details> : null}
   </li>;
 }

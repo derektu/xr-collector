@@ -7,7 +7,7 @@ import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
-import { JobManager, type JobLimits } from '../jobs/job-manager.js';
+import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
@@ -41,6 +41,7 @@ export interface WorkspaceOptions {
   /** Device record of collection jobs; defaults to an in-memory store. */
   jobStore?: JobStore;
   jobLimits?: Partial<JobLimits>;
+  jobRetry?: Partial<RetryPolicy>;
 }
 
 /** Service references stay stable for both UI and Agent while the active vault changes. */
@@ -87,8 +88,12 @@ export class VaultWorkspace {
       catch (error) { await workspace.current.runtime.close(); throw error; }
     }
     try {
+      // Interrupted jobs continue before the scheduler can submit a check of the same channel.
+      await workspace.current.jobs.resume();
+      workspace.current.channels.followResumedBacklogs();
       await workspace.current.schedule.start();
     } catch (error) {
+      await workspace.current.jobs.close().catch(() => undefined);
       await workspace.current.runtime.close().catch(() => undefined);
       throw error;
     }
@@ -357,6 +362,7 @@ export class VaultWorkspace {
       channels: channelStore,
       policy,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
+      ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
     });
     const channels = new ChannelCollector(channelStore, jobs, {
       policy, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),

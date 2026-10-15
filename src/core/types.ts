@@ -263,6 +263,10 @@ export interface SourceJobRecord {
   progress: JobProgress | null;
   outcome: JobOutcome | null;
   error: JobError | null;
+  /** Transient failures so far; `nextAttemptAt` is set while the job waits for its next attempt. */
+  retry: JobRetry | null;
+  /** Times the job continued after the service restarted. */
+  resumedCount: number;
 }
 
 export interface SourceDetail {
@@ -295,12 +299,49 @@ export type JobPhase = 'resolve' | 'discover' | 'capture' | 'save' | 'index';
 /** What a finished job produced; `empty` is a channel whose discovery found nothing to collect. */
 export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty' | 'skipped';
 
-/** Why work was skipped instead of collected. */
-export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed';
+/**
+ * Why work was skipped instead of collected. `superseded` is an interrupted job that a later job
+ * of the same video or channel took over.
+ */
+export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'superseded';
 
 export interface JobError {
   code: string;
   message: string;
+}
+
+/**
+ * Automatic retries after transient failures such as a lost connection. `attempts` counts failed
+ * attempts and survives restarts, so a restart never grants a job more attempts.
+ */
+export interface JobRetry {
+  attempts: number;
+  maxAttempts: number;
+  /** When the next attempt starts; null while an attempt runs or after the last one. */
+  nextAttemptAt: string | null;
+  lastError: JobError;
+}
+
+/** How a job continued across service restarts. */
+export interface JobRecovery {
+  resumedCount: number;
+  /**
+   * Restarts that found the job in the middle of a step, which a clean shutdown never leaves.
+   * A job that keeps stopping the service this way stops resuming automatically.
+   */
+  uncleanStops: number;
+  lastInterruptedAt: string;
+  lastResumedAt: string | null;
+}
+
+/** What a restart needs to continue a job without repeating finished steps. Internal to the service. */
+export interface JobCheckpoint {
+  /** A video job saved this document; a resume only updates the index. */
+  savedDocumentId?: string;
+  /** A channel-add job resolved this channel and is subscribing to it. */
+  subscribing?: { channelId: string; title: string; url: string };
+  /** A channel job recorded its discovered videos; the subscription cursor follows them. */
+  discovered?: { at: string; cursor: ChannelCursor | null; backlog: boolean; cursorSaved: boolean };
 }
 
 /** One discovered video of a channel job and the video job that collects it. */
@@ -313,6 +354,8 @@ export interface JobItem {
   outcome: 'created' | 'existing' | 'skipped' | null;
   skipReason?: SkipReason;
   error: JobError | null;
+  /** Retry state of the video job that collects this item. */
+  retry?: JobRetry;
 }
 
 export interface JobProgress {
@@ -368,6 +411,11 @@ export interface CollectionJob {
   items: JobItem[] | null;
   result: JobResult | null;
   error: JobError | null;
+  retry?: JobRetry;
+  recovery?: JobRecovery;
+  checkpoint?: JobCheckpoint;
+  /** A video a channel job queued that the user also submitted directly; stopping the subscription never skips it. */
+  claimedByUser?: boolean;
 }
 
 export interface JobSubmission {
@@ -393,6 +441,8 @@ export interface JobEvent {
   phase?: JobPhase;
   outcome?: JobOutcome;
   errorCode?: string;
+  /** The failed attempt a retry event follows. */
+  attempt?: number;
   documentId?: string;
   sourceId?: string;
 }

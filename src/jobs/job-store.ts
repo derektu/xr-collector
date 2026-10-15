@@ -40,8 +40,9 @@ export class JobStore {
   }
 
   /**
-   * Loads the previous snapshot. Jobs still queued or running belong to a process that stopped,
-   * so they become interrupted with their scope and progress kept.
+   * Loads the previous snapshot. Jobs still queued or running belong to a process that stopped
+   * without closing, so they become interrupted with their scope and progress kept; a job caught in
+   * the middle of a step counts an unclean stop.
    */
   static async open(directory: string, now: () => Date = () => new Date()): Promise<JobStore> {
     const store = new JobStore(directory, now);
@@ -65,7 +66,7 @@ export class JobStore {
     }
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
-      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。');
+      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { unclean: inStep(job) });
     }
     if (stopped.length > 0) await store.flush();
     return store;
@@ -92,12 +93,18 @@ export class JobStore {
     this.scheduleFlush();
   }
 
-  /** Marks an unfinished job interrupted, as a stopped service leaves it. */
-  interrupt(job: CollectionJob, message: string): void {
+  /** Marks an unfinished job interrupted, as a stopped service leaves it; the job resumes when its Vault opens. */
+  interrupt(job: CollectionJob, message: string, options: { unclean?: boolean } = {}): void {
     const timestamp = this.now().toISOString();
     const interrupted: CollectionJob = {
       ...job,
       state: 'interrupted',
+      recovery: {
+        resumedCount: job.recovery?.resumedCount ?? 0,
+        uncleanStops: (job.recovery?.uncleanStops ?? 0) + (options.unclean ? 1 : 0),
+        lastInterruptedAt: timestamp,
+        lastResumedAt: job.recovery?.lastResumedAt ?? null,
+      },
       finishedAt: timestamp,
       updatedAt: timestamp,
       error: { code: 'interrupted', message },
@@ -172,6 +179,17 @@ export class JobStore {
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     for (const job of finished.slice(0, Math.max(0, finished.length - FINISHED_JOB_LIMIT))) this.jobs.delete(job.id);
   }
+}
+
+/**
+ * True for a job that was doing its own work: capturing, saving or indexing a video, discovering a
+ * channel's videos or resolving a channel. A channel job past discovery only waits for its videos.
+ */
+function inStep(job: CollectionJob): boolean {
+  if (job.state !== 'running') return false;
+  if (job.kind === 'youtube.video') return job.phase === 'capture' || job.phase === 'save' || job.phase === 'index';
+  if (job.kind === 'youtube.channel') return job.phase === 'discover';
+  return job.phase === 'resolve';
 }
 
 function parseJobs(contents: string): CollectionJob[] | null {

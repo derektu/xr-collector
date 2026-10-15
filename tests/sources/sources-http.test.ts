@@ -30,6 +30,8 @@ async function world() {
   const jobs = new JobManager({
     vaultPath: root, store: JobStore.memory(now), source, documents: collector, channels: channelStore, now,
     policy: async () => ({ ...policy }), limits: { discovery: 1, capture: 4 },
+    // Failures here are about the subscription status; automatic retries have their own cases.
+    retry: { maxAttempts: 1 },
   });
   const channels = new ChannelCollector(channelStore, jobs, {
     policy: async () => ({ ...policy }), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
@@ -171,7 +173,7 @@ describe('source detail (T-07, T-08)', () => {
     expect(body.recentDocuments[0]).toMatchObject({ sourceId: fresh, collectedAt: w.clock.now.toISOString() });
     expect(body.recentDocuments.every((document: { publisher: { id: string } }) => document.publisher.id === id)).toBe(true);
     expect(body.recentJobs.map((job: { trigger: string }) => job.trigger)).toEqual(['manual', 'subscribe']);
-    expect(body.recentJobs[0]).toMatchObject({ state: 'completed', outcome: 'created', progress: { created: 1 } });
+    expect(body.recentJobs[0]).toMatchObject({ state: 'completed', outcome: 'created', progress: { created: 1 }, retry: null, resumedCount: 0 });
     expect(body.recentJobs[1]).toMatchObject({ state: 'completed', outcome: 'created', progress: { created: 6 } });
     await w.app.close();
   });

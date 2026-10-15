@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
-import { jobKindLabel, jobPhaseLabel, jobProgressLabel, jobResultLabel } from '../../src/web/job-presentation.js';
+import {
+  jobItemLabel,
+  jobKindLabel,
+  jobPhaseLabel,
+  jobProgressLabel,
+  jobResultLabel,
+  jobStateLabel,
+  recoveryLabel,
+  retryLabel,
+} from '../../src/web/job-presentation.js';
+
+const originalZone = process.env.TZ;
+beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
+afterEach(() => { process.env.TZ = originalZone; });
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
@@ -41,4 +54,20 @@ describe('job presentation', () => {
     expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出補收範圍');
   });
 
+
+  it('states retries, restarts and their outcome', () => {
+    const lastError = { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。' };
+    const waiting = job({ state: 'queued', retry: { attempts: 1, maxAttempts: 3, nextAttemptAt: '2026-10-15T06:02:00.000Z', lastError } });
+    expect(jobStateLabel(waiting)).toBe('等待重試');
+    expect(retryLabel(waiting.retry)).toBe('無法連線到 YouTube，請稍後再試。・14:02 自動重試（第 2／3 次）');
+    expect(retryLabel({ ...waiting.retry!, nextAttemptAt: null })).toBeNull();
+    const recovery = { resumedCount: 1, uncleanStops: 0, lastInterruptedAt: '2026-10-15T06:00:00.000Z', lastResumedAt: '2026-10-15T06:01:00.000Z' };
+    expect(recoveryLabel(job({ state: 'running', recovery }))).toBe('服務重新啟動後已接續');
+    expect(recoveryLabel(job({ state: 'completed', recovery }))).toBe('曾中斷後接續');
+    expect(recoveryLabel(job({ state: 'completed' }))).toBeNull();
+    expect(jobResultLabel(job({ state: 'interrupted', error: { code: 'interrupted', message: '服務停止。' } }))).toBe('已中斷，重新開啟時接續');
+    expect(jobItemLabel({ sourceId: 'a', title: 'a', url: 'u', jobId: 'j', state: 'queued', outcome: null, error: null, retry: waiting.retry! })).toBe('等待重試');
+    expect(jobItemLabel({ sourceId: 'a', title: 'a', url: 'u', jobId: 'j', state: 'completed', outcome: 'skipped', skipReason: 'superseded', error: null }))
+      .toBe('略過・已由較新的工作接續');
+  });
 });

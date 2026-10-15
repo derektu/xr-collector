@@ -114,17 +114,24 @@ export function displayUrl(url: string): string {
 export function jobRecordLabel(record: SourceJobRecord, now: Date = new Date()): { title: string; detail: string; active: boolean } {
   const title = triggerLabel(record.trigger);
   const progress = record.progress;
+  const resumed = record.resumedCount > 0;
   if (record.state === 'queued' || record.state === 'running') {
-    const detail = progress && progress.total > 0 ? `${progress.done}／${progress.total}` : '準備中';
-    return { title, detail, active: true };
+    const notes = [
+      progress && progress.total > 0 ? `${progress.done}／${progress.total}` : '準備中',
+      ...(record.retry?.nextAttemptAt ? ['等待重試'] : []),
+      ...(resumed ? ['已接續'] : []),
+    ];
+    return { title, detail: notes.join(' · '), active: true };
   }
   const when = shortTimeLabel(record.finishedAt ?? record.createdAt, now);
-  if (record.state === 'failed' || record.state === 'interrupted') {
+  if (record.state === 'interrupted') return { title, detail: `${when} · 已中斷，重新開啟時接續`, active: false };
+  if (record.state === 'failed') {
     return { title, detail: `${when} · ${record.error?.message ?? '收集失敗'}`, active: false };
   }
-  if (record.outcome === 'skipped') return { title, detail: `${when} · 已略過`, active: false };
+  const suffix = resumed ? '・曾中斷後接續' : '';
+  if (record.outcome === 'skipped') return { title, detail: `${when} · 已略過${suffix}`, active: false };
   const created = progress?.created ?? 0;
-  return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : '沒有新影片'}`, active: false };
+  return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : '沒有新影片'}${suffix}`, active: false };
 }
 
 /** The shared settings a subscription follows, in one sentence. */

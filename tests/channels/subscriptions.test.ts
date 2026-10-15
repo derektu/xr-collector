@@ -42,6 +42,8 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
       vaultPath: root, store, source, documents: collector, channels: channelStore, now,
       policy: async () => ({ ...policy }),
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
+      // Failed checks here drive the catch-up rules; automatic retries have their own cases.
+      retry: { maxAttempts: 1 },
     });
     const channels = new ChannelCollector(channelStore, jobs, {
       policy: async () => ({ ...policy }), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
