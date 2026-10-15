@@ -16,7 +16,7 @@
 | `web` | 畫面使用的狀態／呈現邏輯 |
 | `tooling` | 獨立驗證工作區、平台要求與證據彙整 |
 
-分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。原生操作與截圖依 [開發驗證流程](../docs/development-validation.md)，只在有實際自動化案例時建立 E2E 測試目錄。
+分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 
 ## 真實搜尋與平台邊界
 
