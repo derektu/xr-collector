@@ -127,6 +127,8 @@ Node 預設從 PATH 找到，也可傳 `-NodePath <node.exe>`。排程成功不�
 
 使用 Parallels 的人可從 Mac 用 `prlctl exec <VM名稱> --current-user powershell.exe ... -File <repo內windows-session.ps1> ...` 呼叫同一入口。VM 名稱、repo、workspace 及 Node 路徑都是該機配置；Parallels 不屬於共同前置條件。也可使用 `prlctl capture` 後以 capture 的 `--file` 匯入。
 
+Windows 驗證機只保留兩個目錄：`C:\projects\xr-collector` 是追蹤 `origin/main` 的 repo，不放未提交修改；`C:\projects\xr-collector-verify` 是從它建立的唯一 detached worktree，供每次驗證切換版本。驗證時在 verify worktree fetch 並切到受驗的分支或 PR HEAD，執行 `npm ci`、`npm run download:runtime:win` 與 build；`resources/bin/win` 與 node_modules 在不同版本間重用。profile、Vault 與 fixture 放在 `C:\projects\xr-collector-verify-data`，每次驗證前清空；截圖與結果存回 Mac 開發 checkout 的 `.local/ticket-artifacts/<issue>/`。尚未 push 的版本可從 Mac 共享磁碟上的 repo（例如 `Y:\projects\km\xr-collector`）fetch，不經 GitHub。需要 `prepare` 工作區的正式證據流程，在 `export` 後移除該工作區，不在驗證機累積。
+
 Windows ARM／x64 模擬執行須如實標示，不代替 Intel／AMD 原生驗收。桌面鎖定、Mac 休眠或 VM 停止時，標為 blocked，恢復可用桌面後再驗證。避免透過 Mac 掛載磁碟同步 node_modules；若傳未提交檔案產生 AppleDouble `._*`，僅清除此批傳輸產生的檔案再驗證。
 
 ## 6. 平台打包
