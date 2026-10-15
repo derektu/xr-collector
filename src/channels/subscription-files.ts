@@ -9,17 +9,18 @@ import type { ChannelCursor, CollectionPolicy, YouTubeChannel } from '../core/ty
  * `youtube-channels.json` version 2 is `{ version: 2, channels: [...] }`: every subscription carries
  * its own settings and check times. Version 1 is a bare array of subscriptions that share the
  * interval and backfill range of `youtube-schedule.json` version 1. `youtube-schedule.json`
- * version 2 holds only the automatic collection switch.
+ * version 2 holds the automatic collection switch and, in a converted Vault, `legacySettings`.
  *
  * A version 1 Vault is converted once, the first time it is opened: the shared settings are copied
- * to every subscription. Whether to convert depends only on the channel file's version, so a
- * converted Vault never reads the shared settings again.
+ * to every subscription and kept as `legacySettings`, which only subscription jobs accepted before
+ * the conversion read. Whether to convert depends only on the channel file's version, so a
+ * converted Vault never gives a subscription the shared settings again.
  */
 export const CHANNELS_FILE = 'settings/youtube-channels.json';
 export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 
 export interface ChannelsFile { version: 2; channels: YouTubeChannel[] }
-export interface ScheduleFile { version: 2; enabled: boolean }
+export interface ScheduleFile { version: 2; enabled: boolean; legacySettings?: CollectionPolicy }
 
 /** Version 1 schedule fields that the conversion reads; interval values before backfill settings existed may be any whole minute. */
 interface LegacySchedule {
@@ -67,6 +68,25 @@ export function scheduleEnabledFromJson(value: unknown): boolean {
   return file.enabled;
 }
 
+/**
+ * The shared settings a converted Vault's subscriptions were given, from a schedule file of either
+ * version; null for a Vault that never had shared settings or whose file holds none.
+ */
+export function legacySettingsFromJson(value: unknown): CollectionPolicy | null {
+  const file = value as { version?: unknown; legacySettings?: unknown } | null | undefined;
+  if (!file || typeof file !== 'object') return null;
+  if (file.version === 1) {
+    const shared = legacySchedule(value);
+    return shared ? { intervalMinutes: shared.intervalMinutes, backfillWindow: shared.backfillWindow, backfillMaxItems: shared.backfillMaxItems } : null;
+  }
+  return isCollectionPolicy(file.legacySettings) ? { ...file.legacySettings } : null;
+}
+
+/** The shared settings a converted Vault's subscriptions were given, or null. */
+export async function readLegacySettings(root: string): Promise<CollectionPolicy | null> {
+  return legacySettingsFromJson(await readJsonFile(path.join(root, SCHEDULE_FILE)));
+}
+
 /** Whether the channel file is version 1 and needs the conversion. */
 export function isLegacyChannelsJson(value: unknown): boolean {
   return Array.isArray(value);
@@ -88,7 +108,8 @@ export async function migrateSubscriptionSettings(root: string): Promise<boolean
     converted = true;
   }
   if (schedule !== undefined && (schedule as { version?: unknown } | null)?.version !== 2) {
-    const file: ScheduleFile = { version: 2, enabled: scheduleEnabledFromJson(schedule) };
+    const legacySettings = legacySettingsFromJson(schedule);
+    const file: ScheduleFile = { version: 2, enabled: scheduleEnabledFromJson(schedule), ...(legacySettings ? { legacySettings } : {}) };
     await writeJsonFile(schedulePath, file);
     converted = true;
   }

@@ -172,6 +172,26 @@ describe('per-subscription scheduling (A2)', () => {
     expect(w.jobEvents().filter((event) => event === 'subscription.settings_updated')).toHaveLength(3);
   });
 
+  it('keeps each subscription on its own rhythm however late the poll that dispatches it', async () => {
+    const w = await world();
+    const id = await w.subscribe('rhythm', { intervalMinutes: 15 });
+    await w.scheduler.start();
+    // Each poll comes 7 seconds later than the last; the next checks stay on the quarter hours.
+    for (const next of ['04:30', '04:45', '05:00']) {
+      w.advance(15 * MINUTE + 7_000);
+      await poll(w);
+      expect(await w.channel(id)).toMatchObject({ nextCheckAt: `2026-10-15T${next}:00.000Z` });
+    }
+    expect(w.scheduledChecks(id)).toBe(3);
+    // A sleep that missed several periods dispatches once, at 06:25:21; the next check stays on the same rhythm.
+    w.advance(100 * MINUTE);
+    await poll(w);
+    expect(await w.channel(id)).toMatchObject({ nextCheckAt: '2026-10-15T06:30:00.000Z' });
+    await poll(w);
+    expect(w.scheduledChecks(id)).toBe(4);
+    await w.scheduler.close();
+  });
+
   it('moves the next check of every subscription a manual check reaches', async () => {
     const w = await world({ enabled: false });
     const id = await w.subscribe('manual', { intervalMinutes: 30 });
@@ -209,6 +229,33 @@ describe('per-subscription scheduling (A2)', () => {
     expect((await w.scheduler.getSchedule()).nextCheck).toEqual({ channelId: first, title: '合成頻道 first', at: '2026-10-15T05:00:00.000Z' });
     await w.scheduler.updateSchedule({ enabled: false });
     expect(await w.scheduler.getSchedule()).toMatchObject({ status: 'paused', nextCheck: null, lastCheck: { channelId: second } });
+  });
+});
+
+describe('concurrent changes of one subscription (A5)', () => {
+  it('keeps every concurrent settings change and computes the next check from the newest interval', async () => {
+    const w = await world();
+    const id = await w.subscribe('busy', { intervalMinutes: 30 });
+    const other = await w.subscribe('apply-target', {});
+    w.advance(10 * MINUTE);
+    await Promise.all([
+      w.channels.updateSettings(id, { intervalMinutes: 180 }),
+      w.channels.updateSettings(id, { backfillWindow: '6m' }),
+      w.channels.updateSettings(id, { backfillMaxItems: 50 }),
+      w.channels.applySettingsToAll(id),
+    ]);
+    const settings = { intervalMinutes: 180, backfillWindow: '6m', backfillMaxItems: 50 };
+    expect(await w.channel(id)).toMatchObject({ settings });
+    // Applying ran after the three changes it was queued behind.
+    expect(await w.channel(other)).toMatchObject({ settings });
+
+    // A check dispatched while the interval changes moves the next check by the new interval.
+    w.advance(10 * MINUTE);
+    await Promise.all([w.channels.startRun({ trigger: 'manual', channelIds: [id] }), w.channels.updateSettings(id, { intervalMinutes: 1440 })]);
+    expect(await w.channel(id)).toMatchObject({
+      settings: { ...settings, intervalMinutes: 1440 }, lastDispatchedAt: '2026-10-15T04:20:00.000Z', nextCheckAt: '2026-10-16T04:20:00.000Z',
+    });
+    await w.idle();
   });
 });
 

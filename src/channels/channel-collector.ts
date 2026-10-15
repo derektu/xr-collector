@@ -145,10 +145,11 @@ export class ChannelCollector {
    */
   async updateSettings(id: string, patch: Partial<CollectionPolicy>): Promise<YouTubeChannel> {
     assertPolicyPatch(patch);
-    const current = (await this.store.list()).find((channel) => channel.id === id);
-    if (!current) throw notFound();
-    const settings = { ...current.settings, ...patch };
-    const channel = await this.store.update(id, this.settingsPatch(current, settings));
+    const now = this.now();
+    const [channel] = await this.store.updateWith((channels) => {
+      const current = channels.find((candidate) => candidate.id === id);
+      return new Map(current ? [[id, settingsPatch(current, { ...current.settings, ...patch }, now)]] : []);
+    });
     if (!channel) throw notFound();
     this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.settings_updated', message: `已更新「${channel.title}」的收集設定。`, sourceId: id });
     return channel;
@@ -159,13 +160,17 @@ export class ChannelCollector {
    * them too and stay paused, so a later resume backfills with them. No work starts.
    */
   async applySettingsToAll(id: string): Promise<ApplySettingsResult> {
-    const channels = await this.store.list();
-    const source = channels.find((channel) => channel.id === id);
+    const now = this.now();
+    let source: YouTubeChannel | undefined;
+    const updated = await this.store.updateWith((channels) => {
+      source = channels.find((channel) => channel.id === id);
+      const settings = source?.settings;
+      if (!settings) return new Map();
+      return new Map(channels
+        .filter((channel) => channel.id !== id)
+        .map((channel) => [channel.id, settingsPatch(channel, settings, now)] as const));
+    });
     if (!source) throw notFound();
-    const patches = new Map(channels
-      .filter((channel) => channel.id !== id)
-      .map((channel) => [channel.id, this.settingsPatch(channel, source.settings)] as const));
-    const updated = await this.store.updateMany(patches);
     const paused = updated.filter((channel) => !channel.enabled).length;
     this.jobs.recordEvent({
       severity: 'info', eventType: 'subscription.settings_applied',
@@ -180,21 +185,9 @@ export class ChannelCollector {
    */
   async planChecks(options: { reset: boolean }): Promise<void> {
     const now = this.now();
-    const patches = new Map((await this.store.list())
+    await this.store.updateWith((channels) => new Map(channels
       .filter((channel) => channel.enabled && (options.reset || !channel.nextCheckAt))
-      .map((channel) => [channel.id, { nextCheckAt: addMinutes(now, channel.settings.intervalMinutes).toISOString() }] as const));
-    if (patches.size > 0) await this.store.updateMany(patches);
-  }
-
-  /** The store change that gives `channel` new settings, with its next check moved when the interval changes. */
-  private settingsPatch(channel: YouTubeChannel, settings: CollectionPolicy): Partial<YouTubeChannel> {
-    const patch: Partial<YouTubeChannel> = { settings: { ...settings } };
-    if (channel.enabled && settings.intervalMinutes !== channel.settings.intervalMinutes) {
-      const now = this.now();
-      const next = addMinutes(channel.lastDispatchedAt ? new Date(channel.lastDispatchedAt) : now, settings.intervalMinutes);
-      patch.nextCheckAt = (next.getTime() < now.getTime() ? now : next).toISOString();
-    }
-    return patch;
+      .map((channel) => [channel.id, { nextCheckAt: addMinutes(now, channel.settings.intervalMinutes).toISOString() }] as const)));
   }
 
   /**
@@ -236,8 +229,9 @@ export class ChannelCollector {
   /**
    * Submits one collection job per subscription: the listed ones, or every enabled one. A channel
    * whose job is still active returns that job, and its cursor waits for the next check. Each
-   * checked subscription's next automatic check is one of its intervals after this one, also when
-   * it joined an active job; a follow-up batch continues a check and moves nothing.
+   * checked subscription's next automatic check moves on, also when it joined an active job: a
+   * scheduled check keeps its rhythm from the time that came due, any other dispatch counts an
+   * interval from now. A follow-up batch continues a check and moves nothing.
    */
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
     const allChannels = await this.store.list();
@@ -268,9 +262,14 @@ export class ChannelCollector {
       if (!submission.deduplicated) this.followBacklog(submission.job.id, channel.id);
     }
     if (request.trigger !== 'backlog') {
-      await this.store.updateMany(new Map(selected.map((channel) => [channel.id, {
-        lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, channel.settings.intervalMinutes).toISOString(),
-      }] as const)));
+      const ids = new Set(selected.map((channel) => channel.id));
+      // Computed from the current rows, so a settings change made meanwhile keeps its interval and
+      // a subscription paused meanwhile gets no next check.
+      await this.store.updateWith((channels) => new Map(channels
+        .filter((channel) => ids.has(channel.id) && channel.enabled)
+        .map((channel) => [channel.id, {
+          lastDispatchedAt: now.toISOString(), nextCheckAt: nextCheckAfterDispatch(channel, request.trigger, now).toISOString(),
+        }] as const)));
     }
     return submissions;
   }
@@ -312,6 +311,32 @@ export class ChannelCollector {
       await this.startRun({ trigger: 'backlog', channelIds: [channelId] });
     }).catch((error: unknown) => console.error('Follow-up channel batch failed', error));
   }
+}
+
+/**
+ * The store change that gives `channel` new settings. A new interval on an enabled subscription
+ * counts from its last dispatch and is due at once if that time has passed.
+ */
+function settingsPatch(channel: YouTubeChannel, settings: CollectionPolicy, now: Date): Partial<YouTubeChannel> {
+  const patch: Partial<YouTubeChannel> = { settings: { ...settings } };
+  if (channel.enabled && settings.intervalMinutes !== channel.settings.intervalMinutes) {
+    const next = addMinutes(channel.lastDispatchedAt ? new Date(channel.lastDispatchedAt) : now, settings.intervalMinutes);
+    patch.nextCheckAt = (next.getTime() < now.getTime() ? now : next).toISOString();
+  }
+  return patch;
+}
+
+/**
+ * A scheduled check keeps the subscription's rhythm: the next check is whole intervals after the
+ * one that came due, the first of them after `now`, so polling delay never accumulates and missed
+ * periods are not checked one by one. Any other dispatch counts an interval from `now`.
+ */
+function nextCheckAfterDispatch(channel: YouTubeChannel, trigger: StartRunRequest['trigger'], now: Date): Date {
+  const interval = channel.settings.intervalMinutes * 60_000;
+  if (trigger !== 'scheduled' || !channel.nextCheckAt) return new Date(now.getTime() + interval);
+  const due = new Date(channel.nextCheckAt).getTime();
+  const periods = Math.max(1, Math.floor((now.getTime() - due) / interval) + 1);
+  return new Date(due + periods * interval);
 }
 
 function addMinutes(date: Date, minutes: number): Date {

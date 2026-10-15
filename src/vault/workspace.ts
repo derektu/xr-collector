@@ -7,7 +7,7 @@ import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
-import { migrateSubscriptionSettings } from '../channels/subscription-files.js';
+import { migrateSubscriptionSettings, readLegacySettings } from '../channels/subscription-files.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
@@ -362,6 +362,7 @@ export class VaultWorkspace {
       source,
       documents: collector,
       channels: channelStore,
+      legacySettings: () => readLegacySettings(root),
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
     });

@@ -10,6 +10,7 @@ import {
   type CapturedTranscript,
   type ChannelJobScope,
   type CollectionJob,
+  type CollectionPolicy,
   type DocumentSummary,
   type SavedDocument,
   type YouTubeChannel,
@@ -165,7 +166,7 @@ afterEach(async () => {
   stores = [];
 });
 
-async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy> } = {}) {
+async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy>; legacySettings?: CollectionPolicy } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'xr-recovery-'));
   directories.push(directory);
   const vault = new MemoryVault();
@@ -189,6 +190,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       vaultPath: VAULT, store, source, documents: new Collector(vault, search), channels,
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
+      ...(options.legacySettings ? { legacySettings: async () => options.legacySettings! } : {}),
       now: () => clock.now,
       createId: () => `job-${++sequence}`,
       setTimer: (run, ms) => {
@@ -382,6 +384,39 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
     expect(followUp.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5 });
     // The chosen settings serve the restart only; the job as UI and Agents read it has no checkpoint.
     expect(done).not.toHaveProperty('checkpoint');
+  });
+});
+
+describe('channel-add jobs accepted before subscriptions had their own settings (A3)', () => {
+  /** A subscribing job as the shared-settings version stored it: a first-collection range and no settings. */
+  async function acceptedBeforeConversion(w: Awaited<ReturnType<typeof world>>, accepted: CollectionPolicy) {
+    const g1 = await w.boot((source) => { source.holdResolve = true; });
+    const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@legacy', accepted);
+    await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
+    await g1.store.flush();
+    const file = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
+    for (const job of file.jobs) delete job.checkpoint;
+    await writeFile(path.join(w.directory, 'jobs.json'), `${JSON.stringify(file)}\n`);
+    const g2 = await w.boot();
+    await g2.manager.resume();
+    const done = await g2.manager.whenSettled(adding.job.id);
+    return g2.manager.whenSettled(done.result!.followUpJobId!);
+  }
+
+  it('subscribes with the shared settings the conversion gave every other subscription', async () => {
+    const shared = { intervalMinutes: 60, backfillWindow: '2w' as const, backfillMaxItems: 20 };
+    const w = await world({ legacySettings: shared });
+    const followUp = await acceptedBeforeConversion(w, shared);
+    expect(w.channels.channels).toEqual([expect.objectContaining({
+      settings: shared, nextCheckAt: new Date(T0.getTime() + 60 * 60_000).toISOString(),
+    })]);
+    expect(followUp.scope).toMatchObject({ trigger: 'subscribe', maxItems: 20 });
+  });
+
+  it('recovers the backfill range from the accepted range when the Vault kept no shared settings', async () => {
+    const w = await world();
+    await acceptedBeforeConversion(w, { intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20 });
+    expect(w.channels.channels).toEqual([expect.objectContaining({ settings: { intervalMinutes: 30, backfillWindow: '3m', backfillMaxItems: 20 } })]);
   });
 });
 

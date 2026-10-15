@@ -50,7 +50,7 @@ describe('subscription settings conversion (A1)', () => {
         { ...row('UCc', false), settings, nextCheckAt: null, lastDispatchedAt: '2026-10-15T03:30:00.000Z' },
       ],
     });
-    expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: true });
+    expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: true, legacySettings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 } });
 
     const channels = await readFile(path.join(root, 'settings', 'youtube-channels.json'));
     const schedule = await readFile(path.join(root, 'settings', 'youtube-schedule.json'));
@@ -68,7 +68,8 @@ describe('subscription settings conversion (A1)', () => {
     await writeFile(path.join(root, 'settings', 'youtube-schedule.json'), JSON.stringify({ ...sharedSchedule, enabled: false, intervalMinutes: 15, backfillMaxItems: 5 }));
     expect(await new JsonChannelScheduleStore(root).load()).toEqual({ enabled: false });
     expect(await migrateSubscriptionSettings(root)).toBe(true);
-    expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: false });
+    // The leftover file still names the shared settings; they only serve jobs accepted before the conversion.
+    expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: false, legacySettings: { intervalMinutes: 15, backfillWindow: '2w', backfillMaxItems: 5 } });
     expect((await new JsonChannelStore(root).list())[0]!.settings).toEqual({ intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 });
   });
 

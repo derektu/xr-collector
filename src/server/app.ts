@@ -393,7 +393,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
       }
-      const settings = request.body.settings === undefined ? {} : parsePolicyPatch(request.body.settings);
+      const settings = request.body.settings === undefined ? {} : parsePolicyPatch(request.body.settings, { allowEmpty: true });
       return reply.code(202).send(await channels.addChannel(request.body.url, settings));
     });
 

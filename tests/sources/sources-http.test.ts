@@ -223,12 +223,13 @@ describe('per-subscription settings over HTTP (A5)', () => {
     await send('POST', '/api/youtube/channels', { url: '@gamma', settings: { backfillMaxItems: 20 } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
 
-    for (const settings of [{ intervalMinutes: 45 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { cadence: 30 }, {}, 'often']) {
+    for (const settings of [{ intervalMinutes: 45 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { cadence: 30 }, 'often']) {
       const rejected = await send('POST', '/api/youtube/channels', { url: '@beta', settings });
       expect(rejected.status).toBe(400);
       expect(rejected.body.error.code).toBe('invalid_request');
       expect((await send('PATCH', `/api/youtube/channels/${beta}`, { settings })).status).toBe(400);
     }
+    expect((await send('PATCH', `/api/youtube/channels/${beta}`, { settings: {} })).status).toBe(400);
     expect((await send('PATCH', `/api/youtube/channels/${beta}`, { color: 'red' })).status).toBe(400);
     expect((await send('PATCH', `/api/youtube/channels/${beta}`, {})).status).toBe(400);
 
@@ -248,6 +249,23 @@ describe('per-subscription settings over HTTP (A5)', () => {
     ]);
     const detail = (await w.get(`/api/sources/youtube/${beta}`)).body.source;
     expect(detail).toMatchObject({ settings, nextCheckAt: expect.any(String), lastCheckedAt: expect.any(String) });
+
+    // Concurrent changes to different settings of one subscription all persist.
+    const concurrent = await Promise.all([
+      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { intervalMinutes: 180 } }),
+      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillWindow: '6m' } }),
+      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillMaxItems: 50 } }),
+    ]);
+    expect(concurrent.map((answer) => answer.status)).toEqual([200, 200, 200]);
+    expect((await w.get(`/api/sources/youtube/${beta}`)).body.source.settings).toEqual({ intervalMinutes: 180, backfillWindow: '6m', backfillMaxItems: 50 });
+
+    // An empty settings object subscribes with the type's defaults.
+    const delta = w.source.addChannel('delta');
+    w.source.publish(delta, 'd', w.clock.now, [1]);
+    const defaults = await send('POST', '/api/youtube/channels', { url: '@delta', settings: {} });
+    expect(defaults.status).toBe(202);
+    await w.jobs.whenSettled((await w.jobs.whenSettled(defaults.body.job.id)).result!.followUpJobId!);
+    expect((await w.get(`/api/sources/youtube/${delta}`)).body.source.settings).toEqual({ intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 });
 
     // A resume and a settings change in one request backfill with the new range.
     const resumed = await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });

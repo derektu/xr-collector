@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { discoverChannelVideos } from '../channels/channel-discovery.js';
-import { backfillWindowStart, DEFAULT_POLICY } from '../channels/collection-policy.js';
+import { BACKFILL_WINDOWS, backfillWindowStart, DEFAULT_POLICY, isBackfillLimit } from '../channels/collection-policy.js';
 import type { ChannelStore } from '../channels/json-channel-store.js';
 import type { Collector } from '../core/collector.js';
 import {
   CollectorError,
+  type BackfillWindow,
   type ChannelJobScope,
   type ChannelJobTrigger,
   type CollectionJob,
@@ -67,6 +68,24 @@ export function backfillScope(trigger: ChannelJobTrigger, policy: CollectionPoli
   };
 }
 
+/**
+ * Settings recovered from a subscription job's accepted first-collection range: its item limit and
+ * the offered window nearest to its start, with the default interval. Anything the range does not
+ * show takes the default.
+ */
+export function settingsFromScope(scope: ChannelJobScope | undefined, acceptedAt: string): CollectionPolicy {
+  if (!scope || scope.mode !== 'backfill') return { ...DEFAULT_POLICY };
+  const accepted = new Date(acceptedAt);
+  const start = new Date(scope.windowStart).getTime();
+  const distance = (window: BackfillWindow) => Math.abs(backfillWindowStart(accepted, window).getTime() - start);
+  const backfillWindow = BACKFILL_WINDOWS.reduce((nearest, window) => (distance(window) < distance(nearest) ? window : nearest));
+  return {
+    intervalMinutes: DEFAULT_POLICY.intervalMinutes,
+    backfillWindow,
+    backfillMaxItems: isBackfillLimit(scope.maxItems) ? scope.maxItems : DEFAULT_POLICY.backfillMaxItems,
+  };
+}
+
 export interface JobManagerOptions {
   /** The Vault every job of this manager writes to. */
   vaultPath: string;
@@ -80,6 +99,11 @@ export interface JobManagerOptions {
   createId?: () => string;
   /** Starts a timer and returns its cancel function; retries wait through it. */
   setTimer?: (callback: () => void, ms: number) => () => void;
+  /**
+   * The shared settings a converted Vault gave its subscriptions; a subscription job accepted
+   * before the conversion carries no settings of its own and subscribes with these.
+   */
+  legacySettings?: () => Promise<CollectionPolicy | null>;
 }
 
 export interface JobListQuery {
@@ -712,7 +736,7 @@ export class JobManager {
     if (this.closed) return;
     if (existing && subscribing) {
       this.update(job, { source: { ...job.source, id: existing.id, title: existing.title } });
-      const scope = job.scope ?? backfillScope('subscribe', DEFAULT_POLICY, this.now());
+      const scope = job.scope ?? backfillScope('subscribe', existing.settings, this.now());
       const followUp = this.enqueueChannel(existing, scope);
       this.finish(job, 'completed', { outcome: 'created', channelId: existing.id, followUpJobId: followUp.job.id }, null);
       return;
@@ -729,7 +753,7 @@ export class JobManager {
     });
     await this.options.store.flush();
     // The first collection below is this subscription's first check; the next one is an interval later.
-    const settings = job.checkpoint?.settings ?? DEFAULT_POLICY;
+    const settings = await this.acceptedSettings(job);
     const now = this.now();
     const channel = await this.options.channels.add({
       ...resolved, enabled: true, addedAt: now.toISOString(), cursor: null, lastCheckedAt: null, backlog: false,
@@ -738,11 +762,22 @@ export class JobManager {
     });
     this.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`, sourceId: channel.id });
     this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
-    const scope = job.scope ?? backfillScope('subscribe', DEFAULT_POLICY, this.now());
+    const scope = job.scope ?? backfillScope('subscribe', settings, this.now());
     const followUp = this.enqueueChannel(channel, scope);
     this.finish(job, 'completed', {
       outcome: 'created', channelId: channel.id, followUpJobId: followUp.job.id,
     }, null);
+  }
+
+  /**
+   * The settings a subscription job subscribes with: the ones accepted with it, or for a job
+   * accepted before subscriptions had their own settings, the shared settings the Vault's
+   * conversion gave every other subscription, else what its accepted range shows.
+   */
+  private async acceptedSettings(job: CollectionJob): Promise<CollectionPolicy> {
+    if (job.checkpoint?.settings) return job.checkpoint.settings;
+    const legacy = await this.options.legacySettings?.();
+    return legacy ? { ...legacy } : settingsFromScope(job.scope, job.createdAt);
   }
 
   private async discoverChannel(job: CollectionJob): Promise<void> {

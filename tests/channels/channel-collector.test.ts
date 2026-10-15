@@ -33,6 +33,10 @@ class MemoryChannelStore implements ChannelStore {
     return this.update(id, { enabled });
   }
 
+  async updateWith(change: (channels: readonly YouTubeChannel[]) => Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
+    return this.updateMany(change(await this.list()));
+  }
+
   async updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
     const updated: YouTubeChannel[] = [];
     for (const [id, patch] of patches) {

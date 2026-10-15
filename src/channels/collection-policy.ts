@@ -40,17 +40,18 @@ export function isCollectionPolicy(value: unknown): value is CollectionPolicy {
 }
 
 /**
- * Reads a settings change from a request body: an object with any of the three settings and
- * nothing else. Throws `invalid_request` for other keys, other values or an empty object.
+ * Reads settings from a request body: an object with any of the three settings and nothing else.
+ * Throws `invalid_request` for other keys or other values, and for an empty object unless
+ * `allowEmpty`, where it means the source type's defaults.
  */
-export function parsePolicyPatch(value: unknown): Partial<CollectionPolicy> {
+export function parsePolicyPatch(value: unknown, options: { allowEmpty?: boolean } = {}): Partial<CollectionPolicy> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new CollectorError('invalid_request', '收集設定必須是 JSON 物件。');
   }
   const keys = Object.keys(value);
   const unknown = keys.find((key) => !POLICY_KEYS.has(key));
   if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-  if (keys.length === 0) throw new CollectorError('invalid_request', '請提供至少一個要修改的設定。');
+  if (keys.length === 0 && !options.allowEmpty) throw new CollectorError('invalid_request', '請提供至少一個要修改的設定。');
   const patch = value as Partial<CollectionPolicy>;
   assertPolicyPatch(patch);
   return patch;
