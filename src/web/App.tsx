@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { api } from './api-client.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
+import { YouTubeSource } from './YouTubeSource.js';
 import { createBrowserThemeStore, createElectronThemeStore, defaultTheme, pathForRoute, routeForPath, sourceRegistry, type ShellPage, type Theme, type ThemeStore } from './app-shell.js';
 
 const onboardingPreviewRequested = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'onboarding';
@@ -14,11 +15,12 @@ const navigation: Array<{ page: ShellPage; label: string; icon: string }> = [
 const pageTitles: Record<ShellPage, string> = { sources: '收集來源', documents: '文件', settings: '設定', activity: '活動記錄' };
 
 export function SourceView({ source }: { source: NonNullable<ReturnType<typeof sourceRegistry.open>> }) {
+  if (source.id === 'youtube') return <YouTubeSource />;
   return <section className="source-view" aria-label="目前來源" data-testid={`source-view-${source.id}`}><h3>{source.view.heading}</h3><p>{source.view.detail}</p></section>;
 }
 
 function PageContent({ page, activeSource, vaultPath, onOpenSource }: { page: ShellPage; activeSource: ReturnType<typeof sourceRegistry.open>; vaultPath: string | null; onOpenSource: (id: string) => void }) {
-  if (page === 'sources') return <><p className="eyebrow">SOURCES</p><p className="page-intro">從這裡管理可收集的來源。來源本身的操作會隨各自的功能票接入。</p><section className="source-grid" aria-label="來源清單">{sourceRegistry.publicSources().map((source) => <article className={`source-card ${source.availability}`} key={source.id} data-testid={`source-${source.id}`}><div className="source-card-heading"><h3>{source.label}</h3><span>{source.availability === 'available' ? '接入位置' : '尚未開放'}</span></div><p>{source.description}</p>{source.availability === 'available' ? <button type="button" onClick={() => onOpenSource(source.id)}>查看來源</button> : <button type="button" disabled>尚未開放</button>}</article>)}</section>{activeSource ? <SourceView source={activeSource} /> : null}</>;
+  if (page === 'sources') return <><p className="eyebrow">SOURCES</p><p className="page-intro">從這裡把來源內容加入知識庫。收集在背景執行，送出後可以繼續其他操作。</p><section className="source-grid" aria-label="來源清單">{sourceRegistry.publicSources().map((source) => <article className={`source-card ${source.availability}`} key={source.id} data-testid={`source-${source.id}`}><div className="source-card-heading"><h3>{source.label}</h3><span>{source.availability === 'available' ? '接入位置' : '尚未開放'}</span></div><p>{source.description}</p>{source.availability === 'available' ? <button type="button" onClick={() => onOpenSource(source.id)}>查看來源</button> : <button type="button" disabled>尚未開放</button>}</article>)}</section>{activeSource ? <SourceView source={activeSource} /> : null}</>;
   if (page === 'documents') return <Placeholder eyebrow="DOCUMENTS" title="文件" detail="文件列表、搜尋與閱讀器將由 #26 接入。此頁目前只提供固定的導覽與畫面容器。" />;
   if (page === 'activity') return <Placeholder eyebrow="ACTIVITY" title="活動記錄" detail="工作摘要與持久活動記錄將由 #29 接入。此頁不以示意資料冒充可查詢的活動。" />;
   return <><p className="eyebrow">SETTINGS</p><p className="page-intro">裝置設定與正式 Vault 資料保持分離。</p><section className="settings-grid" aria-label="設定區塊"><article className="setting-card" data-testid="settings-vault"><h3>知識庫</h3><p>目前使用的知識庫位置：</p><code className="setting-path">{vaultPath}</code><p className="source-note">搬移知識庫將由 #31 接入。</p></article><article className="setting-card"><h3>自動收集</h3><p>Global 收集政策將由 #27 接入。</p></article><article className="setting-card"><h3>外觀</h3><p>使用側欄控制切換深色或淺色主題。</p></article></section></>;
