@@ -16,6 +16,9 @@ import {
   type YouTubeChannel,
 } from '../core/types.js';
 
+/** Job states that end a channel job; the latest of these decides whether a subscription shows an error. */
+const FINISHED = new Set(['completed', 'failed', 'interrupted']);
+
 /** A channel preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;
 
@@ -72,20 +75,29 @@ export class ChannelCollector {
       if (!entry.latest || document.collectedAt > entry.latest) entry.latest = document.collectedAt;
       counts.set(document.publisher.id, entry);
     }
+    const history = this.jobs.channelJobs();
     return channels.map((channel) => {
       const job = this.jobs.activeChannelJob(channel.id);
       const totals = counts.get(channel.id);
+      const lastFinished = (history.get(channel.id) ?? []).find((candidate) => FINISHED.has(candidate.state));
+      const failed = channel.enabled && !job && lastFinished?.state === 'failed';
       return {
         ...channel,
         cursor: channel.cursor ?? null,
         lastCheckedAt: channel.lastCheckedAt ?? null,
         backlog: channel.backlog ?? false,
-        status: !channel.enabled ? 'paused' : job ? 'collecting' : 'tracking',
+        status: !channel.enabled ? 'paused' : job ? 'collecting' : failed ? 'error' : 'tracking',
+        lastError: failed ? lastFinished.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
         activeJob: job ? { id: job.id, done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,
       };
     });
+  }
+
+  /** Channel jobs of one subscription, newest first, as far back as the job history keeps them. */
+  channelJobs(id: string): CollectionJob[] {
+    return this.jobs.channelJobs().get(id) ?? [];
   }
 
   /** Resolves a channel address now and reports its subscription state and the policy a subscription would use. */

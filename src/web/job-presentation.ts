@@ -1,29 +1,5 @@
 import type { CollectionJob, JobPhase, JobState, SkipReason } from '../core/types.js';
-import { classifyYouTubeInput } from '../sources/youtube/url.js';
 import { channelJobLabel } from './subscription-presentation.js';
-
-export interface SubmitAction {
-  label: string;
-  enabled: boolean;
-  /** Why the input cannot be submitted; empty input has no reason. */
-  reason: string | null;
-}
-
-export interface YouTubeSubmitAction extends SubmitAction {
-  /** A channel address opens the subscription confirmation; a video address is collected at once. */
-  kind: 'video' | 'channel' | null;
-}
-
-/** The submit button follows the syntax of what was pasted, before anything is sent. */
-export function youtubeSubmitAction(input: string): YouTubeSubmitAction {
-  if (input.trim() === '') return { label: '加入', enabled: false, reason: null, kind: null };
-  try {
-    const kind = classifyYouTubeInput(input).kind;
-    return { label: kind === 'video' ? '收集影片' : '訂閱頻道', enabled: true, reason: null, kind };
-  } catch (error) {
-    return { label: '加入', enabled: false, reason: error instanceof Error ? error.message : '無法辨識這個網址。', kind: null };
-  }
-}
 
 const STATE_LABELS: Record<JobState, string> = {
   queued: '排隊中', running: '執行中', completed: '完成', failed: '失敗', interrupted: '已中斷',
@@ -85,8 +61,4 @@ export function jobResultLabel(job: CollectionJob): string | null {
   if (result.outcome === 'empty') return '沒有新影片';
   if (result.outcome === 'partial') return '部分影片收集失敗';
   return result.outcome === 'created' ? '收集完成' : '沒有新影片';
-}
-
-export function hasActiveJobs(jobs: CollectionJob[]): boolean {
-  return jobs.some((job) => job.state === 'queued' || job.state === 'running');
 }

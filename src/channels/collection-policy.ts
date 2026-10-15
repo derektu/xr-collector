@@ -86,3 +86,16 @@ export function publishedSince(value: string | null | undefined, start: Date | s
 export function catchUpThresholdMs(intervalMinutes: number): number {
   return Math.max(24 * HOUR_MS, 3 * intervalMinutes * 60_000);
 }
+
+const WINDOW_LABELS: Record<BackfillWindow, string> = { '1w': '1 週', '2w': '2 週', '1m': '1 個月', '3m': '3 個月', '6m': '6 個月' };
+
+/** Option label of a check interval, e.g. "30 分" or "每天". */
+export function intervalLabel(minutes: number): string {
+  if (minutes === 1440) return '每天';
+  if (minutes % 60 === 0) return `${minutes / 60} 小時`;
+  return `${minutes} 分`;
+}
+
+export function windowLabel(window: BackfillWindow): string {
+  return WINDOW_LABELS[window];
+}

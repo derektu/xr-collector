@@ -1,0 +1,137 @@
+import { useEffect, useState, type MouseEvent } from 'react';
+import type { ChannelSchedule, SourceDetail as Detail, SourceTypeInfo } from '../core/types.js';
+import { ApiError, api } from './api-client.js';
+import { ConfirmRemove } from './ConfirmRemove.js';
+import { readerPath } from './document-presentation.js';
+import { Icon } from './icons.js';
+import {
+  calendarDate,
+  displayUrl,
+  initials,
+  jobRecordLabel,
+  sharedPolicySummary,
+  shortTimeLabel,
+  sourceStatusLabel,
+} from './source-presentation.js';
+
+type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
+
+/** One source: its state, counts, recent documents and collection record, with pause, resume and remove. */
+export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onOpenDocuments, onOpenActivity, onOpenSettings, onChanged, onRemoved }: {
+  type: string;
+  id: string;
+  sourceTypes: SourceTypeInfo[];
+  schedule: ChannelSchedule | null;
+  revision: number;
+  onBack: () => void;
+  onOpenDocument: (documentId: string) => void;
+  onOpenDocuments: (source: string) => void;
+  onOpenActivity: () => void;
+  onOpenSettings: () => void;
+  onChanged: (message: string, tone?: 'ok' | 'error') => void;
+  onRemoved: (message: string) => void;
+}) {
+  const [state, setState] = useState<State>({ kind: 'loading' });
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api.sourceDetail(type, id, controller.signal).then((detail) => setState({ kind: 'ready', detail })).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      if (error instanceof ApiError && error.code === 'channel_not_found') setState({ kind: 'missing' });
+      else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個來源。' });
+    });
+    return () => controller.abort();
+  }, [type, id, revision]);
+
+  const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />來源</button>;
+  if (state.kind === 'loading') return <>{back}<p className="loading" role="status">正在讀取…</p></>;
+  if (state.kind === 'error') return <>{back}<p className="load-error" role="alert">{state.message}</p></>;
+  if (state.kind === 'missing') {
+    return <>{back}<section className="empty-state" data-testid="source-missing">
+      <h1 className="page-title" tabIndex={-1} data-page-heading>找不到這個來源</h1>
+      <p>這個來源可能已被移除。已收集的文件仍在文件頁。</p>
+    </section></>;
+  }
+
+  const { source, recentDocuments, recentJobs } = state.detail;
+  const paused = source.status === 'paused';
+  const typeInfo = sourceTypes.find((candidate) => candidate.id === source.type);
+
+  async function toggle(): Promise<void> {
+    setBusy(true);
+    try {
+      await api.setChannelEnabled(source.id, paused);
+      onChanged(paused ? `已恢復「${source.title}」，開始補收。` : `已暫停「${source.title}」。`);
+    } catch (error) {
+      onChanged(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openDocument(event: MouseEvent<HTMLAnchorElement>, documentId: string): void {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+    event.preventDefault();
+    onOpenDocument(documentId);
+  }
+
+  return <div className="source-detail" data-testid="source-detail">
+    {back}
+    <header className="detail-header">
+      <span className="avatar large" aria-hidden="true">{initials(source.title)}</span>
+      <div className="detail-heading">
+        <div className="detail-title-line">
+          <h1 className="page-title" tabIndex={-1} data-page-heading>{source.title}</h1>
+          <span className={`status-chip ${source.status}`}>{sourceStatusLabel(source)}</span>
+        </div>
+        <p className="detail-kind"><Icon name={typeInfo?.icon ?? 'file'} size={14} />{source.kindLabel} ·
+          <a href={source.url} target="_blank" rel="noopener noreferrer">{displayUrl(source.url)}</a></p>
+      </div>
+      <div className="header-actions">
+        <button type="button" className="button" disabled={busy} onClick={() => void toggle()} data-testid="detail-toggle">
+          <Icon name={paused ? 'play' : 'pause'} size={15} />{paused ? '恢復' : '暫停'}
+        </button>
+        <button type="button" className="button danger-outline" onClick={() => setRemoving(true)}>移除</button>
+      </div>
+    </header>
+
+    {source.status === 'error' && source.lastError ? <p className="detail-problem" role="alert">最近一次檢查失敗：{source.lastError.message}</p> : null}
+
+    <dl className="stats">
+      <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
+      <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</dd></div>
+      <div><dt>上次檢查</dt><dd>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
+      <div><dt>訂閱時間</dt><dd>{calendarDate(source.addedAt)}</dd></div>
+    </dl>
+
+    <section className="panel">
+      <div className="panel-heading"><h2>收集設定</h2></div>
+      <p className="panel-text" data-testid="detail-policy">{schedule ? sharedPolicySummary(schedule) : '正在讀取…'}所有 {typeInfo?.label ?? ''} 頻道共用<button type="button" className="inline-link" onClick={onOpenSettings}>自動收集設定</button>。</p>
+    </section>
+
+    <div className="detail-columns">
+      <section className="panel">
+        <div className="panel-heading"><h2>最近收集</h2><button type="button" className="inline-link" onClick={() => onOpenDocuments(`${source.type}:${source.id}`)}>在文件中查看全部</button></div>
+        {recentDocuments.length === 0 ? <p className="panel-text muted">還沒有收集到文件。</p>
+          : <ul className="plain-list">{recentDocuments.map((document) => <li key={document.id}>
+            <a href={readerPath(document.id)} onClick={(event) => openDocument(event, document.id)}><span className="title">{document.title}</span><span className="muted">{calendarDate(document.collectedAt).slice(5)}</span></a>
+          </li>)}</ul>}
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={onOpenActivity}>全部活動</button></div>
+        {recentJobs.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
+          : <ul className="plain-list records">{recentJobs.map((record) => {
+            const label = jobRecordLabel(record);
+            return <li key={record.id} className={record.state}>
+              <span className="title">{label.title}</span><span className="muted">{label.detail}</span>
+              {label.active && record.progress && record.progress.total > 0 ? <progress value={record.progress.done} max={record.progress.total} aria-label={`${label.title}進度`} /> : null}
+            </li>;
+          })}</ul>}
+      </section>
+    </div>
+
+    {removing ? <ConfirmRemove source={source} onCancel={() => setRemoving(false)} onRemoved={(message) => { setRemoving(false); onRemoved(message); }} /> : null}
+  </div>;
+}

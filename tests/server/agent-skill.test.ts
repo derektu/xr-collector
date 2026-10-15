@@ -45,6 +45,10 @@ describe('Agent Skill', () => {
       { method: 'GET', url: '/api/search/status' },
       { method: 'POST', url: '/api/youtube/channel-previews' },
       { method: 'PUT', url: '/api/youtube/schedule' },
+      { method: 'GET', url: '/api/source-types' },
+      { method: 'POST', url: '/api/url-recognitions' },
+      { method: 'GET', url: '/api/sources' },
+      { method: 'GET', url: '/api/sources/:type/:id' },
     ]));
     for (const route of routes) {
       expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);
@@ -72,5 +76,12 @@ describe('Agent Skill', () => {
       expect(skill).toContain(term);
     }
     expect(skill).not.toContain('1–10080');
+  });
+
+  it('documents the source list and URL recognition contract', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const term of ['`ready`', '`login_required`', '`unsupported`', '`unavailable`', '`collect`', '`subscribe`', '`resume`', 'unsubscribed', 'recentJobs', 'lastError', '`error`']) {
+      expect(skill).toContain(term);
+    }
   });
 });

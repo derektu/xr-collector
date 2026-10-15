@@ -9,7 +9,7 @@ const REFRESH_MS = 15_000;
 type Patch = Partial<CollectionPolicy & { enabled: boolean }>;
 
 /**
- * Settings card for the Global collection policy shared by every subscription. Each change saves
+ * Settings section for the Global collection policy shared by every subscription. Each change saves
  * at once; a failed save shows why and returns the controls to the stored values.
  */
 export function AutoCollectionCard() {
@@ -48,9 +48,9 @@ export function AutoCollectionCard() {
   }
 
   const times = schedule ? checkTimes(schedule) : null;
-  return <article className="setting-card auto-collection-card" data-testid="settings-auto-collection">
+  return <section className="settings-section auto-collection-card" data-testid="settings-auto-collection">
     <div className="setting-card-heading">
-      <h3>自動收集</h3>
+      <h2>自動收集</h2>
       {saveState ? <span className={`save-state ${saveState.tone}`} role={saveState.tone === 'error' ? 'alert' : 'status'}>{saveState.text}</span> : null}
     </div>
     {loadError ? <p className="documents-error">{loadError}</p> : null}
@@ -80,8 +80,8 @@ export function AutoCollectionCard() {
           </select>
         </span>
       </div>
-      <p className="source-note">所有訂閱共用這些設定。補收範圍用於新訂閱的首次收集、恢復訂閱，以及服務重新啟動或長時間沒有檢查之後；修改補收範圍不會重新回溯既有頻道。持續運作時，每次檢查都會收完上次之後的新內容。</p>
+      <p className="hint">所有訂閱共用這些設定。補收範圍用於新訂閱的首次收集、恢復訂閱，以及服務重新啟動或長時間沒有檢查之後；修改補收範圍不會重新回溯既有頻道。持續運作時，每次檢查都會收完上次之後的新內容。</p>
       <p className="policy-times" data-testid="auto-collection-times">下次檢查：{times.next}<br />上次檢查：{times.last}</p>
     </> : !loadError ? <p className="loading">正在讀取…</p> : null}
-  </article>;
+  </section>;
 }

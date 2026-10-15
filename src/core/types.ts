@@ -142,11 +142,17 @@ export interface YouTubeChannel {
   backlog?: boolean;
 }
 
-export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused';
+/**
+ * `error` marks an enabled subscription whose latest finished channel job failed and that has no
+ * job running; the next successful job returns it to `tracking`.
+ */
+export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
 
 /** A subscription as the Sources page and Agents read it. */
 export interface Subscription extends YouTubeChannel {
   status: SubscriptionStatus;
+  /** Why the latest channel job failed; set only while `status` is `error`. */
+  lastError: JobError | null;
   /** The channel collection job still queued or running, with its item progress. */
   activeJob: { id: string; done: number; total: number } | null;
   documentCount: number;
@@ -168,6 +174,103 @@ export interface ChannelPreview {
   /** The existing subscription for this channel, or null when it is not subscribed. */
   subscription: { enabled: boolean } | null;
   policy: CollectionPolicy & { enabled: boolean };
+}
+
+/** What one kind of address of a source type can do: collect a single item or subscribe to new ones. */
+export type SourceCapability = 'single' | 'subscription';
+
+export interface SourceKindInfo {
+  id: string;
+  /** Shown as the kind of a source row and a confirmation card, e.g. "YouTube 頻道". */
+  label: string;
+  capability: SourceCapability;
+  /** What one collected item is called, e.g. "影片". */
+  itemNoun: string;
+}
+
+export interface SourceSettingField {
+  key: keyof CollectionPolicy;
+  label: string;
+  options: Array<{ value: string | number; label: string }>;
+}
+
+/** The public part of a source type declaration; the UI builds entry, filters and icons from it. */
+export interface SourceTypeInfo {
+  id: DocumentSourceType;
+  label: string;
+  /** Key of the icon the UI draws for this type. */
+  icon: string;
+  kinds: SourceKindInfo[];
+  /** Collecting needs a signed-in account; such addresses are recognized but not resolved. */
+  requiresLogin: boolean;
+  /** Collection settings a subscription of this type uses. */
+  settings: SourceSettingField[];
+}
+
+export type RecognitionStatus = 'ready' | 'login_required' | 'unsupported' | 'unavailable';
+
+/** One step the recognized address offers, with the request that performs it. */
+export interface RecognitionAction {
+  id: 'collect' | 'subscribe' | 'resume';
+  label: string;
+  primary: boolean;
+  request: { method: 'POST' | 'PATCH'; path: string; body: Record<string, unknown> };
+}
+
+/** What a pasted address is and what can be done with it. */
+export interface UrlRecognition {
+  status: RecognitionStatus;
+  sourceType: DocumentSourceType | null;
+  kind: string | null;
+  kindLabel: string | null;
+  /** The address the actions use; the input as given when nothing recognized it. */
+  url: string;
+  /** The video or channel; a video's title is null because recognition does not contact the source. */
+  target: { id: string; title: string | null; url: string } | null;
+  /** The existing subscription of a recognized channel. */
+  subscription: { id: string; enabled: boolean } | null;
+  /** The settings a new subscription would use. */
+  policy: (CollectionPolicy & { enabled: boolean }) | null;
+  actions: RecognitionAction[];
+  login: { sourceType: DocumentSourceType; label: string; message: string } | null;
+  /** Why the address cannot be used, for `unsupported` and `unavailable`. */
+  message: string | null;
+}
+
+/** A subscription as one row of the source list. */
+export interface SourceEntry extends Subscription {
+  type: DocumentSourceType;
+  kind: string;
+  kindLabel: string;
+}
+
+export interface SourceList {
+  sources: SourceEntry[];
+  /** Documents that belong to no current subscription. */
+  unsubscribed: { documentCount: number; lastCollectedAt: string | null };
+  /** Number of subscriptions of each declared source type. */
+  types: Array<{ type: DocumentSourceType; count: number }>;
+}
+
+/** One channel job as a source's collection record. */
+export interface SourceJobRecord {
+  id: string;
+  state: JobState;
+  trigger: ChannelJobTrigger | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  progress: JobProgress | null;
+  outcome: JobOutcome | null;
+  error: JobError | null;
+}
+
+export interface SourceDetail {
+  source: SourceEntry;
+  /** Newest collected first, at most five. */
+  recentDocuments: DocumentMetadata[];
+  /** Newest first, at most five. */
+  recentJobs: SourceJobRecord[];
 }
 
 /** Why a channel job was started; it decides the labels and, with the cursor, the discovery mode. */

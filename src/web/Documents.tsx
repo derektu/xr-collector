@@ -17,6 +17,7 @@ import {
   type DocumentListState,
 } from './document-presentation.js';
 import { createLatestRequest } from './latest-request.js';
+import { Icon } from './icons.js';
 
 interface Row {
   document: DocumentMetadata;
@@ -35,13 +36,15 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, scroller, onState, onOpen, onNavigate }: {
+export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd }: {
   state: DocumentListState;
   /** The scrolling element whose position is saved before opening the Reader. */
   scroller: () => HTMLElement | null;
   onState: (state: DocumentListState) => void;
   onOpen: (id: string) => void;
-  onNavigate: (page: 'sources' | 'settings') => void;
+  onNavigate: (page: 'settings') => void;
+  /** Opens the Add Content dialog. */
+  onAdd: () => void;
 }) {
   const [draft, setDraft] = useState(state.query);
   const [sources, setSources] = useState<DocumentSources | null>(null);
@@ -127,23 +130,24 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate }: {
   const pages = totalPages(results?.total ?? 0);
   const emptyVault = sources?.total === 0;
 
+  const heading = <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>文件</h1></div>;
   if (emptyVault) {
     return <>
-      <p className="eyebrow">DOCUMENTS</p>
-      <section className="documents-empty" data-testid="documents-empty-vault">
-        <h3>知識庫裡還沒有文件</h3>
-        <p>從收集來源貼上 YouTube 影片或頻道網址，收集完成的字幕會出現在這裡。</p>
-        <button type="button" className="primary-button" onClick={() => onNavigate('sources')}>開始收集</button>
+      {heading}
+      <section className="empty-state" data-testid="documents-empty-vault">
+        <h2>知識庫裡還沒有文件</h2>
+        <p>貼上 YouTube 影片或頻道網址，收集完成的字幕會出現在這裡。</p>
+        <button type="button" className="button primary" onClick={onAdd}>加入內容</button>
       </section>
     </>;
   }
 
   return <>
-    <p className="eyebrow">DOCUMENTS</p>
+    {heading}
     <div className="documents-toolbar" role="search">
       <label className="search-field">
         <span className="visually-hidden">搜尋文件</span>
-        <span className="search-icon" aria-hidden="true">⌕</span>
+        <span className="search-icon" aria-hidden="true"><Icon name="search" size={15} /></span>
         <input
           type="search"
           value={draft}
@@ -156,7 +160,8 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate }: {
         {draft ? <button type="button" className="search-clear" aria-label="清除搜尋" onClick={() => { setDraft(''); onState({ ...state, query: '', page: 1 }); }}>×</button> : null}
       </label>
       <label className="source-select">
-        <span>來源</span>
+        <span className="visually-hidden">來源</span>
+        <Icon name="sources" size={15} />
         <select value={state.source} onChange={(event) => onState({ ...state, source: event.target.value, page: 1 })} data-testid="documents-source">
           <option value={options.all.value}>{options.all.label}</option>
           {options.groups.map((group) => <optgroup key={group.label} label={group.label}>

@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { SourceView } from '../../src/web/App.js';
 import {
   createBrowserThemeStore,
-  createSourceRegistry,
   defaultTheme,
   routeForPath,
   themeFromValue,
@@ -15,23 +11,10 @@ describe('App Shell routes', () => {
     expect(routeForPath('/')).toBe('sources');
     expect(routeForPath('/documents')).toBe('documents');
     expect(routeForPath('/settings/')).toBe('settings');
+    expect(routeForPath('/activity')).toBe('activity');
+    expect(routeForPath('/documents/youtube%3Aabc')).toBe('documents');
+    expect(routeForPath('/sources/youtube/UC123')).toBe('sources');
     expect(routeForPath('/not-a-page')).toBe('sources');
-  });
-});
-
-describe('source registry', () => {
-  it('keeps test-only sources out of the public Sources page', () => {
-    const registry = createSourceRegistry([
-      { id: 'youtube', label: 'YouTube', availability: 'available', view: { heading: 'YouTube source', detail: 'available' } },
-      { id: 'fixture', label: 'Fixture source', availability: 'test-only', view: { heading: 'Fixture source view', detail: 'opened through the registry' } },
-    ]);
-
-    expect(registry.publicSources()).toEqual([
-      { id: 'youtube', label: 'YouTube', availability: 'available', view: { heading: 'YouTube source', detail: 'available' } },
-    ]);
-    const fixture = registry.open('fixture');
-    expect(fixture).toMatchObject({ id: 'fixture', view: { heading: 'Fixture source view' } });
-    expect(renderToStaticMarkup(createElement(SourceView, { source: fixture!, onOpenSettings: () => undefined }))).toContain('Fixture source view');
   });
 });
 
