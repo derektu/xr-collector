@@ -222,7 +222,9 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       await next.manager.resume();
       return next;
     },
-    async events(): Promise<Array<{ eventType: string; jobId: string | null; errorCode?: string; attempt?: number; message: string }>> {
+    async events(): Promise<Array<{
+      eventType: string; jobId: string | null; errorCode?: string; attempt?: number; nextAttemptAt?: string; stopReason?: string; message: string;
+    }>> {
       await new Promise((resolve) => setTimeout(resolve, 0));
       const text = await readFile(path.join(directory, 'events.jsonl'), 'utf8').catch(() => '');
       return text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
@@ -277,6 +279,10 @@ describe('restart compatibility (R-T1)', () => {
     expect(g.manager.get('old-channel')).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: 'superseded' } });
     expect(w.script.discoveries).toBe(0);
     expect(running).not.toHaveProperty('checkpoint');
+    const resumed = (await w.events()).filter((event) => event.eventType === 'job.resumed');
+    expect(Object.fromEntries(resumed.map((event) => [event.jobId, event.stopReason]))).toEqual({
+      'running-video': 'crash', 'interrupted-video': 'unknown',
+    });
     await g.store.flush();
     const onDisk = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
     expect(onDisk.version).toBe(1);
@@ -302,6 +308,8 @@ describe('video jobs across restarts (R-T2)', () => {
     expect(events.filter((event) => event.jobId === first.job.id).map((event) => event.eventType)).toEqual(expect.arrayContaining([
       'job.accepted', 'job.started', 'job.interrupted', 'job.resumed', 'document.saved', 'job.completed',
     ]));
+    expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.resumed'))
+      .toMatchObject({ stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
   });
 
   it('only updates the index of a document saved before the restart', async () => {
@@ -350,6 +358,29 @@ describe('channel-add jobs across restarts (R-T3)', () => {
     expect(done.result).toMatchObject({ outcome: 'created', channelId: w.channels.channels[0]!.id });
     expect(followUp).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { created: 2 } });
     expect(w.channels.channels).toHaveLength(1);
+    expect(w.script.resolves).toBe(1);
+  });
+});
+
+describe('channel-add jobs and the first scheduled check (R-T3)', () => {
+  it('queues the first collection before the scheduler, so a check that is due at once joins it', async () => {
+    const w = await world();
+    w.channels.hangAfterAdd = true;
+    const g1 = await w.boot();
+    const adding = await g1.manager.submit('https://www.youtube.com/@duenow');
+    await vi.waitFor(() => expect(w.channels.channels).toHaveLength(1));
+    const subscribed = w.channels.channels[0]!;
+    w.script.channelVideos.set(subscribed.id, listed(3, 'q'));
+
+    await g1.store.flush();
+    const g2 = await w.boot((source) => { source.holdDiscovery = true; });
+    await g2.manager.resume();
+    // The scheduler starts right after resume; its first check is due at once.
+    const scheduled = await g2.manager.submitChannel(subscribed, { ...WIDE, trigger: 'scheduled', maxItems: 1 });
+    const added = g2.manager.get(adding.job.id);
+
+    expect(added).toMatchObject({ state: 'completed', result: { outcome: 'created', followUpJobId: scheduled.job.id } });
+    expect(scheduled).toMatchObject({ deduplicated: true, job: { scope: { trigger: 'subscribe', maxItems: 10 } } });
     expect(w.script.resolves).toBe(1);
   });
 });
@@ -474,7 +505,9 @@ describe('subscriptions that stopped (R-T5)', () => {
     const video = await g2.manager.whenSettled(claimed.job.id);
 
     expect(g2.manager.get(accepted.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: 'subscription_removed' } });
-    expect(video).toMatchObject({ state: 'completed', result: { outcome: 'created' }, claimedByUser: true });
+    expect(video).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(video).not.toHaveProperty('claimedByUser');
+    expect(g2.store.get(claimed.job.id)).toMatchObject({ claimedByUser: true });
     expect(w.channels.channels).toEqual([]);
   });
 });
@@ -497,7 +530,27 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' }, retry: { attempts: 1, nextAttemptAt: null } });
     expect(w.script.captures).toEqual([videoId(4), videoId(4)]);
     const retried = (await w.events()).find((event) => event.eventType === 'job.retry_scheduled');
-    expect(retried).toMatchObject({ jobId: accepted.job.id, errorCode: 'network_error', attempt: 1 });
+    expect(retried).toMatchObject({ jobId: accepted.job.id, errorCode: 'network_error', attempt: 1, nextAttemptAt: '2026-10-15T06:00:30.000Z' });
+  });
+
+  it('clears the wait from a channel item once its next attempt starts', async () => {
+    const w = await world();
+    const subscribed = channel('UC-item-retry');
+    w.channels.channels.push(subscribed);
+    w.script.channelVideos.set(subscribed.id, listed(1, 'i'));
+    const id = videoId(0, 'i');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
+    const accepted = await g.manager.submitChannel(subscribed, WIDE);
+    await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
+    g.source.release(id);
+    await vi.waitFor(() => expect(g.manager.get(accepted.job.id).items![0]!.retry?.nextAttemptAt).toBe('2026-10-15T06:00:30.000Z'));
+
+    g.fireTimers();
+    await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
+    expect(g.manager.get(accepted.job.id).items![0]).toMatchObject({ state: 'queued', retry: { attempts: 1, nextAttemptAt: null } });
+    g.source.release(id);
+    expect(await g.manager.whenSettled(accepted.job.id)).toMatchObject({ state: 'completed', progress: { created: 1 } });
   });
 
   it.each([
@@ -557,6 +610,8 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const g2 = await w.restart(g1);
     expect(g2.manager.get(failing.job.id)).toMatchObject({ state: 'queued', retry: { attempts: 2 }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(g2.timers.map((timer) => timer.ms)).toEqual([60_000]);
+    expect((await w.events()).find((event) => event.jobId === failing.job.id && event.eventType === 'job.resumed'))
+      .toMatchObject({ stopReason: 'shutdown', message: '服務正常關閉後重新啟動，接續收集工作。' });
     g2.fireTimers();
     const done = await g2.manager.whenSettled(failing.job.id);
 

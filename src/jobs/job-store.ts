@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { CollectionJob, JobEvent } from '../core/types.js';
+import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
 const JOBS_FILE = 'jobs.json';
 const EVENTS_FILE = 'events.jsonl';
@@ -66,7 +66,7 @@ export class JobStore {
     }
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
-      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { unclean: inStep(job) });
+      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inStep(job) });
     }
     if (stopped.length > 0) await store.flush();
     return store;
@@ -94,7 +94,7 @@ export class JobStore {
   }
 
   /** Marks an unfinished job interrupted, as a stopped service leaves it; the job resumes when its Vault opens. */
-  interrupt(job: CollectionJob, message: string, options: { unclean?: boolean } = {}): void {
+  interrupt(job: CollectionJob, message: string, options: { stop: JobStopKind; unclean?: boolean }): void {
     const timestamp = this.now().toISOString();
     const interrupted: CollectionJob = {
       ...job,
@@ -104,6 +104,7 @@ export class JobStore {
         uncleanStops: (job.recovery?.uncleanStops ?? 0) + (options.unclean ? 1 : 0),
         lastInterruptedAt: timestamp,
         lastResumedAt: job.recovery?.lastResumedAt ?? null,
+        lastStop: options.stop,
       },
       finishedAt: timestamp,
       updatedAt: timestamp,

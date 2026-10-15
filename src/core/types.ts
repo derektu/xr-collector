@@ -332,7 +332,11 @@ export interface JobRecovery {
   uncleanStops: number;
   lastInterruptedAt: string;
   lastResumedAt: string | null;
+  /** How the service stopped last time: closed normally or ended abnormally. Absent for jobs stopped before this was recorded. */
+  lastStop?: JobStopKind;
 }
+
+export type JobStopKind = 'shutdown' | 'crash';
 
 /** What a restart needs to continue a job without repeating finished steps. Internal to the service. */
 export interface JobCheckpoint {
@@ -443,6 +447,10 @@ export interface JobEvent {
   errorCode?: string;
   /** The failed attempt a retry event follows. */
   attempt?: number;
+  /** When a retried job starts its next attempt. */
+  nextAttemptAt?: string;
+  /** Why a resumed job stopped: a normal shutdown, an abnormal end, or `unknown` for a stop recorded without it. */
+  stopReason?: JobStopKind | 'unknown';
   documentId?: string;
   sourceId?: string;
 }
