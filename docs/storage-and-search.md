@@ -13,6 +13,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | Meilisearch database | 裝置上的搜尋資料目錄；不納入 Vault 資料包 |
 | profile、Agent 連線檔與 token | 裝置資料；不納入 Vault 資料包 |
 | active Vault 選址 | profile 的 `vault-selection.json`；裝置資料 |
+| 收集工作與事件 | profile 的 `jobs/jobs.json`、`jobs/events.jsonl`；裝置資料，不納入 Vault 資料包 |
 | 合併 journal 與合併前備份 | Vault 旁的操作資料，供失敗恢復使用 |
 
 現行資料使用 Markdown／JSON 與檔案系統，不以 Git 歷史或同步 server 協調 Vault 寫入。同一個 Vault 只由一個程式寫入，外部同步工具不提供多機並行寫入的一致性保證。
