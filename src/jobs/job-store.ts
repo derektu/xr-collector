@@ -49,9 +49,16 @@ export class JobStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     if (contents !== null) {
-      const parsed = JSON.parse(contents) as Partial<JobsFile>;
-      if (parsed.version !== FILE_VERSION || !Array.isArray(parsed.jobs)) throw new Error('Invalid collection jobs file');
-      for (const job of parsed.jobs) store.jobs.set(job.id, job);
+      const jobs = parseJobs(contents);
+      if (jobs) {
+        for (const job of jobs) store.jobs.set(job.id, job);
+      } else {
+        // An unreadable record must not keep the service from starting; it is set aside for diagnosis.
+        const target = path.join(directory, JOBS_FILE);
+        const corrupt = `${target}.corrupt-${now().toISOString().replace(/[:.]/gu, '-')}`;
+        await rename(target, corrupt);
+        console.error(`Collection jobs file is unreadable; moved it to ${corrupt} and started with no job history`);
+      }
     }
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
@@ -160,4 +167,17 @@ export class JobStore {
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     for (const job of finished.slice(0, Math.max(0, finished.length - FINISHED_JOB_LIMIT))) this.jobs.delete(job.id);
   }
+}
+
+function parseJobs(contents: string): CollectionJob[] | null {
+  let parsed: Partial<JobsFile>;
+  try {
+    parsed = JSON.parse(contents) as Partial<JobsFile>;
+  } catch {
+    return null;
+  }
+  if (!parsed || parsed.version !== FILE_VERSION || !Array.isArray(parsed.jobs)) return null;
+  const valid = parsed.jobs.every((job) => job && typeof job === 'object' && typeof job.id === 'string'
+    && typeof job.vaultPath === 'string' && typeof job.state === 'string');
+  return valid ? parsed.jobs : null;
 }
