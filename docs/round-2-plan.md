@@ -53,7 +53,7 @@
 |---|---|---|
 | 共用導覽與外觀 | #19 | 收集來源、文件、設定、活動記錄四個入口；深淺色與最小視窗的呈現 |
 | 首次設定與重新選擇目錄 | #20 | 建立或開啟知識庫、目錄檢查及無法開啟時的處理。設計方向為先選目錄，再以單一按鈕顯示「建立知識庫」或「開啟知識庫」，具體行為在本票確認 |
-| 收集來源與訂閱 | #19、#27 | URL 辨識後的操作、訂閱說明、共用自動收集設定，以及暫停／恢復／移除訂閱 |
+| 收集來源與訂閱 | #19、#27、#52、#53 | URL 辨識後的操作、訂閱說明、共用自動收集設定，以及暫停／恢復／移除訂閱 |
 | 收集進度與活動記錄 | #18、#28、#29 | 如何查看目前工作、切頁後回到工作、理解失敗原因及重試結果 |
 | 文件、搜尋與閱讀 | #26 | 依頻道篩選、搜尋結果、日期標示、返回位置、Markdown 排版，以及沒有資料或搜尋不可用時的呈現 |
 | 刪除文件 | #17 | 確認內容、處理中與結果，以及從閱讀頁刪除後的去向 |
@@ -336,6 +336,8 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | [#18](https://github.com/derektu/xr-collector/issues/18) | 非同步收集工作、進度與有界派工 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#20](https://github.com/derektu/xr-collector/issues/20) | 來源頁 URL 提交、工作進度／結果與 jobs API；同時操作另一頻道或瀏覽文件。 |
 | [#26](https://github.com/derektu/xr-collector/issues/26) | 文件列表、搜尋與 Markdown 閱讀 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#18](https://github.com/derektu/xr-collector/issues/18) | 文件／搜尋頁、Reader、設定索引狀態與相同 list／read／search API。 |
 | [#27](https://github.com/derektu/xr-collector/issues/27) | 頻道訂閱、Global 設定與補收政策 | [#18](https://github.com/derektu/xr-collector/issues/18) | 來源頁訂閱清單、確認摘要、暫停／恢復、設定頁 Global 控制與相關 API。 |
+| [#52](https://github.com/derektu/xr-collector/issues/52) | 介面改版：導覽、來源管理與加入內容 | [#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27) | 側欄、來源頁、來源詳情、加入內容（貼網址）、文件與閱讀新版面及網址辨識 API。 |
+| [#53](https://github.com/derektu/xr-collector/issues/53) | 每個來源各自的收集設定 | [#27](https://github.com/derektu/xr-collector/issues/27)、[#52](https://github.com/derektu/xr-collector/issues/52) | 訂閱確認卡與來源詳情的收集設定、來源頁總開關、相關 API 與資料包。 |
 | [#28](https://github.com/derektu/xr-collector/issues/28) | 收集中斷接續與有限次重試 | [#18](https://github.com/derektu/xr-collector/issues/18)、[#27](https://github.com/derektu/xr-collector/issues/27) | 同一 job 在服務重啟前後的進度與結果、來源頁結果、對應 API 及持久證據。 |
 | [#29](https://github.com/derektu/xr-collector/issues/29) | 活動記錄、工作查詢與 30 天保留 | [#19](https://github.com/derektu/xr-collector/issues/19)、[#28](https://github.com/derektu/xr-collector/issues/28) | 活動頁、來源頁「查看此次工作」、Agent jobs／activity 查詢。 |
 | [#17](https://github.com/derektu/xr-collector/issues/17) | 刪除文件、避免抓回與明確重新收集 | [#26](https://github.com/derektu/xr-collector/issues/26)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29) | 文件列表／Reader 的刪除與重收結果、搜尋、Agent delete／read／search 及後續頻道抓取。 |
@@ -346,7 +348,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | [#34](https://github.com/derektu/xr-collector/issues/34) | 三平台安裝包與可重現簽署建置 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22) | 三平台實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄簽署與架構。 |
 | [#35](https://github.com/derektu/xr-collector/issues/35) | 版本 Release 與免登入下載來源 | [#34](https://github.com/derektu/xr-collector/issues/34) | GitHub Release 頁與另定的匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。 |
 | [#36](https://github.com/derektu/xr-collector/issues/36) | 自動／手動檢查與使用者觸發更新 | [#35](https://github.com/derektu/xr-collector/issues/35)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33) | 設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。 |
-| [#10](https://github.com/derektu/xr-collector/issues/10) | 三平台整體交付與截圖驗收 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#23](https://github.com/derektu/xr-collector/issues/23)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#21](https://github.com/derektu/xr-collector/issues/21)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29)、[#17](https://github.com/derektu/xr-collector/issues/17)、[#30](https://github.com/derektu/xr-collector/issues/30)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33)、[#34](https://github.com/derektu/xr-collector/issues/34)、[#35](https://github.com/derektu/xr-collector/issues/35)、[#36](https://github.com/derektu/xr-collector/issues/36) | 最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
+| [#10](https://github.com/derektu/xr-collector/issues/10) | 三平台整體交付與截圖驗收 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#23](https://github.com/derektu/xr-collector/issues/23)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#21](https://github.com/derektu/xr-collector/issues/21)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27)、[#52](https://github.com/derektu/xr-collector/issues/52)、[#53](https://github.com/derektu/xr-collector/issues/53)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29)、[#17](https://github.com/derektu/xr-collector/issues/17)、[#30](https://github.com/derektu/xr-collector/issues/30)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33)、[#34](https://github.com/derektu/xr-collector/issues/34)、[#35](https://github.com/derektu/xr-collector/issues/35)、[#36](https://github.com/derektu/xr-collector/issues/36) | 最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
 
 ### 6.3 既有 tickets 的責任接續
 
@@ -536,6 +538,43 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 **責任分工**：自動續跑及錯誤重試由 #28；本票負責「新一輪要發現哪些項目」，不改已接受工作的範圍。
 
 **開工時收斂**：月份／時區／發布日期邊界、休眠或長期斷網的補收判定、發現游標、設定上限、停用與排隊工作的收斂。 詳細驗收計畫於本票實作前依 6.1 擬定。
+
+#### [#52](https://github.com/derektu/xr-collector/issues/52) 介面改版：導覽、來源管理與加入內容
+
+**成果**：使用者從同一個「加入內容」入口貼上網址加入內容，在一張來源清單看到所有來源的狀態並進入各來源的詳情；來源類型增加時，入口、清單與篩選不需要重新設計。
+
+**依賴**：#26、#27。
+
+**範圍**：
+
+- 側欄「加入內容」與來源、文件、活動、設定導覽；來源頁單一清單、依來源類型篩選；來源詳情頁。
+- 加入內容對話框分貼網址、加入檔案、寫新文件；本票開放貼網址，服務辨識網址並回傳可做的動作。
+- 來源類型宣告認得的網址、能力、是否需要登入與收集設定欄位，UI 依宣告產生。
+- 各頁移除開發說明文字；畫面依設計畫布 [XR Collector UI Redesign](https://claude.ai/artifact/JxrwCYd63oDwMqiciaPqzF)。
+
+**驗收介面**：側欄、來源頁、來源詳情、加入內容（貼網址）、文件與閱讀新版面及網址辨識 API。
+
+**責任分工**：每個來源的收集設定由 #53；活動頁 #29、刪除 #17、主題切換 #42、登入 #13。
+
+**開工時收斂**：來源類型宣告的形狀、網址辨識 API 回應、「單篇收集」列的範圍、來源詳情路由。 詳細驗收計畫於本票實作前依 6.1 擬定。
+
+#### [#53](https://github.com/derektu/xr-collector/issues/53) 每個來源各自的收集設定
+
+**成果**：每個可定期收集的來源各自設定檢查頻率與補收範圍，訂閱前可調整，訂閱後在來源詳情修改。
+
+**依賴**：#27、#52。
+
+**範圍**：
+
+- 收集設定改為每個訂閱各自保存在 Vault，欄位由來源類型宣告；既有 Vault 把全域設定複製到每個訂閱。
+- 訂閱確認卡可調整；來源詳情修改後自動儲存，可套用到所有同類來源；總開關在來源頁標題列，設定頁不再有自動收集區塊。
+- 排程依各訂閱頻率計算；已接受工作沿用範圍快照；匯出／還原／合併與 Agent API 改為每個訂閱的設定。
+
+**驗收介面**：訂閱確認卡與來源詳情的收集設定、來源頁總開關、相關 API 與資料包。
+
+**責任分工**：中斷接續與重試由 #28；本票只決定新一輪檢查使用哪個訂閱的設定。
+
+**開工時收斂**：設定存放位置與格式版本、全域設定轉換的時機與冪等、套用到同類來源時對暫停中來源的處理、各來源頻率不同時的排程與合併派工。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
 #### [#28](https://github.com/derektu/xr-collector/issues/28) 收集中斷接續與有限次重試
 
@@ -734,7 +773,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **成果**：使用者只看有索引的驗收截圖即可確認可視流程，三個平台有真實可追溯的交付結果。
 
-**依賴**：#25、#23、#19、#22、#21、#20、#18、#26、#27、#28、#29、#17、#30、#31、#32、#33、#34、#35、#36。
+**依賴**：#25、#23、#19、#22、#21、#20、#18、#26、#27、#52、#53、#28、#29、#17、#30、#31、#32、#33、#34、#35、#36。
 
 **範圍**：
 
