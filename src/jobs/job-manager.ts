@@ -10,6 +10,7 @@ import {
   type ChannelJobTrigger,
   type CollectionJob,
   type CollectionPolicy,
+  isRetryable,
   type JobError,
   type JobItem,
   type JobKind,
@@ -279,10 +280,11 @@ export class JobManager {
 
   /**
    * Retries a failed top-level job at the user's request with a new job and a fresh attempt budget.
-   * A video is collected again, a subscription request subscribes with the settings it was accepted
-   * with, and a channel job checks its subscription now from the subscription's own progress. The
-   * new job records `retryOf`, the failed one `retriedBy`; an active job of the same target is
-   * returned as a duplicate instead.
+   * A video is collected again and a subscription request subscribes with the settings it was
+   * accepted with. A channel job whose discovery failed checks its subscription now; one that
+   * recorded videos, failed or completed with some of them failing, collects those failed videos
+   * again. The new job records `retryOf`, the earlier one `retriedBy`; an active job of the same
+   * target is returned as a duplicate instead.
    */
   async retry(id: string): Promise<JobSubmission> {
     const job = this.options.store.get(id);
@@ -290,7 +292,7 @@ export class JobManager {
     if (job.parentId !== null) {
       throw new CollectorError('job_not_retryable', '頻道收集中的影片隨頻道工作處理，請重試頻道工作。');
     }
-    if (job.state !== 'failed') throw new CollectorError('job_not_retryable', '只有失敗的工作可以重試。');
+    if (!isRetryable(job)) throw new CollectorError('job_not_retryable', '只有失敗或有影片失敗的工作可以重試。');
     if (job.retriedBy) throw new CollectorError('job_not_retryable', '這個工作已經重試過，請查看重試的工作。');
     let submission: JobSubmission;
     if (job.kind === 'youtube.video') {
@@ -300,6 +302,17 @@ export class JobManager {
       submission = this.enqueue('youtube.channel-add', jobKey(job), { id: null, url: job.source.url, title: null }, null, {
         scope: backfillScope('subscribe', settings, this.now()), checkpoint: { settings: { ...settings } }, retryOf: job.id,
       });
+    } else if (job.items && job.items.length > 0) {
+      const retryItems = job.items.filter((item) => item.state === 'failed')
+        .map((item) => ({ sourceId: item.sourceId, title: item.title, url: item.url }));
+      if (retryItems.length === 0) throw new CollectorError('job_not_retryable', '這個工作沒有失敗的影片。');
+      const stopped = await this.subscriptionStopped(job.source.id!);
+      if (stopped === 'subscription_removed') throw new CollectorError('channel_not_found', '找不到這個 YouTube 頻道訂閱。');
+      if (stopped) throw new CollectorError('channel_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
+      const scope = { ...(job.scope ?? backfillScope('manual', DEFAULT_POLICY, this.now())), trigger: 'manual' as const };
+      submission = this.enqueue('youtube.channel', `channel:${job.source.id}`, {
+        id: job.source.id, url: job.source.url, title: job.source.title,
+      }, null, { scope, checkpoint: { retryItems }, retryOf: job.id });
     } else {
       if (!this.options.checkChannel || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
       submission = await this.options.checkChannel(job.source.id);
@@ -856,9 +869,15 @@ export class JobManager {
     };
     // Jobs accepted before scopes existed collect like a first subscription with the default policy.
     const scope = job.scope ?? backfillScope('scheduled', DEFAULT_POLICY, new Date(job.createdAt));
-    const discovery = await discoverChannelVideos(
-      this.options.source, channel, scope, async (videoId) => (await this.options.documents.findExisting(videoId)) !== null,
-    );
+    const retryItems = job.checkpoint?.retryItems;
+    const discovery = retryItems
+      ? {
+        videos: retryItems.map((item) => ({ id: item.sourceId, title: item.title, url: item.url })),
+        cursor: null, backlog: false, publishedNotBefore: null,
+      }
+      : await discoverChannelVideos(
+        this.options.source, channel, scope, async (videoId) => (await this.options.documents.findExisting(videoId)) !== null,
+      );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
     const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptionStopped(channel.id);
@@ -890,7 +909,8 @@ export class JobManager {
       at: this.now().toISOString(),
       cursor: discovery.cursor && allAccepted ? discovery.cursor : null,
       backlog: discovery.backlog && allAccepted,
-      cursorSaved: false,
+      // A retry of earlier videos leaves the subscription cursor where it is.
+      cursorSaved: Boolean(retryItems),
     };
     this.update(job, { phase: 'capture', items, progress: progressOf(items), checkpoint: { ...job.checkpoint, discovered } });
     this.event(job, {
@@ -900,6 +920,10 @@ export class JobManager {
     await this.options.store.flush();
     if (this.stoppedJobs.has(job.id)) {
       // Stopped while its videos were being recorded; a later job owns the subscription and its cursor.
+      this.completeChannelIfDone(job);
+      return;
+    }
+    if (retryItems) {
       this.completeChannelIfDone(job);
       return;
     }
@@ -1106,3 +1130,4 @@ function errorDetails(error: unknown): JobError {
   if (error instanceof CollectorError) return { code: error.code, message: limitText(redact(error.message), 500, 'head') };
   return { code: 'capture_failed', message: '收集失敗，請稍後再試。' };
 }
+

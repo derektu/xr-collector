@@ -67,14 +67,20 @@ Authorization: Bearer <token>
 - 服務停止或異常結束時，未完成的工作在 Vault 再次開啟時自動接續，不需要重新提交：沿用原本接受的範圍，已保存的文件不重新下載，只補搜尋索引，已完成的影片不重做。接續後的工作有 `recovery`：`resumedCount`（接續次數）、`uncleanStops`（異常結束時正在執行步驟的次數）、`lastInterruptedAt`、`lastResumedAt`。`interrupted` 只出現在等待所屬 Vault 再次開啟的工作。接續時訂閱已暫停或移除的頻道工作結束為 `skipped`，不會重新啟用訂閱；同一工作在執行中異常結束達 3 次時不再接續，結束為 `failed`，`error.code` 為 `interrupted_repeatedly`，可重新提交。
 - 暫時性錯誤（`network_error`，包含 YouTube 限制連線頻率）會自動重試，每個工作最多嘗試 3 次，失敗後先等 30 秒，再等 2 分鐘。等待期間 `state` 為 `queued`，`retry` 含 `attempts`（已失敗次數）、`maxAttempts`、`nextAttemptAt`（下次嘗試時間，執行中或用完時為 null）與 `lastError`；頻道工作的 `items[].retry` 同步顯示各影片的重試狀態。次數在服務重啟後延續。用完次數後工作結束為 `failed`，`error.message` 附上已嘗試次數。
 - `GET /api/jobs` 列出目前 Vault 的上層工作，新到舊，query：`state`（`active` 或 `all`）、`limit`（1–100，預設 20）、`cursor`（上一頁的 `nextCursor`）。頻道工作派出的影片工作出現在該頻道工作的 `items`，不另列在上層。工作查詢在 Vault 合併期間仍可讀。`GET /api/jobs/summary?since=<ISO 時間>` 回傳 `summary`：`active`（排隊或執行中）、`completed`（`since` 之後完成）、`failed`（`since` 之後失敗且尚未重試）；`since` 須帶時區，例如使用者本地當天零點。
-- `POST /api/jobs/:id/retry` 依使用者要求重試失敗的上層工作，回傳 202 `{"job":{...},"deduplicated":...}`。重試建立新工作，嘗試次數重新計算：影片重新收集；新增訂閱以原本接受的設定重新解析與訂閱；頻道工作立即檢查該訂閱，從訂閱目前的進度發現影片。新工作的 `retryOf` 指向原工作，原工作的 `retriedBy` 指向新工作；同一目標已有排隊或執行中的工作時回傳該工作並標示 `deduplicated: true`。非 `failed`、已重試過或頻道工作派出的影片工作回 409 `job_not_retryable`；訂閱已暫停回 409 `channel_paused`，已移除回 404 `channel_not_found`。自動重試由服務處理，等待重試中的工作不需要手動重試。
+- `POST /api/jobs/:id/retry` 依使用者要求重試上層工作，回傳 202 `{"job":{...},"deduplicated":...}`。可重試的是 `state` 為 `failed` 的上層工作，以及 `result.outcome` 為 `partial`（完成但有影片失敗）的頻道工作。重試建立新工作，嘗試次數重新計算：
+  - 影片：重新收集。
+  - 新增訂閱：以原本接受的設定重新解析與訂閱。
+  - 頻道工作，探索影片時就失敗（`items` 為 null）：立即檢查該訂閱，從訂閱目前的進度發現影片。
+  - 頻道工作，已列出影片（`items` 有內容）：新的頻道工作只重新收集原工作 `items` 中 `state` 為 `failed` 的影片，不重新探索、不移動訂閱進度，也不套用補收的發布時間範圍。
+
+  新工作的 `retryOf` 指向原工作，原工作的 `retriedBy` 指向新工作；同一目標已有排隊或執行中的工作時回傳該工作並標示 `deduplicated: true`。頻道工作派出的單支影片（`parentId` 不為 null）回 409 `job_not_retryable`，它的失敗由重試所屬的頻道工作重新收集；不可重試的狀態與已重試過的工作也回 409 `job_not_retryable`。訂閱已暫停回 409 `channel_paused`，已移除回 404 `channel_not_found`。自動重試由服務處理，等待重試中的工作不需要手動重試。
 - 活動記錄是裝置上的持久事件，保留最近 30 天，到期自動清除；未完成工作的接續資料不受清除影響。`GET /api/activity` 回傳 `events`（新到舊）、`nextCursor`、`retentionDays`、`log`。query：`severity`（`info`、`warning`、`error`，逗號多選）、`eventType`（逗號多選）、`jobId`（含該工作派出的影片與重試它的工作）、`subscriptionId`（頻道 ID）、`since`／`until`（帶時區的 ISO 時間，`until` 不含）、`limit`（1–100，預設 50）、`cursor`（上一頁的 `nextCursor`，篩選條件須相同，否則 400）。範圍是目前 Vault 與不屬於任何 Vault 的事件；尚未設定 Vault 時回傳裝置上全部事件。活動查詢在 Vault 合併期間與 Not Ready 時仍可讀。
 - 事件欄位：`eventId`、`timestamp`、`severity`、`eventType`、`message`、`vaultPath`、`jobId`，以及依事件附上的 `phase`、`outcome`、`skipReason`、`errorCode`、`detail`（外部工具輸出的結尾，已遮蔽並限長）、`attempt`、`nextAttemptAt`、`stopReason`、`documentId`、`sourceId`、`sourceTitle`、`subscriptionId`、`parentJobId`、`trigger`、`retryOf`。`severity` 表示嚴重程度，`outcome` 表示結果，兩者分開判讀：略過是 `info` 加 `outcome: skipped`。常見 `eventType`：`job.accepted`、`job.started`、`channel.discovered`、`document.saved`、`document.index_failed`、`job.retry_scheduled`、`job.completed`、`job.failed`、`job.interrupted`、`job.resumed`、`job.retry_requested`、`subscription.*`、`schedule.updated`、`schedule.dispatched`、`schedule.failed`、`vault.exported`、`vault.restored`、`vault.merged`、`vault.transfer_failed`。記錄中的 token、cookie、Authorization 與帶密鑰的網址參數會顯示為 `[已遮蔽]`。
 - `log` 與 `GET /api/health` 的 `activityLog` 回報記錄狀態：`state`（`ok`／`failing`）、`pending`（等待補寫的筆數）、`dropped`（等待過多而遺失的筆數）、`lastFailureAt`、`lastError`、`skippedLines`（無法讀取的行數）。`failing` 時事件仍保留在記憶體並自動補寫，查詢仍會回傳；有遺失時相關工作帶 `activityIncomplete: true`，代表該工作的記錄不完整，工作狀態本身仍正確。
 - `POST /api/search/rebuild` 重建可衍生索引。呼叫後以搜尋狀態確認結果；Vault 文件仍是正式資料。
 - Vault export 回傳 `application/octet-stream`；restore、merge preview 接受同類資料包。Restore 與 merge apply 回傳 202 後，以 `GET /api/vault/status` 追蹤。Merge 必須先 preview，再逐項提供 choice；cancel 不寫入資料。資料包路徑由使用者或本機工具明確提供，不把內容或 token 送往外部服務。
 - GET 無法連線、逾時或 401 `unauthorized`：依連線流程重新讀取及驗證一次。寫入送出後斷線或逾時時先依第 5 步查狀態，避免重複操作。這些是本機工具錯誤，不是 API 回傳碼。
-- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `channel_not_found`／`job_not_found`：重新取得目前頻道或工作列表。409 `job_not_retryable`：工作不是可重試的失敗工作，查看它的 `retriedBy` 或重新取得工作列表。409 `channel_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_channel`：依參數或網址格式修正請求；400 `unsupported_url`：播放清單不支援，請改用單支影片網址。409 `vault_busy`：等待目前收集或資料交換完成後重試；有排隊或執行中的收集工作時，Vault 匯出、還原與合併都會回 409。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。
+- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `channel_not_found`／`job_not_found`：重新取得目前頻道或工作列表。409 `job_not_retryable`：工作不可重試，查看它的 `retriedBy`；頻道底下的影片改為重試它的 `parentId` 頻道工作。409 `channel_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_channel`：依參數或網址格式修正請求；400 `unsupported_url`：播放清單不支援，請改用單支影片網址。409 `vault_busy`：等待目前收集或資料交換完成後重試；有排隊或執行中的收集工作時，Vault 匯出、還原與合併都會回 409。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。
 - 工作的 `error.code` 沿用擷取錯誤：`no_subtitles`、`video_unavailable` 為來源本身的結果，重試通常不會改變；`network_error` 表示自動重試已用完，`capture_failed` 不自動重試，兩者都可稍後以 `POST /api/jobs/:id/retry` 重試。
 - 503 `vault_not_ready`：尚未設定 Vault，或先前選擇的 Vault 無法使用。依「Vault 設定」處理，不要自行建立替代路徑或重試寫入。
 - 422 `vault_invalid`：目錄不能建立或開啟為知識庫，`message` 說明原因。請使用者改選目錄，不要修改目錄內容。409 `vault_already_set`：已經有使用中的知識庫，不需再設定。
@@ -131,7 +137,7 @@ Authorization: Bearer <token>
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
 | `GET /api/jobs/summary` | query `since`（帶時區的 ISO 時間）；回傳 `summary` |
 | `GET /api/jobs/:id` | 回傳 `job`，查到 `completed` 或 `failed` |
-| `POST /api/jobs/:id/retry` | 重試失敗的上層工作；202 回傳 `job`、`deduplicated` |
+| `POST /api/jobs/:id/retry` | 重試失敗的上層工作或有影片失敗的頻道工作；202 回傳 `job`、`deduplicated` |
 | `GET /api/activity` | query `severity`、`eventType`、`jobId`、`subscriptionId`、`since`、`until`、`limit`、`cursor`；回傳 `events`、`nextCursor`、`retentionDays`、`log` |
 | `POST /api/youtube/channel-previews` | `{"url":"..."}`；同步解析，回傳 `preview` |
 | `GET`／`POST /api/youtube/channels` | 訂閱列表（含設定、狀態與文件數）；訂閱 body `{"url":"...","settings":{...}}`（`settings` 可省略或為 `{}`），202 回傳 `youtube.channel-add` 工作 |
