@@ -1,0 +1,212 @@
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import type { DocumentMetadata, DocumentSources } from '../core/types.js';
+import { ApiError, api } from './api-client.js';
+import {
+  DOCUMENTS_PAGE_SIZE,
+  SEARCH_DEBOUNCE_MS,
+  collectedShortLabel,
+  pageItems,
+  publishedLabel,
+  readerPath,
+  snippetParts,
+  sourceFilter,
+  sourceOptions,
+  sourceTag,
+  totalPages,
+  type DocumentListState,
+} from './document-presentation.js';
+import { createLatestRequest } from './latest-request.js';
+
+interface Row {
+  document: DocumentMetadata;
+  excerpt?: string;
+  snippet?: string;
+}
+
+interface Results {
+  mode: 'browse' | 'search';
+  rows: Row[];
+  total: number;
+}
+
+/** History state the list entry keeps so returning from the Reader can restore the scroll position. */
+interface ListHistoryState {
+  documentsScroll?: number;
+}
+
+export function Documents({ state, scroller, onState, onOpen, onNavigate }: {
+  state: DocumentListState;
+  /** The scrolling element whose position is saved before opening the Reader. */
+  scroller: () => HTMLElement | null;
+  onState: (state: DocumentListState) => void;
+  onOpen: (id: string) => void;
+  onNavigate: (page: 'sources' | 'settings') => void;
+}) {
+  const [draft, setDraft] = useState(state.query);
+  const [sources, setSources] = useState<DocumentSources | null>(null);
+  const [results, setResults] = useState<Results | null>(null);
+  const [searchProblem, setSearchProblem] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const requests = useMemo(createLatestRequest, []);
+  const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
+
+  useEffect(() => { setDraft(state.query); }, [state.query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api.documentSources(controller.signal).then(setSources).catch((error: unknown) => {
+      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取來源清單。');
+    });
+    return () => controller.abort();
+  }, []);
+
+  // Typing updates the URL after a pause; the URL is what drives loading.
+  useEffect(() => {
+    if (draft.trim() === state.query) return undefined;
+    const timer = setTimeout(() => onState({ query: draft.trim(), source: state.source, page: 1 }), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, state.query, state.source, onState]);
+
+  useEffect(() => {
+    let active = true;
+    const filter = sourceFilter(state.source);
+    const offset = (state.page - 1) * DOCUMENTS_PAGE_SIZE;
+    const browse = (signal: AbortSignal) => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
+      .then((page): Results => ({ mode: 'browse', rows: page.documents.map((document) => ({ document, excerpt: document.excerpt })), total: page.total }));
+    setLoading(true);
+    void requests.run(async (signal) => {
+      if (!state.query) return { results: await browse(signal), problem: null };
+      try {
+        const found = await api.searchDocuments({ query: state.query, ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal);
+        return {
+          results: { mode: 'search', rows: found.hits.map((hit) => ({ document: hit, snippet: hit.snippet })), total: found.total } satisfies Results,
+          problem: null,
+        };
+      } catch (error) {
+        // Browsing and reading do not depend on the search engine, so fall back to the Vault list.
+        if (error instanceof ApiError && error.code === 'search_unavailable') {
+          return { results: await browse(signal), problem: error.message };
+        }
+        throw error;
+      }
+    }).then((outcome) => {
+      if (!active || !outcome.current) return;
+      setResults(outcome.value.results);
+      setSearchProblem(outcome.value.problem);
+      setLoadError(null);
+      setLoading(false);
+    }).catch((error: unknown) => {
+      if (!active || (error instanceof DOMException && error.name === 'AbortError')) return;
+      setLoadError(error instanceof Error ? error.message : '無法讀取文件。');
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [state.query, state.source, state.page, requests]);
+
+  useEffect(() => () => requests.cancel(), [requests]);
+
+  useLayoutEffect(() => {
+    if (!results || restoreScroll.current === null) return;
+    const element = scroller();
+    if (element) element.scrollTop = restoreScroll.current;
+    restoreScroll.current = null;
+  }, [results, scroller]);
+
+  function open(event: MouseEvent<HTMLAnchorElement>, id: string): void {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+    event.preventDefault();
+    const scrollTop = scroller()?.scrollTop ?? 0;
+    const current = (window.history.state ?? {}) as ListHistoryState;
+    window.history.replaceState({ ...current, documentsScroll: scrollTop } satisfies ListHistoryState, '');
+    onOpen(id);
+  }
+
+  const options = sourceOptions(sources);
+  const pages = totalPages(results?.total ?? 0);
+  const emptyVault = sources?.total === 0;
+
+  if (emptyVault) {
+    return <>
+      <p className="eyebrow">DOCUMENTS</p>
+      <section className="documents-empty" data-testid="documents-empty-vault">
+        <h3>知識庫裡還沒有文件</h3>
+        <p>從收集來源貼上 YouTube 影片或頻道網址，收集完成的字幕會出現在這裡。</p>
+        <button type="button" className="primary-button" onClick={() => onNavigate('sources')}>開始收集</button>
+      </section>
+    </>;
+  }
+
+  return <>
+    <p className="eyebrow">DOCUMENTS</p>
+    <div className="documents-toolbar" role="search">
+      <label className="search-field">
+        <span className="visually-hidden">搜尋文件</span>
+        <span className="search-icon" aria-hidden="true">⌕</span>
+        <input
+          type="search"
+          value={draft}
+          placeholder="搜尋文件內容…"
+          maxLength={500}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') onState({ ...state, query: draft.trim(), page: 1 }); }}
+          data-testid="documents-search"
+        />
+        {draft ? <button type="button" className="search-clear" aria-label="清除搜尋" onClick={() => { setDraft(''); onState({ ...state, query: '', page: 1 }); }}>×</button> : null}
+      </label>
+      <label className="source-select">
+        <span>來源</span>
+        <select value={state.source} onChange={(event) => onState({ ...state, source: event.target.value, page: 1 })} data-testid="documents-source">
+          <option value={options.all.value}>{options.all.label}</option>
+          {options.groups.map((group) => <optgroup key={group.label} label={group.label}>
+            {group.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </optgroup>)}
+        </select>
+      </label>
+    </div>
+
+    {searchProblem ? <div className="search-warning" role="alert" data-testid="search-unavailable">
+      <p><strong>搜尋暫時無法使用</strong>：{searchProblem} 下方先列出知識庫的文件，閱讀不受影響。</p>
+      <button type="button" onClick={() => onNavigate('settings')}>前往設定</button>
+    </div> : null}
+
+    <div className="documents-summary" aria-live="polite" data-testid="documents-summary">
+      {loadError ? <span className="documents-error">{loadError}</span>
+        : results ? results.mode === 'search' ? `找到 ${results.total} 份` : `共 ${results.total} 份文件`
+          : '正在載入…'}
+      {loading && results ? <span className="documents-loading">更新中…</span> : null}
+    </div>
+
+    {results && results.rows.length === 0 ? <section className="documents-none" data-testid="documents-no-results">
+      {results.mode === 'search'
+        ? <><h3>沒有符合「{state.query}」的文件</h3><p>換個關鍵字，或把來源改回全部來源。</p></>
+        : <><h3>這個來源目前沒有文件</h3><p>把來源改回全部來源可以看到其他文件。</p></>}
+    </section> : null}
+
+    {results && results.rows.length > 0 ? <ol className="document-list" data-testid="document-list">
+      {results.rows.map(({ document, excerpt, snippet }) => <li key={document.id}>
+        <a className="document-row" href={readerPath(document.id)} onClick={(event) => open(event, document.id)}>
+          <span className="document-main">
+            <span className="document-title">{document.title}</span>
+            <span className="document-excerpt">{snippet !== undefined
+              ? snippetParts(snippet).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : <span key={index}>{part.text}</span>)
+              : excerpt}</span>
+          </span>
+          <span className="document-meta">
+            <span className="source-tag">{sourceTag(document)}</span>
+            <span className={document.publishedAt ? 'document-date' : 'document-date unknown'}>{publishedLabel(document.publishedAt)}</span>
+            <span className="document-collected">{collectedShortLabel(document.collectedAt)}</span>
+          </span>
+        </a>
+      </li>)}
+    </ol> : null}
+
+    {results && results.total > DOCUMENTS_PAGE_SIZE ? <nav className="pagination" aria-label="分頁" data-testid="documents-pagination">
+      <button type="button" disabled={state.page <= 1} onClick={() => onState({ ...state, page: state.page - 1 })}>上一頁</button>
+      {pageItems(state.page, pages).map((page, index) => page === null
+        ? <span key={`gap-${index}`} className="page-gap">…</span>
+        : <button key={page} type="button" className={page === state.page ? 'page-number current' : 'page-number'} aria-current={page === state.page ? 'page' : undefined} onClick={() => onState({ ...state, page })}>{page}</button>)}
+      <button type="button" disabled={state.page >= pages} onClick={() => onState({ ...state, page: state.page + 1 })}>下一頁</button>
+    </nav> : null}
+  </>;
+}

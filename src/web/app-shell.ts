@@ -6,6 +6,7 @@ const pagePaths: Record<ShellPage, string> = { sources: '/', documents: '/docume
 
 export function routeForPath(pathname: string): ShellPage {
   const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (normalized.startsWith('/documents/')) return 'documents';
   return (Object.entries(pagePaths).find(([, path]) => path === normalized)?.[0] as ShellPage | undefined) ?? 'sources';
 }
 export function pathForRoute(page: ShellPage): string { return pagePaths[page]; }
