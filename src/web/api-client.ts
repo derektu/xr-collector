@@ -1,13 +1,13 @@
 import type {
-  CollectResult,
+  CollectionJob,
   DocumentSummary,
+  JobPage,
+  JobSubmission,
   SavedDocument,
   SearchQuery,
   SearchResponse,
   SearchStatus,
   YouTubeChannel,
-  AddChannelResult,
-  ChannelRun,
   ChannelSchedule,
   VaultInspection,
   VaultSetupAction,
@@ -90,8 +90,8 @@ export const api = {
     return result.channels;
   },
 
-  addChannel(url: string): Promise<AddChannelResult> {
-    return request<AddChannelResult>('/api/youtube/channels', {
+  addChannel(url: string): Promise<JobSubmission> {
+    return request<JobSubmission>('/api/youtube/channels', {
       method: 'POST',
       body: JSON.stringify({ url }),
     });
@@ -114,19 +114,33 @@ export const api = {
     });
   },
 
-  async startChannelRun(channelIds?: string[]): Promise<ChannelRun> {
-    const result = await request<{ run: ChannelRun }>('/api/youtube/channel-runs', {
+  async startChannelRun(channelIds?: string[]): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', {
       method: 'POST',
       body: JSON.stringify(channelIds ? { channelIds } : {}),
     });
-    return result.run;
+    return result.submissions;
   },
 
-  async getChannelRun(id: string): Promise<ChannelRun> {
-    const result = await request<{ run: ChannelRun }>(
-      `/api/youtube/channel-runs/${encodeURIComponent(id)}`,
-    );
-    return result.run;
+  /** Accepts a video or channel address; the service decides which by its syntax. */
+  submitYouTube(url: string): Promise<JobSubmission> {
+    return request<JobSubmission>('/api/youtube/submissions', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  },
+
+  listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPage> {
+    const parameters = new URLSearchParams();
+    if (query.state) parameters.set('state', query.state);
+    if (query.limit) parameters.set('limit', String(query.limit));
+    if (query.cursor) parameters.set('cursor', query.cursor);
+    const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
+    return request<JobPage>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
+  },
+
+  async getJob(id: string): Promise<CollectionJob> {
+    return (await request<{ job: CollectionJob }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
   },
 
   async listDocuments(): Promise<DocumentSummary[]> {
@@ -141,8 +155,8 @@ export const api = {
     return result.document;
   },
 
-  collectYouTube(url: string): Promise<CollectResult> {
-    return request<CollectResult>('/api/youtube/collect', {
+  collectYouTube(url: string): Promise<JobSubmission> {
+    return request<JobSubmission>('/api/youtube/collect', {
       method: 'POST',
       body: JSON.stringify({ url }),
     });

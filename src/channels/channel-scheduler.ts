@@ -1,8 +1,9 @@
 import {
   CollectorError,
-  type ChannelRun,
   type ChannelSchedule,
   type ChannelScheduleLastResult,
+  type CollectionJob,
+  type JobSubmission,
 } from '../core/types.js';
 
 export interface StoredChannelSchedule {
@@ -20,15 +21,13 @@ export interface ChannelScheduleStore {
 }
 
 export interface ScheduledChannelRunner {
-  startRun(channelIds?: string[]): Promise<ChannelRun>;
-  getRun(id: string): ChannelRun;
-  getActiveRun(): ChannelRun | null;
+  startRun(channelIds?: string[]): Promise<JobSubmission[]>;
+  whenSettled(jobId: string): Promise<CollectionJob>;
 }
 
 export interface ChannelSchedulerOptions {
   now?: () => Date;
   pollIntervalMs?: number;
-  runPollIntervalMs?: number;
 }
 
 export interface UpdateChannelSchedule {
@@ -39,12 +38,14 @@ export interface UpdateChannelSchedule {
 export class ChannelScheduler {
   private readonly now: () => Date;
   private readonly pollIntervalMs: number;
-  private readonly runPollIntervalMs: number;
   private schedule: StoredChannelSchedule | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking: Promise<void> | null = null;
   private suspended = false;
-  private scheduledRunId: string | null = null;
+  private closed = false;
+  /** Increments per dispatch; only the latest dispatch records its result. */
+  private dispatch = 0;
+  private pendingDispatch: number | null = null;
 
   constructor(
     private readonly runner: ScheduledChannelRunner,
@@ -53,7 +54,6 @@ export class ChannelScheduler {
   ) {
     this.now = options.now ?? (() => new Date());
     this.pollIntervalMs = options.pollIntervalMs ?? 15_000;
-    this.runPollIntervalMs = options.runPollIntervalMs ?? 500;
   }
 
   async start(): Promise<void> {
@@ -67,6 +67,7 @@ export class ChannelScheduler {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.checking;
@@ -115,29 +116,25 @@ export class ChannelScheduler {
     return operation;
   }
 
+  /**
+   * Submits one job per enabled channel when the schedule is due, then returns without waiting for
+   * them. The next due time counts from the dispatch; the result is recorded when the jobs settle.
+   */
   private async runDueSchedule(): Promise<void> {
     const schedule = await this.ensureLoaded();
     if (!schedule.enabled || !schedule.nextRunAt) return;
     if (new Date(schedule.nextRunAt).getTime() > this.now().getTime()) return;
-    if (this.runner.getActiveRun()) return;
 
-    schedule.lastAttemptAt = this.now().toISOString();
-    await this.store.save(schedule);
-
+    const dispatchedAt = this.now();
+    schedule.lastAttemptAt = dispatchedAt.toISOString();
+    schedule.nextRunAt = addMinutes(dispatchedAt, schedule.intervalMinutes).toISOString();
+    const dispatch = ++this.dispatch;
+    let submissions: JobSubmission[];
     try {
-      let run = await this.runner.startRun();
-      this.scheduledRunId = run.id;
-      while (run.status !== 'completed') {
-        await delay(this.runPollIntervalMs);
-        run = this.runner.getRun(run.id);
-      }
-      schedule.lastResult = {
-        runId: run.id,
-        created: run.created,
-        existing: run.existing,
-        failed: run.failed,
-      };
+      submissions = await this.runner.startRun();
     } catch (error) {
+      this.pendingDispatch = null;
+      schedule.lastCompletedAt = this.now().toISOString();
       schedule.lastResult = {
         runId: null,
         created: 0,
@@ -145,15 +142,33 @@ export class ChannelScheduler {
         failed: 1,
         error: error instanceof Error ? error.message : '排程抓取失敗。',
       };
-    } finally {
-      this.scheduledRunId = null;
-      const completedAt = this.now();
-      schedule.lastCompletedAt = completedAt.toISOString();
-      schedule.nextRunAt = schedule.enabled
-        ? addMinutes(completedAt, schedule.intervalMinutes).toISOString()
-        : null;
       await this.store.save(schedule);
+      return;
     }
+    this.pendingDispatch = dispatch;
+    await this.store.save(schedule);
+    void Promise.all(submissions.map(({ job }) => this.runner.whenSettled(job.id)))
+      .then((jobs) => this.recordResult(dispatch, jobs))
+      .catch(reportScheduleError);
+  }
+
+  private async recordResult(dispatch: number, jobs: CollectionJob[]): Promise<void> {
+    if (this.closed || dispatch !== this.pendingDispatch) return;
+    this.pendingDispatch = null;
+    const schedule = await this.ensureLoaded();
+    const result: ChannelScheduleLastResult = { runId: null, created: 0, existing: 0, failed: 0 };
+    for (const job of jobs) {
+      if (job.progress) {
+        result.created += job.progress.created;
+        result.existing += job.progress.existing;
+        result.failed += job.progress.failed;
+      } else if (job.state !== 'completed') {
+        result.failed += 1;
+      }
+    }
+    schedule.lastCompletedAt = this.now().toISOString();
+    schedule.lastResult = result;
+    await this.store.save(schedule);
   }
 
   private async ensureLoaded(): Promise<StoredChannelSchedule> {
@@ -165,21 +180,15 @@ export class ChannelScheduler {
     let status: ChannelSchedule['status'];
     if (!schedule.enabled) {
       status = 'paused';
-    } else if (this.scheduledRunId) {
+    } else if (this.pendingDispatch !== null) {
       status = 'running';
-    } else if (
-      schedule.nextRunAt
-      && new Date(schedule.nextRunAt).getTime() <= this.now().getTime()
-      && this.runner.getActiveRun()
-    ) {
-      status = 'waiting_for_run';
     } else {
       status = 'scheduled';
     }
     return {
       ...schedule,
       status,
-      nextRunAt: status === 'scheduled' ? schedule.nextRunAt : null,
+      nextRunAt: schedule.enabled ? schedule.nextRunAt : null,
       lastResult: schedule.lastResult ? { ...schedule.lastResult } : null,
     };
   }
@@ -187,10 +196,6 @@ export class ChannelScheduler {
 
 function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function reportScheduleError(error: unknown): void {

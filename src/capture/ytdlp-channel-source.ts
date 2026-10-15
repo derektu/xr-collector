@@ -3,7 +3,7 @@ import type {
   DiscoveredYouTubeVideo,
   ResolvedYouTubeChannel,
   YouTubeChannelSource,
-} from '../channels/channel-collector.js';
+} from '../sources/youtube/adapter.js';
 import { CollectorError, type YouTubeChannel } from '../core/types.js';
 import { classifyYtDlpError } from './ytdlp-capture.js';
 

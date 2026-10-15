@@ -252,7 +252,7 @@ describe('transaction and HTTP', () => {
       connectionFile: path.join(root, 'connection.json'), skillPath: root,
     });
     const connection = JSON.parse(await readFile(access.info.connectionFile, 'utf8'));
-    const app = await createHttpApp({ collector: workspace.collector, search: workspace.search, transfer: workspace });
+    const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, search: workspace.search, transfer: workspace });
     const agent = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test' });
     try {
       const response = await app.inject({ method: 'POST', url: '/api/vault/merge/preview', headers: { 'content-type': 'application/octet-stream' }, payload: await exportVault(incoming) });
@@ -264,6 +264,7 @@ describe('transaction and HTTP', () => {
       expect((await app.inject('/api/documents')).statusCode).toBe(409);
       expect((await fetch(`${connection.url}/api/documents`, { headers: { authorization: `Bearer ${connection.token}` } })).status).toBe(409);
       expect((await app.inject('/api/vault/status')).statusCode).toBe(200);
+      expect((await app.inject('/api/jobs')).statusCode).toBe(200);
       expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
       expect((await app.inject({ method: 'POST', url: '/api/vault/merge/cancel', payload: { id: preview.id } })).statusCode).toBe(409);
       release(); await wait(workspace);

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
+import { JobManager } from '../../src/jobs/job-manager.js';
+import { JobStore } from '../../src/jobs/job-store.js';
 import type { CapturedTranscript } from '../../src/core/types.js';
 import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
@@ -31,13 +33,18 @@ async function fixture() {
     await vault.add(capture);
   }
   const capture = vi.fn();
-  const collector = new Collector({ capture }, vault);
-  return { root, vault, collector, capture };
+  const collector = new Collector(vault);
+  const jobs = new JobManager({
+    vaultPath: path.join(root, 'vault'), store: JobStore.memory(), documents: collector,
+    source: { capture, resolveChannel: vi.fn(), discover: vi.fn() },
+    channels: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null },
+  });
+  return { root, vault, collector, capture, jobs };
 }
 
 describe('Agent authenticated HTTP access', () => {
   it('requires credentials on every route and permits existing business writes', async () => {
-    const { collector, capture } = await fixture();
+    const { collector, capture, jobs } = await fixture();
     const search = {
       status: () => ({ state: 'ready' as const, indexedDocuments: 3, message: '' }),
       search: vi.fn(async () => ({ hits: [], estimatedTotalHits: 0 })),
@@ -51,11 +58,11 @@ describe('Agent authenticated HTTP access', () => {
     };
     const channels = {
       listChannels: vi.fn(async () => []), addChannel: vi.fn(), setChannelEnabled: vi.fn(),
-      removeChannel: vi.fn(), startRun: vi.fn(), getRun: vi.fn(),
+      removeChannel: vi.fn(), startRun: vi.fn(),
     };
-    const app = await createHttpApp({ collector, search, schedule, channels, agentToken: 'test-secret' });
+    const app = await createHttpApp({ collector, jobs, search, schedule, channels, agentToken: 'test-secret' });
     cleanup.push(() => app.close());
-    for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/']) {
+    for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/api/jobs', '/']) {
       for (const authorization of ['', 'Bearer wrong', 'Bearer test-secreX']) {
         const response = await app.inject({ url, headers: { authorization } });
         expect(response.statusCode).toBe(401);
@@ -73,7 +80,9 @@ describe('Agent authenticated HTTP access', () => {
     expect(scheduleResponse.statusCode).toBe(200);
     expect(schedule.updateSchedule).toHaveBeenCalledWith({ enabled: true, intervalMinutes: 30 });
     expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', headers, payload: {} })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/youtube/submissions', payload: { url: '@agent' } })).statusCode).toBe(401);
     expect(capture).not.toHaveBeenCalled();
+    expect((await app.inject({ url: '/api/jobs', headers })).json()).toEqual({ jobs: [], nextCursor: null });
     expect((await app.inject({ url: '/api/agent/connection', headers })).statusCode).toBe(404);
     expect((await app.inject({ url: '/api/health', headers })).statusCode).toBe(200);
   });

@@ -9,6 +9,7 @@ import {
   type VaultSetupResult,
   type VaultSetupStatus,
 } from '../core/types.js';
+import { JobStore } from '../jobs/job-store.js';
 import type { VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
 import { startServer, type RunningServer } from '../server/start.js';
@@ -63,6 +64,7 @@ export class CollectorRuntime {
 
   private constructor(
     private readonly options: CollectorRuntimeOptions,
+    private readonly services: VaultServiceOptions | null,
     private readonly selection: VaultSelection,
     instanceId: string,
     initial: Opening,
@@ -96,8 +98,13 @@ export class CollectorRuntime {
       state: 'starting', instanceId, profilePath: path.resolve(options.profilePath),
       vaultPath: initial.workspace?.status().vaultPath ?? null, message: '服務啟動中。',
     };
+    // Collection jobs are device data kept in the profile, across every Vault this device opens.
+    const workspaceServices: VaultServiceOptions | null = options.workspace
+      ? { ...options.workspace, jobStore: await JobStore.open(path.join(options.profilePath, 'jobs')) }
+      : null;
     const services = options.workspace ? {
       collector: forwarding(() => current().collector),
+      jobs: forwarding(() => current().jobs),
       transfer: forwarding(() => current()),
       channels: forwarding(() => current().channels),
       schedule: forwarding(() => current().schedule),
@@ -110,7 +117,7 @@ export class CollectorRuntime {
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
     try {
-      if (options.workspace) initial = await CollectorRuntime.openInitial(options, options.workspace, selection);
+      if (workspaceServices) initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       agentAccess = await startAgentAccess({
         ...services, instanceId,
         connectionFile: options.connectionFile,
@@ -125,7 +132,7 @@ export class CollectorRuntime {
         agentInfo: agentAccess.info,
         runtimeStatus, notReady, vaultSetup,
       });
-      runtime = new CollectorRuntime(options, selection, instanceId, initial, agentAccess, server);
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server);
       return runtime;
     } catch (error) {
       await agentAccess?.close().catch(() => undefined);
@@ -182,7 +189,7 @@ export class CollectorRuntime {
 
   /** Creates or opens a Vault while Not Ready, then starts its services and remembers the location. */
   async setup(action: VaultSetupAction, vaultPath: string): Promise<VaultSetupResult> {
-    if (!this.options.workspace) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');
+    if (!this.services) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');
     if (this.closing) throw new CollectorError('vault_busy', '服務正在停止。');
     if (this.workspaceValue) throw new CollectorError('vault_already_set', '已經有使用中的知識庫。更換位置請使用搬移功能。');
     if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等待目前的操作完成。');
@@ -203,7 +210,7 @@ export class CollectorRuntime {
       }
       let workspace: VaultWorkspace;
       try {
-        workspace = await VaultWorkspace.open({ ...this.options.workspace, root, selection: this.selection, createdBy });
+        workspace = await VaultWorkspace.open({ ...this.services, root, selection: this.selection, createdBy });
       } catch (error) {
         console.error('Vault services failed to start', error);
         throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });

@@ -1,52 +1,47 @@
 import type {
-  CollectResult,
+  CapturedTranscript,
   DocumentSummary,
   SavedDocument,
   TranscriptSearch,
-  YouTubeVideoRef,
 } from './types.js';
 import { CollectorError } from './types.js';
-import { parseYouTubeVideoUrl } from './video-url.js';
-
-export interface YouTubeCapture {
-  capture(video: YouTubeVideoRef): Promise<import('./types.js').CapturedTranscript>;
-}
 
 export interface DocumentVault {
   getBySourceId(sourceId: string): Promise<SavedDocument | null>;
-  add(capture: import('./types.js').CapturedTranscript): Promise<SavedDocument>;
+  add(capture: CapturedTranscript): Promise<SavedDocument>;
   list(): Promise<DocumentSummary[]>;
   read(id: string): Promise<SavedDocument | null>;
 }
 
-export class Collector {
-  private readonly inFlight = new Map<string, Promise<CollectResult>>();
+export interface IndexOutcome {
+  indexed: boolean;
+  message?: string;
+}
 
+/** Saves captured documents to one Vault and keeps its search projection in step. */
+export class Collector {
   constructor(
-    private readonly capture: YouTubeCapture,
     private readonly vault: DocumentVault,
-    private readonly search?: Pick<TranscriptSearch, 'index' | 'status'>,
+    private readonly search?: Pick<TranscriptSearch, 'index'>,
   ) {}
 
-  async collect(inputUrl: string): Promise<CollectResult> {
-    const video = parseYouTubeVideoUrl(inputUrl);
-    const running = this.inFlight.get(video.videoId);
-    if (running) return running;
-
-    const task = this.collectOnce(video).finally(() => {
-      this.inFlight.delete(video.videoId);
-    });
-    this.inFlight.set(video.videoId, task);
-    return task;
+  findExisting(videoId: string): Promise<SavedDocument | null> {
+    return this.vault.getBySourceId(videoId);
   }
 
-  isBusy(): boolean {
-    return this.inFlight.size > 0;
+  save(captured: CapturedTranscript): Promise<SavedDocument> {
+    return this.vault.add(captured);
   }
 
-  async whenIdle(): Promise<void> {
-    while (this.inFlight.size > 0) {
-      await Promise.allSettled([...this.inFlight.values()]);
+  /** The Vault is authoritative: a failed index update reports itself and keeps the saved document. */
+  async index(document: SavedDocument): Promise<IndexOutcome> {
+    if (!this.search) return { indexed: false, message: '搜尋服務尚未啟用。' };
+    try {
+      await this.search.index(document);
+      return { indexed: true };
+    } catch (error) {
+      console.error('Search index update failed', error);
+      return { indexed: false, message: '搜尋索引更新失敗，可稍後重建索引。' };
     }
   }
 
@@ -60,33 +55,5 @@ export class Collector {
       throw new CollectorError('document_not_found', '找不到這份文件。');
     }
     return document;
-  }
-
-  private async collectOnce(video: YouTubeVideoRef): Promise<CollectResult> {
-    const existing = await this.vault.getBySourceId(video.videoId);
-    if (existing) return this.finishCollection('existing', existing);
-
-    const captured = await this.capture.capture(video);
-    const document = await this.vault.add(captured);
-    return this.finishCollection('created', document);
-  }
-
-  private async finishCollection(
-    status: CollectResult['status'],
-    document: SavedDocument,
-  ): Promise<CollectResult> {
-    if (this.search) {
-      try {
-        await this.search.index(document);
-      } catch {
-        // The vault is authoritative. Search status reports the failed derived update.
-      }
-    }
-    const searchStatus = this.search?.status() ?? {
-      state: 'error' as const,
-      indexedDocuments: 0,
-      message: '搜尋服務尚未啟用。',
-    };
-    return { status, document, searchStatus };
   }
 }

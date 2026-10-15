@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ChannelCollector, type YouTubeChannelSource } from '../../src/channels/channel-collector.js';
+import { ChannelCollector } from '../../src/channels/channel-collector.js';
 import type { ChannelStore } from '../../src/channels/json-channel-store.js';
-import { CollectorError, type CollectResult, type SavedDocument, type YouTubeChannel } from '../../src/core/types.js';
+import { Collector, type DocumentVault } from '../../src/core/collector.js';
+import type { YouTubeChannel } from '../../src/core/types.js';
+import { JobManager } from '../../src/jobs/job-manager.js';
+import { JobStore } from '../../src/jobs/job-store.js';
+import type { YouTubeSource } from '../../src/sources/youtube/adapter.js';
 
 class MemoryChannelStore implements ChannelStore {
   readonly channels: YouTubeChannel[] = [];
@@ -32,114 +36,59 @@ class MemoryChannelStore implements ChannelStore {
   }
 }
 
+const emptyVault: DocumentVault = {
+  getBySourceId: async () => null,
+  add: async () => { throw new Error('not used'); },
+  list: async () => [],
+  read: async () => null,
+};
+
+function setup(source: Partial<YouTubeSource> = {}) {
+  const store = new MemoryChannelStore();
+  const jobs = new JobManager({
+    vaultPath: '/vault',
+    store: JobStore.memory(),
+    source: {
+      resolveChannel: async () => { throw new Error('not used'); },
+      discover: async () => [],
+      capture: async () => { throw new Error('not used'); },
+      ...source,
+    },
+    documents: new Collector(emptyVault),
+    channels: store,
+  });
+  return { store, jobs, channels: new ChannelCollector(store, jobs) };
+}
+
 describe('ChannelCollector', () => {
-  it('resolves and persists a channel with collection enabled', async () => {
-    const store = new MemoryChannelStore();
-    const source: YouTubeChannelSource = {
-      resolve: async () => ({
-        id: 'UC-channel-one',
-        title: '頻道一',
-        url: 'https://www.youtube.com/channel/UC-channel-one/videos',
-      }),
-      listVideos: async () => [],
-    };
-    const channels = new ChannelCollector(source, store, {
-      collect: async () => {
-        throw new Error('not used');
-      },
-    }, {
-      now: () => new Date('2026-09-17T00:00:00.000Z'),
+  it('accepts a channel address as a job that resolves and persists it with collection enabled', async () => {
+    const { store, jobs, channels } = setup({
+      resolveChannel: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123/videos' }),
     });
 
-    const result = await channels.addChannel('https://www.youtube.com/@channel-one');
-
-    expect(result).toEqual({
-      status: 'created',
-      channel: {
-        id: 'UC-channel-one',
-        title: '頻道一',
-        url: 'https://www.youtube.com/channel/UC-channel-one/videos',
-        enabled: true,
-        addedAt: '2026-09-17T00:00:00.000Z',
-      },
-    });
-    expect(await channels.listChannels()).toEqual([result.channel]);
+    const submission = await channels.addChannel('https://www.youtube.com/@sample');
+    expect(submission.job).toMatchObject({ kind: 'youtube.channel-add', state: 'queued' });
+    expect(await jobs.whenSettled(submission.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created', channelId: 'UC123' } });
+    expect(store.channels).toEqual([expect.objectContaining({ id: 'UC123', title: '測試頻道', enabled: true })]);
+    await jobs.close();
   });
 
-  it('collects the recent videos from every enabled channel and keeps going after failures', async () => {
-    const store = new MemoryChannelStore();
-    store.channels.push(
-      channel('one', true),
-      channel('two', true),
-      channel('disabled', false),
-    );
-    const listedChannels: string[] = [];
-    const source: YouTubeChannelSource = {
-      resolve: async () => {
-        throw new Error('not used');
-      },
-      listVideos: async (saved, limit) => {
-        listedChannels.push(`${saved.id}:${limit}`);
-        return saved.id === 'one'
-          ? [video('aaaaaaaaaaa'), video('bbbbbbbbbbb')]
-          : [video('ccccccccccc')];
-      },
-    };
-    const channels = new ChannelCollector(source, store, {
-      collect: async (url) => {
-        if (url.includes('bbbbbbbbbbb')) {
-          throw new CollectorError('no_subtitles', '這支影片沒有字幕。');
-        }
-        return collectResult(
-          url.includes('ccccccccccc') ? 'existing' : 'created',
-          url.match(/[a-z]{11}/u)?.[0] ?? 'aaaaaaaaaaa',
-        );
-      },
-    }, {
-      createId: () => 'run-1',
-      now: () => new Date('2026-09-17T00:00:00.000Z'),
-    });
+  it('submits one job per enabled channel, or per requested channel', async () => {
+    const { store, jobs, channels } = setup();
+    store.channels.push(channel('one', true), channel('two', false), channel('three', true));
 
-    const started = await channels.startRun();
-    let completed = started;
-    while (completed.status !== 'completed') {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      completed = channels.getRun(started.id);
-    }
-
-    expect(listedChannels).toEqual(['one:10', 'two:10']);
-    expect(completed).toMatchObject({
-      status: 'completed',
-      totalVideos: 3,
-      processedVideos: 3,
-      created: 1,
-      existing: 1,
-      failed: 1,
-    });
-    expect(completed.results).toEqual([
-      expect.objectContaining({ videoId: 'aaaaaaaaaaa', status: 'created' }),
-      expect.objectContaining({
-        videoId: 'bbbbbbbbbbb',
-        status: 'failed',
-        error: { code: 'no_subtitles', message: '這支影片沒有字幕。' },
-      }),
-      expect.objectContaining({ videoId: 'ccccccccccc', status: 'existing' }),
-    ]);
+    const enabled = await channels.startRun();
+    expect(enabled.map(({ job }) => job.source.id)).toEqual(['one', 'three']);
+    const requested = await channels.startRun(['two', 'one', 'two']);
+    expect(requested.map(({ job }) => job.source.id)).toEqual(['two', 'one']);
+    await expect(channels.startRun(['missing'])).rejects.toMatchObject({ code: 'channel_not_found' });
+    await Promise.all([...enabled, ...requested].map(({ job }) => channels.whenSettled(job.id)));
+    await jobs.close();
   });
 
   it('changes enabled state and removes channels through its interface', async () => {
-    const store = new MemoryChannelStore();
+    const { store, channels } = setup();
     store.channels.push(channel('one', true));
-    const channels = new ChannelCollector({
-      resolve: async () => {
-        throw new Error('not used');
-      },
-      listVideos: async () => [],
-    }, store, {
-      collect: async () => {
-        throw new Error('not used');
-      },
-    });
 
     expect(await channels.setChannelEnabled('one', false)).toMatchObject({
       id: 'one',
@@ -147,42 +96,7 @@ describe('ChannelCollector', () => {
     });
     await channels.removeChannel('one');
     expect(await channels.listChannels()).toEqual([]);
-  });
-
-  it('coalesces overlapping collection requests into the active run', async () => {
-    const store = new MemoryChannelStore();
-    store.channels.push(channel('one', true));
-    let releaseDiscovery: (() => void) | undefined;
-    const discoveryBlocked = new Promise<void>((resolve) => {
-      releaseDiscovery = resolve;
-    });
-    let discoveryCount = 0;
-    const channels = new ChannelCollector({
-      resolve: async () => {
-        throw new Error('not used');
-      },
-      listVideos: async () => {
-        discoveryCount += 1;
-        await discoveryBlocked;
-        return [];
-      },
-    }, store, {
-      collect: async () => {
-        throw new Error('not used');
-      },
-    }, {
-      createId: () => 'run-shared',
-    });
-
-    const first = await channels.startRun();
-    const overlapping = await channels.startRun(['one']);
-
-    expect(overlapping.id).toBe(first.id);
-    expect(discoveryCount).toBe(1);
-    releaseDiscovery?.();
-    while (channels.getRun(first.id).status !== 'completed') {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    await expect(channels.startRun()).rejects.toMatchObject({ code: 'invalid_request' });
   });
 });
 
@@ -193,32 +107,5 @@ function channel(id: string, enabled: boolean): YouTubeChannel {
     url: `https://www.youtube.com/channel/${id}/videos`,
     enabled,
     addedAt: '2026-09-17T00:00:00.000Z',
-  };
-}
-
-function video(id: string) {
-  return { id, title: `影片 ${id}`, url: `https://www.youtube.com/watch?v=${id}` };
-}
-
-function collectResult(status: CollectResult['status'], id: string): CollectResult {
-  const document: SavedDocument = {
-    id: `youtube:${id}`,
-    type: 'Transcript',
-    title: `影片 ${id}`,
-    sourceUrl: `https://www.youtube.com/watch?v=${id}`,
-    sourceId: id,
-    channelId: null,
-    channelTitle: '測試頻道',
-    publishedAt: null,
-    collectedAt: '2026-09-17T00:00:00.000Z',
-    languageCode: 'zh-Hant',
-    languageName: null,
-    subtitleKind: 'automatic',
-    bodyMarkdown: '內容',
-  };
-  return {
-    status,
-    document,
-    searchStatus: { state: 'ready', indexedDocuments: 1 },
   };
 }

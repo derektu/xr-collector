@@ -160,7 +160,9 @@ describe('workspace transfer through HTTP', () => {
       expect(restarted.status().vaultPath).toBe(restoredPath);
       expect(await restarted.collector.list()).toHaveLength(1);
       expect((await restarted.schedule.getSchedule()).enabled).toBe(false);
-      expect((await restarted.channels.startRun()).channelIds).toEqual(['UC123']);
+      const [submission] = await restarted.channels.startRun();
+      expect(submission!.job.source.id).toBe('UC123');
+      await restarted.jobs.whenSettled(submission!.job.id);
     } finally { await app.close(); }
   });
   it('keeps original vault and selection when data validation or indexing fails; retry succeeds', async () => {
@@ -189,17 +191,18 @@ describe('workspace transfer through HTTP', () => {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const workspace = await open(path.join(root, 'B'), { capture: { capture: async () => { await waiting; return capture; } } });
-    const collection = workspace.collector.collect(capture.sourceUrl);
+    const collection = await workspace.jobs.submitVideo(capture.sourceUrl);
+    // The job holds the Vault until it finishes, although its HTTP request returned long ago.
     await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy' });
     expect(() => workspace.restore(packageOf([]))).toThrow('等待');
-    release(); await collection;
-    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+    release(); await workspace.jobs.whenSettled(collection.job.id);
+    const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
     try {
       const pending = workspace.export();
       const response = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } });
       expect(response.statusCode).toBe(409);
       await pending;
-      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(202);
     } finally { await app.close(); }
   });
   it('allows an authenticated Agent to invoke transfer routes', async () => {
@@ -253,7 +256,7 @@ it('refuses transfer while a channel discovery run is still active', async () =>
   await workspace.channels.startRun();
   await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy' });
   release();
-  await expect.poll(() => workspace.channels.isBusy()).toBe(false);
+  await expect.poll(() => workspace.jobs.isBusy()).toBe(false);
   await expect(workspace.export()).resolves.toBeInstanceOf(Buffer);
 });
 

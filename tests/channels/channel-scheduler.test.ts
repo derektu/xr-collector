@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ChannelScheduler,
   type ChannelScheduleStore,
+  type ScheduledChannelRunner,
   type StoredChannelSchedule,
 } from '../../src/channels/channel-scheduler.js';
-import type { ChannelRun } from '../../src/core/types.js';
+import type { CollectionJob, JobProgress, JobSubmission } from '../../src/core/types.js';
 
 class MemoryScheduleStore implements ChannelScheduleStore {
   saves: StoredChannelSchedule[] = [];
@@ -21,204 +22,117 @@ class MemoryScheduleStore implements ChannelScheduleStore {
   }
 }
 
+/** Channel jobs that stay unfinished until the test settles them. */
+class ControlledRunner implements ScheduledChannelRunner {
+  starts = 0;
+  failure: Error | null = null;
+  private readonly waiting = new Map<string, (job: CollectionJob) => void>();
+
+  async startRun(): Promise<JobSubmission[]> {
+    this.starts += 1;
+    if (this.failure) throw this.failure;
+    return [{ job: job(`dispatch-${this.starts}`), deduplicated: false }];
+  }
+
+  whenSettled(id: string): Promise<CollectionJob> {
+    return new Promise((resolve) => this.waiting.set(id, resolve));
+  }
+
+  settle(id: string, progress: Partial<JobProgress>): void {
+    this.waiting.get(id)!({ ...job(id), state: 'completed', progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0, ...progress } });
+    this.waiting.delete(id);
+  }
+}
+
+function schedule(overrides: Partial<StoredChannelSchedule> = {}): StoredChannelSchedule {
+  return {
+    enabled: true,
+    intervalMinutes: 5,
+    lastAttemptAt: null,
+    lastCompletedAt: null,
+    nextRunAt: '2026-09-17T00:20:00.000Z',
+    lastResult: null,
+    ...overrides,
+  };
+}
+
 describe('ChannelScheduler', () => {
-  it('does not expose the expired due time as the next run while collection is running', async () => {
+  it('dispatches due channels and returns before their jobs finish', async () => {
     let now = new Date('2026-09-17T00:30:00.000Z');
-    const store = new MemoryScheduleStore({
-      enabled: true,
-      intervalMinutes: 5,
-      lastAttemptAt: null,
-      lastCompletedAt: null,
-      nextRunAt: '2026-09-17T00:20:00.000Z',
-      lastResult: null,
-    });
-    let currentRun = run({
-      id: 'running-schedule',
-      status: 'running',
-      completedAt: null,
-    });
-    const scheduler = new ChannelScheduler({
-      startRun: async () => currentRun,
-      getRun: () => currentRun,
-      getActiveRun: () => null,
-    }, store, {
-      now: () => now,
-      pollIntervalMs: 60_000,
-      runPollIntervalMs: 1,
-    });
+    const store = new MemoryScheduleStore(schedule({
+      lastAttemptAt: '2026-09-16T23:00:00.000Z',
+      lastCompletedAt: '2026-09-16T23:01:00.000Z',
+      nextRunAt: '2026-09-16T23:05:00.000Z',
+    }));
+    const runner = new ControlledRunner();
+    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
 
     await scheduler.start();
-    await vi.waitFor(async () => {
-      expect((await scheduler.getSchedule()).status).toBe('running');
-    }, { timeout: 200 });
-
+    await scheduler.checkNow();
+    // Missed periods coalesce into one dispatch, and the check is over while the job still runs.
+    expect(runner.starts).toBe(1);
+    expect(scheduler.isBusy()).toBe(false);
     expect(await scheduler.getSchedule()).toMatchObject({
       status: 'running',
       lastAttemptAt: '2026-09-17T00:30:00.000Z',
-      lastCompletedAt: null,
-      nextRunAt: null,
+      lastCompletedAt: '2026-09-16T23:01:00.000Z',
+      nextRunAt: '2026-09-17T00:35:00.000Z',
     });
 
-    now = new Date('2026-09-17T00:31:00.000Z');
-    currentRun = run({ id: 'running-schedule' });
-    await scheduler.checkNow();
+    now = new Date('2026-09-17T00:32:00.000Z');
+    runner.settle('dispatch-1', { created: 2, existing: 1, failed: 1 });
+    await vi.waitFor(async () => expect(await scheduler.getSchedule()).toEqual({
+      enabled: true,
+      intervalMinutes: 5,
+      status: 'scheduled',
+      lastAttemptAt: '2026-09-17T00:30:00.000Z',
+      lastCompletedAt: '2026-09-17T00:32:00.000Z',
+      nextRunAt: '2026-09-17T00:35:00.000Z',
+      lastResult: { runId: null, created: 2, existing: 1, failed: 1 },
+    }));
     await scheduler.close();
   });
 
-  it('automatically starts a run when an enabled schedule becomes due', async () => {
+  it('keeps checking at the next due time while earlier jobs are still running', async () => {
+    let now = new Date('2026-09-17T00:30:00.000Z');
+    const runner = new ControlledRunner();
+    const scheduler = new ChannelScheduler(runner, new MemoryScheduleStore(schedule()), { now: () => now, pollIntervalMs: 60_000 });
+
+    await scheduler.start();
+    await scheduler.checkNow();
+    now = new Date('2026-09-17T00:35:00.000Z');
+    await scheduler.checkNow();
+    expect(runner.starts).toBe(2);
+
+    // Only the latest dispatch records its result.
+    runner.settle('dispatch-1', { created: 5 });
+    runner.settle('dispatch-2', { existing: 3 });
+    await vi.waitFor(async () => expect((await scheduler.getSchedule()).lastResult).toMatchObject({ created: 0, existing: 3 }));
+    await scheduler.close();
+  });
+
+  it('automatically dispatches when an enabled schedule becomes due', async () => {
     let now = new Date('2026-09-17T00:00:00.000Z');
-    const store = new MemoryScheduleStore({
-      enabled: false,
-      intervalMinutes: 60,
-      lastAttemptAt: null,
-      lastCompletedAt: null,
-      nextRunAt: null,
-      lastResult: null,
-    });
-    let starts = 0;
-    const completedRun = run({ id: 'timer-run', completedAt: '2026-09-17T00:01:10.000Z' });
-    const scheduler = new ChannelScheduler({
-      startRun: async () => {
-        starts += 1;
-        now = new Date('2026-09-17T00:01:10.000Z');
-        return completedRun;
-      },
-      getRun: () => completedRun,
-      getActiveRun: () => null,
-    }, store, {
+    const runner = new ControlledRunner();
+    const scheduler = new ChannelScheduler(runner, new MemoryScheduleStore(schedule({ enabled: false, intervalMinutes: 60, nextRunAt: null })), {
       now: () => now,
       pollIntervalMs: 5,
-      runPollIntervalMs: 1,
     });
 
     await scheduler.start();
     await scheduler.updateSchedule({ enabled: true, intervalMinutes: 1 });
     now = new Date('2026-09-17T00:01:00.000Z');
 
-    await vi.waitFor(() => expect(starts).toBe(1), { timeout: 200 });
+    await vi.waitFor(() => expect(runner.starts).toBe(1), { timeout: 200 });
     await scheduler.close();
   });
 
-  it('coalesces missed periods into one run and schedules from actual completion', async () => {
-    let now = new Date('2026-09-17T00:30:00.000Z');
-    const store = new MemoryScheduleStore({
-      enabled: true,
-      intervalMinutes: 5,
-      lastAttemptAt: '2026-09-16T23:00:00.000Z',
-      lastCompletedAt: '2026-09-16T23:01:00.000Z',
-      nextRunAt: '2026-09-16T23:05:00.000Z',
-      lastResult: null,
-    });
-    const completedRun = run({
-      id: 'scheduled-run',
-      created: 2,
-      existing: 1,
-      failed: 1,
-      completedAt: '2026-09-17T00:31:00.000Z',
-    });
-    let starts = 0;
-    const scheduler = new ChannelScheduler({
-      startRun: async () => {
-        starts += 1;
-        now = new Date('2026-09-17T00:31:00.000Z');
-        return completedRun;
-      },
-      getRun: () => completedRun,
-      getActiveRun: () => null,
-    }, store, {
-      now: () => now,
-      pollIntervalMs: 60_000,
-      runPollIntervalMs: 1,
-    });
-
-    await scheduler.start();
-    await scheduler.checkNow();
-
-    expect(starts).toBe(1);
-    expect(await scheduler.getSchedule()).toEqual({
-      enabled: true,
-      intervalMinutes: 5,
-      status: 'scheduled',
-      lastAttemptAt: '2026-09-17T00:30:00.000Z',
-      lastCompletedAt: '2026-09-17T00:31:00.000Z',
-      nextRunAt: '2026-09-17T00:36:00.000Z',
-      lastResult: {
-        runId: 'scheduled-run',
-        created: 2,
-        existing: 1,
-        failed: 1,
-      },
-    });
-    await scheduler.close();
-  });
-
-  it('waits for a manual run instead of starting an overlapping scheduled run', async () => {
-    const now = new Date('2026-09-17T00:30:00.000Z');
-    const store = new MemoryScheduleStore({
-      enabled: true,
-      intervalMinutes: 5,
-      lastAttemptAt: null,
-      lastCompletedAt: null,
-      nextRunAt: '2026-09-17T00:20:00.000Z',
-      lastResult: null,
-    });
-    let active: ChannelRun | null = run({
-      id: 'manual-run',
-      status: 'running',
-      completedAt: null,
-    });
-    let starts = 0;
-    const scheduledRun = run({ id: 'scheduled-after-manual' });
-    const scheduler = new ChannelScheduler({
-      startRun: async () => {
-        starts += 1;
-        return scheduledRun;
-      },
-      getRun: () => scheduledRun,
-      getActiveRun: () => active,
-    }, store, { now: () => now, pollIntervalMs: 60_000 });
-
-    await scheduler.start();
-    await scheduler.checkNow();
-    expect(starts).toBe(0);
-    expect(await scheduler.getSchedule()).toMatchObject({ status: 'waiting_for_run' });
-
-    active = null;
-    await scheduler.checkNow();
-    expect(starts).toBe(1);
-    await scheduler.close();
-  });
-
-  it('retries failures at the next period and persists a paused schedule', async () => {
+  it('records a failed dispatch, retries next period and persists a paused schedule', async () => {
     let now = new Date('2026-09-17T00:00:00.000Z');
-    const store = new MemoryScheduleStore({
-      enabled: false,
-      intervalMinutes: 60,
-      lastAttemptAt: null,
-      lastCompletedAt: null,
-      nextRunAt: null,
-      lastResult: null,
-    });
-    const runs = [
-      run({ id: 'offline-run', failed: 2, completedAt: '2026-09-17T00:05:30.000Z' }),
-      run({ id: 'retry-run', created: 2, completedAt: '2026-09-17T00:11:00.000Z' }),
-    ];
-    let starts = 0;
-    const scheduler = new ChannelScheduler({
-      startRun: async () => {
-        const next = runs[starts];
-        if (!next) throw new Error('unexpected run');
-        starts += 1;
-        now = new Date(next.completedAt!);
-        return next;
-      },
-      getRun: (id) => runs.find((candidate) => candidate.id === id)!,
-      getActiveRun: () => null,
-    }, store, {
-      now: () => now,
-      pollIntervalMs: 60_000,
-      runPollIntervalMs: 1,
-    });
+    const store = new MemoryScheduleStore(schedule({ enabled: false, intervalMinutes: 60, nextRunAt: null }));
+    const runner = new ControlledRunner();
+    runner.failure = new Error('沒有可執行的 YouTube 頻道。');
+    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
 
     await scheduler.start();
     expect(await scheduler.updateSchedule({ enabled: true, intervalMinutes: 5 })).toMatchObject({
@@ -229,39 +143,30 @@ describe('ChannelScheduler', () => {
     now = new Date('2026-09-17T00:05:00.000Z');
     await scheduler.checkNow();
     expect(await scheduler.getSchedule()).toMatchObject({
-      lastResult: { runId: 'offline-run', failed: 2 },
-      nextRunAt: '2026-09-17T00:10:30.000Z',
+      status: 'scheduled',
+      lastResult: { runId: null, failed: 1, error: '沒有可執行的 YouTube 頻道。' },
+      nextRunAt: '2026-09-17T00:10:00.000Z',
     });
 
-    now = new Date('2026-09-17T00:10:30.000Z');
+    runner.failure = null;
+    now = new Date('2026-09-17T00:10:00.000Z');
     await scheduler.checkNow();
-    expect(starts).toBe(2);
-    expect(await scheduler.getSchedule()).toMatchObject({
-      lastResult: { runId: 'retry-run', created: 2, failed: 0 },
-    });
+    expect(runner.starts).toBe(2);
 
     expect(await scheduler.updateSchedule({ enabled: false, intervalMinutes: 5 })).toMatchObject({
       status: 'paused',
       nextRunAt: null,
     });
+    expect(store.saves.at(-1)).toMatchObject({ enabled: false, nextRunAt: null });
     await scheduler.close();
   });
 });
 
-function run(overrides: Partial<ChannelRun> = {}): ChannelRun {
+function job(id: string): CollectionJob {
   return {
-    id: 'run-1',
-    status: 'completed',
-    channelIds: ['one'],
-    currentChannelId: null,
-    totalVideos: 0,
-    processedVideos: 0,
-    created: 0,
-    existing: 0,
-    failed: 0,
-    results: [],
-    startedAt: '2026-09-17T00:30:00.000Z',
-    completedAt: '2026-09-17T00:31:00.000Z',
-    ...overrides,
+    id, kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: '/vault', parentId: null,
+    source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1/videos', title: '頻道' },
+    createdAt: '2026-09-17T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-09-17T00:00:00.000Z',
+    progress: null, items: null, result: null, error: null,
   };
 }
