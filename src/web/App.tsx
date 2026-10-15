@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { api } from './api-client.js';
+import { AutoCollectionCard } from './AutoCollectionCard.js';
 import { Documents } from './Documents.js';
 import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
 import { Reader } from './Reader.js';
@@ -18,18 +19,18 @@ const navigation: Array<{ page: ShellPage; label: string; icon: string }> = [
 ];
 const pageTitles: Record<ShellPage, string> = { sources: '收集來源', documents: '文件', settings: '設定', activity: '活動記錄' };
 
-export function SourceView({ source }: { source: NonNullable<ReturnType<typeof sourceRegistry.open>> }) {
-  if (source.id === 'youtube') return <YouTubeSource />;
+export function SourceView({ source, onOpenSettings }: { source: NonNullable<ReturnType<typeof sourceRegistry.open>>; onOpenSettings: () => void }) {
+  if (source.id === 'youtube') return <YouTubeSource onOpenSettings={onOpenSettings} />;
   return <section className="source-view" aria-label="目前來源" data-testid={`source-view-${source.id}`}><h3>{source.view.heading}</h3><p>{source.view.detail}</p></section>;
 }
 
 interface DocumentsRouting { state: DocumentListState; scroller: () => HTMLElement | null; onState: (state: DocumentListState) => void; onOpen: (id: string) => void; onNavigate: (page: ShellPage) => void }
 
 function PageContent({ page, activeSource, vaultPath, onOpenSource, documents }: { page: ShellPage; activeSource: ReturnType<typeof sourceRegistry.open>; vaultPath: string | null; onOpenSource: (id: string) => void; documents: DocumentsRouting }) {
-  if (page === 'sources') return <><p className="eyebrow">SOURCES</p><p className="page-intro">從這裡把來源內容加入知識庫。收集在背景執行，送出後可以繼續其他操作。</p><section className="source-grid" aria-label="來源清單">{sourceRegistry.publicSources().map((source) => <article className={`source-card ${source.availability}`} key={source.id} data-testid={`source-${source.id}`}><div className="source-card-heading"><h3>{source.label}</h3><span>{source.availability === 'available' ? '接入位置' : '尚未開放'}</span></div><p>{source.description}</p>{source.availability === 'available' ? <button type="button" onClick={() => onOpenSource(source.id)}>查看來源</button> : <button type="button" disabled>尚未開放</button>}</article>)}</section>{activeSource ? <SourceView source={activeSource} /> : null}</>;
+  if (page === 'sources') return <><p className="eyebrow">SOURCES</p><p className="page-intro">從這裡把來源內容加入知識庫。收集在背景執行，送出後可以繼續其他操作。</p><section className="source-grid" aria-label="來源清單">{sourceRegistry.publicSources().map((source) => <article className={`source-card ${source.availability}`} key={source.id} data-testid={`source-${source.id}`}><div className="source-card-heading"><h3>{source.label}</h3><span>{source.availability === 'available' ? '接入位置' : '尚未開放'}</span></div><p>{source.description}</p>{source.availability === 'available' ? <button type="button" onClick={() => onOpenSource(source.id)}>查看來源</button> : <button type="button" disabled>尚未開放</button>}</article>)}</section>{activeSource ? <SourceView source={activeSource} onOpenSettings={() => documents.onNavigate('settings')} /> : null}</>;
   if (page === 'documents') return <Documents {...documents} />;
   if (page === 'activity') return <Placeholder eyebrow="ACTIVITY" title="活動記錄" detail="工作摘要與持久活動記錄將由 #29 接入。此頁不以示意資料冒充可查詢的活動。" />;
-  return <><p className="eyebrow">SETTINGS</p><p className="page-intro">裝置設定與正式 Vault 資料保持分離。</p><section className="settings-grid" aria-label="設定區塊"><article className="setting-card" data-testid="settings-vault"><h3>知識庫</h3><p>目前使用的知識庫位置：</p><code className="setting-path">{vaultPath}</code><p className="source-note">搬移知識庫將由 #31 接入。</p></article><article className="setting-card"><h3>自動收集</h3><p>Global 收集政策將由 #27 接入。</p></article><SearchIndexCard /><article className="setting-card"><h3>外觀</h3><p>使用側欄控制切換深色或淺色主題。</p></article></section></>;
+  return <><p className="eyebrow">SETTINGS</p><p className="page-intro">裝置設定與正式 Vault 資料保持分離。</p><section className="settings-grid" aria-label="設定區塊"><article className="setting-card" data-testid="settings-vault"><h3>知識庫</h3><p>目前使用的知識庫位置：</p><code className="setting-path">{vaultPath}</code><p className="source-note">搬移知識庫將由 #31 接入。</p></article><AutoCollectionCard /><SearchIndexCard /><article className="setting-card"><h3>外觀</h3><p>使用側欄控制切換深色或淺色主題。</p></article></section></>;
 }
 function Placeholder({ eyebrow, detail }: { eyebrow: string; title: string; detail: string }) { return <><p className="eyebrow">{eyebrow}</p><section className="placeholder"><p>{detail}</p></section></>; }
 

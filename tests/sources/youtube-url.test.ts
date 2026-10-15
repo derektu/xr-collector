@@ -41,9 +41,9 @@ describe('classifyYouTubeInput', () => {
 
 describe('youtubeSubmitAction', () => {
   it('labels the button by what was pasted', () => {
-    expect(youtubeSubmitAction('')).toEqual({ label: '加入', enabled: false, reason: null });
-    expect(youtubeSubmitAction('https://youtu.be/dQw4w9WgXcQ')).toMatchObject({ label: '新增影片', enabled: true });
-    expect(youtubeSubmitAction('@sample')).toMatchObject({ label: '加入頻道', enabled: true });
+    expect(youtubeSubmitAction('')).toEqual({ label: '加入', enabled: false, reason: null, kind: null });
+    expect(youtubeSubmitAction('https://youtu.be/dQw4w9WgXcQ')).toMatchObject({ label: '收集影片', enabled: true });
+    expect(youtubeSubmitAction('@sample')).toMatchObject({ label: '訂閱頻道', enabled: true });
     expect(youtubeSubmitAction('https://www.youtube.com/playlist?list=PLabc')).toMatchObject({ label: '加入', enabled: false, reason: expect.stringContaining('播放清單') });
     expect(youtubeSubmitAction('https://www.youtube.com/embed/videoseries?list=PLabc')).toMatchObject({ label: '加入', enabled: false });
   });

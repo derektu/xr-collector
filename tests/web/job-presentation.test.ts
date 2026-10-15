@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
-import { jobPhaseLabel, jobProgressLabel, jobResultLabel } from '../../src/web/job-presentation.js';
+import { jobKindLabel, jobPhaseLabel, jobProgressLabel, jobResultLabel, youtubeSubmitAction } from '../../src/web/job-presentation.js';
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
@@ -27,5 +27,23 @@ describe('job presentation', () => {
     expect(jobProgressLabel(channel)).toBe('已處理 3 / 10（新增 2・已存在 0・失敗 1）');
     expect(jobResultLabel(job({ state: 'failed', error: { code: 'no_subtitles', message: '這支影片沒有字幕。' } }))).toBe('這支影片沒有字幕。');
     expect(jobResultLabel(job({ kind: 'youtube.channel', result: { outcome: 'partial' } }))).toBe('部分影片收集失敗');
+  });
+
+  it('labels channel jobs by why they ran and states skipped work', () => {
+    const scope = { mode: 'backfill' as const, windowStart: '2026-09-15T00:00:00.000Z', maxItems: 10, cursor: null };
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'subscribe' } }))).toBe('首次收集');
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'resume' } }))).toBe('恢復補收');
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'manual', mode: 'incremental' } }))).toBe('立即檢查');
+    expect(jobKindLabel(job({ kind: 'youtube.channel' }))).toBe('頻道收集');
+    expect(jobProgressLabel(job({ kind: 'youtube.channel', progress: { total: 3, done: 3, created: 1, existing: 0, failed: 0, skipped: 2 } })))
+      .toBe('已處理 3 / 3（新增 1・已存在 0・略過 2・失敗 0）');
+    expect(jobResultLabel(job({ kind: 'youtube.channel', result: { outcome: 'skipped', skipReason: 'subscription_paused' } }))).toBe('略過：訂閱已暫停');
+    expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出補收範圍');
+  });
+
+  it('names the action a pasted address leads to', () => {
+    expect(youtubeSubmitAction('https://youtu.be/abcdefghijk')).toMatchObject({ label: '收集影片', kind: 'video' });
+    expect(youtubeSubmitAction('@someone')).toMatchObject({ label: '訂閱頻道', kind: 'channel' });
+    expect(youtubeSubmitAction('')).toMatchObject({ label: '加入', enabled: false, kind: null });
   });
 });
