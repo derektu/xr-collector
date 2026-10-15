@@ -70,6 +70,9 @@ async function createWindow(): Promise<void> {
       preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.cjs'),
     },
   });
+  // The app has no menu commands of its own; macOS keeps the default menu for
+  // standard Edit and Quit shortcuts.
+  if (process.platform !== 'darwin') window.removeMenu();
   window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url);
