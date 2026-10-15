@@ -406,6 +406,31 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect((await w.channelStore.list())[0]!.cursor).not.toEqual(cursor);
   });
 
+  it('still collects a queued video the user also submitted directly, past a pause and the backfill bound', async () => {
+    const w = await world({ capture: 1 });
+    const id = w.source.addChannel('claimed');
+    const ids = w.source.publish(id, 'c', w.clock.now, [1, 2, 45]);
+    // Listed as 25 days old, published 45 days ago: the backfill bound alone would skip it.
+    w.source.channels.get(id)!.videos[2]!.listedAt = new Date(w.clock.now.getTime() - 25 * DAY).toISOString();
+    w.source.holdCaptures = true;
+    const added = await w.jobs.whenSettled((await w.channels.addChannel('@claimed')).job.id);
+    const jobId = added.result!.followUpJobId!;
+    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+
+    const manual = await w.jobs.submitVideo(`https://www.youtube.com/watch?v=${ids[2]}`);
+    expect(manual.deduplicated).toBe(true);
+    await w.channels.setChannelEnabled(id, false);
+    w.source.holdCaptures = false;
+    w.source.release(ids[0]!);
+    const job = await w.jobs.whenSettled(jobId);
+    expect(job.items!.map((item) => [item.sourceId, item.outcome, item.skipReason])).toEqual([
+      [ids[0], 'created', undefined],
+      [ids[1], 'skipped', 'subscription_paused'],
+      [ids[2], 'created', undefined],
+    ]);
+    expect(collectedIds(w)).toEqual([ids[0], ids[2]].sort());
+  });
+
   it('removes a subscription, keeps its documents and refuses checks of a paused one', async () => {
     const w = await world({ capture: 1 });
     const id = w.source.addChannel('leaving');
