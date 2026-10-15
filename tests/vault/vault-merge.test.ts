@@ -52,7 +52,7 @@ async function fixture(real = false) {
     search: async ({ query }) => ({ hits: [...docs.values()].filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), total: docs.size, offset: 0, limit: 50 }),
   };
   await search.rebuild(); vi.mocked(search.rebuild).mockClear();
-  const options = { root: local, selection: new VaultSelection(path.join(root, 'selection.json')), createdBy: 'XR Collector test', capture: { capture: async () => capture },
+  const options = { root: local, selection: new VaultSelection(path.join(root, 'selection.json')), profilePath: path.join(root, 'profile'), createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1' }), listVideos: async () => [] },
     searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData: path.join(root, 'search'),
     ...(!real ? { createSearch: async () => ({ search, close: async () => undefined }) } : {}) };
@@ -524,5 +524,58 @@ describe('line diff', () => {
     const diff = lineDiff(before, after);
     expect(diff.filter((l) => l.kind === 'removed').map((l) => l.text).join('\n')).toBe(before);
     expect(diff.filter((l) => l.kind === 'added').map((l) => l.text).join('\n')).toBe(after);
+  });
+});
+
+describe('conflict granularity (T3)', () => {
+  const settings = { intervalMinutes: 60, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+  const channel = { id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1', enabled: true, addedAt: '2026-01-01T00:00:00.000Z', settings };
+  const v2 = (rows: unknown[], extra: Record<string, unknown> = {}) => Buffer.from(JSON.stringify({ version: 2, ...extra, channels: rows }));
+
+  it('takes the imported settings of a subscription and keeps the local collection progress', () => {
+    const localProgress = {
+      addedAt: '2025-12-01T00:00:00.000Z', cursor: { videoId: 'localcursor', publishedAt: null, recentIds: ['localcursor'] },
+      lastCheckedAt: '2026-10-10T00:00:00.000Z', backlog: true, nextCheckAt: '2026-10-10T06:00:00.000Z', lastDispatchedAt: '2026-10-10T00:00:00.000Z',
+    };
+    const incomingRow = {
+      ...channel, title: '備份的名稱', enabled: false, settings: { ...settings, intervalMinutes: 720 },
+      cursor: { videoId: 'othercursor', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-01-02T00:00:00.000Z', backlog: false,
+    };
+    const local = new Map([['settings/youtube-channels.json', v2([{ ...channel, ...localProgress }], { laterField: 'kept' })]]);
+    const incoming = new Map([['settings/youtube-channels.json', v2([incomingRow])]]);
+    const items = compareFiles(local, incoming);
+    expect(items.map((item) => [item.key, item.state])).toEqual([['channel:UC1', 'conflict']]);
+    const merged = JSON.parse(mergeFiles(local, incoming, items, { 'channel:UC1': 'incoming' }).get('settings/youtube-channels.json')!.toString());
+    expect(merged).toEqual({ version: 2, laterField: 'kept', channels: [{
+      ...channel, title: '備份的名稱', enabled: false, settings: { ...settings, intervalMinutes: 720 },
+      addedAt: localProgress.addedAt, cursor: localProgress.cursor, lastCheckedAt: localProgress.lastCheckedAt, backlog: true,
+      nextCheckAt: null, lastDispatchedAt: null,
+    }] });
+    // Progress alone never makes a difference.
+    expect(compareFiles(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, cursor: incomingRow.cursor, backlog: false }])]]))
+      .map((item) => item.state)).toEqual(['same']);
+  });
+
+  it('says which side holds a deletion and keeps other fields of the deletions file', async () => {
+    const { local, incoming, workspace } = await fixture();
+    const id = `youtube:${capture.videoId}`;
+    await new Collector(new MarkdownVault(incoming)).delete(id);
+    const deletions = path.join(local, DELETIONS_FILE);
+    await file(local, DELETIONS_FILE, JSON.stringify({ version: 1, deleted: [], laterField: 'kept' }));
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    expect(preview.items).toEqual([expect.objectContaining({ key: `deletion:${id}`, deletedOn: 'incoming', state: 'conflict' })]);
+    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
+    expect(JSON.parse(await readFile(deletions, 'utf8'))).toMatchObject({ version: 1, laterField: 'kept', deleted: [{ sourceId: capture.videoId }] });
+
+    const other = await fixture();
+    await other.workspace.collector.delete(id);
+    const reverse = await other.workspace.previewMerge(await exportVault(other.incoming));
+    expect(reverse.items).toEqual([expect.objectContaining({ key: `deletion:${id}`, deletedOn: 'local', state: 'conflict' })]);
+  });
+
+  it('compares a document without a collector section on all of its metadata', () => {
+    const bytes = (body: string) => Buffer.from(`---\ntitle: 無來源段落\nnote: x\n---\n${body}`);
+    const items = compareFiles(new Map([['documents/youtube/abcdefghijk.md', bytes('一')]]), new Map([['documents/youtube/abcdefghijk.md', bytes('二')]]));
+    expect(items).toEqual([expect.objectContaining({ kind: 'document', state: 'conflict', label: '無來源段落 (abcdefghijk.md)', localTime: null, incomingTime: null })]);
   });
 });

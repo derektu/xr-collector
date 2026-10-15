@@ -677,12 +677,41 @@ export class CollectorError extends Error {
   }
 }
 
+export type TransferOperation = 'export' | 'merge' | 'restore';
+
+/**
+ * Progress of the one Vault export, merge or restore that runs at a time. `waiting` means the
+ * operation waits for the collection steps already running to finish; queued collection waits
+ * until the operation ends.
+ */
 export interface TransferStatus {
-  state: 'idle' | 'exporting' | 'validating' | 'extracting' | 'indexing' | 'completed' | 'error';
+  state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'indexing' | 'completed' | 'error';
+  operation: TransferOperation | null;
   message: string;
   completedFiles: number;
   totalFiles: number;
   vaultPath: string;
+  /** When this device last exported the active Vault; null when it never has. */
+  lastExportedAt: string | null;
+  /** What the last finished operation produced; null while one runs or after a failure. */
+  result: TransferResult | null;
+}
+
+export interface TransferResult {
+  /** Export: the written package file and its size. */
+  exportPath?: string;
+  exportBytes?: number;
+  /** Merge: files written and the package of the Vault as it was before the merge. */
+  writtenFiles?: number;
+  mergeBackupPath?: string;
+  /**
+   * Restore: the Vault in use before the switch, which stays where it is, and how many of its
+   * collection jobs stopped with the switch; they continue when that Vault is opened again.
+   * The restored Vault starts with automatic collection paused.
+   */
+  previousVaultPath?: string;
+  interruptedJobs?: number;
+  autoCollectionPaused?: boolean;
 }
 
 export type MergeChoice = 'local' | 'incoming';
@@ -699,10 +728,14 @@ export interface MergeItem {
   incomingTime: string | null;
   localText: string;
   incomingText: string;
+  /** Deletion items: which side holds the deletion record. */
+  deletedOn?: 'local' | 'incoming';
 }
 export interface MergePreview {
   id: string;
   items: MergeItem[];
+  /** The description a package carries, when it carries one. */
+  package: { version: number; exportedAt: string | null; createdBy: string | null };
 }
 
 /**

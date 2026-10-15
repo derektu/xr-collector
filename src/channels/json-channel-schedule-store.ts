@@ -5,7 +5,7 @@ import { legacySettingsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson, type Sc
 
 /**
  * The automatic collection switch in the Vault. A Vault without the file collects automatically.
- * Saving keeps the `legacySettings` of a converted Vault.
+ * Saving keeps the `legacySettings` of a converted Vault and any other field of a version 2 file.
  */
 export class JsonChannelScheduleStore implements ChannelScheduleStore {
   private readonly filePath: string;
@@ -22,8 +22,11 @@ export class JsonChannelScheduleStore implements ChannelScheduleStore {
 
   save(schedule: StoredChannelSchedule): Promise<void> {
     const write = async () => {
-      const legacySettings = legacySettingsFromJson(await readJsonFile(this.filePath).catch(() => undefined));
-      const file: ScheduleFile = { version: 2, enabled: schedule.enabled, ...(legacySettings ? { legacySettings } : {}) };
+      const stored = await readJsonFile(this.filePath).catch(() => undefined);
+      const legacySettings = legacySettingsFromJson(stored);
+      // A version 2 file keeps its other fields; a version 1 file contributes only its shared settings.
+      const kept = stored && typeof stored === 'object' && (stored as { version?: unknown }).version === 2 ? stored as object : {};
+      const file: ScheduleFile = { ...kept, version: 2, enabled: schedule.enabled, ...(legacySettings ? { legacySettings } : {}) };
       await writeJsonFile(this.filePath, file);
     };
     const operation = this.mutation.then(write, write);

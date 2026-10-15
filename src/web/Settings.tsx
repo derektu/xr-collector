@@ -2,14 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
+import { BackupSection } from './VaultBackup.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
-/** Device and Vault settings: Vault location, search index and appearance. Collection settings belong to each source. */
-export function Settings({ vaultPath, themePreference, onThemePreference }: {
+/**
+ * Device and Vault settings: Vault location, backups, search index and appearance. Collection
+ * settings belong to each source.
+ */
+export function Settings({ vaultPath, activeJobs, themePreference, onThemePreference, onChanged }: {
   vaultPath: string | null;
+  activeJobs: number;
   themePreference: ThemePreference;
   onThemePreference: (preference: ThemePreference) => void;
+  onChanged: (message: string) => void;
 }) {
   const themeOptions = useRef<Array<HTMLButtonElement | null>>([]);
   const [counts, setCounts] = useState<{ documents: number; sources: number } | null>(null);
@@ -30,6 +36,7 @@ export function Settings({ vaultPath, themePreference, onThemePreference }: {
         <code className="setting-path">{vaultPath}</code>
         {counts ? <p className="hint">{counts.documents} 份文件・{counts.sources} 個來源</p> : null}
       </section>
+      {vaultPath ? <BackupSection vaultPath={vaultPath} activeJobs={activeJobs} onChanged={onChanged} /> : null}
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>

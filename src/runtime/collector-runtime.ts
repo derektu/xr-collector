@@ -28,7 +28,7 @@ export interface CollectorRuntimeStatus {
 }
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */
-export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy'>;
+export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath'>;
 
 export interface CollectorRuntimeOptions {
   profilePath: string;
@@ -159,7 +159,7 @@ export class CollectorRuntime {
   ): Promise<Opening> {
     const createdBy = options.createdBy ?? 'XR Collector';
     const open = async (root: string): Promise<Opening> => ({
-      workspace: await VaultWorkspace.open({ ...services, root, selection, createdBy }), failure: null, message: '',
+      workspace: await VaultWorkspace.open({ ...services, root, selection, createdBy, profilePath: path.resolve(options.profilePath) }), failure: null, message: '',
     });
     const unusable = (failurePath: string, reason: string): Opening => ({
       workspace: null, failure: { path: failurePath, reason }, message: `目前選擇的 Vault 無法使用：${reason}請在 UI Onboarding 重新選擇 Vault。`,
@@ -220,7 +220,7 @@ export class CollectorRuntime {
       }
       let workspace: VaultWorkspace;
       try {
-        workspace = await VaultWorkspace.open({ ...this.services, root, selection: this.selection, createdBy });
+        workspace = await VaultWorkspace.open({ ...this.services, root, selection: this.selection, createdBy, profilePath: this.profilePath });
       } catch (error) {
         console.error('Vault services failed to start', error);
         throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });

@@ -115,6 +115,37 @@ app.whenReady().then(async () => {
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+  const backupFilters: Electron.FileFilter[] = [{ name: 'XR Collector 備份', extensions: ['xr-vault'] }];
+  ipcMain.handle('xrCollector:desktop:chooseBackupToSave', async (event, defaultPath: unknown) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const fallback = path.join(app.getPath('documents'), 'XR Collector 備份.xr-vault');
+    const requested = typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? defaultPath : fallback;
+    const options: Electron.SaveDialogOptions = {
+      title: '匯出備份',
+      buttonLabel: '匯出',
+      defaultPath: path.join(await existingDirectory(path.dirname(requested)), path.basename(requested)),
+      filters: backupFilters,
+      properties: ['createDirectory', 'showOverwriteConfirmation'],
+    };
+    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+    // The dialog confirmed replacing the file it showed; a name given the extension here was not confirmed.
+    return /\.xr-vault$/iu.test(result.filePath)
+      ? { path: result.filePath, overwrite: true }
+      : { path: `${result.filePath}.xr-vault`, overwrite: false };
+  });
+  ipcMain.handle('xrCollector:desktop:chooseBackupToOpen', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      title: '選擇備份檔案',
+      buttonLabel: '選擇',
+      defaultPath: app.getPath('documents'),
+      filters: backupFilters,
+      properties: ['openFile'],
+    };
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
   const capture = new YtDlpCapture({
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),

@@ -128,6 +128,11 @@ export class ChannelScheduler {
     return this.checking !== null;
   }
 
+  /** Resolves when the check in progress, if any, has finished. */
+  async idle(): Promise<void> {
+    await this.checking?.catch(() => undefined);
+  }
+
   checkNow(): Promise<void> {
     if (this.suspended) return Promise.resolve();
     if (this.checking) return this.checking;

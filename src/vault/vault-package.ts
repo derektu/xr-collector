@@ -7,6 +7,8 @@ import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { migrateSubscriptionSettings } from '../channels/subscription-files.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
+import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
+import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE } from '../channels/subscription-files.js';
 
 export const PACKAGE_LIMIT = 128 * 1024 * 1024;
 const CONTENT_LIMIT = 80 * 1024 * 1024;
@@ -19,7 +21,18 @@ interface Entry { path: string; size: number; sha256: string; data: string }
  * Vault is converted after unpacking. A program that reads up to version 2 refuses a version 3
  * package, so it never restores a Vault while silently dropping its deletions.
  */
-interface VaultPackage { format: 'xr-collector-vault'; version: 1 | 2 | 3; files: Entry[]; sha256: string }
+interface VaultPackage extends PackageInfo { format: 'xr-collector-vault'; version: 1 | 2 | 3; files: Entry[]; sha256: string }
+
+/**
+ * Optional description of a package for people choosing it: when and by which program it was
+ * written and what it holds. The manifest digest does not cover it and a reader that does not know
+ * these fields ignores them, so they never decide whether a package is valid.
+ */
+export interface PackageInfo {
+  exportedAt?: string;
+  createdBy?: string;
+  summary?: { documents: number; subscriptions: number; deletions: number };
+}
 const PACKAGE_VERSION = 3;
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const manifestDigest = (files: Entry[]) => digest(JSON.stringify(files.map(({ path, size, sha256 }) => ({ path, size, sha256 }))));
@@ -34,7 +47,8 @@ export function safePath(value: string): boolean {
   if (segments.some((part) => !part || part === '.' || part === '..'
     || /[\\\x00-\x1f\x7f:<>"|?*]/u.test(part) || /[. ]$/u.test(part)
     || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/iu.test(part))) return false;
-  return /^(documents\/youtube\/[A-Za-z0-9_-]{11}\.md|settings\/youtube-(channels|schedule)\.json|settings\/deleted-documents\.json)$/u.test(value)
+  return documentKeyFromPath(value) !== null
+    || /^(settings\/youtube-(channels|schedule)\.json|settings\/deleted-documents\.json)$/u.test(value)
     || /^(attachments|versions|management)\/.+/u.test(value);
 }
 
@@ -43,12 +57,15 @@ export function safePath(value: string): boolean {
  * visibility rule as `MarkdownVault.list`: a document file a deletion hides stays out, and a record
  * whose document is newer stays out, so a package never holds a document next to the record that
  * hides it, even while a deletion is unfinished.
+ *
+ * `info` describes a package written for people; packages this program writes for its own
+ * comparisons leave it out, so two exports of unchanged data are byte for byte equal.
  */
-export async function exportVault(root: string): Promise<Buffer> {
+export async function exportVault(root: string, info: { createdBy?: string; exportedAt?: Date } = {}): Promise<Buffer> {
   const files: Entry[] = [];
   let total = 0;
   const portable = await new MarkdownVault(root).portableDeletions();
-  const hiddenPaths = new Set([...portable.hidden].map((id) => `documents/youtube/${id.slice('youtube:'.length)}.md`));
+  const hiddenPaths = new Set([...portable.hidden].map(documentPathFromId).filter((file): file is string => file !== null));
   async function visit(relative: string): Promise<void> {
     const absolute = path.join(root, relative);
     let stat;
@@ -84,10 +101,34 @@ export async function exportVault(root: string): Promise<Buffer> {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   for (const name of ['youtube-channels.json', 'youtube-schedule.json', 'deleted-documents.json']) await visit(`settings/${name}`);
-  const result: VaultPackage = { format: 'xr-collector-vault', version: PACKAGE_VERSION, files, sha256: manifestDigest(files) };
+  const byPath = new Map(files.map((file) => [file.path, Buffer.from(file.data, 'base64')]));
+  const json = (file: string) => { const bytes = byPath.get(file); return bytes ? JSON.parse(bytes.toString('utf8')) as unknown : undefined; };
+  const summary = {
+    documents: files.filter((file) => documentKeyFromPath(file.path)).length,
+    subscriptions: channelsFromJson(json(CHANNELS_FILE), json(SCHEDULE_FILE)).length,
+    deletions: deletionsFromJson(json(DELETIONS_FILE)).length,
+  };
+  const result: VaultPackage = {
+    format: 'xr-collector-vault', version: PACKAGE_VERSION,
+    ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}), summary,
+    files, sha256: manifestDigest(files),
+  };
   const buffer = Buffer.from(JSON.stringify(result));
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
   return buffer;
+}
+
+/** The description fields of a package, without checking its files. */
+export function packageInfo(buffer: Buffer): PackageInfo & { version: number } {
+  const parsed = JSON.parse(buffer.toString('utf8')) as Partial<VaultPackage>;
+  const summary = parsed.summary;
+  return {
+    version: Number(parsed.version),
+    ...(typeof parsed.exportedAt === 'string' ? { exportedAt: parsed.exportedAt } : {}),
+    ...(typeof parsed.createdBy === 'string' ? { createdBy: parsed.createdBy } : {}),
+    ...(summary && typeof summary === 'object' && [summary.documents, summary.subscriptions, summary.deletions].every(Number.isSafeInteger)
+      ? { summary: { documents: summary.documents, subscriptions: summary.subscriptions, deletions: summary.deletions } } : {}),
+  };
 }
 
 export interface UnpackOptions {
@@ -135,7 +176,7 @@ export async function unpackVault(
     try { records = deletionsFromJson(JSON.parse(deletions.bytes.toString('utf8'))); } catch { invalid('資料包中的刪除紀錄格式無效。'); }
     // An export leaves out documents their deletion hides, so a package holding both is inconsistent.
     const documents = new Set(decoded.map((entry) => entry.path));
-    if (!recovery && records.some((record) => documents.has(`documents/${record.sourceType}/${record.sourceId}.md`))) {
+    if (!recovery && records.some((record) => documents.has(documentPath(record)))) {
       invalid('資料包中同一份文件同時有內容與刪除紀錄。');
     }
   }
@@ -157,17 +198,17 @@ export async function unpackVault(
     const vault = new MarkdownVault(destination);
     const documents = await vault.list();
     const { hidden } = await vault.portableDeletions();
-    const expectedDocuments = decoded.filter((entry) => entry.path.startsWith('documents/')
-      && !hidden.has(`youtube:${path.basename(entry.path, '.md')}`));
+    const expectedDocuments = decoded.flatMap((entry) => {
+      const key = documentKeyFromPath(entry.path);
+      return key && !hidden.has(documentId(key)) ? [key] : [];
+    });
     if (documents.length !== expectedDocuments.length) throw new Error('Document count mismatch');
-    for (const entry of expectedDocuments) {
-      const id = `youtube:${path.basename(entry.path, '.md')}`;
-      const doc = await vault.read(id);
-      if (!doc || doc.id !== id || doc.sourceId !== id.slice(8) || doc.type !== 'Transcript'
-        || typeof doc.title !== 'string' || typeof doc.publisher.name !== 'string'
-        || typeof doc.collectedAt !== 'string' || typeof doc.youtube?.languageCode !== 'string'
-        || !['manual', 'automatic'].includes(doc.youtube.subtitleKind)
-        || doc.sourceUrl !== `https://www.youtube.com/watch?v=${doc.sourceId}`) throw new Error('Invalid document');
+    // The document parser checks the fields of each source type; this checks what every document shares.
+    for (const key of expectedDocuments) {
+      const doc = await vault.read(documentId(key));
+      if (!doc || doc.id !== documentId(key) || doc.sourceType !== key.sourceType || doc.sourceId !== key.sourceId
+        || typeof doc.type !== 'string' || typeof doc.title !== 'string' || typeof doc.publisher?.name !== 'string'
+        || typeof doc.collectedAt !== 'string' || typeof doc.sourceUrl !== 'string') throw new Error('Invalid document');
     }
     await migrateSubscriptionSettings(destination);
     await new JsonChannelStore(destination).list();

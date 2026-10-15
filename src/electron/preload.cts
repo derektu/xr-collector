@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('xrCollectorTheme', {
 
 contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   chooseDirectory: (defaultPath?: string) => ipcRenderer.invoke('xrCollector:desktop:chooseDirectory', defaultPath),
+  chooseBackupToSave: (defaultPath: string) => ipcRenderer.invoke('xrCollector:desktop:chooseBackupToSave', defaultPath),
+  chooseBackupToOpen: () => ipcRenderer.invoke('xrCollector:desktop:chooseBackupToOpen'),
 });

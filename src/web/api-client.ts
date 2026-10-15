@@ -9,6 +9,9 @@ import type {
   DocumentSources,
   JobPage,
   JobSubmission,
+  MergeChoice,
+  MergePreview,
+  TransferStatus,
   SavedDocument,
   SearchQuery,
   SearchResponse,
@@ -283,6 +286,36 @@ export const api = {
       method: 'POST',
     });
     return result.status;
+  },
+
+  vaultTransferStatus(): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/status');
+  },
+
+  /** Writes a backup of the active Vault to an absolute path on this computer. */
+  exportVault(path: string, overwrite: boolean): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/export', { method: 'POST', body: JSON.stringify({ path, overwrite }) });
+  },
+
+  previewMerge(path: string): Promise<MergePreview> {
+    return request<MergePreview>('/api/vault/merge/preview', { method: 'POST', body: JSON.stringify({ path }) });
+  },
+
+  applyMerge(id: string, choices: Record<string, MergeChoice>): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/merge/apply', { method: 'POST', body: JSON.stringify({ id, choices }) });
+  },
+
+  async cancelMerge(id: string): Promise<void> {
+    await request('/api/vault/merge/cancel', { method: 'POST', body: JSON.stringify({ id }) });
+  },
+
+  async restoreSuggestion(): Promise<string> {
+    return (await request<{ path: string }>('/api/vault/restore/suggestion')).path;
+  },
+
+  /** Restores a backup into a new Vault at `targetPath` and switches to it; follow `vaultTransferStatus`. */
+  restoreVault(packagePath: string, targetPath: string): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/restore', { method: 'POST', body: JSON.stringify({ packagePath, targetPath }) });
   },
 };
 

@@ -70,7 +70,7 @@ function fakeSearch(root: string): TranscriptSearch {
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> = {}) {
   const selection = new VaultSelection(`${root}.selection.json`);
   const workspace = await VaultWorkspace.open({
-    root: await selection.read() ?? root, selection, createdBy: 'XR Collector test', capture: { capture: async () => capture },
+    root: await selection.read() ?? root, selection, profilePath: `${root}.profile`, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: `${root}-search`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
@@ -180,35 +180,63 @@ describe('workspace transfer through HTTP', () => {
     } });
     const before = await exportVault(b);
     for (const buffer of [Buffer.from('bad json'), packageOf([{ path: 'settings/youtube-channels.json', data: '{}' }]), packageOf([{ path: `documents/youtube/${capture.videoId}.md`, data: 'bad metadata' }]), before]) {
-      workspace.restore(buffer); await waitForRestore(workspace);
+      await workspace.restore(buffer); await waitForRestore(workspace);
       expect(workspace.status().state).toBe('error');
       expect(workspace.status().vaultPath).toBe(b);
       expect(await exportVault(b)).toEqual(before);
-      expect(await readdir(`${b}.restored`)).toEqual([]);
+      expect((await readdir(root)).filter((name) => /還原|restoring/u.test(name))).toEqual([]);
+      await expect(readFile(`${b}.profile/vault-restore-journal.json`)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(`${b}.selection.json`)).rejects.toMatchObject({ code: 'ENOENT' });
     }
     fail = false;
-    workspace.restore(before); await waitForRestore(workspace);
+    await workspace.restore(before); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
   });
-  it('blocks transfer during collection and blocks HTTP writes during transfer', async () => {
+  it('waits for the running step, keeps queued jobs queued and refuses writes and a second transfer meanwhile', async () => {
     const root = await temp();
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
-    const workspace = await open(path.join(root, 'B'), { capture: { capture: async () => { await waiting; return capture; } } });
-    const collection = await workspace.jobs.submitVideo(capture.sourceUrl);
-    // The job holds the Vault until it finishes, although its HTTP request returned long ago.
-    await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy' });
-    expect(() => workspace.restore(packageOf([]))).toThrow('等待');
-    release(); await workspace.jobs.whenSettled(collection.job.id);
+    const started: string[] = [];
+    const workspace = await open(path.join(root, 'B'), { jobLimits: { capture: 1 }, capture: { capture: async (video) => {
+      started.push(video.videoId);
+      if (started.length === 1) await waiting;
+      return { ...capture, videoId: video.videoId, sourceUrl: video.canonicalUrl };
+    } } });
+    const first = await workspace.jobs.submitVideo(capture.sourceUrl);
+    const second = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=abcdefghijk');
+    await expect.poll(() => started.length).toBe(1);
     const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
     try {
+      // The export takes the Vault at once and waits for the capture already running.
       const pending = workspace.export();
-      const response = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } });
-      expect(response.statusCode).toBe(409);
-      await pending;
+      expect(workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' });
+      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
+      await expect(workspace.restore(packageOf([]))).rejects.toMatchObject({ code: 'vault_busy' });
+      release();
+      const buffer = await pending;
+      // The finished capture is in the package; the queued video did not start while the Vault was held.
+      expect(JSON.parse(buffer.toString()).files.map((file: { path: string }) => file.path)).toContain(`documents/youtube/${capture.videoId}.md`);
+      expect(started).toEqual([capture.videoId]);
+      expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'export' });
+      await workspace.jobs.whenSettled(first.job.id);
+      expect((await workspace.jobs.whenSettled(second.job.id)).state).toBe('completed');
+      expect(started).toEqual([capture.videoId, 'abcdefghijk']);
       expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(202);
     } finally { await app.close(); }
+  });
+  it('gives up with vault_busy when a running step outlasts the hold limit, and collection goes on', async () => {
+    const root = await temp();
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const workspace = await open(path.join(root, 'B'), { holdTimeoutMs: 50, capture: { capture: async () => { await waiting; return capture; } } });
+    const job = await workspace.jobs.submitVideo(capture.sourceUrl);
+    await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy', message: expect.stringContaining('收集步驟') });
+    expect(workspace.status()).toMatchObject({ state: 'error', operation: 'export' });
+    // The lock is gone: writes and another transfer are accepted again.
+    expect(() => workspace.enterWrite()()).not.toThrow();
+    release();
+    expect((await workspace.jobs.whenSettled(job.job.id)).state).toBe('completed');
+    await expect(workspace.export()).resolves.toBeInstanceOf(Buffer);
   });
   it('allows an authenticated Agent to invoke transfer routes', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
@@ -234,12 +262,12 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('rebuilds 
   const buffer = await exportVault(a);
   await rm(a, { recursive: true });
   const selection = new VaultSelection(`${b}.selection.json`);
-  const options = { root: b, selection, createdBy: 'XR Collector test', capture: { capture: async () => capture },
+  const options = { root: b, selection, profilePath: `${b}.profile`, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData: `${b}-search` };
   const workspace = await VaultWorkspace.open(options); workspaces.push(workspace);
   await new Promise((resolve) => setTimeout(resolve, 10));
-  workspace.restore(buffer);
+  await workspace.restore(buffer);
   await waitForRestore(workspace);
   expect(workspace.status()).toMatchObject({ state: 'completed' });
   expect((await workspace.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`);
@@ -250,7 +278,7 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('rebuilds 
   expect((await restarted.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`);
 }, 30_000);
 
-it('refuses transfer while a channel discovery run is still active', async () => {
+it('waits for a running channel discovery before exporting', async () => {
   const root = await temp(); const b = path.join(root, 'B'); await seed(b);
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -259,18 +287,18 @@ it('refuses transfer while a channel discovery run is still active', async () =>
     listVideos: async () => { await pending; return []; },
   } });
   await workspace.channels.startRun({ trigger: 'manual' });
-  await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy' });
+  const exported = workspace.export();
+  expect(workspace.status().state).toBe('waiting');
   release();
-  await expect.poll(() => workspace.jobs.isBusy()).toBe(false);
-  await expect(workspace.export()).resolves.toBeInstanceOf(Buffer);
+  await expect(exported).resolves.toBeInstanceOf(Buffer);
 });
 
 it('rejects invalid schedule data and empty package restores to an empty paused vault', async () => {
   const root = await temp(); const workspace = await open(path.join(root, 'B'));
-  workspace.restore(packageOf([{ path: 'settings/youtube-schedule.json', data: '{"version":1,"enabled":true}' }]));
+  await workspace.restore(packageOf([{ path: 'settings/youtube-schedule.json', data: '{"version":1,"enabled":true}' }]));
   await waitForRestore(workspace);
   expect(workspace.status().state).toBe('error');
-  workspace.restore(packageOf([])); await waitForRestore(workspace);
+  await workspace.restore(packageOf([])); await waitForRestore(workspace);
   expect(workspace.status().state).toBe('completed');
   expect(await workspace.collector.list()).toEqual([]);
   expect((await workspace.schedule.getSchedule()).enabled).toBe(false);
@@ -302,7 +330,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     expect(JSON.parse(Buffer.from(channelsFile.data, 'base64').toString())).toMatchObject({ version: 2, channels: [{ id: 'UC123', settings }] });
     const workspace = await open(path.join(root, 'B'));
 
-    workspace.restore(exported); await waitForRestore(workspace);
+    await workspace.restore(exported); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
     expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', settings })]);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, nextCheck: null });
@@ -310,7 +338,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
 
   it('restores a package with shared settings by giving them to every subscription', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
-    workspace.restore(packageOf([
+    await workspace.restore(packageOf([
       { path: 'settings/youtube-channels.json', data: sharedChannels },
       { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 20, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: '2026-10-15T00:00:00.000Z', lastResult: null }) },
     ]));
@@ -329,7 +357,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
 
   it('restores a package from before the backfill settings with the default backfill and an offered interval', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
-    workspace.restore(packageOf([
+    await workspace.restore(packageOf([
       { path: 'settings/youtube-channels.json', data: JSON.stringify([{ id: 'UC123', title: '第一輪頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]) },
       { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 45, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null }) },
     ]));
@@ -377,7 +405,7 @@ describe('deletion records in packages (A6)', () => {
     expect(parsed.files.map((file) => file.path)).not.toContain(`documents/youtube/${deletedId}.md`);
 
     const workspace = await open(path.join(root, 'B'));
-    workspace.restore(exported); await waitForRestore(workspace);
+    await workspace.restore(exported); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
     await expect(workspace.collector.read(`youtube:${deletedId}`)).rejects.toMatchObject({ code: 'document_deleted' });
     expect(await workspace.collector.isKnown(deletedId)).toBe(true);
@@ -425,7 +453,7 @@ it('refuses a document deletion while a restore holds the Vault (A7)', async () 
     },
   });
   const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
-  workspace.restore(await exportVault(a));
+  await workspace.restore(await exportVault(a));
   const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
   await expect.poll(async () => (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409);
   release(); await waitForRestore(workspace);
