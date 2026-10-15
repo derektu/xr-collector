@@ -174,3 +174,17 @@ function localDate(date: Date): string {
 function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
+
+/** What deleting a document does, as the confirmation states it. */
+export const DELETE_CONFIRMATION = '文件會從知識庫與搜尋移除。之後的自動收集與頻道收集會略過這支影片；要再收集，請貼上這支影片的網址。訂閱不受影響。';
+
+/** The page to show after deleting the last document of a list page: the previous page, or the same one. */
+export function pageAfterDeletion(page: number, rowsOnPage: number): number {
+  return rowsOnPage <= 1 && page > 1 ? page - 1 : page;
+}
+
+/** The source address of a document ID, for collecting a deleted document again; null for an unknown ID. */
+export function sourceUrlOfDocumentId(id: string): string | null {
+  const videoId = /^youtube:([A-Za-z0-9_-]{11})$/u.exec(id)?.[1];
+  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : null;
+}

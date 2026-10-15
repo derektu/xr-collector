@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_PENDING_REMOVALS } from '../../src/search/managed-transcript-search.js';
 import type { SavedDocument } from '../../src/core/types.js';
 import {
   ManagedTranscriptSearch,
@@ -45,6 +46,7 @@ function fakeBackend(current: boolean, rebuilt: SavedDocument[][]): SearchBacken
       rebuilt.push(items);
     },
     upsert: async () => undefined,
+    remove: async () => undefined,
     search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
   };
 }
@@ -232,5 +234,89 @@ describe('ManagedTranscriptSearch', () => {
 
   it('gives different source types with the same source ID different keys', () => {
     expect(indexKey('youtube:abc')).not.toBe(indexKey('rss:abc'));
+  });
+});
+
+/** A backend holding documents in memory that applies the exclusion like the engine filter does. */
+function recordingBackend(initial: SavedDocument[]) {
+  const held = new Map(initial.map((document) => [document.id, document]));
+  const calls = { removes: [] as string[][], excludes: [] as string[][], rebuilds: 0 };
+  let removeFails = false;
+  const backend: SearchBackend = {
+    initialize: async () => undefined,
+    count: async () => held.size,
+    isCurrent: async (items) => items.length === held.size && items.every((item) => held.has(item.id)),
+    replaceAll: async (items) => { calls.rebuilds += 1; held.clear(); for (const item of items) held.set(item.id, item); },
+    upsert: async (document) => { held.set(document.id, document); },
+    remove: async (ids) => { calls.removes.push(ids); if (removeFails) throw new Error('engine down'); for (const id of ids) held.delete(id); },
+    search: async (_query, excludeIds) => {
+      calls.excludes.push(excludeIds);
+      const hits = [...held.values()].filter((document) => !excludeIds.includes(document.id)).map((document) => ({ ...document, snippet: document.bodyMarkdown }));
+      return { hits, total: hits.length, offset: 0, limit: 50 };
+    },
+  };
+  return { backend, held, calls, setRemoveFails(value: boolean) { removeFails = value; } };
+}
+
+describe('removing deleted documents from search (A3)', () => {
+  it('excludes a document whose removal failed and removes it with the next index change', async () => {
+    let vault = [...documents];
+    const engine = recordingBackend(documents);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => vault);
+    await search.start();
+    const [first, second] = documents as [SavedDocument, SavedDocument];
+
+    engine.setRemoveFails(true);
+    vault = [second];
+    await expect(search.remove(first.id)).rejects.toThrow('engine down');
+
+    expect(search.status().state).toBe('ready');
+    const result = await search.search({ query: '字幕' });
+    expect(result.hits.map(({ id }) => id)).toEqual([second.id]);
+    expect(result.total).toBe(1);
+    expect(engine.calls.excludes.at(-1)).toEqual([first.id]);
+    expect(engine.held.has(first.id)).toBe(true);
+
+    engine.setRemoveFails(false);
+    await search.index(second);
+    expect(engine.held.has(first.id)).toBe(false);
+    await search.search({ query: '字幕' });
+    expect(engine.calls.excludes.at(-1)).toEqual([]);
+  });
+
+  it('rebuilds from the Vault instead of sending a filter longer than the limit', async () => {
+    const many = Array.from({ length: MAX_PENDING_REMOVALS + 2 }, (_, index) => ({
+      ...documents[0]!, id: `youtube:${String(index).padStart(11, 'x')}`, sourceId: String(index).padStart(11, 'x'),
+    }));
+    let vault = [...many];
+    const engine = recordingBackend(many);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => vault);
+    await search.start();
+    engine.setRemoveFails(true);
+
+    for (const document of many.slice(0, MAX_PENDING_REMOVALS)) {
+      vault = vault.filter((candidate) => candidate.id !== document.id);
+      await search.remove(document.id).catch(() => undefined);
+    }
+    await search.search({ query: 'x' });
+    expect(engine.calls.excludes.at(-1)).toHaveLength(MAX_PENDING_REMOVALS);
+
+    const extra = many[MAX_PENDING_REMOVALS]!;
+    vault = vault.filter((candidate) => candidate.id !== extra.id);
+    await search.remove(extra.id);
+
+    expect(engine.calls.rebuilds).toBe(1);
+    expect([...engine.held.keys()]).toEqual([many[MAX_PENDING_REMOVALS + 1]!.id]);
+    await search.search({ query: 'x' });
+    expect(engine.calls.excludes.at(-1)).toEqual([]);
+    expect(Math.max(...engine.calls.excludes.map((ids) => ids.length))).toBeLessThanOrEqual(MAX_PENDING_REMOVALS);
+  });
+
+  it('rebuilds at the next start when a removal never reached the index', async () => {
+    const engine = recordingBackend(documents);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => [documents[1]!]);
+    await search.start();
+    expect(engine.calls.rebuilds).toBe(1);
+    expect([...engine.held.keys()]).toEqual([documents[1]!.id]);
   });
 });

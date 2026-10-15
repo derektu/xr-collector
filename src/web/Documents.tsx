@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import type { DocumentMetadata, DocumentSources } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
 import {
@@ -6,6 +7,7 @@ import {
   SEARCH_DEBOUNCE_MS,
   collectedShortLabel,
   draftForQuery,
+  pageAfterDeletion,
   pageItems,
   publishedLabel,
   readerPath,
@@ -36,7 +38,7 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd }: {
+export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
   state: DocumentListState;
   /** The scrolling element whose position is saved before opening the Reader. */
   scroller: () => HTMLElement | null;
@@ -45,6 +47,8 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
   onNavigate: (page: 'settings') => void;
   /** Opens the Add Content dialog. */
   onAdd: () => void;
+  /** Reports the result of a row action. */
+  onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const [draft, setDraft] = useState(state.query);
   const [sources, setSources] = useState<DocumentSources | null>(null);
@@ -52,6 +56,8 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
   const [searchProblem, setSearchProblem] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Bumped after a deletion, so the sources and the current page load again. */
+  const [revision, setRevision] = useState(0);
   const requests = useMemo(createLatestRequest, []);
   const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
 
@@ -63,7 +69,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
       if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取來源清單。');
     });
     return () => controller.abort();
-  }, []);
+  }, [revision]);
 
   // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
@@ -106,7 +112,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
       setLoading(false);
     });
     return () => { active = false; };
-  }, [state.query, state.source, state.page, requests]);
+  }, [state.query, state.source, state.page, requests, revision]);
 
   useEffect(() => () => requests.cancel(), [requests]);
 
@@ -124,6 +130,13 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
     const current = (window.history.state ?? {}) as ListHistoryState;
     window.history.replaceState({ ...current, documentsScroll: scrollTop } satisfies ListHistoryState, '');
     onOpen(id);
+  }
+
+  function deleted(message: string): void {
+    onChanged(message);
+    const page = pageAfterDeletion(state.page, results?.rows.length ?? 0);
+    if (page !== state.page) onState({ ...state, page });
+    setRevision((value) => value + 1);
   }
 
   const options = sourceOptions(sources);
@@ -190,7 +203,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
     </section> : null}
 
     {results && results.rows.length > 0 ? <ol className="document-list" data-testid="document-list">
-      {results.rows.map(({ document, excerpt, snippet }) => <li key={document.id}>
+      {results.rows.map(({ document, excerpt, snippet }) => <li key={document.id} className="document-item">
         <a className="document-row" href={readerPath(document.id)} onClick={(event) => open(event, document.id)}>
           <span className="document-main">
             <span className="document-title">{document.title}</span>
@@ -204,6 +217,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
             <span className="document-collected">{collectedShortLabel(document.collectedAt)}</span>
           </span>
         </a>
+        <DocumentActions document={document} onDeleted={deleted} />
       </li>)}
     </ol> : null}
 
@@ -215,4 +229,32 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd 
       <button type="button" disabled={state.page >= pages} onClick={() => onState({ ...state, page: state.page + 1 })}>下一頁</button>
     </nav> : null}
   </>;
+}
+
+/** The more-actions menu of one list row. */
+function DocumentActions({ document: item, onDeleted }: { document: DocumentMetadata; onDeleted: (message: string) => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const close = (event: Event) => { if (!menu.current?.contains(event.target as Node)) setMenuOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
+  }, [menuOpen]);
+
+  return <div className="document-actions">
+    <div className="menu-anchor" ref={menu}>
+      <button type="button" className="icon-only" aria-label={`${item.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((open) => !open)} data-testid="document-more"><Icon name="more" size={15} /></button>
+      {menuOpen ? <div className="menu" role="menu">
+        <button type="button" role="menuitem" className="danger" onClick={() => { setMenuOpen(false); setDeleting(true); }}>刪除</button>
+      </div> : null}
+    </div>
+    {deleting ? <ConfirmDeleteDocument document={item} onCancel={() => setDeleting(false)}
+      onDeleted={(message) => { setDeleting(false); onDeleted(message); }} /> : null}
+  </div>;
 }

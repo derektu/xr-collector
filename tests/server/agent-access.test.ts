@@ -115,6 +115,33 @@ describe('Agent authenticated HTTP access', () => {
     expect(missing.json().error.code).toBe('document_not_found');
   });
 
+  it('deletes a document for an authorized Agent with the same results the UI sees (A7)', async () => {
+    const { collector } = await fixture();
+    const agent = await createHttpApp({ collector, agentToken: 'secret' });
+    const ui = await createHttpApp({ collector });
+    cleanup.push(() => agent.close(), () => ui.close());
+    const headers = { authorization: 'Bearer secret' };
+    const url = `/api/documents/${encodeURIComponent('youtube:aaaaaaaaaaa')}`;
+
+    expect((await agent.inject({ method: 'DELETE', url })).statusCode).toBe(401);
+    const deleted = await agent.inject({ method: 'DELETE', url, headers });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({
+      deleted: { id: 'youtube:aaaaaaaaaaa', sourceType: 'youtube', sourceId: 'aaaaaaaaaaa', title: 'Agent fixture aaaaaaaaaaa', deletedAt: expect.any(String) },
+      indexed: false,
+    });
+    for (const app of [agent, ui]) {
+      const options = app === agent ? { headers } : {};
+      const read = await app.inject({ url, ...options });
+      expect([read.statusCode, read.json().error.code]).toEqual([404, 'document_deleted']);
+      const again = await app.inject({ method: 'DELETE', url, ...options });
+      expect([again.statusCode, again.json().error.code]).toEqual([404, 'document_deleted']);
+      expect((await app.inject({ url: '/api/documents', ...options })).json().total).toBe(2);
+    }
+    const missing = await ui.inject({ method: 'DELETE', url: '/api/documents/youtube:zzzzzzzzzzz' });
+    expect([missing.statusCode, missing.json().error.code]).toEqual([404, 'document_not_found']);
+  });
+
   it('reports incomplete indexing while browse/read remain available', async () => {
     const { collector } = await fixture();
     const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), search: vi.fn() };

@@ -161,7 +161,8 @@ export default function App() {
   let body;
   if (readerId) {
     const fromSource = historyState().returnable === true && historyState().from === 'source';
-    body = <Reader key={readerId} id={readerId} backLabel={fromSource ? '來源' : '文件'} onBack={() => back('/documents')} onOpenSource={openSource} />;
+    body = <Reader key={readerId} id={readerId} backLabel={fromSource ? '來源' : '文件'} onBack={() => back('/documents')} onOpenSource={openSource}
+      onDeleted={(message) => { announce(message); back('/documents', true); }} />;
   } else if (sourceRoute) {
     body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
       onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onOpenDocuments={(source) => go('/documents', listStateSearch({ query: '', source, page: 1 }), { returnable: true })}
@@ -171,7 +172,7 @@ export default function App() {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} active={active} schedule={status.schedule} revision={status.revision}
       onAdd={() => setAdding(true)} onOpenSource={openSource} onOpenActivity={() => navigate('activity')} onChanged={announce} />;
   } else if (page === 'documents') {
-    body = <Documents state={listState} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={() => setAdding(true)} />;
+    body = <Documents state={listState} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={() => setAdding(true)} onChanged={announce} />;
   } else if (page === 'activity') {
     body = <Activity revision={status.revision} search={location.search} onState={onActivityState}
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;

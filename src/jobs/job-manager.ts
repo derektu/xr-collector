@@ -587,7 +587,9 @@ export class JobManager {
         // A direct submission is the user's own request: no backfill bound and no subscription stop applies.
         this.manualClaims.add(active.id);
         delete active.publishedNotBefore;
-        this.update(active, { claimedByUser: true });
+        this.update(active, {
+          claimedByUser: true, checkpoint: { ...active.checkpoint, claimedAt: active.checkpoint?.claimedAt ?? this.now().toISOString() },
+        });
       }
       return { job: this.get(activeId), deduplicated: true };
     }
@@ -704,7 +706,8 @@ export class JobManager {
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title } });
         // The save phase is on disk before the document is, so a restart knows who saved it.
         await this.options.store.flush();
-        document = await documents.save(captured);
+        const saved = await documents.save(captured, { explicitAt: explicitRequestTime(job) });
+        document = saved.document;
         outcome = 'created';
         this.update(job, { checkpoint: { ...job.checkpoint, savedDocumentId: document.id } });
         this.event(job, {
@@ -713,6 +716,10 @@ export class JobManager {
       }
       this.update(job, { phase: 'index', source: { ...job.source, title: document.title } });
       const index = await documents.index(document);
+      if (index.deleted) {
+        this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'deleted' }, null);
+        return;
+      }
       if (!index.indexed) {
         this.event(job, {
           severity: 'warning', eventType: 'document.index_failed', message: '文件已保存，搜尋更新失敗。',
@@ -724,8 +731,8 @@ export class JobManager {
         ...(index.message ? { indexMessage: index.message } : {}),
       }, null);
     } catch (error) {
-      if (error instanceof CollectorError && error.code === 'out_of_range') {
-        this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'out_of_range' }, null);
+      if (error instanceof CollectorError && (error.code === 'out_of_range' || error.code === 'document_deleted')) {
+        this.finish(job, 'completed', { outcome: 'skipped', skipReason: error.code === 'out_of_range' ? 'out_of_range' : 'deleted' }, null);
         return;
       }
       this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
@@ -876,7 +883,8 @@ export class JobManager {
         cursor: null, backlog: false, publishedNotBefore: null,
       }
       : await discoverChannelVideos(
-        this.options.source, channel, scope, async (videoId) => (await this.options.documents.findExisting(videoId)) !== null,
+        // A deleted video counts as collected, so it neither returns nor takes a place within the item limit.
+        this.options.source, channel, scope, (videoId) => this.options.documents.isKnown(videoId),
       );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
@@ -1117,8 +1125,18 @@ function completionMessage(job: CollectionJob, result: JobResult): string {
 
 const SKIP_MESSAGES: Record<SkipReason, string> = {
   out_of_range: '超出補收範圍', subscription_paused: '訂閱已暫停', subscription_removed: '訂閱已移除',
-  superseded: '已由較新的工作接續',
+  superseded: '已由較新的工作接續', deleted: '文件已刪除',
 };
+
+/**
+ * When the user asked for this video by itself: a direct submission or a retry of one when it was
+ * accepted, a video a channel job queued when the user also submitted it. Null for channel work.
+ */
+function explicitRequestTime(job: CollectionJob): string | null {
+  if (job.kind !== 'youtube.video') return null;
+  if (job.parentId === null) return job.createdAt;
+  return job.claimedByUser ? job.checkpoint?.claimedAt ?? null : null;
+}
 
 /** External tool output carried by the error, for the activity log's diagnostic detail. */
 function diagnosticDetail(error: unknown): string | undefined {

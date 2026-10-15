@@ -63,7 +63,7 @@ describe('Collector', () => {
       },
     });
 
-    const document = await collector.save(captureResult);
+    const { document } = await collector.save(captureResult);
     const outcome = await collector.index(document);
 
     expect(indexAttempted).toBe(true);
@@ -75,7 +75,7 @@ describe('Collector', () => {
     const vault = new MemoryVault();
     const collector = new Collector(vault, { index: async () => undefined });
     expect(await collector.findExisting('dQw4w9WgXcQ')).toBeNull();
-    const document = await collector.save(captureResult);
+    const { document } = await collector.save(captureResult);
     expect(await collector.findExisting('dQw4w9WgXcQ')).toEqual(document);
     expect(await collector.index(document)).toEqual({ indexed: true });
   });

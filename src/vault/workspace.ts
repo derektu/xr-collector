@@ -13,6 +13,7 @@ import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
+import { deletionId } from './deleted-documents.js';
 import { compareFiles, fingerprint, packageFiles, mergeFiles } from './vault-merge.js';
 import { exportVault, unpackVault, safePath } from './vault-package.js';
 import { writeVaultMarker } from './vault-directory.js';
@@ -296,14 +297,20 @@ export class VaultWorkspace {
       this.mergeWriting = true;
       this.statusValue = { state: 'extracting', message: '正在合併資料…', completedFiles: 0, totalFiles: changes.size };
       for (const [relative, bytes] of changes) {
-        await this.atomicFile(path.join(root, relative), bytes);
+        if (bytes) await this.atomicFile(path.join(root, relative), bytes);
+        else await rm(path.join(root, relative), { force: true });
         this.statusValue.completedFiles += 1;
       }
       this.statusValue = { ...this.statusValue, state: 'indexing', message: '正在增量更新搜尋…' };
       const vault = new MarkdownVault(root);
-      for (const relative of changes.keys()) {
+      for (const [relative, bytes] of changes) {
         if (!relative.startsWith('documents/')) continue;
-        const document = await vault.read(`youtube:${path.basename(relative, '.md')}`);
+        const id = `youtube:${path.basename(relative, '.md')}`;
+        if (!bytes) {
+          await this.current.runtime.search.remove(id);
+          continue;
+        }
+        const document = await vault.read(id);
         if (!document) throw new Error('Merged document missing');
         await this.current.runtime.search.index(document);
       }
@@ -361,11 +368,13 @@ export class VaultWorkspace {
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
     await migrateSubscriptionSettings(root);
     const vault = new MarkdownVault(root);
+    // Deletions a stop left unfinished are settled before the search index is compared with the Vault.
+    const recovery = await vault.recoverDeletions();
     const runtime = this.options.createSearch ? await this.options.createSearch(root) : await startSearchRuntime({
       vault, binaryPath: this.options.searchBinary, databasePath: this.searchPath(root),
       ...(port ? { port } : {}),
     });
-    const collector = new Collector(vault, runtime.search);
+    const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry) });
     const channelStore = new JsonChannelStore(root);
     const source = youtubeSource(this.options.capture, this.options.channelSource);
     // The scheduler is replaced after a merge, so switch reads go through the bundle.
@@ -385,6 +394,18 @@ export class VaultWorkspace {
     const channels = new ChannelCollector(channelStore, jobs, {
       autoCollection, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),
     });
+    for (const record of recovery.completed) {
+      jobs.recordEvent({
+        severity: 'info', eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+      });
+    }
+    for (const record of recovery.cleared) {
+      jobs.recordEvent({
+        severity: 'info', eventType: 'document.recollected', message: `已重新收集「${record.title}」，解除刪除紀錄。`,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+      });
+    }
     const partial = { root, runtime, collector, channels, jobs };
     const bundle: Bundle = { ...partial, schedule: makeScheduler(partial) };
     return bundle;

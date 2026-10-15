@@ -120,6 +120,7 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   invalid_channel: 400,
   invalid_request: 400,
   document_not_found: 404,
+  document_deleted: 404,
   search_unavailable: 503,
   channel_not_found: 404,
   channel_paused: 409,
@@ -340,6 +341,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   app.get<{ Params: { id: string } }>('/api/documents/:id', async (request) => ({
     document: await options.collector!.read(request.params.id),
   }));
+
+  app.delete<{ Params: { id: string } }>('/api/documents/:id', async (request) =>
+    options.collector!.delete(request.params.id));
 
   if (options.jobs) {
     const jobs = options.jobs;

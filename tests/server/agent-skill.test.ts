@@ -41,6 +41,7 @@ describe('Agent Skill', () => {
       { method: 'GET', url: '/api/documents' },
       { method: 'GET', url: '/api/documents/sources' },
       { method: 'GET', url: '/api/documents/:id' },
+      { method: 'DELETE', url: '/api/documents/:id' },
       { method: 'GET', url: '/api/search' },
       { method: 'GET', url: '/api/search/status' },
       { method: 'POST', url: '/api/youtube/channel-previews' },
@@ -100,6 +101,14 @@ describe('Agent Skill', () => {
     const skill = await readFile(skillPath, 'utf8');
     for (const term of ['`severity`', '`eventType`', '`subscriptionId`', '`nextCursor`', '`retentionDays`', '`activityLog`', '`failing`', '`dropped`',
       '`job_not_retryable`', '`retryOf`', '`retriedBy`', '`activityIncomplete: true`', '保留最近 30 天', '`[已遮蔽]`', '`outcome: skipped`']) {
+      expect(skill).toContain(term);
+    }
+  });
+
+  it('documents deletion, its records and explicit collection again', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const term of ['`DELETE /api/documents/:id`', '`document_deleted`', '`skipReason` 為 `deleted`', '`kind: deletion`', '`indexed: false`',
+      '`document.deleted`', '`document.recollected`', '以單支網址明確收集']) {
       expect(skill).toContain(term);
     }
   });

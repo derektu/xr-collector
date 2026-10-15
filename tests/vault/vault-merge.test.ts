@@ -9,6 +9,8 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { exportVault } from '../../src/vault/vault-package.js';
 import { compareFiles, mergeFiles, packageFiles } from '../../src/vault/vault-merge.js';
 import { lineDiff } from '../../src/web/line-diff.js';
+import { Collector } from '../../src/core/collector.js';
+import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
 import { createHttpApp } from '../../src/server/app.js';
@@ -41,6 +43,7 @@ async function fixture(real = false) {
   const search: TranscriptSearch = {
     status: () => ({ state: 'ready', indexedDocuments: docs.size }),
     index: vi.fn(async (doc: SavedDocument) => { docs.set(doc.id, doc); }),
+    remove: vi.fn(async (id: string) => { docs.delete(id); }),
     rebuild: vi.fn(async () => {
       docs.clear(); const vault = new MarkdownVault(local);
       for (const row of await vault.list()) docs.set(row.id, (await vault.read(row.id))!);
@@ -339,6 +342,81 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('updates r
   await expect.poll(() => restarted.search.status().state, { timeout: 10_000 }).toBe('ready');
   expect((await restarted.search.search({ query: '海洋' })).hits).toHaveLength(1);
 }, 30_000);
+
+describe('deletion records in a merge (A6)', () => {
+  const id = `youtube:${capture.videoId}`;
+  const deleteIn = (root: string) => new Collector(new MarkdownVault(root)).delete(id);
+  const records = async (root: string) => (await new MarkdownVault(root).deletions.list()).map((record) => record.sourceId);
+
+  it.each(['local', 'incoming'] as const)('asks once when the package deleted a document the Vault keeps (%s)', async (choice) => {
+    const { local, incoming, workspace, search } = await fixture();
+    await deleteIn(incoming);
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    expect(preview.items.map((item) => [item.key, item.kind, item.state])).toEqual([[`deletion:${id}`, 'deletion', 'conflict']]);
+    expect(preview.items[0]!.label).toBe('刪除紀錄：本機標題');
+
+    workspace.applyMerge(preview.id, choices(preview, choice)); await wait(workspace);
+    expect(workspace.status().state).toBe('completed');
+    if (choice === 'local') {
+      expect(await workspace.collector.list()).toHaveLength(1);
+      expect(await records(local)).toEqual([]);
+    } else {
+      expect(await workspace.collector.list()).toEqual([]);
+      expect(existsSync(path.join(local, 'documents/youtube', `${capture.videoId}.md`))).toBe(false);
+      expect(await records(local)).toEqual([capture.videoId]);
+      expect(search.remove).toHaveBeenCalledWith(id);
+      expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(0);
+    }
+  });
+
+  it.each(['local', 'incoming'] as const)('asks once when the Vault deleted a document the package has (%s)', async (choice) => {
+    const { local, incoming, workspace } = await fixture();
+    await workspace.collector.delete(id);
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    expect(preview.items.map((item) => [item.key, item.state])).toEqual([[`deletion:${id}`, 'conflict']]);
+
+    workspace.applyMerge(preview.id, choices(preview, choice)); await wait(workspace);
+    expect(workspace.status().state).toBe('completed');
+    if (choice === 'local') {
+      await expect(workspace.collector.read(id)).rejects.toMatchObject({ code: 'document_deleted' });
+      expect(await records(local)).toEqual([capture.videoId]);
+    } else {
+      expect((await workspace.collector.read(id)).bodyMarkdown).toBe('匯入的海洋內容');
+      expect(await records(local)).toEqual([]);
+      expect((await workspace.search.search({ query: '海洋' })).hits).toHaveLength(1);
+    }
+  });
+
+  it('adds a deletion that meets no document and treats deletions on both sides as the same', async () => {
+    const { local, incoming, workspace } = await fixture();
+    await add(incoming, 'gone0000001', '只在匯入包出現過');
+    await new Collector(new MarkdownVault(incoming)).delete('youtube:gone0000001');
+    await workspace.collector.delete(id);
+    await deleteIn(incoming);
+
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    expect(preview.items.map((item) => [item.key, item.state])).toEqual([
+      ['deletion:youtube:gone0000001', 'new'], [`deletion:${id}`, 'same'],
+    ]);
+    workspace.applyMerge(preview.id, {}); await wait(workspace);
+    expect((await records(local)).sort()).toEqual([capture.videoId, 'gone0000001'].sort());
+    expect(await workspace.collector.isKnown('gone0000001')).toBe(true);
+  });
+
+  it('restores the document and the deletions file when applying a deletion fails', async () => {
+    const { local, incoming, workspace, search } = await fixture();
+    await deleteIn(incoming);
+    const before = await exportVault(local);
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    vi.mocked(search.remove).mockRejectedValueOnce(new Error('index failure'));
+    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
+
+    expect(workspace.status().state).toBe('error');
+    expect(await exportVault(local)).toEqual(before);
+    expect(existsSync(path.join(local, DELETIONS_FILE))).toBe(false);
+    expect(await workspace.collector.list()).toHaveLength(1);
+  });
+});
 
 describe('line diff', () => {
   it.each([['', ''], ['', '新增'], ['刪除', ''], ['a\nb', 'a\nx\nb'], ['a\nb\nc', 'c\nb\na'], ['重複\n重複', '重複'], ['甲\n乙\n丙', '甲\n丁\n丙'], ['a\n', 'a'], ['one', 'two']])('reconstructs both sides: %j → %j', (before, after) => {

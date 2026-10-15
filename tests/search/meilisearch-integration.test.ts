@@ -144,4 +144,29 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(legacy.hits.every((hit) => hit.publisher.id === null)).toBe(true);
     });
   }, 30_000);
+
+  it('stops returning a deleted document as soon as its removal is requested', async () => {
+    const databasePath = await tempDatabase();
+    const kept = transcript('keep0000000', '共同的草原內容，保留下來。');
+    const deleted = transcript('gone0000000', '共同的草原內容，只有這篇有獨特的峽谷字。');
+    let vault = [kept, deleted];
+    await withSearch(databasePath, () => vault, async (search, engine) => {
+      expect((await search.search({ query: '草原' })).total).toBe(2);
+      // The exclusion filter a pending removal uses, against the real engine.
+      const backend = new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey });
+      const excluded = await backend.search({ query: '草原' }, [deleted.id]);
+      expect([excluded.total, excluded.hits.map(({ id }) => id)]).toEqual([1, [kept.id]]);
+      vault = [kept];
+      await search.remove(deleted.id);
+      expect((await search.search({ query: '峽谷' })).total).toBe(0);
+      const common = await search.search({ query: '草原' });
+      expect(common.hits.map(({ id }) => id)).toEqual([kept.id]);
+      expect(common.total).toBe(1);
+    });
+    // The engine no longer holds it, so a restart needs no rebuild.
+    await withSearch(databasePath, () => vault, async (search, _engine, rebuilds) => {
+      expect(rebuilds).toBe(0);
+      expect((await search.search({ query: '峽谷' })).total).toBe(0);
+    });
+  }, 30_000);
 });

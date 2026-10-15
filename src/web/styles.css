@@ -298,17 +298,23 @@ dialog::backdrop { background:var(--overlay); }
 .documents-loading { color:var(--accent); }
 .documents-error { color:var(--error); }
 
-.document-list { margin:0; padding:0; list-style:none; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--frame); }
+.document-list { margin:0; padding:0; list-style:none; border:1px solid var(--border); border-radius:8px; background:var(--frame); }
 .document-list li + li { border-top:1px solid var(--border); }
 .document-row { display:flex; align-items:flex-start; gap:18px; padding:16px 20px; color:inherit; text-decoration:none; }
-.document-row:hover { background:var(--card); }
+.document-item { display:flex; align-items:flex-start; }
+.document-item:first-child { border-radius:8px 8px 0 0; }
+.document-item:last-child { border-radius:0 0 8px 8px; }
+.document-item:only-child { border-radius:8px; }
+.document-item:hover { background:var(--card); }
+.document-item .document-row { flex:1; min-width:0; }
+.document-actions { padding:12px 10px 0 0; }
 .document-main { min-width:0; flex:1; display:flex; flex-direction:column; gap:5px; }
 .document-title { font-size:15px; font-weight:550; line-height:1.4; }
 .document-excerpt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; color:var(--secondary); font-size:13px; line-height:1.55; }
 .document-excerpt mark { padding:0; border-radius:2px; color:var(--primary); background:var(--mark); }
 .document-meta { flex:none; width:170px; display:flex; flex-direction:column; align-items:flex-end; gap:6px; text-align:right; }
 .source-tag { max-width:100%; padding:2px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:4px; color:var(--secondary); background:var(--card); font-size:11px; }
-.document-row:hover .source-tag { background:var(--frame); }
+.document-item:hover .source-tag { background:var(--frame); }
 .document-date { color:var(--secondary); font-size:12px; }
 .document-date.unknown { color:var(--warning); }
 .document-collected { color:var(--tertiary); font-size:11px; opacity:.85; }

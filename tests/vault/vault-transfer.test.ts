@@ -12,6 +12,8 @@ import { VaultWorkspace } from '../../src/vault/workspace.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 import { createHttpApp } from '../../src/server/app.js';
+import { Collector } from '../../src/core/collector.js';
+import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import type { CapturedTranscript, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
 
 const roots: string[] = [];
@@ -54,6 +56,7 @@ function fakeSearch(root: string): TranscriptSearch {
   return {
     status: () => ({ state: 'ready', indexedDocuments: docs.length }),
     async index(doc) { docs.push(doc); },
+    async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
       const vault = new MarkdownVault(root);
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
@@ -126,7 +129,7 @@ describe('portable vault package', () => {
       (data: typeof good) => { data.files[0].data = 'YQ=='; },
       (data: typeof good) => { data.files.find((entry: { path: string }) => entry.path === 'attachments/sample.bin').data = Buffer.from([0, 1, 128, 254]).toString('base64'); },
       (data: typeof good) => { data.files.pop(); },
-      (data: typeof good) => { data.version = 3; },
+      (data: typeof good) => { data.version = 4; },
       (data: typeof good) => { data.files[0].data += '!!'; },
     ]) {
       const data = structuredClone(good); mutate(data);
@@ -287,14 +290,14 @@ describe('portable subscription settings (S-T10, A4)', () => {
     { id: 'UC456', title: '頻道二', url: 'https://www.youtube.com/channel/UC456', enabled: false, addedAt: '2026-01-02T00:00:00.000Z' },
   ]);
 
-  it('carries each subscription with its settings and progress through a version 2 package, paused', async () => {
+  it('carries each subscription with its settings and progress through a current package, paused', async () => {
     const root = await temp(); const source = path.join(root, 'source'); await seed(source);
     const cursor = { videoId: 'dQw4w9WgXcQ', publishedAt: '2026-10-01T00:00:00.000Z', recentIds: ['dQw4w9WgXcQ'] };
     const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
     await new JsonChannelStore(source).update('UC123', { cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', backlog: false, settings });
     const exported = await exportVault(source);
     const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string; data: string }[] };
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
     const channelsFile = parsed.files.find((file) => file.path === 'settings/youtube-channels.json')!;
     expect(JSON.parse(Buffer.from(channelsFile.data, 'base64').toString())).toMatchObject({ version: 2, channels: [{ id: 'UC123', settings }] });
     const workspace = await open(path.join(root, 'B'));
@@ -349,4 +352,82 @@ describe('portable subscription settings (S-T10, A4)', () => {
     expect((await workspace.channels.listChannels()).map((channel) => channel.settings)).toEqual([settings, settings]);
     expect(JSON.parse(await readFile(path.join(vault, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: true, legacySettings: settings });
   });
+});
+
+describe('deletion records in packages (A6)', () => {
+  const deletedId = 'gone0000001';
+  const record = {
+    sourceType: 'youtube', sourceId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除的影片',
+    publisherId: 'UC123', publisherName: '測試頻道', deletedAt: '2026-10-15T00:00:00.000Z',
+  };
+  function versioned(version: number, files: { path: string; data: string }[]) {
+    const data = JSON.parse(packageOf(files).toString()) as { version: number };
+    data.version = version;
+    return Buffer.from(JSON.stringify(data));
+  }
+
+  it('exports deletions in a version 3 package and a restore keeps them in force', async () => {
+    const root = await temp(); const source = path.join(root, 'source'); await seed(source);
+    await new MarkdownVault(source).add({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title });
+    await new Collector(new MarkdownVault(source)).delete(`youtube:${deletedId}`);
+    const exported = await exportVault(source);
+    const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string }[] };
+    expect(parsed.version).toBe(3);
+    expect(parsed.files.map((file) => file.path)).toContain(DELETIONS_FILE);
+    expect(parsed.files.map((file) => file.path)).not.toContain(`documents/youtube/${deletedId}.md`);
+
+    const workspace = await open(path.join(root, 'B'));
+    workspace.restore(exported); await waitForRestore(workspace);
+    expect(workspace.status().state).toBe('completed');
+    await expect(workspace.collector.read(`youtube:${deletedId}`)).rejects.toMatchObject({ code: 'document_deleted' });
+    expect(await workspace.collector.isKnown(deletedId)).toBe(true);
+    expect((await workspace.collector.list()).map((document) => document.sourceId)).toEqual([capture.videoId]);
+  });
+
+  it('still restores version 2 packages, which carry no deletions', async () => {
+    const root = await temp(); await seed(path.join(root, 'source'));
+    const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
+    const target = path.join(root, 'v2');
+    await unpackVault(versioned(2, [{ path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown }]), target, () => undefined);
+    expect((await new MarkdownVault(target).list()).map((document) => document.sourceId)).toEqual([capture.videoId]);
+  });
+
+  it.each([
+    ['a version 2 package with a deletions file', 2, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [record] }) }]],
+    ['a malformed deletions file', 3, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [{ ...record, sourceId: 'short' }] }) }]],
+    ['an unknown deletions version', 3, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 9, deleted: [] }) }]],
+  ])('rejects %s', async (_name, version, files) => {
+    const root = await temp();
+    await expect(unpackVault(versioned(version as number, files as { path: string; data: string }[]), path.join(root, 'target'), () => undefined)).rejects.toThrow('刪除紀錄');
+  });
+
+  it('rejects a package holding both a document and its deletion record', async () => {
+    const root = await temp(); await seed(path.join(root, 'source'));
+    const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
+    const both = versioned(3, [
+      { path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown },
+      { path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [{ ...record, sourceId: 'dQw4w9WgXcQ', sourceUrl: capture.sourceUrl }] }) },
+    ]);
+    await expect(unpackVault(both, path.join(root, 'target'), () => undefined)).rejects.toThrow('同時有內容與刪除紀錄');
+  });
+});
+
+it('refuses a document deletion while a restore holds the Vault (A7)', async () => {
+  const root = await temp(); const a = path.join(root, 'A'); await seed(a);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const workspace = await open(a, {
+    createSearch: async (destination) => {
+      const search = fakeSearch(destination);
+      // The restored Vault's index build waits, so the restore keeps the Vault locked.
+      if (destination !== a) search.rebuild = async () => { await held; };
+      return { search, close: async () => undefined };
+    },
+  });
+  const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+  workspace.restore(await exportVault(a));
+  const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
+  await expect.poll(async () => (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409);
+  release(); await waitForRestore(workspace);
+  await app.close();
 });

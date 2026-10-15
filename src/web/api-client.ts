@@ -4,6 +4,7 @@ import type {
   CollectionJob,
   JobSummary,
   DocumentFilter,
+  DocumentDeletion,
   DocumentPage,
   DocumentSources,
   JobPage,
@@ -214,6 +215,11 @@ export const api = {
       signal ? { signal } : undefined,
     );
     return result.document;
+  },
+
+  /** Deletes a document; automatic and channel collection skip it until the user collects it again by its address. */
+  deleteDocument(id: string): Promise<DocumentDeletion> {
+    return request<DocumentDeletion>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   collectYouTube(url: string): Promise<JobSubmission> {

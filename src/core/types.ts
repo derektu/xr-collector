@@ -320,9 +320,10 @@ export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty'
 
 /**
  * Why work was skipped instead of collected. `superseded` is an interrupted job that a later job
- * of the same video or channel took over.
+ * of the same video or channel took over; `deleted` is an item the user deleted, which only an
+ * explicit single-item collection started after the deletion collects again.
  */
-export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'superseded';
+export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'superseded' | 'deleted';
 
 export interface JobError {
   code: string;
@@ -361,6 +362,11 @@ export type JobStopKind = 'shutdown' | 'crash';
 export interface JobCheckpoint {
   /** A video job saved this document; a resume only updates the index. */
   savedDocumentId?: string;
+  /**
+   * When the user submitted this video directly while a channel job had already queued it. That
+   * request is explicit, so it may collect the video again after a deletion made before it.
+   */
+  claimedAt?: string;
   /** A channel-add job: the settings the new subscription starts with, chosen when the job was accepted. */
   settings?: CollectionPolicy;
   /** A channel-add job resolved this channel and is subscribing to it. */
@@ -584,6 +590,14 @@ export interface SearchStatus {
   message?: string;
 }
 
+/** The result of deleting a document. */
+export interface DocumentDeletion {
+  deleted: { id: string; sourceType: DocumentSourceType; sourceId: string; title: string; deletedAt: string };
+  /** False when the search index still holds the document; searches exclude it until the index catches up. */
+  indexed: boolean;
+  indexMessage?: string;
+}
+
 /** Search status as the HTTP API reports it, next to the Vault's own document count. */
 export interface SearchStatusReport extends SearchStatus {
   vaultDocuments: number;
@@ -592,6 +606,8 @@ export interface SearchStatusReport extends SearchStatus {
 export interface TranscriptSearch {
   status(): SearchStatus;
   index(document: SavedDocument): Promise<void>;
+  /** Removes a deleted document; it is excluded from results from the moment this is called. */
+  remove(id: string): Promise<void>;
   search(query: SearchQuery): Promise<SearchResponse>;
   rebuild(): Promise<void>;
 }
@@ -608,6 +624,7 @@ export type CollectorErrorCode =
   | 'network_error'
   | 'capture_failed'
   | 'document_not_found'
+  | 'document_deleted'
   | 'search_unavailable'
   | 'channel_not_found'
   | 'channel_paused'
@@ -662,9 +679,13 @@ export interface TransferStatus {
 }
 
 export type MergeChoice = 'local' | 'incoming';
+/**
+ * One difference between the local Vault and an imported package. A `deletion` item pairs a
+ * deletion record on one side with the document or nothing on the other side.
+ */
 export interface MergeItem {
   key: string;
-  kind: 'document' | 'channel' | 'file';
+  kind: 'document' | 'channel' | 'file' | 'deletion';
   label: string;
   state: 'new' | 'same' | 'conflict';
   localTime: string | null;
