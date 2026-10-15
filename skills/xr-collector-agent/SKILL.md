@@ -61,19 +61,29 @@ Authorization: Bearer <token>
 - Search 使用 `q` query，支援上述來源篩選、`publishedFrom`／`publishedTo`（YYYY-MM-DD）、`offset`、`limit`；`offset` 必須是 `limit` 的整數倍。依相關度排序，回傳 `hits`、`total`（精確命中數，最多計到 10000）、`offset`、`limit`。`hits[].snippet` 是命中附近的片段，命中詞以 `<mark>`／`</mark>` 標出，引用時去掉標記。列表可瀏覽全部文件。空結果只表示此條件目前沒有命中。
 - Read 使用 browse/search 回傳的穩定 `id`，取得 `document.bodyMarkdown` 全文與上述欄位。根據全文回答並附 `sourceUrl`；未知日期維持未知，不以收集時間替代發布時間。
 - `GET /api/search/status` 回傳 `status`：`state`、`indexedDocuments`（索引內篇數）、`vaultDocuments`（Vault 篇數）、`lastRebuiltAt`（上次從 Vault 全量重建的時間，含啟動時的重建；未曾重建為 null）及錯誤時的 `message`。`starting`、`updating`、`rebuilding` 或 `error` 時，搜尋會回報 503 `search_unavailable`，不代表知識庫沒有資料；此時 browse/read 仍可使用。需要搜尋時稍後重試，持續錯誤請使用者在 UI 檢查或重建。
-- 收集是背景工作。`POST /api/youtube/submissions` 依網址格式辨識：影片網址（含帶 `list` 參數的觀看網址，只收該支影片）建立 `youtube.video` 工作；頻道網址或 `@handle` 建立 `youtube.channel-add` 工作，解析後加入頻道清單，再以 `result.followUpJobId` 指向的 `youtube.channel` 工作收集最近 10 支影片。純播放清單網址回 400 `unsupported_url`。`POST /api/youtube/collect` 只接受影片，`POST /api/youtube/channels` 只接受頻道，結果形狀相同。
+- 收集是背景工作。`POST /api/youtube/submissions` 依網址格式辨識：影片網址（含帶 `list` 參數的觀看網址，只收該支影片）建立 `youtube.video` 工作；頻道網址或 `@handle` 建立 `youtube.channel-add` 工作，解析後訂閱該頻道，再以 `result.followUpJobId` 指向的 `youtube.channel` 工作做首次補收（見「訂閱與自動收集」）；頻道已在訂閱清單時結果為 `existing`，不另外收集，也不改變暫停狀態。純播放清單網址回 400 `unsupported_url`。`POST /api/youtube/collect` 只接受影片，`POST /api/youtube/channels` 只接受頻道，結果形狀相同。
 - 提交回傳 202 `{"job":{...},"deduplicated":false}`，表示工作已持久接受，不代表已完成。同一 Vault 中同一影片或頻道已有排隊／執行中的工作時，回傳該工作並標示 `deduplicated: true`，不會重複擷取。以 `GET /api/jobs/:id` 查詢直到 `state` 為 `completed`、`failed` 或 `interrupted`；建議間隔 2 秒以上。
-- 工作欄位：`kind`；`state`（`queued`／`running`／`completed`／`failed`／`interrupted`）；執行中的 `phase`（`resolve`、`discover`、`capture`、`save`、`index`）；`source`（`id`、`url`、`title`）；`result.outcome`（`created`、`existing`、`partial`、`failed`、`empty`）；失敗或中斷時的 `error`。影片結果以 `result.saved` 與 `result.indexed` 分開表示保存與搜尋索引：`saved: true, indexed: false` 表示文件已在 Vault 可讀，只是搜尋尚未更新，可呼叫重建索引，不需重新收集。頻道工作的 `items` 列出發現的影片及其 `jobId`、狀態與錯誤，`progress` 是 `total`／`done`／`created`／`existing`／`failed` 計數。
+- 工作欄位：`kind`；`state`（`queued`／`running`／`completed`／`failed`／`interrupted`）；執行中的 `phase`（`resolve`、`discover`、`capture`、`save`、`index`）；`source`（`id`、`url`、`title`）；`result.outcome`（`created`、`existing`、`partial`、`failed`、`empty`、`skipped`）；失敗或中斷時的 `error`。影片結果以 `result.saved` 與 `result.indexed` 分開表示保存與搜尋索引：`saved: true, indexed: false` 表示文件已在 Vault 可讀，只是搜尋尚未更新，可呼叫重建索引，不需重新收集。頻道工作的 `items` 列出發現的影片及其 `jobId`、狀態、`outcome`（`created`／`existing`／`skipped`）與錯誤，`progress` 是 `total`／`done`／`created`／`existing`／`failed`／`skipped` 計數。`skipped` 是刻意不收，原因在 `skipReason`：`out_of_range`（精確發布時間早於補收範圍）、`subscription_paused`、`subscription_removed`。頻道工作的 `scope` 是接受時固定的發現範圍：`trigger`（`subscribe`、`resume`、`scheduled`、`manual`、`backlog`）、`mode`（`backfill` 或 `incremental`）、`windowStart`、`maxItems`；之後修改設定不影響已接受的工作。
 - `interrupted` 表示服務在工作完成前停止；已保存的文件保留。需要時重新提交同一網址，已存在的影片會直接回報 `existing`。
 - `GET /api/jobs` 列出目前 Vault 的上層工作，新到舊，query：`state`（`active` 或 `all`）、`limit`（1–100，預設 20）、`cursor`（上一頁的 `nextCursor`）。頻道工作派出的影片工作出現在該頻道工作的 `items`，不另列在上層。工作查詢在 Vault 合併期間仍可讀。
-- Channels 管理頻道清單；`POST /api/youtube/channel-runs` 為指定頻道（或所有已啟用頻道）各建立一個 `youtube.channel` 工作，回傳 202 `{"submissions":[{"job":...,"deduplicated":...}]}`。Schedule 讀取或更新目前排程；排程到期時同樣為已啟用頻道建立工作，`lastAttemptAt` 是派工時間，`lastCompletedAt` 與 `lastResult` 在這批工作結束後更新。移除頻道只移除追蹤設定，不刪除既有文件。
 - `POST /api/search/rebuild` 重建可衍生索引。呼叫後以搜尋狀態確認結果；Vault 文件仍是正式資料。
 - Vault export 回傳 `application/octet-stream`；restore、merge preview 接受同類資料包。Restore 與 merge apply 回傳 202 後，以 `GET /api/vault/status` 追蹤。Merge 必須先 preview，再逐項提供 choice；cancel 不寫入資料。資料包路徑由使用者或本機工具明確提供，不把內容或 token 送往外部服務。
 - GET 無法連線、逾時或 401 `unauthorized`：依連線流程重新讀取及驗證一次。寫入送出後斷線或逾時時先依第 5 步查狀態，避免重複操作。這些是本機工具錯誤，不是 API 回傳碼。
-- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `channel_not_found`／`job_not_found`：重新取得目前頻道或工作列表。400 `invalid_request`／`invalid_url`／`invalid_channel`：依參數或網址格式修正請求；400 `unsupported_url`：播放清單不支援，請改用單支影片網址。409 `vault_busy`：等待目前收集或資料交換完成後重試；有排隊或執行中的收集工作時，Vault 匯出、還原與合併都會回 409。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。
+- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `channel_not_found`／`job_not_found`：重新取得目前頻道或工作列表。409 `channel_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_channel`：依參數或網址格式修正請求；400 `unsupported_url`：播放清單不支援，請改用單支影片網址。409 `vault_busy`：等待目前收集或資料交換完成後重試；有排隊或執行中的收集工作時，Vault 匯出、還原與合併都會回 409。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。
 - 工作的 `error.code` 沿用擷取錯誤：`no_subtitles`、`video_unavailable` 為來源本身的結果，重試不會改變；`network_error`、`capture_failed` 可稍後重新提交。
 - 503 `vault_not_ready`：尚未設定 Vault，或先前選擇的 Vault 無法使用。依「Vault 設定」處理，不要自行建立替代路徑或重試寫入。
 - 422 `vault_invalid`：目錄不能建立或開啟為知識庫，`message` 說明原因。請使用者改選目錄，不要修改目錄內容。409 `vault_already_set`：已經有使用中的知識庫，不需再設定。
+
+## 訂閱與自動收集
+
+- 訂閱前先以 `POST /api/youtube/channel-previews` 同步解析頻道（最多約 60 秒），回傳 `preview.channel`（`id`、`title`、`url`）、`preview.subscription`（未訂閱為 null，否則 `{"enabled":...}`）與 `preview.policy`（目前的 Global 設定）。向使用者說明首次收集範圍後，以 `POST /api/youtube/channels` 帶 `preview.channel.url` 訂閱；已訂閱且暫停中的頻道改用 PATCH 恢復。
+- 所有訂閱共用 Global 設定（`GET`／`PUT /api/youtube/schedule`）：`enabled`（自動收集總開關）、`intervalMinutes`（只接受 15、30、60、180、360、720、1440）、`backfillWindow`（`1w`、`2w`、`1m`、`3m`、`6m`）、`backfillMaxItems`（5、10、20、50）。PUT 可只帶要改的欄位；其他值或未知欄位回 400 `invalid_request`。預設為開啟、30 分、`1m`、10 則。還原或合併產生的 Vault 自動收集為關閉，需使用者確認後才開啟。
+- **補收**：首次訂閱、恢復訂閱、服務啟動後的第一次檢查，以及距上次成功檢查超過 24 小時（或 3 個週期，取較長者）時，只收補收範圍內、Vault 還沒有的最新影片，最多 `backfillMaxItems` 則。月份依這台電腦的時區以日曆月計算。較舊的影片可用單支影片網址收集。
+- **增量**：持續運作中的檢查收上次進度之後的所有新影片，不套補收上限；一次最多 50 支，剩下的由 `trigger: backlog` 的工作接續。同頻道已有工作時沿用該工作，新影片留給下一次檢查。
+- 修改補收範圍不會重新回溯既有訂閱，只在下一次補收生效；修改頻率會以上次派工時間重算下次檢查。
+- `GET /api/youtube/channels` 每筆含 `status`（`tracking`、`collecting`、`paused`）、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`。
+- `PATCH /api/youtube/channels/:id` `{"enabled":false}` 暫停：排隊中的頻道工作與尚未開始的影片結束為 `skipped`，正在擷取的影片會完成保存。`{"enabled":true}` 恢復並立即補收，回傳 `{"channel":...,"submission":...}`。`DELETE` 移除訂閱，回傳 `{"removed":true,"documentsKept":N}`，文件保留。暫停與移除在服務重啟後維持原狀。
+- `POST /api/youtube/channel-runs` 不帶 body 時立即檢查所有啟用中的訂閱，並從此刻重算下次自動檢查；帶 `{"channelIds":[...]}` 只檢查指定訂閱，暫停中的訂閱回 409 `channel_paused`。兩者都回傳 202 `{"submissions":[{"job":...,"deduplicated":...}]}`。Schedule 的 `lastAttemptAt` 是派工時間，`lastCompletedAt` 與 `lastResult` 在這批工作結束後更新。
 
 ## Vault 設定
 
@@ -100,10 +110,11 @@ Authorization: Bearer <token>
 | `POST /api/youtube/collect` | `{"url":"..."}`，只接受影片；202 回傳 `job`、`deduplicated` |
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
 | `GET /api/jobs/:id` | 回傳 `job`，查到 `completed`、`failed` 或 `interrupted` |
-| `GET`／`POST /api/youtube/channels` | 列表；新增 body `{"url":"..."}`，202 回傳 `youtube.channel-add` 工作 |
-| `PATCH`／`DELETE /api/youtube/channels/:id` | PATCH body `{"enabled":true}`；ID URL encode |
-| `POST /api/youtube/channel-runs` | 選用 `{"channelIds":["..."]}`；202 回傳 `submissions` |
-| `GET`／`PUT /api/youtube/schedule` | PUT body `{"enabled":true,"intervalMinutes":60}`，週期 1–10080 |
+| `POST /api/youtube/channel-previews` | `{"url":"..."}`；同步解析，回傳 `preview` |
+| `GET`／`POST /api/youtube/channels` | 訂閱列表（含狀態與文件數）；訂閱 body `{"url":"..."}`，202 回傳 `youtube.channel-add` 工作 |
+| `PATCH`／`DELETE /api/youtube/channels/:id` | PATCH body `{"enabled":true}`，回傳 `channel`、`submission`；DELETE 回傳 `documentsKept`；ID URL encode |
+| `POST /api/youtube/channel-runs` | 無 body 檢查全部訂閱；或 `{"channelIds":["..."]}`；202 回傳 `submissions` |
+| `GET`／`PUT /api/youtube/schedule` | PUT 部分欄位：`enabled`、`intervalMinutes`、`backfillWindow`、`backfillMaxItems` |
 | `GET /api/search`、`GET /api/search/status` | query `q`、`sourceType`、`publisherId`、`publishedFrom`、`publishedTo`、`offset`、`limit`；讀取索引狀態 |
 | `POST /api/search/rebuild` | 等待重建完成並回傳搜尋狀態 |
 | `GET /api/vault/setup` | Vault 位置狀態：`state`（`ready`／`not_ready`）、`vaultPath`、`suggestedPath`、`failure` |

@@ -26,7 +26,7 @@ const channel = { id: 'UC-demo', title: '合成測試頻道', url: 'https://www.
 await new JsonChannelStore(local).add(channel);
 await new JsonChannelStore(incoming).add({ ...channel, title: '匯入頻道名稱', enabled: false });
 await new JsonChannelStore(incoming).add({ ...channel, id: 'UC-new', title: '新增頻道', url: 'https://www.youtube.com/channel/UC-new', enabled: false });
-for (const [target, intervalMinutes] of [[local, 60], [incoming, 120]]) {
+for (const [target, intervalMinutes] of [[local, 60], [incoming, 180]]) {
   await new JsonChannelScheduleStore(target).save({ enabled: false, intervalMinutes, nextRunAt: null, lastAttemptAt: null, lastCompletedAt: null, lastResult: null });
   await mkdir(path.join(target, 'attachments'), { recursive: true });
   await writeFile(path.join(target, 'attachments', 'sample.bin'), Buffer.from([0, 128, intervalMinutes]));
