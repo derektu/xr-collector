@@ -46,6 +46,8 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   const [reload, setReload] = useState(0);
   const saveSequence = useRef(0);
   const saveInFlight = useRef(false);
+  /** Saves go out one at a time in the order made, so a later change is never overwritten by an earlier one. */
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,23 +89,27 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     }
   }
 
-  async function saveSettings(patch: Partial<CollectionPolicy>): Promise<void> {
+  function saveSettings(patch: Partial<CollectionPolicy>): void {
     const sequence = ++saveSequence.current;
     setPending({ ...(pending ?? source.settings), ...patch });
     setSaving({ kind: 'saving' });
     saveInFlight.current = true;
-    try {
-      await api.updateChannelSettings(source.id, patch);
-      if (sequence !== saveSequence.current) return;
-      saveInFlight.current = false;
-      setSaving({ kind: 'saved' });
-      setReload((value) => value + 1);
-    } catch (error) {
-      if (sequence !== saveSequence.current) return;
-      saveInFlight.current = false;
-      setPending(null);
-      setSaving({ kind: 'error', message: error instanceof Error ? error.message : '無法儲存，請稍後再試。' });
-    }
+    const send = async () => {
+      try {
+        await api.updateChannelSettings(source.id, patch);
+        if (sequence !== saveSequence.current) return;
+        saveInFlight.current = false;
+        setSaving({ kind: 'saved' });
+        setReload((value) => value + 1);
+      } catch (error) {
+        if (sequence !== saveSequence.current) return;
+        saveInFlight.current = false;
+        setPending(null);
+        setSaving({ kind: 'error', message: error instanceof Error ? error.message : '無法儲存，請稍後再試。' });
+        setReload((value) => value + 1);
+      }
+    };
+    saveQueue.current = saveQueue.current.then(send);
   }
 
   function openDocument(event: MouseEvent<HTMLAnchorElement>, documentId: string): void {
@@ -151,7 +157,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       </div>
       <div className="panel-body">
         <CollectionSettingsFields idPrefix="detail-settings" fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
-          onChange={(patch) => void saveSettings(patch)} backfillLabel="暫停後恢復時" backfillLead="補收最近" />
+          onChange={saveSettings} backfillLabel="暫停後恢復時" backfillLead="補收最近" />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下一次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
       </div>

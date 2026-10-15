@@ -9,6 +9,11 @@ export interface ChannelStore {
   list(): Promise<YouTubeChannel[]>;
   /** Changes several subscriptions in one write; ids that no longer exist are left out of the result. */
   updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]>;
+  /**
+   * Changes subscriptions with patches computed from their current rows, in the same serialized
+   * write as every other change, so a concurrent change is never computed from an older row.
+   */
+  updateWith(change: (channels: readonly YouTubeChannel[]) => Map<string, ChannelPatch>): Promise<YouTubeChannel[]>;
   add(channel: YouTubeChannel): Promise<YouTubeChannel>;
   remove(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null>;
@@ -66,8 +71,13 @@ export class JsonChannelStore implements ChannelStore {
   }
 
   updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
+    return this.updateWith(() => patches);
+  }
+
+  updateWith(change: (channels: readonly YouTubeChannel[]) => Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
     return this.mutate(async () => {
       const channels = await this.readChannels();
+      const patches = change(channels);
       const updated: YouTubeChannel[] = [];
       const next = channels.map((channel) => {
         const patch = patches.get(channel.id);

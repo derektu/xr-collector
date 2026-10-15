@@ -1,9 +1,12 @@
 import path from 'node:path';
 import type { ChannelScheduleStore, StoredChannelSchedule } from './channel-scheduler.js';
 import { readJsonFile, writeJsonFile } from './json-file.js';
-import { SCHEDULE_FILE, scheduleEnabledFromJson, type ScheduleFile } from './subscription-files.js';
+import { legacySettingsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson, type ScheduleFile } from './subscription-files.js';
 
-/** The automatic collection switch in the Vault. A Vault without the file collects automatically. */
+/**
+ * The automatic collection switch in the Vault. A Vault without the file collects automatically.
+ * Saving keeps the `legacySettings` of a converted Vault.
+ */
 export class JsonChannelScheduleStore implements ChannelScheduleStore {
   private readonly filePath: string;
   private mutation: Promise<void> = Promise.resolve();
@@ -18,8 +21,11 @@ export class JsonChannelScheduleStore implements ChannelScheduleStore {
   }
 
   save(schedule: StoredChannelSchedule): Promise<void> {
-    const file: ScheduleFile = { version: 2, enabled: schedule.enabled };
-    const write = () => writeJsonFile(this.filePath, file);
+    const write = async () => {
+      const legacySettings = legacySettingsFromJson(await readJsonFile(this.filePath).catch(() => undefined));
+      const file: ScheduleFile = { version: 2, enabled: schedule.enabled, ...(legacySettings ? { legacySettings } : {}) };
+      await writeJsonFile(this.filePath, file);
+    };
     const operation = this.mutation.then(write, write);
     this.mutation = operation.then(() => undefined, () => undefined);
     return operation;

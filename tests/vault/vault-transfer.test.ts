@@ -321,7 +321,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
     const root2 = workspace.status().vaultPath;
     expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-channels.json'), 'utf8'))).toMatchObject({ version: 2 });
-    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: false });
+    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: false, legacySettings: settings });
   });
 
   it('restores a package from before the backfill settings with the default backfill and an offered interval', async () => {
@@ -347,6 +347,6 @@ describe('portable subscription settings (S-T10, A4)', () => {
     const workspace = await open(vault);
     const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 };
     expect((await workspace.channels.listChannels()).map((channel) => channel.settings)).toEqual([settings, settings]);
-    expect(JSON.parse(await readFile(path.join(vault, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: true });
+    expect(JSON.parse(await readFile(path.join(vault, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: true, legacySettings: settings });
   });
 });

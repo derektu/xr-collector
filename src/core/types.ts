@@ -302,7 +302,7 @@ export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual' 
 /**
  * The discovery range a channel job accepted. Backfill takes the newest uncollected videos published
  * since `windowStart`, at most `maxItems`; incremental takes every video newer than `cursor`.
- * Later Global changes never alter an accepted scope.
+ * Later settings changes never alter an accepted scope.
  */
 export interface ChannelJobScope {
   trigger: ChannelJobTrigger;

@@ -78,11 +78,11 @@ Authorization: Bearer <token>
 ## 訂閱與自動收集
 
 - 每個訂閱有自己的收集設定 `settings`：`intervalMinutes`（只接受 15、30、60、180、360、720、1440）是檢查頻率的分鐘數，`backfillWindow`（`1w`、`2w`、`1m`、`3m`、`6m`）是補收時間範圍，`backfillMaxItems`（5、10、20、50）是補收則數。新訂閱的預設值是 30 分、`1m`、10 則，即 `GET /api/source-types` 各設定欄位的 `default`。其他值或未知欄位回 400 `invalid_request`。
-- 訂閱前先以 `POST /api/youtube/channel-previews` 同步解析頻道（最多約 60 秒），回傳 `preview.channel`（`id`、`title`、`url`）、`preview.subscription`（未訂閱為 null，否則 `{"enabled":...,"settings":...}`）、`preview.settings`（既有訂閱的設定，或新訂閱的預設值）與 `preview.autoCollection`（自動收集總開關）。向使用者說明首次收集範圍與檢查頻率，需要時讓使用者調整，再以 `POST /api/youtube/channels` `{"url":"<preview.channel.url>","settings":{...}}` 訂閱；`settings` 可省略或只帶要改的欄位，其餘用預設值。已訂閱的頻道保留自己的設定；暫停中的頻道改用 PATCH 恢復。
+- 訂閱前先以 `POST /api/youtube/channel-previews` 同步解析頻道（最多約 60 秒），回傳 `preview.channel`（`id`、`title`、`url`）、`preview.subscription`（未訂閱為 null，否則 `{"enabled":...,"settings":...}`）、`preview.settings`（既有訂閱的設定，或新訂閱的預設值）與 `preview.autoCollection`（自動收集總開關）。向使用者說明首次收集範圍與檢查頻率，需要時讓使用者調整，再以 `POST /api/youtube/channels` `{"url":"<preview.channel.url>","settings":{...}}` 訂閱；`settings` 可省略、為空物件或只帶要改的欄位，其餘用預設值。已訂閱的頻道保留自己的設定；暫停中的頻道改用 PATCH 恢復。
 - 修改一個訂閱的設定：`PATCH /api/youtube/channels/:id` `{"settings":{...}}`，只帶要改的欄位，回傳 `{"channel":...,"submission":null}`。修改頻率會從該訂閱上次派工時間重算下一次檢查，已過時立即到期；修改補收範圍不重新回溯，只在下一次補收生效。修改不開始工作，已接受的工作沿用接受時的 `scope`。
 - 套用到同類：`POST /api/youtube/channels/:id/apply-settings` 把這個訂閱的設定套用到其他所有 YouTube 訂閱，回傳 `{"updated":N,"paused":M}`。暫停中的訂閱也會套用並保持暫停，恢復時用新的補收範圍；套用不開始工作。這會覆蓋其他訂閱的設定，先向使用者確認。
 - 自動收集總開關：`GET /api/youtube/schedule` 回傳 `schedule`：`enabled`、`status`（`scheduled` 或 `paused`）、`lastCheck`（`lastCheckedAt` 最新的訂閱：`channelId`、`title`、`at`）與 `nextCheck`（啟用中最早到期的訂閱；總開關關閉時為 null）。`PUT /api/youtube/schedule` 只接受 `{"enabled":true|false}`；帶頻率或補收欄位回 400 `invalid_request`。開啟時每個啟用中的訂閱從此刻起算各自的頻率。還原產生的 Vault 自動收集為關閉，需使用者確認後才開啟；合併保留目前 Vault 的開關。
-- **排程**：每個訂閱依自己的頻率檢查，`nextCheckAt` 是下一次檢查時間，`lastDispatchedAt` 是上次派工時間。任何派工（定時、立即檢查、首次訂閱、恢復）後，下一次檢查是派工時間加上該訂閱的頻率；同時到期的訂閱一起派工，每個訂閱一個工作。暫停中的訂閱 `nextCheckAt` 為 null。
+- **排程**：每個訂閱依自己的頻率檢查，`nextCheckAt` 是下一次檢查時間，`lastDispatchedAt` 是上次派工時間。定時檢查派工後，下一次檢查是原本的下一次檢查時間之後、第一個晚於現在的整數倍頻率時間；立即檢查、首次訂閱與恢復後是派工時間加上該訂閱的頻率；同時到期的訂閱一起派工，每個訂閱一個工作。暫停中的訂閱 `nextCheckAt` 為 null。
 - **補收**：首次訂閱、恢復訂閱、服務啟動後的第一次檢查，以及距上次成功檢查超過 24 小時（或該訂閱 3 個週期，取較長者）時，只收補收範圍內、Vault 還沒有的最新影片，最多 `backfillMaxItems` 則。月份依這台電腦的時區以日曆月計算。較舊的影片可用單支影片網址收集。
 - **增量**：持續運作中的檢查收上次進度之後的所有新影片，不套補收上限；一次最多 50 支，剩下的由 `trigger: backlog` 的工作接續。同頻道已有工作時沿用該工作，新影片留給下一次檢查。
 - `GET /api/youtube/channels` 每筆含 `settings`、`nextCheckAt`、`lastDispatchedAt`、`status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次完成或失敗（`completed`／`failed`）的頻道工作是失敗，原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`；`interrupted` 與接續中的工作不改變錯誤狀態。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
@@ -127,7 +127,7 @@ Authorization: Bearer <token>
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
 | `GET /api/jobs/:id` | 回傳 `job`，查到 `completed` 或 `failed` |
 | `POST /api/youtube/channel-previews` | `{"url":"..."}`；同步解析，回傳 `preview` |
-| `GET`／`POST /api/youtube/channels` | 訂閱列表（含設定、狀態與文件數）；訂閱 body `{"url":"...","settings":{...}}`（`settings` 可省略），202 回傳 `youtube.channel-add` 工作 |
+| `GET`／`POST /api/youtube/channels` | 訂閱列表（含設定、狀態與文件數）；訂閱 body `{"url":"...","settings":{...}}`（`settings` 可省略或為 `{}`），202 回傳 `youtube.channel-add` 工作 |
 | `PATCH`／`DELETE /api/youtube/channels/:id` | PATCH body `{"enabled":true}` 及／或 `{"settings":{...}}`，回傳 `channel`、`submission`；DELETE 回傳 `documentsKept`；ID URL encode |
 | `POST /api/youtube/channels/:id/apply-settings` | 把這個訂閱的設定套用到其他 YouTube 訂閱；回傳 `updated`、`paused` |
 | `POST /api/youtube/channel-runs` | 無 body 檢查全部訂閱；或 `{"channelIds":["..."]}`；202 回傳 `submissions` |

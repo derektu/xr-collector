@@ -39,9 +39,9 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 ### 訂閱設定的格式版本
 
-`youtube-channels.json` version 2 是 `{ "version": 2, "channels": [...] }`，每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` version 2 只有 `enabled`。Version 1 的頻道檔是陣列，所有訂閱共用 version 1 排程檔的頻率與補收設定。
+`youtube-channels.json` version 2 是 `{ "version": 2, "channels": [...] }`，每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` version 2 有 `enabled`，轉換過的 Vault 另有 `legacySettings`：轉換時給每個訂閱的共用設定，只供轉換前接受、尚未建立訂閱的新增訂閱工作使用，讓它與同一 Vault 的其他訂閱一致；沒有這個欄位時，這類工作從接受時的首次收集範圍推回補收設定，頻率用預設值。Version 1 的頻道檔是陣列，所有訂閱共用 version 1 排程檔的頻率與補收設定。
 
-Vault 開啟時與資料包解開後，version 1 的頻道檔轉成 version 2：共用設定與檢查時間複製到每個訂閱。是否轉換只看頻道檔版本；頻道檔先寫，排程檔後寫，兩次寫入之間中斷時不會重轉，殘留的 version 1 排程檔只讀總開關。舊版程式讀到 version 2 的頻道檔或資料包時明確拒絕，不會改用共用設定。
+Vault 開啟時與資料包解開後，version 1 的頻道檔轉成 version 2：共用設定與檢查時間複製到每個訂閱，共用設定另存為排程檔的 `legacySettings`。是否轉換只看頻道檔版本；頻道檔先寫，排程檔後寫，兩次寫入之間中斷時不會重轉，殘留的 version 1 排程檔只讀總開關。舊版程式讀到 version 2 的頻道檔或資料包時明確拒絕，不會改用共用設定。
 
 有實際異動時，先建立合併前資料包與 journal。套用失敗會復原檔案及搜尋；復原失敗則保留恢復資料、停止寫入與排程，重啟先處理 journal。合併期間文件／搜尋 API 暫時拒絕存取，狀態 API 仍可查詢。備份及 journal 在恢復完成前必須保留。
 
