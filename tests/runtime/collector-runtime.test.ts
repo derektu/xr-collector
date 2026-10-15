@@ -241,20 +241,30 @@ describe('CollectorRuntime', () => {
     await vi.waitFor(async () => {
       expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { channelId: 'UC-runtime' } });
     });
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels).toMatchObject([
-      { id: 'UC-runtime', enabled: true },
-    ]);
+    const uiChannels = (await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels;
+    expect(uiChannels).toMatchObject([{ id: 'UC-runtime', enabled: true, status: 'tracking', documentCount: 0 }]);
+    // The Agent reads the same subscriptions and previews through the same service.
+    expect((await (await agent('/api/youtube/channels')).json()).channels).toEqual(uiChannels);
+    const preview = await agent('/api/youtube/channel-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
+    expect((await preview.json()).preview).toMatchObject({
+      channel: { id: 'UC-runtime' }, subscription: { enabled: true }, policy: { enabled: true, intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+    });
     expect((await agent('/api/youtube/channels/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ enabled: false }),
     })).status).toBe(200);
     expect((await agent('/api/youtube/schedule', {
       method: 'PUT', body: JSON.stringify({ enabled: false, intervalMinutes: 30 }),
     })).status).toBe(200);
-    const run = await agent('/api/youtube/channel-runs', {
+    const pausedRun = await agent('/api/youtube/channel-runs', {
       method: 'POST', body: JSON.stringify({ channelIds: ['UC-runtime'] }),
     });
-    expect(run.status).toBe(202);
-    const runId = (await run.json()).submissions[0].job.id as string;
+    expect(pausedRun.status).toBe(409);
+    expect((await pausedRun.json()).error.code).toBe('channel_paused');
+    const resumed = await agent('/api/youtube/channels/UC-runtime', {
+      method: 'PATCH', body: JSON.stringify({ enabled: true }),
+    });
+    expect(resumed.status).toBe(200);
+    const runId = (await resumed.json()).submission.job.id as string;
     await vi.waitFor(async () => {
       const current = await agent(`/api/jobs/${encodeURIComponent(runId)}`);
       expect((await current.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });

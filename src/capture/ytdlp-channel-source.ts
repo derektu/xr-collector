@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import type {
   DiscoveredYouTubeVideo,
+  ListingPage,
   ResolvedYouTubeChannel,
   YouTubeChannelSource,
 } from '../sources/youtube/adapter.js';
@@ -11,6 +12,10 @@ interface YtDlpChannelEntry {
   id?: string;
   title?: string;
   channel_id?: string;
+  /** Present with `youtubetab:approximate_date`: the listing's relative age turned into a time. */
+  timestamp?: number;
+  release_timestamp?: number;
+  live_status?: string;
 }
 
 interface YtDlpChannelInfo {
@@ -47,7 +52,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
 
   async resolve(inputUrl: string): Promise<ResolvedYouTubeChannel> {
     const url = normalizeChannelUrl(inputUrl);
-    const info = await this.readInfo(url, 1, true);
+    const info = await this.readInfo(url, { offset: 0, limit: 1 }, true);
     const id = channelIdFromInfo(info);
     const title = info.channel?.trim() || info.uploader?.trim() || info.title?.trim();
     if (!id || !title) {
@@ -60,24 +65,27 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
     };
   }
 
-  async listVideos(channel: YouTubeChannel, limit: number): Promise<DiscoveredYouTubeVideo[]> {
-    const info = await this.readInfo(channel.url, limit, false);
+  async listVideos(channel: YouTubeChannel, page: ListingPage): Promise<DiscoveredYouTubeVideo[]> {
+    const info = await this.readInfo(channel.url, page, false);
     const seen = new Set<string>();
     return (info.entries ?? []).flatMap((entry) => {
       const id = entry.id?.trim();
       if (!id || !/^[A-Za-z0-9_-]{11}$/u.test(id) || seen.has(id)) return [];
       seen.add(id);
+      const timestamp = entry.timestamp ?? entry.release_timestamp;
       return [{
         id,
         title: entry.title?.trim() || `YouTube ${id}`,
         url: `https://www.youtube.com/watch?v=${id}`,
+        publishedAt: typeof timestamp === 'number' ? new Date(timestamp * 1000).toISOString() : null,
+        upcoming: entry.live_status === 'is_upcoming' || entry.live_status === 'is_live',
       }];
     });
   }
 
   private async readInfo(
     url: string,
-    limit: number,
+    page: ListingPage,
     resolvingChannel: boolean,
   ): Promise<YtDlpChannelInfo> {
     let output: string;
@@ -85,8 +93,12 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
       output = await this.commandRunner([
         ...this.runtimeArgs(),
         '--flat-playlist',
+        '--extractor-args',
+        'youtubetab:approximate_date',
+        '--playlist-start',
+        String(page.offset + 1),
         '--playlist-end',
-        String(limit),
+        String(page.offset + page.limit),
         '--dump-single-json',
         url,
       ]);

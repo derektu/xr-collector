@@ -117,19 +117,83 @@ export interface SearchResponse {
   limit: number;
 }
 
+/** Where incremental discovery of a subscription stops: the newest video already handed to a job. */
+export interface ChannelCursor {
+  videoId: string;
+  /** Approximate publish time from the channel listing; null when the listing gave none. */
+  publishedAt: string | null;
+  /** Recently accepted or listed video IDs, newest first, so a deleted cursor video still ends discovery. */
+  recentIds: string[];
+}
+
+/** A subscribed YouTube channel. Discovery progress is portable collection progress and lives with it. */
 export interface YouTubeChannel {
   id: string;
   title: string;
   url: string;
+  /** False while the subscription is paused. */
   enabled: boolean;
   addedAt: string;
+  /** Null until the first discovery, and again after a resume. */
+  cursor?: ChannelCursor | null;
+  /** The last discovery that finished listing the channel. */
+  lastCheckedAt?: string | null;
+  /** True when incremental discovery left newer videos for a follow-up batch. */
+  backlog?: boolean;
+}
+
+export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused';
+
+/** A subscription as the Sources page and Agents read it. */
+export interface Subscription extends YouTubeChannel {
+  status: SubscriptionStatus;
+  /** The channel collection job still queued or running, with its item progress. */
+  activeJob: { id: string; done: number; total: number } | null;
+  documentCount: number;
+  /** Collection time of the newest document from this channel. */
+  lastCollectedAt: string | null;
+}
+
+export type BackfillWindow = '1w' | '2w' | '1m' | '3m' | '6m';
+
+/** Global collection settings shared by every subscription. */
+export interface CollectionPolicy {
+  intervalMinutes: number;
+  backfillWindow: BackfillWindow;
+  backfillMaxItems: number;
+}
+
+export interface ChannelPreview {
+  channel: { id: string; title: string; url: string };
+  /** The existing subscription for this channel, or null when it is not subscribed. */
+  subscription: { enabled: boolean } | null;
+  policy: CollectionPolicy & { enabled: boolean };
+}
+
+/** Why a channel job was started; it decides the labels and, with the cursor, the discovery mode. */
+export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual' | 'backlog';
+
+/**
+ * The discovery range a channel job accepted. Backfill takes the newest uncollected videos published
+ * since `windowStart`, at most `maxItems`; incremental takes every video newer than `cursor`.
+ * Later Global changes never alter an accepted scope.
+ */
+export interface ChannelJobScope {
+  trigger: ChannelJobTrigger;
+  mode: 'backfill' | 'incremental';
+  windowStart: string;
+  maxItems: number;
+  cursor: ChannelCursor | null;
 }
 
 export type JobKind = 'youtube.video' | 'youtube.channel' | 'youtube.channel-add';
 export type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted';
 export type JobPhase = 'resolve' | 'discover' | 'capture' | 'save' | 'index';
 /** What a finished job produced; `empty` is a channel whose discovery found nothing to collect. */
-export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty';
+export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty' | 'skipped';
+
+/** Why work was skipped instead of collected. */
+export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed';
 
 export interface JobError {
   code: string;
@@ -143,7 +207,8 @@ export interface JobItem {
   url: string;
   jobId: string | null;
   state: JobState;
-  outcome: 'created' | 'existing' | null;
+  outcome: 'created' | 'existing' | 'skipped' | null;
+  skipReason?: SkipReason;
   error: JobError | null;
 }
 
@@ -153,10 +218,15 @@ export interface JobProgress {
   created: number;
   existing: number;
   failed: number;
+  /** Items left uncollected on purpose; absent in jobs recorded before skipping existed. */
+  skipped?: number;
 }
 
 export interface JobResult {
   outcome: JobOutcome;
+  skipReason?: SkipReason;
+  /** A channel job that left newer videos for a follow-up batch. */
+  backlog?: boolean;
   documentId?: string;
   /** The document is stored in the Vault. */
   saved?: boolean;
@@ -188,6 +258,10 @@ export interface CollectionJob {
   finishedAt: string | null;
   updatedAt: string;
   progress: JobProgress | null;
+  /** The accepted discovery range of a channel or channel-add job. */
+  scope?: ChannelJobScope;
+  /** For a video found by backfill: videos published before this time are skipped. */
+  publishedNotBefore?: string;
   items: JobItem[] | null;
   result: JobResult | null;
   error: JobError | null;
@@ -233,6 +307,8 @@ export interface ChannelScheduleLastResult {
 export interface ChannelSchedule {
   enabled: boolean;
   intervalMinutes: number;
+  backfillWindow: BackfillWindow;
+  backfillMaxItems: number;
   status: ChannelScheduleStatus;
   lastAttemptAt: string | null;
   lastCompletedAt: string | null;
@@ -276,6 +352,8 @@ export type CollectorErrorCode =
   | 'document_not_found'
   | 'search_unavailable'
   | 'channel_not_found'
+  | 'channel_paused'
+  | 'out_of_range'
   | 'job_not_found'
   | 'unsupported_url'
   | 'queue_full'

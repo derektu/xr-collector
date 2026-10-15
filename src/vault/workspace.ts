@@ -322,7 +322,7 @@ export class VaultWorkspace {
 
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
-    this.current.schedule = new ChannelScheduler(this.current.channels, new JsonChannelScheduleStore(this.current.root));
+    this.current.schedule = makeScheduler(this.current);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
   }
@@ -345,18 +345,25 @@ export class VaultWorkspace {
     });
     const collector = new Collector(vault, runtime.search);
     const channelStore = new JsonChannelStore(root);
+    const source = youtubeSource(this.options.capture, this.options.channelSource);
+    // The scheduler is replaced after a merge, so policy reads go through the bundle.
+    const policy = () => bundle.schedule.getPolicy();
     // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
     const jobs = new JobManager({
       vaultPath: root,
       store: this.jobStore,
-      source: youtubeSource(this.options.capture, this.options.channelSource),
+      source,
       documents: collector,
       channels: channelStore,
+      policy,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
     });
-    const channels = new ChannelCollector(channelStore, jobs);
-    const schedule = new ChannelScheduler(channels, new JsonChannelScheduleStore(root));
-    return { root, runtime, collector, channels, jobs, schedule };
+    const channels = new ChannelCollector(channelStore, jobs, {
+      policy, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),
+    });
+    const partial = { root, runtime, collector, channels, jobs };
+    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial) };
+    return bundle;
   }
 
   async close(): Promise<void> {
@@ -369,4 +376,10 @@ export class VaultWorkspace {
     const failed = [...drained, ...search].find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failed) throw failed.reason;
   }
+}
+
+function makeScheduler(bundle: Pick<Bundle, 'root' | 'channels' | 'jobs'>): ChannelScheduler {
+  return new ChannelScheduler(bundle.channels, new JsonChannelScheduleStore(bundle.root), {
+    recordEvent: (entry) => bundle.jobs.recordEvent(entry),
+  });
 }

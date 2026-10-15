@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { discoverChannelVideos } from '../channels/channel-discovery.js';
+import { backfillWindowStart, DEFAULT_POLICY } from '../channels/collection-policy.js';
 import type { ChannelStore } from '../channels/json-channel-store.js';
 import type { Collector } from '../core/collector.js';
 import {
   CollectorError,
+  type ChannelJobScope,
+  type ChannelJobTrigger,
   type CollectionJob,
+  type CollectionPolicy,
   type JobError,
   type JobItem,
   type JobKind,
@@ -13,6 +18,7 @@ import {
   type JobResult,
   type JobState,
   type JobSubmission,
+  type SkipReason,
   type YouTubeChannel,
 } from '../core/types.js';
 import { parseYouTubeVideoUrl } from '../core/video-url.js';
@@ -30,8 +36,17 @@ export interface JobLimits {
 }
 
 export const DEFAULT_JOB_LIMITS: JobLimits = { discovery: 1, capture: 2, maxQueued: 500 };
-/** Videos a channel collection job looks at, newest first. */
-export const CHANNEL_VIDEO_LIMIT = 10;
+
+/** A backfill scope for the policy in force when a job is accepted. */
+export function backfillScope(trigger: ChannelJobTrigger, policy: CollectionPolicy, now: Date): ChannelJobScope {
+  return {
+    trigger,
+    mode: 'backfill',
+    windowStart: backfillWindowStart(now, policy.backfillWindow).toISOString(),
+    maxItems: policy.backfillMaxItems,
+    cursor: null,
+  };
+}
 
 export interface JobManagerOptions {
   /** The Vault every job of this manager writes to. */
@@ -41,7 +56,8 @@ export interface JobManagerOptions {
   documents: Collector;
   channels: ChannelStore;
   limits?: Partial<JobLimits>;
-  channelVideoLimit?: number;
+  /** The Global policy a new subscription's first collection snapshots. */
+  policy?: () => Promise<CollectionPolicy>;
   now?: () => Date;
   createId?: () => string;
 }
@@ -61,7 +77,6 @@ const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);
  */
 export class JobManager {
   private readonly limits: JobLimits;
-  private readonly channelVideoLimit: number;
   private readonly now: () => Date;
   private readonly createId: () => string;
   /** Unfinished jobs, including channel jobs waiting for their videos. */
@@ -77,11 +92,12 @@ export class JobManager {
   /** Channel jobs that wait for a video job, keyed by the video job. */
   private readonly watchers = new Map<string, Set<string>>();
   private readonly settleWaiters = new Map<string, Array<(job: CollectionJob) => void>>();
+  /** Channel jobs whose discovery left newer videos for a follow-up batch. */
+  private readonly backlogJobs = new Set<string>();
   private closed = false;
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
-    this.channelVideoLimit = options.channelVideoLimit ?? CHANNEL_VIDEO_LIMIT;
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? (() => randomUUID());
   }
@@ -101,20 +117,25 @@ export class JobManager {
     return submission;
   }
 
-  /** Resolves a channel address, adds the channel and starts one collection of its recent videos. */
+  /**
+   * Resolves a channel address and subscribes to it. A new subscription starts its first collection
+   * with the backfill range of the policy in force now; an existing one is left as it is.
+   */
   async submitChannelAdd(url: string): Promise<JobSubmission> {
     const input = classifyYouTubeInput(url);
     if (input.kind !== 'channel') throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
+    const policy = await (this.options.policy?.() ?? Promise.resolve(DEFAULT_POLICY));
     const submission = this.enqueue('youtube.channel-add', `channel-add:${input.url.toLowerCase()}`, {
       id: null, url: input.url, title: null,
-    }, null);
+    }, null, { scope: backfillScope('subscribe', policy, this.now()) });
     await this.options.store.flush();
     this.pump();
     return submission;
   }
 
-  async submitChannel(channel: YouTubeChannel): Promise<JobSubmission> {
-    const submission = this.enqueueChannel(channel);
+  /** Starts one collection of a subscription; an active job of the same channel is returned instead. */
+  async submitChannel(channel: YouTubeChannel, scope: ChannelJobScope): Promise<JobSubmission> {
+    const submission = this.enqueueChannel(channel, scope);
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -140,6 +161,43 @@ export class JobManager {
     }
     const page = jobs.slice(0, limit);
     return { jobs: page, nextCursor: jobs.length > limit ? page[page.length - 1]!.id : null };
+  }
+
+  /** The channel collection job of this subscription that is still queued or running. */
+  activeChannelJob(channelId: string): CollectionJob | null {
+    for (const job of this.jobs.values()) {
+      if (job.kind === 'youtube.channel' && job.source.id === channelId) return structuredClone(job);
+    }
+    return null;
+  }
+
+  /**
+   * Converges a paused or removed subscription: its queued channel job and the videos it queued that
+   * have not started end as skipped. A video already capturing finishes and is saved; a discovery in
+   * progress sees the change before accepting any video.
+   */
+  stopChannel(channelId: string, reason: SkipReason): void {
+    for (const job of [...this.jobs.values()]) {
+      if (job.kind !== 'youtube.channel' || job.source.id !== channelId) continue;
+      if (job.state === 'queued') {
+        const index = this.discoveryQueue.indexOf(job.id);
+        if (index >= 0) this.discoveryQueue.splice(index, 1);
+        this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
+        continue;
+      }
+      for (const item of job.items ?? []) {
+        const video = item.jobId ? this.jobs.get(item.jobId) : undefined;
+        if (!video || video.parentId !== job.id || video.state !== 'queued') continue;
+        this.removeFromLane(video);
+        this.finish(video, 'completed', { outcome: 'skipped', skipReason: reason }, null);
+      }
+    }
+    void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
+  }
+
+  /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
+  recordEvent(entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
+    this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, jobId: null });
   }
 
   /** True while any job of this Vault is queued, running or waiting for its videos. */
@@ -172,20 +230,26 @@ export class JobManager {
     await this.options.store.flush();
   }
 
-  private enqueueVideo(url: string, parentId: string | null): JobSubmission {
+  private enqueueVideo(url: string, parentId: string | null, publishedNotBefore: string | null = null): JobSubmission {
     const video = parseYouTubeVideoUrl(url);
     return this.enqueue('youtube.video', `video:${video.videoId}`, {
       id: video.videoId, url: video.canonicalUrl, title: null,
-    }, parentId);
+    }, parentId, publishedNotBefore ? { publishedNotBefore } : {});
   }
 
-  private enqueueChannel(channel: YouTubeChannel): JobSubmission {
+  private enqueueChannel(channel: YouTubeChannel, scope: ChannelJobScope): JobSubmission {
     return this.enqueue('youtube.channel', `channel:${channel.id}`, {
       id: channel.id, url: channel.url, title: channel.title,
-    }, null);
+    }, null, { scope });
   }
 
-  private enqueue(kind: JobKind, key: string, source: Omit<CollectionJob['source'], 'type'>, parentId: string | null): JobSubmission {
+  private enqueue(
+    kind: JobKind,
+    key: string,
+    source: Omit<CollectionJob['source'], 'type'>,
+    parentId: string | null,
+    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore'> = {},
+  ): JobSubmission {
     if (this.closed) throw new CollectorError('vault_busy', '服務正在停止，無法接受新的收集工作。');
     const activeId = this.activeByKey.get(key);
     if (activeId) return { job: this.get(activeId), deduplicated: true };
@@ -206,6 +270,7 @@ export class JobManager {
       finishedAt: null,
       updatedAt: timestamp,
       progress: null,
+      ...extra,
       items: null,
       result: null,
       error: null,
@@ -250,6 +315,18 @@ export class JobManager {
     }
   }
 
+  private removeFromLane(job: CollectionJob): void {
+    const lane = job.parentId ?? job.id;
+    const queue = this.captureLanes.get(lane);
+    if (!queue) return;
+    const index = queue.indexOf(job.id);
+    if (index >= 0) queue.splice(index, 1);
+    if (queue.length === 0) {
+      this.captureLanes.delete(lane);
+      this.laneOrder = this.laneOrder.filter((candidate) => candidate !== lane);
+    }
+  }
+
   private nextCapture(): string | undefined {
     const lane = this.laneOrder.shift();
     if (lane === undefined) return undefined;
@@ -275,7 +352,9 @@ export class JobManager {
       let document = await documents.findExisting(video.videoId);
       let outcome: 'created' | 'existing' = 'existing';
       if (!document) {
-        const captured = await source.capture(video);
+        const captured = await source.capture(
+          video, job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {},
+        );
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title } });
         document = await documents.save(captured);
         outcome = 'created';
@@ -296,6 +375,10 @@ export class JobManager {
         ...(index.message ? { indexMessage: index.message } : {}),
       }, null);
     } catch (error) {
+      if (error instanceof CollectorError && error.code === 'out_of_range') {
+        this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'out_of_range' }, null);
+        return;
+      }
       this.finish(job, 'failed', { outcome: 'failed' }, errorDetails(error));
     }
   }
@@ -317,15 +400,23 @@ export class JobManager {
     this.start(job, 'resolve');
     const resolved = await this.options.source.resolveChannel(job.source.url);
     const existing = (await this.options.channels.list()).find((channel) => channel.id === resolved.id);
-    const channel = existing ?? await this.options.channels.add({
-      ...resolved, enabled: true, addedAt: this.now().toISOString(),
-    });
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
+    if (existing) {
+      // An existing subscription keeps its own state; a paused one is resumed explicitly.
+      this.update(job, { source: { ...job.source, id: existing.id, title: existing.title } });
+      this.finish(job, 'completed', { outcome: 'existing', channelId: existing.id }, null);
+      return;
+    }
+    const channel = await this.options.channels.add({
+      ...resolved, enabled: true, addedAt: this.now().toISOString(), cursor: null, lastCheckedAt: null, backlog: false,
+    });
+    this.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`, sourceId: channel.id });
     this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
-    const followUp = this.enqueueChannel(channel);
+    const scope = job.scope ?? backfillScope('subscribe', DEFAULT_POLICY, this.now());
+    const followUp = this.enqueueChannel(channel, scope);
     this.finish(job, 'completed', {
-      outcome: existing ? 'existing' : 'created', channelId: channel.id, followUpJobId: followUp.job.id,
+      outcome: 'created', channelId: channel.id, followUpJobId: followUp.job.id,
     }, null);
   }
 
@@ -334,15 +425,24 @@ export class JobManager {
     const channel: YouTubeChannel = {
       id: job.source.id!, title: job.source.title ?? job.source.id!, url: job.source.url, enabled: true, addedAt: job.createdAt,
     };
-    const videos = await this.options.source.discover(channel, this.channelVideoLimit);
+    // Jobs accepted before scopes existed collect like a first subscription with the default policy.
+    const scope = job.scope ?? backfillScope('scheduled', DEFAULT_POLICY, new Date(job.createdAt));
+    const discovery = await discoverChannelVideos(
+      this.options.source, channel, scope, async (videoId) => (await this.options.documents.findExisting(videoId)) !== null,
+    );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
-    const items: JobItem[] = videos.map((video) => {
+    const reason = await this.subscriptionStopped(channel.id);
+    if (reason) {
+      this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
+      return;
+    }
+    const items: JobItem[] = discovery.videos.map((video) => {
       const item: JobItem = {
         sourceId: video.id, title: video.title, url: video.url, jobId: null, state: 'queued', outcome: null, error: null,
       };
       try {
-        const submission = this.enqueueVideo(video.url, job.id);
+        const submission = this.enqueueVideo(video.url, job.id, discovery.publishedNotBefore);
         item.jobId = submission.job.id;
         item.state = submission.job.state;
         const watching = this.watchers.get(submission.job.id) ?? new Set<string>();
@@ -354,11 +454,28 @@ export class JobManager {
       }
       return item;
     });
+    if (discovery.backlog) this.backlogJobs.add(job.id);
     this.update(job, { phase: 'capture', items, progress: progressOf(items) });
     this.event(job, {
       severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} 支影片。`, phase: 'discover',
     });
-    this.completeChannelIfDone(job);
+    // The cursor moves only after the accepted videos are recorded, so a stop in between finds them again.
+    await this.options.store.flush();
+    const saved = await this.options.channels.update(channel.id, {
+      ...(discovery.cursor ? { cursor: discovery.cursor } : {}),
+      lastCheckedAt: this.now().toISOString(),
+      backlog: discovery.backlog,
+    });
+    if (!saved) this.stopChannel(channel.id, 'subscription_removed');
+    else if (!saved.enabled) this.stopChannel(channel.id, 'subscription_paused');
+    if (this.jobs.has(job.id)) this.completeChannelIfDone(job);
+  }
+
+  /** Null while the subscription exists and is enabled; otherwise why its work stops. */
+  private async subscriptionStopped(channelId: string): Promise<SkipReason | null> {
+    const channel = (await this.options.channels.list()).find((candidate) => candidate.id === channelId);
+    if (!channel) return 'subscription_removed';
+    return channel.enabled ? null : 'subscription_paused';
   }
 
   private onVideoSettled(video: CollectionJob): void {
@@ -371,7 +488,9 @@ export class JobManager {
       const items = channel.items.map((item) => item.jobId === video.id ? {
         ...item,
         state: video.state,
-        outcome: video.result?.outcome === 'created' || video.result?.outcome === 'existing' ? video.result.outcome : null,
+        outcome: video.result?.outcome === 'created' || video.result?.outcome === 'existing' || video.result?.outcome === 'skipped'
+          ? video.result.outcome : null,
+        ...(video.result?.skipReason ? { skipReason: video.result.skipReason } : {}),
         error: video.error,
       } : item);
       this.update(channel, { items, progress: progressOf(items) });
@@ -383,13 +502,16 @@ export class JobManager {
     const items = job.items ?? [];
     if (items.some((item) => ACTIVE.has(item.state))) return;
     const progress = progressOf(items);
+    const backlog = this.backlogJobs.delete(job.id) ? { backlog: true } : {};
     if (items.length === 0) {
-      this.finish(job, 'completed', { outcome: 'empty' }, null);
+      this.finish(job, 'completed', { outcome: 'empty', ...backlog }, null);
     } else if (progress.failed === items.length) {
-      this.finish(job, 'failed', { outcome: 'failed' }, { code: 'all_items_failed', message: '這個頻道的影片都收集失敗。' });
+      this.finish(job, 'failed', { outcome: 'failed', ...backlog }, { code: 'all_items_failed', message: '這個頻道的影片都收集失敗。' });
     } else {
-      const outcome = progress.failed > 0 ? 'partial' : progress.created > 0 ? 'created' : 'existing';
-      this.finish(job, 'completed', { outcome }, null);
+      const outcome = progress.failed > 0 ? 'partial' : progress.created > 0 ? 'created'
+        : progress.existing > 0 ? 'existing' : 'skipped';
+      const skipReason = outcome === 'skipped' ? items.find((item) => item.skipReason)?.skipReason : undefined;
+      this.finish(job, 'completed', { outcome, ...(skipReason ? { skipReason } : {}), ...backlog }, null);
     }
   }
 
@@ -439,11 +561,11 @@ export class JobManager {
 }
 
 function progressOf(items: JobItem[]): JobProgress {
-  const progress: JobProgress = { total: items.length, done: 0, created: 0, existing: 0, failed: 0 };
+  const progress: JobProgress = { total: items.length, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
   for (const item of items) {
     if (ACTIVE.has(item.state)) continue;
     progress.done += 1;
-    if (item.state === 'completed' && item.outcome) progress[item.outcome] += 1;
+    if (item.state === 'completed' && item.outcome) progress[item.outcome] = (progress[item.outcome] ?? 0) + 1;
     else progress.failed += 1;
   }
   return progress;

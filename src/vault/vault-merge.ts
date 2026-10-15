@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
-import { CollectorError, type MergeItem, type MergeChoice } from '../core/types.js';
+import { DEFAULT_POLICY, isBackfillLimit, isBackfillWindow, normalizeInterval } from '../channels/collection-policy.js';
+import { CollectorError, type CollectionPolicy, type MergeItem, type MergeChoice } from '../core/types.js';
 
 export type Files = Map<string, Buffer>;
 export const fingerprint = (data: Buffer) => createHash('sha256').update(data).digest('hex');
@@ -41,9 +42,20 @@ function channels(files: Files): Map<string, Record<string, unknown>> {
   }
   return result;
 }
-function schedule(bytes: Buffer): { enabled: boolean; intervalMinutes: number } {
-  const value = JSON.parse(bytes.toString()) as { enabled: boolean; intervalMinutes: number };
-  return { enabled: value.enabled, intervalMinutes: value.intervalMinutes };
+/** The portable Global settings; older files without backfill fields compare as the defaults. */
+function schedule(bytes: Buffer): CollectionPolicy & { enabled: boolean } {
+  const value = JSON.parse(bytes.toString()) as Partial<CollectionPolicy> & { enabled: boolean; intervalMinutes: number };
+  return {
+    enabled: value.enabled,
+    intervalMinutes: normalizeInterval(value.intervalMinutes),
+    backfillWindow: isBackfillWindow(value.backfillWindow) ? value.backfillWindow : DEFAULT_POLICY.backfillWindow,
+    backfillMaxItems: isBackfillLimit(value.backfillMaxItems) ? value.backfillMaxItems : DEFAULT_POLICY.backfillMaxItems,
+  };
+}
+
+/** Discovery progress and check times describe collection, not the subscription choice, so they never conflict. */
+function subscriptionContent({ addedAt: _time, cursor: _cursor, lastCheckedAt: _checked, backlog: _backlog, ...rest }: Record<string, unknown>): string {
+  return canonical(rest);
 }
 export function compareFiles(local: Files, incoming: Files): MergeItem[] {
   const items: MergeItem[] = [];
@@ -69,9 +81,8 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
   const left = channels(local);
   for (const [id, row] of channels(incoming)) {
     const before = left.get(id);
-    const content = ({ addedAt: _time, ...rest }: Record<string, unknown>) => canonical(rest);
     items.push({ key: `channel:${id}`, kind: 'channel', label: `${row.title} (${id})`,
-      state: !before ? 'new' : content(before) === content(row) ? 'same' : 'conflict',
+      state: !before ? 'new' : subscriptionContent(before) === subscriptionContent(row) ? 'same' : 'conflict',
       localTime: before ? String(before.addedAt) : null, incomingTime: String(row.addedAt),
       localText: before ? JSON.stringify(before, null, 2) : '', incomingText: JSON.stringify(row, null, 2) });
   }
@@ -102,8 +113,9 @@ export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], ch
     else if (item.kind === 'schedule') {
       // Run history belongs to this device. Imported scheduling never triggers collection automatically.
       const previous = JSON.parse(local.get(SCHEDULE)?.toString() ?? '{}') as Record<string, unknown>;
+      const { intervalMinutes, backfillWindow, backfillMaxItems } = schedule(incoming.get(SCHEDULE)!);
       result.set(SCHEDULE, Buffer.from(JSON.stringify({ version: 1, lastAttemptAt: null, lastCompletedAt: null, lastResult: null,
-        ...previous, intervalMinutes: schedule(incoming.get(SCHEDULE)!).intervalMinutes, enabled: false, nextRunAt: null }, null, 2) + '\n'));
+        ...previous, intervalMinutes, backfillWindow, backfillMaxItems, enabled: false, nextRunAt: null }, null, 2) + '\n'));
     } else result.set(item.key, incoming.get(item.key)!);
   }
   if (channelsChanged) result.set(CHANNELS, Buffer.from(JSON.stringify([...rows.values()], null, 2) + '\n'));

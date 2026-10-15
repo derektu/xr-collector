@@ -9,7 +9,8 @@ import {
   type CapturedTranscript,
   type YouTubeVideoRef,
 } from '../core/types.js';
-import type { YouTubeCapture } from '../sources/youtube/adapter.js';
+import { publishedSince } from '../channels/collection-policy.js';
+import type { CaptureOptions, YouTubeCapture } from '../sources/youtube/adapter.js';
 
 interface YtDlpFormat {
   name?: string;
@@ -117,8 +118,11 @@ export class YtDlpCapture implements YouTubeCapture {
     this.timeoutMs = options.timeoutMs ?? 90_000;
   }
 
-  async capture(video: YouTubeVideoRef): Promise<CapturedTranscript> {
+  async capture(video: YouTubeVideoRef, options: CaptureOptions = {}): Promise<CapturedTranscript> {
     const info = await this.readInfo(video);
+    if (options.publishedNotBefore && !publishedSince(publishedAtFromInfo(info), options.publishedNotBefore)) {
+      throw new CollectorError('out_of_range', '這支影片的發布時間早於補收範圍。');
+    }
     const track = chooseSubtitleTrack(tracksFromInfo(info));
     if (!track) {
       throw new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。');

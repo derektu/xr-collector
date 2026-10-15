@@ -1,12 +1,16 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { YouTubeChannel } from '../core/types.js';
+import type { ChannelCursor, YouTubeChannel } from '../core/types.js';
+
+export type ChannelPatch = Partial<Omit<YouTubeChannel, 'id' | 'addedAt'>>;
 
 export interface ChannelStore {
   list(): Promise<YouTubeChannel[]>;
   add(channel: YouTubeChannel): Promise<YouTubeChannel>;
   remove(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null>;
+  /** Changes one subscription; returns null when it no longer exists, so a removed channel is never recreated. */
+  update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null>;
 }
 
 export class JsonChannelStore implements ChannelStore {
@@ -44,13 +48,17 @@ export class JsonChannelStore implements ChannelStore {
   }
 
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null> {
+    return this.update(id, { enabled });
+  }
+
+  update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null> {
     return this.mutate(async () => {
       const channels = await this.readChannels();
       const index = channels.findIndex((channel) => channel.id === id);
       if (index < 0) return null;
       const current = channels[index];
       if (!current) return null;
-      const updated = { ...current, enabled };
+      const updated = { ...current, ...patch };
       channels[index] = updated;
       await this.writeChannels(channels);
       return updated;
@@ -100,5 +108,17 @@ function isYouTubeChannel(value: unknown): value is YouTubeChannel {
     && typeof channel.title === 'string'
     && typeof channel.url === 'string'
     && typeof channel.enabled === 'boolean'
-    && typeof channel.addedAt === 'string';
+    && typeof channel.addedAt === 'string'
+    && (channel.cursor === undefined || channel.cursor === null || isCursor(channel.cursor))
+    && (channel.lastCheckedAt === undefined || channel.lastCheckedAt === null || typeof channel.lastCheckedAt === 'string')
+    && (channel.backlog === undefined || typeof channel.backlog === 'boolean');
+}
+
+function isCursor(value: unknown): value is ChannelCursor {
+  if (!value || typeof value !== 'object') return false;
+  const cursor = value as Partial<ChannelCursor>;
+  return typeof cursor.videoId === 'string'
+    && (cursor.publishedAt === null || typeof cursor.publishedAt === 'string')
+    && Array.isArray(cursor.recentIds)
+    && cursor.recentIds.every((id) => typeof id === 'string');
 }

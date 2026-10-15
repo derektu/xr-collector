@@ -127,6 +127,13 @@ describe('merge comparison and choices', () => {
     expect((await workspace.channels.listChannels()).map((c) => [c.id, c.enabled])).toEqual([['UC1', false], ['UC-local', true], ['UC-new', true]]);
     const again = await workspace.previewMerge(buffer);
     expect(again.items.filter((item) => item.kind === 'channel').every((item) => item.state === 'same')).toBe(true);
+    // Discovery progress describes collection, not the subscription choice.
+    const progress = { cursor: { videoId: 'abcdefghijk', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-10-01', backlog: true };
+    const withProgress = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([{ ...channel, ...progress }]))]]);
+    const withoutProgress = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([channel]))]]);
+    expect(compareFiles(withoutProgress, withProgress).map((item) => item.state)).toEqual(['same']);
+    const adopted = mergeFiles(new Map(), withProgress, compareFiles(new Map(), withProgress), {});
+    expect(JSON.parse(adopted.get('settings/youtube-channels.json')!.toString())).toEqual([{ ...channel, ...progress }]);
     const a = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([channel, { ...channel, id: 'UC2' }]))]]);
     const b = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([{ ...channel, id: 'UC2' }, { ...channel, addedAt: '2000' }]))]]);
     expect(compareFiles(a, b).every((item) => item.state === 'same')).toBe(true);
@@ -136,11 +143,16 @@ describe('merge comparison and choices', () => {
     const store = new JsonChannelScheduleStore(local);
     const original = { ...(await store.load()), enabled: false, intervalMinutes: 30, lastCompletedAt: '2026-01-01' };
     await store.save(original);
-    await new JsonChannelScheduleStore(incoming).save({ ...original, enabled: true, intervalMinutes: 120, lastCompletedAt: '2099-01-01', nextRunAt: '2000-01-01' });
+    await new JsonChannelScheduleStore(incoming).save({
+      ...original, enabled: true, intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20,
+      lastCompletedAt: '2099-01-01', nextRunAt: '2000-01-01',
+    });
     const preview = await workspace.previewMerge(await exportVault(incoming));
     expect(preview.items.find((item) => item.kind === 'schedule')).toMatchObject({ state: 'conflict' });
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, intervalMinutes: 120, lastCompletedAt: '2026-01-01', nextRunAt: null });
+    expect(await workspace.schedule.getSchedule()).toMatchObject({
+      enabled: false, intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20, lastCompletedAt: '2026-01-01', nextRunAt: null,
+    });
   });
   it('compares binary attachments, versions and management files without deleting absent files', async () => {
     const { local, incoming, workspace } = await fixture();

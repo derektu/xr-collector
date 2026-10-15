@@ -4,18 +4,26 @@ import type {
   ChannelScheduleStore,
   StoredChannelSchedule,
 } from './channel-scheduler.js';
+import { DEFAULT_POLICY, isBackfillLimit, isBackfillWindow, normalizeInterval } from './collection-policy.js';
 
+/** A Vault without a schedule file collects automatically with the default policy. */
 const DEFAULT_SCHEDULE: StoredChannelSchedule = {
-  enabled: false,
-  intervalMinutes: 60,
+  enabled: true,
+  ...DEFAULT_POLICY,
   lastAttemptAt: null,
   lastCompletedAt: null,
   nextRunAt: null,
   lastResult: null,
 };
 
-interface ScheduleFile extends StoredChannelSchedule {
+/**
+ * Version 1 files written before the backfill settings existed lack those fields and may hold any
+ * interval from 1 to 10080 minutes; they load with the default backfill and the nearest offered interval.
+ */
+interface ScheduleFile extends Omit<StoredChannelSchedule, 'backfillWindow' | 'backfillMaxItems'> {
   version: 1;
+  backfillWindow?: unknown;
+  backfillMaxItems?: unknown;
 }
 
 export class JsonChannelScheduleStore implements ChannelScheduleStore {
@@ -37,8 +45,13 @@ export class JsonChannelScheduleStore implements ChannelScheduleStore {
     }
     const parsed: unknown = JSON.parse(contents);
     if (!isScheduleFile(parsed)) throw new Error('Invalid YouTube channel schedule settings');
-    const { version: _version, ...schedule } = parsed;
-    return schedule;
+    const { version: _version, backfillWindow, backfillMaxItems, ...schedule } = parsed;
+    return {
+      ...schedule,
+      intervalMinutes: normalizeInterval(schedule.intervalMinutes),
+      backfillWindow: isBackfillWindow(backfillWindow) ? backfillWindow : DEFAULT_POLICY.backfillWindow,
+      backfillMaxItems: isBackfillLimit(backfillMaxItems) ? backfillMaxItems : DEFAULT_POLICY.backfillMaxItems,
+    };
   }
 
   save(schedule: StoredChannelSchedule): Promise<void> {
@@ -71,7 +84,6 @@ function isScheduleFile(value: unknown): value is ScheduleFile {
     && typeof schedule.enabled === 'boolean'
     && Number.isInteger(schedule.intervalMinutes)
     && (schedule.intervalMinutes ?? 0) >= 1
-    && (schedule.intervalMinutes ?? 0) <= 10_080
     && isNullableString(schedule.lastAttemptAt)
     && isNullableString(schedule.lastCompletedAt)
     && isNullableString(schedule.nextRunAt)
