@@ -29,7 +29,7 @@ export function createSourceRegistry(definitions: SourceDefinition[]): SourceReg
   return { get: (id) => byId.get(id), open: (id) => byId.get(id), publicSources: () => definitions.filter((definition) => definition.availability !== 'test-only') };
 }
 export const sourceRegistry = createSourceRegistry([
-  { id: 'youtube', label: 'YouTube', availability: 'available', description: '影片、頻道與訂閱的操作將由後續工作接入這個來源位置。', view: { heading: 'YouTube 來源', detail: '這是 YouTube 的接入位置；收集與訂閱操作尚未啟用。' } },
+  { id: 'youtube', label: 'YouTube', availability: 'available', description: '貼上影片或頻道網址，收集字幕到知識庫。', view: { heading: 'YouTube 來源', detail: '貼上影片或頻道網址，收集字幕到知識庫。' } },
   { id: 'rss', label: 'RSS', availability: 'planned', description: '尚未開放的來源。', view: { heading: 'RSS 來源', detail: 'RSS 尚未開放。' } },
   { id: 'web', label: '一般網頁', availability: 'planned', description: '尚未開放的來源。', view: { heading: '一般網頁來源', detail: '一般網頁來源尚未開放。' } },
 ]);
