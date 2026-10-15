@@ -1,12 +1,26 @@
+import { createHash } from 'node:crypto';
 import type {
+  DocumentMetadata,
   SavedDocument,
   SearchHit,
   SearchQuery,
   SearchResponse,
 } from '../core/types.js';
+import { NO_PUBLISHER_ID } from '../core/collector.js';
 import type { SearchBackend } from './managed-transcript-search.js';
 
-const INDEX_UID = 'transcripts';
+/** The index UID carries the schema version; a schema change gets a new index and a full rebuild. */
+const INDEX_UID = 'documents_v2';
+/** Indexes written by earlier schema versions, removed once the current index is in place. */
+const RETIRED_INDEX_UIDS = ['transcripts'];
+const MAX_TOTAL_HITS = 10_000;
+const HIGHLIGHT_PRE = '<mark>';
+const HIGHLIGHT_POST = '</mark>';
+
+const RETRIEVED_ATTRIBUTES = [
+  'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
+  'publishedAt', 'collectedAt', 'youtube', 'bodyMarkdown',
+];
 
 interface MeilisearchBackendOptions {
   baseUrl: string;
@@ -27,14 +41,20 @@ interface TaskResult {
 interface IndexedDocument {
   key: string;
   id: string;
+  type: SavedDocument['type'];
+  sourceType: SavedDocument['sourceType'];
+  sourceId: string;
+  sourceUrl: string;
   title: string;
-  channelTitle: string;
+  publisherId: string | null;
+  publisherName: string;
   publishedAt: string | null;
   publishedAtEpoch: number | null;
   collectedAt: string;
-  languageCode: string;
-  subtitleKind: SavedDocument['subtitleKind'];
+  youtube: SavedDocument['youtube'] | null;
   bodyMarkdown: string;
+  /** Fingerprint of everything above, compared with the Vault to decide whether the index is current. */
+  contentHash: string;
 }
 
 interface SearchHitDocument extends IndexedDocument {
@@ -45,8 +65,14 @@ interface SearchHitDocument extends IndexedDocument {
 
 interface MeilisearchSearchResponse {
   hits: SearchHitDocument[];
-  estimatedTotalHits?: number;
   totalHits?: number;
+  page?: number;
+  hitsPerPage?: number;
+}
+
+/** Meilisearch keys allow only `[A-Za-z0-9_-]`; base64url keeps the full document ID reversible and unique. */
+export function indexKey(documentId: string): string {
+  return Buffer.from(documentId, 'utf8').toString('base64url');
 }
 
 export class MeilisearchBackend implements SearchBackend {
@@ -78,22 +104,21 @@ export class MeilisearchBackend implements SearchBackend {
       {
         method: 'PATCH',
         body: JSON.stringify({
-          searchableAttributes: ['title', 'channelTitle', 'bodyMarkdown'],
-          displayedAttributes: [
-            'id',
-            'title',
-            'channelTitle',
-            'publishedAt',
-            'collectedAt',
-            'languageCode',
-            'subtitleKind',
-            'bodyMarkdown',
-          ],
-          filterableAttributes: ['channelTitle', 'publishedAtEpoch'],
+          searchableAttributes: ['title', 'publisherName', 'bodyMarkdown'],
+          filterableAttributes: ['sourceType', 'publisherId', 'publishedAtEpoch'],
+          pagination: { maxTotalHits: MAX_TOTAL_HITS },
         }),
       },
     );
     await this.waitForTask(settingsTask.taskUid);
+
+    for (const uid of RETIRED_INDEX_UIDS) {
+      const existing = await this.fetchImplementation(`${this.baseUrl}/indexes/${uid}`, { headers: this.headers() });
+      if (existing.status === 404) continue;
+      if (!existing.ok) throw await this.responseError(existing);
+      const task = await this.request<TaskReference>(`/indexes/${uid}`, { method: 'DELETE' });
+      await this.waitForTask(task.taskUid);
+    }
   }
 
   async count(): Promise<number> {
@@ -101,6 +126,26 @@ export class MeilisearchBackend implements SearchBackend {
       `/indexes/${INDEX_UID}/stats`,
     );
     return stats.numberOfDocuments;
+  }
+
+  /** True when the index holds exactly the given documents with identical content. */
+  async isCurrent(documents: SavedDocument[]): Promise<boolean> {
+    const expected = new Map(documents.map((document) => {
+      const indexed = toIndexedDocument(document);
+      return [indexed.key, indexed.contentHash];
+    }));
+    let seen = 0;
+    for (let offset = 0; ; offset += 1000) {
+      const page = await this.request<{ results: Array<{ key: string; contentHash?: string }>; total: number }>(
+        `/indexes/${INDEX_UID}/documents?fields=key,contentHash&limit=1000&offset=${offset}`,
+      );
+      for (const entry of page.results) {
+        if (expected.get(entry.key) !== entry.contentHash) return false;
+        seen += 1;
+      }
+      if (page.results.length < 1000) break;
+    }
+    return seen === expected.size;
   }
 
   async replaceAll(documents: SavedDocument[]): Promise<void> {
@@ -134,8 +179,13 @@ export class MeilisearchBackend implements SearchBackend {
 
   async search(query: SearchQuery): Promise<SearchResponse> {
     const filter: string[] = [];
-    if (query.channel) {
-      filter.push(`channelTitle = ${JSON.stringify(query.channel)}`);
+    if (query.sourceType) {
+      filter.push(`sourceType = ${JSON.stringify(query.sourceType)}`);
+    }
+    if (query.publisherId === NO_PUBLISHER_ID) {
+      filter.push('publisherId IS NULL');
+    } else if (query.publisherId) {
+      filter.push(`publisherId = ${JSON.stringify(query.publisherId)}`);
     }
     if (query.publishedFrom) {
       filter.push(`publishedAtEpoch >= ${dateBoundary(query.publishedFrom, 'start')}`);
@@ -144,25 +194,22 @@ export class MeilisearchBackend implements SearchBackend {
       filter.push(`publishedAtEpoch <= ${dateBoundary(query.publishedTo, 'end')}`);
     }
 
+    const limit = query.limit ?? 50;
+    const offset = query.offset ?? 0;
+    // Page-based search returns an exact total, which numbered pagination needs.
     const result = await this.request<MeilisearchSearchResponse>(
       `/indexes/${INDEX_UID}/search`,
       {
         method: 'POST',
         body: JSON.stringify({
           q: query.query,
-          limit: query.limit ?? 50,
-          offset: query.offset ?? 0,
-          attributesToRetrieve: [
-            'id',
-            'title',
-            'channelTitle',
-            'publishedAt',
-            'collectedAt',
-            'languageCode',
-            'subtitleKind',
-            'bodyMarkdown',
-          ],
+          hitsPerPage: limit,
+          page: Math.floor(offset / limit) + 1,
+          attributesToRetrieve: RETRIEVED_ATTRIBUTES,
           attributesToCrop: ['bodyMarkdown:32'],
+          attributesToHighlight: ['bodyMarkdown'],
+          highlightPreTag: HIGHLIGHT_PRE,
+          highlightPostTag: HIGHLIGHT_POST,
           cropMarker: '…',
           matchingStrategy: 'all',
           ...(filter.length > 0 ? { filter } : {}),
@@ -172,7 +219,9 @@ export class MeilisearchBackend implements SearchBackend {
 
     return {
       hits: result.hits.map(toSearchHit),
-      estimatedTotalHits: result.estimatedTotalHits ?? result.totalHits ?? result.hits.length,
+      total: result.totalHits ?? result.hits.length,
+      offset,
+      limit,
     };
   }
 
@@ -212,31 +261,39 @@ export class MeilisearchBackend implements SearchBackend {
 }
 
 function toIndexedDocument(document: SavedDocument): IndexedDocument {
-  return {
-    key: document.sourceId,
+  const fields: Omit<IndexedDocument, 'contentHash'> = {
+    key: indexKey(document.id),
     id: document.id,
+    type: document.type,
+    sourceType: document.sourceType,
+    sourceId: document.sourceId,
+    sourceUrl: document.sourceUrl,
     title: document.title,
-    channelTitle: document.channelTitle,
+    publisherId: document.publisher.id,
+    publisherName: document.publisher.name,
     publishedAt: document.publishedAt,
     publishedAtEpoch: document.publishedAt ? Date.parse(document.publishedAt) : null,
     collectedAt: document.collectedAt,
-    languageCode: document.languageCode,
-    subtitleKind: document.subtitleKind,
+    youtube: document.youtube ?? null,
     bodyMarkdown: document.bodyMarkdown,
   };
+  return { ...fields, contentHash: createHash('sha256').update(JSON.stringify(fields)).digest('hex') };
 }
 
 function toSearchHit(hit: SearchHitDocument): SearchHit {
-  return {
+  const metadata: DocumentMetadata = {
     id: hit.id,
+    type: hit.type,
+    sourceType: hit.sourceType,
+    sourceId: hit.sourceId,
+    sourceUrl: hit.sourceUrl,
     title: hit.title,
-    channelTitle: hit.channelTitle,
+    publisher: { id: hit.publisherId, name: hit.publisherName },
     publishedAt: hit.publishedAt,
     collectedAt: hit.collectedAt,
-    languageCode: hit.languageCode,
-    subtitleKind: hit.subtitleKind,
-    snippet: hit._formatted?.bodyMarkdown ?? hit.bodyMarkdown,
+    ...(hit.youtube ? { youtube: hit.youtube } : {}),
   };
+  return { ...metadata, snippet: hit._formatted?.bodyMarkdown ?? hit.bodyMarkdown };
 }
 
 function dateBoundary(value: string, boundary: 'start' | 'end'): number {

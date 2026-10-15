@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
 import type {
   CapturedTranscript,
-  DocumentSummary,
+  DocumentMetadata,
   SavedDocument,
   SubtitleKind,
 } from '../core/types.js';
@@ -50,16 +50,21 @@ function toSavedDocument(metadata: StoredMetadata, bodyMarkdown: string): SavedD
   return {
     id: metadata.collector.id,
     type: 'Transcript',
-    title: metadata.title,
-    sourceUrl: metadata.resource,
+    sourceType: 'youtube',
     sourceId: metadata.collector.source_id,
-    channelId: metadata.collector.publisher_id ?? null,
-    channelTitle: metadata.collector.publisher,
+    sourceUrl: metadata.resource,
+    title: metadata.title,
+    publisher: {
+      id: metadata.collector.publisher_id ?? null,
+      name: metadata.collector.publisher,
+    },
     publishedAt: metadata.collector.published_at ?? null,
     collectedAt: metadata.collector.collected_at,
-    languageCode: metadata.collector.subtitle.language_code,
-    languageName: metadata.collector.subtitle.language_name ?? null,
-    subtitleKind: metadata.collector.subtitle.kind,
+    youtube: {
+      languageCode: metadata.collector.subtitle.language_code,
+      languageName: metadata.collector.subtitle.language_name ?? null,
+      subtitleKind: metadata.collector.subtitle.kind,
+    },
     bodyMarkdown,
   };
 }
@@ -125,7 +130,8 @@ export class MarkdownVault implements DocumentVault {
     return saved;
   }
 
-  async list(): Promise<DocumentSummary[]> {
+  /** Metadata of every document, without bodies, newest collection first. */
+  async list(): Promise<DocumentMetadata[]> {
     let files: string[];
     try {
       files = await readdir(this.documentsDir);
@@ -139,16 +145,8 @@ export class MarkdownVault implements DocumentVault {
     );
     return documents
       .filter((document): document is SavedDocument => document !== null)
-      .map(({ id, title, channelTitle, publishedAt, collectedAt, languageCode, subtitleKind }) => ({
-        id,
-        title,
-        channelTitle,
-        publishedAt,
-        collectedAt,
-        languageCode,
-        subtitleKind,
-      }))
-      .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt));
+      .map(({ bodyMarkdown: _body, ...metadata }) => metadata)
+      .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
   }
 
   async read(id: string): Promise<SavedDocument | null> {

@@ -278,8 +278,8 @@ describe('CollectorRuntime', () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     const rebuild = vi.fn(async () => held);
     const search: TranscriptSearch = {
-      status: () => ({ state: 'ready', indexedDocuments: 0, message: '' }),
-      search: async () => ({ hits: [], estimatedTotalHits: 0 }),
+      status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null, message: '' }),
+      search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
       index: async () => undefined,
       rebuild,
     };

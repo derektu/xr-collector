@@ -18,48 +18,103 @@ export interface CapturedTranscript {
   bodyMarkdown: string;
 }
 
-export interface SavedDocument {
-  id: string;
-  type: 'Transcript';
-  title: string;
-  sourceUrl: string;
-  sourceId: string;
-  channelId: string | null;
-  channelTitle: string;
-  publishedAt: string | null;
-  collectedAt: string;
+/** Source types whose documents the Vault can hold; each adds its own metadata block. */
+export type DocumentSourceType = 'youtube';
+
+/** Who published a document; `id` is null for documents saved without a stable publisher ID. */
+export interface DocumentPublisher {
+  id: string | null;
+  name: string;
+}
+
+/** Subtitle details that only YouTube transcripts carry. */
+export interface YouTubeDocumentMetadata {
   languageCode: string;
   languageName: string | null;
   subtitleKind: SubtitleKind;
+}
+
+/** Source-independent document fields shared by browse, search and read. */
+export interface DocumentMetadata {
+  id: string;
+  type: 'Transcript';
+  sourceType: DocumentSourceType;
+  sourceId: string;
+  sourceUrl: string;
+  title: string;
+  publisher: DocumentPublisher;
+  publishedAt: string | null;
+  collectedAt: string;
+  youtube?: YouTubeDocumentMetadata;
+}
+
+export interface SavedDocument extends DocumentMetadata {
   bodyMarkdown: string;
 }
 
-export interface DocumentSummary {
-  id: string;
-  title: string;
-  channelTitle: string;
-  publishedAt: string | null;
-  collectedAt: string;
-  languageCode: string;
-  subtitleKind: SubtitleKind;
+export interface DocumentSummary extends DocumentMetadata {
+  /** Plain-text opening of the body, not a generated summary. */
+  excerpt: string;
 }
 
-export interface SearchQuery {
+/** Narrows browse and search to one source type, optionally one publisher within it. */
+export interface DocumentFilter {
+  sourceType?: DocumentSourceType;
+  /** A publisher ID, or `none` for documents without one; requires `sourceType`. */
+  publisherId?: string;
+}
+
+export interface DocumentPage {
+  documents: DocumentSummary[];
+  total: number;
+  offset: number;
+  limit: number;
+  nextOffset: number | null;
+}
+
+export interface DocumentSourcePublisher {
+  id: string | null;
+  name: string;
+  count: number;
+  /**
+   * Whether the publisher is in the source's subscription list. False covers both a removed
+   * subscription whose documents stay and a publisher only collected item by item; null when the
+   * documents carry no publisher ID to match.
+   */
+  subscribed: boolean | null;
+}
+
+export interface DocumentSourceGroup {
+  sourceType: DocumentSourceType;
+  label: string;
+  count: number;
+  publishers: DocumentSourcePublisher[];
+}
+
+export interface DocumentSources {
+  total: number;
+  groups: DocumentSourceGroup[];
+}
+
+export interface SearchQuery extends DocumentFilter {
   query: string;
   offset?: number;
   limit?: number;
-  channel?: string;
   publishedFrom?: string;
   publishedTo?: string;
 }
 
-export interface SearchHit extends DocumentSummary {
+export interface SearchHit extends DocumentMetadata {
+  /** Cropped body text around the match, with matched terms wrapped in `<mark>` and `</mark>`. */
   snippet: string;
 }
 
 export interface SearchResponse {
   hits: SearchHit[];
-  estimatedTotalHits: number;
+  /** Exact number of matching documents. */
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 export interface YouTubeChannel {
@@ -190,7 +245,14 @@ export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'er
 export interface SearchStatus {
   state: SearchState;
   indexedDocuments: number;
+  /** When the index was last rebuilt from the Vault, including rebuilds at startup. */
+  lastRebuiltAt: string | null;
   message?: string;
+}
+
+/** Search status as the HTTP API reports it, next to the Vault's own document count. */
+export interface SearchStatusReport extends SearchStatus {
+  vaultDocuments: number;
 }
 
 export interface TranscriptSearch {

@@ -46,7 +46,7 @@ async function fixture(real = false) {
       docs.clear(); const vault = new MarkdownVault(local);
       for (const row of await vault.list()) docs.set(row.id, (await vault.read(row.id))!);
     }),
-    search: async ({ query }) => ({ hits: [...docs.values()].filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), estimatedTotalHits: docs.size }),
+    search: async ({ query }) => ({ hits: [...docs.values()].filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), total: docs.size, offset: 0, limit: 50 }),
   };
   await search.rebuild(); vi.mocked(search.rebuild).mockClear();
   const options = { root: local, selection: new VaultSelection(path.join(root, 'selection.json')), createdBy: 'XR Collector test', capture: { capture: async () => capture },

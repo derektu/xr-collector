@@ -14,6 +14,9 @@ import {
   type JobSubmission,
   type MergeChoice,
   type ChannelSchedule,
+  type DocumentFilter,
+  type DocumentSourceType,
+  type SearchStatusReport,
   type TranscriptSearch,
   type VaultInspection,
   type VaultSetupAction,
@@ -68,6 +71,8 @@ export interface HttpAppOptions {
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
 }
+
+const DOCUMENT_SOURCE_TYPES: DocumentSourceType[] = ['youtube'];
 
 const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
 
@@ -237,43 +242,23 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.get('/api/agent/connection', async () => options.agentInfo);
   }
 
-  app.get<{ Querystring: { offset?: string; limit?: string } }>('/api/documents', async (request) => {
-    const documents = await options.collector!.list();
-    documents.sort((a, b) => b.collectedAt.localeCompare(a.collectedAt) || a.id.localeCompare(b.id));
-    if (options.agentToken === undefined && request.query.offset === undefined && request.query.limit === undefined) {
-      return { documents };
-    }
-    const { offset, limit } = pagination(request.query);
-    return {
-      documents: documents.slice(offset, offset + limit),
-      total: documents.length,
-      offset,
-      limit,
-      nextOffset: offset + limit < documents.length ? offset + limit : null,
-    };
+  app.get<{ Querystring: Record<string, unknown> }>('/api/documents', async (request) => {
+    const query = singleValues(request.query);
+    return options.collector!.listDocuments(documentFilter(query), pagination(query));
   });
 
-  app.get<{
-    Querystring: {
-      q?: string;
-      channel?: string;
-      publishedFrom?: string;
-      publishedTo?: string;
-      offset?: string;
-      limit?: string;
-    };
-  }>('/api/search', async (request) => {
+  app.get('/api/documents/sources', async () => ({
+    sources: await options.collector!.sources({ youtube: await options.channels?.listChannels() ?? [] }),
+  }));
+
+  app.get<{ Querystring: Record<string, unknown> }>('/api/search', async (request) => {
     if (!options.search) {
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
-    for (const value of Object.values(request.query)) {
-      if (typeof value !== 'string') {
-        throw new CollectorError('invalid_request', '每個搜尋參數只能提供一個值。');
-      }
-    }
-    const query = request.query.q?.trim() ?? '';
-    const { channel, publishedFrom, publishedTo } = request.query;
-    if (query.length > 500 || (channel?.length ?? 0) > 200) {
+    const parameters = singleValues(request.query);
+    const query = parameters.q?.trim() ?? '';
+    const { publishedFrom, publishedTo } = parameters;
+    if (query.length > 500) {
       throw new CollectorError('invalid_request', '搜尋條件過長。');
     }
     if (
@@ -283,30 +268,37 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     ) {
       throw new CollectorError('invalid_request', '發布日期篩選無效。');
     }
+    const page = pagination(parameters);
+    if (page.offset % page.limit !== 0) {
+      throw new CollectorError('invalid_request', '搜尋的 offset 必須是 limit 的整數倍。');
+    }
     return options.search.search({
       query,
-      ...(channel ? { channel } : {}),
+      ...documentFilter(parameters),
       ...(publishedFrom ? { publishedFrom } : {}),
       ...(publishedTo ? { publishedTo } : {}),
-      ...((request.query.offset !== undefined || request.query.limit !== undefined)
-        ? pagination(request.query) : {}),
+      ...page,
     });
   });
 
-  app.get('/api/search/status', async () => ({
-    status: options.search?.status() ?? {
+  const searchStatus = async (): Promise<SearchStatusReport> => ({
+    ...(options.search?.status() ?? {
       state: 'error',
       indexedDocuments: 0,
+      lastRebuiltAt: null,
       message: '搜尋服務尚未啟用。',
-    },
-  }));
+    }),
+    vaultDocuments: (await options.collector?.list())?.length ?? 0,
+  });
+
+  app.get('/api/search/status', async () => ({ status: await searchStatus() }));
 
   app.post('/api/search/rebuild', async () => {
     if (!options.search) {
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
     await options.search.rebuild();
-    return { status: options.search.status() };
+    return { status: await searchStatus() };
   });
 
   app.get<{ Params: { id: string } }>('/api/documents/:id', async (request) => ({
@@ -444,7 +436,37 @@ function isCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
 }
 
-function pagination(query: { offset?: string; limit?: string }): { offset: number; limit: number } {
+/** Rejects repeated query parameters so each filter has exactly one value. */
+function singleValues(query: Record<string, unknown>): Record<string, string | undefined> {
+  const values: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value !== 'string') {
+      throw new CollectorError('invalid_request', '每個查詢參數只能提供一個值。');
+    }
+    values[key] = value;
+  }
+  return values;
+}
+
+/** Source filters use stable IDs; publisher names are display text and never filter. */
+function documentFilter(query: Record<string, string | undefined>): DocumentFilter {
+  if (query.channel !== undefined) {
+    throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');
+  }
+  const { sourceType, publisherId } = query;
+  if (sourceType !== undefined && !DOCUMENT_SOURCE_TYPES.includes(sourceType as DocumentSourceType)) {
+    throw new CollectorError('invalid_request', '不支援的 sourceType。');
+  }
+  if (publisherId !== undefined && (sourceType === undefined || publisherId === '' || publisherId.length > 200)) {
+    throw new CollectorError('invalid_request', 'publisherId 需要搭配 sourceType，且長度須在 1 到 200 之間。');
+  }
+  return {
+    ...(sourceType ? { sourceType: sourceType as DocumentSourceType } : {}),
+    ...(publisherId ? { publisherId } : {}),
+  };
+}
+
+function pagination(query: { offset?: string | undefined; limit?: string | undefined }): { offset: number; limit: number } {
   const parse = (value: string | undefined, fallback: number, min: number, max: number): number => {
     if (value === undefined) return fallback;
     if (typeof value !== 'string' || !/^\d+$/u.test(value)) {

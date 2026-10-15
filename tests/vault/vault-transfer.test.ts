@@ -57,7 +57,7 @@ function fakeSearch(root: string): TranscriptSearch {
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search({ query }) {
-      return { hits: docs.filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), estimatedTotalHits: docs.length };
+      return { hits: docs.filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), total: docs.length, offset: 0, limit: 50 };
     },
   };
 }

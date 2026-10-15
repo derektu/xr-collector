@@ -32,16 +32,14 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
       saved = {
         id: `youtube:${input.videoId}`,
         type: 'Transcript',
+        sourceType: 'youtube',
         title: input.title,
         sourceUrl: input.sourceUrl,
         sourceId: input.videoId,
-        channelId: input.channelId,
-        channelTitle: input.channelTitle,
+        publisher: { id: input.channelId, name: input.channelTitle },
         publishedAt: input.publishedAt,
         collectedAt: '2026-09-17T00:00:00.000Z',
-        languageCode: input.languageCode,
-        languageName: input.languageName,
-        subtitleKind: input.subtitleKind,
+        youtube: { languageCode: input.languageCode, languageName: input.languageName, subtitleKind: input.subtitleKind },
         bodyMarkdown: input.bodyMarkdown,
       };
       return saved;
@@ -208,27 +206,27 @@ describe('HTTP app', () => {
     await app.close();
   });
 
-  it('searches transcript text with channel and published-date filters', async () => {
+  it('searches with stable source filters, published dates and page bounds', async () => {
     const searchRequests: unknown[] = [];
+    const hit = {
+      id: 'youtube:dQw4w9WgXcQ',
+      type: 'Transcript' as const,
+      sourceType: 'youtube' as const,
+      sourceId: 'dQw4w9WgXcQ',
+      sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: '搜尋結果',
+      publisher: { id: 'UC-test', name: '測試頻道' },
+      publishedAt: '2026-09-12T00:00:00.000Z',
+      collectedAt: '2026-09-17T00:00:00.000Z',
+      youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' as const },
+      snippet: '…符合<mark>條件</mark>的字幕內容…',
+    };
     const search = {
-      status: () => ({ state: 'ready' as const, indexedDocuments: 2 }),
+      status: () => ({ state: 'ready' as const, indexedDocuments: 2, lastRebuiltAt: null }),
       index: async () => undefined,
-      search: async (request: unknown) => {
+      search: async (request: { offset?: number; limit?: number }) => {
         searchRequests.push(request);
-        return {
-          hits: [
-            {
-              id: 'youtube:dQw4w9WgXcQ',
-              title: '搜尋結果',
-              channelTitle: '測試頻道',
-              publishedAt: '2026-09-12T00:00:00.000Z',
-              languageCode: 'zh-Hant',
-              subtitleKind: 'manual' as const,
-              snippet: '…符合條件的字幕內容…',
-            },
-          ],
-          estimatedTotalHits: 1,
-        };
+        return { hits: [hit], total: 21, offset: request.offset ?? 0, limit: request.limit ?? 50 };
       },
       rebuild: async () => undefined,
     };
@@ -236,37 +234,44 @@ describe('HTTP app', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: '/api/search?q=%E6%A2%9D%E4%BB%B6&channel=%E6%B8%AC%E8%A9%A6%E9%A0%BB%E9%81%93&publishedFrom=2026-09-01&publishedTo=2026-09-30',
+      url: '/api/search?q=%E6%A2%9D%E4%BB%B6&sourceType=youtube&publisherId=UC-test&publishedFrom=2026-09-01&publishedTo=2026-09-30&offset=20&limit=20',
     });
 
     expect(response.statusCode).toBe(200);
     expect(searchRequests).toEqual([
       {
         query: '條件',
-        channel: '測試頻道',
+        sourceType: 'youtube',
+        publisherId: 'UC-test',
         publishedFrom: '2026-09-01',
         publishedTo: '2026-09-30',
+        offset: 20,
+        limit: 20,
       },
     ]);
-    expect(response.json()).toEqual({
-      hits: [
-        expect.objectContaining({
-          id: 'youtube:dQw4w9WgXcQ',
-          snippet: '…符合條件的字幕內容…',
-        }),
-      ],
-      estimatedTotalHits: 1,
-    });
+    expect(response.json()).toEqual({ hits: [hit], total: 21, offset: 20, limit: 20 });
+
+    const rejected = await Promise.all([
+      '/api/search?q=x&channel=%E6%B8%AC%E8%A9%A6%E9%A0%BB%E9%81%93',
+      '/api/search?q=x&publisherId=UC-test',
+      '/api/search?q=x&sourceType=rss',
+      '/api/search?q=x&offset=5&limit=20',
+      '/api/search?q=x&sourceType=youtube&sourceType=youtube',
+    ].map((url) => app.inject({ method: 'GET', url })));
+    expect(rejected.map((item) => [item.statusCode, item.json().error.code])).toEqual(
+      Array.from({ length: 5 }, () => [400, 'invalid_request']),
+    );
+    expect(searchRequests).toHaveLength(1);
     await app.close();
   });
 
   it('rejects an invalid published-date filter before searching', async () => {
     let searchCount = 0;
     const search = {
-      status: () => ({ state: 'ready' as const, indexedDocuments: 0 }),
+      status: () => ({ state: 'ready' as const, indexedDocuments: 0, lastRebuiltAt: null }),
       search: async () => {
         searchCount += 1;
-        return { hits: [], estimatedTotalHits: 0 };
+        return { hits: [], total: 0, offset: 0, limit: 50 };
       },
       index: async () => undefined,
       rebuild: async () => undefined,

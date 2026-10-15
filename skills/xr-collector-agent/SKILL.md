@@ -29,7 +29,7 @@ Authorization: Bearer <token>
 ```
 
 ```http
-GET /api/search?q=math&offset=0&limit=20
+GET /api/search?q=math&sourceType=youtube&publisherId=<channel-id>&offset=0&limit=20
 Authorization: Bearer <token>
 ```
 
@@ -55,10 +55,12 @@ Authorization: Bearer <token>
 
 ## 操作與判讀
 
-- Browse 回傳 `documents`、`total`、`offset`、`limit`、`nextOffset`。把下一頁的 `offset` query 設為 `nextOffset`，直到回傳 null。依收集時間新到舊、同時間依 ID 排序；收集中翻頁可能遇到移動的結果，跨頁以 ID 去重。
-- Search 使用 `q` query，支援 `channel`、`publishedFrom`／`publishedTo`（YYYY-MM-DD）、`offset`、`limit`。`hits` 是相關片段，`estimatedTotalHits` 是估計值；Meilisearch 預設最多能翻閱前 1000 個命中，可縮小條件。列表可瀏覽全部文件。空結果只表示此條件目前沒有命中。
-- Read 使用 browse/search 回傳的穩定 `id`，取得 `document.bodyMarkdown` 全文與 `sourceUrl`、頻道、發布／收集日期、語言及人工／自動字幕資訊。根據全文回答並附來源連結；未知日期維持未知，不以收集時間替代發布時間。
-- `GET /api/search/status` 回傳索引狀態。`starting`、`updating`、`rebuilding` 或 `error` 時，搜尋會回報 503 `search_unavailable`，不代表知識庫沒有資料；此時 browse/read 仍可使用。需要搜尋時稍後重試，持續錯誤請使用者在 UI 檢查或重建。
+- 文件欄位與來源無關：`id`（穩定 ID，例如 `youtube:<videoId>`）、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`（`id`、`name`；舊文件的 `id` 可能是 null）、`publishedAt`（未知為 null）、`collectedAt`。字幕語言與人工／自動字幕只在 YouTube 文件的 `youtube`（`languageCode`、`languageName`、`subtitleKind`）。
+- 來源篩選使用穩定 ID：`sourceType`（目前為 `youtube`）與 `publisherId`（頻道 ID；沒有頻道 ID 的舊文件用 `none`），`publisherId` 必須搭配 `sourceType`。browse 與 search 接受相同篩選。頻道名稱只是顯示文字，`channel` 參數回 400 `invalid_request`。`GET /api/documents/sources` 回傳 `sources.total` 與 `sources.groups`：每個來源類型的 `count` 及 `publishers`（`id`、`name`、`count`、`subscribed`；`false` 表示頻道不在訂閱清單，包括已移除訂閱及只以單支影片收集的頻道，`null` 表示無頻道 ID）。這份統計直接讀 Vault，不受搜尋索引狀態影響。
+- Browse 回傳 `documents`、`total`、`offset`、`limit`、`nextOffset`；每份文件附 `excerpt`（正文開頭的純文字，不是摘要）。把下一頁的 `offset` query 設為 `nextOffset`，直到回傳 null。依收集時間新到舊、同時間依 ID 排序；收集中翻頁可能遇到移動的結果，跨頁以 ID 去重。
+- Search 使用 `q` query，支援上述來源篩選、`publishedFrom`／`publishedTo`（YYYY-MM-DD）、`offset`、`limit`；`offset` 必須是 `limit` 的整數倍。依相關度排序，回傳 `hits`、`total`（精確命中數，最多計到 10000）、`offset`、`limit`。`hits[].snippet` 是命中附近的片段，命中詞以 `<mark>`／`</mark>` 標出，引用時去掉標記。列表可瀏覽全部文件。空結果只表示此條件目前沒有命中。
+- Read 使用 browse/search 回傳的穩定 `id`，取得 `document.bodyMarkdown` 全文與上述欄位。根據全文回答並附 `sourceUrl`；未知日期維持未知，不以收集時間替代發布時間。
+- `GET /api/search/status` 回傳 `status`：`state`、`indexedDocuments`（索引內篇數）、`vaultDocuments`（Vault 篇數）、`lastRebuiltAt`（上次從 Vault 全量重建的時間，含啟動時的重建；未曾重建為 null）及錯誤時的 `message`。`starting`、`updating`、`rebuilding` 或 `error` 時，搜尋會回報 503 `search_unavailable`，不代表知識庫沒有資料；此時 browse/read 仍可使用。需要搜尋時稍後重試，持續錯誤請使用者在 UI 檢查或重建。
 - 收集是背景工作。`POST /api/youtube/submissions` 依網址格式辨識：影片網址（含帶 `list` 參數的觀看網址，只收該支影片）建立 `youtube.video` 工作；頻道網址或 `@handle` 建立 `youtube.channel-add` 工作，解析後加入頻道清單，再以 `result.followUpJobId` 指向的 `youtube.channel` 工作收集最近 10 支影片。純播放清單網址回 400 `unsupported_url`。`POST /api/youtube/collect` 只接受影片，`POST /api/youtube/channels` 只接受頻道，結果形狀相同。
 - 提交回傳 202 `{"job":{...},"deduplicated":false}`，表示工作已持久接受，不代表已完成。同一 Vault 中同一影片或頻道已有排隊／執行中的工作時，回傳該工作並標示 `deduplicated: true`，不會重複擷取。以 `GET /api/jobs/:id` 查詢直到 `state` 為 `completed`、`failed` 或 `interrupted`；建議間隔 2 秒以上。
 - 工作欄位：`kind`；`state`（`queued`／`running`／`completed`／`failed`／`interrupted`）；執行中的 `phase`（`resolve`、`discover`、`capture`、`save`、`index`）；`source`（`id`、`url`、`title`）；`result.outcome`（`created`、`existing`、`partial`、`failed`、`empty`）；失敗或中斷時的 `error`。影片結果以 `result.saved` 與 `result.indexed` 分開表示保存與搜尋索引：`saved: true, indexed: false` 表示文件已在 Vault 可讀，只是搜尋尚未更新，可呼叫重建索引，不需重新收集。頻道工作的 `items` 列出發現的影片及其 `jobId`、狀態與錯誤，`progress` 是 `total`／`done`／`created`／`existing`／`failed` 計數。
@@ -92,7 +94,8 @@ Authorization: Bearer <token>
 | Method 與 path | 輸入／結果 |
 | --- | --- |
 | `GET /api/health` | runtime state、instance、profile、active Vault 與 Not Ready 原因 |
-| `GET /api/documents`、`GET /api/documents/:id` | 列表 query：`offset`、`limit`；ID URL encode |
+| `GET /api/documents`、`GET /api/documents/:id` | 列表 query：`sourceType`、`publisherId`、`offset`、`limit`；ID URL encode |
+| `GET /api/documents/sources` | 依來源類型與頻道統計文件數及訂閱狀態 |
 | `POST /api/youtube/submissions` | `{"url":"..."}`，影片或頻道；202 回傳 `job`、`deduplicated` |
 | `POST /api/youtube/collect` | `{"url":"..."}`，只接受影片；202 回傳 `job`、`deduplicated` |
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
@@ -101,7 +104,7 @@ Authorization: Bearer <token>
 | `PATCH`／`DELETE /api/youtube/channels/:id` | PATCH body `{"enabled":true}`；ID URL encode |
 | `POST /api/youtube/channel-runs` | 選用 `{"channelIds":["..."]}`；202 回傳 `submissions` |
 | `GET`／`PUT /api/youtube/schedule` | PUT body `{"enabled":true,"intervalMinutes":60}`，週期 1–10080 |
-| `GET /api/search`、`GET /api/search/status` | 搜尋 query 如上；讀取索引狀態 |
+| `GET /api/search`、`GET /api/search/status` | query `q`、`sourceType`、`publisherId`、`publishedFrom`、`publishedTo`、`offset`、`limit`；讀取索引狀態 |
 | `POST /api/search/rebuild` | 等待重建完成並回傳搜尋狀態 |
 | `GET /api/vault/setup` | Vault 位置狀態：`state`（`ready`／`not_ready`）、`vaultPath`、`suggestedPath`、`failure` |
 | `POST /api/vault/inspect` | `{"path":"<絕對路徑>"}`；回傳 `inspection.kind` 為 `empty`、`existing`（含 `documentCount`）或 `invalid`（含 `reason`），不改動目錄 |

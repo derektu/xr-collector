@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type {
   CapturedTranscript,
-  DocumentSummary,
+  DocumentMetadata,
   SavedDocument,
 } from '../../src/core/types.js';
 
@@ -31,21 +31,19 @@ class MemoryVault implements DocumentVault {
       id: `youtube:${capture.videoId}`,
       type: 'Transcript',
       title: capture.title,
+      sourceType: 'youtube',
       sourceUrl: capture.sourceUrl,
       sourceId: capture.videoId,
-      channelId: capture.channelId,
-      channelTitle: capture.channelTitle,
+      publisher: { id: capture.channelId, name: capture.channelTitle },
       publishedAt: capture.publishedAt,
       collectedAt: '2026-09-17T00:00:00.000Z',
-      languageCode: capture.languageCode,
-      languageName: capture.languageName,
-      subtitleKind: capture.subtitleKind,
+      youtube: { languageCode: capture.languageCode, languageName: capture.languageName, subtitleKind: capture.subtitleKind },
       bodyMarkdown: capture.bodyMarkdown,
     };
     return this.document;
   }
 
-  async list(): Promise<DocumentSummary[]> {
+  async list(): Promise<DocumentMetadata[]> {
     return [];
   }
 

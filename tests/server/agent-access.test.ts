@@ -46,8 +46,8 @@ describe('Agent authenticated HTTP access', () => {
   it('requires credentials on every route and permits existing business writes', async () => {
     const { collector, capture, jobs } = await fixture();
     const search = {
-      status: () => ({ state: 'ready' as const, indexedDocuments: 3, message: '' }),
-      search: vi.fn(async () => ({ hits: [], estimatedTotalHits: 0 })),
+      status: () => ({ state: 'ready' as const, indexedDocuments: 3, lastRebuiltAt: null, message: '' }),
+      search: vi.fn(async () => ({ hits: [], total: 0, offset: 0, limit: 50 })),
       index: vi.fn(async () => undefined),
       rebuild: vi.fn(async () => undefined),
     };
@@ -117,7 +117,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('reports incomplete indexing while browse/read remain available', async () => {
     const { collector } = await fixture();
-    const backend = { initialize: vi.fn(), count: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), search: vi.fn() };
+    const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), search: vi.fn() };
     const search = new ManagedTranscriptSearch(backend, async () => []);
     const app = await createHttpApp({ collector, search, agentToken: 'secret' });
     cleanup.push(() => app.close());
@@ -165,7 +165,7 @@ describe('Agent authenticated HTTP access', () => {
     };
     const browse = await get('/api/documents?limit=1');
     expect(browse.total).toBe(3);
-    const first = await get('/api/search?q=orchard&limit=1&offset=0&channel=Integration%20channel&publishedFrom=2026-09-18');
+    const first = await get('/api/search?q=orchard&limit=1&offset=0&sourceType=youtube&publisherId=none&publishedFrom=2026-09-18');
     const second = await get('/api/search?q=orchard&limit=1&offset=1');
     expect(first.hits).toHaveLength(1);
     expect(second.hits).toHaveLength(1);
@@ -179,7 +179,8 @@ describe('Agent authenticated HTTP access', () => {
     const read = await get(`/api/documents/${encodeURIComponent(first.hits[0].id)}`);
     expect(read).toEqual((await ui.inject(`/api/documents/${encodeURIComponent(first.hits[0].id)}`)).json());
     expect((await get('/api/search?q=nonexistentkeyword')).hits).toEqual([]);
-    expect((await get('/api/search/status')).status.state).toBe('ready');
+    expect((await get('/api/search/status')).status).toMatchObject({ state: 'ready', indexedDocuments: 3, vaultDocuments: 3 });
+    expect((await get('/api/documents/sources')).sources).toEqual((await ui.inject('/api/documents/sources')).json().sources);
     await access.close();
     await expect(get('/api/documents')).rejects.toThrow('fetch failed');
     await chmod(connectionFile, 0o644);
