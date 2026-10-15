@@ -14,7 +14,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/core` | 共用型別、文件保存與索引、字幕處理 |
 | `src/sources/youtube`、`src/capture` | YouTube 網址辨識、來源 adapter 介面與 yt-dlp 實作 |
 | `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工與裝置端持久紀錄 |
-| `src/channels` | 頻道清單、頻道工作提交及執行期間的週期排程 |
+| `src/channels` | 訂閱、共用自動收集設定、補收與增量發現範圍、頻道工作提交及執行期間的週期檢查 |
 | `src/vault` | Markdown 保存、active Vault、資料包與合併恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client |

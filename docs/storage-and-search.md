@@ -8,7 +8,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | --- | --- |
 | Vault 標記檔 | Vault 根目錄的 `xr-collector-vault.json`；不納入 Vault 資料包 |
 | YouTube Markdown | Vault 的 `documents/youtube/` |
-| 頻道、排程設定 | Vault 的 `settings/youtube-channels.json`、`settings/youtube-schedule.json` |
+| 訂閱與發現進度、自動收集設定 | Vault 的 `settings/youtube-channels.json`、`settings/youtube-schedule.json` |
 | 附件、保留版本、管理檔案 | Vault 的 `attachments/`、`versions/`、`management/`；隨完整資料包交換 |
 | Meilisearch database | 裝置上的搜尋資料目錄；不納入 Vault 資料包 |
 | profile、Agent 連線檔與 token | 裝置資料；不納入 Vault 資料包 |
@@ -30,7 +30,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 `.xr-vault` 是 version 1 JSON 資料包：檔案使用 Base64，檔案內容與清單以 SHA-256 檢查完整性。限制為 128 MiB 包大小、80 MiB 解碼內容、10000 個檔案。系統驗證路徑、衝突、checksum、版本及支援的資料格式；checksum 不等於來源簽章。
 
-還原在目前 Vault 旁的 `<vault>.restored/` 下建立獨立 Vault 並寫入新的標記檔，驗證資料及搜尋索引後才切換 active Vault，原 Vault 保留。還原設定保存頻道及週期，但排程暫停；再次啟用由使用者操作。切換前失敗保留原資料與選址。Vault 匯出／還原期間，程式阻止衝突寫入。
+還原在目前 Vault 旁的 `<vault>.restored/` 下建立獨立 Vault 並寫入新的標記檔，驗證資料及搜尋索引後才切換 active Vault，原 Vault 保留。還原保存訂閱、發現進度與自動收集設定，但自動收集暫停；再次開啟由使用者操作。切換前失敗保留原資料與選址。Vault 匯出／還原期間，程式阻止衝突寫入。
 
 ## 合併與恢復
 
