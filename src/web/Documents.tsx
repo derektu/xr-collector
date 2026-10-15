@@ -5,6 +5,7 @@ import {
   DOCUMENTS_PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
   collectedShortLabel,
+  draftForQuery,
   pageItems,
   publishedLabel,
   readerPath,
@@ -51,7 +52,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate }: {
   const requests = useMemo(createLatestRequest, []);
   const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
 
-  useEffect(() => { setDraft(state.query); }, [state.query]);
+  useEffect(() => { setDraft((current) => draftForQuery(current, state.query)); }, [state.query]);
 
   useEffect(() => {
     const controller = new AbortController();
