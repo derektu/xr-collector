@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Collector, type YouTubeCapture } from '../core/collector.js';
 import { CollectorError, type MergePreview, type MergeChoice, type TransferStatus, type TranscriptSearch } from '../core/types.js';
@@ -11,6 +11,8 @@ import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { compareFiles, fingerprint, packageFiles, mergeFiles } from './vault-merge.js';
 import { exportVault, unpackVault, safePath } from './vault-package.js';
+import { writeVaultMarker } from './vault-directory.js';
+import type { VaultSelection } from './vault-selection.js';
 
 interface Bundle {
   root: string;
@@ -20,7 +22,12 @@ interface Bundle {
   runtime: SearchRuntime;
 }
 export interface WorkspaceOptions {
-  defaultRoot: string;
+  /** Absolute path of a Vault that the caller has already inspected. */
+  root: string;
+  /** Device record updated when a restore switches the active Vault. */
+  selection: VaultSelection;
+  /** Application name and version written into markers of Vaults it creates. */
+  createdBy: string;
   capture: YouTubeCapture;
   channelSource: YouTubeChannelSource;
   searchBinary: string;
@@ -29,15 +36,8 @@ export interface WorkspaceOptions {
   createSearch?: (root: string) => Promise<SearchRuntime>;
 }
 
-export class ActiveVaultUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ActiveVaultUnavailableError';
-  }
-}
-
 /** Service references stay stable for both UI and Agent while the active vault changes. */
-function forwarding<T extends object>(target: () => T): T {
+export function forwarding<T extends object>(target: () => T): T {
   return new Proxy({} as T, {
     get(_object, key) {
       const object = target();
@@ -61,41 +61,15 @@ export class VaultWorkspace {
   readonly channels = forwarding(() => this.current.channels);
   readonly schedule = forwarding(() => this.current.schedule);
   readonly search = forwarding<TranscriptSearch>(() => this.current.runtime.search);
-  private readonly selectionFile: string;
   private readonly restoreParent: string;
 
   private constructor(private readonly options: WorkspaceOptions) {
-    this.selectionFile = `${options.defaultRoot}.active.json`;
-    this.restoreParent = `${options.defaultRoot}.restored`;
+    this.restoreParent = `${options.root}.restored`;
   }
 
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
     const workspace = new VaultWorkspace(options);
-    let root = options.defaultRoot;
-    try {
-      const selection: unknown = JSON.parse(await readFile(workspace.selectionFile, 'utf8'));
-      if (!selection || typeof selection !== 'object' || !('name' in selection)
-        || typeof selection.name !== 'string' || !/^vault-[A-Za-z0-9]+$/u.test(selection.name)) {
-        throw new Error('Invalid active vault selection');
-      }
-      root = path.join(workspace.restoreParent, selection.name);
-      // A missing restored vault must never silently become an empty writable vault.
-      try {
-        if (!(await stat(root)).isDirectory()) throw new ActiveVaultUnavailableError(
-          '目前選擇的 Vault 不存在。請在 UI Onboarding 重新設定 Vault。',
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT'
-          || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
-          throw new ActiveVaultUnavailableError(
-            '目前選擇的 Vault 不存在。請在 UI Onboarding 重新設定 Vault。',
-          );
-        }
-        throw error;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || root !== options.defaultRoot) throw error;
-    }
+    const root = options.root;
     const recovered = await workspace.recoverMerge(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
     if (recovered) {
@@ -160,22 +134,19 @@ export class VaultWorkspace {
   private async restoreOnce(buffer: Buffer): Promise<void> {
     let destination: string | null = null;
     let candidate: Bundle | null = null;
-    let temporary: string | null = null;
     try {
       await mkdir(this.restoreParent, { recursive: true, mode: 0o700 });
       destination = await mkdtemp(path.join(this.restoreParent, 'vault-'));
       await unpackVault(buffer, destination, (done, total) => {
         this.statusValue = { state: 'extracting', message: '正在還原檔案…', completedFiles: done, totalFiles: total };
       });
+      await writeVaultMarker(destination, this.options.createdBy);
       this.statusValue = { ...this.statusValue, state: 'indexing', message: '正在重建新 vault 的搜尋索引…' };
       candidate = await this.makeBundle(destination);
       // The candidate owns a separate search database; failed preparation leaves the active vault intact.
       await candidate.runtime.search.rebuild();
       await candidate.schedule.getSchedule();
-      temporary = `${this.selectionFile}.${randomUUID()}.tmp`;
-      await writeFile(temporary, JSON.stringify({ name: path.basename(destination) }), { flag: 'wx', mode: 0o600 });
-      await rename(temporary, this.selectionFile);
-      temporary = null;
+      await this.options.selection.write(destination);
       const previous = this.current;
       this.current = candidate;
       candidate = null;
@@ -192,7 +163,6 @@ export class VaultWorkspace {
           await candidate.schedule.close();
           await candidate.runtime.close();
         }
-        if (temporary) await rm(temporary, { force: true });
         if (destination) {
           await rm(destination, { recursive: true, force: true });
           await rm(this.searchPath(destination), { recursive: true, force: true });
@@ -351,9 +321,9 @@ export class VaultWorkspace {
       ? error.message : '資料搬移失敗，請確認資料包、磁碟空間與搜尋服務後重試。' };
   }
 
+  /** Each Vault path gets its own rebuildable search database on this device. */
   private searchPath(root: string): string {
-    return root === this.options.defaultRoot ? this.options.searchData
-      : `${this.options.searchData}-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
+    return `${this.options.searchData}-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
   }
 
   private async makeBundle(root: string, port?: number): Promise<Bundle> {

@@ -6,6 +6,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { exportVault, unpackVault } from '../../src/vault/vault-package.js';
+import { VaultSelection } from '../../src/vault/vault-selection.js';
+import { VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
@@ -59,9 +61,11 @@ function fakeSearch(root: string): TranscriptSearch {
     },
   };
 }
+/** Opens the Vault the device selection points at, as the runtime does at startup. */
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> = {}) {
+  const selection = new VaultSelection(`${root}.selection.json`);
   const workspace = await VaultWorkspace.open({
-    defaultRoot: root, capture: { capture: async () => capture },
+    root: await selection.read() ?? root, selection, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: `${root}-search`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
@@ -150,6 +154,7 @@ describe('workspace transfer through HTTP', () => {
       expect((await app.inject('/api/youtube/schedule')).json().schedule.enabled).toBe(false);
       expect(await new MarkdownVault(b).read('youtube:abcdefghijk')).not.toBeNull();
       const restoredPath = workspace.status().vaultPath;
+      expect(JSON.parse(await readFile(path.join(restoredPath!, VAULT_MARKER), 'utf8'))).toMatchObject({ format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector test' });
       await workspace.close();
       const restarted = await open(b);
       expect(restarted.status().vaultPath).toBe(restoredPath);
@@ -173,7 +178,7 @@ describe('workspace transfer through HTTP', () => {
       expect(workspace.status().vaultPath).toBe(b);
       expect(await exportVault(b)).toEqual(before);
       expect(await readdir(`${b}.restored`)).toEqual([]);
-      await expect(readFile(`${b}.active.json`)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(`${b}.selection.json`)).rejects.toMatchObject({ code: 'ENOENT' });
     }
     fail = false;
     workspace.restore(before); await waitForRestore(workspace);
@@ -220,7 +225,8 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('rebuilds 
   await seed(a);
   const buffer = await exportVault(a);
   await rm(a, { recursive: true });
-  const options = { defaultRoot: b, capture: { capture: async () => capture },
+  const selection = new VaultSelection(`${b}.selection.json`);
+  const options = { root: b, selection, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData: `${b}-search` };
   const workspace = await VaultWorkspace.open(options); workspaces.push(workspace);
@@ -231,7 +237,7 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('rebuilds 
   expect((await workspace.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`);
   expect((await workspace.schedule.getSchedule()).enabled).toBe(false);
   await workspace.close();
-  const restarted = await VaultWorkspace.open(options); workspaces.push(restarted);
+  const restarted = await VaultWorkspace.open({ ...options, root: (await selection.read())! }); workspaces.push(restarted);
   await expect.poll(() => restarted.search.status().state, { timeout: 5000 }).toBe('ready');
   expect((await restarted.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`);
 }, 30_000);

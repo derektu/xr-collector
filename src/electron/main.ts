@@ -1,5 +1,6 @@
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
@@ -30,6 +31,23 @@ function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
     ?? (name === 'meilisearch'
       ? path.join(app.getAppPath(), 'resources', 'bin', process.platform === 'win32' ? 'win' : 'mac', executable)
       : executable);
+}
+
+/**
+ * Returns the closest existing directory at or above the given path. The
+ * Windows folder dialog asks to create a missing default path as soon as it
+ * opens, so the dialog starts in a folder that already exists.
+ */
+async function existingDirectory(start: string): Promise<string> {
+  let current = start;
+  for (;;) {
+    try {
+      if ((await stat(current)).isDirectory()) return current;
+    } catch { /* keep walking up */ }
+    const parent = path.dirname(current);
+    if (parent === current) return app.getPath('documents');
+    current = parent;
+  }
 }
 
 async function createWindow(): Promise<void> {
@@ -80,9 +98,20 @@ app.whenReady().then(async () => {
     if (theme !== 'dark' && theme !== 'light') throw new Error('Unsupported theme preference');
     return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
   });
-  const vaultRoot = path.resolve(
-    process.env.XR_COLLECTOR_VAULT ?? path.join(app.getPath('userData'), 'vault'),
-  );
+  const suggestedVaultPath = path.join(app.getPath('documents'), 'XR Collector');
+  ipcMain.handle('xrCollector:desktop:chooseDirectory', async (event, defaultPath: unknown) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      title: '選擇知識庫目錄',
+      buttonLabel: '選擇',
+      defaultPath: await existingDirectory(
+        typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? defaultPath : app.getPath('documents'),
+      ),
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    };
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
   const capture = new YtDlpCapture({
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
@@ -94,10 +123,13 @@ app.whenReady().then(async () => {
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
     workspace: {
-      defaultRoot: vaultRoot, capture, channelSource,
+      capture, channelSource,
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
     },
+    ...(process.env.XR_COLLECTOR_VAULT ? { explicitVaultPath: path.resolve(process.env.XR_COLLECTOR_VAULT) } : {}),
+    suggestedVaultPath,
+    createdBy: `XR Collector ${app.getVersion()}`,
     connectionFile: agentConnectionFile({
       platform: process.platform,
       isPackaged: app.isPackaged,

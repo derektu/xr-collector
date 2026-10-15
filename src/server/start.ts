@@ -1,6 +1,6 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { FastifyInstance } from 'fastify';
-import type { ChannelCollection, ChannelScheduleManagement } from './app.js';
+import type { ChannelCollection, ChannelScheduleManagement, VaultSetup } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -18,7 +18,8 @@ export interface StartServerOptions {
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
   runtimeStatus?: () => CollectorRuntimeStatus;
-  notReadyMessage?: string;
+  notReady?: () => string | null;
+  vaultSetup?: VaultSetup;
 }
 
 export interface RunningServer {
@@ -39,7 +40,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.agentToken !== undefined ? { agentToken: options.agentToken } : {}),
     ...(options.agentInfo ? { agentInfo: options.agentInfo } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
-    ...(options.notReadyMessage ? { notReadyMessage: options.notReadyMessage } : {}),
+    ...(options.notReady ? { notReady: options.notReady } : {}),
+    ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
   });
   const host = options.host ?? '127.0.0.1';
   await app.listen({ host, port: options.port });
