@@ -6,7 +6,10 @@ import type { CollectionJob, JobEvent } from '../core/types.js';
 const JOBS_FILE = 'jobs.json';
 const EVENTS_FILE = 'events.jsonl';
 const FILE_VERSION = 1;
-/** Finished jobs beyond this count are dropped oldest first; unfinished jobs are always kept. */
+/**
+ * Completed and failed jobs beyond this count are dropped oldest first. Queued, running and
+ * interrupted jobs are always kept, because an interrupted job's scope and progress are what resumes it.
+ */
 const FINISHED_JOB_LIMIT = 1000;
 
 interface JobsFile {
@@ -163,7 +166,7 @@ export class JobStore {
 
   private prune(): void {
     const finished = [...this.jobs.values()]
-      .filter((job) => job.state !== 'queued' && job.state !== 'running')
+      .filter((job) => job.state === 'completed' || job.state === 'failed')
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     for (const job of finished.slice(0, Math.max(0, finished.length - FINISHED_JOB_LIMIT))) this.jobs.delete(job.id);
   }

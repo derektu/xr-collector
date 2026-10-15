@@ -32,14 +32,19 @@ export function classifyYouTubeInput(input: string): YouTubeInput {
     throw new CollectorError('invalid_url', '這不是 YouTube 網址。');
   }
 
+  const parts = url.pathname.split('/').filter(Boolean);
+  const first = parts[0] ?? '';
+  // An embedded playlist's path segment is 11 characters long and would otherwise read as a video ID.
+  if (youtube && first === 'embed' && parts[1] === 'videoseries') {
+    throw new CollectorError('unsupported_url', '目前不支援播放清單網址；請貼上清單中的單支影片網址。');
+  }
+
   try {
     return { kind: 'video', video: parseYouTubeVideoUrl(trimmed) };
   } catch {
     // Not a video address; it may still be a playlist or a channel.
   }
 
-  const parts = url.pathname.split('/').filter(Boolean);
-  const first = parts[0] ?? '';
   if (youtube && (first === 'playlist' || (first === 'watch' && url.searchParams.has('list')))) {
     throw new CollectorError('unsupported_url', '目前不支援播放清單網址；請貼上清單中的單支影片網址。');
   }
