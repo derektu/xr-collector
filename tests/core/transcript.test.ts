@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { documentExcerpt } from '../../src/core/document-text.js';
 import { formatTranscriptSegments } from '../../src/core/transcript.js';
 
 describe('formatTranscriptSegments', () => {
@@ -17,4 +18,17 @@ describe('formatTranscriptSegments', () => {
       '下一段內容',
     ])).toBe(`${opening}\n\n下一段內容`);
   });
+
+  it('keeps Markdown syntax in subtitle text literal', () => {
+    expect(formatTranscriptSegments(['# 不是標題', '一張 28*28 的圖', '用 [括號] 與 <b> 與 snake_case'])).toBe(
+      '\\# 不是標題 一張 28\\*28 的圖 用 \\[括號\\] 與 \\<b\\> 與 snake\\_case',
+    );
+    expect(formatTranscriptSegments(['1. 第一點'])).toBe('1\\. 第一點');
+  });
+
+  it('turns escaped subtitle text back into the original words for excerpts', () => {
+    const body = formatTranscriptSegments(['# 一張 28*28 的圖', '[括號] snake_case']);
+    expect(documentExcerpt(body)).toBe('# 一張 28*28 的圖 [括號] snake_case');
+  });
 });
+
