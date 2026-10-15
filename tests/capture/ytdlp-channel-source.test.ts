@@ -3,7 +3,7 @@ import { CollectorError } from '../../src/core/types.js';
 import { YtDlpChannelSource } from '../../src/capture/ytdlp-channel-source.js';
 
 describe('YtDlpChannelSource', () => {
-  it('resolves channel identity and lists a limited set of video references', async () => {
+  it('resolves channel identity and lists one dated page of video references', async () => {
     const commands: string[][] = [];
     const source = new YtDlpChannelSource({
       run: async (args) => {
@@ -13,8 +13,9 @@ describe('YtDlpChannelSource', () => {
           channel_id: 'UCabcdefghijklmnopqrstuv',
           channel: '測試頻道',
           entries: [
-            { id: 'aaaaaaaaaaa', title: '第一支' },
+            { id: 'aaaaaaaaaaa', title: '第一支', timestamp: 1791504000 },
             { id: 'bbbbbbbbbbb', title: '第二支' },
+            { id: 'ccccccccccc', title: '首播', live_status: 'is_upcoming', release_timestamp: 1792000000 },
           ],
         });
       },
@@ -25,7 +26,7 @@ describe('YtDlpChannelSource', () => {
       ...resolved,
       enabled: true,
       addedAt: '2026-09-17T00:00:00.000Z',
-    }, 10);
+    }, { offset: 50, limit: 50 });
 
     expect(resolved).toEqual({
       id: 'UCabcdefghijklmnopqrstuv',
@@ -37,15 +38,26 @@ describe('YtDlpChannelSource', () => {
         id: 'aaaaaaaaaaa',
         title: '第一支',
         url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+        publishedAt: '2026-10-09T00:00:00.000Z',
+        upcoming: false,
       },
       {
         id: 'bbbbbbbbbbb',
         title: '第二支',
         url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb',
+        publishedAt: null,
+        upcoming: false,
+      },
+      {
+        id: 'ccccccccccc',
+        title: '首播',
+        url: 'https://www.youtube.com/watch?v=ccccccccccc',
+        publishedAt: new Date(1792000000 * 1000).toISOString(),
+        upcoming: true,
       },
     ]);
     expect(commands[0]).toEqual(expect.arrayContaining(['--playlist-end', '1']));
-    expect(commands[1]).toEqual(expect.arrayContaining(['--playlist-end', '10']));
+    expect(commands[1]!.join(' ')).toContain('--extractor-args youtubetab:approximate_date --playlist-start 51 --playlist-end 100');
   });
 
   it('rejects a video URL before invoking yt-dlp', async () => {

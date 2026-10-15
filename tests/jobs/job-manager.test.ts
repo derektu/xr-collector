@@ -2,11 +2,12 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ChannelStore } from '../../src/channels/json-channel-store.js';
+import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CapturedTranscript,
+  type ChannelJobScope,
   type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
@@ -53,11 +54,20 @@ class MemoryVault implements DocumentVault {
 
 class MemoryChannels implements ChannelStore {
   readonly channels: YouTubeChannel[] = [];
-  async list() { return [...this.channels]; }
+  async list() { return this.channels.map((channel) => ({ ...channel })); }
   async add(channel: YouTubeChannel) { this.channels.push(channel); return channel; }
   async remove() { return false; }
   async setEnabled() { return null; }
+  async update(id: string, patch: ChannelPatch) {
+    const channel = this.channels.find((candidate) => candidate.id === id);
+    if (!channel) return null;
+    Object.assign(channel, patch);
+    return { ...channel };
+  }
 }
+
+/** A backfill wide enough that every listed video is in range. */
+const WIDE: ChannelJobScope = { trigger: 'manual', mode: 'backfill', windowStart: '2000-01-01T00:00:00.000Z', maxItems: 50, cursor: null };
 
 /** A YouTube source whose captures wait until the test releases them. */
 class ControlledSource implements YouTubeSource {
@@ -73,8 +83,8 @@ class ControlledSource implements YouTubeSource {
     return { id, title: `頻道 ${handle}`, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 
-  async discover(channel: YouTubeChannel, limit: number): Promise<DiscoveredYouTubeVideo[]> {
-    return (this.channelVideos.get(channel.id) ?? []).slice(0, limit);
+  async discover(channel: YouTubeChannel, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+    return (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit);
   }
 
   async capture(video: YouTubeVideoRef): Promise<CapturedTranscript> {
@@ -109,7 +119,12 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
     ...(options.limits ? { limits: options.limits } : {}),
     createId: () => `job-${++sequence}`,
   });
-  return { manager, vault, channels, source, search, store };
+  /** Subscribes to the channel and starts one wide backfill of it. */
+  const collect = (subscribed: YouTubeChannel) => {
+    if (!channels.channels.some((candidate) => candidate.id === subscribed.id)) channels.channels.push(subscribed);
+    return manager.submitChannel(subscribed, WIDE);
+  };
+  return { manager, vault, channels, source, search, store, collect };
 }
 
 function channel(id: string, title = id): YouTubeChannel {
@@ -119,7 +134,7 @@ function channel(id: string, title = id): YouTubeChannel {
 function videos(count: number, prefix: string): DiscoveredYouTubeVideo[] {
   return Array.from({ length: count }, (_, index) => {
     const id = videoId(index, prefix);
-    return { id, title: `影片 ${id}`, url: watchUrl(id) };
+    return { id, title: `影片 ${id}`, url: watchUrl(id), publishedAt: null, upcoming: false };
   });
 }
 
@@ -167,14 +182,14 @@ describe('JobManager', () => {
   });
 
   it('gives each channel its own job and links a video already being collected', async () => {
-    const { manager, source } = setup({ limits: { capture: 1 } });
+    const { manager, source, collect } = setup({ limits: { capture: 1 } });
     source.channelVideos.set('UC-A', videos(3, 'a'));
     source.channelVideos.set('UC-B', videos(2, 'b'));
     const manual = await manager.submitVideo(watchUrl(videoId(1, 'a')));
-    const a = await manager.submitChannel(channel('UC-A'));
-    const b = await manager.submitChannel(channel('UC-B'));
+    const a = await collect(channel('UC-A'));
+    const b = await collect(channel('UC-B'));
     expect(b.job.id).not.toBe(a.job.id);
-    expect((await manager.submitChannel(channel('UC-A'))).job.id).toBe(a.job.id);
+    expect((await collect(channel('UC-A'))).job.id).toBe(a.job.id);
 
     await vi.waitFor(() => expect(manager.get(b.job.id).items).toHaveLength(2));
     const aItems = manager.get(a.job.id).items!;
@@ -189,13 +204,13 @@ describe('JobManager', () => {
   });
 
   it('bounds concurrent captures and rotates between the jobs that queued them', async () => {
-    const { manager, source } = setup({ limits: { capture: 2 } });
+    const { manager, source, collect } = setup({ limits: { capture: 2 } });
     source.channelVideos.set('UC-BIG', videos(20, 'g'));
     source.channelVideos.set('UC-OTHER', videos(2, 'o'));
-    const big = await manager.submitChannel(channel('UC-BIG'));
+    const big = await collect(channel('UC-BIG'));
     await vi.waitFor(() => expect(source.running()).toHaveLength(2));
     const manual = await manager.submitVideo(watchUrl(videoId(1, 'm')));
-    const other = await manager.submitChannel(channel('UC-OTHER'));
+    const other = await collect(channel('UC-OTHER'));
     await vi.waitFor(() => expect(manager.get(other.job.id).items).toHaveLength(2));
 
     const order: string[] = [];
@@ -226,16 +241,16 @@ describe('JobManager', () => {
   });
 
   it('fails a channel job whose videos all fail and keeps partial results otherwise', async () => {
-    const { manager, source } = setup();
+    const { manager, source, collect } = setup();
     source.holdCaptures = false;
     source.channelVideos.set('UC-PART', videos(2, 'p'));
     source.failures.set(videoId(0, 'p'), new CollectorError('no_subtitles', '這支影片沒有字幕。'));
-    const partial = await manager.whenSettled((await manager.submitChannel(channel('UC-PART'))).job.id);
+    const partial = await manager.whenSettled((await collect(channel('UC-PART'))).job.id);
     expect(partial).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { created: 1, failed: 1 } });
     expect(partial.items?.find((item) => item.state === 'failed')?.error).toMatchObject({ code: 'no_subtitles' });
 
     source.channelVideos.set('UC-NONE', []);
-    expect(await manager.whenSettled((await manager.submitChannel(channel('UC-NONE'))).job.id))
+    expect(await manager.whenSettled((await collect(channel('UC-NONE'))).job.id))
       .toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
   });
 
@@ -292,7 +307,7 @@ describe('JobManager', () => {
   });
 
   it('records channel discovery and channel adding cut short by close as interrupted, not failed', async () => {
-    const { manager, source, channels } = setup();
+    const { manager, source, collect } = setup();
     let releaseDiscovery!: () => void;
     let releaseResolve!: () => void;
     source.discover = async () => {
@@ -303,7 +318,7 @@ describe('JobManager', () => {
       await new Promise<void>((resolve) => { releaseResolve = resolve; });
       return { id: 'UC-LATE', title: '晚到的頻道', url: 'https://www.youtube.com/channel/UC-LATE/videos' };
     };
-    const discovering = await manager.submitChannel(channel('UC-DISCOVER'));
+    const discovering = await collect(channel('UC-DISCOVER'));
     await vi.waitFor(() => expect(manager.get(discovering.job.id).phase).toBe('discover'));
 
     const closing = manager.close();
@@ -320,7 +335,7 @@ describe('JobManager', () => {
     releaseResolve();
     await closingSecond;
     expect(second.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', error: { code: 'interrupted' } });
-    expect(channels.channels).toEqual([]);
+    expect(second.channels.channels).toEqual([]);
   });
 });
 
@@ -331,9 +346,9 @@ describe('JobStore', () => {
   it('persists accepted jobs and events, and marks unfinished jobs interrupted on reopen', async () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
     const store = await JobStore.open(directory);
-    const { manager, source } = setup({ store, limits: { discovery: 1, capture: 1 } });
+    const { manager, source, collect } = setup({ store, limits: { discovery: 1, capture: 1 } });
     source.channelVideos.set('UC-STOP', videos(2, 's'));
-    const accepted = await manager.submitChannel(channel('UC-STOP', '停止中的頻道'));
+    const accepted = await collect(channel('UC-STOP', '停止中的頻道'));
 
     // Acceptance is durable before the HTTP response.
     const onDisk = JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8'));

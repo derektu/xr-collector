@@ -28,8 +28,11 @@ class ControlledRunner implements ScheduledChannelRunner {
   failure: Error | null = null;
   private readonly waiting = new Map<string, (job: CollectionJob) => void>();
 
-  async startRun(): Promise<JobSubmission[]> {
+  triggers: string[] = [];
+
+  async startRun(request: { trigger: string }): Promise<JobSubmission[]> {
     this.starts += 1;
+    this.triggers.push(request.trigger);
     if (this.failure) throw this.failure;
     return [{ job: job(`dispatch-${this.starts}`), deduplicated: false }];
   }
@@ -48,6 +51,8 @@ function schedule(overrides: Partial<StoredChannelSchedule> = {}): StoredChannel
   return {
     enabled: true,
     intervalMinutes: 5,
+    backfillWindow: '1m',
+    backfillMaxItems: 10,
     lastAttemptAt: null,
     lastCompletedAt: null,
     nextRunAt: '2026-09-17T00:20:00.000Z',
@@ -84,6 +89,8 @@ describe('ChannelScheduler', () => {
     await vi.waitFor(async () => expect(await scheduler.getSchedule()).toEqual({
       enabled: true,
       intervalMinutes: 5,
+      backfillWindow: '1m',
+      backfillMaxItems: 10,
       status: 'scheduled',
       lastAttemptAt: '2026-09-17T00:30:00.000Z',
       lastCompletedAt: '2026-09-17T00:32:00.000Z',
@@ -120,8 +127,8 @@ describe('ChannelScheduler', () => {
     });
 
     await scheduler.start();
-    await scheduler.updateSchedule({ enabled: true, intervalMinutes: 1 });
-    now = new Date('2026-09-17T00:01:00.000Z');
+    await scheduler.updateSchedule({ enabled: true, intervalMinutes: 15 });
+    now = new Date('2026-09-17T00:15:00.000Z');
 
     await vi.waitFor(() => expect(runner.starts).toBe(1), { timeout: 200 });
     await scheduler.close();
@@ -135,30 +142,99 @@ describe('ChannelScheduler', () => {
     const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
 
     await scheduler.start();
-    expect(await scheduler.updateSchedule({ enabled: true, intervalMinutes: 5 })).toMatchObject({
+    expect(await scheduler.updateSchedule({ enabled: true, intervalMinutes: 15 })).toMatchObject({
       status: 'scheduled',
-      nextRunAt: '2026-09-17T00:05:00.000Z',
+      nextRunAt: '2026-09-17T00:15:00.000Z',
     });
 
-    now = new Date('2026-09-17T00:05:00.000Z');
+    now = new Date('2026-09-17T00:15:00.000Z');
     await scheduler.checkNow();
     expect(await scheduler.getSchedule()).toMatchObject({
       status: 'scheduled',
       lastResult: { runId: null, failed: 1, error: '沒有可執行的 YouTube 頻道。' },
-      nextRunAt: '2026-09-17T00:10:00.000Z',
+      nextRunAt: '2026-09-17T00:30:00.000Z',
     });
 
     runner.failure = null;
-    now = new Date('2026-09-17T00:10:00.000Z');
+    now = new Date('2026-09-17T00:30:00.000Z');
     await scheduler.checkNow();
     expect(runner.starts).toBe(2);
 
-    expect(await scheduler.updateSchedule({ enabled: false, intervalMinutes: 5 })).toMatchObject({
+    expect(await scheduler.updateSchedule({ enabled: false })).toMatchObject({
       status: 'paused',
       nextRunAt: null,
     });
     expect(store.saves.at(-1)).toMatchObject({ enabled: false, nextRunAt: null });
     await scheduler.close();
+  });
+});
+
+describe('ChannelScheduler Global settings', () => {
+  it('schedules the first check one interval after starting when enabled without a due time', async () => {
+    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: null }));
+    const scheduler = new ChannelScheduler(new ControlledRunner(), store, { now: () => new Date('2026-09-17T00:00:00.000Z'), pollIntervalMs: 60_000 });
+    await scheduler.start();
+    expect((await scheduler.getSchedule()).nextRunAt).toBe('2026-09-17T00:30:00.000Z');
+    expect(store.saves.at(-1)).toMatchObject({ nextRunAt: '2026-09-17T00:30:00.000Z' });
+    await scheduler.close();
+  });
+
+  it('applies partial updates, validates offered values and records an event', async () => {
+    const now = new Date('2026-09-17T00:00:00.000Z');
+    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: '2026-09-17T00:30:00.000Z' }));
+    const events: string[] = [];
+    const scheduler = new ChannelScheduler(new ControlledRunner(), store, {
+      now: () => now, pollIntervalMs: 60_000, recordEvent: (entry) => events.push(entry.eventType),
+    });
+
+    expect(await scheduler.updateSchedule({ backfillWindow: '1w' })).toMatchObject({
+      enabled: true, intervalMinutes: 30, backfillWindow: '1w', backfillMaxItems: 10, nextRunAt: '2026-09-17T00:30:00.000Z',
+    });
+    expect(await scheduler.updateSchedule({ backfillMaxItems: 5 })).toMatchObject({ backfillWindow: '1w', backfillMaxItems: 5 });
+    for (const invalid of [{ intervalMinutes: 45 }, { intervalMinutes: 1 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { enabled: 'yes' }]) {
+      await expect(scheduler.updateSchedule(invalid as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(store.saves).toHaveLength(2);
+    expect(events).toEqual(['schedule.updated', 'schedule.updated']);
+  });
+
+  it('counts a new interval from the last dispatch and is due at once when that time has passed', async () => {
+    let now = new Date('2026-09-17T01:00:00.000Z');
+    const store = new MemoryScheduleStore(schedule({
+      intervalMinutes: 180, lastAttemptAt: '2026-09-17T00:40:00.000Z', nextRunAt: '2026-09-17T03:40:00.000Z',
+    }));
+    const runner = new ControlledRunner();
+    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
+
+    expect((await scheduler.updateSchedule({ intervalMinutes: 60 })).nextRunAt).toBe('2026-09-17T01:40:00.000Z');
+    expect((await scheduler.updateSchedule({ intervalMinutes: 15 })).nextRunAt).toBe('2026-09-17T01:00:00.000Z');
+    // Changing only the backfill range moves nothing and dispatches nothing.
+    now = new Date('2026-09-17T00:59:00.000Z');
+    expect((await scheduler.updateSchedule({ backfillWindow: '6m' })).nextRunAt).toBe('2026-09-17T01:00:00.000Z');
+    expect(runner.starts).toBe(0);
+  });
+
+  it('checks now on request even when automatic collection is off, and moves the next automatic check', async () => {
+    let now = new Date('2026-09-17T00:10:00.000Z');
+    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: '2026-09-17T00:30:00.000Z' }));
+    const runner = new ControlledRunner();
+    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
+
+    const submissions = await scheduler.runNow();
+    expect(submissions).toHaveLength(1);
+    expect(runner.triggers).toEqual(['manual']);
+    expect(await scheduler.getSchedule()).toMatchObject({
+      status: 'running', lastAttemptAt: '2026-09-17T00:10:00.000Z', nextRunAt: '2026-09-17T00:40:00.000Z',
+    });
+
+    await scheduler.updateSchedule({ enabled: false });
+    now = new Date('2026-09-17T00:20:00.000Z');
+    await scheduler.runNow();
+    expect(runner.triggers).toEqual(['manual', 'manual']);
+    expect(await scheduler.getSchedule()).toMatchObject({ enabled: false, lastAttemptAt: '2026-09-17T00:20:00.000Z', nextRunAt: null });
+
+    runner.failure = new Error('沒有可檢查的訂閱。');
+    await expect(scheduler.runNow()).rejects.toThrow('沒有可檢查的訂閱。');
   });
 });
 

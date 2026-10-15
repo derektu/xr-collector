@@ -80,6 +80,8 @@ describe('HTTP app', () => {
     const scheduleValue = {
       enabled: true,
       intervalMinutes: 15,
+      backfillWindow: '1m' as const,
+      backfillMaxItems: 10,
       status: 'scheduled' as const,
       lastAttemptAt: null,
       lastCompletedAt: null,
@@ -88,10 +90,12 @@ describe('HTTP app', () => {
     };
     const schedule = {
       getSchedule: async () => scheduleValue,
-      updateSchedule: async (input: { enabled: boolean; intervalMinutes: number }) => {
+      updateSchedule: async (input: Record<string, unknown>) => {
+        if (input.intervalMinutes === 0) throw new CollectorError('invalid_request', '檢查頻率無效。');
         calls.push(input);
         return { ...scheduleValue, ...input };
       },
+      runNow: async () => [],
     };
     const app = await createHttpApp({ collector: makeCollector(), schedule });
 
@@ -101,19 +105,29 @@ describe('HTTP app', () => {
       url: '/api/youtube/schedule',
       payload: { enabled: false, intervalMinutes: 60 },
     });
+    const partial = await app.inject({
+      method: 'PUT',
+      url: '/api/youtube/schedule',
+      payload: { backfillWindow: '1w' },
+    });
     const invalid = await app.inject({
       method: 'PUT',
       url: '/api/youtube/schedule',
       payload: { enabled: true, intervalMinutes: 0 },
     });
+    const unknownField = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: { interval: 30 } });
+    const empty = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: {} });
 
     expect(read.json()).toEqual({ schedule: scheduleValue });
     expect(updated.json()).toMatchObject({
       schedule: { enabled: false, intervalMinutes: 60 },
     });
+    expect(partial.json()).toMatchObject({ schedule: { backfillWindow: '1w', intervalMinutes: 15 } });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.code).toBe('invalid_request');
-    expect(calls).toEqual([{ enabled: false, intervalMinutes: 60 }]);
+    expect(unknownField.statusCode).toBe(400);
+    expect(empty.statusCode).toBe(400);
+    expect(calls).toEqual([{ enabled: false, intervalMinutes: 60 }, { backfillWindow: '1w' }]);
     await app.close();
   });
 
@@ -146,25 +160,53 @@ describe('HTTP app', () => {
       progress: null, items: null, result: null, error: null,
     });
     const calls: unknown[] = [];
+    const subscription = { ...savedChannel, status: 'tracking' as const, activeJob: null, documentCount: 3, lastCollectedAt: null };
     const channels = {
       listChannels: async () => [savedChannel],
+      listSubscriptions: async () => [subscription],
+      preview: async (url: string) => {
+        calls.push(['preview', url]);
+        if (url.includes('watch')) throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
+        return {
+          channel: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
+          subscription: { enabled: true },
+          policy: { enabled: true, intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
+        };
+      },
       addChannel: async (url: string) => {
         calls.push(['add', url]);
         return { job: { ...job('add-1'), kind: 'youtube.channel-add' as const }, deduplicated: false };
       },
       setChannelEnabled: async (id: string, enabled: boolean) => {
         calls.push(['enabled', id, enabled]);
-        return { ...savedChannel, enabled };
+        return { channel: { ...savedChannel, enabled }, submission: null };
       },
       removeChannel: async (id: string) => {
         calls.push(['remove', id]);
+        return { documentsKept: 3 };
       },
-      startRun: async (ids?: string[]) => {
-        calls.push(['run', ids]);
+      startRun: async (request: { trigger: string; channelIds?: string[] }) => {
+        calls.push(['run', request]);
         return [{ job: job('run-1'), deduplicated: false }];
       },
     };
-    const app = await createHttpApp({ collector: makeCollector(), channels });
+    const schedule = {
+      getSchedule: async () => { throw new Error('unused'); },
+      updateSchedule: async () => { throw new Error('unused'); },
+      runNow: async () => {
+        calls.push(['check-all']);
+        return [{ job: job('run-2'), deduplicated: false }];
+      },
+    };
+    const app = await createHttpApp({ collector: makeCollector(), channels, schedule });
+
+    const previewed = await app.inject({
+      method: 'POST', url: '/api/youtube/channel-previews', payload: { url: '@channel-one' },
+    });
+    const previewVideo = await app.inject({
+      method: 'POST', url: '/api/youtube/channel-previews', payload: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+    });
+    const checkedAll = await app.inject({ method: 'POST', url: '/api/youtube/channel-runs' });
 
     const added = await app.inject({
       method: 'POST',
@@ -192,15 +234,22 @@ describe('HTTP app', () => {
 
     expect(added.statusCode).toBe(202);
     expect(added.json()).toMatchObject({ deduplicated: false, job: { id: 'add-1', kind: 'youtube.channel-add' } });
-    expect(listed.json()).toEqual({ channels: [savedChannel] });
-    expect(disabled.json()).toMatchObject({ channel: { id: savedChannel.id, enabled: false } });
+    expect(previewed.json()).toMatchObject({ preview: { channel: { title: '頻道一' }, subscription: { enabled: true } } });
+    expect(previewVideo.statusCode).toBe(400);
+    expect(checkedAll.statusCode).toBe(202);
+    expect(checkedAll.json()).toMatchObject({ submissions: [{ job: { id: 'run-2' } }] });
+    expect(listed.json()).toEqual({ channels: [subscription] });
+    expect(disabled.json()).toMatchObject({ channel: { id: savedChannel.id, enabled: false }, submission: null });
     expect(started.statusCode).toBe(202);
     expect(started.json()).toMatchObject({ submissions: [{ deduplicated: false, job: { id: 'run-1', state: 'queued' } }] });
-    expect(removed.json()).toEqual({ removed: true });
+    expect(removed.json()).toEqual({ removed: true, documentsKept: 3 });
     expect(calls).toEqual([
+      ['preview', '@channel-one'],
+      ['preview', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
+      ['check-all'],
       ['add', 'https://www.youtube.com/@channel-one'],
       ['enabled', savedChannel.id, false],
-      ['run', [savedChannel.id]],
+      ['run', { trigger: 'manual', channelIds: [savedChannel.id] }],
       ['remove', savedChannel.id],
     ]);
     await app.close();

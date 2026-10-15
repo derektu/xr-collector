@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChannelCollector } from '../../src/channels/channel-collector.js';
-import type { ChannelStore } from '../../src/channels/json-channel-store.js';
+import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
+import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type { YouTubeChannel } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
@@ -29,10 +30,14 @@ class MemoryChannelStore implements ChannelStore {
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null> {
+    return this.update(id, { enabled });
+  }
+
+  async update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null> {
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
-    channel.enabled = enabled;
-    return channel;
+    Object.assign(channel, patch);
+    return { ...channel };
   }
 }
 
@@ -57,7 +62,15 @@ function setup(source: Partial<YouTubeSource> = {}) {
     documents: new Collector(emptyVault),
     channels: store,
   });
-  return { store, jobs, channels: new ChannelCollector(store, jobs) };
+  return {
+    store,
+    jobs,
+    channels: new ChannelCollector(store, jobs, {
+      policy: async () => ({ enabled: true, ...DEFAULT_POLICY }),
+      resolveChannel: async () => { throw new Error('not used'); },
+      documents: async () => [],
+    }),
+  };
 }
 
 describe('ChannelCollector', () => {
@@ -77,11 +90,13 @@ describe('ChannelCollector', () => {
     const { store, jobs, channels } = setup();
     store.channels.push(channel('one', true), channel('two', false), channel('three', true));
 
-    const enabled = await channels.startRun();
+    const enabled = await channels.startRun({ trigger: 'manual' });
     expect(enabled.map(({ job }) => job.source.id)).toEqual(['one', 'three']);
-    const requested = await channels.startRun(['two', 'one', 'two']);
-    expect(requested.map(({ job }) => job.source.id)).toEqual(['two', 'one']);
-    await expect(channels.startRun(['missing'])).rejects.toMatchObject({ code: 'channel_not_found' });
+    await Promise.all(enabled.map(({ job }) => channels.whenSettled(job.id)));
+    const requested = await channels.startRun({ trigger: 'manual', channelIds: ['three', 'one', 'three'] });
+    expect(requested.map(({ job }) => job.source.id)).toEqual(['three', 'one']);
+    await expect(channels.startRun({ trigger: 'manual', channelIds: ['missing'] })).rejects.toMatchObject({ code: 'channel_not_found' });
+    await expect(channels.startRun({ trigger: 'manual', channelIds: ['two'] })).rejects.toMatchObject({ code: 'channel_paused' });
     await Promise.all([...enabled, ...requested].map(({ job }) => channels.whenSettled(job.id)));
     await jobs.close();
   });
@@ -91,12 +106,13 @@ describe('ChannelCollector', () => {
     store.channels.push(channel('one', true));
 
     expect(await channels.setChannelEnabled('one', false)).toMatchObject({
-      id: 'one',
-      enabled: false,
+      channel: { id: 'one', enabled: false },
+      submission: null,
     });
-    await channels.removeChannel('one');
+    expect(await channels.removeChannel('one')).toEqual({ documentsKept: 0 });
     expect(await channels.listChannels()).toEqual([]);
-    await expect(channels.startRun()).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(channels.startRun({ trigger: 'manual' })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(await channels.startRun({ trigger: 'scheduled' })).toEqual([]);
   });
 });
 

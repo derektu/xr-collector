@@ -22,15 +22,20 @@ import {
   type VaultSetupAction,
   type VaultSetupResult,
   type VaultSetupStatus,
+  type ChannelPreview,
+  type CollectionPolicy,
+  type Subscription,
   type YouTubeChannel,
 } from '../core/types.js';
 
 export interface ChannelCollection {
   listChannels(): Promise<YouTubeChannel[]>;
+  listSubscriptions(): Promise<Subscription[]>;
+  preview(url: string): Promise<ChannelPreview>;
   addChannel(url: string): Promise<JobSubmission>;
-  setChannelEnabled(id: string, enabled: boolean): Promise<YouTubeChannel>;
-  removeChannel(id: string): Promise<void>;
-  startRun(channelIds?: string[]): Promise<JobSubmission[]>;
+  setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }>;
+  removeChannel(id: string): Promise<{ documentsKept: number }>;
+  startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
 }
 
 /** Accepts collection work and answers job queries for the active Vault. */
@@ -43,8 +48,12 @@ export interface CollectionJobs {
 
 export interface ChannelScheduleManagement {
   getSchedule(): Promise<ChannelSchedule>;
-  updateSchedule(input: { enabled: boolean; intervalMinutes: number }): Promise<ChannelSchedule>;
+  updateSchedule(input: Partial<CollectionPolicy & { enabled: boolean }>): Promise<ChannelSchedule>;
+  /** Checks every enabled subscription now. */
+  runNow(): Promise<JobSubmission[]>;
 }
+
+const SCHEDULE_FIELDS = new Set(['enabled', 'intervalMinutes', 'backfillWindow', 'backfillMaxItems']);
 
 /** Vault location operations that stay available before a Vault is active. */
 export interface VaultSetup {
@@ -91,6 +100,8 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   document_not_found: 404,
   search_unavailable: 503,
   channel_not_found: 404,
+  channel_paused: 409,
+  out_of_range: 422,
   job_not_found: 404,
   unsupported_url: 400,
   queue_full: 503,
@@ -344,32 +355,31 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       schedule: await schedule.getSchedule(),
     }));
 
-    app.put<{
-      Body: { enabled?: unknown; intervalMinutes?: unknown };
-    }>('/api/youtube/schedule', async (request) => {
-      const { enabled, intervalMinutes } = request.body ?? {};
-      if (
-        typeof enabled !== 'boolean'
-        || !Number.isInteger(intervalMinutes)
-        || (intervalMinutes as number) < 1
-        || (intervalMinutes as number) > 10_080
-      ) {
-        throw new CollectorError('invalid_request', '排程設定無效。');
+    app.put<{ Body: Record<string, unknown> | null }>('/api/youtube/schedule', async (request) => {
+      const body = request.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new CollectorError('invalid_request', '自動收集設定必須是 JSON 物件。');
       }
-      return {
-        schedule: await schedule.updateSchedule({
-          enabled,
-          intervalMinutes: intervalMinutes as number,
-        }),
-      };
+      const keys = Object.keys(body);
+      const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
+      if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
+      if (keys.length === 0) throw new CollectorError('invalid_request', '請提供至少一個要修改的設定。');
+      return { schedule: await schedule.updateSchedule(body as Partial<CollectionPolicy & { enabled: boolean }>) };
     });
   }
 
   if (options.channels) {
     const channels = options.channels;
     app.get('/api/youtube/channels', async () => ({
-      channels: await channels.listChannels(),
+      channels: await channels.listSubscriptions(),
     }));
+
+    app.post<{ Body: { url?: unknown } }>('/api/youtube/channel-previews', async (request) => {
+      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+        throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
+      }
+      return { preview: await channels.preview(request.body.url) };
+    });
 
     app.post<{ Body: { url?: unknown } }>('/api/youtube/channels', async (request, reply) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
@@ -385,14 +395,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (typeof request.body?.enabled !== 'boolean') {
         throw new CollectorError('invalid_request', '頻道啟用設定無效。');
       }
-      return {
-        channel: await channels.setChannelEnabled(request.params.id, request.body.enabled),
-      };
+      return channels.setChannelEnabled(request.params.id, request.body.enabled);
     });
 
     app.delete<{ Params: { id: string } }>('/api/youtube/channels/:id', async (request) => {
-      await channels.removeChannel(request.params.id);
-      return { removed: true };
+      const { documentsKept } = await channels.removeChannel(request.params.id);
+      return { removed: true, documentsKept };
     });
 
     app.post<{ Body?: { channelIds?: unknown } }>('/api/youtube/channel-runs', async (request, reply) => {
@@ -405,7 +413,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       ) {
         throw new CollectorError('invalid_request', '頻道執行範圍無效。');
       }
-      const submissions = await channels.startRun(channelIds as string[] | undefined);
+      // Checking every subscription is the schedule's manual check, so it moves the next automatic one.
+      const submissions = channelIds === undefined && options.schedule
+        ? await options.schedule.runNow()
+        : await channels.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });
       return reply.code(202).send({ submissions });
     });
   }

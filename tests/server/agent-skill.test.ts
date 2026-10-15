@@ -43,6 +43,8 @@ describe('Agent Skill', () => {
       { method: 'GET', url: '/api/documents/:id' },
       { method: 'GET', url: '/api/search' },
       { method: 'GET', url: '/api/search/status' },
+      { method: 'POST', url: '/api/youtube/channel-previews' },
+      { method: 'PUT', url: '/api/youtube/schedule' },
     ]));
     for (const route of routes) {
       expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);
@@ -58,5 +60,17 @@ describe('Agent Skill', () => {
     expect(skill).toContain('`channel` 參數回 400');
     expect(skill).not.toContain('estimatedTotalHits');
     expect(skill).not.toContain('channelTitle');
+  });
+
+  it('documents the subscription contract the server enforces', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    const { INTERVAL_OPTIONS, BACKFILL_WINDOWS, BACKFILL_LIMITS } = await import('../../src/channels/collection-policy.js');
+    expect(skill).toContain(`只接受 ${INTERVAL_OPTIONS.join('、')}`);
+    expect(skill).toContain(BACKFILL_WINDOWS.map((window) => `\`${window}\``).join('、'));
+    expect(skill).toContain(`（${BACKFILL_LIMITS.join('、')}）`);
+    for (const term of ['backfillWindow', 'backfillMaxItems', 'channel_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_paused', '`backlog`']) {
+      expect(skill).toContain(term);
+    }
+    expect(skill).not.toContain('1–10080');
   });
 });

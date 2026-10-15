@@ -160,7 +160,7 @@ describe('workspace transfer through HTTP', () => {
       expect(restarted.status().vaultPath).toBe(restoredPath);
       expect(await restarted.collector.list()).toHaveLength(1);
       expect((await restarted.schedule.getSchedule()).enabled).toBe(false);
-      const [submission] = await restarted.channels.startRun();
+      const [submission] = await restarted.channels.startRun({ trigger: 'manual' });
       expect(submission!.job.source.id).toBe('UC123');
       await restarted.jobs.whenSettled(submission!.job.id);
     } finally { await app.close(); }
@@ -253,7 +253,7 @@ it('refuses transfer while a channel discovery run is still active', async () =>
     resolve: async () => ({ id: 'UC123', title: 'channel', url: 'https://www.youtube.com/channel/UC123' }),
     listVideos: async () => { await pending; return []; },
   } });
-  await workspace.channels.startRun();
+  await workspace.channels.startRun({ trigger: 'manual' });
   await expect(workspace.export()).rejects.toMatchObject({ code: 'vault_busy' });
   release();
   await expect.poll(() => workspace.jobs.isBusy()).toBe(false);
@@ -277,4 +277,34 @@ it('rejects a checksum-valid document with an unsupported document type', async 
   const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
   const invalid = packageOf([{ path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown.replace('type: Transcript', 'type: Article') }]);
   await expect(unpackVault(invalid, path.join(root, 'destination'), () => undefined)).rejects.toThrow('格式無效');
+});
+
+describe('portable subscription settings (S-T10)', () => {
+  it('carries subscription progress and backfill settings through export and restore, paused', async () => {
+    const root = await temp(); const source = path.join(root, 'source'); await seed(source);
+    const cursor = { videoId: 'dQw4w9WgXcQ', publishedAt: '2026-10-01T00:00:00.000Z', recentIds: ['dQw4w9WgXcQ'] };
+    await new JsonChannelStore(source).update('UC123', { cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', backlog: false });
+    const schedule = new JsonChannelScheduleStore(source);
+    await schedule.save({ ...(await schedule.load()), backfillWindow: '3m', backfillMaxItems: 20 });
+    const workspace = await open(path.join(root, 'B'));
+
+    workspace.restore(await exportVault(source)); await waitForRestore(workspace);
+    expect(workspace.status().state).toBe('completed');
+    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z' })]);
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, intervalMinutes: 60, backfillWindow: '3m', backfillMaxItems: 20, nextRunAt: null });
+  });
+
+  it('restores a first-round package with the default backfill, an offered interval and a backfill for its subscriptions', async () => {
+    const root = await temp(); const workspace = await open(path.join(root, 'B'));
+    workspace.restore(packageOf([
+      { path: 'settings/youtube-channels.json', data: JSON.stringify([{ id: 'UC123', title: '第一輪頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]) },
+      { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 45, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null }) },
+    ]));
+    await waitForRestore(workspace);
+    expect(workspace.status().state).toBe('completed');
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 });
+    const [submission] = await workspace.channels.startRun({ trigger: 'manual' });
+    expect(submission!.job.scope).toMatchObject({ mode: 'backfill', maxItems: 10 });
+    await workspace.jobs.whenSettled(submission!.job.id);
+  });
 });
