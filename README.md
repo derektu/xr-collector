@@ -51,7 +51,7 @@ npm run download:runtime
 npm run dev
 ```
 
-瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，開發用 Meilisearch 只監聽 `127.0.0.1:7177`。正式文件保存在 `.data/dev-vault`，可重建的搜尋資料保存在 `.data/dev-search`。
+瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，開發用 Meilisearch 只監聽 `127.0.0.1:7177`。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
 
 已完成 production build 時，也可以只啟動單一 Web Server：
 
@@ -104,12 +104,9 @@ npm run package:win  # 在 Windows 執行
 
 文件包含可追溯來源的 YAML frontmatter，以及可直接閱讀及交給其他工具使用的字幕正文。影片 URL 只保存在 frontmatter；正文不包含逐句 timestamp 或重複的來源連結。已存在相同 video ID 時，系統回傳既有文件，不覆寫檔案。
 
-不同執行模式的預設 vault：
+Vault 位置由使用者在第一次啟動的 Onboarding 選擇，建議位置是「文件」下的 `XR Collector`。每個 Vault 根目錄有 `xr-collector-vault.json` 標記檔；這台電腦使用哪個 Vault 記錄在 profile 的 `vault-selection.json`（Web 開發為 `.data/`，Electron 為 application data 目錄）。
 
-- Web 開發／standalone server：`.data/dev-vault`
-- Electron 安裝版：Electron application data 目錄下的 `vault`
-
-開發或測試可以用 `XR_COLLECTOR_VAULT` 指定其他位置。
+開發或測試可以用 `XR_COLLECTOR_VAULT` 直接指定 Vault，略過 Onboarding；目錄為空或不存在時會自動建立。
 
 ## 資料匯出與還原
 

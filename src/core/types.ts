@@ -146,6 +146,9 @@ export interface CollectResult {
 
 export type CollectorErrorCode =
   | 'vault_busy'
+  | 'vault_not_ready'
+  | 'vault_invalid'
+  | 'vault_already_set'
   | 'invalid_url'
   | 'invalid_channel'
   | 'no_subtitles'
@@ -157,6 +160,28 @@ export type CollectorErrorCode =
   | 'channel_not_found'
   | 'channel_run_not_found'
   | 'invalid_request';
+
+/** Result of reading a directory before it is created or opened as a Vault. */
+export type VaultInspection =
+  | { kind: 'empty'; path: string; exists: boolean }
+  | { kind: 'existing'; path: string; documentCount: number }
+  | { kind: 'invalid'; path: string; reason: string };
+
+export type VaultSetupAction = 'create' | 'open';
+
+/** Device-side Vault location state shared by Onboarding, Settings and Agents. */
+export interface VaultSetupStatus {
+  state: 'ready' | 'not_ready';
+  vaultPath: string | null;
+  suggestedPath: string;
+  /** The previously selected Vault that could not be opened at startup. */
+  failure: { path: string; reason: string } | null;
+}
+
+export interface VaultSetupResult {
+  vault: VaultSetupStatus;
+  documentCount: number;
+}
 
 export class CollectorError extends Error {
   readonly code: CollectorErrorCode;

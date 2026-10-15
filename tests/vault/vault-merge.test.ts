@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile, readdir, rename } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { exportVault } from '../../src/vault/vault-package.js';
@@ -48,7 +49,7 @@ async function fixture(real = false) {
     search: async ({ query }) => ({ hits: [...docs.values()].filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), estimatedTotalHits: docs.size }),
   };
   await search.rebuild(); vi.mocked(search.rebuild).mockClear();
-  const options = { defaultRoot: local, capture: { capture: async () => capture },
+  const options = { root: local, selection: new VaultSelection(path.join(root, 'selection.json')), createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1' }), listVideos: async () => [] },
     searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData: path.join(root, 'search'),
     ...(!real ? { createSearch: async () => ({ search, close: async () => undefined }) } : {}) };

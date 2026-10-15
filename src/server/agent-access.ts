@@ -16,7 +16,8 @@ export async function startAgentAccess(options: {
   connectionFile: string;
   skillPath: string;
   runtimeStatus?: StartServerOptions['runtimeStatus'];
-  notReadyMessage?: string;
+  notReady?: StartServerOptions['notReady'];
+  vaultSetup?: StartServerOptions['vaultSetup'];
 }) {
   if (!options.instanceId) throw new Error('Agent discovery instance ID must not be empty');
   const token = randomBytes(32).toString('hex');
@@ -27,7 +28,8 @@ export async function startAgentAccess(options: {
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
-    ...(options.notReadyMessage ? { notReadyMessage: options.notReadyMessage } : {}),
+    ...(options.notReady ? { notReady: options.notReady } : {}),
+    ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
     agentToken: token,
     port: 0,
   });

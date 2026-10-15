@@ -9,6 +9,10 @@ import type {
   AddChannelResult,
   ChannelRun,
   ChannelSchedule,
+  VaultInspection,
+  VaultSetupAction,
+  VaultSetupResult,
+  VaultSetupStatus,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -47,6 +51,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async getVaultSetup(): Promise<VaultSetupStatus> {
+    return (await request<{ vault: VaultSetupStatus }>('/api/vault/setup')).vault;
+  },
+
+  async inspectVault(path: string): Promise<VaultInspection> {
+    return (await request<{ inspection: VaultInspection }>('/api/vault/inspect', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    })).inspection;
+  },
+
+  setupVault(action: VaultSetupAction, path: string): Promise<VaultSetupResult> {
+    return request<VaultSetupResult>('/api/vault/setup', {
+      method: 'POST',
+      body: JSON.stringify({ action, path }),
+    });
+  },
+
   agentConnection(): Promise<{ url: string; connectionFile: string; skillPath: string }> {
     return request('/api/agent/connection');
   },

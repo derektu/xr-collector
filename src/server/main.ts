@@ -6,7 +6,7 @@ import { CollectorRuntime } from '../runtime/collector-runtime.js';
 
 const projectRoot = process.cwd();
 const profilePath = path.resolve(process.env.XR_COLLECTOR_PROFILE ?? path.join(projectRoot, '.data'));
-const vaultRoot = path.resolve(process.env.XR_COLLECTOR_VAULT ?? path.join(profilePath, 'dev-vault'));
+const explicitVaultPath = process.env.XR_COLLECTOR_VAULT;
 const webRoot = path.join(projectRoot, 'dist', 'web');
 const platformDirectory = process.platform === 'win32' ? 'win' : 'mac';
 const runtimeRoot = path.join(projectRoot, 'resources', 'bin', platformDirectory);
@@ -23,13 +23,14 @@ const captureOptions = {
 const runtime = await CollectorRuntime.start({
   profilePath,
   workspace: {
-    defaultRoot: vaultRoot,
     capture: new YtDlpCapture(captureOptions),
     channelSource: new YtDlpChannelSource(captureOptions),
     searchBinary: binary('XR_COLLECTOR_MEILISEARCH', 'meilisearch'),
     searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
     searchPort,
   },
+  ...(explicitVaultPath ? { explicitVaultPath: path.resolve(explicitVaultPath) } : {}),
+  createdBy: 'XR Collector (development server)',
   connectionFile: path.join(profilePath, 'agent-connection.json'),
   skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
   uiPort: port,
@@ -37,7 +38,7 @@ const runtime = await CollectorRuntime.start({
 });
 
 console.log(`XR Collector API listening at ${runtime.server.url}`);
-console.log(`Vault: ${runtime.status().vaultPath}`);
+console.log(`Vault: ${runtime.status().vaultPath ?? `not ready — ${runtime.status().message}`}`);
 
 let stopping = false;
 async function stop(): Promise<void> {

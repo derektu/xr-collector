@@ -14,6 +14,10 @@ import {
   type ChannelRun,
   type ChannelSchedule,
   type TranscriptSearch,
+  type VaultInspection,
+  type VaultSetupAction,
+  type VaultSetupResult,
+  type VaultSetupStatus,
   type YouTubeChannel,
 } from '../core/types.js';
 
@@ -31,6 +35,16 @@ export interface ChannelScheduleManagement {
   updateSchedule(input: { enabled: boolean; intervalMinutes: number }): Promise<ChannelSchedule>;
 }
 
+/** Vault location operations that stay available before a Vault is active. */
+export interface VaultSetup {
+  status(): VaultSetupStatus;
+  inspect(path: string): Promise<VaultInspection>;
+  setup(action: VaultSetupAction, path: string): Promise<VaultSetupResult>;
+}
+
+/** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
+const NOT_READY_ROUTES = new Set(['/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect']);
+
 export interface HttpAppOptions {
   collector?: Collector;
   transfer?: VaultWorkspace;
@@ -41,7 +55,9 @@ export interface HttpAppOptions {
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
   runtimeStatus?: () => CollectorRuntimeStatus;
-  notReadyMessage?: string;
+  /** Returns why business routes are unavailable, or null once a Vault is active. */
+  notReady?: () => string | null;
+  vaultSetup?: VaultSetup;
 }
 
 const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
@@ -52,6 +68,9 @@ export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
 
 const ERROR_STATUS: Record<CollectorError['code'], number> = {
   vault_busy: 409,
+  vault_not_ready: 503,
+  vault_invalid: 422,
+  vault_already_set: 409,
   invalid_url: 400,
   invalid_channel: 400,
   invalid_request: 400,
@@ -100,14 +119,32 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   }
 
-  if (options.notReadyMessage) {
+  if (options.notReady) {
+    const notReady = options.notReady;
     app.addHook('onRequest', async (request, reply) => {
-      if (request.routeOptions.url === '/api/health' || request.routeOptions.url === '/api/agent/connection') return;
-      if (request.url.startsWith('/api/')) {
-        return reply.code(503).send({
-          error: { code: 'vault_not_ready', message: options.notReadyMessage },
-        });
+      if (!request.url.startsWith('/api/') || NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) return;
+      const message = notReady();
+      if (message) {
+        return reply.code(503).send({ error: { code: 'vault_not_ready', message } });
       }
+    });
+  }
+
+  if (options.vaultSetup) {
+    const vaultSetup = options.vaultSetup;
+    app.get('/api/vault/setup', async () => ({ vault: vaultSetup.status() }));
+    app.post<{ Body: { path?: unknown } }>('/api/vault/inspect', async (request) => {
+      if (typeof request.body?.path !== 'string' || request.body.path.trim() === '') {
+        throw new CollectorError('invalid_request', '請提供要檢查的目錄路徑。');
+      }
+      return { inspection: await vaultSetup.inspect(request.body.path) };
+    });
+    app.post<{ Body: { action?: unknown; path?: unknown } }>('/api/vault/setup', async (request) => {
+      const { action, path: vaultPath } = request.body ?? {};
+      if ((action !== 'create' && action !== 'open') || typeof vaultPath !== 'string' || vaultPath.trim() === '') {
+        throw new CollectorError('invalid_request', '請提供 action（create 或 open）與知識庫目錄路徑。');
+      }
+      return vaultSetup.setup(action, vaultPath);
     });
   }
 
@@ -116,7 +153,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const writes = new WeakMap<object, () => void>();
     app.addHook('preHandler', async (request) => {
       if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/api/')
-        && request.routeOptions.url !== '/api/vault/status') transfer.assertReadable();
+        && request.routeOptions.url !== '/api/vault/status'
+        && !NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) transfer.assertReadable();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
         && !request.routeOptions.url?.startsWith('/api/vault/')) {
         writes.set(request, transfer.enterWrite());
