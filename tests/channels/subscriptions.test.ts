@@ -26,7 +26,7 @@ afterEach(async () => {
  * One Vault's subscription services over synthetic YouTube channels, a controllable clock and a
  * real channel settings file. `restart()` builds new services on the same Vault and device record.
  */
-async function world(options: { capture?: number; discovery?: number; jobsDirectory?: string } = {}) {
+async function world(options: { capture?: number; discovery?: number; maxQueued?: number; jobsDirectory?: string } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscriptions-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
@@ -41,7 +41,7 @@ async function world(options: { capture?: number; discovery?: number; jobsDirect
     const jobs = new JobManager({
       vaultPath: root, store, source, documents: collector, channels: channelStore, now,
       policy: async () => ({ ...policy }),
-      limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4 },
+      limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
     });
     const channels = new ChannelCollector(channelStore, jobs, {
       policy: async () => ({ ...policy }), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
@@ -193,6 +193,28 @@ describe('incremental checks (S-T4, S-T5)', () => {
     w.advance(30 * 60_000);
     const [next] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     expect(next!.items!.map((item) => item.sourceId)).toEqual(meanwhile);
+  });
+});
+
+describe('full queue', () => {
+  it('keeps the cursor when some found videos could not be queued, so the next check finds them again', async () => {
+    const w = await world({ capture: 1, maxQueued: 3 });
+    const id = w.source.addChannel('crowded');
+    const ids = w.source.publish(id, 'q', w.clock.now, [1, 2, 3, 4, 5]);
+    w.source.holdCaptures = true;
+    const first = w.jobs.whenSettled((await w.jobs.whenSettled((await w.channels.addChannel('@crowded')).job.id)).result!.followUpJobId!);
+    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    w.source.holdCaptures = false;
+    for (const video of w.source.running()) w.source.release(video);
+    const settled = await first;
+    expect(settled.items!.filter((item) => item.error?.code === 'queue_full')).toHaveLength(2);
+    expect((await w.channelStore.list())[0]!.cursor).toBeNull();
+
+    w.advance(30 * 60_000);
+    await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
+    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    expect(collectedIds(w)).toEqual([...ids].sort());
+    expect((await w.channelStore.list())[0]!.cursor).toMatchObject({ videoId: ids[0] });
   });
 });
 
