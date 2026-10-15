@@ -2,6 +2,20 @@
 
 PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 仍執行 `npm ci` 與 `npm run verify`；原生操作與截圖依本流程執行，尚未設定為自動 Desktop runner 或 branch protection gate。
 
+## 驗證層級
+
+Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴桌面殼層。驗證依 scenario 實際需要的層級進行，原生 Desktop 驗收只花在瀏覽器無法證明的部分：
+
+| 層級 | 時機 | 內容 |
+| --- | --- | --- |
+| 自動檢查 | 每次修改 | `npm run verify`：單元、HTTP 與檔案系統整合測試、typecheck、build |
+| Web 畫面 | 有畫面或 API 行為變更時 | 以隔離的 `XR_COLLECTOR_PROFILE` 執行 `npm run dev`，在瀏覽器依 scenario 操作、比對並截圖 |
+| 原生 Desktop | 票的結尾，只針對依賴 Electron 或平台能力的 scenario | 依本文件第 2–4 節，在指定版本的 Desktop 實際操作與原生截圖 |
+
+依賴 Electron 或平台能力的 scenario 包括：原生對話框、preload bridge、路徑與權限、程序生命週期、視窗行為、Tray／選單列、登入自啟、安裝與更新。其餘 scenario 以 Web 畫面截圖作為執行證據，截圖說明標示為 Web 開發模式。Web 畫面證據不替代原生 UI 證據。
+
+開發主力機器是 Mac；Windows 透過另一台電腦或 Parallels VM 執行。需要 Windows 驗收時，先確認 VM 正在執行且桌面可操作。VM 未啟動或無法操作時，暫停並通知使用者，由使用者決定啟動 VM 補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
+
 ## 1. 先定驗收計畫
 
 實作前在 issue 記錄 scenario ID、平台需求與原因、操作步驟及預期結果。可複製 [計畫範例](validation-plan.example.json) 作為本次 plan；範例不代表每個 PR 都要 Windows。兩台電腦使用同一份計畫，工具以內容雜湊辨識，`version` 供人閱讀。
