@@ -185,7 +185,7 @@ npm run prepare:merge-demo -- --output <新的資料目錄>
 
 ```text
 <profile>/jobs/jobs.json      目前與最近的工作快照（含接續所需的進度與重試次數），原子寫入；完成的工作最多保留 1000 筆
-<profile>/jobs/events.jsonl   最小時序事件：接受、開始、保存、索引失敗、完成、失敗、中斷、接續、排定重試
+<profile>/jobs/events.jsonl   最小時序事件：接受、開始、保存、索引失敗、完成、失敗、中斷、接續（附正常關閉或異常結束）、排定重試（附下次時間）
 ```
 
 profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/youtube/submissions`、`GET /api/jobs`、`GET /api/jobs/:id`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。

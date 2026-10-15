@@ -342,6 +342,18 @@ export class JobManager {
         }
         channelJobs.push(job);
       }
+      const subscribing = job.kind === 'youtube.channel-add' ? job.checkpoint?.subscribing : undefined;
+      const subscribed = subscribing ? subscriptions.find((candidate) => candidate.id === subscribing.channelId) : undefined;
+      if (subscribed) {
+        // The subscription was written before the stop; its first collection is queued now, before the
+        // scheduler can start a check of the same channel, so that check joins it.
+        const restored = this.restore(job, { queue: false });
+        const scope = restored.scope ?? backfillScope('subscribe', DEFAULT_POLICY, this.now());
+        this.update(restored, { source: { ...restored.source, id: subscribed.id, title: subscribed.title } });
+        const followUp = this.enqueueChannel(subscribed, scope);
+        this.finish(restored, 'completed', { outcome: 'created', channelId: subscribed.id, followUpJobId: followUp.job.id }, null);
+        continue;
+      }
       this.restore(job);
     }
     for (const job of pending) {
@@ -379,8 +391,11 @@ export class JobManager {
     this.pump();
   }
 
-  /** Returns an interrupted job to the queue, or to waiting for its next attempt. */
-  private restore(stored: CollectionJob): void {
+  /**
+   * Makes an interrupted job active again and, unless told otherwise, returns it to the queue or to
+   * waiting for its next attempt.
+   */
+  private restore(stored: CollectionJob, options: { queue: boolean } = { queue: true }): CollectionJob {
     const timestamp = this.now().toISOString();
     const waitsForVideos = stored.kind === 'youtube.channel' && stored.items !== null;
     const job: CollectionJob = {
@@ -389,6 +404,7 @@ export class JobManager {
       finishedAt: null,
       error: null,
       recovery: {
+        ...stored.recovery,
         resumedCount: (stored.recovery?.resumedCount ?? 0) + 1,
         uncleanStops: stored.recovery?.uncleanStops ?? 0,
         lastInterruptedAt: stored.recovery?.lastInterruptedAt ?? stored.updatedAt,
@@ -402,11 +418,17 @@ export class JobManager {
     this.activeByKey.set(key, job.id);
     if (job.claimedByUser) this.manualClaims.add(job.id);
     this.options.store.put(job);
-    this.event(job, { severity: 'info', eventType: 'job.resumed', message: '服務重新啟動後接續收集工作。' });
-    if (waitsForVideos) return;
+    const stopReason = job.recovery?.lastStop ?? 'unknown';
+    this.event(job, {
+      severity: 'info', eventType: 'job.resumed', stopReason,
+      message: stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
+        : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。' : '服務重新啟動後接續收集工作。',
+    });
+    if (waitsForVideos || !options.queue) return job;
     const waitMs = job.retry?.nextAttemptAt ? new Date(job.retry.nextAttemptAt).getTime() - this.now().getTime() : 0;
     if (waitMs > 0) this.waitForAttempt(job, waitMs);
     else this.requeue(job);
+    return job;
   }
 
   /** An item whose video job is not running here, as that job's record says it ended. */
@@ -428,7 +450,7 @@ export class JobManager {
     this.closed = true;
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
-      this.options.store.interrupt(job, '服務停止時工作尚未完成；已保存的內容保留。');
+      this.options.store.interrupt(job, '服務停止時工作尚未完成；已保存的內容保留。', { stop: 'shutdown' });
       this.release(job);
       this.notifySettled(this.options.store.get(job.id)!);
     }
@@ -567,7 +589,8 @@ export class JobManager {
   private async runVideo(id: string): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
-    // A job interrupted while saving, or after, has saved the document a resume finds.
+    // A job that reached the save phase, or recorded the saved document, before it stopped created
+    // whatever document findExisting now returns for this video; that document is its own result.
     const savedEarlier = job.checkpoint?.savedDocumentId !== undefined || job.phase === 'save';
     this.start(job, 'capture');
     try {
@@ -648,7 +671,7 @@ export class JobManager {
     this.event(job, {
       severity: 'warning', eventType: 'job.retry_scheduled',
       message: `第 ${attempts} 次嘗試失敗，稍後自動重試：${error.message}`,
-      errorCode: error.code, attempt: attempts, ...(job.phase ? { phase: job.phase } : {}),
+      errorCode: error.code, attempt: attempts, nextAttemptAt, ...(job.phase ? { phase: job.phase } : {}),
     });
     this.notifyItemRetry(job);
     this.waitForAttempt(job, delay);
@@ -836,6 +859,8 @@ export class JobManager {
       state: 'running', phase, startedAt: job.startedAt ?? timestamp,
       ...(job.retry ? { retry: { ...job.retry, nextAttemptAt: null } } : {}),
     });
+    // Channel items stop showing the wait once the next attempt starts.
+    this.notifyItemRetry(job);
     this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
 
@@ -896,10 +921,11 @@ function settledItem(item: JobItem, video: CollectionJob): JobItem {
   };
 }
 
-/** The job as UI and Agents read it; the checkpoint only serves restarts. */
+/** The job as UI and Agents read it; the checkpoint and the user-claim flag only serve restarts. */
 function publicJob(job: CollectionJob): CollectionJob {
   const copy = { ...job };
   delete copy.checkpoint;
+  delete copy.claimedByUser;
   return copy;
 }
 
