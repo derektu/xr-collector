@@ -83,6 +83,12 @@ export class Collector {
     return (await this.vault.deletions?.get(`youtube:${videoId}`)) != null;
   }
 
+  /** Whether a deletion keeps this request from collecting the video: a record exists and the request does not postdate it. */
+  async isDeletedFor(videoId: string, intent: SaveIntent): Promise<boolean> {
+    const deletion = await this.vault.deletions?.get(`youtube:${videoId}`);
+    return deletion != null && !explicitAfter(intent, deletion.deletedAt);
+  }
+
   /**
    * Saves a captured transcript. A deleted item is saved only for an explicit request made after the
    * deletion: the document is stamped after the deletion time, then the record is lifted, so a stop
@@ -94,7 +100,7 @@ export class Collector {
     return this.exclusive(id, async () => {
       const deletion = await this.vault.deletions?.get(id);
       if (!deletion) return { document: await this.vault.add(captured), recollected: false };
-      if (intent.explicitAt === null || collectedBeforeDeletion(intent.explicitAt, deletion.deletedAt)) {
+      if (!explicitAfter(intent, deletion.deletedAt)) {
         throw new CollectorError('document_deleted', '這份文件已刪除，自動與頻道收集會略過。');
       }
       const now = (this.vault.now ?? (() => new Date()))();
@@ -130,9 +136,10 @@ export class Collector {
 
   /**
    * Deletes a document: the deletion record goes first and hides the document at once, then the
-   * file and the index entry are removed. A stop after the record leaves work that opening the Vault
-   * finishes; a failed index removal leaves the document excluded from searches until the index
-   * catches up.
+   * file is removed and the search excludes the document. The index entry is removed in the
+   * background, so a deletion never waits for a rebuild; a failed removal is recorded as a warning
+   * and the document stays excluded until the index catches up. A stop after the record leaves work
+   * that opening the Vault finishes.
    */
   delete(id: string): Promise<DocumentDeletion> {
     return this.exclusive(id, async () => {
@@ -161,19 +168,16 @@ export class Collector {
       let indexMessage: string | undefined;
       if (!this.search?.remove) {
         indexed = false;
-        indexMessage = '搜尋服務尚未啟用。';
+        indexMessage = '搜尋服務尚未啟用；下次啟動搜尋時會排除這份文件。';
       } else {
-        try {
-          await this.search.remove(id);
-        } catch (error) {
+        // Calling remove excludes the document from searches at once; the index entry goes in the background.
+        void this.search.remove(id).catch((error: unknown) => {
           console.error('Search index removal failed', error);
-          indexed = false;
-          indexMessage = '搜尋索引稍後更新；搜尋結果已排除這份文件。';
           this.options.recordEvent?.({
             severity: 'warning', eventType: 'document.index_remove_failed', ...event,
             message: `「${document.title}」已刪除，搜尋索引稍後更新；搜尋結果已排除這份文件。`,
           });
-        }
+        });
       }
       this.options.recordEvent?.({ severity: 'info', eventType: 'document.deleted', message: `已刪除「${document.title}」。`, ...event });
       return {
@@ -256,6 +260,11 @@ export class Collector {
     }
     return document;
   }
+}
+
+/** Whether the request is explicit and made after the deletion; a request at the deletion time counts as before it. */
+function explicitAfter(intent: SaveIntent, deletedAt: string): boolean {
+  return intent.explicitAt !== null && !collectedBeforeDeletion(intent.explicitAt, deletedAt);
 }
 
 function matchesFilter(document: DocumentMetadata, filter: DocumentFilter): boolean {

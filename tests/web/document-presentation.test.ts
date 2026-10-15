@@ -85,13 +85,15 @@ describe('document presentation', () => {
 
 describe('document deletion presentation (A8)', () => {
   it('states what deletion does, where the list goes and how to collect again', async () => {
-    const { DELETE_CONFIRMATION, pageAfterDeletion, sourceUrlOfDocumentId } = await import('../../src/web/document-presentation.js');
+    const { DELETE_CONFIRMATION, pageWithRows, sourceUrlOfDocumentId } = await import('../../src/web/document-presentation.js');
     const { skipReasonLabel } = await import('../../src/web/job-presentation.js');
     expect(DELETE_CONFIRMATION).toContain('自動收集與頻道收集會略過');
     expect(DELETE_CONFIRMATION).toContain('訂閱不受影響');
-    expect(pageAfterDeletion(3, 1)).toBe(2);
-    expect(pageAfterDeletion(3, 4)).toBe(3);
-    expect(pageAfterDeletion(1, 1)).toBe(1);
+    expect(pageWithRows(3, 0, 40)).toBe(2);
+    expect(pageWithRows(5, 0, 25)).toBe(2);
+    expect(pageWithRows(3, 4, 44)).toBe(3);
+    expect(pageWithRows(1, 0, 0)).toBe(1);
+    expect(pageWithRows(2, 0, 0)).toBe(1);
     expect(sourceUrlOfDocumentId('youtube:dQw4w9WgXcQ')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     expect(sourceUrlOfDocumentId('youtube:bad')).toBeNull();
     expect(skipReasonLabel('deleted')).toBe('文件已刪除');

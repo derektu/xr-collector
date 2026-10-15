@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { exportVault } from '../../src/vault/vault-package.js';
+import { exportVault, unpackVault } from '../../src/vault/vault-package.js';
+import { createHash } from 'node:crypto';
 import { compareFiles, mergeFiles, packageFiles } from '../../src/vault/vault-merge.js';
 import { lineDiff } from '../../src/web/line-diff.js';
 import { Collector } from '../../src/core/collector.js';
@@ -401,6 +402,92 @@ describe('deletion records in a merge (A6)', () => {
     workspace.applyMerge(preview.id, {}); await wait(workspace);
     expect((await records(local)).sort()).toEqual([capture.videoId, 'gone0000001'].sort());
     expect(await workspace.collector.isKnown('gone0000001')).toBe(true);
+  });
+
+  /** Deletes through a Vault whose file removal fails, which leaves the file next to its record. */
+  async function deleteLeavingFile(root: string, at?: Date) {
+    class StuckVault extends MarkdownVault {
+      override async remove(): Promise<void> { throw new Error('file is locked'); }
+    }
+    return new Collector(new StuckVault(root, at ? { now: () => at } : {})).delete(id);
+  }
+  const documentPath = `documents/youtube/${capture.videoId}.md`;
+
+  it('exports, restores and merges a Vault whose deletion left its file behind', async () => {
+    const { root, local, incoming, workspace } = await fixture();
+    await deleteLeavingFile(local, new Date(Date.now() + 60_000));
+    expect(existsSync(path.join(local, documentPath))).toBe(true);
+
+    const exported = await exportVault(local);
+    const files = packageFiles(exported);
+    expect(files.has(documentPath)).toBe(false);
+    expect(JSON.parse(files.get(DELETIONS_FILE)!.toString()).deleted.map((r: { sourceId: string }) => r.sourceId)).toEqual([capture.videoId]);
+    const restored = path.join(root, 'restored');
+    await unpackVault(exported, restored, () => undefined);
+    expect(await new MarkdownVault(restored).list()).toEqual([]);
+    expect(await records(restored)).toEqual([capture.videoId]);
+
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    expect(preview.items.map((item) => [item.key, item.state])).toEqual([[`deletion:${id}`, 'conflict']]);
+    workspace.applyMerge(preview.id, choices(preview, 'incoming')); await wait(workspace);
+    expect(workspace.status().state).toBe('completed');
+    expect((await workspace.collector.read(id)).bodyMarkdown).toBe('匯入的海洋內容');
+    expect(await records(local)).toEqual([]);
+  });
+
+  it('leaves out a record whose document was collected again after it', async () => {
+    const { local } = await fixture();
+    await new MarkdownVault(local).deletions.record({
+      sourceType: 'youtube', sourceId: capture.videoId, sourceUrl: capture.sourceUrl, title: capture.title, publisherId: 'UC1', publisherName: '頻道',
+    });
+    await new MarkdownVault(local, { now: () => new Date(Date.now() + 60_000) }).add(capture);
+
+    const files = packageFiles(await exportVault(local));
+    expect(files.has(documentPath)).toBe(true);
+    expect(JSON.parse(files.get(DELETIONS_FILE)!.toString()).deleted).toEqual([]);
+  });
+
+  it('rolls back a failed merge into a Vault whose deletion left its file behind', async () => {
+    const { local, incoming, workspace } = await fixture();
+    await deleteLeavingFile(local, new Date(Date.now() + 60_000));
+    await add(incoming, 'new00000001', '新增沙漠');
+    const before = await exportVault(local);
+    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const originalRename = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).rename;
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      if (String(to) === path.join(local, 'documents/youtube/new00000001.md')) throw new Error('simulated disk write failure');
+      return originalRename(from, to);
+    });
+    try {
+      workspace.applyMerge(preview.id, choices(preview, 'local')); await wait(workspace);
+    } finally { vi.mocked(rename).mockImplementation(originalRename); }
+
+    expect(workspace.status().state).toBe('error');
+    expect(workspace.status().message).not.toContain('重新啟動');
+    expect(await exportVault(local)).toEqual(before);
+    expect(() => workspace.enterWrite()()).not.toThrow();
+  });
+
+  it('recovers from a merge backup that holds a document next to its record', async () => {
+    const { local, workspace, options } = await fixture();
+    const files = packageFiles(await exportVault(local));
+    await workspace.close();
+    // A backup with both is still restored: recovery checks the format, not this agreement.
+    files.set(DELETIONS_FILE, Buffer.from(JSON.stringify({ version: 1, deleted: [{
+      sourceType: 'youtube', sourceId: capture.videoId, sourceUrl: capture.sourceUrl, title: capture.title,
+      publisherId: 'UC1', publisherName: '頻道', deletedAt: new Date(Date.now() + 60_000).toISOString(),
+    }] })));
+    const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
+    const entries = [...files].map(([file, data]) => ({ path: file, size: data.length, sha256: sha(data), data: data.toString('base64') }));
+    const backup = `${local}.before-merge-both.xr-vault`;
+    await writeFile(backup, JSON.stringify({ format: 'xr-collector-vault', version: 3, files: entries,
+      sha256: sha(JSON.stringify(entries.map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })))) }));
+    await writeFile(`${local}.merge-journal.json`, JSON.stringify({ backup, paths: [DELETIONS_FILE] }));
+
+    const restarted = await VaultWorkspace.open(options); workspaces.push(restarted);
+    expect(existsSync(`${local}.merge-journal.json`)).toBe(false);
+    expect(await records(local)).toEqual([capture.videoId]);
+    expect(await restarted.collector.list()).toEqual([]);
   });
 
   it('restores the document and the deletions file when applying a deletion fails', async () => {

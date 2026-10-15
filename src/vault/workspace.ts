@@ -202,7 +202,7 @@ export class VaultWorkspace {
     try {
       await mkdir(this.restoreParent, { recursive: true });
       directory = await mkdtemp(path.join(this.restoreParent, 'preview-'));
-      await unpackVault(buffer, directory, () => undefined, false);
+      await unpackVault(buffer, directory, () => undefined, { pauseSchedule: false });
       const local = await exportVault(this.current.root);
       const value = { id: randomUUID(), items: compareFiles(packageFiles(local), packageFiles(buffer)) };
       this.preview = { value, baseline: fingerprint(local), incoming: buffer };
@@ -250,7 +250,7 @@ export class VaultWorkspace {
     const backup = await readFile(data.backup);
     await mkdir(this.restoreParent, { recursive: true });
     const validation = await mkdtemp(path.join(this.restoreParent, 'recovery-'));
-    try { await unpackVault(backup, validation, () => undefined, false); }
+    try { await unpackVault(backup, validation, () => undefined, { pauseSchedule: false, recovery: true }); }
     finally { await rm(validation, { recursive: true, force: true }); }
     const files = packageFiles(backup);
     for (const relative of data.paths) {
@@ -397,6 +397,13 @@ export class VaultWorkspace {
     for (const record of recovery.completed) {
       jobs.recordEvent({
         severity: 'info', eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+      });
+    }
+    for (const record of recovery.unresolved) {
+      jobs.recordEvent({
+        severity: 'warning', eventType: 'document.delete_unresolved',
+        message: `「${record.title}」有刪除紀錄，但文件檔缺少可讀的收集時間；文件維持隱藏，檔案與刪除紀錄都保留。`,
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
       });
     }

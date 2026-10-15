@@ -33,4 +33,4 @@
 
 Vault 也可攜帶 `attachments/`、`versions/` 與 `management/` 檔案；這不代表程式已實作附件編輯器、版本瀏覽器或 Derived pipeline。完整資料包責任見 [儲存與搜尋](storage-and-search.md)。
 
-Round 2 改動文件欄位、來源身分或刪除記錄時，須同步定義第一輪文件的讀取與遷移行為，並驗證資料包還原及合併；不得只更換新文件的 writer。
+Round 2 改動文件欄位、來源身分或刪除紀錄時，須同步定義第一輪文件的讀取與遷移行為，並驗證資料包還原及合併；不得只更換新文件的 writer。
