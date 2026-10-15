@@ -101,6 +101,11 @@ export interface HttpAppOptions {
   vaultSetup?: VaultSetup;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
+  /**
+   * Host names a request may address, each accepted only with the port this server listens on;
+   * other Host headers get 403. Unset, every Host is accepted.
+   */
+  allowedHosts?: string[];
 }
 
 const DOCUMENT_SOURCE_TYPES: DocumentSourceType[] = ['youtube'];
@@ -129,6 +134,8 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   job_not_retryable: 409,
   unsupported_url: 400,
   queue_full: 503,
+  file_exists: 409,
+  transfer_cancelled: 409,
   no_subtitles: 422,
   video_unavailable: 422,
   capture_failed: 502,
@@ -156,6 +163,21 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
     };
   });
+
+  if (options.allowedHosts) {
+    // Any page this computer opens can reach a server on the loopback interface. A page on another
+    // site that rebinds its own name to 127.0.0.1 still sends that name in Host, so accepting only
+    // the server's own names keeps such pages out of the UI's unauthenticated routes.
+    const names = options.allowedHosts;
+    app.addHook('onRequest', async (request, reply) => {
+      const address = app.server.address();
+      const port = address && typeof address === 'object' ? address.port : null;
+      const host = (request.headers.host ?? '').toLowerCase();
+      if (port === null || !names.some((name) => host === `${name}:${port}`)) {
+        return reply.code(403).send({ error: { code: 'forbidden_host', message: '請以 127.0.0.1 或 localhost 加上服務的埠號連線。' } });
+      }
+    });
+  }
 
   if (options.agentToken !== undefined) {
     if (!options.agentToken) throw new Error('Agent token must not be empty');
@@ -242,6 +264,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       transfer.cancelMerge(request.body?.id);
       return { cancelled: true };
     });
+    app.post('/api/vault/cancel', async () => transfer.cancelWait());
     app.get('/api/vault/restore/suggestion', async () => ({ path: await transfer.suggestRestoreFolder() }));
     app.post<{ Body: Buffer | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
       if (Buffer.isBuffer(request.body)) return reply.code(202).send(await transfer.restore(request.body));

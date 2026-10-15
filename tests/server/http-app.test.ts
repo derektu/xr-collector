@@ -401,3 +401,25 @@ describe('HTTP app', () => {
     await app.close();
   });
 });
+
+describe('Host header', () => {
+  it('answers only requests addressed to the server by its loopback name and port', async () => {
+    const { startServer } = await import('../../src/server/start.js');
+    const server = await startServer({ port: 0, collector: makeCollector() });
+    try {
+      const get = (host: string) => server.app.inject({ method: 'GET', url: '/api/health', headers: { host } });
+      for (const host of [`127.0.0.1:${server.port}`, `localhost:${server.port}`, `LOCALHOST:${server.port}`]) {
+        expect((await get(host)).statusCode, host).toBe(200);
+      }
+      for (const host of [`evil.example:${server.port}`, '127.0.0.1:1', '127.0.0.1', `127.0.0.1.evil.example:${server.port}`]) {
+        const response = await get(host);
+        expect(response.statusCode, host).toBe(403);
+        expect(response.json()).toMatchObject({ error: { code: 'forbidden_host' } });
+      }
+      // A real request from this computer carries the address it connected to.
+      expect((await fetch(`${server.url}/api/health`)).status).toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+});

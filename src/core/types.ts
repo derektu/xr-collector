@@ -640,6 +640,8 @@ export type CollectorErrorCode =
   | 'job_not_retryable'
   | 'unsupported_url'
   | 'queue_full'
+  | 'file_exists'
+  | 'transfer_cancelled'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */
@@ -695,6 +697,8 @@ export interface TransferStatus {
   lastExportedAt: string | null;
   /** What the last finished operation produced; null while one runs or after a failure. */
   result: TransferResult | null;
+  /** The error code of a failed operation, such as `vault_busy`; null unless `state` is `error`. */
+  errorCode: CollectorErrorCode | null;
 }
 
 export interface TransferResult {

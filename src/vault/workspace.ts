@@ -16,12 +16,12 @@ import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
-import { compareFiles, fingerprint, packageFiles, mergeFiles } from './vault-merge.js';
+import { compareFiles, mergeBaseline, packageFiles, mergeFiles } from './vault-merge.js';
 import { exportVault, packageInfo, unpackVault, safePath } from './vault-package.js';
 import { documentIdFromPath } from './document-paths.js';
 import {
-  checkExportFile, checkRestoreFolder, clearRestoreJournal, readLastExport, readPackageFile, recordExport, recoverRestore,
-  stagingFolder, suggestRestoreFolder, writePackageFile, writeRestoreJournal,
+  checkExportFile, checkRestoreFolder, clearRestoreJournal, markerDigest, readLastExport, readPackageFile, recordExport, recoverRestore,
+  stagingFolder, suggestRestoreFolder, writePackageFile, writeRestoreJournal, type RestoreJournal,
 } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import type { VaultSelection } from './vault-selection.js';
@@ -77,9 +77,11 @@ export class VaultWorkspace {
   private operation: Promise<void> | null = null;
   /** Lifts the collection hold of the running transfer. */
   private releaseJobs: (() => void) | null = null;
+  /** Cancels the running transfer while it waits for collection; null once it has started its work. */
+  private waitAbort: AbortController | null = null;
   private lastExportedAt: string | null = null;
   private statusValue: Omit<TransferStatus, 'vaultPath' | 'lastExportedAt'> = {
-    state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null,
+    state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
   };
   readonly collector = forwarding(() => this.current.collector);
   readonly channels = forwarding(() => this.current.channels);
@@ -100,7 +102,8 @@ export class VaultWorkspace {
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
     const workspace = new VaultWorkspace(options);
     const root = options.root;
-    await recoverRestore(options.profilePath);
+    // The selected Vault and the one being opened are never taken back, whatever the journal says.
+    await recoverRestore(options.profilePath, [await options.selection.read().catch(() => null), root]);
     const recovered = await workspace.recoverMerge(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
     workspace.lastExportedAt = await readLastExport(options.profilePath, root);
@@ -152,14 +155,38 @@ export class VaultWorkspace {
     this.locked = true;
     this.current.schedule.setSuspended(true);
     this.statusValue = {
-      state: 'waiting', operation, message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0, result: null,
+      state: 'waiting', operation, message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
     };
   }
 
-  /** Waits for the collection steps and the subscription check already running. */
+  /** Waits for the collection steps and the subscription check already running; `cancelWait` ends the wait. */
   private async settleCollection(): Promise<void> {
-    this.releaseJobs = await this.current.jobs.hold(this.holdTimeoutMs);
-    await this.current.schedule.idle();
+    const abort = new AbortController();
+    this.waitAbort = abort;
+    try {
+      this.releaseJobs = await this.current.jobs.hold(this.holdTimeoutMs, abort.signal);
+      await abortable(this.current.schedule.idle(), abort.signal);
+    } finally {
+      this.waitAbort = null;
+    }
+  }
+
+  /**
+   * Cancels the transfer that is still waiting for collection steps: collection continues, nothing
+   * is written, and the status returns to idle. A transfer past the wait runs to its end.
+   */
+  cancelWait(): TransferStatus {
+    if (!this.waitAbort) throw new CollectorError('invalid_request', '目前沒有等待中的備份、還原或合併；已開始的處理無法取消。');
+    this.waitAbort.abort(new CollectorError('transfer_cancelled', '已取消，資料未變更。'));
+    this.waitAbort = null;
+    this.cancelled();
+    return this.status();
+  }
+
+  private cancelled(): void {
+    this.statusValue = {
+      state: 'idle', operation: null, message: '已取消，資料未變更。', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
+    };
   }
 
   private end(): void {
@@ -262,28 +289,28 @@ export class VaultWorkspace {
 
   private async restoreOnce(buffer: Buffer, target: string): Promise<void> {
     const profile = this.options.profilePath;
-    let staging: string | null = null;
+    let journal: RestoreJournal | null = null;
     let placed = false;
-    let targetExisted = false;
     let candidate: Bundle | null = null;
+    let previous: Bundle | null = null;
     try {
       await this.settleCollection();
       this.progress('validating', '正在檢查備份…');
-      staging = stagingFolder(target);
-      await writeRestoreJournal(profile, staging);
-      await mkdir(staging, { mode: 0o700 });
-      await unpackVault(buffer, staging, (done, total) => {
+      journal = { staging: stagingFolder(target), target, placed: false, marker: null, emptyTarget: false };
+      await writeRestoreJournal(profile, journal);
+      await mkdir(journal.staging, { mode: 0o700 });
+      await unpackVault(buffer, journal.staging, (done, total) => {
         this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在還原檔案…', completedFiles: done, totalFiles: total };
       });
-      await writeVaultMarker(staging, this.options.createdBy);
+      await writeVaultMarker(journal.staging, this.options.createdBy);
       // The chosen folder holds at most entries a file manager adds by itself; the staging folder takes its place.
       await checkRestoreFolder(target, this.folders);
-      targetExisted = await pathExists(target);
-      if (targetExisted) await rm(target, { recursive: true });
-      await rename(staging, target);
+      // Recorded before the rename, so a stop at any point after it can take the restored folder back.
+      journal = { ...journal, placed: true, marker: await markerDigest(journal.staging), emptyTarget: await pathExists(target) };
+      await writeRestoreJournal(profile, journal);
+      if (journal.emptyTarget) await rm(target, { recursive: true });
+      await rename(journal.staging, target);
       placed = true;
-      staging = null;
-      await clearRestoreJournal(profile);
       this.progress('indexing', '正在建立新知識庫的搜尋索引…');
       candidate = await this.makeBundle(target);
       // The candidate owns a separate search database; failed preparation leaves the active vault intact.
@@ -291,50 +318,63 @@ export class VaultWorkspace {
       await candidate.schedule.getSchedule();
       await this.options.selection.write(target);
       placed = false;
-      const previous = this.current;
-      const interruptedJobs = previous.jobs.unfinishedCount();
+      previous = this.current;
       this.releaseJobs = null;
       this.current = candidate;
       candidate = null;
-      this.lastExportedAt = await readLastExport(profile, target);
-      await this.current.schedule.start();
-      await previous.schedule.close();
-      await previous.jobs.close();
-      await previous.runtime.close().catch((error: unknown) => console.error('Previous search shutdown failed', error));
-      const jobs = interruptedJobs ? `原知識庫有 ${interruptedJobs} 個收集工作暫停，回到原知識庫時會接續。` : '';
-      this.statusValue = {
-        ...this.statusValue, state: 'completed',
-        message: `已還原到新的知識庫並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`,
-        result: { previousVaultPath: previous.root, interruptedJobs, autoCollectionPaused: true },
-      };
-      // Device-level, so both the previous and the restored Vault show the switch.
-      this.record('info', 'vault.restored',
-        `已從備份還原新的知識庫 ${target} 並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`, null);
     } catch (error) {
       this.fail(error, '還原');
-    } finally {
-      try {
-        if (candidate) {
-          await candidate.schedule.close();
-          await candidate.jobs.close();
-          await candidate.runtime.close();
-        }
-        // A restore that fails after placing its folder takes it back, leaving the chosen folder as it was.
-        if (placed) {
-          staging = stagingFolder(target);
-          await writeRestoreJournal(profile, staging);
-          await rename(target, staging);
-          if (targetExisted) await mkdir(target);
-          await rm(this.searchPath(target), { recursive: true, force: true });
-        }
-        if (staging) await rm(staging, { recursive: true, force: true });
-        await clearRestoreJournal(profile);
-      } catch (error) {
-        console.error('Restore cleanup failed', error);
-      } finally {
-        this.end();
-      }
     }
+    try {
+      if (candidate) {
+        await candidate.schedule.close();
+        await candidate.jobs.close();
+        await candidate.runtime.close();
+      }
+      // A restore that fails after placing its folder takes it back, leaving the chosen folder as it was.
+      if (placed && journal) {
+        await rename(target, journal.staging);
+        if (journal.emptyTarget) await mkdir(target);
+        await rm(this.searchPath(target), { recursive: true, force: true });
+      }
+      if (journal) {
+        await rm(journal.staging, { recursive: true, force: true });
+        await clearRestoreJournal(profile);
+      }
+    } catch (error) {
+      console.error('Restore cleanup failed', error);
+    }
+    try {
+      if (previous) await this.finishSwitch(previous, target);
+    } finally {
+      this.end();
+    }
+  }
+
+  /**
+   * Settles the switch to a restored Vault. The switch has happened once the selection names the
+   * restored Vault, so a step that fails here is logged and the restore still completes; the
+   * previous Vault's jobs are always closed, which records them as interrupted for its next opening.
+   */
+  private async finishSwitch(previous: Bundle, target: string): Promise<void> {
+    const step = async (label: string, work: () => Promise<unknown>) => {
+      try { await work(); } catch (error) { console.error(label, error); }
+    };
+    const interruptedJobs = previous.jobs.unfinishedCount();
+    this.lastExportedAt = await readLastExport(this.options.profilePath, target);
+    await step('Restored Vault schedule start failed', () => this.current.schedule.start());
+    await step('Previous schedule shutdown failed', () => previous.schedule.close());
+    await step('Previous jobs shutdown failed', () => previous.jobs.close('切換到還原的知識庫時工作尚未完成；回到原知識庫時接續。'));
+    await step('Previous search shutdown failed', () => previous.runtime.close());
+    const jobs = interruptedJobs ? `原知識庫有 ${interruptedJobs} 個收集工作暫停，回到原知識庫時會接續。` : '';
+    this.statusValue = {
+      ...this.statusValue, state: 'completed', errorCode: null,
+      message: `已還原到新的知識庫並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`,
+      result: { previousVaultPath: previous.root, interruptedJobs, autoCollectionPaused: true },
+    };
+    // Device-level, so both the previous and the restored Vault show the switch.
+    this.record('info', 'vault.restored',
+      `已從備份還原新的知識庫 ${target} 並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`, null);
   }
 
   /** Compares a package file with the active Vault. */
@@ -343,8 +383,9 @@ export class VaultWorkspace {
   }
 
   async previewMerge(buffer: Buffer): Promise<MergePreview> {
-    this.preview = null;
     return this.run('merge', '比對', async () => {
+      // A comparison refused for a busy Vault leaves the previous one usable.
+      this.preview = null;
       this.progress('validating', '正在檢查備份…');
       let directory: string | null = null;
       try {
@@ -361,7 +402,7 @@ export class VaultWorkspace {
         id: randomUUID(), items: compareFiles(packageFiles(local), packageFiles(buffer)),
         package: { version: info.version, exportedAt: info.exportedAt ?? null, createdBy: info.createdBy ?? null },
       };
-      this.preview = { value, baseline: fingerprint(local), incoming: buffer };
+      this.preview = { value, baseline: mergeBaseline(packageFiles(local), packageFiles(buffer)), incoming: buffer };
       this.statusValue = { ...this.statusValue, state: 'completed', message: '比對完成，請選擇差異的處理方式。' };
       return value;
     });
@@ -436,7 +477,7 @@ export class VaultWorkspace {
       await this.settleCollection();
       this.progress('validating', '正在檢查本機資料…');
       const before = await exportVault(root);
-      if (fingerprint(before) !== preview.baseline) {
+      if (mergeBaseline(packageFiles(before), packageFiles(preview.incoming)) !== preview.baseline) {
         this.preview = null;
         throw new CollectorError('invalid_request', '本機資料在比對後有變更，請重新比對。');
       }
@@ -506,8 +547,16 @@ export class VaultWorkspace {
   }
 
   private fail(error: unknown, operation: string): void {
-    this.statusValue = { ...this.statusValue, state: 'error', result: null, message: error instanceof CollectorError
-      ? error.message : '操作失敗，請確認備份檔案、磁碟空間與搜尋服務後重試。' };
+    if (error instanceof CollectorError && error.code === 'transfer_cancelled') {
+      this.cancelled();
+      this.record('info', 'vault.transfer_cancelled', `已取消${operation}，資料未變更。`);
+      return;
+    }
+    this.statusValue = {
+      ...this.statusValue, state: 'error', result: null,
+      errorCode: error instanceof CollectorError ? error.code : null,
+      message: error instanceof CollectorError ? error.message : '操作失敗，請確認備份檔案、磁碟空間與搜尋服務後重試。',
+    };
     this.record('error', 'vault.transfer_failed', `${operation}失敗：${this.statusValue.message}`,
       undefined, error instanceof CollectorError ? error.code : undefined);
   }
@@ -593,6 +642,16 @@ export class VaultWorkspace {
 function makeScheduler(bundle: Pick<Bundle, 'root' | 'channels' | 'jobs'>): ChannelScheduler {
   return new ChannelScheduler(bundle.channels, new JsonChannelScheduleStore(bundle.root), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
+  });
+}
+
+/** Settles with `work`, or rejects with the signal's reason once it is aborted. */
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason as Error);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason as Error);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 }
 

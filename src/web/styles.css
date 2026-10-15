@@ -219,6 +219,7 @@ dialog::backdrop { background:var(--overlay); }
 .path-row .button { margin-bottom:22px; }
 .fact-list { margin:14px 0 0; padding:12px 14px 12px 30px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); color:var(--secondary); font-size:13px; line-height:1.7; }
 .transfer-progress { display:flex; align-items:center; gap:10px; }
+.transfer-progress-line { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .confirm-dialog p.transfer-done { color:var(--ok); font-weight:600; }
 .merge-source { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; color:var(--primary)!important; }
 .confirm-dialog p.merge-counts { color:var(--primary); font-size:15px; font-weight:600; }
