@@ -3,7 +3,7 @@ import type { SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core
 import { Activity } from './Activity.js';
 import { AddContent, type AddResult } from './AddContent.js';
 import { api } from './api-client.js';
-import { createBrowserThemeStore, createElectronThemeStore, defaultTheme, pathForRoute, routeForPath, type ShellPage, type Theme, type ThemeStore } from './app-shell.js';
+import { createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, pathForRoute, resolveTheme, routeForPath, type ShellPage, type ThemePreference, type ThemeStore } from './app-shell.js';
 import { Documents } from './Documents.js';
 import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
 import { Icon } from './icons.js';
@@ -32,6 +32,20 @@ const navigation: Array<{ page: ShellPage; label: string; icon: string }> = [
  */
 interface AppHistoryState { returnable?: boolean; from?: 'source' }
 
+const darkSchemeQuery = '(prefers-color-scheme: dark)';
+/** Tracks the operating system's light or dark appearance and updates when it changes. */
+function useSystemDark(): boolean {
+  const [dark, setDark] = useState(() => window.matchMedia(darkSchemeQuery).matches);
+  useEffect(() => {
+    const media = window.matchMedia(darkSchemeQuery);
+    const update = () => setDark(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return dark;
+}
+
 export default function App() {
   if (DevelopmentOnboardingPreview) return <Suspense fallback={<p className="loading">正在載入開發預覽…</p>}><DevelopmentOnboardingPreview /></Suspense>;
 
@@ -43,9 +57,11 @@ export default function App() {
   const bridge = window.xrCollectorTheme;
   const desktop = navigator.userAgent.includes('Electron');
   const store = useMemo<ThemeStore | null>(() => bridge ? createElectronThemeStore(bridge) : desktop ? null : createBrowserThemeStore(window.localStorage), [bridge, desktop]);
-  const [theme, setTheme] = useState<Theme>(defaultTheme);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(defaultThemePreference);
   const [themeReady, setThemeReady] = useState(!bridge);
-  const [saving, setSaving] = useState(false);
+  // Theme writes run one after another so the last choice is the one that stays saved.
+  const themeWrites = useRef<Promise<void>>(Promise.resolve());
+  const systemDark = useSystemDark();
   const [vault, setVault] = useState<VaultSetupStatus | null>(null);
   const [vaultLoadError, setVaultLoadError] = useState<string>();
   const [adding, setAdding] = useState(false);
@@ -54,7 +70,7 @@ export default function App() {
   const ready = vault?.state === 'ready';
   const status = useCollectionStatus(ready);
 
-  useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setTheme(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
+  useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setThemePreference(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { void loadVault(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
@@ -114,9 +130,13 @@ export default function App() {
     announce(result.message);
     if (result.source && !(page === 'sources' && !sourceRoute)) go('/');
   }
-  async function persist(next: Theme): Promise<void> { setTheme(next); if (!store) return; setSaving(true); try { await store.write(next); } catch (error: unknown) { console.warn('Unable to save theme preference', error); } finally { setSaving(false); } }
+  function persist(next: ThemePreference): void {
+    setThemePreference(next);
+    if (!store) return;
+    themeWrites.current = themeWrites.current.then(() => store.write(next)).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
+  }
 
-  const themeName = theme === 'light' ? 'silverblue' : 'duskblue';
+  const themeName = resolveTheme(themePreference, systemDark) === 'light' ? 'silverblue' : 'duskblue';
   if (!themeReady || !vault) return <div className="app-loading" data-theme={themeName}>{vaultLoadError ? <div className="app-load-error" role="alert"><p>{vaultLoadError}</p><button type="button" onClick={() => void loadVault()}>重試</button></div> : <p className="loading" role="status">正在載入…</p>}</div>;
   if (vault.state === 'not_ready') return <div data-theme={themeName}><VaultOnboarding status={vault} onStatus={setVault} onReady={enterVault} /></div>;
 
@@ -145,7 +165,7 @@ export default function App() {
   } else if (page === 'activity') {
     body = <Activity revision={status.revision} />;
   } else {
-    body = <Settings vaultPath={vault.vaultPath} theme={theme} themeBusy={!themeReady || saving} onTheme={(next) => void persist(next)} />;
+    body = <Settings vaultPath={vault.vaultPath} themePreference={themePreference} onThemePreference={persist} />;
   }
 
   return <div className={readerId ? 'shell reader-mode' : 'shell'} data-theme={themeName}>

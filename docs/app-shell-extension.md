@@ -18,9 +18,11 @@ A source type is declared on the server, so the UI and Agents read the same desc
 
 ## Theme persistence
 
-The theme control is the 外觀 section of the Settings page. The shared `ThemeStore` interface in `src/web/app-shell.ts` keeps page rendering independent from its persistence location.
+The theme control is the 外觀 section of the Settings page: a radio group 主題 with 跟隨系統, 深色 and 淺色. The stored preference is `system`, `dark` or `light`; `system` follows the operating system's light or dark appearance through the `prefers-color-scheme` media query and switches as soon as the system appearance changes. Electron's `prefers-color-scheme` follows the system through `nativeTheme`, so Browser and Electron share one renderer path and Electron main does not set `nativeTheme.themeSource`. The shared `ThemeStore` interface in `src/web/app-shell.ts` keeps page rendering independent from its persistence location.
 
 - Browser mode uses `localStorage` key `xr-collector.theme` on the current origin.
-- Electron mode exposes only `read()` and `write('dark' | 'light')` through its preload bridge. Electron main stores `{ "theme": "dark" | "light" }` in `appearance.json` under the Electron device profile. It contains no Vault path, document data, Agent token or credential.
+- Electron mode exposes only `read()` and `write('system' | 'dark' | 'light')` through its preload bridge. Electron main stores `{ "theme": "system" | "dark" | "light" }` in `appearance.json` under the Electron device profile and completes writes one at a time. It contains no Vault path, document data, Agent token or credential.
 
-The Electron bridge is desktop integration for appearance only. Business screens continue to call the local HTTP API. The UI waits for Electron's stored value before enabling the theme control, so first render never writes the default over a saved value. A read of an invalid value falls back to dark. A failed write is logged; the chosen theme stays applied for the running session.
+The Electron bridge is desktop integration for appearance only. Business screens continue to call the local HTTP API. The UI waits for Electron's stored value before showing the app, so first render never writes the default over a saved value; a value is written only when the user picks one. A missing or invalid value follows the system. A failed write is logged; the chosen theme stays applied for the running session.
+
+The radio group follows the WAI-ARIA radio pattern: the chosen option is the group's only Tab stop, arrow keys move to the previous or next option with wrap-around, Home and End jump to the ends, and focus and selection move together. The options stay enabled while a write is in progress, so keyboard focus remains on the chosen option.

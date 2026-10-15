@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from './api-client.js';
-import type { Theme } from './app-shell.js';
+import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
 
+const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
+
 /** Device and Vault settings: Vault location, search index and appearance. Collection settings belong to each source. */
-export function Settings({ vaultPath, theme, themeBusy, onTheme }: {
+export function Settings({ vaultPath, themePreference, onThemePreference }: {
   vaultPath: string | null;
-  theme: Theme;
-  themeBusy: boolean;
-  onTheme: (theme: Theme) => void;
+  themePreference: ThemePreference;
+  onThemePreference: (preference: ThemePreference) => void;
 }) {
+  const themeOptions = useRef<Array<HTMLButtonElement | null>>([]);
   const [counts, setCounts] = useState<{ documents: number; sources: number } | null>(null);
 
   useEffect(() => {
@@ -31,9 +33,17 @@ export function Settings({ vaultPath, theme, themeBusy, onTheme }: {
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>
-        <div className="segmented" role="radiogroup" aria-label="主題">
-          {(['dark', 'light'] as const).map((value) => <button key={value} type="button" role="radio" aria-checked={theme === value}
-            className={theme === value ? 'active' : undefined} disabled={themeBusy} onClick={() => onTheme(value)}>{value === 'dark' ? '深色' : '淺色'}</button>)}
+        {/* A radio group: one Tab stop on the chosen option, arrow keys and Home/End choose another. */}
+        <div className="segmented" role="radiogroup" aria-label="主題" onKeyDown={(event) => {
+          const next = radioIndexForKey(event.key, themePreferences.indexOf(themePreference), themePreferences.length);
+          if (next === null) return;
+          event.preventDefault();
+          onThemePreference(themePreferences[next]!);
+          themeOptions.current[next]?.focus();
+        }}>
+          {themePreferences.map((value, index) => <button key={value} ref={(element) => { themeOptions.current[index] = element; }} type="button" role="radio"
+            aria-checked={themePreference === value} tabIndex={themePreference === value ? 0 : -1} className={themePreference === value ? 'active' : undefined}
+            onClick={() => onThemePreference(value)}>{themeLabels[value]}</button>)}
         </div>
       </section>
     </div>
