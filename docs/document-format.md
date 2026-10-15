@@ -23,11 +23,11 @@
 | `collector.subtitle.kind` | `manual` 或 `automatic` |
 | `collector.source_tags` | 初始為空陣列 |
 
-正文是整理過空白與段落的字幕文字，保留原文，不做摘要或改寫，不含逐句 timestamp。來源 URL 放在 frontmatter。
+正文是整理過空白與段落的字幕文字，保留原文，不做摘要或改寫，不含逐句 timestamp。來源 URL 放在 frontmatter。字幕是純文字，寫入時跳脫 Markdown 語法字元（例如 `28\*28`、行首的 `\#`），以 Markdown 呈現時仍顯示原字；列表節錄與搜尋片段會還原這些跳脫。
 
 ## 讀取與相容性
 
-現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的 `SavedDocument` 是固定欄位投影，不能假設未知 frontmatter 會透過 API 完整呈現。
+現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的文件是固定欄位投影：來源無關的 `id`、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`、`publishedAt`、`collectedAt`，以及 YouTube 專屬的 `youtube`（字幕語言與人工／自動）。未知 frontmatter 不透過 API 呈現；讀取不改寫檔案，未知欄位保留在 Vault。沒有 `publisher_id` 的文件以 `publisher.id: null` 呈現。
 
 合併比對完整 frontmatter 與正文；收集／異動時間及序列化差異不單獨形成內容衝突。合併沒有提供一般正文編輯、草稿或垃圾桶生命週期。
 
