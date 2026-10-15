@@ -99,6 +99,8 @@ export class JobManager {
    * the channel's dedupe key, so a resume or new subscription starts its own job at once.
    */
   private readonly stoppedJobs = new Map<string, SkipReason>();
+  /** Videos a channel job queued that the user then submitted directly; pausing never skips them. */
+  private readonly manualClaims = new Set<string>();
   private closed = false;
 
   constructor(private readonly options: JobManagerOptions) {
@@ -195,7 +197,7 @@ export class JobManager {
       if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
       for (const item of job.items ?? []) {
         const video = item.jobId ? this.jobs.get(item.jobId) : undefined;
-        if (!video || video.parentId !== job.id || video.state !== 'queued') continue;
+        if (!video || video.parentId !== job.id || video.state !== 'queued' || this.manualClaims.has(video.id)) continue;
         this.removeFromLane(video);
         this.finish(video, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       }
@@ -260,7 +262,18 @@ export class JobManager {
   ): JobSubmission {
     if (this.closed) throw new CollectorError('vault_busy', '服務正在停止，無法接受新的收集工作。');
     const activeId = this.activeByKey.get(key);
-    if (activeId) return { job: this.get(activeId), deduplicated: true };
+    if (activeId) {
+      const active = this.jobs.get(activeId);
+      if (active && parentId === null && active.parentId !== null && kind === 'youtube.video') {
+        // A direct submission is the user's own request: no backfill bound and no subscription stop applies.
+        this.manualClaims.add(active.id);
+        if (active.publishedNotBefore) {
+          delete active.publishedNotBefore;
+          this.update(active, {});
+        }
+      }
+      return { job: this.get(activeId), deduplicated: true };
+    }
     if (this.queuedCount() >= this.limits.maxQueued) {
       throw new CollectorError('queue_full', '等待中的收集工作已達上限，請等目前的工作完成後再試。');
     }
@@ -554,6 +567,7 @@ export class JobManager {
     this.jobs.delete(job.id);
     this.stoppedJobs.delete(job.id);
     this.backlogJobs.delete(job.id);
+    this.manualClaims.delete(job.id);
     const key = this.keys.get(job.id);
     this.keys.delete(job.id);
     if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
