@@ -3,6 +3,7 @@ import { parse } from 'yaml';
 import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE } from '../channels/subscription-files.js';
 import { CollectorError, type MergeItem, type MergeChoice, type YouTubeChannel } from '../core/types.js';
 import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
+import { documentKeyFromPath, documentPath } from './document-paths.js';
 
 export type Files = Map<string, Buffer>;
 /** Files a merge writes; null removes the file. */
@@ -18,14 +19,28 @@ function canonical(value: unknown): string {
   if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value);
 }
-function document(bytes: Buffer) {
+/**
+ * A document file for comparison: its metadata and body without the collection and change times,
+ * which say when a copy was made rather than what it holds. The times live under `collector`
+ * when the metadata has that section; a document without one compares on everything.
+ */
+function document(bytes: Buffer, file: string) {
   const match = bytes.toString().replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u);
   if (!match) throw new CollectorError('invalid_request', '文件格式無效。');
-  const metadata = parse(match[1]!) as Record<string, unknown> & { collector: Record<string, unknown> };
-  const time = String(metadata.collector.updated_at ?? metadata.collector.collected_at ?? '未提供');
-  delete metadata.collector.collected_at;
-  delete metadata.collector.updated_at;
-  return { content: `${canonical(metadata)}\n${match[2]!.trim()}`, time, title: String(metadata.title) };
+  const parsed = parse(match[1]!) as unknown;
+  const metadata = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed as Record<string, unknown> } : {};
+  const section = metadata.collector && typeof metadata.collector === 'object' && !Array.isArray(metadata.collector)
+    ? { ...metadata.collector as Record<string, unknown> } : null;
+  let time: string | null = null;
+  if (section) {
+    const stamp = section.updated_at ?? section.collected_at;
+    time = stamp === undefined || stamp === null ? null : String(stamp);
+    delete section.collected_at;
+    delete section.updated_at;
+    metadata.collector = section;
+  }
+  const title = typeof metadata.title === 'string' && metadata.title ? metadata.title : file.split('/').pop()!;
+  return { content: `${canonical(metadata)}\n${match[2]!.trim()}`, time, title };
 }
 function view(bytes: Buffer | undefined): string {
   if (!bytes) return '';
@@ -67,7 +82,6 @@ function deletions(files: Files): Map<string, DeletionRecord> {
   return new Map(records.map((record) => [deletionId(record), record]));
 }
 
-const documentPath = (record: DeletionRecord) => `documents/${record.sourceType}/${record.sourceId}.md`;
 const deletionText = (record: DeletionRecord) => `已刪除：${record.title}\n刪除時間：${record.deletedAt}\n來源：${record.sourceUrl}`;
 
 /**
@@ -90,12 +104,13 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
     let label = file;
     let localTime: string | null = null; let incomingTime: string | null = null;
     let localText = view(before); let incomingText = view(bytes);
-    if (file.startsWith('documents/')) {
-      const right = document(bytes); const left = before ? document(before) : null;
+    const isDocument = documentKeyFromPath(file) !== null;
+    if (isDocument) {
+      const right = document(bytes, file); const left = before ? document(before, file) : null;
       label = `${right.title} (${file.split('/').pop()})`;
       equal = left?.content === right.content; localTime = left?.time ?? null; incomingTime = right.time;
     }
-    items.push({ key: file, kind: file.startsWith('documents/') ? 'document' : 'file',
+    items.push({ key: file, kind: isDocument ? 'document' : 'file',
       label, state: !before ? 'new' : equal ? 'same' : 'conflict', localTime, incomingTime, localText, incomingText });
   }
   const left = channels(local);
@@ -110,9 +125,9 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
     const before = localDeletions.get(id);
     const localDocument = local.get(documentPath(record));
     items.push({
-      key: `deletion:${id}`, kind: 'deletion', label: `刪除紀錄：${record.title}`,
+      key: `deletion:${id}`, kind: 'deletion', label: `刪除紀錄：${record.title}`, deletedOn: 'incoming',
       state: before ? 'same' : localDocument ? 'conflict' : 'new',
-      localTime: before?.deletedAt ?? (localDocument ? document(localDocument).time : null), incomingTime: record.deletedAt,
+      localTime: before?.deletedAt ?? (localDocument ? document(localDocument, documentPath(record)).time : null), incomingTime: record.deletedAt,
       localText: before ? deletionText(before) : view(localDocument), incomingText: deletionText(record),
     });
   }
@@ -121,8 +136,8 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
     const incomingDocument = incoming.get(documentPath(record));
     if (!incomingDocument) continue;
     items.push({
-      key: `deletion:${id}`, kind: 'deletion', label: `刪除紀錄：${record.title}`, state: 'conflict',
-      localTime: record.deletedAt, incomingTime: document(incomingDocument).time,
+      key: `deletion:${id}`, kind: 'deletion', label: `刪除紀錄：${record.title}`, deletedOn: 'local', state: 'conflict',
+      localTime: record.deletedAt, incomingTime: document(incomingDocument, documentPath(record)).time,
       localText: deletionText(record), incomingText: view(incomingDocument),
     });
   }
@@ -166,12 +181,40 @@ export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], ch
       }
       deletionsChanged = true;
     } else if (item.kind === 'channel') {
+      const id = item.key.slice('channel:'.length);
+      const before = rows.get(id);
       // An imported subscription is first checked one of its intervals after the merge, never at once.
-      rows.set(item.key.slice(8), { ...incomingRows.get(item.key.slice(8))!, nextCheckAt: null, lastDispatchedAt: null });
+      // A subscription both Vaults have keeps the local collection progress: it describes what this
+      // Vault already collected, while the imported choice covers the title, address, pause and settings.
+      rows.set(id, { ...incomingRows.get(id)!, ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
       channelsChanged = true;
     } else result.set(item.key, incoming.get(item.key)!);
   }
-  if (channelsChanged) result.set(CHANNELS_FILE, Buffer.from(JSON.stringify({ version: 2, channels: [...rows.values()] }, null, 2) + '\n'));
-  if (deletionsChanged) result.set(DELETIONS_FILE, Buffer.from(`${JSON.stringify(deletionsToJson([...records.values()]), null, 2)}\n`));
+  // Rewritten settings files keep the other top-level fields of the local file.
+  if (channelsChanged) {
+    result.set(CHANNELS_FILE, Buffer.from(JSON.stringify({ ...topLevel(local, CHANNELS_FILE), version: 2, channels: [...rows.values()] }, null, 2) + '\n'));
+  }
+  if (deletionsChanged) {
+    result.set(DELETIONS_FILE, Buffer.from(`${JSON.stringify({ ...topLevel(local, DELETIONS_FILE), ...deletionsToJson([...records.values()]) }, null, 2)}\n`));
+  }
   return new Map([...result].filter(([key, value]) => (value === null ? local.has(key) : !local.get(key)?.equals(value))));
+}
+
+/** The collection progress of a subscription, which a merge never replaces. */
+function collectionProgress(row: YouTubeChannel): Partial<YouTubeChannel> {
+  const { addedAt, cursor, lastCheckedAt, backlog } = row;
+  return {
+    addedAt,
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
+    ...(backlog !== undefined ? { backlog } : {}),
+  };
+}
+
+/** The top-level fields of a JSON settings file, or none when it is missing or not an object. */
+function topLevel(files: Files, file: string): Record<string, unknown> {
+  const bytes = files.get(file);
+  if (!bytes) return {};
+  const value = JSON.parse(bytes.toString()) as unknown;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }

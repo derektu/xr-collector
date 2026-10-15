@@ -118,6 +118,8 @@ export interface JobListQuery {
 }
 
 const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);
+/** How long a hold waits for running steps before giving up. */
+export const HOLD_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * Accepts collection work for one Vault, runs it in bounded queues and records every state change.
@@ -155,6 +157,8 @@ export class JobManager {
   /** Videos a channel job queued that the user then submitted directly; pausing never skips them. */
   private readonly manualClaims = new Set<string>();
   private closed = false;
+  /** Number of holds in force; while any is, no queued step starts. */
+  private holds = 0;
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
@@ -350,6 +354,44 @@ export class JobManager {
   /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
   recordEvent(entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, jobId: null });
+  }
+
+  /**
+   * Stops starting queued steps and resolves once the steps already running have finished, with a
+   * function that lifts the hold. Queued jobs keep their place and continue after the last hold is
+   * lifted. When the running steps take longer than `timeoutMs`, the hold is lifted and the call
+   * fails with `vault_busy`, so a caller never waits on a stuck step indefinitely.
+   */
+  async hold(timeoutMs = HOLD_TIMEOUT_MS): Promise<() => void> {
+    this.holds += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.holds -= 1;
+      if (this.holds === 0) this.pump();
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => resolve('expired'), timeoutMs); });
+    try {
+      while (this.running.size > 0) {
+        const outcome = await Promise.race([Promise.allSettled([...this.running]).then(() => 'settled' as const), expired]);
+        if (outcome === 'expired') {
+          release();
+          throw new CollectorError('vault_busy', `目前的收集步驟在 ${Math.round(timeoutMs / 60_000) || 1} 分鐘內沒有結束，請稍後再試。`);
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return release;
+  }
+
+  /** Number of top-level jobs that are queued, running or waiting for their videos. */
+  unfinishedCount(): number {
+    let count = 0;
+    for (const job of this.jobs.values()) if (job.parentId === null) count += 1;
+    return count;
   }
 
   /** True while any job of this Vault is queued, running or waiting for its videos. */
@@ -649,7 +691,7 @@ export class JobManager {
   }
 
   private pump(): void {
-    if (this.closed) return;
+    if (this.closed || this.holds > 0) return;
     while (this.runningDiscovery < this.limits.discovery && this.discoveryQueue.length > 0) {
       const id = this.discoveryQueue.shift()!;
       this.runningDiscovery += 1;

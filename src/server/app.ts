@@ -219,14 +219,21 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
     app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: PACKAGE_LIMIT }, (_request, body, done) => done(null, body));
     app.get('/api/vault/status', async () => transfer.status());
-    app.post('/api/vault/export', async (_request, reply) => {
+    // A JSON body names local files by absolute path; a byte body carries the package itself.
+    // JSON requests need a CORS preflight, which this server never grants, so only the app's own
+    // pages and authorized Agents can name files.
+    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', async (request, reply) => {
+      if (request.body && typeof request.body === 'object' && 'path' in request.body) {
+        return transfer.exportTo(request.body.path, request.body.overwrite === true);
+      }
       const buffer = await transfer.export();
       return reply.type('application/octet-stream')
         .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(buffer);
     });
-    app.post<{ Body: Buffer }>('/api/vault/merge/preview', { bodyLimit: PACKAGE_LIMIT }, async (request) => {
-      if (!Buffer.isBuffer(request.body)) throw new CollectorError('invalid_request', '請上傳 .xr-vault 資料包。');
-      return transfer.previewMerge(request.body);
+    app.post<{ Body: Buffer | { path?: unknown } }>('/api/vault/merge/preview', { bodyLimit: PACKAGE_LIMIT }, async (request) => {
+      if (Buffer.isBuffer(request.body)) return transfer.previewMerge(request.body);
+      if (request.body && typeof request.body === 'object' && 'path' in request.body) return transfer.previewMergeFrom(request.body.path);
+      throw new CollectorError('invalid_request', '請提供 .xr-vault 資料包或它的完整路徑。');
     });
     app.post<{ Body: { id: string; choices: Record<string, MergeChoice> } }>('/api/vault/merge/apply', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
       return reply.code(202).send(transfer.applyMerge(request.body?.id, request.body?.choices));
@@ -235,10 +242,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       transfer.cancelMerge(request.body?.id);
       return { cancelled: true };
     });
-    app.post<{ Body: Buffer }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
-      if (!Buffer.isBuffer(request.body)) throw new CollectorError('invalid_request', '請上傳 .xr-vault 資料包。');
-      const status = transfer.restore(request.body);
-      return reply.code(202).send(status);
+    app.get('/api/vault/restore/suggestion', async () => ({ path: await transfer.suggestRestoreFolder() }));
+    app.post<{ Body: Buffer | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
+      if (Buffer.isBuffer(request.body)) return reply.code(202).send(await transfer.restore(request.body));
+      if (request.body && typeof request.body === 'object' && 'packagePath' in request.body) {
+        return reply.code(202).send(await transfer.restoreFrom(request.body.packagePath, request.body.targetPath));
+      }
+      throw new CollectorError('invalid_request', '請提供 .xr-vault 資料包或它的完整路徑。');
     });
   }
 

@@ -204,6 +204,47 @@ dialog::backdrop { background:var(--overlay); }
 .settings-section .hint { color:var(--text-muted); font-size:12px; }
 .settings-section .button { margin-top:14px; }
 .setting-path { display:block; margin-top:10px; overflow-wrap:anywhere; color:var(--primary); font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
+
+/* Backup, merge and restore */
+.settings-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.settings-section .settings-line .button { margin-top:0; }
+.transfer-dialog[open] { display:flex; flex-direction:column; gap:4px; }
+.transfer-dialog.wide { width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 48px); }
+.transfer-dialog code { overflow-wrap:anywhere; font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
+.transfer-dialog .hint { color:var(--text-muted); font-size:12px; }
+.path-field { display:flex; flex:1; min-width:0; flex-direction:column; gap:6px; margin-top:14px; }
+.path-field .url-input { width:100%; font-family:"SFMono-Regular",Consolas,monospace; font-size:13px; }
+.field-hint { color:var(--text-muted); font-size:12px; }
+.path-row { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px; }
+.path-row .button { margin-bottom:22px; }
+.fact-list { margin:14px 0 0; padding:12px 14px 12px 30px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); color:var(--secondary); font-size:13px; line-height:1.7; }
+.transfer-progress { display:flex; align-items:center; gap:10px; }
+.confirm-dialog p.transfer-done { color:var(--ok); font-weight:600; }
+.merge-source { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; color:var(--primary)!important; }
+.confirm-dialog p.merge-counts { color:var(--primary); font-size:15px; font-weight:600; }
+.merge-bulk { display:flex; gap:8px; margin-top:12px; }
+.merge-groups { min-height:0; overflow:auto; margin-top:12px; padding-right:4px; }
+.merge-group + .merge-group { margin-top:14px; }
+.merge-group h3 { display:flex; align-items:baseline; gap:10px; margin:0 0 6px; font-size:14px; }
+.merge-group ul { margin:0; padding:0; list-style:none; }
+.merge-row { padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--card); }
+.merge-row + .merge-row { margin-top:8px; }
+.merge-row.conflict { border-color:color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.merge-row-main { display:flex; align-items:center; gap:8px; min-width:0; }
+.merge-name { min-width:0; overflow-wrap:anywhere; font-size:14px; font-weight:600; }
+.confirm-dialog .merge-row p { margin-top:6px; font-size:13px; }
+.merge-state { flex:none; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+.merge-state.new { color:var(--tracking-fg); background:var(--tracking-bg); }
+.merge-state.conflict { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
+.merge-choice { margin-top:10px; }
+.merge-diff-toggle { display:block; margin:10px 0 0; font-size:12px; }
+.merge-diff { max-height:260px; overflow:auto; margin:6px 0 0; padding:10px; border-radius:8px; background:var(--base); color:var(--text-body); font-size:12px; line-height:1.5; white-space:pre-wrap; }
+.diff-added { color:var(--tracking-fg); background:color-mix(in srgb, var(--ok) 14%, transparent); }
+.diff-removed { color:var(--error-fg); background:color-mix(in srgb, var(--error) 12%, transparent); }
+.merge-missing { margin-right:auto; align-self:center; }
+.restore-schedule { margin-top:12px; padding:12px 14px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); }
+.confirm-dialog .restore-schedule p { margin-top:0; }
+.restore-schedule .button { margin-top:10px; }
 .setting-card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .save-state { font-size:12px; font-weight:650; color:var(--secondary); }
 .save-state.saved { color:var(--ok); }

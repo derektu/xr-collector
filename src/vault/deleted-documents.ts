@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readJsonFile, writeJsonFile } from '../channels/json-file.js';
 import type { DocumentSourceType } from '../core/types.js';
+import { documentId, isSourceId, isSourceType } from './document-paths.js';
 
 /**
  * Vault file of deleted documents, relative to the Vault root. Each record keeps a source item from
@@ -13,7 +14,6 @@ import type { DocumentSourceType } from '../core/types.js';
  */
 export const DELETIONS_FILE = 'settings/deleted-documents.json';
 const DELETIONS_VERSION = 1;
-const SOURCE_TYPES: ReadonlySet<string> = new Set<DocumentSourceType>(['youtube']);
 
 export interface DeletionRecord {
   sourceType: DocumentSourceType;
@@ -35,7 +35,7 @@ export class InvalidDeletionsFile extends Error {}
 
 /** The document ID a record stands for. */
 export function deletionId(record: Pick<DeletionRecord, 'sourceType' | 'sourceId'>): string {
-  return `${record.sourceType}:${record.sourceId}`;
+  return documentId(record);
 }
 
 /**
@@ -121,8 +121,8 @@ export class DeletionLedger {
 function isRecord(value: unknown): value is DeletionRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<DeletionRecord>;
-  return typeof record.sourceType === 'string' && SOURCE_TYPES.has(record.sourceType)
-    && typeof record.sourceId === 'string' && /^[A-Za-z0-9_-]{11}$/u.test(record.sourceId)
+  return typeof record.sourceType === 'string' && isSourceType(record.sourceType)
+    && typeof record.sourceId === 'string' && isSourceId(record.sourceType, record.sourceId)
     && typeof record.sourceUrl === 'string'
     && typeof record.title === 'string'
     && (record.publisherId === null || typeof record.publisherId === 'string')
