@@ -220,9 +220,8 @@ dialog::backdrop { background:var(--overlay); }
 .status-light.error { background:var(--error); box-shadow:0 0 0 3px color-mix(in srgb, var(--error) 22%, transparent); }
 .index-problem { color:var(--warning)!important; }
 .segmented { display:inline-flex; margin-top:12px; padding:3px; border:1px solid var(--control-border); border-radius:9px; background:var(--base); }
-.segmented button { min-width:72px; height:30px; padding:0 14px; border:0; border-radius:7px; color:var(--secondary); background:transparent; font-size:13px; }
+.segmented button { min-width:72px; height:30px; padding:0 14px; white-space:nowrap; border:0; border-radius:7px; color:var(--secondary); background:transparent; font-size:13px; }
 .segmented button.active { color:var(--primary); background:var(--nav-active); font-weight:600; }
-.segmented button:disabled { cursor:wait; }
 
 /* Activity */
 .job-list ul { margin:0; padding:0; list-style:none; }

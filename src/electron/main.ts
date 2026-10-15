@@ -5,7 +5,7 @@ import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
-import { FileThemePreference, type StoredTheme } from './theme-preference.js';
+import { FileThemePreference, isStoredTheme } from './theme-preference.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
@@ -97,8 +97,8 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
   ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
-  ipcMain.handle('xrCollector:theme:write', (_event, theme: StoredTheme) => {
-    if (theme !== 'dark' && theme !== 'light') throw new Error('Unsupported theme preference');
+  ipcMain.handle('xrCollector:theme:write', (_event, theme: unknown) => {
+    if (!isStoredTheme(theme)) throw new Error('Unsupported theme preference');
     return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
   });
   const suggestedVaultPath = path.join(app.getPath('documents'), 'XR Collector');
