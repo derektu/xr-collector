@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapturedTranscript, TranscriptSearch } from '../../src/core/types.js';
-import { Collector } from '../../src/core/collector.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
@@ -103,7 +102,6 @@ describe('CollectorRuntime', () => {
     let release!: (capture: CapturedTranscript) => void;
     const waiting = new Promise<CapturedTranscript>((resolve) => { release = resolve; });
     const capture = vi.fn(async () => waiting);
-    const collectCalls = vi.spyOn(Collector.prototype, 'collect');
     const setup = await options({ capture });
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
@@ -126,30 +124,69 @@ describe('CollectorRuntime', () => {
       title: 'Disconnected client', channelId: null, channelTitle: 'Runtime', publishedAt: null,
       languageCode: 'en', languageName: 'English', subtitleKind: 'manual', bodyMarkdown: 'Completed after disconnect.',
     };
-    let uiCollection: Promise<Response> | null = null;
+    let jobId: string;
     try {
       await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
-      uiCollection = fetch(`${runtime.server.url}/api/youtube/collect`, {
+      await clientExited;
+      // The UI submission of the same video joins the Agent's job instead of capturing again.
+      const ui = await fetch(`${runtime.server.url}/api/youtube/collect`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: captured.sourceUrl }),
       });
-      await vi.waitFor(() => expect(collectCalls).toHaveBeenCalledTimes(2));
-      expect(capture).toHaveBeenCalledOnce();
-      await clientExited;
+      expect(ui.status).toBe(202);
+      const accepted = await ui.json() as { job: { id: string; state: string }; deduplicated: boolean };
+      expect(accepted).toMatchObject({ deduplicated: true, job: { state: 'running' } });
+      jobId = accepted.job.id;
     } finally {
       release(captured);
     }
-    expect((await uiCollection!).status).toBe(200);
-    expect(capture).toHaveBeenCalledOnce();
     await vi.waitFor(async () => {
-      const response = await fetch(`${connection.url}/api/documents`, { headers: { authorization: `Bearer ${connection.token}` } });
-      expect((await response.json()).documents).toHaveLength(1);
+      const response = await fetch(`${connection.url}/api/jobs/${jobId}`, { headers: { authorization: `Bearer ${connection.token}` } });
+      expect((await response.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'created', saved: true } });
     });
+    expect(capture).toHaveBeenCalledOnce();
+    const documents = await fetch(`${connection.url}/api/documents`, { headers: { authorization: `Bearer ${connection.token}` } });
+    expect((await documents.json()).documents).toHaveLength(1);
 
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(200);
     await runtime.close();
     expect(runtime.status().state).toBe('stopped');
     expect(setup.closeSearch).toHaveBeenCalledOnce();
+  });
+
+  it('waits for running captures on close and shows queued work as interrupted after restart', async () => {
+    const releases: Array<() => void> = [];
+    const capture = vi.fn(async (video: { videoId: string; canonicalUrl: string }) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return {
+        videoId: video.videoId, sourceUrl: video.canonicalUrl, title: `Video ${video.videoId}`, channelId: null,
+        channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
+        subtitleKind: 'manual' as const, bodyMarkdown: 'Body.',
+      };
+    });
+    const setup = await options({ capture });
+    const first = await CollectorRuntime.start(setup.value);
+    const submit = async (id: string) => (await (await fetch(`${first.server.url}/api/youtube/submissions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${id}` }),
+    })).json()).job.id as string;
+    const ids = [await submit('restart0001'), await submit('restart0002'), await submit('restart0003')];
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+
+    const closing = first.close();
+    for (const release of releases) release();
+    await closing;
+    expect(capture).toHaveBeenCalledTimes(2);
+
+    const second = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => second.close());
+    const page = await (await fetch(`${second.server.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
+    expect(Object.fromEntries(page.jobs.map((job) => [job.id, job.state]))).toEqual({
+      [ids[0]!]: 'completed', [ids[1]!]: 'completed', [ids[2]!]: 'interrupted',
+    });
+    expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(2);
+    const events = await readFile(path.join(setup.value.profilePath, 'jobs', 'events.jsonl'), 'utf8');
+    expect(events).toContain('"eventType":"job.interrupted"');
   });
 
   it('closes the workspace when a later listener fails to start', async () => {
@@ -199,7 +236,11 @@ describe('CollectorRuntime', () => {
     const added = await agent('/api/youtube/channels', {
       method: 'POST', body: JSON.stringify({ url: 'https://www.youtube.com/@runtime' }),
     });
-    expect(added.status).toBe(200);
+    expect(added.status).toBe(202);
+    const addJob = (await added.json()).job.id as string;
+    await vi.waitFor(async () => {
+      expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { channelId: 'UC-runtime' } });
+    });
     expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels).toMatchObject([
       { id: 'UC-runtime', enabled: true },
     ]);
@@ -213,10 +254,10 @@ describe('CollectorRuntime', () => {
       method: 'POST', body: JSON.stringify({ channelIds: ['UC-runtime'] }),
     });
     expect(run.status).toBe(202);
-    const runId = (await run.json()).run.id as string;
+    const runId = (await run.json()).submissions[0].job.id as string;
     await vi.waitFor(async () => {
-      const current = await agent(`/api/youtube/channel-runs/${encodeURIComponent(runId)}`);
-      expect((await current.json()).run.status).toBe('completed');
+      const current = await agent(`/api/jobs/${encodeURIComponent(runId)}`);
+      expect((await current.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
     });
     expect((await agent('/api/youtube/channels/UC-runtime', { method: 'DELETE' })).status).toBe(200);
     expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels).toEqual([]);
@@ -316,7 +357,11 @@ describe('CollectorRuntime Vault setup', () => {
     const added = await fetch(`${runtime.server.url}/api/youtube/channels`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://www.youtube.com/@runtime' }),
     });
-    expect(added.status).toBe(200);
+    expect(added.status).toBe(202);
+    const addJob = (await added.json()).job.id as string;
+    await vi.waitFor(async () => {
+      expect((await (await fetch(`${runtime.server.url}/api/jobs/${addJob}`)).json()).job.state).toBe('completed');
+    });
     await runtime.close();
 
     const restarted = await CollectorRuntime.start(setup.value);

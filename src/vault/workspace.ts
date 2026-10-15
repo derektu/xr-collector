@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { Collector, type YouTubeCapture } from '../core/collector.js';
+import { Collector } from '../core/collector.js';
 import { CollectorError, type MergePreview, type MergeChoice, type TransferStatus, type TranscriptSearch } from '../core/types.js';
-import { ChannelCollector, type YouTubeChannelSource } from '../channels/channel-collector.js';
+import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
+import { JobManager, type JobLimits } from '../jobs/job-manager.js';
+import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
+import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { compareFiles, fingerprint, packageFiles, mergeFiles } from './vault-merge.js';
 import { exportVault, unpackVault, safePath } from './vault-package.js';
@@ -18,6 +21,7 @@ interface Bundle {
   root: string;
   collector: Collector;
   channels: ChannelCollector;
+  jobs: JobManager;
   schedule: ChannelScheduler;
   runtime: SearchRuntime;
 }
@@ -34,6 +38,9 @@ export interface WorkspaceOptions {
   searchData: string;
   searchPort?: number;
   createSearch?: (root: string) => Promise<SearchRuntime>;
+  /** Device record of collection jobs; defaults to an in-memory store. */
+  jobStore?: JobStore;
+  jobLimits?: Partial<JobLimits>;
 }
 
 /** Service references stay stable for both UI and Agent while the active vault changes. */
@@ -59,12 +66,15 @@ export class VaultWorkspace {
   };
   readonly collector = forwarding(() => this.current.collector);
   readonly channels = forwarding(() => this.current.channels);
+  readonly jobs = forwarding(() => this.current.jobs);
   readonly schedule = forwarding(() => this.current.schedule);
   readonly search = forwarding<TranscriptSearch>(() => this.current.runtime.search);
   private readonly restoreParent: string;
+  private readonly jobStore: JobStore;
 
   private constructor(private readonly options: WorkspaceOptions) {
     this.restoreParent = `${options.root}.restored`;
+    this.jobStore = options.jobStore ?? JobStore.memory();
   }
 
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
@@ -100,8 +110,7 @@ export class VaultWorkspace {
   }
 
   private begin(state: 'exporting' | 'validating'): void {
-    if (this.locked || this.requests || this.current.collector.isBusy()
-      || this.current.channels.isBusy() || this.current.schedule.isBusy()) {
+    if (this.locked || this.requests || this.current.jobs.isBusy() || this.current.schedule.isBusy()) {
       throw new CollectorError('vault_busy', '請等待目前的收集或設定操作完成，再匯出或還原。');
     }
     this.locked = true;
@@ -153,6 +162,7 @@ export class VaultWorkspace {
       destination = null;
       await this.current.schedule.start();
       await previous.schedule.close();
+      await previous.jobs.close();
       await previous.runtime.close().catch((error: unknown) => console.error('Previous search shutdown failed', error));
       this.statusValue = { ...this.statusValue, state: 'completed', message: '已切換到還原的獨立 vault。排程已暫停。' };
     } catch (error) {
@@ -161,6 +171,7 @@ export class VaultWorkspace {
       try {
         if (candidate) {
           await candidate.schedule.close();
+          await candidate.jobs.close();
           await candidate.runtime.close();
         }
         if (destination) {
@@ -332,18 +343,27 @@ export class VaultWorkspace {
       vault, binaryPath: this.options.searchBinary, databasePath: this.searchPath(root),
       ...(port ? { port } : {}),
     });
-    const collector = new Collector(this.options.capture, vault, runtime.search);
-    const channels = new ChannelCollector(this.options.channelSource, new JsonChannelStore(root), collector);
+    const collector = new Collector(vault, runtime.search);
+    const channelStore = new JsonChannelStore(root);
+    // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
+    const jobs = new JobManager({
+      vaultPath: root,
+      store: this.jobStore,
+      source: youtubeSource(this.options.capture, this.options.channelSource),
+      documents: collector,
+      channels: channelStore,
+      ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
+    });
+    const channels = new ChannelCollector(channelStore, jobs);
     const schedule = new ChannelScheduler(channels, new JsonChannelScheduleStore(root));
-    return { root, runtime, collector, channels, schedule };
+    return { root, runtime, collector, channels, jobs, schedule };
   }
 
   async close(): Promise<void> {
     await this.operation;
     const drained = await Promise.allSettled([
       this.current.schedule.close(),
-      this.current.channels.whenIdle(),
-      this.current.collector.whenIdle(),
+      this.current.jobs.close(),
     ]);
     const search = await Promise.allSettled([this.current.runtime.close()]);
     const failed = [...drained, ...search].find((result): result is PromiseRejectedResult => result.status === 'rejected');

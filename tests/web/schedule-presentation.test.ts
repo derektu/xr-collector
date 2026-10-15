@@ -3,7 +3,7 @@ import { scheduleTimingLabels } from '../../src/web/schedule-presentation.js';
 import type { ChannelSchedule } from '../../src/core/types.js';
 
 describe('scheduleTimingLabels', () => {
-  it('distinguishes the current run start from the previous completion', () => {
+  it('distinguishes the current dispatch from the previous completion', () => {
     const schedule: ChannelSchedule = {
       enabled: true,
       intervalMinutes: 1,
@@ -15,9 +15,10 @@ describe('scheduleTimingLabels', () => {
     };
 
     expect(scheduleTimingLabels(schedule)).toEqual({
-      startLabel: '本次開始',
+      startLabel: '本次派工',
       completionLabel: '前次完成',
-      nextRunLabel: '本次完成 1 分鐘後',
+      nextRunLabel: '尚無',
     });
+    expect(scheduleTimingLabels({ ...schedule, status: 'paused', enabled: false }).nextRunLabel).toBe('已暫停');
   });
 });

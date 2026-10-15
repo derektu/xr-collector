@@ -70,40 +70,102 @@ export interface YouTubeChannel {
   addedAt: string;
 }
 
-export interface AddChannelResult {
-  status: 'created' | 'existing';
-  channel: YouTubeChannel;
+export type JobKind = 'youtube.video' | 'youtube.channel' | 'youtube.channel-add';
+export type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted';
+export type JobPhase = 'resolve' | 'discover' | 'capture' | 'save' | 'index';
+/** What a finished job produced; `empty` is a channel whose discovery found nothing to collect. */
+export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty';
+
+export interface JobError {
+  code: string;
+  message: string;
 }
 
-export interface ChannelRunResult {
-  channelId: string;
-  channelTitle: string;
-  videoId: string | null;
-  videoTitle: string;
+/** One discovered video of a channel job and the video job that collects it. */
+export interface JobItem {
+  sourceId: string;
+  title: string;
   url: string;
-  status: 'created' | 'existing' | 'failed';
-  error?: {
-    code: string;
-    message: string;
-  };
+  jobId: string | null;
+  state: JobState;
+  outcome: 'created' | 'existing' | null;
+  error: JobError | null;
 }
 
-export interface ChannelRun {
-  id: string;
-  status: 'queued' | 'running' | 'completed';
-  channelIds: string[];
-  currentChannelId: string | null;
-  totalVideos: number;
-  processedVideos: number;
+export interface JobProgress {
+  total: number;
+  done: number;
   created: number;
   existing: number;
   failed: number;
-  results: ChannelRunResult[];
-  startedAt: string;
-  completedAt: string | null;
 }
 
-export type ChannelScheduleStatus = 'paused' | 'scheduled' | 'running' | 'waiting_for_run';
+export interface JobResult {
+  outcome: JobOutcome;
+  documentId?: string;
+  /** The document is stored in the Vault. */
+  saved?: boolean;
+  /** The search projection includes the saved document. */
+  indexed?: boolean;
+  indexMessage?: string;
+  channelId?: string;
+  /** The channel collection job a channel-add job started. */
+  followUpJobId?: string;
+}
+
+/** A durable unit of collection work bound to the Vault it was submitted for. */
+export interface CollectionJob {
+  id: string;
+  kind: JobKind;
+  state: JobState;
+  phase: JobPhase | null;
+  vaultPath: string;
+  parentId: string | null;
+  source: {
+    type: 'youtube';
+    /** Video ID or channel ID; null until a channel URL has been resolved. */
+    id: string | null;
+    url: string;
+    title: string | null;
+  };
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+  progress: JobProgress | null;
+  items: JobItem[] | null;
+  result: JobResult | null;
+  error: JobError | null;
+}
+
+export interface JobSubmission {
+  job: CollectionJob;
+  /** True when an active job for the same item already existed and was returned instead. */
+  deduplicated: boolean;
+}
+
+export interface JobPage {
+  jobs: CollectionJob[];
+  nextCursor: string | null;
+}
+
+/** Minimal durable timeline entry that the Activity view reads later. */
+export interface JobEvent {
+  eventId: string;
+  timestamp: string;
+  severity: 'info' | 'warning' | 'error';
+  eventType: string;
+  message: string;
+  vaultPath: string | null;
+  jobId: string | null;
+  phase?: JobPhase;
+  outcome?: JobOutcome;
+  errorCode?: string;
+  documentId?: string;
+  sourceId?: string;
+}
+
+export type ChannelScheduleStatus = 'paused' | 'scheduled' | 'running';
 
 export interface ChannelScheduleLastResult {
   runId: string | null;
@@ -138,12 +200,6 @@ export interface TranscriptSearch {
   rebuild(): Promise<void>;
 }
 
-export interface CollectResult {
-  status: 'created' | 'existing';
-  document: SavedDocument;
-  searchStatus: SearchStatus;
-}
-
 export type CollectorErrorCode =
   | 'vault_busy'
   | 'vault_not_ready'
@@ -158,7 +214,9 @@ export type CollectorErrorCode =
   | 'document_not_found'
   | 'search_unavailable'
   | 'channel_not_found'
-  | 'channel_run_not_found'
+  | 'job_not_found'
+  | 'unsupported_url'
+  | 'queue_full'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */

@@ -9,9 +9,10 @@ import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import {
   CollectorError,
-  type AddChannelResult,
+  type CollectionJob,
+  type JobPage,
+  type JobSubmission,
   type MergeChoice,
-  type ChannelRun,
   type ChannelSchedule,
   type TranscriptSearch,
   type VaultInspection,
@@ -23,11 +24,18 @@ import {
 
 export interface ChannelCollection {
   listChannels(): Promise<YouTubeChannel[]>;
-  addChannel(url: string): Promise<AddChannelResult>;
+  addChannel(url: string): Promise<JobSubmission>;
   setChannelEnabled(id: string, enabled: boolean): Promise<YouTubeChannel>;
   removeChannel(id: string): Promise<void>;
-  startRun(channelIds?: string[]): Promise<ChannelRun>;
-  getRun(id: string): ChannelRun;
+  startRun(channelIds?: string[]): Promise<JobSubmission[]>;
+}
+
+/** Accepts collection work and answers job queries for the active Vault. */
+export interface CollectionJobs {
+  submit(url: string): Promise<JobSubmission>;
+  submitVideo(url: string): Promise<JobSubmission>;
+  get(id: string): CollectionJob;
+  list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
 }
 
 export interface ChannelScheduleManagement {
@@ -47,6 +55,7 @@ const NOT_READY_ROUTES = new Set(['/api/health', '/api/agent/connection', '/api/
 
 export interface HttpAppOptions {
   collector?: Collector;
+  jobs?: CollectionJobs;
   transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
@@ -77,7 +86,9 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   document_not_found: 404,
   search_unavailable: 503,
   channel_not_found: 404,
-  channel_run_not_found: 404,
+  job_not_found: 404,
+  unsupported_url: 400,
+  queue_full: 503,
   no_subtitles: 422,
   video_unavailable: 422,
   capture_failed: 502,
@@ -154,6 +165,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('preHandler', async (request) => {
       if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/api/')
         && request.routeOptions.url !== '/api/vault/status'
+        // Job state is device data and stays readable while a merge holds the Vault.
+        && !request.routeOptions.url?.startsWith('/api/jobs')
         && !NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) transfer.assertReadable();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
         && !request.routeOptions.url?.startsWith('/api/vault/')) {
@@ -300,12 +313,38 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     document: await options.collector!.read(request.params.id),
   }));
 
-  app.post<{ Body: { url?: unknown } }>('/api/youtube/collect', async (request) => {
-    if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-      throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址。');
-    }
-    return options.collector!.collect(request.body.url);
-  });
+  if (options.jobs) {
+    const jobs = options.jobs;
+    app.post<{ Body: { url?: unknown } }>('/api/youtube/submissions', async (request, reply) => {
+      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+        throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址、頻道網址或 @handle。');
+      }
+      return reply.code(202).send(await jobs.submit(request.body.url));
+    });
+
+    app.post<{ Body: { url?: unknown } }>('/api/youtube/collect', async (request, reply) => {
+      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+        throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址。');
+      }
+      return reply.code(202).send(await jobs.submitVideo(request.body.url));
+    });
+
+    app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', async (request) => {
+      const { state, cursor } = request.query;
+      if (state !== undefined && state !== 'active' && state !== 'all') {
+        throw new CollectorError('invalid_request', 'state 只能是 active 或 all。');
+      }
+      if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length === 0 || cursor.length > 100)) {
+        throw new CollectorError('invalid_request', '分頁位置無效。');
+      }
+      const { limit } = pagination({ limit: request.query.limit ?? '20' });
+      return jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
+    });
+
+    app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request) => ({
+      job: jobs.get(request.params.id),
+    }));
+  }
 
   if (options.schedule) {
     const schedule = options.schedule;
@@ -340,11 +379,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       channels: await channels.listChannels(),
     }));
 
-    app.post<{ Body: { url?: unknown } }>('/api/youtube/channels', async (request) => {
+    app.post<{ Body: { url?: unknown } }>('/api/youtube/channels', async (request, reply) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
       }
-      return channels.addChannel(request.body.url);
+      return reply.code(202).send(await channels.addChannel(request.body.url));
     });
 
     app.patch<{
@@ -374,14 +413,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       ) {
         throw new CollectorError('invalid_request', '頻道執行範圍無效。');
       }
-      const run = await channels.startRun(channelIds as string[] | undefined);
-      void reply.code(202);
-      return { run };
+      const submissions = await channels.startRun(channelIds as string[] | undefined);
+      return reply.code(202).send({ submissions });
     });
-
-    app.get<{ Params: { id: string } }>('/api/youtube/channel-runs/:id', async (request) => ({
-      run: channels.getRun(request.params.id),
-    }));
   }
 
   if (options.webRoot && existsSync(options.webRoot)) {

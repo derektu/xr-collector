@@ -9,7 +9,7 @@ import {
   type CapturedTranscript,
   type YouTubeVideoRef,
 } from '../core/types.js';
-import type { YouTubeCapture } from '../core/collector.js';
+import type { YouTubeCapture } from '../sources/youtube/adapter.js';
 
 interface YtDlpFormat {
   name?: string;

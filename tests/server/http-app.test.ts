@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Collector, type DocumentVault, type YouTubeCapture } from '../../src/core/collector.js';
-import { CollectorError, type CapturedTranscript, type SavedDocument } from '../../src/core/types.js';
+import type { FastifyInstance } from 'fastify';
+import { Collector, type DocumentVault } from '../../src/core/collector.js';
+import { CollectorError, type CapturedTranscript, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
+import { JobManager } from '../../src/jobs/job-manager.js';
+import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 
 const captured: CapturedTranscript = {
@@ -16,14 +19,13 @@ const captured: CapturedTranscript = {
   bodyMarkdown: '內容',
 };
 
-function makeCollector(captureFailure?: CollectorError): Collector {
+function makeCollector(): Collector {
+  return makeServices().collector;
+}
+
+/** Real job manager over an in-memory Vault; capture fails with the given error when supplied. */
+function makeServices(captureFailure?: CollectorError, captureGate?: Promise<void>): { collector: Collector; jobs: JobManager } {
   let saved: SavedDocument | null = null;
-  const capture: YouTubeCapture = {
-    capture: async () => {
-      if (captureFailure) throw captureFailure;
-      return captured;
-    },
-  };
   const vault: DocumentVault = {
     getBySourceId: async () => saved,
     add: async (input) => {
@@ -47,7 +49,31 @@ function makeCollector(captureFailure?: CollectorError): Collector {
     list: async () => [],
     read: async () => saved,
   };
-  return new Collector(capture, vault);
+  const collector = new Collector(vault, { index: async () => undefined });
+  const jobs = new JobManager({
+    vaultPath: '/vault',
+    store: JobStore.memory(),
+    source: {
+      resolveChannel: async () => ({ id: 'UC-http', title: 'HTTP 頻道', url: 'https://www.youtube.com/channel/UC-http/videos' }),
+      discover: async () => [],
+      capture: async () => {
+        await captureGate;
+        if (captureFailure) throw captureFailure;
+        return captured;
+      },
+    },
+    documents: collector,
+    channels: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null },
+  });
+  return { collector, jobs };
+}
+
+async function settledJob(app: FastifyInstance, id: string) {
+  let job: CollectionJob;
+  do {
+    job = (await app.inject({ method: 'GET', url: `/api/jobs/${id}` })).json().job;
+  } while (job.state === 'queued' || job.state === 'running');
+  return job;
 }
 
 describe('HTTP app', () => {
@@ -115,12 +141,18 @@ describe('HTTP app', () => {
       startedAt: '2026-09-17T00:00:00.000Z',
       completedAt: null,
     };
+    const job = (id: string): CollectionJob => ({
+      id, kind: 'youtube.channel', state: 'queued', phase: null, vaultPath: '/vault', parentId: null,
+      source: { type: 'youtube', id: savedChannel.id, url: savedChannel.url, title: savedChannel.title },
+      createdAt: '2026-09-17T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-09-17T00:00:00.000Z',
+      progress: null, items: null, result: null, error: null,
+    });
     const calls: unknown[] = [];
     const channels = {
       listChannels: async () => [savedChannel],
       addChannel: async (url: string) => {
         calls.push(['add', url]);
-        return { status: 'created' as const, channel: savedChannel };
+        return { job: { ...job('add-1'), kind: 'youtube.channel-add' as const }, deduplicated: false };
       },
       setChannelEnabled: async (id: string, enabled: boolean) => {
         calls.push(['enabled', id, enabled]);
@@ -131,11 +163,7 @@ describe('HTTP app', () => {
       },
       startRun: async (ids?: string[]) => {
         calls.push(['run', ids]);
-        return run;
-      },
-      getRun: (id: string) => {
-        calls.push(['getRun', id]);
-        return run;
+        return [{ job: job('run-1'), deduplicated: false }];
       },
     };
     const app = await createHttpApp({ collector: makeCollector(), channels });
@@ -159,28 +187,22 @@ describe('HTTP app', () => {
       url: '/api/youtube/channel-runs',
       payload: { channelIds: [savedChannel.id] },
     });
-    const progress = await app.inject({
-      method: 'GET',
-      url: '/api/youtube/channel-runs/run-1',
-    });
     const removed = await app.inject({
       method: 'DELETE',
       url: `/api/youtube/channels/${savedChannel.id}`,
     });
 
-    expect(added.statusCode).toBe(200);
-    expect(added.json()).toMatchObject({ status: 'created', channel: { id: savedChannel.id } });
+    expect(added.statusCode).toBe(202);
+    expect(added.json()).toMatchObject({ deduplicated: false, job: { id: 'add-1', kind: 'youtube.channel-add' } });
     expect(listed.json()).toEqual({ channels: [savedChannel] });
     expect(disabled.json()).toMatchObject({ channel: { id: savedChannel.id, enabled: false } });
     expect(started.statusCode).toBe(202);
-    expect(started.json()).toMatchObject({ run: { id: 'run-1', status: 'running' } });
-    expect(progress.json()).toMatchObject({ run: { processedVideos: 1, totalVideos: 2 } });
+    expect(started.json()).toMatchObject({ submissions: [{ deduplicated: false, job: { id: 'run-1', state: 'queued' } }] });
     expect(removed.json()).toEqual({ removed: true });
     expect(calls).toEqual([
       ['add', 'https://www.youtube.com/@channel-one'],
       ['enabled', savedChannel.id, false],
       ['run', [savedChannel.id]],
-      ['getRun', 'run-1'],
       ['remove', savedChannel.id],
     ]);
     await app.close();
@@ -262,49 +284,86 @@ describe('HTTP app', () => {
     await app.close();
   });
 
-  it('collects a video through the public HTTP interface', async () => {
-    const app = await createHttpApp({ collector: makeCollector() });
+  it('accepts a video with 202 and exposes its progress through the jobs API', async () => {
+    const { collector, jobs } = makeServices();
+    const app = await createHttpApp({ collector, jobs });
     const response = await app.inject({
       method: 'POST',
       url: '/api/youtube/collect',
       payload: { url: captured.sourceUrl },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      status: 'created',
-      document: { id: 'youtube:dQw4w9WgXcQ', title: 'HTTP 測試' },
+    expect(response.statusCode).toBe(202);
+    const { job } = response.json() as { job: CollectionJob };
+    expect(job).toMatchObject({ kind: 'youtube.video', state: 'queued', source: { id: 'dQw4w9WgXcQ' } });
+    expect(await settledJob(app, job.id)).toMatchObject({
+      state: 'completed',
+      result: { outcome: 'created', documentId: 'youtube:dQw4w9WgXcQ', saved: true, indexed: true },
     });
+    expect((await app.inject({ method: 'GET', url: '/api/jobs?state=all&limit=5' })).json()).toMatchObject({
+      jobs: [{ id: job.id }], nextCursor: null,
+    });
+    await jobs.close();
     await app.close();
   });
 
-  it('returns a stable error code when no subtitles exist', async () => {
-    const app = await createHttpApp({
-      collector: makeCollector(new CollectorError('no_subtitles', '沒有字幕')),
-    });
+  it('classifies a pasted address into a video or channel job', async () => {
+    let release!: () => void;
+    const { collector, jobs } = makeServices(undefined, new Promise<void>((resolve) => { release = resolve; }));
+    const app = await createHttpApp({ collector, jobs });
+    const submit = (url: string) => app.inject({ method: 'POST', url: '/api/youtube/submissions', payload: { url } });
+
+    const video = await submit('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123');
+    const repeated = await submit('https://youtu.be/dQw4w9WgXcQ');
+    const channel = await submit('@http-channel');
+    const playlist = await submit('https://www.youtube.com/playlist?list=PL123');
+
+    expect(video.statusCode).toBe(202);
+    expect(video.json()).toMatchObject({ deduplicated: false, job: { kind: 'youtube.video' } });
+    expect(repeated.json()).toMatchObject({ deduplicated: true, job: { id: video.json().job.id } });
+    expect(channel.json()).toMatchObject({ job: { kind: 'youtube.channel-add', source: { url: 'https://www.youtube.com/@http-channel' } } });
+    expect(playlist.statusCode).toBe(400);
+    expect(playlist.json().error.code).toBe('unsupported_url');
+    release();
+    await settledJob(app, video.json().job.id);
+    await settledJob(app, channel.json().job.id);
+    await jobs.close();
+    await app.close();
+  });
+
+  it('reports a capture failure on the job with a stable error code', async () => {
+    const { collector, jobs } = makeServices(new CollectorError('no_subtitles', '沒有字幕'));
+    const app = await createHttpApp({ collector, jobs });
     const response = await app.inject({
       method: 'POST',
       url: '/api/youtube/collect',
       payload: { url: captured.sourceUrl },
     });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toEqual({
+    expect(response.statusCode).toBe(202);
+    expect(await settledJob(app, response.json().job.id)).toMatchObject({
+      state: 'failed',
       error: { code: 'no_subtitles', message: '沒有字幕' },
     });
+    await jobs.close();
     await app.close();
   });
 
-  it('rejects malformed requests without invoking collection', async () => {
-    const app = await createHttpApp({ collector: makeCollector() });
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/youtube/collect',
-      payload: {},
-    });
+  it('rejects malformed requests without accepting a job', async () => {
+    const { collector, jobs } = makeServices();
+    const app = await createHttpApp({ collector, jobs });
+    const empty = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: {} });
+    const channelAsVideo = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: '@channel' } });
+    const badState = await app.inject({ method: 'GET', url: '/api/jobs?state=done' });
+    const missing = await app.inject({ method: 'GET', url: '/api/jobs/unknown' });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error.code).toBe('invalid_request');
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json().error.code).toBe('invalid_request');
+    expect(channelAsVideo.json().error.code).toBe('invalid_url');
+    expect(badState.statusCode).toBe(400);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().error.code).toBe('job_not_found');
+    expect(jobs.list().jobs).toEqual([]);
     await app.close();
   });
 });

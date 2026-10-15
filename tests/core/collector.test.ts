@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Collector, type DocumentVault, type YouTubeCapture } from '../../src/core/collector.js';
+import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type {
   CapturedTranscript,
   DocumentSummary,
   SavedDocument,
-  YouTubeVideoRef,
 } from '../../src/core/types.js';
 
 const captureResult: CapturedTranscript = {
@@ -58,69 +57,28 @@ class MemoryVault implements DocumentVault {
 describe('Collector', () => {
   it('keeps a newly saved document when its search-index update fails', async () => {
     const vault = new MemoryVault();
-    const capture: YouTubeCapture = {
-      capture: async () => captureResult,
-    };
     let indexAttempted = false;
-    const search = {
-      status: () => ({
-        state: indexAttempted ? 'error' as const : 'ready' as const,
-        indexedDocuments: 0,
-        ...(indexAttempted ? { message: '無法更新搜尋索引。' } : {}),
-      }),
+    const collector = new Collector(vault, {
       index: async () => {
         indexAttempted = true;
         throw new Error('index unavailable');
       },
-    };
-    const collector = new Collector(capture, vault, search);
+    });
 
-    const result = await collector.collect(captureResult.sourceUrl);
+    const document = await collector.save(captureResult);
+    const outcome = await collector.index(document);
 
     expect(indexAttempted).toBe(true);
-    expect(vault.document?.title).toBe('測試影片');
-    expect(result.document.id).toBe('youtube:dQw4w9WgXcQ');
-    expect(result.searchStatus).toEqual({
-      state: 'error',
-      indexedDocuments: 0,
-      message: '無法更新搜尋索引。',
-    });
+    expect(outcome).toEqual({ indexed: false, message: expect.any(String) });
+    expect(await collector.read('youtube:dQw4w9WgXcQ')).toMatchObject({ title: '測試影片' });
   });
 
-  it('returns the existing document without calling YouTube again', async () => {
+  it('finds an existing document by its YouTube ID', async () => {
     const vault = new MemoryVault();
-    await vault.add(captureResult);
-    const capture: YouTubeCapture = {
-      capture: async () => {
-        throw new Error('capture must not run');
-      },
-    };
-    const collector = new Collector(capture, vault);
-
-    const result = await collector.collect(captureResult.sourceUrl);
-
-    expect(result.status).toBe('existing');
-    expect(result.document.id).toBe('youtube:dQw4w9WgXcQ');
-  });
-
-  it('coalesces concurrent collection of the same video', async () => {
-    const vault = new MemoryVault();
-    let captureCount = 0;
-    const capture: YouTubeCapture = {
-      async capture(_video: YouTubeVideoRef) {
-        captureCount += 1;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return captureResult;
-      },
-    };
-    const collector = new Collector(capture, vault);
-
-    const [first, second] = await Promise.all([
-      collector.collect(captureResult.sourceUrl),
-      collector.collect(captureResult.sourceUrl),
-    ]);
-
-    expect(captureCount).toBe(1);
-    expect(first.document.id).toBe(second.document.id);
+    const collector = new Collector(vault, { index: async () => undefined });
+    expect(await collector.findExisting('dQw4w9WgXcQ')).toBeNull();
+    const document = await collector.save(captureResult);
+    expect(await collector.findExisting('dQw4w9WgXcQ')).toEqual(document);
+    expect(await collector.index(document)).toEqual({ indexed: true });
   });
 });

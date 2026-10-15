@@ -17,6 +17,8 @@
   "include": [
     "src/core/**/*.ts",
     "src/channels/**/*.ts",
+    "src/jobs/**/*.ts",
+    "src/sources/**/*.ts",
     "src/capture/**/*.ts",
     "src/vault/**/*.ts",
     "src/server/**/*.ts",

@@ -8,6 +8,7 @@ export const AGENT_CONNECTION_SCHEMA_VERSION = 1;
 /** A separate authenticated listener exposes the same business services as the UI listener. */
 export async function startAgentAccess(options: {
   collector?: StartServerOptions['collector'];
+  jobs?: StartServerOptions['jobs'];
   transfer?: StartServerOptions['transfer'];
   channels?: StartServerOptions['channels'];
   schedule?: StartServerOptions['schedule'];
@@ -23,6 +24,7 @@ export async function startAgentAccess(options: {
   const token = randomBytes(32).toString('hex');
   const server = await startServer({
     ...(options.collector ? { collector: options.collector } : {}),
+    ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.channels ? { channels: options.channels } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
