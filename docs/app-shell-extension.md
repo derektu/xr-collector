@@ -1,23 +1,26 @@
 # App Shell extension points
 
-The App Shell owns the four stable top-level routes and the shared presentation surface. It does not own collection, document, Vault, job, search, or activity behaviour. Those tickets attach a page component or source capability without changing navigation.
+The App Shell owns the four top-level pages (來源, 文件, 活動, 設定), the sidebar with the 加入內容 button and the background status, and the shared presentation surface. It does not own collection, document, Vault, job, search, or activity behaviour. Those tickets attach a page component or a source type without changing navigation.
 
-## Add a source
+## Add a source type
 
-1. Add a `SourceDefinition` with its `view` copy to `sourceRegistry` in `src/web/app-shell.ts`. The registry provides the source card and resolves its own source view through `open(id)`.
-2. Use `availability: 'planned'` until the source has a delivered capability. The page labels planned sources as unavailable and provides no successful-looking action.
-3. Register test fixtures with `availability: 'test-only'`. They remain available to direct registry tests but are excluded from `publicSources()` and the product UI.
-4. Put the actual source operation behind the existing shared HTTP API. The Shell is deliberately not an Electron IPC business boundary.
+A source type is declared on the server, so the UI and Agents read the same description and use the same URL recognition.
+
+1. Add a `SourceTypeDeclaration` to `SOURCE_TYPES` in `src/sources/source-types.ts`. Its public part (`id`, `label`, `icon`, `kinds`, `requiresLogin`, `settings`) is served by `GET /api/source-types`; the UI builds the type chips, row icons, type labels and recognition card titles from it.
+2. Implement `owns(input, url)` and `recognize(input, context)`. `recognize` returns a `UrlRecognition` whose `actions` carry the HTTP `request` to perform. The Add Content dialog and Agents replay that request as given, so a new type needs no UI branch for its URL kinds.
+3. A type with `requiresLogin: true` is answered with `status: 'login_required'` before `recognize` runs.
+4. Put the actual collection behind the shared HTTP API. `SourceCatalog` (`src/sources/source-catalog.ts`) serves `GET /api/sources` and `GET /api/sources/:type/:id` from the YouTube channel subscriptions; a type with subscriptions of its own adds them there. The Shell is deliberately not an Electron IPC business boundary.
+5. Give the type an icon in `src/web/icons.tsx` under the declared `icon` key.
 
 ## Add a page
 
-`src/web/App.tsx` maps a `ShellPage` to its path, navigation label, title and page component. A new top-level page changes those mappings together. Each page heading receives focus after route changes so keyboard navigation has a stable destination.
+`src/web/app-shell.ts` maps each `ShellPage` to its path, and `src/web/App.tsx` maps it to its navigation label, icon and page component. A new top-level page changes those mappings together. Detail pages (`/sources/<type>/<id>`, `/documents/<id>`) belong to their list page in the navigation. Each page heading receives focus after route changes so keyboard navigation has a stable destination.
 
 ## Theme persistence
 
-The shared `ThemeStore` interface in `src/web/app-shell.ts` keeps page rendering independent from its persistence location.
+The theme control is the 外觀 section of the Settings page. The shared `ThemeStore` interface in `src/web/app-shell.ts` keeps page rendering independent from its persistence location.
 
 - Browser mode uses `localStorage` key `xr-collector.theme` on the current origin.
 - Electron mode exposes only `read()` and `write('dark' | 'light')` through its preload bridge. Electron main stores `{ "theme": "dark" | "light" }` in `appearance.json` under the Electron device profile. It contains no Vault path, document data, Agent token or credential.
 
-The Electron bridge is desktop integration for appearance only. Business screens continue to call the local HTTP API. The UI waits for Electron's stored value before enabling theme controls, so first render never writes the default over a saved value. A read of an invalid value falls back to dark; a write failure remains visible, reports that it was not saved, and offers retry.
+The Electron bridge is desktop integration for appearance only. Business screens continue to call the local HTTP API. The UI waits for Electron's stored value before enabling the theme control, so first render never writes the default over a saved value. A read of an invalid value falls back to dark. A failed write is logged; the chosen theme stays applied for the running session.
