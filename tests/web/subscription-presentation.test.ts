@@ -6,8 +6,7 @@ import {
   limitChoices,
   removeConfirmation,
   subscribeSummary,
-  subscriptionDetail,
-  subscriptionStatusLabel,
+  backfillPhrase,
   windowChoices,
 } from '../../src/web/subscription-presentation.js';
 
@@ -16,7 +15,7 @@ const policy = { enabled: true, intervalMinutes: 30, backfillWindow: '1m' as con
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    status: 'tracking', activeJob: null, documentCount: 12, lastCollectedAt: null, ...overrides,
+    status: 'tracking', lastError: null, activeJob: null, documentCount: 12, lastCollectedAt: null, ...overrides,
   };
 }
 
@@ -32,13 +31,8 @@ describe('subscription presentation', () => {
     expect(subscribeSummary({ ...policy, enabled: false }).text).toContain('自動收集目前已暫停');
   });
 
-  it('labels status, the paused resume range and the removal confirmation', () => {
-    expect(subscriptionStatusLabel(subscription())).toBe('追蹤中');
-    expect(subscriptionStatusLabel(subscription({ status: 'collecting', activeJob: { id: 'j', done: 3, total: 10 } }))).toBe('收集中 3／10');
-    expect(subscriptionStatusLabel(subscription({ status: 'paused', enabled: false }))).toBe('已暫停');
-    expect(subscriptionDetail(subscription({ status: 'paused', enabled: false }), { ...policy, backfillWindow: '1w', backfillMaxItems: 5 }))
-      .toBe('恢復後補收最近 1 週內最新的最多 5 支未收集影片。');
-    expect(subscriptionDetail(subscription(), policy)).toBe('12 份文件・尚未新增文件');
+  it('words the backfill range and the removal confirmation', () => {
+    expect(backfillPhrase({ backfillWindow: '1w', backfillMaxItems: 5 })).toBe('最近 1 週內最新的最多 5 支未收集影片');
     expect(removeConfirmation(subscription())).toBe('停止自動收集，已收集的 12 份文件保留。');
   });
 

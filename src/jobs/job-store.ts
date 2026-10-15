@@ -76,11 +76,13 @@ export class JobStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  /** Jobs of one Vault, newest first. */
+  /** Jobs of one Vault, newest first; jobs created in the same millisecond keep their submission order. */
   list(vaultPath: string): CollectionJob[] {
+    // The map keeps insertion order, and the sort is stable, so reversing first puts later submissions first.
     return [...this.jobs.values()]
       .filter((job) => job.vaultPath === vaultPath)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+      .reverse()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map((job) => structuredClone(job));
   }
 

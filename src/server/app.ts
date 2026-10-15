@@ -7,6 +7,8 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import { SourceCatalog } from '../sources/source-catalog.js';
+import { recognizeUrl, SOURCE_TYPES, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
   CollectorError,
   type CollectionJob,
@@ -36,6 +38,7 @@ export interface ChannelCollection {
   setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }>;
   removeChannel(id: string): Promise<{ documentsKept: number }>;
   startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
+  channelJobs(id: string): CollectionJob[];
 }
 
 /** Accepts collection work and answers job queries for the active Vault. */
@@ -79,6 +82,8 @@ export interface HttpAppOptions {
   /** Returns why business routes are unavailable, or null once a Vault is active. */
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
+  /** Source types the service offers; tests replace them to exercise other declarations. */
+  sourceTypes?: SourceTypeDeclaration[];
 }
 
 const DOCUMENT_SOURCE_TYPES: DocumentSourceType[] = ['youtube'];
@@ -419,6 +424,27 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         : await channels.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });
       return reply.code(202).send({ submissions });
     });
+  }
+
+  const sourceTypes = options.sourceTypes ?? SOURCE_TYPES;
+  app.get('/api/source-types', async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
+
+  if (options.channels) {
+    const channels = options.channels;
+    const catalog = new SourceCatalog(sourceTypes, channels, async () => await options.collector?.list() ?? []);
+
+    // Every address answers 200 with a status; only a missing address is a malformed request.
+    app.post<{ Body: { url?: unknown } }>('/api/url-recognitions', async (request) => {
+      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+        throw new CollectorError('invalid_request', '請貼上要加入的網址。');
+      }
+      return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewChannel: (url) => channels.preview(url) }) };
+    });
+
+    app.get('/api/sources', async () => catalog.list());
+
+    app.get<{ Params: { type: string; id: string } }>('/api/sources/:type/:id', async (request) =>
+      catalog.detail(request.params.type, request.params.id));
   }
 
   if (options.webRoot && existsSync(options.webRoot)) {

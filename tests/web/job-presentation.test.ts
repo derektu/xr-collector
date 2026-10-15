@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
-import { jobKindLabel, jobPhaseLabel, jobProgressLabel, jobResultLabel, youtubeSubmitAction } from '../../src/web/job-presentation.js';
+import { jobKindLabel, jobPhaseLabel, jobProgressLabel, jobResultLabel } from '../../src/web/job-presentation.js';
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
@@ -41,9 +41,4 @@ describe('job presentation', () => {
     expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出補收範圍');
   });
 
-  it('names the action a pasted address leads to', () => {
-    expect(youtubeSubmitAction('https://youtu.be/abcdefghijk')).toMatchObject({ label: '收集影片', kind: 'video' });
-    expect(youtubeSubmitAction('@someone')).toMatchObject({ label: '訂閱頻道', kind: 'channel' });
-    expect(youtubeSubmitAction('')).toMatchObject({ label: '加入', enabled: false, kind: null });
-  });
 });

@@ -1,18 +1,8 @@
-import type { BackfillWindow, ChannelSchedule, CollectionJob, CollectionPolicy, Subscription } from '../core/types.js';
-import { BACKFILL_LIMITS, BACKFILL_WINDOWS, INTERVAL_OPTIONS } from '../channels/collection-policy.js';
+import type { ChannelJobTrigger, ChannelSchedule, CollectionJob, CollectionPolicy, Subscription } from '../core/types.js';
+import { BACKFILL_LIMITS, BACKFILL_WINDOWS, INTERVAL_OPTIONS, intervalLabel, windowLabel } from '../channels/collection-policy.js';
 import { dateTimeLabel } from './document-presentation.js';
 
-const WINDOW_LABELS: Record<BackfillWindow, string> = { '1w': '1 週', '2w': '2 週', '1m': '1 個月', '3m': '3 個月', '6m': '6 個月' };
-
-export function intervalLabel(minutes: number): string {
-  if (minutes === 1440) return '每天';
-  if (minutes % 60 === 0) return `${minutes / 60} 小時`;
-  return `${minutes} 分`;
-}
-
-export function windowLabel(window: BackfillWindow): string {
-  return WINDOW_LABELS[window];
-}
+export { intervalLabel, windowLabel };
 
 export const intervalChoices = INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) }));
 export const windowChoices = BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) }));
@@ -42,25 +32,7 @@ export function subscribeSummary(policy: CollectionPolicy & { enabled: boolean }
   };
 }
 
-export function subscriptionStatusLabel(subscription: Subscription): string {
-  if (subscription.status === 'paused') return '已暫停';
-  if (subscription.status === 'collecting') {
-    const job = subscription.activeJob;
-    return job && job.total > 0 ? `收集中 ${job.done}／${job.total}` : '收集中';
-  }
-  return '追蹤中';
-}
-
-/** Secondary line of a subscription row. */
-export function subscriptionDetail(subscription: Subscription, policy: CollectionPolicy | null): string {
-  if (subscription.status === 'paused') {
-    return policy ? `恢復後補收${backfillPhrase(policy)}。` : '恢復後依自動收集設定補收。';
-  }
-  const added = subscription.lastCollectedAt ? `最近新增 ${dateTimeLabel(subscription.lastCollectedAt)}` : '尚未新增文件';
-  return `${subscription.documentCount} 份文件・${added}`;
-}
-
-export function removeConfirmation(subscription: Subscription): string {
+export function removeConfirmation(subscription: Pick<Subscription, 'documentCount'>): string {
   return `停止自動收集，已收集的 ${subscription.documentCount} 份文件保留。`;
 }
 
@@ -78,5 +50,9 @@ const TRIGGER_LABELS = {
 
 /** The reason a channel job ran, for the job list. */
 export function channelJobLabel(job: CollectionJob): string {
-  return job.scope ? TRIGGER_LABELS[job.scope.trigger] : '頻道收集';
+  return triggerLabel(job.scope?.trigger ?? null);
+}
+
+export function triggerLabel(trigger: ChannelJobTrigger | null): string {
+  return trigger ? TRIGGER_LABELS[trigger] : '頻道收集';
 }

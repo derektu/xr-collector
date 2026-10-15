@@ -170,6 +170,21 @@ export class JobManager {
     return { jobs: page, nextCursor: jobs.length > limit ? page[page.length - 1]!.id : null };
   }
 
+  /**
+   * Channel collection jobs of the active Vault grouped by channel, newest first. Finished jobs are
+   * kept up to the job store's limit, so older records drop out.
+   */
+  channelJobs(): Map<string, CollectionJob[]> {
+    const byChannel = new Map<string, CollectionJob[]>();
+    for (const job of this.options.store.list(this.options.vaultPath)) {
+      if (job.kind !== 'youtube.channel' || !job.source.id) continue;
+      const jobs = byChannel.get(job.source.id) ?? [];
+      jobs.push(job);
+      byChannel.set(job.source.id, jobs);
+    }
+    return byChannel;
+  }
+
   /** The channel collection job of this subscription that is still queued or running. */
   activeChannelJob(channelId: string): CollectionJob | null {
     for (const job of this.jobs.values()) {

@@ -13,7 +13,12 @@ import type {
   ChannelPreview,
   ChannelSchedule,
   CollectionPolicy,
+  RecognitionAction,
+  SourceDetail,
+  SourceList,
+  SourceTypeInfo,
   Subscription,
+  UrlRecognition,
   VaultInspection,
   VaultSetupAction,
   VaultSetupResult,
@@ -188,6 +193,40 @@ export const api = {
     if (query.offset !== undefined) parameters.set('offset', String(query.offset));
     if (query.limit !== undefined) parameters.set('limit', String(query.limit));
     return request<SearchResponse>(`/api/search?${parameters.toString()}`, signal ? { signal } : undefined);
+  },
+
+  async sourceTypes(): Promise<SourceTypeInfo[]> {
+    return (await request<{ sourceTypes: SourceTypeInfo[] }>('/api/source-types')).sourceTypes;
+  },
+
+  async recognizeUrl(url: string, signal?: AbortSignal): Promise<UrlRecognition> {
+    return (await request<{ recognition: UrlRecognition }>('/api/url-recognitions', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+      ...(signal ? { signal } : {}),
+    })).recognition;
+  },
+
+  /** Sends the request a recognized address offers, exactly as the service described it. */
+  performAction(action: RecognitionAction): Promise<unknown> {
+    return request(action.request.path, { method: action.request.method, body: JSON.stringify(action.request.body) });
+  },
+
+  listSources(signal?: AbortSignal): Promise<SourceList> {
+    return request<SourceList>('/api/sources', signal ? { signal } : undefined);
+  },
+
+  sourceDetail(type: string, id: string, signal?: AbortSignal): Promise<SourceDetail> {
+    return request<SourceDetail>(`/api/sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, signal ? { signal } : undefined);
+  },
+
+  /** Checks the listed subscriptions now. */
+  async checkChannels(channelIds: string[]): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', {
+      method: 'POST',
+      body: JSON.stringify({ channelIds }),
+    });
+    return result.submissions;
   },
 
   async getSearchStatus(): Promise<SearchStatusReport> {

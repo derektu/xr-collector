@@ -8,7 +8,7 @@ const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
   starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用',
 };
 
-/** Settings card that shows whether the search index matches the Vault and lets the user rebuild it. */
+/** Settings section that shows whether the search index matches the Vault and lets the user rebuild it. */
 export function SearchIndexCard() {
   const [status, setStatus] = useState<SearchStatusReport | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -48,8 +48,8 @@ export function SearchIndexCard() {
 
   const state = rebuilding ? 'rebuilding' : status?.state;
   const mismatch = status?.state === 'ready' && status.indexedDocuments !== status.vaultDocuments;
-  return <article className="setting-card search-index-card" data-testid="settings-search-index">
-    <h3>搜尋索引</h3>
+  return <section className="settings-section search-index-card" data-testid="settings-search-index">
+    <h2>搜尋</h2>
     {loadError ? <p className="documents-error">{loadError}</p> : null}
     {status && state ? <>
       <p className="index-state" data-testid="search-index-state"><span className={`status-light ${state}`} aria-hidden="true" />{STATE_LABELS[state]}</p>
@@ -59,7 +59,7 @@ export function SearchIndexCard() {
       {mismatch ? <p className="index-problem">索引篇數與知識庫不同，可以重建索引。</p> : null}
       {rebuildError ? <p className="index-problem">{rebuildError}</p> : null}
     </> : !loadError ? <p className="loading">正在讀取…</p> : null}
-    <button type="button" className="secondary-button" disabled={busy || !status} onClick={() => void rebuild()}>{rebuilding ? '重建中…' : '重建索引'}</button>
-    <p className="source-note">索引由知識庫文件產生，重建不會改動文件。</p>
-  </article>;
+    <button type="button" className="button" disabled={busy || !status} onClick={() => void rebuild()}>{rebuilding ? '重建中…' : '重建索引'}</button>
+    <p className="hint">索引由知識庫文件產生，重建不會改動文件。</p>
+  </section>;
 }
