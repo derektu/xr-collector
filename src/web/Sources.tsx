@@ -4,6 +4,7 @@ import { api } from './api-client.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import {
+  checkTimesLine,
   collectingSummary,
   filterSources,
   showsSingleItems,
@@ -33,6 +34,7 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
   const [list, setList] = useState<SourceList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [draft, setDraft] = useState(state.query);
 
   useEffect(() => {
@@ -57,6 +59,18 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
     }
   }
 
+  async function setAutoCollection(enabled: boolean): Promise<void> {
+    setSwitching(true);
+    try {
+      await api.setAutoCollection(enabled);
+      onChanged(enabled ? '已開啟自動收集。' : '已暫停自動收集。');
+    } catch (error) {
+      onChanged(error instanceof Error ? error.message : '無法變更自動收集。', 'error');
+    } finally {
+      setSwitching(false);
+    }
+  }
+
   const sources = list?.sources ?? [];
   const visible = filterSources(sources, state);
   const enabledCount = sources.filter((source) => source.enabled).length;
@@ -68,7 +82,12 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
     <div className="page-header">
       <h1 className="page-title" tabIndex={-1} data-page-heading>來源</h1>
       <div className="header-actions">
-        {schedule && !schedule.enabled ? <span className="header-note" data-testid="auto-collection-paused">自動收集已暫停</span> : null}
+        {schedule ? <label className="header-switch" data-testid="auto-collection">
+          自動收集
+          <input type="checkbox" role="switch" checked={schedule.enabled} disabled={switching}
+            onChange={(event) => void setAutoCollection(event.target.checked)} data-testid="auto-collection-switch" />
+          <span className="switch" aria-hidden="true" />
+        </label> : null}
         <button type="button" className="button" disabled={checking || enabledCount === 0} onClick={() => void checkAll()} data-testid="check-all">
           <Icon name="refresh" size={15} />{checking ? '檢查中…' : '立即檢查'}
         </button>
@@ -119,9 +138,7 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
       </div>
     </> : null}
 
-    {list && !empty && schedule ? <p className="page-footnote" data-testid="check-times">
-      上次檢查 {schedule.lastAttemptAt ? shortTimeLabel(schedule.lastAttemptAt) : '尚未檢查'}・下一次檢查 {!schedule.enabled ? '自動收集已暫停' : schedule.nextRunAt ? shortTimeLabel(schedule.nextRunAt) : '尚未排定'}
-    </p> : null}
+    {list && !empty && schedule ? <p className="page-footnote" data-testid="check-times">{checkTimesLine(schedule)}</p> : null}
   </>;
 }
 

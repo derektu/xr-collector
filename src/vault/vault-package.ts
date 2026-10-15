@@ -5,12 +5,18 @@ import { CollectorError } from '../core/types.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
+import { migrateSubscriptionSettings } from '../channels/subscription-files.js';
 
 export const PACKAGE_LIMIT = 128 * 1024 * 1024;
 const CONTENT_LIMIT = 80 * 1024 * 1024;
 const FILE_LIMIT = 10_000;
 interface Entry { path: string; size: number; sha256: string; data: string }
-interface VaultPackage { format: 'xr-collector-vault'; version: 1; files: Entry[]; sha256: string }
+/**
+ * Version 2 packages carry subscriptions with their own collection settings. Version 1 packages
+ * (shared settings in the schedule file) are still read; their Vault is converted after unpacking.
+ */
+interface VaultPackage { format: 'xr-collector-vault'; version: 1 | 2; files: Entry[]; sha256: string }
+const PACKAGE_VERSION = 2;
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const manifestDigest = (files: Entry[]) => digest(JSON.stringify(files.map(({ path, size, sha256 }) => ({ path, size, sha256 }))));
 
@@ -61,7 +67,7 @@ export async function exportVault(root: string): Promise<Buffer> {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   for (const name of ['youtube-channels.json', 'youtube-schedule.json']) await visit(`settings/${name}`);
-  const result: VaultPackage = { format: 'xr-collector-vault', version: 1, files, sha256: manifestDigest(files) };
+  const result: VaultPackage = { format: 'xr-collector-vault', version: PACKAGE_VERSION, files, sha256: manifestDigest(files) };
   const buffer = Buffer.from(JSON.stringify(result));
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
   return buffer;
@@ -71,7 +77,7 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
   let parsed: VaultPackage;
   try { parsed = JSON.parse(buffer.toString('utf8')) as VaultPackage; } catch { invalid('資料包不是有效的 JSON。'); }
-  if (!parsed || parsed.format !== 'xr-collector-vault' || parsed.version !== 1 || !Array.isArray(parsed.files)
+  if (!parsed || parsed.format !== 'xr-collector-vault' || (parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.files)
     || parsed.files.length > FILE_LIMIT) invalid('不支援的資料包格式或版本。');
   const seen = new Set<string>();
   const decoded: { path: string; bytes: Buffer }[] = [];
@@ -120,10 +126,11 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
         || !['manual', 'automatic'].includes(doc.youtube.subtitleKind)
         || doc.sourceUrl !== `https://www.youtube.com/watch?v=${doc.sourceId}`) throw new Error('Invalid document');
     }
+    await migrateSubscriptionSettings(destination);
     await new JsonChannelStore(destination).list();
     const store = new JsonChannelScheduleStore(destination);
     const schedule = await store.load();
-    if (pauseSchedule) await store.save({ ...schedule, enabled: false, nextRunAt: null });
+    if (pauseSchedule) await store.save({ ...schedule, enabled: false });
   } catch {
     invalid('資料包中的文件、頻道或排程資料格式無效。');
   }

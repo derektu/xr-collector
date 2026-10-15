@@ -2,8 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChannelCollector, type SchedulePolicy } from '../../src/channels/channel-collector.js';
-import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
+import { ChannelCollector } from '../../src/channels/channel-collector.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type SavedDocument } from '../../src/core/types.js';
@@ -22,19 +21,18 @@ async function world() {
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
-  const policy: SchedulePolicy = { enabled: true, ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
   const channelStore = new JsonChannelStore(root);
   const jobs = new JobManager({
     vaultPath: root, store: JobStore.memory(now), source, documents: collector, channels: channelStore, now,
-    policy: async () => ({ ...policy }), limits: { discovery: 1, capture: 4 },
+    limits: { discovery: 1, capture: 4 },
     // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },
   });
   const channels = new ChannelCollector(channelStore, jobs, {
-    policy: async () => ({ ...policy }), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
+    autoCollection: async () => true, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   const app = await createHttpApp({ collector, jobs, channels, agentToken: 'agent-token' });
   const get = async (url: string) => {
@@ -199,6 +197,61 @@ describe('source detail (T-07, T-08)', () => {
       method: 'POST', url: '/api/url-recognitions', payload: { url: '@alpha' }, headers: { authorization: 'Bearer agent-token' },
     });
     expect(recognized.json().recognition).toMatchObject({ status: 'ready', kind: 'channel', actions: [{ id: 'subscribe' }] });
+    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await w.app.close();
+  });
+});
+
+describe('per-subscription settings over HTTP (A5)', () => {
+  it('subscribes with chosen settings, changes and applies them, and answers the same to UI and Agent', async () => {
+    const w = await world();
+    const auth = { authorization: 'Bearer agent-token' };
+    const send = async (method: 'POST' | 'PATCH', url: string, payload?: unknown) => {
+      const response = await w.app.inject({ method, url, headers: auth, ...(payload === undefined ? {} : { payload: payload as object }) });
+      return { status: response.statusCode, body: response.json() };
+    };
+    const alpha = w.source.addChannel('alpha');
+    const beta = w.source.addChannel('beta');
+    const gamma = w.source.addChannel('gamma');
+    for (const id of [alpha, beta, gamma]) w.source.publish(id, id.slice(-1), w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
+
+    const added = await send('POST', '/api/youtube/channels', { url: '@alpha', settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 } });
+    expect(added.status).toBe(202);
+    const first = await w.jobs.whenSettled((await w.jobs.whenSettled(added.body.job.id)).result!.followUpJobId!);
+    expect(first.scope).toMatchObject({ maxItems: 5 });
+    await send('POST', '/api/youtube/channels', { url: '@beta' });
+    await send('POST', '/api/youtube/channels', { url: '@gamma', settings: { backfillMaxItems: 20 } });
+    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+
+    for (const settings of [{ intervalMinutes: 45 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { cadence: 30 }, {}, 'often']) {
+      const rejected = await send('POST', '/api/youtube/channels', { url: '@beta', settings });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error.code).toBe('invalid_request');
+      expect((await send('PATCH', `/api/youtube/channels/${beta}`, { settings })).status).toBe(400);
+    }
+    expect((await send('PATCH', `/api/youtube/channels/${beta}`, { color: 'red' })).status).toBe(400);
+    expect((await send('PATCH', `/api/youtube/channels/${beta}`, {})).status).toBe(400);
+
+    const changed = await send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillWindow: '3m' } });
+    expect(changed).toMatchObject({ status: 200, body: { channel: { id: beta, settings: { intervalMinutes: 30, backfillWindow: '3m', backfillMaxItems: 10 } }, submission: null } });
+    expect((await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: false })).status).toBe(200);
+
+    const jobsBefore = w.jobs.list({ limit: 100 }).jobs.length;
+    expect(await send('POST', `/api/youtube/channels/${alpha}/apply-settings`)).toEqual({ status: 200, body: { updated: 2, paused: 1 } });
+    expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);
+    expect((await send('POST', '/api/youtube/channels/UCmissing/apply-settings')).status).toBe(404);
+
+    const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 };
+    const listed = (await w.get('/api/youtube/channels')).body.channels;
+    expect(listed.map((channel: { id: string; enabled: boolean; settings: unknown }) => [channel.id, channel.enabled, channel.settings])).toEqual([
+      [alpha, true, settings], [beta, true, settings], [gamma, false, settings],
+    ]);
+    const detail = (await w.get(`/api/sources/youtube/${beta}`)).body.source;
+    expect(detail).toMatchObject({ settings, nextCheckAt: expect.any(String), lastCheckedAt: expect.any(String) });
+
+    // A resume and a settings change in one request backfill with the new range.
+    const resumed = await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
+    expect(resumed.body).toMatchObject({ channel: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume', maxItems: 20 } } } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
     await w.app.close();
   });

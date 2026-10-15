@@ -233,7 +233,10 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
 }
 
 function channel(id: string): YouTubeChannel {
-  return { id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString() };
+  return {
+    id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(),
+    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+  };
 }
 
 function listed(count: number, prefix: string): DiscoveredYouTubeVideo[] {
@@ -359,6 +362,26 @@ describe('channel-add jobs across restarts (R-T3)', () => {
     expect(followUp).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { created: 2 } });
     expect(w.channels.channels).toHaveLength(1);
     expect(w.script.resolves).toBe(1);
+  });
+});
+
+describe('channel-add jobs with chosen settings across restarts (A3)', () => {
+  it('subscribes with the settings chosen when the job was accepted after a stop while resolving', async () => {
+    const w = await world();
+    const chosen = { intervalMinutes: 180, backfillWindow: '2w' as const, backfillMaxItems: 5 };
+    const g1 = await w.boot((source) => { source.holdResolve = true; });
+    const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@chosen', chosen);
+    expect(adding.job.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5 });
+    await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
+
+    const g2 = await w.crash(g1);
+    const done = await g2.manager.whenSettled(adding.job.id);
+    const followUp = await g2.manager.whenSettled(done.result!.followUpJobId!);
+
+    expect(w.channels.channels).toEqual([expect.objectContaining({ settings: chosen })]);
+    expect(followUp.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5 });
+    // The chosen settings serve the restart only; the job as UI and Agents read it has no checkpoint.
+    expect(done).not.toHaveProperty('checkpoint');
   });
 });
 

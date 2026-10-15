@@ -75,10 +75,10 @@ describe('Agent authenticated HTTP access', () => {
     expect(rebuild).toHaveBeenCalledOnce();
     const scheduleResponse = await app.inject({
       method: 'PUT', url: '/api/youtube/schedule', headers,
-      payload: { enabled: true, intervalMinutes: 30 },
+      payload: { enabled: true },
     });
     expect(scheduleResponse.statusCode).toBe(200);
-    expect(schedule.updateSchedule).toHaveBeenCalledWith({ enabled: true, intervalMinutes: 30 });
+    expect(schedule.updateSchedule).toHaveBeenCalledWith({ enabled: true });
     expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', headers, payload: {} })).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url: '/api/youtube/submissions', payload: { url: '@agent' } })).statusCode).toBe(401);
     expect(capture).not.toHaveBeenCalled();

@@ -4,18 +4,19 @@ import { CollectorError, type ChannelPreview } from '../../src/core/types.js';
 import { createHttpApp, type ChannelCollection } from '../../src/server/app.js';
 import { recognizeUrl, SOURCE_TYPES, type SourceTypeDeclaration } from '../../src/sources/source-types.js';
 
-const policy = { enabled: true, ...DEFAULT_POLICY };
+const own = { intervalMinutes: 60, backfillWindow: '2w' as const, backfillMaxItems: 5 };
 const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
 
 /** Channel previews keyed by the resolved address; anything else fails to resolve. */
-function channelsWith(previews: Record<string, ChannelPreview['subscription']>, failure?: CollectorError) {
+function channelsWith(previews: Record<string, { enabled: boolean } | null>, failure?: CollectorError) {
   const preview = vi.fn(async (url: string): Promise<ChannelPreview> => {
     if (failure) throw failure;
     if (!(url in previews)) throw new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。');
     return {
       channel: { id: CHANNEL_ID, title: '頻道一', url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` },
-      subscription: previews[url] ?? null,
-      policy,
+      subscription: previews[url] ? { ...previews[url]!, settings: own } : null,
+      settings: previews[url] ? own : DEFAULT_POLICY,
+      autoCollection: true,
     };
   });
   const channels = { preview, listSubscriptions: async () => [], channelJobs: () => [] } as unknown as ChannelCollection;
@@ -30,7 +31,7 @@ async function recognize(url: unknown, channels: ChannelCollection, sourceTypes?
 }
 
 describe('source type declarations (T-01)', () => {
-  it('publishes YouTube with its kinds, login need and the Global setting options', async () => {
+  it('publishes YouTube with its kinds, login need and the setting options with their defaults', async () => {
     const app = await createHttpApp({});
     const response = await app.inject({ method: 'GET', url: '/api/source-types' });
     await app.close();
@@ -51,6 +52,8 @@ describe('source type declarations (T-01)', () => {
     expect(options).toEqual({
       intervalMinutes: [...INTERVAL_OPTIONS], backfillWindow: [...BACKFILL_WINDOWS], backfillMaxItems: [...BACKFILL_LIMITS],
     });
+    expect(Object.fromEntries(youtube.settings.map((field: { key: string; default: unknown }) => [field.key, field.default]))).toEqual(DEFAULT_POLICY);
+    expect(youtube.settings[0].options.map((option: { label: string }) => option.label)).toEqual(['每 15 分鐘', '每 30 分鐘', '每 1 小時', '每 3 小時', '每 6 小時', '每 12 小時', '每天']);
     expect(youtube).not.toHaveProperty('recognize');
   });
 });
@@ -72,7 +75,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       status: 'ready', sourceType: 'youtube', kind: 'video', kindLabel: 'YouTube 影片',
       url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
       target: { id: 'dQw4w9WgXcQ', title: null, url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
-      subscription: null, policy: null, login: null, message: null,
+      subscription: null, settings: null, autoCollection: null, login: null, message: null,
       actions: [{
         id: 'collect', label: '收集影片', primary: true,
         request: { method: 'POST', path: '/api/youtube/collect', body: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } },
@@ -87,14 +90,14 @@ describe('URL recognition (T-02 to T-05)', () => {
     ['https://www.youtube.com/channel/UCabc/featured', 'https://www.youtube.com/channel/UCabc'],
     ['https://www.youtube.com/c/legacy', 'https://www.youtube.com/c/legacy'],
     ['https://www.youtube.com/user/older', 'https://www.youtube.com/user/older'],
-  ])('offers to subscribe to an unsubscribed channel %s with the Global policy', async (input, resolved) => {
+  ])('offers to subscribe to an unsubscribed channel %s with the type defaults', async (input, resolved) => {
     const { channels, preview } = channelsWith({ [resolved]: null });
     const recognition = (await recognize(input, channels)).json().recognition;
 
     expect(preview).toHaveBeenCalledWith(resolved);
     expect(recognition).toMatchObject({
       status: 'ready', sourceType: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道',
-      target: { id: CHANNEL_ID, title: '頻道一' }, subscription: null, policy,
+      target: { id: CHANNEL_ID, title: '頻道一' }, subscription: null, settings: DEFAULT_POLICY, autoCollection: true,
       actions: [{
         id: 'subscribe', label: '訂閱頻道', primary: true,
         request: { method: 'POST', path: '/api/youtube/channels', body: { url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` } },
@@ -107,7 +110,7 @@ describe('URL recognition (T-02 to T-05)', () => {
     const active = (await recognize('@channel-one', channelsWith({ 'https://www.youtube.com/@channel-one': { enabled: true } }).channels)).json().recognition;
 
     expect(paused).toMatchObject({
-      status: 'ready', subscription: { id: CHANNEL_ID, enabled: false },
+      status: 'ready', subscription: { id: CHANNEL_ID, enabled: false, settings: own },
       actions: [{ id: 'resume', label: '恢復訂閱', request: { method: 'PATCH', path: `/api/youtube/channels/${CHANNEL_ID}`, body: { enabled: true } } }],
     });
     expect(active).toMatchObject({ status: 'ready', subscription: { id: CHANNEL_ID, enabled: true }, actions: [] });
@@ -155,7 +158,7 @@ describe('URL recognition (T-02 to T-05)', () => {
 
     expect(recognition).toEqual({
       status: 'login_required', sourceType: 'fixture', kind: null, kindLabel: null, url: 'https://login.example/page',
-      target: null, subscription: null, policy: null, actions: [], message: null,
+      target: null, subscription: null, settings: null, autoCollection: null, actions: [], message: null,
       login: { sourceType: 'fixture', label: '登入測試', message: '需要先登入 登入測試 才能收集這個網址的內容。' },
     });
     expect(recognizeFixture).not.toHaveBeenCalled();

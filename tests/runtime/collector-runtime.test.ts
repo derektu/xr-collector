@@ -298,14 +298,22 @@ describe('CollectorRuntime', () => {
     expect((await (await agent('/api/youtube/channels')).json()).channels).toEqual(uiChannels);
     const preview = await agent('/api/youtube/channel-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
     expect((await preview.json()).preview).toMatchObject({
-      channel: { id: 'UC-runtime' }, subscription: { enabled: true }, policy: { enabled: true, intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+      channel: { id: 'UC-runtime' }, subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } },
+      settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, autoCollection: true,
+    });
+    expect((await agent('/api/youtube/channels/UC-runtime', {
+      method: 'PATCH', body: JSON.stringify({ settings: { intervalMinutes: 60 } }),
+    })).status).toBe(200);
+    expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels[0].settings).toEqual({
+      intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10,
     });
     expect((await agent('/api/youtube/channels/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ enabled: false }),
     })).status).toBe(200);
     expect((await agent('/api/youtube/schedule', {
-      method: 'PUT', body: JSON.stringify({ enabled: false, intervalMinutes: 30 }),
+      method: 'PUT', body: JSON.stringify({ enabled: false }),
     })).status).toBe(200);
+    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule).toMatchObject({ enabled: false, nextCheck: null });
     const pausedRun = await agent('/api/youtube/channel-runs', {
       method: 'POST', body: JSON.stringify({ channelIds: ['UC-runtime'] }),
     });
@@ -329,7 +337,8 @@ describe('CollectorRuntime', () => {
     const settings = path.join(setup.vaultPath, 'settings');
     await mkdir(settings, { recursive: true });
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
-    await writeFile(path.join(settings, 'youtube-schedule.json'), '[]');
+    // A version 2 file needs no conversion, so the Vault opens and the bad subscriptions stop the scheduler.
+    await writeFile(path.join(settings, 'youtube-channels.json'), JSON.stringify({ version: 2, channels: 'bad' }));
     await expect(CollectorRuntime.start(setup.value)).rejects.toThrow();
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });

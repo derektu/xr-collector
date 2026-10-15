@@ -1,24 +1,16 @@
-import { assertPolicyPatch } from './collection-policy.js';
-import type { SchedulePolicy, StartRunRequest } from './channel-collector.js';
+import type { StartRunRequest } from './channel-collector.js';
 import type { NewJobEvent } from '../jobs/job-store.js';
 import {
   CollectorError,
-  type BackfillWindow,
   type ChannelSchedule,
-  type ChannelScheduleLastResult,
-  type CollectionJob,
   type JobSubmission,
+  type ScheduledCheck,
+  type YouTubeChannel,
 } from '../core/types.js';
 
+/** What the Vault keeps for automatic collection; check times live with each subscription. */
 export interface StoredChannelSchedule {
   enabled: boolean;
-  intervalMinutes: number;
-  backfillWindow: BackfillWindow;
-  backfillMaxItems: number;
-  lastAttemptAt: string | null;
-  lastCompletedAt: string | null;
-  nextRunAt: string | null;
-  lastResult: ChannelScheduleLastResult | null;
 }
 
 export interface ChannelScheduleStore {
@@ -26,9 +18,11 @@ export interface ChannelScheduleStore {
   save(schedule: StoredChannelSchedule): Promise<void>;
 }
 
+/** The subscription service the scheduler checks through. */
 export interface ScheduledChannelRunner {
+  listChannels(): Promise<YouTubeChannel[]>;
   startRun(request: StartRunRequest): Promise<JobSubmission[]>;
-  whenSettled(jobId: string): Promise<CollectionJob>;
+  planChecks(options: { reset: boolean }): Promise<void>;
 }
 
 export interface ChannelSchedulerOptions {
@@ -37,9 +31,15 @@ export interface ChannelSchedulerOptions {
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
 }
 
-/** Any subset of the Global settings; fields left out keep their value. */
-export type UpdateChannelSchedule = Partial<SchedulePolicy>;
+export interface UpdateChannelSchedule {
+  enabled: boolean;
+}
 
+/**
+ * Checks each subscription when its own next check time arrives. Every poll submits all due
+ * subscriptions together, one job per subscription, and returns without waiting for them; the
+ * job manager bounds how many run at once.
+ */
 export class ChannelScheduler {
   private readonly now: () => Date;
   private readonly pollIntervalMs: number;
@@ -47,10 +47,6 @@ export class ChannelScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking: Promise<void> | null = null;
   private suspended = false;
-  private closed = false;
-  /** Increments per dispatch; only the latest dispatch records its result. */
-  private dispatchCount = 0;
-  private pendingDispatch: number | null = null;
 
   constructor(
     private readonly runner: ScheduledChannelRunner,
@@ -62,12 +58,7 @@ export class ChannelScheduler {
   }
 
   async start(): Promise<void> {
-    const schedule = await this.ensureLoaded();
-    // A Vault without a schedule file is enabled with no due time yet; the first check is one interval away.
-    if (schedule.enabled && !schedule.nextRunAt) {
-      schedule.nextRunAt = addMinutes(this.now(), schedule.intervalMinutes).toISOString();
-      await this.store.save(schedule);
-    }
+    await this.ensureLoaded();
     if (!this.timer) {
       this.timer = setInterval(() => {
         void this.checkNow().catch(reportScheduleError);
@@ -77,61 +68,56 @@ export class ChannelScheduler {
   }
 
   async close(): Promise<void> {
-    this.closed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.checking;
   }
 
-  async getSchedule(): Promise<ChannelSchedule> {
-    const schedule = await this.ensureLoaded();
-    return this.snapshot(schedule);
+  async isEnabled(): Promise<boolean> {
+    return (await this.ensureLoaded()).enabled;
   }
 
-  async getPolicy(): Promise<SchedulePolicy> {
-    const { enabled, intervalMinutes, backfillWindow, backfillMaxItems } = await this.ensureLoaded();
-    return { enabled, intervalMinutes, backfillWindow, backfillMaxItems };
+  /** The switch, the newest finished check and, while collection is on, the subscription due first. */
+  async getSchedule(): Promise<ChannelSchedule> {
+    const { enabled } = await this.ensureLoaded();
+    const channels = await this.runner.listChannels();
+    let lastCheck: ScheduledCheck | null = null;
+    let nextCheck: ScheduledCheck | null = null;
+    for (const channel of channels) {
+      if (channel.lastCheckedAt && (!lastCheck || channel.lastCheckedAt > lastCheck.at)) {
+        lastCheck = { channelId: channel.id, title: channel.title, at: channel.lastCheckedAt };
+      }
+      if (enabled && channel.enabled && channel.nextCheckAt && (!nextCheck || channel.nextCheckAt < nextCheck.at)) {
+        nextCheck = { channelId: channel.id, title: channel.title, at: channel.nextCheckAt };
+      }
+    }
+    return { enabled, status: enabled ? 'scheduled' : 'paused', lastCheck, nextCheck };
   }
 
   /**
-   * Changes the Global settings. Turning collection on counts the interval from now; a new interval
-   * counts from the last dispatch and is due at once if that time has passed. Backfill settings
-   * apply to the next backfill only and start no work.
+   * Turns automatic collection on or off. Turning it on counts every enabled subscription's next
+   * check from now, so a long pause never makes them all due at once.
    */
   async updateSchedule(input: UpdateChannelSchedule): Promise<ChannelSchedule> {
-    assertPolicyPatch(input);
-    const current = await this.ensureLoaded();
-    const now = this.now();
-    const wasEnabled = current.enabled;
-    const intervalChanged = input.intervalMinutes !== undefined && input.intervalMinutes !== current.intervalMinutes;
-    if (input.enabled !== undefined) current.enabled = input.enabled;
-    if (input.intervalMinutes !== undefined) current.intervalMinutes = input.intervalMinutes;
-    if (input.backfillWindow !== undefined) current.backfillWindow = input.backfillWindow;
-    if (input.backfillMaxItems !== undefined) current.backfillMaxItems = input.backfillMaxItems;
-    if (!current.enabled) {
-      current.nextRunAt = null;
-    } else if (!wasEnabled || !current.nextRunAt) {
-      current.nextRunAt = addMinutes(now, current.intervalMinutes).toISOString();
-    } else if (intervalChanged) {
-      const base = current.lastAttemptAt ? new Date(current.lastAttemptAt) : now;
-      const next = addMinutes(base, current.intervalMinutes);
-      current.nextRunAt = (next.getTime() < now.getTime() ? now : next).toISOString();
+    if (typeof input?.enabled !== 'boolean') {
+      throw new CollectorError('invalid_request', '自動收集開關必須是 true 或 false。');
     }
-    await this.store.save(current);
-    this.options.recordEvent?.({
-      severity: 'info', eventType: 'schedule.updated', message: '已更新自動收集設定。',
-    });
-    return this.snapshot(current);
+    const current = await this.ensureLoaded();
+    if (current.enabled !== input.enabled) {
+      current.enabled = input.enabled;
+      await this.store.save(current);
+      if (current.enabled) await this.runner.planChecks({ reset: true });
+      this.options.recordEvent?.({
+        severity: 'info', eventType: 'schedule.updated', message: current.enabled ? '已開啟自動收集。' : '已暫停自動收集。',
+      });
+    }
+    return this.getSchedule();
   }
 
-  /**
-   * Checks every enabled subscription now, whether or not automatic collection is on, and counts the
-   * next automatic check from this dispatch.
-   */
+  /** Checks every enabled subscription now, whether or not automatic collection is on. */
   async runNow(): Promise<JobSubmission[]> {
     if (this.suspended) throw new CollectorError('vault_busy', '資料搬移進行中，請稍後再檢查。');
-    const schedule = await this.ensureLoaded();
-    return this.dispatch(schedule, 'manual', true);
+    return this.runner.startRun({ trigger: 'manual' });
   }
 
   setSuspended(suspended: boolean): void {
@@ -145,7 +131,7 @@ export class ChannelScheduler {
   checkNow(): Promise<void> {
     if (this.suspended) return Promise.resolve();
     if (this.checking) return this.checking;
-    const operation = this.runDueSchedule();
+    const operation = this.runDueChecks();
     this.checking = operation;
     const clearChecking = () => {
       if (this.checking === operation) this.checking = null;
@@ -154,96 +140,25 @@ export class ChannelScheduler {
     return operation;
   }
 
-  /**
-   * Submits one job per enabled channel when the schedule is due, then returns without waiting for
-   * them. The next due time counts from the dispatch; the result is recorded when the jobs settle.
-   */
-  private async runDueSchedule(): Promise<void> {
+  /** Submits the enabled subscriptions whose next check time has come. */
+  private async runDueChecks(): Promise<void> {
     const schedule = await this.ensureLoaded();
-    if (!schedule.enabled || !schedule.nextRunAt) return;
-    if (new Date(schedule.nextRunAt).getTime() > this.now().getTime()) return;
-    await this.dispatch(schedule, 'scheduled', false).catch(() => undefined);
-  }
-
-  /** Records the dispatch, submits the jobs and leaves their result to be recorded when they settle. */
-  private async dispatch(
-    schedule: StoredChannelSchedule,
-    trigger: 'scheduled' | 'manual',
-    rethrow: boolean,
-  ): Promise<JobSubmission[]> {
-    const dispatchedAt = this.now();
-    schedule.lastAttemptAt = dispatchedAt.toISOString();
-    if (schedule.enabled) schedule.nextRunAt = addMinutes(dispatchedAt, schedule.intervalMinutes).toISOString();
-    const dispatch = ++this.dispatchCount;
-    let submissions: JobSubmission[];
-    try {
-      submissions = await this.runner.startRun({ trigger });
-    } catch (error) {
-      this.pendingDispatch = null;
-      schedule.lastCompletedAt = this.now().toISOString();
-      schedule.lastResult = {
-        runId: null,
-        created: 0,
-        existing: 0,
-        failed: 1,
-        error: error instanceof Error ? error.message : '排程抓取失敗。',
-      };
-      await this.store.save(schedule);
-      if (rethrow) throw error;
-      return [];
+    if (!schedule.enabled) return;
+    let channels = await this.runner.listChannels();
+    if (channels.some((channel) => channel.enabled && !channel.nextCheckAt)) {
+      await this.runner.planChecks({ reset: false });
+      channels = await this.runner.listChannels();
     }
-    this.pendingDispatch = dispatch;
-    await this.store.save(schedule);
-    void Promise.all(submissions.map(({ job }) => this.runner.whenSettled(job.id)))
-      .then((jobs) => this.recordResult(dispatch, jobs))
-      .catch(reportScheduleError);
-    return submissions;
-  }
-
-  private async recordResult(dispatch: number, jobs: CollectionJob[]): Promise<void> {
-    if (this.closed || dispatch !== this.pendingDispatch) return;
-    this.pendingDispatch = null;
-    const schedule = await this.ensureLoaded();
-    const result: ChannelScheduleLastResult = { runId: null, created: 0, existing: 0, failed: 0 };
-    for (const job of jobs) {
-      if (job.progress) {
-        result.created += job.progress.created;
-        result.existing += job.progress.existing;
-        result.failed += job.progress.failed;
-      } else if (job.state !== 'completed') {
-        result.failed += 1;
-      }
-    }
-    schedule.lastCompletedAt = this.now().toISOString();
-    schedule.lastResult = result;
-    await this.store.save(schedule);
+    const now = this.now().getTime();
+    const due = channels.filter((channel) => channel.enabled && channel.nextCheckAt && new Date(channel.nextCheckAt).getTime() <= now);
+    if (due.length === 0) return;
+    await this.runner.startRun({ trigger: 'scheduled', channelIds: due.map((channel) => channel.id) }).catch(reportScheduleError);
   }
 
   private async ensureLoaded(): Promise<StoredChannelSchedule> {
     this.schedule ??= await this.store.load();
     return this.schedule;
   }
-
-  private snapshot(schedule: StoredChannelSchedule): ChannelSchedule {
-    let status: ChannelSchedule['status'];
-    if (!schedule.enabled) {
-      status = 'paused';
-    } else if (this.pendingDispatch !== null) {
-      status = 'running';
-    } else {
-      status = 'scheduled';
-    }
-    return {
-      ...schedule,
-      status,
-      nextRunAt: schedule.enabled ? schedule.nextRunAt : null,
-      lastResult: schedule.lastResult ? { ...schedule.lastResult } : null,
-    };
-  }
-}
-
-function addMinutes(date: Date, minutes: number): Date {
-  return new Date(date.getTime() + minutes * 60_000);
 }
 
 function reportScheduleError(error: unknown): void {

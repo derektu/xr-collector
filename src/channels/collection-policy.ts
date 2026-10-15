@@ -1,10 +1,11 @@
 import { CollectorError, type BackfillWindow, type CollectionPolicy } from '../core/types.js';
 
-/** Check intervals the Settings page offers and the API accepts, in minutes. */
+/** Check intervals a subscription may use, in minutes. */
 export const INTERVAL_OPTIONS = [15, 30, 60, 180, 360, 720, 1440] as const;
 export const BACKFILL_WINDOWS: readonly BackfillWindow[] = ['1w', '2w', '1m', '3m', '6m'];
 export const BACKFILL_LIMITS = [5, 10, 20, 50] as const;
 
+/** The settings a new YouTube subscription starts with. */
 export const DEFAULT_POLICY: CollectionPolicy = {
   intervalMinutes: 30,
   backfillWindow: '1m',
@@ -30,10 +31,32 @@ export function normalizeInterval(minutes: number): number {
   return INTERVAL_OPTIONS.find((option) => option >= minutes) ?? INTERVAL_OPTIONS[INTERVAL_OPTIONS.length - 1]!;
 }
 
-export function assertPolicyPatch(patch: Partial<CollectionPolicy & { enabled: boolean }>): void {
-  if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') {
-    throw new CollectorError('invalid_request', '自動收集開關必須是 true 或 false。');
+const POLICY_KEYS: ReadonlySet<string> = new Set(['intervalMinutes', 'backfillWindow', 'backfillMaxItems']);
+
+export function isCollectionPolicy(value: unknown): value is CollectionPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const policy = value as Partial<CollectionPolicy>;
+  return isIntervalOption(policy.intervalMinutes) && isBackfillWindow(policy.backfillWindow) && isBackfillLimit(policy.backfillMaxItems);
+}
+
+/**
+ * Reads a settings change from a request body: an object with any of the three settings and
+ * nothing else. Throws `invalid_request` for other keys, other values or an empty object.
+ */
+export function parsePolicyPatch(value: unknown): Partial<CollectionPolicy> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CollectorError('invalid_request', '收集設定必須是 JSON 物件。');
   }
+  const keys = Object.keys(value);
+  const unknown = keys.find((key) => !POLICY_KEYS.has(key));
+  if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
+  if (keys.length === 0) throw new CollectorError('invalid_request', '請提供至少一個要修改的設定。');
+  const patch = value as Partial<CollectionPolicy>;
+  assertPolicyPatch(patch);
+  return patch;
+}
+
+export function assertPolicyPatch(patch: Partial<CollectionPolicy>): void {
   if (patch.intervalMinutes !== undefined && !isIntervalOption(patch.intervalMinutes)) {
     throw new CollectorError('invalid_request', `檢查頻率必須是 ${INTERVAL_OPTIONS.join('、')} 分鐘之一。`);
   }
@@ -89,11 +112,11 @@ export function catchUpThresholdMs(intervalMinutes: number): number {
 
 const WINDOW_LABELS: Record<BackfillWindow, string> = { '1w': '1 週', '2w': '2 週', '1m': '1 個月', '3m': '3 個月', '6m': '6 個月' };
 
-/** Option label of a check interval, e.g. "30 分" or "每天". */
+/** A check interval in words, e.g. "每 30 分鐘", "每 3 小時" or "每天". */
 export function intervalLabel(minutes: number): string {
   if (minutes === 1440) return '每天';
-  if (minutes % 60 === 0) return `${minutes / 60} 小時`;
-  return `${minutes} 分`;
+  if (minutes % 60 === 0) return `每 ${minutes / 60} 小時`;
+  return `每 ${minutes} 分鐘`;
 }
 
 export function windowLabel(window: BackfillWindow): string {

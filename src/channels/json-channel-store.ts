@@ -1,11 +1,14 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ChannelCursor, YouTubeChannel } from '../core/types.js';
+import type { YouTubeChannel } from '../core/types.js';
+import { readJsonFile, writeJsonFile } from './json-file.js';
+import { CHANNELS_FILE, channelsFromJson, isLegacyChannelsJson, SCHEDULE_FILE, type ChannelsFile } from './subscription-files.js';
 
 export type ChannelPatch = Partial<Omit<YouTubeChannel, 'id' | 'addedAt'>>;
 
 export interface ChannelStore {
   list(): Promise<YouTubeChannel[]>;
+  /** Changes several subscriptions in one write; ids that no longer exist are left out of the result. */
+  updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]>;
   add(channel: YouTubeChannel): Promise<YouTubeChannel>;
   remove(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null>;
@@ -14,12 +17,9 @@ export interface ChannelStore {
 }
 
 export class JsonChannelStore implements ChannelStore {
-  private readonly filePath: string;
   private mutation: Promise<void> = Promise.resolve();
 
-  constructor(vaultRoot: string) {
-    this.filePath = path.join(vaultRoot, 'settings', 'youtube-channels.json');
-  }
+  constructor(private readonly root: string) {}
 
   async list(): Promise<YouTubeChannel[]> {
     await this.mutation;
@@ -65,6 +65,22 @@ export class JsonChannelStore implements ChannelStore {
     });
   }
 
+  updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
+    return this.mutate(async () => {
+      const channels = await this.readChannels();
+      const updated: YouTubeChannel[] = [];
+      const next = channels.map((channel) => {
+        const patch = patches.get(channel.id);
+        if (!patch) return channel;
+        const changed = { ...channel, ...patch };
+        updated.push(changed);
+        return changed;
+      });
+      if (updated.length > 0) await this.writeChannels(next);
+      return updated;
+    });
+  }
+
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.mutation.then(operation, operation);
     this.mutation = result.then(() => undefined, () => undefined);
@@ -72,53 +88,15 @@ export class JsonChannelStore implements ChannelStore {
   }
 
   private async readChannels(): Promise<YouTubeChannel[]> {
-    let contents: string;
-    try {
-      contents = await readFile(this.filePath, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
-    const parsed: unknown = JSON.parse(contents);
-    if (!Array.isArray(parsed) || !parsed.every(isYouTubeChannel)) {
-      throw new Error('Invalid YouTube channel settings');
-    }
-    return parsed.sort((left, right) => left.addedAt.localeCompare(right.addedAt));
+    const value = await readJsonFile(path.join(this.root, CHANNELS_FILE));
+    // A version 1 file is normally converted when the Vault opens; reading one here keeps a store
+    // used on its own correct, and the next write stores version 2.
+    const schedule = isLegacyChannelsJson(value) ? await readJsonFile(path.join(this.root, SCHEDULE_FILE)) : undefined;
+    return channelsFromJson(value, schedule).sort((left, right) => left.addedAt.localeCompare(right.addedAt));
   }
 
   private async writeChannels(channels: YouTubeChannel[]): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(channels, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx',
-    });
-    try {
-      await rename(temporaryPath, this.filePath);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    const file: ChannelsFile = { version: 2, channels };
+    await writeJsonFile(path.join(this.root, CHANNELS_FILE), file);
   }
-}
-
-function isYouTubeChannel(value: unknown): value is YouTubeChannel {
-  if (!value || typeof value !== 'object') return false;
-  const channel = value as Partial<YouTubeChannel>;
-  return typeof channel.id === 'string'
-    && typeof channel.title === 'string'
-    && typeof channel.url === 'string'
-    && typeof channel.enabled === 'boolean'
-    && typeof channel.addedAt === 'string'
-    && (channel.cursor === undefined || channel.cursor === null || isCursor(channel.cursor))
-    && (channel.lastCheckedAt === undefined || channel.lastCheckedAt === null || typeof channel.lastCheckedAt === 'string')
-    && (channel.backlog === undefined || typeof channel.backlog === 'boolean');
-}
-
-function isCursor(value: unknown): value is ChannelCursor {
-  if (!value || typeof value !== 'object') return false;
-  const cursor = value as Partial<ChannelCursor>;
-  return typeof cursor.videoId === 'string'
-    && (cursor.publishedAt === null || typeof cursor.publishedAt === 'string')
-    && Array.isArray(cursor.recentIds)
-    && cursor.recentIds.every((id) => typeof id === 'string');
 }

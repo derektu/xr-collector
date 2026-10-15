@@ -1,248 +1,233 @@
-import { describe, expect, it, vi } from 'vitest';
-import {
-  ChannelScheduler,
-  type ChannelScheduleStore,
-  type ScheduledChannelRunner,
-  type StoredChannelSchedule,
-} from '../../src/channels/channel-scheduler.js';
-import type { CollectionJob, JobProgress, JobSubmission } from '../../src/core/types.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ChannelCollector } from '../../src/channels/channel-collector.js';
+import { ChannelScheduler, type ChannelScheduleStore, type StoredChannelSchedule } from '../../src/channels/channel-scheduler.js';
+import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { Collector } from '../../src/core/collector.js';
+import type { CollectionPolicy } from '../../src/core/types.js';
+import { JobManager } from '../../src/jobs/job-manager.js';
+import { JobStore } from '../../src/jobs/job-store.js';
+import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
+
+const MINUTE = 60_000;
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 class MemoryScheduleStore implements ChannelScheduleStore {
   saves: StoredChannelSchedule[] = [];
-
-  constructor(private value: StoredChannelSchedule) {}
-
-  async load(): Promise<StoredChannelSchedule> {
-    return structuredClone(this.value);
-  }
-
+  constructor(private value: StoredChannelSchedule = { enabled: true }) {}
+  async load(): Promise<StoredChannelSchedule> { return structuredClone(this.value); }
   async save(value: StoredChannelSchedule): Promise<void> {
     this.value = structuredClone(value);
     this.saves.push(structuredClone(value));
   }
 }
 
-/** Channel jobs that stay unfinished until the test settles them. */
-class ControlledRunner implements ScheduledChannelRunner {
-  starts = 0;
-  failure: Error | null = null;
-  private readonly waiting = new Map<string, (job: CollectionJob) => void>();
-
-  triggers: string[] = [];
-
-  async startRun(request: { trigger: string }): Promise<JobSubmission[]> {
-    this.starts += 1;
-    this.triggers.push(request.trigger);
-    if (this.failure) throw this.failure;
-    return [{ job: job(`dispatch-${this.starts}`), deduplicated: false }];
-  }
-
-  whenSettled(id: string): Promise<CollectionJob> {
-    return new Promise((resolve) => this.waiting.set(id, resolve));
-  }
-
-  settle(id: string, progress: Partial<JobProgress>): void {
-    this.waiting.get(id)!({ ...job(id), state: 'completed', progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0, ...progress } });
-    this.waiting.delete(id);
-  }
-}
-
-function schedule(overrides: Partial<StoredChannelSchedule> = {}): StoredChannelSchedule {
+/**
+ * Subscriptions over synthetic channels with a controllable clock, and a scheduler whose polls the
+ * test runs by hand.
+ */
+async function world(schedule: StoredChannelSchedule = { enabled: true }) {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-scheduler-'));
+  roots.push(root);
+  const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
+  const now = () => clock.now;
+  const source = new SyntheticYouTube();
+  const documents = new MemoryDocuments(now);
+  const channelStore = new JsonChannelStore(root);
+  const collector = new Collector(documents);
+  const jobs = new JobManager({
+    vaultPath: root, store: JobStore.memory(now), source, documents: collector, channels: channelStore, now,
+    limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 },
+  });
+  const scheduleStore = new MemoryScheduleStore(schedule);
+  const events: string[] = [];
+  let scheduler!: ChannelScheduler;
+  const channels = new ChannelCollector(channelStore, jobs, {
+    autoCollection: () => scheduler.isEnabled(), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
+  });
+  scheduler = new ChannelScheduler(channels, scheduleStore, { now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => events.push(entry.eventType) });
+  const runs = vi.spyOn(channels, 'startRun');
+  const jobEvents = vi.spyOn(jobs, 'recordEvent');
   return {
-    enabled: true,
-    intervalMinutes: 5,
-    backfillWindow: '1m',
-    backfillMaxItems: 10,
-    lastAttemptAt: null,
-    lastCompletedAt: null,
-    nextRunAt: '2026-09-17T00:20:00.000Z',
-    lastResult: null,
-    ...overrides,
+    root, clock, source, jobs, channels, channelStore, scheduler, scheduleStore, events, runs,
+    jobEvents: () => jobEvents.mock.calls.map(([entry]) => entry.eventType),
+    advance(ms: number) { clock.now = new Date(clock.now.getTime() + ms); },
+    async idle() { await vi.waitFor(() => expect(jobs.isBusy()).toBe(false)); },
+    async subscribe(name: string, settings: Partial<CollectionPolicy>): Promise<string> {
+      const id = source.addChannel(name);
+      source.publish(id, name.slice(0, 1), clock.now, [1]);
+      const added = await jobs.whenSettled((await channels.addChannel(`@${name}`, settings)).job.id);
+      await jobs.whenSettled(added.result!.followUpJobId!);
+      return id;
+    },
+    scheduledChecks(id: string): number {
+      return jobs.list({ limit: 100 }).jobs.filter((job) => job.kind === 'youtube.channel' && job.source.id === id && job.scope?.trigger === 'scheduled').length;
+    },
+    async channel(id: string) { return (await channelStore.list()).find((channel) => channel.id === id)!; },
   };
 }
 
-describe('ChannelScheduler', () => {
-  it('dispatches due channels and returns before their jobs finish', async () => {
-    let now = new Date('2026-09-17T00:30:00.000Z');
-    const store = new MemoryScheduleStore(schedule({
-      lastAttemptAt: '2026-09-16T23:00:00.000Z',
-      lastCompletedAt: '2026-09-16T23:01:00.000Z',
-      nextRunAt: '2026-09-16T23:05:00.000Z',
-    }));
-    const runner = new ControlledRunner();
-    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
+type World = Awaited<ReturnType<typeof world>>;
 
-    await scheduler.start();
-    await scheduler.checkNow();
-    // Missed periods coalesce into one dispatch, and the check is over while the job still runs.
-    expect(runner.starts).toBe(1);
-    expect(scheduler.isBusy()).toBe(false);
-    expect(await scheduler.getSchedule()).toMatchObject({
-      status: 'running',
-      lastAttemptAt: '2026-09-17T00:30:00.000Z',
-      lastCompletedAt: '2026-09-16T23:01:00.000Z',
-      nextRunAt: '2026-09-17T00:35:00.000Z',
-    });
+async function poll(w: World): Promise<void> {
+  await w.scheduler.checkNow();
+  await w.idle();
+}
 
-    now = new Date('2026-09-17T00:32:00.000Z');
-    runner.settle('dispatch-1', { created: 2, existing: 1, failed: 1 });
-    await vi.waitFor(async () => expect(await scheduler.getSchedule()).toEqual({
-      enabled: true,
-      intervalMinutes: 5,
-      backfillWindow: '1m',
-      backfillMaxItems: 10,
-      status: 'scheduled',
-      lastAttemptAt: '2026-09-17T00:30:00.000Z',
-      lastCompletedAt: '2026-09-17T00:32:00.000Z',
-      nextRunAt: '2026-09-17T00:35:00.000Z',
-      lastResult: { runId: null, created: 2, existing: 1, failed: 1 },
-    }));
-    await scheduler.close();
-  });
-
-  it('keeps checking at the next due time while earlier jobs are still running', async () => {
-    let now = new Date('2026-09-17T00:30:00.000Z');
-    const runner = new ControlledRunner();
-    const scheduler = new ChannelScheduler(runner, new MemoryScheduleStore(schedule()), { now: () => now, pollIntervalMs: 60_000 });
-
-    await scheduler.start();
-    await scheduler.checkNow();
-    now = new Date('2026-09-17T00:35:00.000Z');
-    await scheduler.checkNow();
-    expect(runner.starts).toBe(2);
-
-    // Only the latest dispatch records its result.
-    runner.settle('dispatch-1', { created: 5 });
-    runner.settle('dispatch-2', { existing: 3 });
-    await vi.waitFor(async () => expect((await scheduler.getSchedule()).lastResult).toMatchObject({ created: 0, existing: 3 }));
-    await scheduler.close();
-  });
-
-  it('automatically dispatches when an enabled schedule becomes due', async () => {
-    let now = new Date('2026-09-17T00:00:00.000Z');
-    const runner = new ControlledRunner();
-    const scheduler = new ChannelScheduler(runner, new MemoryScheduleStore(schedule({ enabled: false, intervalMinutes: 60, nextRunAt: null })), {
-      now: () => now,
-      pollIntervalMs: 5,
-    });
-
-    await scheduler.start();
-    await scheduler.updateSchedule({ enabled: true, intervalMinutes: 15 });
-    now = new Date('2026-09-17T00:15:00.000Z');
-
-    await vi.waitFor(() => expect(runner.starts).toBe(1), { timeout: 200 });
-    await scheduler.close();
-  });
-
-  it('records a failed dispatch, retries next period and persists a paused schedule', async () => {
-    let now = new Date('2026-09-17T00:00:00.000Z');
-    const store = new MemoryScheduleStore(schedule({ enabled: false, intervalMinutes: 60, nextRunAt: null }));
-    const runner = new ControlledRunner();
-    runner.failure = new Error('沒有可執行的 YouTube 頻道。');
-    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
-
-    await scheduler.start();
-    expect(await scheduler.updateSchedule({ enabled: true, intervalMinutes: 15 })).toMatchObject({
-      status: 'scheduled',
-      nextRunAt: '2026-09-17T00:15:00.000Z',
-    });
-
-    now = new Date('2026-09-17T00:15:00.000Z');
-    await scheduler.checkNow();
-    expect(await scheduler.getSchedule()).toMatchObject({
-      status: 'scheduled',
-      lastResult: { runId: null, failed: 1, error: '沒有可執行的 YouTube 頻道。' },
-      nextRunAt: '2026-09-17T00:30:00.000Z',
-    });
-
-    runner.failure = null;
-    now = new Date('2026-09-17T00:30:00.000Z');
-    await scheduler.checkNow();
-    expect(runner.starts).toBe(2);
-
-    expect(await scheduler.updateSchedule({ enabled: false })).toMatchObject({
-      status: 'paused',
-      nextRunAt: null,
-    });
-    expect(store.saves.at(-1)).toMatchObject({ enabled: false, nextRunAt: null });
-    await scheduler.close();
-  });
-});
-
-describe('ChannelScheduler Global settings', () => {
-  it('schedules the first check one interval after starting when enabled without a due time', async () => {
-    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: null }));
-    const scheduler = new ChannelScheduler(new ControlledRunner(), store, { now: () => new Date('2026-09-17T00:00:00.000Z'), pollIntervalMs: 60_000 });
-    await scheduler.start();
-    expect((await scheduler.getSchedule()).nextRunAt).toBe('2026-09-17T00:30:00.000Z');
-    expect(store.saves.at(-1)).toMatchObject({ nextRunAt: '2026-09-17T00:30:00.000Z' });
-    await scheduler.close();
-  });
-
-  it('applies partial updates, validates offered values and records an event', async () => {
-    const now = new Date('2026-09-17T00:00:00.000Z');
-    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: '2026-09-17T00:30:00.000Z' }));
-    const events: string[] = [];
-    const scheduler = new ChannelScheduler(new ControlledRunner(), store, {
-      now: () => now, pollIntervalMs: 60_000, recordEvent: (entry) => events.push(entry.eventType),
-    });
-
-    expect(await scheduler.updateSchedule({ backfillWindow: '1w' })).toMatchObject({
-      enabled: true, intervalMinutes: 30, backfillWindow: '1w', backfillMaxItems: 10, nextRunAt: '2026-09-17T00:30:00.000Z',
-    });
-    expect(await scheduler.updateSchedule({ backfillMaxItems: 5 })).toMatchObject({ backfillWindow: '1w', backfillMaxItems: 5 });
-    for (const invalid of [{ intervalMinutes: 45 }, { intervalMinutes: 1 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { enabled: 'yes' }]) {
-      await expect(scheduler.updateSchedule(invalid as never)).rejects.toMatchObject({ code: 'invalid_request' });
+describe('per-subscription scheduling (A2)', () => {
+  it('checks each subscription on its own interval', async () => {
+    const w = await world();
+    const quarter = await w.subscribe('quarter', { intervalMinutes: 15 });
+    const hourly = await w.subscribe('hourly', { intervalMinutes: 60 });
+    const daily = await w.subscribe('daily', { intervalMinutes: 1440 });
+    await w.scheduler.start();
+    for (let step = 0; step < 8; step += 1) {
+      w.advance(15 * MINUTE);
+      await poll(w);
     }
-    expect(store.saves).toHaveLength(2);
-    expect(events).toEqual(['schedule.updated', 'schedule.updated']);
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly), w.scheduledChecks(daily)]).toEqual([8, 2, 0]);
+    expect(await w.channel(daily)).toMatchObject({ nextCheckAt: '2026-10-16T04:00:00.000Z' });
+    await w.scheduler.close();
   });
 
-  it('counts a new interval from the last dispatch and is due at once when that time has passed', async () => {
-    let now = new Date('2026-09-17T01:00:00.000Z');
-    const store = new MemoryScheduleStore(schedule({
-      intervalMinutes: 180, lastAttemptAt: '2026-09-17T00:40:00.000Z', nextRunAt: '2026-09-17T03:40:00.000Z',
-    }));
-    const runner = new ControlledRunner();
-    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
-
-    expect((await scheduler.updateSchedule({ intervalMinutes: 60 })).nextRunAt).toBe('2026-09-17T01:40:00.000Z');
-    expect((await scheduler.updateSchedule({ intervalMinutes: 15 })).nextRunAt).toBe('2026-09-17T01:00:00.000Z');
-    // Changing only the backfill range moves nothing and dispatches nothing.
-    now = new Date('2026-09-17T00:59:00.000Z');
-    expect((await scheduler.updateSchedule({ backfillWindow: '6m' })).nextRunAt).toBe('2026-09-17T01:00:00.000Z');
-    expect(runner.starts).toBe(0);
+  it('submits the subscriptions due in one poll together, one job each', async () => {
+    const w = await world();
+    const quarter = await w.subscribe('together-a', { intervalMinutes: 15 });
+    const hourly = await w.subscribe('together-b', { intervalMinutes: 60 });
+    await w.scheduler.start();
+    w.runs.mockClear();
+    w.advance(60 * MINUTE);
+    await poll(w);
+    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', channelIds: [quarter, hourly] }]]);
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
+    expect(await w.channel(quarter)).toMatchObject({ lastDispatchedAt: '2026-10-15T05:00:00.000Z', nextCheckAt: '2026-10-15T05:15:00.000Z' });
+    expect(await w.channel(hourly)).toMatchObject({ lastDispatchedAt: '2026-10-15T05:00:00.000Z', nextCheckAt: '2026-10-15T06:00:00.000Z' });
+    await w.scheduler.close();
   });
 
-  it('checks now on request even when automatic collection is off, and moves the next automatic check', async () => {
-    let now = new Date('2026-09-17T00:10:00.000Z');
-    const store = new MemoryScheduleStore(schedule({ intervalMinutes: 30, nextRunAt: '2026-09-17T00:30:00.000Z' }));
-    const runner = new ControlledRunner();
-    const scheduler = new ChannelScheduler(runner, store, { now: () => now, pollIntervalMs: 60_000 });
+  it('joins a job still running and moves the next check without a second job', async () => {
+    const w = await world();
+    const id = await w.subscribe('slow', { intervalMinutes: 15 });
+    await w.scheduler.start();
+    w.source.holdCaptures = true;
+    const [video] = w.source.publish(id, 'n', w.clock.now, [0.001], 5);
+    w.advance(15 * MINUTE);
+    await w.scheduler.checkNow();
+    await vi.waitFor(() => expect(w.source.running()).toEqual([video]));
+    w.advance(15 * MINUTE);
+    await w.scheduler.checkNow();
+    expect(w.scheduledChecks(id)).toBe(1);
+    expect(await w.channel(id)).toMatchObject({ nextCheckAt: '2026-10-15T04:45:00.000Z' });
+    w.source.holdCaptures = false;
+    w.source.release(video!);
+    await w.idle();
+    await w.scheduler.close();
+  });
 
-    const submissions = await scheduler.runNow();
+  it('never checks a paused subscription, and checks nothing while automatic collection is off', async () => {
+    const w = await world();
+    const active = await w.subscribe('active', { intervalMinutes: 15 });
+    const paused = await w.subscribe('paused', { intervalMinutes: 15 });
+    await w.channels.setChannelEnabled(paused, false);
+    expect(await w.channel(paused)).toMatchObject({ nextCheckAt: null });
+    await w.scheduler.start();
+    w.advance(15 * MINUTE);
+    await poll(w);
+    expect([w.scheduledChecks(active), w.scheduledChecks(paused)]).toEqual([1, 0]);
+
+    expect(await w.scheduler.updateSchedule({ enabled: false })).toMatchObject({ enabled: false, status: 'paused', nextCheck: null });
+    w.advance(120 * MINUTE);
+    await poll(w);
+    expect(w.scheduledChecks(active)).toBe(1);
+
+    // Turning it on counts every enabled subscription's next check from now.
+    await w.scheduler.updateSchedule({ enabled: true });
+    expect(await w.channel(active)).toMatchObject({ nextCheckAt: '2026-10-15T06:30:00.000Z' });
+    expect(await w.channel(paused)).toMatchObject({ nextCheckAt: null });
+    await poll(w);
+    expect(w.scheduledChecks(active)).toBe(1);
+    expect(w.scheduleStore.saves).toEqual([{ enabled: false }, { enabled: true }]);
+    expect(w.events.filter((event) => event === 'schedule.updated')).toHaveLength(2);
+    await expect(w.scheduler.updateSchedule({ enabled: 'yes' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    await w.scheduler.close();
+  });
+
+  it('counts a new interval from the last check and is due at once when that time has passed', async () => {
+    const w = await world();
+    const id = await w.subscribe('interval', { intervalMinutes: 180 });
+    w.advance(40 * MINUTE);
+    expect(await w.channels.updateSettings(id, { intervalMinutes: 60 })).toMatchObject({ nextCheckAt: '2026-10-15T05:00:00.000Z' });
+    w.advance(30 * MINUTE);
+    expect(await w.channels.updateSettings(id, { intervalMinutes: 15 })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
+    // Backfill settings move nothing and start nothing.
+    expect(await w.channels.updateSettings(id, { backfillWindow: '6m' })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
+    expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(2);
+    await expect(w.channels.updateSettings(id, { backfillMaxItems: 7 })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(w.jobEvents().filter((event) => event === 'subscription.settings_updated')).toHaveLength(3);
+  });
+
+  it('moves the next check of every subscription a manual check reaches', async () => {
+    const w = await world({ enabled: false });
+    const id = await w.subscribe('manual', { intervalMinutes: 30 });
+    w.advance(10 * MINUTE);
+    const submissions = await w.scheduler.runNow();
     expect(submissions).toHaveLength(1);
-    expect(runner.triggers).toEqual(['manual']);
-    expect(await scheduler.getSchedule()).toMatchObject({
-      status: 'running', lastAttemptAt: '2026-09-17T00:10:00.000Z', nextRunAt: '2026-09-17T00:40:00.000Z',
+    await w.idle();
+    expect(await w.channel(id)).toMatchObject({ lastDispatchedAt: '2026-10-15T04:10:00.000Z', nextCheckAt: '2026-10-15T04:40:00.000Z' });
+  });
+
+  it('plans subscriptions without a next check one interval from the first poll', async () => {
+    const w = await world();
+    const id = await w.subscribe('unplanned', { intervalMinutes: 60 });
+    await w.channelStore.update(id, { nextCheckAt: null });
+    w.advance(5 * MINUTE);
+    await w.scheduler.start();
+    await w.scheduler.checkNow();
+    expect(await w.channel(id)).toMatchObject({ nextCheckAt: '2026-10-15T05:05:00.000Z' });
+    expect(w.scheduledChecks(id)).toBe(0);
+    await w.scheduler.close();
+  });
+
+  it('reports the newest check and the subscription due first by name', async () => {
+    const w = await world();
+    const first = await w.subscribe('first', { intervalMinutes: 60 });
+    w.advance(5 * MINUTE);
+    const second = await w.subscribe('second', { intervalMinutes: 15 });
+    expect(await w.scheduler.getSchedule()).toEqual({
+      enabled: true,
+      status: 'scheduled',
+      lastCheck: { channelId: second, title: '合成頻道 second', at: '2026-10-15T04:05:00.000Z' },
+      nextCheck: { channelId: second, title: '合成頻道 second', at: '2026-10-15T04:20:00.000Z' },
     });
-
-    await scheduler.updateSchedule({ enabled: false });
-    now = new Date('2026-09-17T00:20:00.000Z');
-    await scheduler.runNow();
-    expect(runner.triggers).toEqual(['manual', 'manual']);
-    expect(await scheduler.getSchedule()).toMatchObject({ enabled: false, lastAttemptAt: '2026-09-17T00:20:00.000Z', nextRunAt: null });
-
-    runner.failure = new Error('沒有可檢查的訂閱。');
-    await expect(scheduler.runNow()).rejects.toThrow('沒有可檢查的訂閱。');
+    await w.channels.setChannelEnabled(second, false);
+    expect((await w.scheduler.getSchedule()).nextCheck).toEqual({ channelId: first, title: '合成頻道 first', at: '2026-10-15T05:00:00.000Z' });
+    await w.scheduler.updateSchedule({ enabled: false });
+    expect(await w.scheduler.getSchedule()).toMatchObject({ status: 'paused', nextCheck: null, lastCheck: { channelId: second } });
   });
 });
 
-function job(id: string): CollectionJob {
-  return {
-    id, kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: '/vault', parentId: null,
-    source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1/videos', title: '頻道' },
-    createdAt: '2026-09-17T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-09-17T00:00:00.000Z',
-    progress: null, items: null, result: null, error: null,
-  };
-}
+describe('apply settings to the same type (A5)', () => {
+  it('gives every other subscription the settings, keeps paused ones paused and starts nothing', async () => {
+    const w = await world();
+    const source = await w.subscribe('source', { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 });
+    const other = await w.subscribe('other', {});
+    const paused = await w.subscribe('resting', {});
+    await w.channels.setChannelEnabled(paused, false);
+    const jobsBefore = w.jobs.list({ limit: 100 }).jobs.length;
+    w.advance(10 * MINUTE);
+
+    expect(await w.channels.applySettingsToAll(source)).toEqual({ updated: 2, paused: 1 });
+    const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 };
+    expect(await w.channel(other)).toMatchObject({ settings, enabled: true, nextCheckAt: '2026-10-15T05:00:00.000Z' });
+    expect(await w.channel(paused)).toMatchObject({ settings, enabled: false, nextCheckAt: null });
+    expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);
+    expect(w.jobEvents()).toContain('subscription.settings_applied');
+    await expect(w.channels.applySettingsToAll('UCmissing')).rejects.toMatchObject({ code: 'channel_not_found' });
+  });
+});

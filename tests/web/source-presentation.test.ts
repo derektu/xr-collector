@@ -10,13 +10,14 @@ import {
   initials,
   jobRecordLabel,
   parseSourceListState,
-  sharedPolicySummary,
   shortTimeLabel,
   showsSingleItems,
   sourceListSearch,
   sourcePath,
   sourceRouteForPath,
   sourceStatusLabel,
+  checkTimesLine,
+  nextCheckLabel,
 } from '../../src/web/source-presentation.js';
 
 const originalZone = process.env.TZ;
@@ -26,7 +27,7 @@ afterEach(() => { process.env.TZ = originalZone; });
 function source(overrides: Partial<SourceEntry>): SourceEntry {
   return {
     id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    status: 'tracking', lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
+    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, status: 'tracking', lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
     type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', ...overrides,
   };
 }
@@ -94,7 +95,7 @@ describe('source presentation (T-09)', () => {
     expect(backgroundStatus(0, { enabled: false })).toEqual({ tone: 'off', text: '自動收集已暫停' });
   });
 
-  it('describes collection records and the shared settings', () => {
+  it('describes collection records', () => {
     const now = new Date('2026-10-15T06:00:00.000Z');
     const record = (overrides: Partial<SourceJobRecord>): SourceJobRecord => ({
       id: 'r', state: 'completed', trigger: 'scheduled', createdAt: '2026-10-15T05:00:00.000Z', startedAt: null,
@@ -111,11 +112,19 @@ describe('source presentation (T-09)', () => {
       .toBe('4／10 · 等待重試 · 已接續');
     expect(jobRecordLabel(record({ resumedCount: 1 }), now).detail).toBe('今天 13:30 · 新增 1・曾中斷後接續');
     expect(jobRecordLabel(record({ state: 'interrupted' }), now).detail).toBe('今天 13:30 · 已中斷，重新開啟時接續');
-    expect(sharedPolicySummary({ enabled: true, intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }))
-      .toBe('每 30 分鐘檢查新影片；首次訂閱與恢復時補收最近 1 個月內最新的最多 10 支未收集影片。');
-    expect(sharedPolicySummary({ enabled: true, intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 })).toMatch(/^每 1 小時檢查新影片/u);
-    expect(sharedPolicySummary({ enabled: true, intervalMinutes: 1440, backfillWindow: '2w', backfillMaxItems: 5 })).toMatch(/^每天檢查新影片/u);
-    expect(sharedPolicySummary({ enabled: false, intervalMinutes: 30, backfillWindow: '2w', backfillMaxItems: 5 })).toMatch(/^自動收集已暫停/u);
+  });
+
+  it('names the sources of the last and next check under the list, as their detail pages show them (A6)', () => {
+    const now = new Date('2026-10-15T06:00:00.000Z');
+    const lastCheck = { channelId: 'UC1', title: '財經八百', at: '2026-10-15T06:00:00.000Z' };
+    const nextCheck = { channelId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
+    expect(checkTimesLine({ enabled: true, lastCheck, nextCheck }, now)).toBe('上次檢查 今天 14:00（財經八百） · 下一個檢查 今天 14:30（3Blue1Brown）');
+    expect(checkTimesLine({ enabled: false, lastCheck, nextCheck: null }, now)).toBe('上次檢查 今天 14:00（財經八百） · 自動收集已暫停');
+    expect(checkTimesLine({ enabled: true, lastCheck: null, nextCheck: null }, now)).toBe('上次檢查 尚未檢查 · 下一個檢查 沒有追蹤中的來源');
+    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, true, now)).toBe('今天 14:30');
+    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, false, now)).toBe('自動收集已暫停');
+    expect(nextCheckLabel({ enabled: false, nextCheckAt: null }, true, now)).toBe('已暫停');
+    expect(nextCheckLabel({ enabled: true, nextCheckAt: null }, true, now)).toBe('尚未排定');
   });
 
   it('shortens names and addresses for display', () => {

@@ -7,6 +7,7 @@ import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
+import { migrateSubscriptionSettings } from '../channels/subscription-files.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
@@ -343,6 +344,7 @@ export class VaultWorkspace {
   }
 
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
+    await migrateSubscriptionSettings(root);
     const vault = new MarkdownVault(root);
     const runtime = this.options.createSearch ? await this.options.createSearch(root) : await startSearchRuntime({
       vault, binaryPath: this.options.searchBinary, databasePath: this.searchPath(root),
@@ -351,8 +353,8 @@ export class VaultWorkspace {
     const collector = new Collector(vault, runtime.search);
     const channelStore = new JsonChannelStore(root);
     const source = youtubeSource(this.options.capture, this.options.channelSource);
-    // The scheduler is replaced after a merge, so policy reads go through the bundle.
-    const policy = () => bundle.schedule.getPolicy();
+    // The scheduler is replaced after a merge, so switch reads go through the bundle.
+    const autoCollection = () => bundle.schedule.isEnabled();
     // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
     const jobs = new JobManager({
       vaultPath: root,
@@ -360,12 +362,11 @@ export class VaultWorkspace {
       source,
       documents: collector,
       channels: channelStore,
-      policy,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
     });
     const channels = new ChannelCollector(channelStore, jobs, {
-      policy, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),
+      autoCollection, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),
     });
     const partial = { root, runtime, collector, channels, jobs };
     const bundle: Bundle = { ...partial, schedule: makeScheduler(partial) };

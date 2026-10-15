@@ -1,47 +1,27 @@
-import type { ChannelJobTrigger, ChannelSchedule, CollectionJob, CollectionPolicy, Subscription } from '../core/types.js';
-import { BACKFILL_LIMITS, BACKFILL_WINDOWS, INTERVAL_OPTIONS, intervalLabel, windowLabel } from '../channels/collection-policy.js';
-import { dateTimeLabel } from './document-presentation.js';
+import type { ChannelJobTrigger, CollectionJob, CollectionPolicy, Subscription } from '../core/types.js';
+import { intervalLabel, windowLabel } from '../channels/collection-policy.js';
 
 export { intervalLabel, windowLabel };
 
-export const intervalChoices = INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) }));
-export const windowChoices = BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) }));
-export const limitChoices = BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 則` }));
-
-/** "每 30 分鐘" style wording for sentences. */
-function intervalPhrase(minutes: number): string {
-  if (minutes === 1440) return '每天';
-  if (minutes % 60 === 0) return `每 ${minutes / 60} 小時`;
-  return `每 ${minutes} 分鐘`;
+/** The backfill range in words, e.g. "最近 1 個月內最新的 10 支影片". */
+export function backfillPhrase(settings: Pick<CollectionPolicy, 'backfillWindow' | 'backfillMaxItems'>): string {
+  return `最近 ${windowLabel(settings.backfillWindow)}內最新的 ${settings.backfillMaxItems} 支影片`;
 }
 
-/** The backfill range in words, e.g. "最近 1 個月內最新的最多 10 支未收集影片". */
-export function backfillPhrase(policy: Pick<CollectionPolicy, 'backfillWindow' | 'backfillMaxItems'>): string {
-  return `最近 ${windowLabel(policy.backfillWindow)}內最新的最多 ${policy.backfillMaxItems} 支未收集影片`;
+/** What subscribing with `settings` does, as the confirmation card says it. */
+export function subscribeSummary(settings: CollectionPolicy, autoCollection: boolean): string {
+  return autoCollection
+    ? `訂閱後先收集${backfillPhrase(settings)}，之後${intervalLabel(settings.intervalMinutes)}檢查新影片。`
+    : `訂閱後先收集${backfillPhrase(settings)}。自動收集目前已暫停，開啟後才會定時檢查新影片。`;
 }
 
-/** What subscribing does under the current Global settings; the part after it links to Settings. */
-export function subscribeSummary(policy: CollectionPolicy & { enabled: boolean }): { text: string; settingsLead: string; settingsTail: string } {
-  const tracking = policy.enabled
-    ? `之後${intervalPhrase(policy.intervalMinutes)}自動檢查新內容。`
-    : '自動收集目前已暫停，恢復後才會定時檢查新內容。';
-  return {
-    text: `訂閱後，先收集${backfillPhrase(policy)}，${tracking}`,
-    settingsLead: '所有訂閱共用自動收集設定，可在',
-    settingsTail: '中調整。',
-  };
+/** What resuming a paused subscription does with its own settings. */
+export function resumeSummary(settings: CollectionPolicy): string {
+  return `這個訂閱已暫停。恢復後補收${backfillPhrase(settings)}，之後${intervalLabel(settings.intervalMinutes)}檢查新影片。`;
 }
 
 export function removeConfirmation(subscription: Pick<Subscription, 'documentCount'>): string {
   return `停止自動收集，已收集的 ${subscription.documentCount} 份文件保留。`;
-}
-
-/** Last and next check times shown in the subscription list header and the Settings card. */
-export function checkTimes(schedule: ChannelSchedule): { last: string; next: string } {
-  return {
-    last: schedule.lastAttemptAt ? dateTimeLabel(schedule.lastAttemptAt) : '尚未檢查',
-    next: !schedule.enabled ? '自動收集已暫停' : schedule.nextRunAt ? dateTimeLabel(schedule.nextRunAt) : '尚未排定',
-  };
 }
 
 const TRIGGER_LABELS = {

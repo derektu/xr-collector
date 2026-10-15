@@ -7,6 +7,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import { parsePolicyPatch } from '../channels/collection-policy.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
 import { recognizeUrl, SOURCE_TYPES, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
@@ -34,8 +35,10 @@ export interface ChannelCollection {
   listChannels(): Promise<YouTubeChannel[]>;
   listSubscriptions(): Promise<Subscription[]>;
   preview(url: string): Promise<ChannelPreview>;
-  addChannel(url: string): Promise<JobSubmission>;
+  addChannel(url: string, settings?: Partial<CollectionPolicy>): Promise<JobSubmission>;
   setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }>;
+  updateSettings(id: string, patch: Partial<CollectionPolicy>): Promise<YouTubeChannel>;
+  applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
   removeChannel(id: string): Promise<{ documentsKept: number }>;
   startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
   channelJobs(id: string): CollectionJob[];
@@ -51,12 +54,12 @@ export interface CollectionJobs {
 
 export interface ChannelScheduleManagement {
   getSchedule(): Promise<ChannelSchedule>;
-  updateSchedule(input: Partial<CollectionPolicy & { enabled: boolean }>): Promise<ChannelSchedule>;
+  updateSchedule(input: { enabled: boolean }): Promise<ChannelSchedule>;
   /** Checks every enabled subscription now. */
   runNow(): Promise<JobSubmission[]>;
 }
 
-const SCHEDULE_FIELDS = new Set(['enabled', 'intervalMinutes', 'backfillWindow', 'backfillMaxItems']);
+const SCHEDULE_FIELDS = new Set(['enabled']);
 
 /** Vault location operations that stay available before a Vault is active. */
 export interface VaultSetup {
@@ -368,8 +371,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const keys = Object.keys(body);
       const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
       if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-      if (keys.length === 0) throw new CollectorError('invalid_request', '請提供至少一個要修改的設定。');
-      return { schedule: await schedule.updateSchedule(body as Partial<CollectionPolicy & { enabled: boolean }>) };
+      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動收集開關必須是 true 或 false。');
+      return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
     });
   }
 
@@ -386,22 +389,34 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { preview: await channels.preview(request.body.url) };
     });
 
-    app.post<{ Body: { url?: unknown } }>('/api/youtube/channels', async (request, reply) => {
+    app.post<{ Body: { url?: unknown; settings?: unknown } }>('/api/youtube/channels', async (request, reply) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
       }
-      return reply.code(202).send(await channels.addChannel(request.body.url));
+      const settings = request.body.settings === undefined ? {} : parsePolicyPatch(request.body.settings);
+      return reply.code(202).send(await channels.addChannel(request.body.url, settings));
     });
 
+    // Settings change first, so a resume in the same request backfills with the new range.
     app.patch<{
       Params: { id: string };
-      Body: { enabled?: unknown };
+      Body: { enabled?: unknown; settings?: unknown } | null;
     }>('/api/youtube/channels/:id', async (request) => {
-      if (typeof request.body?.enabled !== 'boolean') {
-        throw new CollectorError('invalid_request', '頻道啟用設定無效。');
-      }
-      return channels.setChannelEnabled(request.params.id, request.body.enabled);
+      const body = request.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', '頻道設定必須是 JSON 物件。');
+      const unknown = Object.keys(body).find((key) => key !== 'enabled' && key !== 'settings');
+      if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
+      if (body.enabled === undefined && body.settings === undefined) throw new CollectorError('invalid_request', '請提供 enabled 或 settings。');
+      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '頻道啟用設定無效。');
+      const settings = body.settings === undefined ? null : parsePolicyPatch(body.settings);
+      let channel = settings ? await channels.updateSettings(request.params.id, settings) : null;
+      let submission: JobSubmission | null = null;
+      if (typeof body.enabled === 'boolean') ({ channel, submission } = await channels.setChannelEnabled(request.params.id, body.enabled));
+      return { channel, submission };
     });
+
+    app.post<{ Params: { id: string } }>('/api/youtube/channels/:id/apply-settings', async (request) =>
+      channels.applySettingsToAll(request.params.id));
 
     app.delete<{ Params: { id: string } }>('/api/youtube/channels/:id', async (request) => {
       const { documentsKept } = await channels.removeChannel(request.params.id);
@@ -418,7 +433,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       ) {
         throw new CollectorError('invalid_request', '頻道執行範圍無效。');
       }
-      // Checking every subscription is the schedule's manual check, so it moves the next automatic one.
+      // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
       const submissions = channelIds === undefined && options.schedule
         ? await options.schedule.runNow()
         : await channels.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });

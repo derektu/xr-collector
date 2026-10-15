@@ -75,59 +75,37 @@ async function settledJob(app: FastifyInstance, id: string) {
 }
 
 describe('HTTP app', () => {
-  it('reads and updates the channel schedule through HTTP', async () => {
+  it('reads the schedule summary and switches automatic collection through HTTP', async () => {
     const calls: unknown[] = [];
     const scheduleValue = {
       enabled: true,
-      intervalMinutes: 15,
-      backfillWindow: '1m' as const,
-      backfillMaxItems: 10,
       status: 'scheduled' as const,
-      lastAttemptAt: null,
-      lastCompletedAt: null,
-      nextRunAt: '2026-09-17T00:15:00.000Z',
-      lastResult: null,
+      lastCheck: { channelId: 'UC1', title: '頻道一', at: '2026-09-17T00:00:00.000Z' },
+      nextCheck: { channelId: 'UC2', title: '頻道二', at: '2026-09-17T00:15:00.000Z' },
     };
     const schedule = {
       getSchedule: async () => scheduleValue,
-      updateSchedule: async (input: Record<string, unknown>) => {
-        if (input.intervalMinutes === 0) throw new CollectorError('invalid_request', '檢查頻率無效。');
+      updateSchedule: async (input: { enabled: boolean }) => {
         calls.push(input);
-        return { ...scheduleValue, ...input };
+        return { ...scheduleValue, ...input, status: 'paused' as const, nextCheck: null };
       },
       runNow: async () => [],
     };
     const app = await createHttpApp({ collector: makeCollector(), schedule });
 
     const read = await app.inject({ method: 'GET', url: '/api/youtube/schedule' });
-    const updated = await app.inject({
-      method: 'PUT',
-      url: '/api/youtube/schedule',
-      payload: { enabled: false, intervalMinutes: 60 },
-    });
-    const partial = await app.inject({
-      method: 'PUT',
-      url: '/api/youtube/schedule',
-      payload: { backfillWindow: '1w' },
-    });
-    const invalid = await app.inject({
-      method: 'PUT',
-      url: '/api/youtube/schedule',
-      payload: { enabled: true, intervalMinutes: 0 },
-    });
-    const unknownField = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: { interval: 30 } });
-    const empty = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: {} });
+    const updated = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: { enabled: false } });
+    const rejected = await Promise.all([
+      { enabled: false, intervalMinutes: 60 }, { backfillWindow: '1w' }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
+    ].map((payload) => app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload })));
 
     expect(read.json()).toEqual({ schedule: scheduleValue });
-    expect(updated.json()).toMatchObject({
-      schedule: { enabled: false, intervalMinutes: 60 },
-    });
-    expect(partial.json()).toMatchObject({ schedule: { backfillWindow: '1w', intervalMinutes: 15 } });
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json().error.code).toBe('invalid_request');
-    expect(unknownField.statusCode).toBe(400);
-    expect(empty.statusCode).toBe(400);
-    expect(calls).toEqual([{ enabled: false, intervalMinutes: 60 }, { backfillWindow: '1w' }]);
+    expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null } });
+    for (const response of rejected) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe('invalid_request');
+    }
+    expect(calls).toEqual([{ enabled: false }]);
     await app.close();
   });
 
@@ -138,6 +116,7 @@ describe('HTTP app', () => {
       url: 'https://www.youtube.com/channel/UC-channel-one/videos',
       enabled: true,
       addedAt: '2026-09-17T00:00:00.000Z',
+      settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
     };
     const run = {
       id: 'run-1',
@@ -169,8 +148,9 @@ describe('HTTP app', () => {
         if (url.includes('watch')) throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
         return {
           channel: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
-          subscription: { enabled: true },
-          policy: { enabled: true, intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
+          subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 } },
+          settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
+          autoCollection: true,
         };
       },
       addChannel: async (url: string) => {

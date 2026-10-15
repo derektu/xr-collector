@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
-import { DEFAULT_POLICY, isBackfillLimit, isBackfillWindow, normalizeInterval } from '../channels/collection-policy.js';
-import { CollectorError, type CollectionPolicy, type MergeItem, type MergeChoice } from '../core/types.js';
+import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE } from '../channels/subscription-files.js';
+import { CollectorError, type MergeItem, type MergeChoice, type YouTubeChannel } from '../core/types.js';
 
 export type Files = Map<string, Buffer>;
 export const fingerprint = (data: Buffer) => createHash('sha256').update(data).digest('hex');
@@ -30,37 +30,41 @@ function view(bytes: Buffer | undefined): string {
   if (text.includes('\0') || !Buffer.from(text).equals(bytes)) return `二進位檔案 · ${bytes.length} bytes · SHA-256 ${fingerprint(bytes)}`;
   return text.length > 100_000 ? `${text.slice(0, 100_000)}\n…（僅顯示前 100000 字元；比較使用完整內容）` : text;
 }
-const CHANNELS = 'settings/youtube-channels.json';
-const SCHEDULE = 'settings/youtube-schedule.json';
-function channels(files: Files): Map<string, Record<string, unknown>> {
-  const rows = JSON.parse(files.get(CHANNELS)?.toString() ?? '[]') as Record<string, unknown>[];
-  const result = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    const id = String(row.id);
-    if (result.has(id)) throw new CollectorError('invalid_request', `頻道 ID 重複：${id}`);
-    result.set(id, row);
+/**
+ * Subscriptions of a package by ID, each with its own settings. A version 1 package's rows take the
+ * shared settings of its own schedule file, so packages of both versions compare alike.
+ */
+function channels(files: Files): Map<string, YouTubeChannel> {
+  const json = (file: string) => {
+    const bytes = files.get(file);
+    return bytes ? JSON.parse(bytes.toString()) as unknown : undefined;
+  };
+  const result = new Map<string, YouTubeChannel>();
+  for (const row of channelsFromJson(json(CHANNELS_FILE), json(SCHEDULE_FILE))) {
+    if (result.has(row.id)) throw new CollectorError('invalid_request', `頻道 ID 重複：${row.id}`);
+    result.set(row.id, row);
   }
   return result;
 }
-/** The portable Global settings; older files without backfill fields compare as the defaults. */
-function schedule(bytes: Buffer): CollectionPolicy & { enabled: boolean } {
-  const value = JSON.parse(bytes.toString()) as Partial<CollectionPolicy> & { enabled: boolean; intervalMinutes: number };
-  return {
-    enabled: value.enabled,
-    intervalMinutes: normalizeInterval(value.intervalMinutes),
-    backfillWindow: isBackfillWindow(value.backfillWindow) ? value.backfillWindow : DEFAULT_POLICY.backfillWindow,
-    backfillMaxItems: isBackfillLimit(value.backfillMaxItems) ? value.backfillMaxItems : DEFAULT_POLICY.backfillMaxItems,
-  };
-}
 
-/** Discovery progress and check times describe collection, not the subscription choice, so they never conflict. */
-function subscriptionContent({ addedAt: _time, cursor: _cursor, lastCheckedAt: _checked, backlog: _backlog, ...rest }: Record<string, unknown>): string {
+/**
+ * Discovery progress and check times describe collection, not the subscription choice, so they
+ * never conflict; the title, URL, paused state and settings do.
+ */
+function subscriptionContent({
+  addedAt: _time, cursor: _cursor, lastCheckedAt: _checked, backlog: _backlog, nextCheckAt: _next, lastDispatchedAt: _dispatched, ...rest
+}: YouTubeChannel): string {
   return canonical(rest);
 }
+
+/**
+ * The automatic collection switch belongs to the Vault being merged into, so the schedule file is
+ * never a merge item.
+ */
 export function compareFiles(local: Files, incoming: Files): MergeItem[] {
   const items: MergeItem[] = [];
   for (const [file, bytes] of incoming) {
-    if (file === CHANNELS) continue;
+    if (file === CHANNELS_FILE || file === SCHEDULE_FILE) continue;
     const before = local.get(file);
     let equal = before?.equals(bytes) ?? false;
     let label = file;
@@ -70,12 +74,8 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
       const right = document(bytes); const left = before ? document(before) : null;
       label = `${right.title} (${file.split('/').pop()})`;
       equal = left?.content === right.content; localTime = left?.time ?? null; incomingTime = right.time;
-    } else if (file === SCHEDULE) {
-      equal = !!before && canonical(schedule(before)) === canonical(schedule(bytes));
-      localText = before ? JSON.stringify(schedule(before), null, 2) : '';
-      incomingText = JSON.stringify(schedule(bytes), null, 2);
     }
-    items.push({ key: file, kind: file.startsWith('documents/') ? 'document' : file === SCHEDULE ? 'schedule' : 'file',
+    items.push({ key: file, kind: file.startsWith('documents/') ? 'document' : 'file',
       label, state: !before ? 'new' : equal ? 'same' : 'conflict', localTime, incomingTime, localText, incomingText });
   }
   const left = channels(local);
@@ -109,15 +109,12 @@ export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], ch
   let channelsChanged = false;
   for (const item of items) {
     if (item.state === 'same' || (item.state === 'conflict' && choices[item.key] === 'local')) continue;
-    if (item.kind === 'channel') { rows.set(item.key.slice(8), incomingRows.get(item.key.slice(8))!); channelsChanged = true; }
-    else if (item.kind === 'schedule') {
-      // Run history belongs to this device. Imported scheduling never triggers collection automatically.
-      const previous = JSON.parse(local.get(SCHEDULE)?.toString() ?? '{}') as Record<string, unknown>;
-      const { intervalMinutes, backfillWindow, backfillMaxItems } = schedule(incoming.get(SCHEDULE)!);
-      result.set(SCHEDULE, Buffer.from(JSON.stringify({ version: 1, lastAttemptAt: null, lastCompletedAt: null, lastResult: null,
-        ...previous, intervalMinutes, backfillWindow, backfillMaxItems, enabled: false, nextRunAt: null }, null, 2) + '\n'));
+    if (item.kind === 'channel') {
+      // An imported subscription is first checked one of its intervals after the merge, never at once.
+      rows.set(item.key.slice(8), { ...incomingRows.get(item.key.slice(8))!, nextCheckAt: null, lastDispatchedAt: null });
+      channelsChanged = true;
     } else result.set(item.key, incoming.get(item.key)!);
   }
-  if (channelsChanged) result.set(CHANNELS, Buffer.from(JSON.stringify([...rows.values()], null, 2) + '\n'));
+  if (channelsChanged) result.set(CHANNELS_FILE, Buffer.from(JSON.stringify({ version: 2, channels: [...rows.values()] }, null, 2) + '\n'));
   return new Map([...result].filter(([key, value]) => !local.get(key)?.equals(value)));
 }

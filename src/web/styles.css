@@ -37,7 +37,7 @@
 .icon-only:hover:not(:disabled) { border-color:var(--control-border); color:var(--primary); }
 .icon-only:disabled { opacity:.5; cursor:not-allowed; }
 .inline-link { padding:0; margin:0 2px; border:0; color:var(--accent); background:transparent; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
-.button:focus-visible,.icon-only:focus-visible,.inline-link:focus-visible,.chip:focus-visible,.nav-item:focus-visible,.source-name a:focus-visible,.plain-list a:focus-visible,.collecting-banner:focus-visible,.back-link:focus-visible,.menu button:focus-visible,.segmented button:focus-visible,.switch-row input:focus-visible + .switch,.policy-row select:focus-visible,.url-input:focus-visible,.filter-input:focus-within,.search-clear:focus-visible,.source-select select:focus-visible,.document-row:focus-visible,.pagination button:focus-visible,.search-warning button:focus-visible,.reader-publisher:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+.button:focus-visible,.icon-only:focus-visible,.inline-link:focus-visible,.chip:focus-visible,.nav-item:focus-visible,.source-name a:focus-visible,.plain-list a:focus-visible,.collecting-banner:focus-visible,.back-link:focus-visible,.menu button:focus-visible,.segmented button:focus-visible,.header-switch input:focus-visible + .switch,.policy-row select:focus-visible,.url-input:focus-visible,.filter-input:focus-within,.search-clear:focus-visible,.source-select select:focus-visible,.document-row:focus-visible,.pagination button:focus-visible,.search-warning button:focus-visible,.reader-publisher:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
 .spinner { display:inline-block; width:14px; height:14px; border:2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color:var(--accent); border-radius:50%; animation:spin .9s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .spinner,.pulse { animation:none!important; } }
@@ -69,7 +69,6 @@
 .page-title { margin:0; color:var(--primary); font-size:24px; font-weight:600; letter-spacing:-.01em; }
 .page-title:focus { outline:none; }
 .header-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.header-note { margin-right:6px; color:var(--warning); font-size:13px; }
 .page-footnote { margin:0; color:var(--text-muted); font-size:12px; }
 .toast { position:fixed; right:24px; bottom:24px; z-index:5; max-width:min(440px, calc(100vw - 48px)); margin:0; padding:12px 16px; border:1px solid var(--banner-border); border-radius:10px; color:var(--primary); background:var(--frame); box-shadow:0 10px 30px rgba(0,0,0,.25); font-size:13px; line-height:1.5; }
 .toast.error { border-color:var(--error); color:var(--error-fg); }
@@ -144,6 +143,21 @@
 .panel-heading h2 { margin:0; font-size:15px; font-weight:600; }
 .panel-heading .inline-link { font-size:13px; text-decoration:none; }
 .panel-text { margin:0; color:var(--secondary); font-size:13px; line-height:1.7; }
+.settings-panel .panel-heading { align-items:center; justify-content:flex-start; }
+.panel-spacer { flex:1; }
+.save-state { color:var(--text-muted); font-size:12px; }
+.save-state.saved { color:var(--tracking-fg); }
+.collection-settings .policy-row:first-child { margin-top:4px; }
+.collection-settings .policy-row > label,.collection-settings .policy-row > span:first-child { min-width:96px; }
+.next-check { margin:14px 0 0; color:var(--text-muted); font-size:12px; }
+.card-settings { margin-top:8px; padding-top:4px; border-top:1px solid var(--banner-border); }
+.card-settings .policy-row > label,.card-settings .policy-row > span:first-child { min-width:64px; }
+.card-settings .hint { margin-top:10px!important; color:var(--text-muted)!important; font-size:12px!important; }
+.header-switch { display:inline-flex; align-items:center; gap:8px; margin-right:6px; color:var(--secondary); font-size:13px; cursor:pointer; }
+.header-switch input { position:absolute; opacity:0; width:1px; height:1px; }
+.header-switch input:checked + .switch { background:var(--accent); }
+.header-switch input:checked + .switch::after { transform:translateX(16px); }
+.header-switch input:disabled + .switch { opacity:.6; }
 .detail-columns { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:16px; }
 .plain-list { margin:0; padding:0; list-style:none; }
 .plain-list li + li { border-top:1px solid var(--row-border); }
@@ -194,17 +208,12 @@ dialog::backdrop { background:var(--overlay); }
 .save-state { font-size:12px; font-weight:650; color:var(--secondary); }
 .save-state.saved { color:var(--ok); }
 .save-state.error { color:var(--error); }
-.switch-row { display:flex; align-items:center; gap:10px; margin-top:16px; color:var(--primary); font-size:14px; cursor:pointer; }
-.switch-row input { position:absolute; opacity:0; width:1px; height:1px; }
 .switch { position:relative; flex:none; width:36px; height:20px; border-radius:10px; background:var(--control-border); transition:background .15s; }
 .switch::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .15s; }
-.switch-row input:checked + .switch { background:var(--accent); }
-.switch-row input:checked + .switch::after { transform:translateX(16px); }
 .policy-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin-top:14px; color:var(--secondary); font-size:13px; }
 .policy-row > label,.policy-row > span:first-child { min-width:64px; }
 .policy-sentence { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .policy-row select { padding:6px 10px; border:1px solid var(--control-border); border-radius:6px; color:var(--primary); background:var(--control); font:inherit; font-weight:600; }
-.policy-times { color:var(--text-muted)!important; font-size:12px!important; line-height:1.8!important; }
 .index-state { display:flex; align-items:center; gap:8px; color:var(--primary)!important; font-weight:600; }
 .status-light { width:9px; height:9px; border-radius:50%; background:var(--warning); box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent); }
 .status-light.ready { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
