@@ -13,7 +13,8 @@ type ReaderState =
   | { kind: 'error'; message: string };
 
 /** Full-width reading view for one document; the shell collapses its sidebar while this is open. */
-export function Reader({ id, onBack, onOpenSource }: { id: string; onBack: () => void; onOpenSource: (type: string, id: string) => void }) {
+/** `backLabel` names the page the Back control returns to. */
+export function Reader({ id, backLabel, onBack, onOpenSource }: { id: string; backLabel: string; onBack: () => void; onOpenSource: (type: string, id: string) => void }) {
   const [state, setState] = useState<ReaderState>({ kind: 'loading' });
   const [subscribed, setSubscribed] = useState<Set<string>>(new Set());
 
@@ -36,7 +37,7 @@ export function Reader({ id, onBack, onOpenSource }: { id: string; onBack: () =>
 
   return <div className="reader" data-testid="reader">
     <div className="reader-bar">
-      <button type="button" className="button" onClick={onBack}><Icon name="back" size={15} />文件</button>
+      <button type="button" className="button" onClick={onBack}><Icon name="back" size={15} />{backLabel}</button>
       <span className="spacer" />
       {state.kind === 'ready' ? <a className="button" href={state.document.sourceUrl} target="_blank" rel="noopener noreferrer" data-testid="reader-source-link">
         <Icon name="external" size={15} />{state.document.sourceType === 'youtube' ? '開啟原始影片' : '開啟原始內容'}

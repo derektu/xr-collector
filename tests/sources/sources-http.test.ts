@@ -108,6 +108,25 @@ describe('source list (T-06, T-08)', () => {
     await w.app.close();
   });
 
+  it('keeps the error through a later interrupted job, which says nothing about the source', async () => {
+    const w = await world();
+    const id = w.source.addChannel('alpha');
+    await w.subscribe('alpha');
+    w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
+    const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual' }))[0]!.job.id);
+    // A newer channel job that a shutdown interrupted, as the job history reports it after a restart.
+    const history = w.jobs.channelJobs.bind(w.jobs);
+    vi.spyOn(w.jobs, 'channelJobs').mockImplementation(() => {
+      const jobs = history();
+      const interrupted = { ...failed, id: 'interrupted-run', state: 'interrupted' as const, error: { code: 'interrupted', message: '服務停止時工作尚未完成。' } };
+      jobs.set(id, [interrupted, ...(jobs.get(id) ?? [])]);
+      return jobs;
+    });
+
+    expect((await w.get('/api/sources')).body.sources[0]).toMatchObject({ status: 'error', lastError: { code: 'network_error' } });
+    await w.app.close();
+  });
+
   it('shows a paused subscription as paused even when its latest job failed', async () => {
     const w = await world();
     const id = w.source.addChannel('alpha');

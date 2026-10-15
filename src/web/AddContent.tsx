@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { RecognitionAction, UrlRecognition } from '../core/types.js';
 import { api } from './api-client.js';
 import { Icon, SourceTypeBadge } from './icons.js';
-import { initials } from './source-presentation.js';
+import { currentRecognition, initials } from './source-presentation.js';
 import { backfillPhrase, subscribeSummary } from './subscription-presentation.js';
 
 const RECOGNIZE_DELAY_MS = 500;
@@ -10,7 +10,7 @@ const RECOGNIZE_DELAY_MS = 500;
 type Recognition =
   | { state: 'idle' }
   | { state: 'recognizing' }
-  | { state: 'done'; recognition: UrlRecognition }
+  | { state: 'done'; input: string; recognition: UrlRecognition }
   | { state: 'error'; message: string };
 
 /** What the dialog reports after an action succeeded. */
@@ -50,10 +50,12 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
     if (!trimmed) { sequence.current += 1; setRecognition({ state: 'idle' }); return undefined; }
     const current = ++sequence.current;
     const controller = new AbortController();
+    // Any edit invalidates the previous answer at once, so its card and action cannot be used
+    // for the new address while the debounce runs.
+    setRecognition({ state: 'recognizing' });
     const timer = setTimeout(() => {
-      setRecognition({ state: 'recognizing' });
       api.recognizeUrl(trimmed, controller.signal).then((result) => {
-        if (current === sequence.current) setRecognition({ state: 'done', recognition: result });
+        if (current === sequence.current) setRecognition({ state: 'done', input: trimmed, recognition: result });
       }).catch((error: unknown) => {
         if (controller.signal.aborted || current !== sequence.current) return;
         setRecognition({ state: 'error', message: error instanceof Error ? error.message : '無法辨識這個網址。' });
@@ -81,13 +83,13 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
 
   function submit(event: FormEvent): void {
     event.preventDefault();
-    if (recognition.state !== 'done') return;
-    const primary = recognition.recognition.actions.find((action) => action.primary);
-    if (primary && !busy) void perform(primary, recognition.recognition);
+    const answer = currentRecognition(recognition.state === 'done' ? recognition : null, input.current?.value ?? url);
+    if (answer?.primary && !busy) void perform(answer.primary, answer.recognition);
   }
 
-  const found = recognition.state === 'done' ? recognition.recognition : null;
-  const primary = found?.actions.find((action) => action.primary) ?? null;
+  const answer = currentRecognition(recognition.state === 'done' ? recognition : null, url);
+  const found = answer?.recognition ?? null;
+  const primary = answer?.primary ?? null;
   return <dialog ref={dialog} className="add-dialog" aria-label="加入內容" data-testid="add-dialog"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>

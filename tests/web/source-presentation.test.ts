@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionJob, SourceEntry, SourceJobRecord } from '../../src/core/types.js';
+import type { CollectionJob, SourceEntry, SourceJobRecord, UrlRecognition } from '../../src/core/types.js';
 import {
   activeJobs,
   backgroundStatus,
   collectingSummary,
+  currentRecognition,
   displayUrl,
   filterSources,
   initials,
@@ -114,5 +115,20 @@ describe('source presentation (T-09)', () => {
     expect(initials('3Blue1Brown')).toBe('3B');
     expect(initials('合成頻道 A【合成】')).toBe('合成');
     expect(displayUrl('https://www.youtube.com/channel/UC1/videos')).toBe('youtube.com/channel/UC1');
+  });
+
+  it('applies a recognition answer only to the address it was given for', () => {
+    const collect = { id: 'collect' as const, label: '收集影片', primary: true, request: { method: 'POST' as const, path: '/api/youtube/collect', body: { url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' } } };
+    const recognition: UrlRecognition = {
+      status: 'ready', sourceType: 'youtube', kind: 'video', kindLabel: 'YouTube 影片', url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      target: { id: 'aaaaaaaaaaa', title: null, url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' },
+      subscription: null, policy: null, actions: [collect], login: null, message: null,
+    };
+    const answer = { input: 'youtu.be/aaaaaaaaaaa', recognition };
+    expect(currentRecognition(answer, '  youtu.be/aaaaaaaaaaa ')).toEqual({ recognition, primary: collect });
+    // The input changed while the next recognition waits: the old card and its action no longer apply.
+    expect(currentRecognition(answer, 'youtu.be/bbbbbbbbbbb')).toBeNull();
+    expect(currentRecognition(null, 'youtu.be/aaaaaaaaaaa')).toBeNull();
+    expect(currentRecognition({ input: 'x', recognition: { ...recognition, actions: [] } }, 'x')).toEqual({ recognition: { ...recognition, actions: [] }, primary: null });
   });
 });

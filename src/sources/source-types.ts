@@ -107,14 +107,17 @@ export function sourceTypeInfo(declaration: SourceTypeDeclaration): SourceTypeIn
  * `unsupported`; a type that requires login answers `login_required` without contacting the source.
  */
 export async function recognizeUrl(input: string, declarations: SourceTypeDeclaration[], context: RecognitionContext): Promise<UrlRecognition> {
-  const trimmed = input.trim();
-  let url: URL | null = null;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    // Not an absolute URL; a type may still own it, such as a YouTube @handle.
+  let trimmed = input.trim();
+  let url = absoluteUrl(trimmed);
+  let owner = declarations.find((declaration) => declaration.owns(trimmed, url));
+  if (!owner && !url) {
+    // Addresses are often copied without their scheme (youtube.com/watch?v=…). Such an input is
+    // read as https:// only when a type owns the result; any other bare string stays unsupported.
+    const withScheme = `https://${trimmed}`;
+    const candidate = /^[^\s/@:]+\.[^\s/]+(\/\S*)?$/u.test(trimmed) ? absoluteUrl(withScheme) : null;
+    const candidateOwner = candidate ? declarations.find((declaration) => declaration.owns(withScheme, candidate)) : undefined;
+    if (candidate && candidateOwner) { trimmed = withScheme; url = candidate; owner = candidateOwner; }
   }
-  const owner = declarations.find((declaration) => declaration.owns(trimmed, url));
   if (!owner) {
     return unsupported(trimmed, url ? '目前還不支援這個網站的網址。' : '請貼上完整網址，例如 https:// 開頭的網址。', null);
   }
@@ -126,6 +129,15 @@ export async function recognizeUrl(input: string, declarations: SourceTypeDeclar
     };
   }
   return owner.recognize(trimmed, context);
+}
+
+function absoluteUrl(input: string): URL | null {
+  try {
+    return new URL(input);
+  } catch {
+    // Not an absolute URL; a type may still own it, such as a YouTube @handle.
+    return null;
+  }
 }
 
 function base(status: UrlRecognition['status'], url: string): UrlRecognition {
