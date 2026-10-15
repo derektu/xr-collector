@@ -338,6 +338,74 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect(await w.jobs.whenSettled(during!.job.id)).toMatchObject({ result: { outcome: 'skipped', skipReason: 'subscription_paused' }, items: null });
   });
 
+  it('starts its own backfill when resumed while a video of the paused job is still capturing', async () => {
+    const w = await world({ capture: 1 });
+    const id = w.source.addChannel('quick');
+    const ids = w.source.publish(id, 'u', w.clock.now, [1, 2, 3, 4]);
+    w.source.holdCaptures = true;
+    const added = await w.jobs.whenSettled((await w.channels.addChannel('@quick')).job.id);
+    const oldJobId = added.result!.followUpJobId!;
+    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+
+    await w.channels.setChannelEnabled(id, false);
+    const resumed = await w.channels.setChannelEnabled(id, true);
+    expect(resumed.submission).toMatchObject({ deduplicated: false, job: { scope: { trigger: 'resume' } } });
+    expect(resumed.submission!.job.id).not.toBe(oldJobId);
+    expect((await w.channels.listSubscriptions())[0]!.activeJob?.id).toBe(resumed.submission!.job.id);
+
+    w.source.holdCaptures = false;
+    w.source.release(ids[0]!);
+    expect((await w.jobs.whenSettled(oldJobId)).items!.map((item) => item.outcome)).toEqual(['created', 'skipped', 'skipped', 'skipped']);
+    await w.jobs.whenSettled(resumed.submission!.job.id);
+    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    expect(collectedIds(w)).toEqual([...ids].sort());
+  });
+
+  it('runs the first backfill when a channel is subscribed again right after removal', async () => {
+    const w = await world({ capture: 1 });
+    const id = w.source.addChannel('again2');
+    const ids = w.source.publish(id, 'y', w.clock.now, [1, 2, 3]);
+    w.source.holdCaptures = true;
+    const added = await w.jobs.whenSettled((await w.channels.addChannel('@again2')).job.id);
+    const oldJobId = added.result!.followUpJobId!;
+    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+
+    await w.channels.removeChannel(id);
+    const again = await w.jobs.whenSettled((await w.channels.addChannel('@again2')).job.id);
+    expect(again.result).toMatchObject({ outcome: 'created' });
+    expect(again.result!.followUpJobId).not.toBe(oldJobId);
+
+    w.source.holdCaptures = false;
+    w.source.release(ids[0]!);
+    const backfill = await w.jobs.whenSettled(again.result!.followUpJobId!);
+    expect(backfill).toMatchObject({ scope: { trigger: 'subscribe', mode: 'backfill' } });
+    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    expect(collectedIds(w)).toEqual([...ids].sort());
+  });
+
+  it('discards what a stopped discovery found even when the channel is enabled again before it returns', async () => {
+    const w = await world();
+    const id = w.source.addChannel('racing');
+    w.source.publish(id, 'z', w.clock.now, [1]);
+    await subscribe(w, 'racing');
+    const cursor = (await w.channelStore.list())[0]!.cursor;
+    let release!: () => void;
+    w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
+    w.advance(HOUR);
+    w.source.publish(id, 'n', w.clock.now, [0.01], 5);
+    const [old] = await w.channels.startRun({ trigger: 'manual' });
+    await vi.waitFor(() => expect(w.jobs.get(old!.job.id).phase).toBe('discover'));
+
+    await w.channels.setChannelEnabled(id, false);
+    const resumed = await w.channels.setChannelEnabled(id, true);
+    w.source.holdDiscovery = null;
+    release();
+    expect(await w.jobs.whenSettled(old!.job.id)).toMatchObject({ result: { outcome: 'skipped', skipReason: 'subscription_paused' }, items: null });
+    const backfill = await w.jobs.whenSettled(resumed.submission!.job.id);
+    expect(backfill.scope).toMatchObject({ trigger: 'resume' });
+    expect((await w.channelStore.list())[0]!.cursor).not.toEqual(cursor);
+  });
+
   it('removes a subscription, keeps its documents and refuses checks of a paused one', async () => {
     const w = await world({ capture: 1 });
     const id = w.source.addChannel('leaving');
