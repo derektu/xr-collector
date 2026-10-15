@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
-import { inspectVaultDirectory } from './vault-directory.js';
+import { inspectVaultDirectory, VAULT_MARKER } from './vault-directory.js';
 import { PACKAGE_LIMIT } from './vault-package.js';
 
 /**
@@ -73,7 +73,7 @@ export async function checkExportFile(value: unknown, overwrite: boolean, folder
   try {
     const existing = await lstat(file);
     if (!existing.isFile()) invalid('這個路徑已有資料夾或其他項目，請換一個檔名。');
-    if (!overwrite) invalid('這個檔案已經存在。要取代它，請確認覆寫。');
+    if (!overwrite) throw new CollectorError('file_exists', `「${path.basename(file)}」已經存在。要取代它，請確認覆寫。`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
@@ -130,37 +130,73 @@ export function stagingFolder(folder: string): string {
 }
 
 /**
- * Profile record of a restore in progress: `{ "staging": "<absolute path>" }`. A restore unpacks
- * into the staging folder and renames it to the chosen folder once it is complete, so a stop before
- * the rename leaves only the staging folder, which the next start removes.
+ * Profile record of a restore in progress, kept until the device selection names the restored Vault:
+ * `{ "staging": "<path>", "target": "<path>", "placed": <boolean>, "marker": "<sha256>", "emptyTarget": <boolean> }`.
+ * A restore unpacks into the staging folder and renames it to the target once it is complete.
+ * `placed` is set just before that rename; `marker` is the digest of the Vault marker the restore
+ * wrote, which tells the restored folder apart from anything else at the target path, and
+ * `emptyTarget` says the target was an empty folder the restore replaced.
  */
 export const RESTORE_JOURNAL = 'vault-restore-journal.json';
 
-export async function writeRestoreJournal(profilePath: string, staging: string): Promise<void> {
+export interface RestoreJournal {
+  staging: string;
+  target: string;
+  placed: boolean;
+  marker: string | null;
+  emptyTarget: boolean;
+}
+
+export async function writeRestoreJournal(profilePath: string, journal: RestoreJournal): Promise<void> {
   await mkdir(profilePath, { recursive: true });
-  await writePackageFile(path.join(profilePath, RESTORE_JOURNAL), Buffer.from(JSON.stringify({ staging })));
+  await writePackageFile(path.join(profilePath, RESTORE_JOURNAL), Buffer.from(JSON.stringify(journal)));
 }
 
 export async function clearRestoreJournal(profilePath: string): Promise<void> {
   await rm(path.join(profilePath, RESTORE_JOURNAL), { force: true });
 }
 
-/**
- * Removes the staging folder of a restore a stop interrupted. Only a folder whose name a restore
- * gives its staging folder is removed; a journal naming anything else is dropped without touching it.
- */
-export async function recoverRestore(profilePath: string): Promise<string | null> {
-  let staging: unknown;
+/** The digest of a Vault's marker file, or null when it has none. */
+export async function markerDigest(folder: string): Promise<string | null> {
   try {
-    staging = (JSON.parse(await readFile(path.join(profilePath, RESTORE_JOURNAL), 'utf8')) as { staging?: unknown }).staging;
+    return createHash('sha256').update(await readFile(path.join(folder, VAULT_MARKER))).digest('hex');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    staging = null;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return null;
+    throw error;
   }
-  let removed: string | null = null;
+}
+
+/**
+ * Takes back a restore a stop interrupted, unless `kept` names its target (the device selection and
+ * the Vault being opened):
+ * the staging folder is removed, and a target folder whose marker is the one the restore wrote is
+ * renamed back to a staging name and removed, leaving an empty folder where the restore found one.
+ * Only folders named like a restore's staging folder and a target carrying the restore's own marker
+ * are touched; a journal naming anything else is dropped without touching it. Returns the folders
+ * removed.
+ */
+export async function recoverRestore(profilePath: string, kept: readonly (string | null)[]): Promise<string[]> {
+  let journal: Partial<RestoreJournal> | null;
+  try {
+    journal = JSON.parse(await readFile(path.join(profilePath, RESTORE_JOURNAL), 'utf8')) as Partial<RestoreJournal>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    journal = null;
+  }
+  const removed: string[] = [];
+  const staging = journal?.staging;
   if (typeof staging === 'string' && path.isAbsolute(staging) && STAGING.test(staging)) {
     await rm(staging, { recursive: true, force: true });
-    removed = staging;
+    removed.push(staging);
+    const target = journal?.target;
+    if (journal?.placed === true && typeof target === 'string' && path.isAbsolute(target)
+      && staging.startsWith(`${target}.restoring-`) && !kept.includes(target)
+      && typeof journal.marker === 'string' && await markerDigest(target) === journal.marker) {
+      await rename(target, staging);
+      await rm(staging, { recursive: true, force: true });
+      if (journal.emptyTarget === true) await mkdir(target);
+      removed.push(target);
+    }
   }
   await clearRestoreJournal(profilePath);
   return removed;

@@ -46,6 +46,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
+    allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';
   await app.listen({ host, port: options.port });

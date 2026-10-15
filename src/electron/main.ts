@@ -129,7 +129,8 @@ app.whenReady().then(async () => {
     };
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return null;
-    // The dialog confirmed replacing the file it showed; a name given the extension here was not confirmed.
+    // The dialog confirmed replacing the file it showed. A name given the extension here was not
+    // confirmed, so the export dialog asks before replacing a file of that name.
     return /\.xr-vault$/iu.test(result.filePath)
       ? { path: result.filePath, overwrite: true }
       : { path: `${result.filePath}.xr-vault`, overwrite: false };

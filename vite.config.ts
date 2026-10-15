@@ -12,7 +12,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '^/api/': 'http://127.0.0.1:7175',
+      // The API accepts only its own address in Host, so the proxy sends the target's address.
+      '^/api/': { target: 'http://127.0.0.1:7175', changeOrigin: true },
     },
   },
 });

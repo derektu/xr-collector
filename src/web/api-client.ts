@@ -309,6 +309,11 @@ export const api = {
     await request('/api/vault/merge/cancel', { method: 'POST', body: JSON.stringify({ id }) });
   },
 
+  /** Cancels a backup, restore or merge that is still waiting for collection steps. */
+  cancelTransfer(): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/cancel', { method: 'POST' });
+  },
+
   async restoreSuggestion(): Promise<string> {
     return (await request<{ path: string }>('/api/vault/restore/suggestion')).path;
   },

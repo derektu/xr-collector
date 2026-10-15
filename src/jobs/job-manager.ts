@@ -360,9 +360,10 @@ export class JobManager {
    * Stops starting queued steps and resolves once the steps already running have finished, with a
    * function that lifts the hold. Queued jobs keep their place and continue after the last hold is
    * lifted. When the running steps take longer than `timeoutMs`, the hold is lifted and the call
-   * fails with `vault_busy`, so a caller never waits on a stuck step indefinitely.
+   * fails with `vault_busy`, so a caller never waits on a stuck step indefinitely. Aborting `signal`
+   * while it waits lifts the hold and fails the call with the signal's reason.
    */
-  async hold(timeoutMs = HOLD_TIMEOUT_MS): Promise<() => void> {
+  async hold(timeoutMs = HOLD_TIMEOUT_MS, signal?: AbortSignal): Promise<() => void> {
     this.holds += 1;
     let released = false;
     const release = () => {
@@ -372,10 +373,19 @@ export class JobManager {
       if (this.holds === 0) this.pump();
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
     const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => resolve('expired'), timeoutMs); });
+    const aborted = new Promise<'aborted'>((resolve) => {
+      onAbort = () => resolve('aborted');
+      if (signal?.aborted) resolve('aborted'); else signal?.addEventListener('abort', onAbort, { once: true });
+    });
     try {
-      while (this.running.size > 0) {
-        const outcome = await Promise.race([Promise.allSettled([...this.running]).then(() => 'settled' as const), expired]);
+      while (this.running.size > 0 || signal?.aborted) {
+        const outcome = await Promise.race([Promise.allSettled([...this.running]).then(() => 'settled' as const), expired, aborted]);
+        if (outcome === 'aborted') {
+          release();
+          throw signal!.reason;
+        }
         if (outcome === 'expired') {
           release();
           throw new CollectorError('vault_busy', `目前的收集步驟在 ${Math.round(timeoutMs / 60_000) || 1} 分鐘內沒有結束，請稍後再試。`);
@@ -383,6 +393,7 @@ export class JobManager {
       }
     } finally {
       clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
     }
     return release;
   }
@@ -583,12 +594,15 @@ export class JobManager {
     this.options.store.put(job);
   }
 
-  /** Stops starting work, waits for running steps, and records what is left as interrupted. */
-  async close(): Promise<void> {
+  /**
+   * Stops starting work, waits for running steps, and records what is left as interrupted with
+   * `reason`, which says why the jobs stopped.
+   */
+  async close(reason = '服務停止時工作尚未完成；已保存的內容保留。'): Promise<void> {
     this.closed = true;
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
-      this.options.store.interrupt(job, '服務停止時工作尚未完成；已保存的內容保留。', { stop: 'shutdown' });
+      this.options.store.interrupt(job, reason, { stop: 'shutdown' });
       this.release(job);
       this.notifySettled(this.options.store.get(job.id)!);
     }

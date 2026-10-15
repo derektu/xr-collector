@@ -103,14 +103,21 @@ export async function exportVault(root: string, info: { createdBy?: string; expo
   for (const name of ['youtube-channels.json', 'youtube-schedule.json', 'deleted-documents.json']) await visit(`settings/${name}`);
   const byPath = new Map(files.map((file) => [file.path, Buffer.from(file.data, 'base64')]));
   const json = (file: string) => { const bytes = byPath.get(file); return bytes ? JSON.parse(bytes.toString('utf8')) as unknown : undefined; };
-  const summary = {
-    documents: files.filter((file) => documentKeyFromPath(file.path)).length,
-    subscriptions: channelsFromJson(json(CHANNELS_FILE), json(SCHEDULE_FILE)).length,
-    deletions: deletionsFromJson(json(DELETIONS_FILE)).length,
-  };
+  // The summary only describes the package; settings it cannot read leave it out instead of failing the export.
+  let summary: VaultPackage['summary'];
+  try {
+    summary = {
+      documents: files.filter((file) => documentKeyFromPath(file.path)).length,
+      subscriptions: channelsFromJson(json(CHANNELS_FILE), json(SCHEDULE_FILE)).length,
+      deletions: deletionsFromJson(json(DELETIONS_FILE)).length,
+    };
+  } catch {
+    summary = undefined;
+  }
   const result: VaultPackage = {
     format: 'xr-collector-vault', version: PACKAGE_VERSION,
-    ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}), summary,
+    ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
+    ...(summary ? { summary } : {}),
     files, sha256: manifestDigest(files),
   };
   const buffer = Buffer.from(JSON.stringify(result));

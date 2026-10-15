@@ -33,6 +33,11 @@ const capture: CapturedTranscript = { videoId: 'abcdefghijk', sourceUrl: 'https:
 async function add(root: string, id = capture.videoId, body = capture.bodyMarkdown) {
   return new MarkdownVault(root).add({ ...capture, videoId: id, sourceUrl: `https://www.youtube.com/watch?v=${id}`, bodyMarkdown: body });
 }
+/** Changes a document's body the way an editor would, without collecting it again. */
+async function edit(root: string, id = capture.videoId) {
+  const target = path.join(root, `documents/youtube/${id}.md`);
+  await writeFile(target, `${await readFile(target, 'utf8')}\n比對後加入的段落\n`);
+}
 async function file(root: string, name: string, data: string | Buffer) {
   await mkdir(path.dirname(path.join(root, name)), { recursive: true }); await writeFile(path.join(root, name), data);
 }
@@ -212,7 +217,7 @@ describe('transaction and HTTP', () => {
       workspace.applyMerge(preview.id, decision as Record<string, MergeChoice>); await wait(workspace);
       expect(workspace.status().state).toBe('error');
     }
-    await add(local, 'newlocal001');
+    await edit(local);
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(workspace.status().message).toContain('重新比對');
     const row = { id: 'UC1', title: '', url: '', enabled: false, addedAt: '', settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } };
@@ -554,6 +559,27 @@ describe('conflict granularity (T3)', () => {
     // Progress alone never makes a difference.
     expect(compareFiles(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, cursor: incomingRow.cursor, backlog: false }])]]))
       .map((item) => item.state)).toEqual(['same']);
+  });
+
+  it('applies after collection progress moves, and asks to compare again after a document changes', async () => {
+    const { local, incoming, workspace } = await fixture();
+    const write = (root: string, row: Record<string, unknown>) => file(root, 'settings/youtube-channels.json', JSON.stringify({ version: 2, channels: [row] }));
+    await write(local, channel);
+    await write(incoming, { ...channel, title: '備份的名稱' });
+    let preview = await workspace.previewMerge(await exportVault(incoming));
+    // A scheduled check after the comparison moves the cursor and the check times.
+    const cursor = { videoId: 'movedcursor', publishedAt: null, recentIds: ['movedcursor'] };
+    await write(local, { ...channel, cursor, lastCheckedAt: '2026-10-16T00:00:00.000Z', nextCheckAt: '2026-10-16T06:00:00.000Z', lastDispatchedAt: '2026-10-16T00:00:00.000Z' });
+    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'completed' });
+    expect(JSON.parse(await readFile(path.join(local, 'settings/youtube-channels.json'), 'utf8')).channels[0]).toMatchObject({ title: '備份的名稱', cursor });
+
+    await add(incoming, 'new00000001', '新增沙漠');
+    preview = await workspace.previewMerge(await exportVault(incoming));
+    await edit(local);
+    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'error', message: expect.stringContaining('重新比對') });
+    expect(existsSync(path.join(local, 'documents/youtube/new00000001.md'))).toBe(false);
   });
 
   it('says which side holds a deletion and keeps other fields of the deletions file', async () => {

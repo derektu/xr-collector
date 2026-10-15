@@ -3,7 +3,7 @@ import { parse } from 'yaml';
 import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE } from '../channels/subscription-files.js';
 import { CollectorError, type MergeItem, type MergeChoice, type YouTubeChannel } from '../core/types.js';
 import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
-import { documentKeyFromPath, documentPath } from './document-paths.js';
+import { documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
 
 export type Files = Map<string, Buffer>;
 /** Files a merge writes; null removes the file. */
@@ -155,6 +155,37 @@ export function compareFiles(local: Files, incoming: Files): MergeItem[] {
   }
   return items;
 }
+/**
+ * A digest of what the merge items stand on in the local Vault: each item's key and state, and the
+ * local content a choice keeps or replaces. A merge applies only while this digest still matches
+ * its preview. Subscription collection progress and check times are left out, so a check the
+ * scheduler runs after the preview does not invalidate it; a changed document, file, deletion
+ * record or subscription setting does, and so does a local change that adds or removes an item.
+ */
+export function mergeBaseline(local: Files, incoming: Files): string {
+  const rows = channels(local);
+  const localDeletions = deletions(local);
+  const hash = createHash('sha256');
+  for (const item of compareFiles(local, incoming)) {
+    let content = '';
+    if (item.kind === 'channel') {
+      const row = rows.get(item.key.slice('channel:'.length));
+      if (row) content = subscriptionContent(row);
+    } else if (item.kind === 'deletion') {
+      const id = item.key.slice('deletion:'.length);
+      const record = localDeletions.get(id);
+      const file = documentPathFromId(id);
+      const bytes = file ? local.get(file) : undefined;
+      content = record ? canonical(record) : bytes ? fingerprint(bytes) : '';
+    } else {
+      const bytes = local.get(item.key);
+      if (bytes) content = fingerprint(bytes);
+    }
+    hash.update(canonical([item.key, item.state, item.deletedOn ?? null, content])).update('\n');
+  }
+  return hash.digest('hex');
+}
+
 export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], choices: Record<string, MergeChoice>): FileChanges {
   const conflicts = new Set(items.filter((item) => item.state === 'conflict').map((item) => item.key));
   if (Object.keys(choices).some((key) => !conflicts.has(key)) || [...conflicts].some((key) => choices[key] !== 'local' && choices[key] !== 'incoming')) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { MergeChoice, MergeItem, MergePreview, TransferResult, TransferStatus } from '../core/types.js';
-import { api } from './api-client.js';
+import { api, ApiError } from './api-client.js';
 import { lineDiff } from './line-diff.js';
 import {
   besideVault, choiceText, exportFileName, fileName, itemName, itemTimes, lastExportLabel, mergeCounts, mergeGroups,
@@ -87,24 +87,30 @@ function Modal({ title, wide, busy, onDismiss, children, testId }: {
   </dialog>;
 }
 
+interface TransferProgress {
+  text: string;
+  /** The transfer still waits for collection steps and can be cancelled. */
+  waiting: boolean;
+}
+
 /** Progress of the running transfer, read from the status while `active`. */
-function useTransferProgress(active: boolean): string {
-  const [text, setText] = useState('');
+function useTransferProgress(active: boolean): TransferProgress {
+  const [progress, setProgress] = useState<TransferProgress>({ text: '', waiting: false });
   useEffect(() => {
-    if (!active) { setText(''); return undefined; }
+    if (!active) { setProgress({ text: '', waiting: false }); return undefined; }
     let alive = true;
     void (async () => {
       while (alive) {
         try {
           const status = await api.vaultTransferStatus();
-          if (alive && transferRunning(status)) setText(progressText(status));
+          if (alive && transferRunning(status)) setProgress({ text: progressText(status), waiting: status.state === 'waiting' });
         } catch { /* the request in flight reports its own failure */ }
         await sleep(POLL_MS);
       }
     })();
     return () => { alive = false; };
   }, [active]);
-  return text;
+  return progress;
 }
 
 async function followTransfer(): Promise<TransferStatus> {
@@ -115,8 +121,20 @@ async function followTransfer(): Promise<TransferStatus> {
   }
 }
 
-function Progress({ text }: { text: string }) {
-  return <p className="transfer-progress" role="status" data-testid="transfer-progress"><span className="spinner" aria-hidden="true" />{text || '處理中…'}</p>;
+/** The progress line; while the transfer waits for collection steps it offers to cancel. */
+function Progress({ progress, fallback }: { progress: TransferProgress; fallback: string }) {
+  const [problem, setProblem] = useState<string | null>(null);
+  async function cancel(): Promise<void> {
+    setProblem(null);
+    try { await api.cancelTransfer(); } catch (error) { setProblem(errorText(error, '無法取消。')); }
+  }
+  return <>
+    <div className="transfer-progress-line">
+      <p className="transfer-progress" role="status" data-testid="transfer-progress"><span className="spinner" aria-hidden="true" />{progress.text || fallback}</p>
+      {progress.waiting ? <button type="button" className="button small" onClick={() => void cancel()} data-testid="transfer-cancel">取消</button> : null}
+    </div>
+    {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
+  </>;
 }
 
 function PathField({ label, value, onChange, testId, hint }: {
@@ -133,13 +151,15 @@ function ExportDialog({ vaultPath, file, onClose }: {
   vaultPath: string; file: { path: string; overwrite: boolean } | undefined; onClose: () => void;
 }) {
   const [target, setTarget] = useState(() => file?.path ?? besideVault(vaultPath, exportFileName(new Date())));
-  const [phase, setPhase] = useState<'input' | 'running' | 'done' | 'failed'>(file ? 'running' : 'input');
+  const [phase, setPhase] = useState<'input' | 'running' | 'exists' | 'done' | 'failed'>(file ? 'running' : 'input');
   const [result, setResult] = useState<TransferResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const progress = useTransferProgress(phase === 'running');
   const started = useRef(false);
+  const chosen = useRef('');
 
   async function run(path: string, overwrite: boolean): Promise<void> {
+    chosen.current = path;
     setPhase('running');
     setFailure(null);
     try {
@@ -147,6 +167,7 @@ function ExportDialog({ vaultPath, file, onClose }: {
       setResult(status.result);
       setPhase('done');
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'file_exists') { setPhase('exists'); return; }
       setFailure(errorText(error, '匯出失敗，請稍後再試。'));
       setPhase(file ? 'failed' : 'input');
     }
@@ -160,7 +181,12 @@ function ExportDialog({ vaultPath, file, onClose }: {
       <p>備份包含文件、附件、訂閱與各自的收集設定、收集進度及刪除紀錄。搜尋索引、收集工作記錄與登入資料留在這台電腦。</p>
       <PathField label="備份檔案位置" value={target} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .xr-vault 結尾。" />
     </> : null}
-    {phase === 'running' ? <Progress text={progress} /> : null}
+    {phase === 'running' ? <Progress progress={progress} fallback="處理中…" /> : null}
+    {phase === 'exists' ? <div data-testid="export-exists">
+      <p>這個位置已經有同名的備份檔案：</p>
+      <code className="setting-path">{chosen.current}</code>
+      <p>要用目前的知識庫取代它嗎？原本的檔案內容會被覆寫。</p>
+    </div> : null}
     {phase === 'done' && result ? <>
       <p className="transfer-done" role="status">備份已建立。</p>
       <code className="setting-path" data-testid="export-result-path">{result.exportPath}</code>
@@ -171,6 +197,10 @@ function ExportDialog({ vaultPath, file, onClose }: {
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={onClose}>取消</button>
         <button type="button" className="button primary" disabled={!target.trim()} onClick={() => void run(target.trim(), false)} data-testid="export-confirm">匯出</button>
+      </> : null}
+      {phase === 'exists' ? <>
+        <button type="button" className="button" onClick={() => { if (file) onClose(); else setPhase('input'); }} data-testid="export-keep">取消</button>
+        <button type="button" className="button primary" onClick={() => void run(chosen.current, true)} data-testid="export-replace">取代</button>
       </> : null}
       {phase === 'done' || phase === 'failed' ? <button type="button" className="button primary" onClick={onClose} data-testid="transfer-close">完成</button> : null}
     </div>
@@ -241,6 +271,8 @@ function MergeDialog({ file, onClose }: { file: string | undefined; onClose: (me
       await api.applyMerge(preview.id, choices);
       const status = await followTransfer();
       if (status.state === 'error') throw new Error(status.message);
+      // Cancelled while waiting for collection: nothing was written and the comparison still holds.
+      if (status.state === 'idle') { setFailure(status.message); setPhase('preview'); return; }
       setResult(status.result);
       setPhase('done');
     } catch (error) {
@@ -261,16 +293,17 @@ function MergeDialog({ file, onClose }: { file: string | undefined; onClose: (me
   const missing = conflicts.filter((item) => !choices[item.key]).length;
   const chooseAll = (choice: MergeChoice) => setChoices(Object.fromEntries(conflicts.map((item) => [item.key, choice])));
 
-  return <Modal title="合併另一份備份" wide busy={phase === 'comparing' || phase === 'applying'} onDismiss={() => void cancel()} testId="merge-dialog">
+  return <Modal title="合併另一份備份" wide busy={phase === 'comparing' || phase === 'applying'}
+    onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="merge-dialog">
     {phase === 'input' ? <>
       <p>把另一份備份的內容加入目前的知識庫。合併前會先列出差異，兩邊不同的項目由你決定保留哪一邊。</p>
       <PathField label="備份檔案" value={source} onChange={setSource} testId="merge-path" hint="完整路徑，例如另一台電腦匯出的 .xr-vault 檔。" />
     </> : null}
-    {phase === 'comparing' ? <Progress text={progress || '正在比對…'} /> : null}
+    {phase === 'comparing' ? <Progress progress={progress} fallback="正在比對…" /> : null}
     {phase === 'preview' && preview && counts ? <>
       <p className="merge-source"><span>{fileName(source)}</span>{preview.package.exportedAt ? <span className="hint">・匯出於 {lastExportLabel(preview.package.exportedAt).replace('上次匯出 ', '')}</span> : null}</p>
       <p className="merge-counts" data-testid="merge-counts">新增 {counts.added}・相同 {counts.same}・需要選擇 {counts.conflicts}</p>
-      <p>新增的項目會加入，相同的略過。備份裡沒有的項目保留本機，不會因此刪除。自動收集開關與各訂閱的收集進度維持本機。</p>
+      <p>新增的項目會加入，相同的略過。備份裡沒有的項目保留本機，不會因此刪除。自動收集開關維持本機；既有訂閱的收集進度維持本機，新訂閱帶入備份中的進度。</p>
       {conflicts.length > 1 ? <div className="merge-bulk">
         <button type="button" className="button small" onClick={() => chooseAll('local')}>全部保留本機</button>
         <button type="button" className="button small" onClick={() => chooseAll('incoming')}>全部採用備份</button>
@@ -283,7 +316,7 @@ function MergeDialog({ file, onClose }: { file: string | undefined; onClose: (me
         </section>)}
       </div>
     </> : null}
-    {phase === 'applying' ? <Progress text={progress || '正在合併…'} /> : null}
+    {phase === 'applying' ? <Progress progress={progress} fallback="正在合併…" /> : null}
     {phase === 'done' && result ? <>
       <p className="transfer-done" role="status">{result.writtenFiles ? `合併完成，寫入 ${result.writtenFiles} 個檔案。` : '合併完成，沒有需要寫入的變更。'}</p>
       {result.mergeBackupPath ? <><p>合併前的資料已另存一份備份：</p><code className="setting-path" data-testid="merge-backup-path">{result.mergeBackupPath}</code></> : null}
@@ -337,6 +370,7 @@ function RestoreDialog({ vaultPath, file, activeJobs, onClose }: {
       await api.restoreVault(source.trim(), target.trim());
       const status = await followTransfer();
       if (status.state === 'error') throw new Error(status.message);
+      if (status.state === 'idle') { setFailure(status.message); setPhase('input'); return; }
       setResult({ status, collecting: false });
       setPhase('done');
     } catch (error) {
@@ -371,7 +405,7 @@ function RestoreDialog({ vaultPath, file, activeJobs, onClose }: {
         <li>新知識庫的自動收集會先暫停，完成後可以開啟。</li>
       </ul>
     </> : null}
-    {phase === 'running' ? <Progress text={progress || '正在還原…'} /> : null}
+    {phase === 'running' ? <Progress progress={progress} fallback="正在還原…" /> : null}
     {phase === 'done' && result && done ? <>
       <p className="transfer-done" role="status">已切換到還原的知識庫。</p>
       <code className="setting-path" data-testid="restore-result-path">{result.status.vaultPath}</code>

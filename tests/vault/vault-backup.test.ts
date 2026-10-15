@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,7 +11,8 @@ import type { CapturedTranscript, SavedDocument, TranscriptSearch } from '../../
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { EXPORT_LOG, RESTORE_JOURNAL } from '../../src/vault/transfer-files.js';
+import { EXPORT_LOG, markerDigest, RESTORE_JOURNAL } from '../../src/vault/transfer-files.js';
+import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { exportVault, packageInfo, unpackVault } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
@@ -121,6 +122,14 @@ describe('package description and unknown fields (T1)', () => {
     expect(await json('settings/youtube-schedule.json')).toEqual({ version: 2, enabled: false, laterFileField: 'schedule' });
     expect(await json('settings/deleted-documents.json')).toMatchObject({ laterFileField: 'deletions' });
     expect(await readFile(path.join(target, `documents/youtube/${capture.videoId}.md`), 'utf8')).toContain('later_frontmatter: kept');
+  });
+
+  it('leaves the summary out when the settings cannot be read, and still exports', async () => {
+    const at = await setup(); await seed(at.vault);
+    await writeFile(path.join(at.vault, 'settings/youtube-channels.json'), JSON.stringify({ version: 2, channels: 'not a list' }));
+    const info = packageInfo(await exportVault(at.vault, { createdBy: 'XR Collector test', exportedAt: new Date() }));
+    expect(info).toMatchObject({ version: 3, createdBy: 'XR Collector test' });
+    expect(info.summary).toBeUndefined();
   });
 
   it('refuses a package with a file path it does not know', async () => {
@@ -242,6 +251,129 @@ describe('restore into a chosen folder (T5)', () => {
     expect(await readdir(other)).toEqual(['keep.md']);
     expect(existsSync(path.join(at.profile, RESTORE_JOURNAL))).toBe(false);
   });
+  it('refuses a folder reached through a symbolic link into the Vault or the profile', async () => {
+    const at = await setup(); await seed(at.vault);
+    await mkdir(at.profile, { recursive: true });
+    const workspace = await open(at);
+    const buffer = await exportVault(at.vault);
+    await symlink(at.vault, path.join(at.root, 'ToVault'));
+    await symlink(at.profile, path.join(at.root, 'ToProfile'));
+    for (const [target, message] of [
+      [path.join(at.root, 'ToVault', 'restored'), '目前的知識庫'], [path.join(at.root, 'ToProfile', 'restored'), '程式資料目錄'],
+    ] as const) {
+      await expect(workspace.restore(buffer, target), target).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining(message) });
+    }
+    expect(await readdir(at.vault)).not.toContain('restored');
+    expect(await readdir(at.profile)).not.toContain('restored');
+  });
+
+  it('completes the switch when closing the previous Vault fails, and records its jobs as stopped by the switch', async () => {
+    const at = await setup(); await seed(at.vault);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const workspace = await open(at, { jobLimits: { capture: 1 }, capture: { capture: async (video: { videoId: string; canonicalUrl: string }) => {
+      started.push(video.videoId);
+      if (started.length === 1) await waiting;
+      return { ...capture, videoId: video.videoId, sourceUrl: video.canonicalUrl };
+    } } });
+    await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=aaaaaaaaaaa');
+    const queued = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=bbbbbbbbbbb');
+    await expect.poll(() => started.length).toBe(1);
+    // The previous Vault's scheduler and search fail to shut down.
+    const previous = (workspace as unknown as { current: { schedule: { close(): Promise<void> }; runtime: { close(): Promise<void> } } }).current;
+    previous.schedule.close = async () => { throw new Error('schedule close failed'); };
+    previous.runtime.close = async () => { throw new Error('search close failed'); };
+    const target = path.join(at.root, 'Restored');
+    await workspace.restore(await exportVault(at.vault), target);
+    release(); await settled(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target, errorCode: null, result: { interruptedJobs: 1 } });
+    expect(at.jobStore.get(queued.job.id)).toMatchObject({ state: 'interrupted', vaultPath: at.vault });
+    expect(JSON.stringify(at.jobStore.get(queued.job.id))).toContain('切換到還原的知識庫');
+    expect(() => workspace.enterWrite()()).not.toThrow();
+  });
+
+  it('takes back a restored folder a stop left after the rename, unless the selection names it', async () => {
+    const at = await setup(); await seed(at.vault);
+    await mkdir(at.profile, { recursive: true });
+    const buffer = await exportVault(at.vault);
+    const target = path.join(at.root, 'Restored');
+    const journalFile = path.join(at.profile, RESTORE_JOURNAL);
+    async function stoppedAfterRename(createdBy = 'XR Collector test'): Promise<string> {
+      await mkdir(target);
+      await unpackVault(buffer, target, () => undefined);
+      await writeVaultMarker(target, createdBy);
+      return (await markerDigest(target))!;
+    }
+    const journal = (marker: string) => JSON.stringify({ staging: `${target}.restoring-${randomUUID()}`, target, placed: true, marker, emptyTarget: true });
+
+    await writeFile(journalFile, journal(await stoppedAfterRename()));
+    await open(at);
+    // The restore had replaced an empty folder, which comes back.
+    expect(await readdir(target)).toEqual([]);
+    expect(existsSync(journalFile)).toBe(false);
+    await workspaces.pop()!.close();
+
+    // A folder at the target that the restore did not write is left alone.
+    await rm(target, { recursive: true });
+    const marker = await stoppedAfterRename();
+    await rm(path.join(target, 'xr-collector-vault.json'));
+    await writeVaultMarker(target, 'another program');
+    await writeFile(journalFile, journal(marker));
+    await open(at);
+    expect(await readdir(target)).toContain('documents');
+    await workspaces.pop()!.close();
+
+    // Once the selection names the restored Vault, the restore is complete and the folder stays.
+    await rm(target, { recursive: true });
+    await writeFile(journalFile, journal(await stoppedAfterRename()));
+    await writeFile(path.join(at.profile, 'vault-selection.json'), JSON.stringify({ path: target }));
+    const restored = await open(at);
+    expect(restored.status().vaultPath).toBe(target);
+    expect(await readdir(target)).toContain('documents');
+    expect(existsSync(journalFile)).toBe(false);
+  });
+});
+
+describe('cancelling a transfer that waits for collection (T4)', () => {
+  it('ends the wait, writes nothing and returns to idle while collection goes on', async () => {
+    const at = await setup(); await seed(at.vault);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const workspace = await open(at, { capture: { capture: async () => { await waiting; return capture; } } });
+    expect(() => workspace.cancelWait()).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    const job = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=aaaaaaaaaaa');
+    await expect.poll(() => workspace.jobs.get(job.job.id)?.state).toBe('running');
+
+    const file = path.join(at.root, 'cancelled.xr-vault');
+    const exporting = workspace.exportTo(file);
+    await expect.poll(() => workspace.status().state).toBe('waiting');
+    expect(workspace.cancelWait()).toMatchObject({ state: 'idle', operation: null, message: '已取消，資料未變更。' });
+    await expect(exporting).rejects.toMatchObject({ code: 'transfer_cancelled' });
+    expect(existsSync(file)).toBe(false);
+    expect(() => workspace.enterWrite()()).not.toThrow();
+
+    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+    try {
+      const target = path.join(at.root, 'Restored');
+      const source = path.join(at.root, 'source.xr-vault');
+      await writeFile(source, await exportVault(at.vault));
+      expect((await app.inject({ method: 'POST', url: '/api/vault/restore', payload: { packagePath: source, targetPath: target } })).statusCode).toBe(202);
+      expect(workspace.status().state).toBe('waiting');
+      const cancelled = await app.inject({ method: 'POST', url: '/api/vault/cancel' });
+      expect(cancelled.statusCode).toBe(200);
+      expect(cancelled.json()).toMatchObject({ state: 'idle', vaultPath: at.vault });
+      await expect.poll(() => { try { workspace.enterWrite()(); return true; } catch { return false; } }).toBe(true);
+      await expect.poll(() => existsSync(path.join(at.profile, RESTORE_JOURNAL))).toBe(false);
+      expect(existsSync(target)).toBe(false);
+      expect((await app.inject({ method: 'POST', url: '/api/vault/cancel' })).statusCode).toBe(400);
+    } finally { await app.close(); }
+
+    release();
+    expect((await workspace.jobs.whenSettled(job.job.id)).state).toBe('completed');
+    expect((await at.jobStore.activity.query({}, { vaultPath: at.vault })).events.filter((event) => event.eventType === 'vault.transfer_cancelled'))
+      .toHaveLength(2);
+  });
 });
 
 describe('export to a file (T6)', () => {
@@ -259,7 +391,7 @@ describe('export to a file (T6)', () => {
     expect(status.lastExportedAt).toBe(packageInfo(written).exportedAt);
     expect((await readdir(at.root)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
 
-    await expect(workspace.exportTo(file)).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('已經存在') });
+    await expect(workspace.exportTo(file)).rejects.toMatchObject({ code: 'file_exists', message: expect.stringContaining('已經存在') });
     await new MarkdownVault(at.vault).add({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' });
     await workspace.exportTo(file, true);
     expect(packageInfo(await readFile(file)).summary?.documents).toBe(2);
@@ -312,9 +444,55 @@ describe('transfer by path over HTTP (T7)', () => {
     }
   });
 
+  it('reports vault_busy in the status when a restore or merge outlasts the wait for collection', async () => {
+    const at = await setup(); await seed(at.vault);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const workspace = await open(at, { holdTimeoutMs: 50, capture: { capture: async () => { await waiting; return capture; } } });
+    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+    try {
+      const source = path.join(at.root, 'source.xr-vault');
+      await writeFile(source, await exportVault(at.vault));
+      const preview = (await app.inject({ method: 'POST', url: '/api/vault/merge/preview', payload: { path: source } })).json();
+      const job = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=aaaaaaaaaaa');
+      await expect.poll(() => workspace.jobs.get(job.job.id).state).toBe('running');
+
+      const apply = await app.inject({ method: 'POST', url: '/api/vault/merge/apply', payload: { id: preview.id, choices: {} } });
+      expect(apply.statusCode).toBe(202);
+      await settled(workspace);
+      expect((await app.inject({ method: 'GET', url: '/api/vault/status' })).json()).toMatchObject({
+        state: 'error', operation: 'merge', errorCode: 'vault_busy',
+      });
+      const restore = await app.inject({ method: 'POST', url: '/api/vault/restore', payload: { packagePath: source, targetPath: path.join(at.root, 'Restored') } });
+      expect(restore.statusCode).toBe(202);
+      await settled(workspace);
+      expect((await app.inject({ method: 'GET', url: '/api/vault/status' })).json()).toMatchObject({
+        state: 'error', operation: 'restore', errorCode: 'vault_busy', vaultPath: at.vault,
+      });
+      // Export answers the request itself.
+      expect((await app.inject({ method: 'POST', url: '/api/vault/export', payload: { path: path.join(at.root, 'late.xr-vault') } })).json())
+        .toMatchObject({ error: { code: 'vault_busy' } });
+    } finally {
+      release();
+      await app.close();
+    }
+  });
+
+  it('keeps an earlier comparison when a new one is refused', async () => {
+    const at = await setup(); await seed(at.vault);
+    const workspace = await open(at);
+    const preview = await workspace.previewMerge(await exportVault(at.vault));
+    const leave = workspace.enterWrite();
+    await expect(workspace.previewMerge(await exportVault(at.vault))).rejects.toMatchObject({ code: 'vault_busy' });
+    leave();
+    workspace.applyMerge(preview.id, {}); await settled(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'completed', result: { writtenFiles: 0 } });
+  });
+
   it('documents the path contract for Agents', async () => {
     const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
-    for (const term of ['"packagePath"', '"targetPath"', '`deletedOn`', 'autoCollectionPaused', '/api/vault/restore/suggestion', '`state: waiting`', 'overwrite']) {
+    for (const term of ['"packagePath"', '"targetPath"', '`deletedOn`', 'autoCollectionPaused', '/api/vault/restore/suggestion', '`state: waiting`', 'overwrite',
+      '`errorCode`', '/api/vault/cancel', '`file_exists`', '`transfer_cancelled`']) {
       expect(skill).toContain(term);
     }
   });
