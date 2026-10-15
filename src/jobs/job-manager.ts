@@ -583,13 +583,16 @@ export class JobManager {
     const activeId = this.activeByKey.get(key);
     if (activeId) {
       const active = this.jobs.get(activeId);
-      if (active && parentId === null && active.parentId !== null && kind === 'youtube.video') {
-        // A direct submission is the user's own request: no backfill bound and no subscription stop applies.
-        this.manualClaims.add(active.id);
-        delete active.publishedNotBefore;
-        this.update(active, {
-          claimedByUser: true, checkpoint: { ...active.checkpoint, claimedAt: active.checkpoint?.claimedAt ?? this.now().toISOString() },
-        });
+      if (active && parentId === null && kind === 'youtube.video') {
+        const checkpoint = { ...active.checkpoint, claimedAt: this.now().toISOString() };
+        if (active.parentId !== null) {
+          // A direct submission is the user's own request: no backfill bound and no subscription stop applies.
+          this.manualClaims.add(active.id);
+          delete active.publishedNotBefore;
+          this.update(active, { claimedByUser: true, checkpoint });
+        } else {
+          this.update(active, { checkpoint });
+        }
       }
       return { job: this.get(activeId), deduplicated: true };
     }
@@ -699,6 +702,11 @@ export class JobManager {
       const { documents, source } = this.options;
       let document = await documents.findExisting(video.videoId);
       let outcome: 'created' | 'existing' = document && savedEarlier ? 'created' : 'existing';
+      if (!document && await documents.isDeletedFor(video.videoId, { explicitAt: explicitRequestTime(job) })) {
+        // A deleted video is skipped before capture, so YouTube is not asked for a transcript the save would refuse.
+        this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'deleted' }, null);
+        return;
+      }
       if (!document) {
         const captured = await source.capture(
           video, job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {},
@@ -1129,12 +1137,13 @@ const SKIP_MESSAGES: Record<SkipReason, string> = {
 };
 
 /**
- * When the user asked for this video by itself: a direct submission or a retry of one when it was
- * accepted, a video a channel job queued when the user also submitted it. Null for channel work.
+ * The latest time the user asked for this video by itself: a direct submission or a retry of one,
+ * including a later direct submission merged into the same job, or a video a channel job queued
+ * when the user also submitted it. Null for channel work.
  */
 function explicitRequestTime(job: CollectionJob): string | null {
   if (job.kind !== 'youtube.video') return null;
-  if (job.parentId === null) return job.createdAt;
+  if (job.parentId === null) return job.checkpoint?.claimedAt ?? job.createdAt;
   return job.claimedByUser ? job.checkpoint?.claimedAt ?? null : null;
 }
 

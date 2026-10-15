@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DocumentMetadata } from '../core/types.js';
-import { api } from './api-client.js';
+import { api, ApiError } from './api-client.js';
 import { DELETE_CONFIRMATION } from './document-presentation.js';
 
 /** Confirms deleting a document; the subscription it came from stays. */
@@ -25,6 +25,11 @@ export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
       await api.deleteDocument(document.id);
       onDeleted(`已刪除「${document.title}」。`);
     } catch (error) {
+      // Deleted elsewhere meanwhile, such as by an Agent or another window: the outcome is the same.
+      if (error instanceof ApiError && error.code === 'document_deleted') {
+        onDeleted(`已刪除「${document.title}」。`);
+        return;
+      }
       setFailure(error instanceof Error ? error.message : '無法刪除，請稍後再試。');
       setBusy(false);
     }

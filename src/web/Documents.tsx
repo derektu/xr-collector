@@ -7,7 +7,7 @@ import {
   SEARCH_DEBOUNCE_MS,
   collectedShortLabel,
   draftForQuery,
-  pageAfterDeletion,
+  pageWithRows,
   pageItems,
   publishedLabel,
   readerPath,
@@ -102,6 +102,9 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
       }
     }).then((outcome) => {
       if (!active || !outcome.current) return;
+      const { rows, total } = outcome.value.results;
+      const page = pageWithRows(state.page, rows.length, total);
+      if (page !== state.page) { onState({ ...state, page }); return; }
       setResults(outcome.value.results);
       setSearchProblem(outcome.value.problem);
       setLoadError(null);
@@ -134,8 +137,6 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
 
   function deleted(message: string): void {
     onChanged(message);
-    const page = pageAfterDeletion(state.page, results?.rows.length ?? 0);
-    if (page !== state.page) onState({ ...state, page });
     setRevision((value) => value + 1);
   }
 

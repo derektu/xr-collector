@@ -363,8 +363,10 @@ export interface JobCheckpoint {
   /** A video job saved this document; a resume only updates the index. */
   savedDocumentId?: string;
   /**
-   * When the user submitted this video directly while a channel job had already queued it. That
-   * request is explicit, so it may collect the video again after a deletion made before it.
+   * The latest time the user submitted this video directly while this job was already queued: a
+   * repeated direct submission of a video job, or a direct submission of a video a channel job
+   * queued. That request is explicit, so it may collect the video again after a deletion made
+   * before it.
    */
   claimedAt?: string;
   /** A channel-add job: the settings the new subscription starts with, chosen when the job was accepted. */
@@ -593,7 +595,12 @@ export interface SearchStatus {
 /** The result of deleting a document. */
 export interface DocumentDeletion {
   deleted: { id: string; sourceType: DocumentSourceType; sourceId: string; title: string; deletedAt: string };
-  /** False when the search index still holds the document; searches exclude it until the index catches up. */
+  /**
+   * True when the search service excludes the document from results; its index entry is removed in
+   * the background, and a failed removal is recorded as `document.index_remove_failed`. False when
+   * no search service runs; the next search start compares the index with the Vault and leaves the
+   * document out.
+   */
   indexed: boolean;
   indexMessage?: string;
 }

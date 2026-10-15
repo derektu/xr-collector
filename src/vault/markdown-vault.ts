@@ -9,7 +9,7 @@ import type {
   SavedDocument,
   SubtitleKind,
 } from '../core/types.js';
-import { collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
+import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
 
 interface StoredMetadata {
   type: 'Transcript';
@@ -81,6 +81,19 @@ export interface DeletionRecovery {
   completed: DeletionRecord[];
   /** Explicit re-collections that saved the document but did not lift the deletion; the record is lifted now. */
   cleared: DeletionRecord[];
+  /**
+   * Deletions whose document file has no readable `collected_at`. Both the record and the file stay,
+   * and the document stays hidden, because the file cannot show whether it predates the deletion.
+   */
+  unresolved: DeletionRecord[];
+}
+
+/** The deletion state a package carries: which document files stay out and which records go in. */
+export interface PortableDeletions {
+  /** IDs of document files their deletion hides. */
+  hidden: Set<string>;
+  /** Records still in effect; a record whose document is newer belongs to a lifted deletion and is left out. */
+  records: DeletionRecord[];
 }
 
 /**
@@ -200,12 +213,14 @@ export class MarkdownVault implements DocumentVault {
    * lifts the record.
    */
   async recoverDeletions(): Promise<DeletionRecovery> {
-    const recovery: DeletionRecovery = { completed: [], cleared: [] };
+    const recovery: DeletionRecovery = { completed: [], cleared: [], unresolved: [] };
     for (const record of await this.deletions.list()) {
       const id = deletionId(record);
       const document = await this.readStored(id);
       if (!document) continue;
-      if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
+      if (!collectedAtReadable(document.collectedAt)) {
+        recovery.unresolved.push(record);
+      } else if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
         await this.remove(id);
         recovery.completed.push(record);
       } else {
@@ -214,6 +229,26 @@ export class MarkdownVault implements DocumentVault {
       }
     }
     return recovery;
+  }
+
+  /**
+   * Applies the visibility rule to the files a package takes from this Vault, so a package never
+   * holds a document next to the record that hides it, even while a deletion is unfinished.
+   */
+  async portableDeletions(): Promise<PortableDeletions> {
+    const hidden = new Set<string>();
+    const records: DeletionRecord[] = [];
+    for (const record of await this.deletions.list()) {
+      const id = deletionId(record);
+      let document: SavedDocument | null;
+      try { document = await this.readStored(id); } catch { document = null; hidden.add(id); }
+      if (!document) { records.push(record); continue; }
+      if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
+        hidden.add(id);
+        records.push(record);
+      }
+    }
+    return { hidden, records };
   }
 
   /** A document file as stored, whether or not a deletion hides it. */

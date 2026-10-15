@@ -75,6 +75,10 @@ export function indexKey(documentId: string): string {
   return Buffer.from(documentId, 'utf8').toString('base64url');
 }
 
+const TASK_TIMEOUT_MS = 30_000;
+/** How long starting the search waits for the index settings to apply. */
+const SETTINGS_TASK_TIMEOUT_MS = 5 * 60_000;
+
 export class MeilisearchBackend implements SearchBackend {
   private readonly baseUrl: string;
   private readonly fetchImplementation: typeof fetch;
@@ -110,7 +114,8 @@ export class MeilisearchBackend implements SearchBackend {
         }),
       },
     );
-    await this.waitForTask(settingsTask.taskUid);
+    // Making a field filterable re-processes every stored document, which takes a while on a large index.
+    await this.waitForTask(settingsTask.taskUid, SETTINGS_TASK_TIMEOUT_MS);
 
     for (const uid of RETIRED_INDEX_UIDS) {
       const existing = await this.fetchImplementation(`${this.baseUrl}/indexes/${uid}`, { headers: this.headers() });
@@ -237,8 +242,8 @@ export class MeilisearchBackend implements SearchBackend {
     };
   }
 
-  private async waitForTask(taskUid: number): Promise<void> {
-    const deadline = Date.now() + 30_000;
+  private async waitForTask(taskUid: number, timeoutMs = TASK_TIMEOUT_MS): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const task = await this.request<TaskResult>(`/tasks/${taskUid}`);
       if (task.status === 'succeeded') return;

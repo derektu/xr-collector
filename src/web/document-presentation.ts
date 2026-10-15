@@ -178,9 +178,12 @@ function pad(value: number): string {
 /** What deleting a document does, as the confirmation states it. */
 export const DELETE_CONFIRMATION = '文件會從知識庫與搜尋移除。之後的自動收集與頻道收集會略過這支影片；要再收集，請貼上這支影片的網址。訂閱不受影響。';
 
-/** The page to show after deleting the last document of a list page: the previous page, or the same one. */
-export function pageAfterDeletion(page: number, rowsOnPage: number): number {
-  return rowsOnPage <= 1 && page > 1 ? page - 1 : page;
+/**
+ * The page a loaded list should show: the same page while it has rows, otherwise the last page that
+ * has any, such as after the last document of a page was deleted here or from the Reader.
+ */
+export function pageWithRows(page: number, rowsOnPage: number, total: number): number {
+  return rowsOnPage === 0 && page > 1 ? Math.min(page - 1, totalPages(total)) : page;
 }
 
 /** The source address of a document ID, for collecting a deleted document again; null for an unknown ID. */

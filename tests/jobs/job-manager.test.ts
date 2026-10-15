@@ -147,6 +147,7 @@ describe('JobManager', () => {
     expect(submission).toMatchObject({ deduplicated: false, job: { kind: 'youtube.video', state: 'queued', source: { id } } });
 
     await vi.waitFor(() => expect(manager.get(submission.job.id)).toMatchObject({ state: 'running', phase: 'capture' }));
+    await vi.waitFor(() => expect(source.pending.has(id)).toBe(true));
     source.release(id);
     const job = await manager.whenSettled(submission.job.id);
     expect(job).toMatchObject({
