@@ -115,9 +115,9 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
       const id = `youtube:${path.basename(entry.path, '.md')}`;
       const doc = await vault.read(id);
       if (!doc || doc.id !== id || doc.sourceId !== id.slice(8) || doc.type !== 'Transcript'
-        || typeof doc.title !== 'string' || typeof doc.channelTitle !== 'string'
-        || typeof doc.collectedAt !== 'string' || typeof doc.languageCode !== 'string'
-        || !['manual', 'automatic'].includes(doc.subtitleKind)
+        || typeof doc.title !== 'string' || typeof doc.publisher.name !== 'string'
+        || typeof doc.collectedAt !== 'string' || typeof doc.youtube?.languageCode !== 'string'
+        || !['manual', 'automatic'].includes(doc.youtube.subtitleKind)
         || doc.sourceUrl !== `https://www.youtube.com/watch?v=${doc.sourceId}`) throw new Error('Invalid document');
     }
     await new JsonChannelStore(destination).list();

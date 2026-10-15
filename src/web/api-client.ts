@@ -1,12 +1,14 @@
 import type {
   CollectionJob,
-  DocumentSummary,
+  DocumentFilter,
+  DocumentPage,
+  DocumentSources,
   JobPage,
   JobSubmission,
   SavedDocument,
   SearchQuery,
   SearchResponse,
-  SearchStatus,
+  SearchStatusReport,
   YouTubeChannel,
   ChannelSchedule,
   VaultInspection,
@@ -33,10 +35,11 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // A JSON content type without a body is rejected by the server, so only label requests that carry one.
   const response = await fetch(path, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },
   });
@@ -143,14 +146,21 @@ export const api = {
     return (await request<{ job: CollectionJob }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
   },
 
-  async listDocuments(): Promise<DocumentSummary[]> {
-    const result = await request<{ documents: DocumentSummary[] }>('/api/documents');
-    return result.documents;
+  listDocuments(query: DocumentFilter & { offset: number; limit: number }, signal?: AbortSignal): Promise<DocumentPage> {
+    const parameters = filterParameters(query);
+    parameters.set('offset', String(query.offset));
+    parameters.set('limit', String(query.limit));
+    return request<DocumentPage>(`/api/documents?${parameters.toString()}`, signal ? { signal } : undefined);
   },
 
-  async readDocument(id: string): Promise<SavedDocument> {
+  async documentSources(signal?: AbortSignal): Promise<DocumentSources> {
+    return (await request<{ sources: DocumentSources }>('/api/documents/sources', signal ? { signal } : undefined)).sources;
+  },
+
+  async readDocument(id: string, signal?: AbortSignal): Promise<SavedDocument> {
     const result = await request<{ document: SavedDocument }>(
       `/api/documents/${encodeURIComponent(id)}`,
+      signal ? { signal } : undefined,
     );
     return result.document;
   },
@@ -162,23 +172,32 @@ export const api = {
     });
   },
 
-  searchDocuments(query: SearchQuery): Promise<SearchResponse> {
-    const parameters = new URLSearchParams({ q: query.query });
-    if (query.channel) parameters.set('channel', query.channel);
+  searchDocuments(query: SearchQuery, signal?: AbortSignal): Promise<SearchResponse> {
+    const parameters = filterParameters(query);
+    parameters.set('q', query.query);
     if (query.publishedFrom) parameters.set('publishedFrom', query.publishedFrom);
     if (query.publishedTo) parameters.set('publishedTo', query.publishedTo);
-    return request<SearchResponse>(`/api/search?${parameters.toString()}`);
+    if (query.offset !== undefined) parameters.set('offset', String(query.offset));
+    if (query.limit !== undefined) parameters.set('limit', String(query.limit));
+    return request<SearchResponse>(`/api/search?${parameters.toString()}`, signal ? { signal } : undefined);
   },
 
-  async getSearchStatus(): Promise<SearchStatus> {
-    const result = await request<{ status: SearchStatus }>('/api/search/status');
+  async getSearchStatus(): Promise<SearchStatusReport> {
+    const result = await request<{ status: SearchStatusReport }>('/api/search/status');
     return result.status;
   },
 
-  async rebuildSearch(): Promise<SearchStatus> {
-    const result = await request<{ status: SearchStatus }>('/api/search/rebuild', {
+  async rebuildSearch(): Promise<SearchStatusReport> {
+    const result = await request<{ status: SearchStatusReport }>('/api/search/rebuild', {
       method: 'POST',
     });
     return result.status;
   },
 };
+
+function filterParameters(filter: DocumentFilter): URLSearchParams {
+  const parameters = new URLSearchParams();
+  if (filter.sourceType) parameters.set('sourceType', filter.sourceType);
+  if (filter.publisherId) parameters.set('publisherId', filter.publisherId);
+  return parameters;
+}

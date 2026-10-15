@@ -11,15 +11,24 @@ import { CollectorError } from '../core/types.js';
 export interface SearchBackend {
   initialize(): Promise<void>;
   count(): Promise<number>;
+  /** Whether the index holds exactly these documents with identical content. */
+  isCurrent(documents: SavedDocument[]): Promise<boolean>;
   replaceAll(documents: SavedDocument[]): Promise<void>;
   upsert(document: SavedDocument): Promise<void>;
   search(query: SearchQuery): Promise<SearchResponse>;
+}
+
+/** Device-side record of index maintenance that outlives one process. */
+export interface SearchStateStore {
+  load(): Promise<{ lastRebuiltAt: string | null }>;
+  save(state: { lastRebuiltAt: string | null }): Promise<void>;
 }
 
 export class ManagedTranscriptSearch implements TranscriptSearch {
   private currentStatus: SearchStatus = {
     state: 'starting',
     indexedDocuments: 0,
+    lastRebuiltAt: null,
   };
 
   private operationTail: Promise<void> = Promise.resolve();
@@ -27,6 +36,8 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
   constructor(
     private readonly backend: SearchBackend,
     private readonly loadDocuments: () => Promise<SavedDocument[]>,
+    private readonly stateStore?: SearchStateStore,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   status(): SearchStatus {
@@ -36,28 +47,28 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
   start(): Promise<void> {
     return this.enqueue(async () => {
       this.setState('starting');
+      const stored = await this.stateStore?.load().catch(() => null);
+      this.currentStatus = { ...this.currentStatus, lastRebuiltAt: stored?.lastRebuiltAt ?? null };
       await this.backend.initialize();
       const documents = await this.loadDocuments();
-      const indexedDocuments = await this.backend.count();
-      if (indexedDocuments !== documents.length) {
-        this.setState('rebuilding');
-        await this.backend.replaceAll(documents);
-      }
+      // Equal counts do not prove freshness; compare every document's content fingerprint.
+      if (!(await this.backend.isCurrent(documents))) await this.replaceAll(documents);
       this.currentStatus = {
         state: 'ready',
         indexedDocuments: documents.length,
+        lastRebuiltAt: this.currentStatus.lastRebuiltAt,
       };
     }, '無法啟動搜尋索引。');
   }
 
   rebuild(): Promise<void> {
     return this.enqueue(async () => {
-      this.setState('rebuilding');
       const documents = await this.loadDocuments();
-      await this.backend.replaceAll(documents);
+      await this.replaceAll(documents);
       this.currentStatus = {
         state: 'ready',
         indexedDocuments: documents.length,
+        lastRebuiltAt: this.currentStatus.lastRebuiltAt,
       };
     }, '無法重建搜尋索引。');
   }
@@ -69,6 +80,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
       this.currentStatus = {
         state: 'ready',
         indexedDocuments: await this.backend.count(),
+        lastRebuiltAt: this.currentStatus.lastRebuiltAt,
       };
     }, '無法更新搜尋索引。');
   }
@@ -94,6 +106,16 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
         { cause: error },
       );
     }
+  }
+
+  private async replaceAll(documents: SavedDocument[]): Promise<void> {
+    this.setState('rebuilding');
+    await this.backend.replaceAll(documents);
+    const lastRebuiltAt = this.now().toISOString();
+    this.currentStatus = { ...this.currentStatus, lastRebuiltAt };
+    await this.stateStore?.save({ lastRebuiltAt }).catch((error: unknown) => {
+      console.warn('Unable to record the search rebuild time', error);
+    });
   }
 
   private enqueue(work: () => Promise<void>, errorMessage: string): Promise<void> {
@@ -122,6 +144,7 @@ export class UnavailableTranscriptSearch implements TranscriptSearch {
     this.currentStatus = {
       state: 'error',
       indexedDocuments: 0,
+      lastRebuiltAt: null,
       message,
     };
   }

@@ -1,8 +1,11 @@
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { DocumentVault } from '../core/collector.js';
 import type { SavedDocument, TranscriptSearch } from '../core/types.js';
 import {
   ManagedTranscriptSearch,
   UnavailableTranscriptSearch,
+  type SearchStateStore,
 } from './managed-transcript-search.js';
 import { MeilisearchBackend } from './meilisearch-backend.js';
 import { startMeilisearchProcess } from './meilisearch-process.js';
@@ -34,6 +37,7 @@ export async function startSearchRuntime(
         apiKey: process.apiKey,
       }),
       () => loadAllDocuments(options.vault),
+      fileSearchStateStore(`${options.databasePath}-state.json`),
     );
     void search.start().catch(() => undefined);
     return {
@@ -49,8 +53,29 @@ export async function startSearchRuntime(
   }
 }
 
+/** Keeps search maintenance state beside the search database, outside the Vault. */
+export function fileSearchStateStore(filePath: string): SearchStateStore {
+  return {
+    async load() {
+      try {
+        const value = JSON.parse(await readFile(filePath, 'utf8')) as { lastRebuiltAt?: unknown };
+        return { lastRebuiltAt: typeof value.lastRebuiltAt === 'string' ? value.lastRebuiltAt : null };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { lastRebuiltAt: null };
+        throw error;
+      }
+    },
+    async save(state) {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      const temporary = `${filePath}.${process.pid}.tmp`;
+      await writeFile(temporary, JSON.stringify(state), 'utf8');
+      await rename(temporary, filePath);
+    },
+  };
+}
+
 async function loadAllDocuments(vault: DocumentVault): Promise<SavedDocument[]> {
-  const summaries = await vault.list();
-  const documents = await Promise.all(summaries.map(({ id }) => vault.read(id)));
+  const metadata = await vault.list();
+  const documents = await Promise.all(metadata.map(({ id }) => vault.read(id)));
   return documents.filter((document): document is SavedDocument => document !== null);
 }
