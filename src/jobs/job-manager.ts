@@ -94,6 +94,11 @@ export class JobManager {
   private readonly settleWaiters = new Map<string, Array<(job: CollectionJob) => void>>();
   /** Channel jobs whose discovery left newer videos for a follow-up batch. */
   private readonly backlogJobs = new Set<string>();
+  /**
+   * Running channel jobs of a paused or removed subscription, with the reason. They no longer hold
+   * the channel's dedupe key, so a resume or new subscription starts its own job at once.
+   */
+  private readonly stoppedJobs = new Map<string, SkipReason>();
   private closed = false;
 
   constructor(private readonly options: JobManagerOptions) {
@@ -166,7 +171,7 @@ export class JobManager {
   /** The channel collection job of this subscription that is still queued or running. */
   activeChannelJob(channelId: string): CollectionJob | null {
     for (const job of this.jobs.values()) {
-      if (job.kind === 'youtube.channel' && job.source.id === channelId) return structuredClone(job);
+      if (job.kind === 'youtube.channel' && job.source.id === channelId && !this.stoppedJobs.has(job.id)) return structuredClone(job);
     }
     return null;
   }
@@ -185,6 +190,9 @@ export class JobManager {
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
         continue;
       }
+      this.stoppedJobs.set(job.id, reason);
+      const key = this.keys.get(job.id);
+      if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
       for (const item of job.items ?? []) {
         const video = item.jobId ? this.jobs.get(item.jobId) : undefined;
         if (!video || video.parentId !== job.id || video.state !== 'queued') continue;
@@ -432,7 +440,7 @@ export class JobManager {
     );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
-    const reason = await this.subscriptionStopped(channel.id);
+    const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptionStopped(channel.id);
     if (reason) {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       return;
@@ -461,6 +469,11 @@ export class JobManager {
     });
     // The cursor moves only after the accepted videos are recorded, so a stop in between finds them again.
     await this.options.store.flush();
+    if (this.stoppedJobs.has(job.id)) {
+      // Stopped while its videos were being recorded; a later job owns the subscription and its cursor.
+      this.completeChannelIfDone(job);
+      return;
+    }
     const saved = await this.options.channels.update(channel.id, {
       ...(discovery.cursor ? { cursor: discovery.cursor } : {}),
       lastCheckedAt: this.now().toISOString(),
@@ -502,7 +515,9 @@ export class JobManager {
     const items = job.items ?? [];
     if (items.some((item) => ACTIVE.has(item.state))) return;
     const progress = progressOf(items);
-    const backlog = this.backlogJobs.delete(job.id) ? { backlog: true } : {};
+    const stopped = this.stoppedJobs.delete(job.id);
+    // A stopped job never asks for a follow-up batch.
+    const backlog = this.backlogJobs.delete(job.id) && !stopped ? { backlog: true } : {};
     if (items.length === 0) {
       this.finish(job, 'completed', { outcome: 'empty', ...backlog }, null);
     } else if (progress.failed === items.length) {
@@ -537,6 +552,8 @@ export class JobManager {
 
   private release(job: CollectionJob): void {
     this.jobs.delete(job.id);
+    this.stoppedJobs.delete(job.id);
+    this.backlogJobs.delete(job.id);
     const key = this.keys.get(job.id);
     this.keys.delete(job.id);
     if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
