@@ -26,6 +26,7 @@ describe('classifyYouTubeInput', () => {
   it.each([
     'https://www.youtube.com/playlist?list=PLabc',
     'https://www.youtube.com/watch?list=PLabc',
+    'https://www.youtube.com/embed/videoseries?list=PLabc',
   ])('reports %s as an unsupported playlist', (input) => {
     expect(() => classifyYouTubeInput(input)).toThrowError(expect.objectContaining({ code: 'unsupported_url' }));
   });
@@ -44,5 +45,6 @@ describe('youtubeSubmitAction', () => {
     expect(youtubeSubmitAction('https://youtu.be/dQw4w9WgXcQ')).toMatchObject({ label: '新增影片', enabled: true });
     expect(youtubeSubmitAction('@sample')).toMatchObject({ label: '加入頻道', enabled: true });
     expect(youtubeSubmitAction('https://www.youtube.com/playlist?list=PLabc')).toMatchObject({ label: '加入', enabled: false, reason: expect.stringContaining('播放清單') });
+    expect(youtubeSubmitAction('https://www.youtube.com/embed/videoseries?list=PLabc')).toMatchObject({ label: '加入', enabled: false });
   });
 });

@@ -7,6 +7,7 @@ import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CapturedTranscript,
+  type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
   type YouTubeChannel,
@@ -357,6 +358,24 @@ describe('JobStore', () => {
     expect(events[0]).toEqual(expect.objectContaining({ eventId: expect.any(String), timestamp: expect.any(String), vaultPath: VAULT }));
     source.release(videoId(1, 's'));
     await manager.close();
+  });
+
+  it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
+    const store = JobStore.memory();
+    const record = (id: string, state: 'completed' | 'interrupted', minute: number): CollectionJob => ({
+      id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, parentId: null,
+      source: { type: 'youtube', id: null, url: watchUrl(videoId(minute)), title: null },
+      createdAt: new Date(Date.UTC(2026, 9, 1, 0, minute)).toISOString(), startedAt: null, finishedAt: null,
+      updatedAt: new Date(Date.UTC(2026, 9, 1, 0, minute)).toISOString(),
+      progress: null, items: null, result: null, error: null,
+    });
+    store.put(record('oldest-interrupted', 'interrupted', 0));
+    store.put(record('oldest-completed', 'completed', 1));
+    for (let index = 0; index < 1000; index += 1) store.put(record(`completed-${index}`, 'completed', 2 + index));
+
+    expect(store.get('oldest-interrupted')).toMatchObject({ state: 'interrupted' });
+    expect(store.get('oldest-completed')).toBeUndefined();
+    expect(store.list(VAULT)).toHaveLength(1001);
   });
 
   it.each(['', '{"version":1,"jobs":"broken"}', '{"version":99,"jobs":[]}'])(
