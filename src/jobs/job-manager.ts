@@ -20,12 +20,14 @@ import {
   type JobRetry,
   type JobState,
   type JobSubmission,
+  type JobSummary,
   type SkipReason,
   type YouTubeChannel,
 } from '../core/types.js';
 import { parseYouTubeVideoUrl } from '../core/video-url.js';
 import type { YouTubeSource } from '../sources/youtube/adapter.js';
 import { classifyYouTubeInput } from '../sources/youtube/url.js';
+import { limitText, redact } from '../activity/redact.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 
 export interface JobLimits {
@@ -104,6 +106,8 @@ export interface JobManagerOptions {
    * before the conversion carries no settings of its own and subscribes with these.
    */
   legacySettings?: () => Promise<CollectionPolicy | null>;
+  /** Checks one subscription now, as a manual check does; a failed channel job is retried through it. */
+  checkChannel?: (channelId: string) => Promise<JobSubmission>;
 }
 
 export interface JobListQuery {
@@ -121,7 +125,7 @@ const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);
  */
 export class JobManager {
   private readonly limits: JobLimits;
-  private readonly retry: RetryPolicy;
+  private readonly retryPolicy: RetryPolicy;
   private readonly setTimer: (callback: () => void, ms: number) => () => void;
   /** Cancel functions of jobs waiting for their next attempt. */
   private readonly retryTimers = new Map<string, () => void>();
@@ -153,7 +157,7 @@ export class JobManager {
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
-    this.retry = { ...DEFAULT_RETRY_POLICY, ...options.retry };
+    this.retryPolicy = { ...DEFAULT_RETRY_POLICY, ...options.retry };
     this.setTimer = options.setTimer ?? ((callback, ms) => {
       const timer = setTimeout(callback, ms);
       return () => clearTimeout(timer);
@@ -271,6 +275,63 @@ export class JobManager {
       }
     }
     void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
+  }
+
+  /**
+   * Retries a failed top-level job at the user's request with a new job and a fresh attempt budget.
+   * A video is collected again, a subscription request subscribes with the settings it was accepted
+   * with, and a channel job checks its subscription now from the subscription's own progress. The
+   * new job records `retryOf`, the failed one `retriedBy`; an active job of the same target is
+   * returned as a duplicate instead.
+   */
+  async retry(id: string): Promise<JobSubmission> {
+    const job = this.options.store.get(id);
+    if (!job || job.vaultPath !== this.options.vaultPath) throw new CollectorError('job_not_found', '找不到這個收集工作。');
+    if (job.parentId !== null) {
+      throw new CollectorError('job_not_retryable', '頻道收集中的影片隨頻道工作處理，請重試頻道工作。');
+    }
+    if (job.state !== 'failed') throw new CollectorError('job_not_retryable', '只有失敗的工作可以重試。');
+    if (job.retriedBy) throw new CollectorError('job_not_retryable', '這個工作已經重試過，請查看重試的工作。');
+    let submission: JobSubmission;
+    if (job.kind === 'youtube.video') {
+      submission = this.enqueueVideo(job.source.url, null, null, { retryOf: job.id }, job.source.title);
+    } else if (job.kind === 'youtube.channel-add') {
+      const settings = await this.acceptedSettings(job);
+      submission = this.enqueue('youtube.channel-add', jobKey(job), { id: null, url: job.source.url, title: null }, null, {
+        scope: backfillScope('subscribe', settings, this.now()), checkpoint: { settings: { ...settings } }, retryOf: job.id,
+      });
+    } else {
+      if (!this.options.checkChannel || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
+      submission = await this.options.checkChannel(job.source.id);
+      const started = this.jobs.get(submission.job.id);
+      if (started && !submission.deduplicated) {
+        this.update(started, { retryOf: job.id });
+        submission = { ...submission, job: this.get(started.id) };
+      }
+    }
+    this.updateStored(job, { retriedBy: submission.job.id, updatedAt: this.now().toISOString() });
+    const retried = this.jobs.get(submission.job.id) ?? this.options.store.get(submission.job.id)!;
+    this.event(retried, {
+      severity: 'info', eventType: 'job.retry_requested', retryOf: job.id,
+      message: submission.deduplicated ? '已手動重試，併入進行中的工作。' : '已手動重試，重新排入收集。',
+    });
+    await this.options.store.flush();
+    this.pump();
+    return submission;
+  }
+
+  /** Top-level job counts: queued or running now, and completed or failed (and not retried) since `since`. */
+  summary(since: string): JobSummary {
+    const bound = new Date(since).toISOString();
+    const summary: JobSummary = { active: 0, completed: 0, failed: 0, since: bound };
+    for (const job of this.options.store.list(this.options.vaultPath)) {
+      if (job.parentId !== null) continue;
+      if (ACTIVE.has(job.state)) summary.active += 1;
+      else if (!job.finishedAt || job.finishedAt < bound) continue;
+      else if (job.state === 'completed') summary.completed += 1;
+      else if (job.state === 'failed' && !job.retriedBy) summary.failed += 1;
+    }
+    return summary;
   }
 
   /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
@@ -482,11 +543,14 @@ export class JobManager {
     await this.options.store.flush();
   }
 
-  private enqueueVideo(url: string, parentId: string | null, publishedNotBefore: string | null = null): JobSubmission {
+  private enqueueVideo(
+    url: string, parentId: string | null, publishedNotBefore: string | null = null, extra: Pick<CollectionJob, 'retryOf'> = {},
+    title: string | null = null,
+  ): JobSubmission {
     const video = parseYouTubeVideoUrl(url);
     return this.enqueue('youtube.video', `video:${video.videoId}`, {
-      id: video.videoId, url: video.canonicalUrl, title: null,
-    }, parentId, publishedNotBefore ? { publishedNotBefore } : {});
+      id: video.videoId, url: video.canonicalUrl, title,
+    }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
   }
 
   private enqueueChannel(channel: YouTubeChannel, scope: ChannelJobScope): JobSubmission {
@@ -500,7 +564,7 @@ export class JobManager {
     key: string,
     source: Omit<CollectionJob['source'], 'type'>,
     parentId: string | null,
-    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore' | 'checkpoint'> = {},
+    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore' | 'checkpoint' | 'retryOf'> = {},
   ): JobSubmission {
     if (this.closed) throw new CollectorError('vault_busy', '服務正在停止，無法接受新的收集工作。');
     const activeId = this.activeByKey.get(key);
@@ -541,7 +605,7 @@ export class JobManager {
     this.activeByKey.set(key, job.id);
     this.requeue(job);
     this.options.store.put(job);
-    this.event(job, { severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。' });
+    this.event(job, { severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
     return { job: structuredClone(job), deduplicated: false };
   }
 
@@ -651,7 +715,7 @@ export class JobManager {
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'out_of_range' }, null);
         return;
       }
-      this.failOrRetry(job, errorDetails(error));
+      this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
 
@@ -664,7 +728,7 @@ export class JobManager {
     } catch (error) {
       // A step cut short by shutdown is left for close() to record as interrupted.
       if (this.closed) return;
-      this.failOrRetry(job, errorDetails(error));
+      this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
 
@@ -672,21 +736,21 @@ export class JobManager {
    * Schedules another attempt after a transient failure while attempts remain; otherwise the job
    * fails, and a job that was retried says how many attempts it made.
    */
-  private failOrRetry(job: CollectionJob, error: JobError): void {
+  private failOrRetry(job: CollectionJob, error: JobError, detail?: string): void {
     const attempts = (job.retry?.attempts ?? 0) + 1;
     if (!RETRYABLE.has(error.code)) {
-      this.finish(job, 'failed', { outcome: 'failed' }, error);
+      this.finish(job, 'failed', { outcome: 'failed' }, error, detail);
       return;
     }
-    const maxAttempts = this.retry.maxAttempts;
+    const maxAttempts = this.retryPolicy.maxAttempts;
     if (attempts >= maxAttempts) {
       this.update(job, { retry: { attempts, maxAttempts, nextAttemptAt: null, lastError: error } });
       this.notifyItemRetry(job);
       const message = attempts > 1 ? `${error.message}（已嘗試 ${attempts} 次）` : error.message;
-      this.finish(job, 'failed', { outcome: 'failed' }, { code: error.code, message });
+      this.finish(job, 'failed', { outcome: 'failed' }, { code: error.code, message }, detail);
       return;
     }
-    const delays = this.retry.delaysMs;
+    const delays = this.retryPolicy.delaysMs;
     const delay = delays[Math.min(attempts - 1, delays.length - 1)] ?? 0;
     const nextAttemptAt = new Date(this.now().getTime() + delay).toISOString();
     this.update(job, { state: 'queued', retry: { attempts, maxAttempts, nextAttemptAt, lastError: error } });
@@ -694,6 +758,7 @@ export class JobManager {
       severity: 'warning', eventType: 'job.retry_scheduled',
       message: `第 ${attempts} 次嘗試失敗，稍後自動重試：${error.message}`,
       errorCode: error.code, attempt: attempts, nextAttemptAt, ...(job.phase ? { phase: job.phase } : {}),
+      ...(detail ? { detail } : {}),
     });
     this.notifyItemRetry(job);
     this.waitForAttempt(job, delay);
@@ -760,7 +825,10 @@ export class JobManager {
       settings: { ...settings }, lastDispatchedAt: now.toISOString(),
       nextCheckAt: new Date(now.getTime() + settings.intervalMinutes * 60_000).toISOString(),
     });
-    this.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`, sourceId: channel.id });
+    this.recordEvent({
+      severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`,
+      sourceId: channel.id, sourceTitle: channel.title, subscriptionId: channel.id,
+    });
     this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
     const scope = job.scope ?? backfillScope('subscribe', settings, this.now());
     const followUp = this.enqueueChannel(channel, scope);
@@ -803,7 +871,7 @@ export class JobManager {
         sourceId: video.id, title: video.title, url: video.url, jobId: null, state: 'queued', outcome: null, error: null,
       };
       try {
-        const submission = this.enqueueVideo(video.url, job.id, discovery.publishedNotBefore);
+        const submission = this.enqueueVideo(video.url, job.id, discovery.publishedNotBefore, {}, video.title || null);
         item.jobId = submission.job.id;
         item.state = submission.job.state;
         const watching = this.watchers.get(submission.job.id) ?? new Set<string>();
@@ -903,13 +971,17 @@ export class JobManager {
     this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
 
-  private finish(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null): void {
+  private finish(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, detail?: string): void {
     this.update(job, { state, result, error, finishedAt: this.now().toISOString() });
     this.event(job, state === 'completed'
-      ? { severity: 'info', eventType: 'job.completed', message: '收集工作完成。', outcome: result.outcome }
+      ? {
+        severity: 'info', eventType: 'job.completed', message: completionMessage(job, result), outcome: result.outcome,
+        ...(result.skipReason ? { skipReason: result.skipReason } : {}),
+        ...(result.documentId ? { documentId: result.documentId } : {}),
+      }
       : {
         severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
-        ...(error ? { errorCode: error.code } : {}),
+        ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });
     this.release(job);
     const settled = this.options.store.get(job.id)!;
@@ -940,10 +1012,26 @@ export class JobManager {
     this.options.store.put(job);
   }
 
+  /** Records an event of `job` with what the activity view shows and filters by: title, subscription, parent and trigger. */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
+    const subscriptionId = this.subscriptionOf(job);
     this.options.store.event({
-      ...entry, vaultPath: job.vaultPath, jobId: job.id, ...(job.source.id ? { sourceId: job.source.id } : {}),
+      ...entry, vaultPath: job.vaultPath, jobId: job.id,
+      ...(job.source.id ? { sourceId: job.source.id } : {}),
+      ...(job.source.title ? { sourceTitle: job.source.title } : {}),
+      ...(subscriptionId ? { subscriptionId } : {}),
+      ...(job.parentId ? { parentJobId: job.parentId } : {}),
+      ...(job.scope ? { trigger: job.scope.trigger } : {}),
     });
+  }
+
+  /** The channel a job collects for: its own channel, its parent channel job's, or the one a subscription request added. */
+  private subscriptionOf(job: CollectionJob): string | null {
+    if (job.kind === 'youtube.channel') return job.source.id;
+    if (job.kind === 'youtube.channel-add') return job.result?.channelId ?? job.checkpoint?.subscribing?.channelId ?? null;
+    if (!job.parentId) return null;
+    const parent = this.jobs.get(job.parentId) ?? this.options.store.get(job.parentId);
+    return parent?.kind === 'youtube.channel' ? parent.source.id : null;
   }
 }
 
@@ -986,7 +1074,35 @@ function progressOf(items: JobItem[]): JobProgress {
   return progress;
 }
 
+/** What a finished job's activity entry says; skip reasons and counts make the log readable on its own. */
+function completionMessage(job: CollectionJob, result: JobResult): string {
+  if (result.outcome === 'skipped') return `略過：${SKIP_MESSAGES[result.skipReason ?? 'out_of_range']}。`;
+  if (job.kind === 'youtube.video') {
+    const stored = result.outcome === 'created' ? '收集完成，文件已保存' : '文件已存在';
+    return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
+  }
+  if (job.kind === 'youtube.channel-add') return result.outcome === 'created' ? '已訂閱，開始首次收集。' : '這個頻道已在訂閱清單中。';
+  if (result.outcome === 'empty') return '收集完成，沒有新影片。';
+  const progress = job.progress;
+  if (!progress) return '收集完成。';
+  const parts = [`新增 ${progress.created}`, `已存在 ${progress.existing}`];
+  if (progress.skipped) parts.push(`略過 ${progress.skipped}`);
+  if (progress.failed) parts.push(`失敗 ${progress.failed}`);
+  return `收集完成：${parts.join('・')}。`;
+}
+
+const SKIP_MESSAGES: Record<SkipReason, string> = {
+  out_of_range: '超出補收範圍', subscription_paused: '訂閱已暫停', subscription_removed: '訂閱已移除',
+  superseded: '已由較新的工作接續',
+};
+
+/** External tool output carried by the error, for the activity log's diagnostic detail. */
+function diagnosticDetail(error: unknown): string | undefined {
+  return error instanceof CollectorError && error.detail ? error.detail : undefined;
+}
+
 function errorDetails(error: unknown): JobError {
-  if (error instanceof CollectorError) return { code: error.code, message: error.message };
+  // Job errors reach the UI, Agents and diagnostics, so credentials in a source's message are masked here too.
+  if (error instanceof CollectorError) return { code: error.code, message: limitText(redact(error.message), 500, 'head') };
   return { code: 'capture_failed', message: '收集失敗，請稍後再試。' };
 }

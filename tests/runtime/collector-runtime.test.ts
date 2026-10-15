@@ -7,6 +7,7 @@ import type { CapturedTranscript, TranscriptSearch } from '../../src/core/types.
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
+import { readEventFiles } from '../activity/event-files.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -192,8 +193,7 @@ describe('CollectorRuntime', () => {
     expect(resumed).toMatchObject({ result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(resumed).not.toHaveProperty('checkpoint');
     expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(3);
-    const events = (await readFile(path.join(setup.value.profilePath, 'jobs', 'events.jsonl'), 'utf8')).trim().split('\n')
-      .map((line) => JSON.parse(line) as { eventType: string; jobId: string | null })
+    const events = (await readEventFiles(path.join(setup.value.profilePath, 'jobs')))
       .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
     expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
     expect(events.at(-1)).toBe('job.completed');

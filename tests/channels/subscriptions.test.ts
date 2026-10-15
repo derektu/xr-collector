@@ -10,6 +10,7 @@ import { CollectorError, type CollectionJob, type CollectionPolicy } from '../..
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube, syntheticChannelId } from './synthetic-youtube.js';
+import { readEventFiles } from '../activity/event-files.js';
 
 const DAY = 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
@@ -19,7 +20,7 @@ const roots: string[] = [];
 beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
 afterEach(async () => {
   process.env.TZ = originalZone;
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
 /**
@@ -554,7 +555,7 @@ describe('subscription events (S-T12)', () => {
     await w.jobs.whenSettled(resumed.submission!.job.id);
     await w.channels.removeChannel(id);
     await w.store.flush();
-    const events = (await readFile(path.join(directory, 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const events = await readEventFiles(directory);
     expect(events.filter((event) => event.eventType.startsWith('subscription.'))).toEqual([
       expect.objectContaining({ eventType: 'subscription.added', sourceId: syntheticChannelId('events'), jobId: null }),
       expect.objectContaining({ eventType: 'subscription.paused' }),

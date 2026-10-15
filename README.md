@@ -184,11 +184,12 @@ npm run prepare:merge-demo -- --output <新的資料目錄>
 工作狀態與事件屬於裝置資料，不放在 Vault，也不納入資料包：
 
 ```text
-<profile>/jobs/jobs.json      目前與最近的工作快照（含接續所需的進度與重試次數），原子寫入；完成的工作最多保留 1000 筆
-<profile>/jobs/events.jsonl   最小時序事件：接受、開始、保存、索引失敗、完成、失敗、中斷、接續（附正常關閉或異常結束）、排定重試（附下次時間）
+<profile>/jobs/jobs.json                  目前與最近的工作快照（含接續所需的進度與重試次數），原子寫入；完成的工作最多保留 1000 筆
+<profile>/jobs/events/YYYY-MM-DD.jsonl    活動記錄，每個 UTC 日一個檔，保留 30 天
+<profile>/jobs/events.jsonl               較早版本的單一活動記錄檔；照常讀取，同樣依 30 天清除
 ```
 
-profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/youtube/submissions`、`GET /api/jobs`、`GET /api/jobs/:id`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
+profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/youtube/submissions`、`GET /api/jobs`、`GET /api/jobs/summary`、`GET /api/jobs/:id`、`POST /api/jobs/:id/retry`、`GET /api/activity`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
 
 ### 中斷接續與自動重試
 
@@ -201,6 +202,18 @@ profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版�
 - **異常結束上限**：同一工作在執行步驟中遇到異常結束達 3 次後，不再接續，結果為失敗（`interrupted_repeatedly`），避免反覆讓服務當掉。正常關閉不計入。
 
 網路錯誤與 YouTube 限制連線頻率屬於暫時性錯誤：影片擷取、頻道探索與頻道解析遇到時自動重試，每個工作最多嘗試 3 次，失敗後先等 30 秒，再等 2 分鐘。等待期間顯示「等待重試」、原因與下一次時間，不占用執行名額。已失敗次數保存在工作中，服務重啟後延續，不會因重啟而無限重試。無字幕、影片無法存取、超出補收範圍與無法解析的內容不重試，直接記錄原因。
+
+失敗的工作可在活動頁按「重試」。手動重試建立新工作，嘗試次數重新計算：影片重新收集，新增訂閱以原本接受的設定重新訂閱，頻道工作立即檢查該訂閱。原工作標示「已重試」，每個失敗工作只重試一次；同一目標已有進行中的工作時併入該工作。
+
+### 活動記錄
+
+活動頁上方列出工作：進行中的工作附進度，其後是最近結束的工作，失敗的工作有「查看記錄」與「重試」；標題列顯示進行中、今天完成與今天失敗的數量。下方是記錄，可依等級（全部、錯誤、新增）、來源與時間（今天、最近 7 天、30 天內）篩選，依工作篩選時可複製診斷資訊；「載入更早的記錄」以 cursor 往前翻頁。來源詳情的每筆收集紀錄開啟該工作的記錄，「全部活動」開啟該來源的記錄。
+
+- **事件內容**：每筆事件有時間、`severity`（info／warning／error）、類型與訊息，依事件附上階段、結果（`outcome`）、略過原因、錯誤碼、文件、來源標題、所屬訂閱、上層工作與觸發原因。嚴重程度與結果分開記錄，略過不是錯誤。記錄涵蓋接受、開始、發現、保存、索引失敗、排定重試、完成、失敗、中斷、接續、手動重試、訂閱與排程異動、定時檢查派工，以及 Vault 匯出、還原、合併與失敗。
+- **保留**：保留最近 30 天，啟動時與之後每小時清除。日檔以 UTC 日期命名，畫面的「今天」與時間顯示依本機時區，查詢以時間戳記判斷範圍。工作快照與搜尋資料不在清除範圍，中斷工作仍能接續。
+- **遮蔽**：寫入與讀出時把 Authorization、Bearer token、Cookie、帶密鑰的網址參數與 Agent token 換成 `[已遮蔽]`；訊息最多 500 字，外部工具輸出只留結尾 2000 字；不記錄文件正文。
+- **寫入失敗**：無法寫入的事件留在記憶體並每 30 秒補寫，最多 1000 筆，超過時最舊的遺失並計數。活動頁顯示警示，`GET /api/health` 的 `activityLog` 回報狀態，遺失事件的工作標示記錄不完整。
+- **Vault 鎖**：記錄與工作屬於裝置資料，Vault 合併期間與尚未設定 Vault 時仍可查詢。
 
 ## 頻道訂閱
 

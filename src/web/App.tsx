@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { Activity } from './Activity.js';
+import { activityStateSearch, type ActivityViewState } from './activity-presentation.js';
 import { AddContent, type AddResult } from './AddContent.js';
 import { api } from './api-client.js';
 import { createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, pathForRoute, resolveTheme, routeForPath, type ShellPage, type ThemePreference, type ThemeStore } from './app-shell.js';
@@ -121,6 +122,15 @@ export default function App() {
   }, []);
   function openDocument(id: string, from?: AppHistoryState['from']): void { go(readerPath(id), '', { returnable: true, ...(from ? { from } : {}) }); }
   function openSource(type: string, id: string): void { go(sourcePath(type, id), '', { returnable: true }); }
+  /** Opens the activity page, filtered to one job or one source when the caller names it. */
+  function openActivity(filter: { job?: string; source?: string } = {}): void {
+    go('/activity', activityStateSearch({ level: 'all', range: '30d', job: filter.job ?? null, source: filter.source ?? null }), { returnable: true });
+  }
+  const onActivityState = useCallback((next: ActivityViewState) => {
+    const search = activityStateSearch(next);
+    window.history.replaceState(window.history.state, '', `/activity${search}`);
+    setLocation({ pathname: '/activity', search });
+  }, []);
   function announce(text: string, tone: 'ok' | 'error' = 'ok'): void {
     setNotice({ tone, text, key: Date.now() });
     status.announce();
@@ -155,7 +165,7 @@ export default function App() {
   } else if (sourceRoute) {
     body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
       onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onOpenDocuments={(source) => go('/documents', listStateSearch({ query: '', source, page: 1 }), { returnable: true })}
-      onOpenActivity={() => navigate('activity')} onChanged={announce}
+      onOpenActivity={openActivity} onChanged={announce}
       onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} active={active} schedule={status.schedule} revision={status.revision}
@@ -163,7 +173,8 @@ export default function App() {
   } else if (page === 'documents') {
     body = <Documents state={listState} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={() => setAdding(true)} />;
   } else if (page === 'activity') {
-    body = <Activity revision={status.revision} />;
+    body = <Activity revision={status.revision} search={location.search} onState={onActivityState}
+      onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
   } else {
     body = <Settings vaultPath={vault.vaultPath} themePreference={themePreference} onThemePreference={persist} />;
   }

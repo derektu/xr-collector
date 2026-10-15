@@ -29,7 +29,7 @@ describe('Agent Skill', () => {
   it('lists only routes the server registers, including the document and search contract', async () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
-      collector: stub, jobs: stub, transfer: stub, channels: stub, schedule: stub, search: stub, vaultSetup: stub,
+      collector: stub, jobs: stub, activity: stub, transfer: stub, channels: stub, schedule: stub, search: stub, vaultSetup: stub,
       agentToken: 'skill-test',
     };
     const app = await createHttpApp(options);
@@ -49,6 +49,9 @@ describe('Agent Skill', () => {
       { method: 'POST', url: '/api/url-recognitions' },
       { method: 'GET', url: '/api/sources' },
       { method: 'GET', url: '/api/sources/:type/:id' },
+      { method: 'GET', url: '/api/activity' },
+      { method: 'GET', url: '/api/jobs/summary' },
+      { method: 'POST', url: '/api/jobs/:id/retry' },
     ]));
     for (const route of routes) {
       expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);
@@ -91,5 +94,13 @@ describe('Agent Skill', () => {
       expect(skill).toContain(term);
     }
     expect(skill).not.toContain('`completed`、`failed` 或 `interrupted`');
+  });
+
+  it('documents the activity log, its retention and manual retry', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const term of ['`severity`', '`eventType`', '`subscriptionId`', '`nextCursor`', '`retentionDays`', '`activityLog`', '`failing`', '`dropped`',
+      '`job_not_retryable`', '`retryOf`', '`retriedBy`', '`activityIncomplete: true`', '保留最近 30 天', '`[已遮蔽]`', '`outcome: skipped`']) {
+      expect(skill).toContain(term);
+    }
   });
 });

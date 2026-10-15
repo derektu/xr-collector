@@ -151,7 +151,7 @@ export class ChannelCollector {
       return new Map(current ? [[id, settingsPatch(current, { ...current.settings, ...patch }, now)]] : []);
     });
     if (!channel) throw notFound();
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.settings_updated', message: `已更新「${channel.title}」的收集設定。`, sourceId: id });
+    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.settings_updated', message: `已更新「${channel.title}」的收集設定。`, ...subject(id, channel.title) });
     return channel;
   }
 
@@ -174,7 +174,7 @@ export class ChannelCollector {
     const paused = updated.filter((channel) => !channel.enabled).length;
     this.jobs.recordEvent({
       severity: 'info', eventType: 'subscription.settings_applied',
-      message: `已把「${source.title}」的收集設定套用到其他 ${updated.length} 個 YouTube 頻道。`, sourceId: id,
+      message: `已把「${source.title}」的收集設定套用到其他 ${updated.length} 個 YouTube 頻道。`, ...subject(id, source.title),
     });
     return { updated: updated.length, paused };
   }
@@ -202,7 +202,7 @@ export class ChannelCollector {
       const channel = await this.store.update(id, { enabled: false, backlog: false, nextCheckAt: null });
       if (!channel) throw notFound();
       this.jobs.stopChannel(id, 'subscription_paused');
-      this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${channel.title}」。`, sourceId: id });
+      this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${channel.title}」。`, ...subject(id, channel.title) });
       return { channel, submission: null };
     }
     const now = this.now();
@@ -211,7 +211,7 @@ export class ChannelCollector {
       lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, current.settings.intervalMinutes).toISOString(),
     });
     if (!channel) throw notFound();
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.resumed', message: `已恢復「${channel.title}」。`, sourceId: id });
+    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.resumed', message: `已恢復「${channel.title}」。`, ...subject(id, channel.title) });
     const submission = await this.jobs.submitChannel(channel, backfillScope('resume', channel.settings, now));
     return { channel, submission };
   }
@@ -221,7 +221,7 @@ export class ChannelCollector {
     const channel = (await this.store.list()).find((candidate) => candidate.id === id);
     if (!channel || !(await this.store.remove(id))) throw notFound();
     this.jobs.stopChannel(id, 'subscription_removed');
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.removed', message: `已移除「${channel.title}」，文件保留。`, sourceId: id });
+    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.removed', message: `已移除「${channel.title}」，文件保留。`, ...subject(id, channel.title) });
     const documents = await this.options.documents();
     return { documentsKept: documents.filter((document) => document.publisher.id === id).length };
   }
@@ -353,4 +353,9 @@ function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
     timer = setTimeout(() => reject(new CollectorError('network_error', '解析頻道逾時，請稍後再試。')), timeoutMs);
   });
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** The fields that tie a subscription event to its channel, so the activity view can show and filter it by source. */
+function subject(id: string, title: string): { sourceId: string; sourceTitle: string; subscriptionId: string } {
+  return { sourceId: id, sourceTitle: title, subscriptionId: id };
 }

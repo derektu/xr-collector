@@ -1,5 +1,8 @@
 import type {
+  ActivityPage,
+  ActivityQuery,
   CollectionJob,
+  JobSummary,
   DocumentFilter,
   DocumentPage,
   DocumentSources,
@@ -171,6 +174,27 @@ export const api = {
 
   async getJob(id: string): Promise<CollectionJob> {
     return (await request<{ job: CollectionJob }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
+  },
+
+  async jobSummary(since: string, signal?: AbortSignal): Promise<JobSummary> {
+    return (await request<{ summary: JobSummary }>(`/api/jobs/summary?${new URLSearchParams({ since }).toString()}`, signal ? { signal } : undefined)).summary;
+  },
+
+  retryJob(id: string): Promise<JobSubmission> {
+    return request<JobSubmission>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  },
+
+  activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {
+    const parameters = new URLSearchParams();
+    if (query.severity) parameters.set('severity', query.severity.join(','));
+    if (query.eventType) parameters.set('eventType', query.eventType.join(','));
+    for (const key of ['jobId', 'subscriptionId', 'since', 'until', 'cursor'] as const) {
+      const value = query[key];
+      if (value) parameters.set(key, value);
+    }
+    if (query.limit) parameters.set('limit', String(query.limit));
+    const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
+    return request<ActivityPage>(`/api/activity${suffix}`, signal ? { signal } : undefined);
   },
 
   listDocuments(query: DocumentFilter & { offset: number; limit: number }, signal?: AbortSignal): Promise<DocumentPage> {

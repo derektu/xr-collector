@@ -228,10 +228,12 @@ export function classifyYtDlpError(
   }
 
   const details = `${error.message}\n${stderr}`;
+  // The end of stderr names the failure; the activity log masks and shortens it further.
+  const diagnostic = stderr.trim() ? { detail: stderr.trim().slice(-4000) } : {};
   // Rate limiting is temporary, so it shares the retryable network code.
   if (/http error 429|too many requests/i.test(details)) {
     return new CollectorError('network_error', 'YouTube 暫時限制連線，請稍後再試。', {
-      cause: error,
+      cause: error, ...diagnostic,
     });
   }
   if (
@@ -240,7 +242,7 @@ export function classifyYtDlpError(
     )
   ) {
     return new CollectorError('video_unavailable', '這支影片目前無法存取。', {
-      cause: error,
+      cause: error, ...diagnostic,
     });
   }
   if (
@@ -249,10 +251,10 @@ export function classifyYtDlpError(
     )
   ) {
     return new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。', {
-      cause: error,
+      cause: error, ...diagnostic,
     });
   }
   return new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。', {
-    cause: error,
+    cause: error, ...diagnostic,
   });
 }

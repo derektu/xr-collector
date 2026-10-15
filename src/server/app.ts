@@ -12,6 +12,11 @@ import { SourceCatalog } from '../sources/source-catalog.js';
 import { recognizeUrl, SOURCE_TYPES, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
   CollectorError,
+  type ActivityLogHealth,
+  type ActivityPage,
+  type ActivityQuery,
+  type EventSeverity,
+  type JobSummary,
   type CollectionJob,
   type JobPage,
   type JobSubmission,
@@ -50,6 +55,14 @@ export interface CollectionJobs {
   submitVideo(url: string): Promise<JobSubmission>;
   get(id: string): CollectionJob;
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
+  summary(since: string): JobSummary;
+  retry(id: string): Promise<JobSubmission>;
+}
+
+/** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
+export interface ActivityAccess {
+  query(query: ActivityQuery): Promise<ActivityPage>;
+  health(): ActivityLogHealth;
 }
 
 export interface ChannelScheduleManagement {
@@ -69,11 +82,12 @@ export interface VaultSetup {
 }
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
-const NOT_READY_ROUTES = new Set(['/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect']);
+const NOT_READY_ROUTES = new Set(['/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity']);
 
 export interface HttpAppOptions {
   collector?: Collector;
   jobs?: CollectionJobs;
+  activity?: ActivityAccess;
   transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
@@ -111,6 +125,7 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   channel_paused: 409,
   out_of_range: 422,
   job_not_found: 404,
+  job_not_retryable: 409,
   unsupported_url: 400,
   queue_full: 503,
   no_subtitles: 422,
@@ -189,8 +204,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('preHandler', async (request) => {
       if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/api/')
         && request.routeOptions.url !== '/api/vault/status'
-        // Job state is device data and stays readable while a merge holds the Vault.
+        // Jobs and activity are device data and stay readable while a merge holds the Vault.
         && !request.routeOptions.url?.startsWith('/api/jobs')
+        && request.routeOptions.url !== '/api/activity'
         && !NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) transfer.assertReadable();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
         && !request.routeOptions.url?.startsWith('/api/vault/')) {
@@ -254,6 +270,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return {
       status: runtime && runtime.state !== 'ready' ? 'unavailable' : 'ok',
       ...(runtime ? { runtime } : {}),
+      ...(options.activity ? { activityLog: options.activity.health() } : {}),
     };
   });
 
@@ -352,8 +369,24 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
     });
 
+    app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', async (request) => {
+      const { since } = singleValues(request.query);
+      if (since !== undefined && !isInstant(since)) throw new CollectorError('invalid_request', 'since 必須是 ISO 時間。');
+      return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
+    });
+
     app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request) => ({
       job: jobs.get(request.params.id),
+    }));
+
+    app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) =>
+      reply.code(202).send(await jobs.retry(request.params.id)));
+  }
+
+  if (options.activity) {
+    const activity = options.activity;
+    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', async (request) => ({
+      ...(await activity.query(activityQuery(singleValues(request.query)))),
     }));
   }
 
@@ -480,6 +513,50 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   }
 
   return app;
+}
+
+const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['info', 'warning', 'error']);
+const ACTIVITY_PARAMETERS = new Set(['severity', 'eventType', 'jobId', 'subscriptionId', 'since', 'until', 'limit', 'cursor']);
+
+function activityQuery(query: Record<string, string | undefined>): ActivityQuery {
+  const unknown = Object.keys(query).find((key) => !ACTIVITY_PARAMETERS.has(key));
+  if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
+  const list = (value: string | undefined) => value?.split(',').map((item) => item.trim()).filter(Boolean);
+  const severity = list(query.severity);
+  if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
+    throw new CollectorError('invalid_request', 'severity 只能是 info、warning、error，以逗號分隔。');
+  }
+  const eventType = list(query.eventType);
+  if (eventType && (eventType.length === 0 || !eventType.every((value) => /^[a-z_.]{1,60}$/u.test(value)))) {
+    throw new CollectorError('invalid_request', 'eventType 格式無效。');
+  }
+  for (const key of ['jobId', 'subscriptionId'] as const) {
+    const value = query[key];
+    if (value !== undefined && (value === '' || value.length > 200)) throw new CollectorError('invalid_request', `${key} 長度須在 1 到 200 之間。`);
+  }
+  for (const key of ['since', 'until'] as const) {
+    const value = query[key];
+    if (value !== undefined && !isInstant(value)) throw new CollectorError('invalid_request', `${key} 必須是 ISO 時間。`);
+  }
+  if (query.cursor !== undefined && (query.cursor === '' || query.cursor.length > 500)) {
+    throw new CollectorError('invalid_request', '分頁位置無效。');
+  }
+  const { limit } = pagination({ limit: query.limit ?? '50' });
+  return {
+    ...(severity ? { severity: severity as EventSeverity[] } : {}),
+    ...(eventType ? { eventType } : {}),
+    ...(query.jobId ? { jobId: query.jobId } : {}),
+    ...(query.subscriptionId ? { subscriptionId: query.subscriptionId } : {}),
+    ...(query.since ? { since: query.since } : {}),
+    ...(query.until ? { until: query.until } : {}),
+    ...(query.cursor ? { cursor: query.cursor } : {}),
+    limit,
+  };
+}
+
+/** An ISO date-time with an explicit offset or Z, so the instant does not depend on the server's time zone. */
+function isInstant(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 function isCalendarDate(value: string): boolean {

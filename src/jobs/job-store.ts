@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
 const JOBS_FILE = 'jobs.json';
-const EVENTS_FILE = 'events.jsonl';
 const FILE_VERSION = 1;
 /**
  * Completed and failed jobs beyond this count are dropped oldest first. Queued, running and
@@ -19,15 +19,19 @@ interface JobsFile {
 
 export type NewJobEvent = Omit<JobEvent, 'eventId' | 'timestamp'>;
 
+/** Activity log settings a job store passes on; the store supplies the clock, job lookup and drop handling. */
+export type JobActivityOptions = Pick<ActivityLogOptions, 'setTimer' | 'append'>;
+
 /**
  * Device-side record of collection jobs and their timeline. Jobs live in one JSON snapshot that is
- * replaced atomically; events append to a JSONL file. Both stay outside every Vault.
+ * replaced atomically; events go to the activity log. Both stay outside every Vault, and the
+ * activity log's retention never removes a job record.
  */
 export class JobStore {
   private readonly jobs = new Map<string, CollectionJob>();
   private flushing: Promise<void> | null = null;
   private dirty = false;
-  private eventTail: Promise<void> = Promise.resolve();
+  private activityLog!: ActivityLog;
 
   private constructor(
     private readonly directory: string | null,
@@ -36,16 +40,22 @@ export class JobStore {
 
   /** Keeps everything in memory; for tests and runtimes without a device profile. */
   static memory(now: () => Date = () => new Date()): JobStore {
-    return new JobStore(null, now);
+    const store = new JobStore(null, now);
+    store.activityLog = ActivityLog.memory(store.activityOptions({}));
+    return store;
   }
+
+  /** The device activity log the store's events go to. */
+  get activity(): ActivityLog { return this.activityLog; }
 
   /**
    * Loads the previous snapshot. Jobs still queued or running belong to a process that stopped
    * without closing, so they become interrupted with their scope and progress kept; a job caught in
    * the middle of a step counts an unclean stop.
    */
-  static async open(directory: string, now: () => Date = () => new Date()): Promise<JobStore> {
+  static async open(directory: string, now: () => Date = () => new Date(), activity: JobActivityOptions = {}): Promise<JobStore> {
     const store = new JobStore(directory, now);
+    store.activityLog = await ActivityLog.open(directory, store.activityOptions(activity));
     let contents: string | null = null;
     try {
       contents = await readFile(path.join(directory, JOBS_FILE), 'utf8');
@@ -122,24 +132,37 @@ export class JobStore {
   }
 
   event(entry: NewJobEvent): void {
-    const event: JobEvent = { eventId: randomUUID(), timestamp: this.now().toISOString(), ...entry };
-    if (!this.directory) return;
-    const file = path.join(this.directory, EVENTS_FILE);
-    this.eventTail = this.eventTail
-      .then(async () => {
-        await mkdir(this.directory!, { recursive: true });
-        await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
-      })
-      .catch((error: unknown) => console.error('Collection event write failed', error));
+    this.activityLog.record({ eventId: randomUUID(), timestamp: this.now().toISOString(), ...entry });
   }
 
-  /** Resolves once every change so far is on disk. */
+  /** Resolves once every change so far is on disk, or the activity log reported why it is not. */
   async flush(): Promise<void> {
+    await this.activityLog.flush();
     while (this.dirty || this.flushing) {
       if (this.flushing) await this.flushing;
       else this.scheduleFlush();
     }
-    await this.eventTail;
+  }
+
+  /** Writes what is left and stops the activity log's timers. */
+  async close(): Promise<void> {
+    await this.activityLog.close();
+    await this.flush();
+  }
+
+  private activityOptions(activity: JobActivityOptions): ActivityLogOptions {
+    return {
+      ...activity,
+      now: this.now,
+      lookupJob: (id) => this.jobs.get(id),
+      // A job whose events were lost says so, so its record is not mistaken for complete.
+      onDropped: (event: JobEvent) => {
+        const job = event.jobId ? this.jobs.get(event.jobId) : undefined;
+        if (!job || job.activityIncomplete) return;
+        job.activityIncomplete = true;
+        this.scheduleFlush();
+      },
+    };
   }
 
   private scheduleFlush(): void {
