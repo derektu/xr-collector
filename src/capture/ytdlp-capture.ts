@@ -228,6 +228,12 @@ export function classifyYtDlpError(
   }
 
   const details = `${error.message}\n${stderr}`;
+  // Rate limiting is temporary, so it shares the retryable network code.
+  if (/http error 429|too many requests/i.test(details)) {
+    return new CollectorError('network_error', 'YouTube 暫時限制連線，請稍後再試。', {
+      cause: error,
+    });
+  }
   if (
     /video (?:is )?unavailable|private video|members[- ]only|sign in to confirm|age[- ]restricted|not available/i.test(
       details,

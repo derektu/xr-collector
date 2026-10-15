@@ -84,4 +84,12 @@ describe('Agent Skill', () => {
       expect(skill).toContain(term);
     }
   });
+
+  it('documents resumption after a restart and automatic retries', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const term of ['`recovery`', '`resumedCount`', '`uncleanStops`', '`interrupted_repeatedly`', '`retry`', '`nextAttemptAt`', '`maxAttempts`', '`superseded`']) {
+      expect(skill).toContain(term);
+    }
+    expect(skill).not.toContain('`completed`、`failed` 或 `interrupted`');
+  });
 });

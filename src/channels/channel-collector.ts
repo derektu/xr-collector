@@ -207,6 +207,14 @@ export class ChannelCollector {
     return { ...backfill, mode: 'incremental', cursor: channel.cursor };
   }
 
+  /** Resumed channel jobs that left newer videos behind are followed by the next batch, as when they started. */
+  followResumedBacklogs(): void {
+    for (const [channelId] of this.jobs.channelJobs()) {
+      const job = this.jobs.activeChannelJob(channelId);
+      if (job) this.followBacklog(job.id, channelId);
+    }
+  }
+
   /** A job that left newer videos behind is followed at once by the next batch while the subscription stays enabled. */
   private followBacklog(jobId: string, channelId: string): void {
     void this.jobs.whenSettled(jobId).then(async (job) => {

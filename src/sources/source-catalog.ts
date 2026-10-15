@@ -82,5 +82,7 @@ function jobRecord(job: CollectionJob): SourceJobRecord {
     progress: job.progress,
     outcome: job.result?.outcome ?? null,
     error: job.error,
+    retry: job.retry ?? null,
+    resumedCount: job.recovery?.resumedCount ?? 0,
   };
 }

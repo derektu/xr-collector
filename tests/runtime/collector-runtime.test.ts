@@ -154,7 +154,7 @@ describe('CollectorRuntime', () => {
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });
 
-  it('waits for running captures on close and shows queued work as interrupted after restart', async () => {
+  it('waits for running captures on close and resumes queued work after restart', async () => {
     const releases: Array<() => void> = [];
     const capture = vi.fn(async (video: { videoId: string; canonicalUrl: string }) => {
       await new Promise<void>((resolve) => releases.push(resolve));
@@ -180,13 +180,60 @@ describe('CollectorRuntime', () => {
 
     const second = await CollectorRuntime.start(setup.value);
     cleanups.push(() => second.close());
-    const page = await (await fetch(`${second.server.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
-    expect(Object.fromEntries(page.jobs.map((job) => [job.id, job.state]))).toEqual({
-      [ids[0]!]: 'completed', [ids[1]!]: 'completed', [ids[2]!]: 'interrupted',
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(3));
+    for (const release of releases) release();
+    await vi.waitFor(async () => {
+      const page = await (await fetch(`${second.server.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
+      expect(Object.fromEntries(page.jobs.map((job) => [job.id, job.state]))).toEqual({
+        [ids[0]!]: 'completed', [ids[1]!]: 'completed', [ids[2]!]: 'completed',
+      });
     });
-    expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(2);
-    const events = await readFile(path.join(setup.value.profilePath, 'jobs', 'events.jsonl'), 'utf8');
-    expect(events).toContain('"eventType":"job.interrupted"');
+    const resumed = (await (await fetch(`${second.server.url}/api/jobs/${ids[2]!}`)).json()).job;
+    expect(resumed).toMatchObject({ result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
+    expect(resumed).not.toHaveProperty('checkpoint');
+    expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(3);
+    const events = (await readFile(path.join(setup.value.profilePath, 'jobs', 'events.jsonl'), 'utf8')).trim().split('\n')
+      .map((line) => JSON.parse(line) as { eventType: string; jobId: string | null })
+      .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
+    expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
+    expect(events.at(-1)).toBe('job.completed');
+  });
+
+  it('resumes the work of a killed process without capturing saved videos again', async () => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'xr-runtime-kill-'));
+    cleanups.push(() => rm(profile, { recursive: true, force: true }));
+    const vaultPath = path.join(profile, 'vault');
+    const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('tests/runtime/fixtures/killed-runtime.ts'), profile, vaultPath], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    let output = '';
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.on('data', (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes('holding')) resolve();
+      });
+      child.once('exit', (code) => reject(new Error(`fixture exited ${code}: ${output}`)));
+    });
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    child.kill('SIGKILL');
+    await exited;
+    const [savedJob, heldJob] = JSON.parse(output.split('\n').find((line) => line.startsWith('jobs '))!.slice(5)) as [string, string];
+
+    const capture = vi.fn(async (video: { videoId: string; canonicalUrl: string }) => ({
+      videoId: video.videoId, sourceUrl: video.canonicalUrl, title: `Video ${video.videoId}`, channelId: null,
+      channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
+      subtitleKind: 'manual' as const, bodyMarkdown: 'Body.',
+    }));
+    const setup = await options({ capture });
+    const runtime = await CollectorRuntime.start({ ...setup.value, profilePath: profile, explicitVaultPath: vaultPath });
+    cleanups.push(() => runtime.close());
+    await vi.waitFor(async () => {
+      const job = (await (await fetch(`${runtime.server.url}/api/jobs/${heldJob}`)).json()).job;
+      expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 1 } });
+    });
+    expect((await (await fetch(`${runtime.server.url}/api/jobs/${savedJob}`)).json()).job).toMatchObject({ state: 'completed' });
+    expect(capture.mock.calls.map(([video]) => video.videoId)).toEqual(['killheld001']);
+    expect((await (await fetch(`${runtime.server.url}/api/documents`)).json()).documents).toHaveLength(2);
   });
 
   it('closes the workspace when a later listener fails to start', async () => {
