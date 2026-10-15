@@ -1,4 +1,4 @@
-import { BACKFILL_LIMITS, BACKFILL_WINDOWS, INTERVAL_OPTIONS, intervalLabel, windowLabel } from '../channels/collection-policy.js';
+import { BACKFILL_LIMITS, BACKFILL_WINDOWS, DEFAULT_POLICY, INTERVAL_OPTIONS, intervalLabel, windowLabel } from '../channels/collection-policy.js';
 import {
   CollectorError,
   type ChannelPreview,
@@ -9,7 +9,7 @@ import { classifyYouTubeInput } from './youtube/url.js';
 
 /** Services a source type may call while recognizing an address. */
 export interface RecognitionContext {
-  /** Resolves a channel address and reports its subscription state and the policy it would use. */
+  /** Resolves a channel address and reports its subscription state and the settings it uses or would start with. */
   previewChannel(url: string): Promise<ChannelPreview>;
 }
 
@@ -37,9 +37,18 @@ export const youtubeSourceType: SourceTypeDeclaration = {
   ],
   requiresLogin: false,
   settings: [
-    { key: 'intervalMinutes', label: '檢查頻率', options: INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) })) },
-    { key: 'backfillWindow', label: '補收時間範圍', options: BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) })) },
-    { key: 'backfillMaxItems', label: '補收數量', options: BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 支影片` })) },
+    {
+      key: 'intervalMinutes', label: '檢查頻率', default: DEFAULT_POLICY.intervalMinutes,
+      options: INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) })),
+    },
+    {
+      key: 'backfillWindow', label: '補收時間範圍', default: DEFAULT_POLICY.backfillWindow,
+      options: BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) })),
+    },
+    {
+      key: 'backfillMaxItems', label: '補收數量', default: DEFAULT_POLICY.backfillMaxItems,
+      options: BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 支影片` })),
+    },
   ],
   owns(input, url) {
     if (input.startsWith('@')) return true;
@@ -86,8 +95,9 @@ export const youtubeSourceType: SourceTypeDeclaration = {
       ...base('ready', channel.url),
       sourceType: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道',
       target: { id: channel.id, title: channel.title, url: channel.url },
-      subscription: subscription ? { id: channel.id, enabled: subscription.enabled } : null,
-      policy: preview.policy,
+      subscription: subscription ? { id: channel.id, enabled: subscription.enabled, settings: subscription.settings } : null,
+      settings: DEFAULT_POLICY,
+      autoCollection: preview.autoCollection,
       actions,
     };
   },
@@ -143,7 +153,7 @@ function absoluteUrl(input: string): URL | null {
 function base(status: UrlRecognition['status'], url: string): UrlRecognition {
   return {
     status, sourceType: null, kind: null, kindLabel: null, url, target: null,
-    subscription: null, policy: null, actions: [], login: null, message: null,
+    subscription: null, settings: null, autoCollection: null, actions: [], login: null, message: null,
   };
 }
 

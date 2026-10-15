@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from './api-client.js';
 import type { Theme } from './app-shell.js';
-import { AutoCollectionCard } from './AutoCollectionCard.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
 
-/** Device and Vault settings: Vault location, shared collection settings, search index and appearance. */
+/** Device and Vault settings: Vault location, search index and appearance. Collection settings belong to each source. */
 export function Settings({ vaultPath, theme, themeBusy, onTheme }: {
   vaultPath: string | null;
   theme: Theme;
@@ -29,7 +28,6 @@ export function Settings({ vaultPath, theme, themeBusy, onTheme }: {
         <code className="setting-path">{vaultPath}</code>
         {counts ? <p className="hint">{counts.documents} 份文件・{counts.sources} 個來源</p> : null}
       </section>
-      <AutoCollectionCard />
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>

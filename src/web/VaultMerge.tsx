@@ -54,7 +54,7 @@ export function VaultMerge({ file, disabled, onBusy, onStatus }: {
       <h3>資料包：{sourceName}</h3>
       <p>新增 {preview.items.filter((item) => item.state === 'new').length} · 相同 {preview.items.filter((item) => item.state === 'same').length} · 差異 {conflicts.length}</p>
       <p>新增項目會加入，相同項目會跳過；來源缺少的項目保留本機。每項差異都需要選擇。</p>
-      <p>文件時間取自異動時間（若有）或收集時間，頻道顯示加入時間，僅供參考。採用匯入排程會套用週期並暫停排程；執行紀錄保留本機。</p>
+      <p>文件時間取自異動時間（若有）或收集時間，頻道顯示加入時間，僅供參考。頻道的收集設定隨頻道比對；檢查時間、自動收集開關與執行紀錄保留本機。</p>
       {preview.items.map((item) => <details key={item.key} className="merge-item">
         <summary>{item.state === 'new' ? '新增' : item.state === 'same' ? '相同' : '差異'} · {item.label}{item.state === 'conflict' ? ` · ${choices[item.key] === 'local' ? '保留本機' : choices[item.key] === 'incoming' ? '採用匯入' : '尚未選擇'}` : ''}</summary>
         {item.state === 'conflict' && <fieldset disabled={disabled}>

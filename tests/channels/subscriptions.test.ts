@@ -2,11 +2,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChannelCollector, type SchedulePolicy } from '../../src/channels/channel-collector.js';
+import { ChannelCollector } from '../../src/channels/channel-collector.js';
 import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { Collector } from '../../src/core/collector.js';
-import { CollectorError, type CollectionJob } from '../../src/core/types.js';
+import { CollectorError, type CollectionJob, type CollectionPolicy } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube, syntheticChannelId } from './synthetic-youtube.js';
@@ -31,7 +31,8 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
-  const policy: SchedulePolicy = { enabled: true, ...DEFAULT_POLICY };
+  /** The settings `subscribe` gives new subscriptions. */
+  const policy: CollectionPolicy = { ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const store = options.jobsDirectory ? await JobStore.open(options.jobsDirectory, now) : JobStore.memory(now);
@@ -40,13 +41,12 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
     const collector = new Collector(documents);
     const jobs = new JobManager({
       vaultPath: root, store, source, documents: collector, channels: channelStore, now,
-      policy: async () => ({ ...policy }),
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
       // Failed checks here drive the catch-up rules; automatic retries have their own cases.
       retry: { maxAttempts: 1 },
     });
     const channels = new ChannelCollector(channelStore, jobs, {
-      policy: async () => ({ ...policy }), resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
+      autoCollection: async () => true, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     });
     return { channelStore, jobs, channels };
   };
@@ -68,7 +68,7 @@ type World = Awaited<ReturnType<typeof world>>;
 
 /** Subscribes through the channel-add job and returns the settled first collection. */
 async function subscribe(w: World, name: string): Promise<CollectionJob> {
-  const added = await w.jobs.whenSettled((await w.channels.addChannel(`@${name}`)).job.id);
+  const added = await w.jobs.whenSettled((await w.channels.addChannel(`@${name}`, { ...w.policy })).job.id);
   expect(added.result).toMatchObject({ outcome: 'created' });
   return w.jobs.whenSettled(added.result!.followUpJobId!);
 }
@@ -280,21 +280,44 @@ describe('catch-up decisions (S-T6)', () => {
   });
 });
 
-describe('accepted scope (S-T7)', () => {
-  it('keeps the range a job accepted when the Global settings change before it runs', async () => {
+describe('accepted scope (S-T7, A3)', () => {
+  it('keeps the range a job accepted when the subscription settings change before it runs', async () => {
     const w = await world();
     const id = w.source.addChannel('snapshot');
     const ids = w.source.publish(id, 's', w.clock.now, Array.from({ length: 20 }, (_, index) => 1 + index));
     let release!: () => void;
     w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
 
-    const added = await w.channels.addChannel('@snapshot');
-    Object.assign(w.policy, { backfillWindow: '1w', backfillMaxItems: 5 });
+    const added = await w.channels.addChannel('@snapshot', { backfillMaxItems: 10 });
+    const followUpId = (await w.jobs.whenSettled(added.job.id)).result!.followUpJobId!;
+    await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
     w.source.holdDiscovery = null;
     release();
-    const first = await w.jobs.whenSettled((await w.jobs.whenSettled(added.job.id)).result!.followUpJobId!);
+    const first = await w.jobs.whenSettled(followUpId);
     expect(first.scope).toMatchObject({ maxItems: 10, windowStart: '2026-09-15T04:00:00.000Z' });
     expect(first.items!.map((item) => item.sourceId)).toEqual(ids.slice(0, 10));
+
+    // The next backfill uses the changed settings.
+    await w.channels.setChannelEnabled(id, false);
+    const resumed = await w.channels.setChannelEnabled(id, true);
+    expect((await w.jobs.whenSettled(resumed.submission!.job.id)).scope).toMatchObject({
+      trigger: 'resume', maxItems: 5, windowStart: '2026-10-08T04:00:00.000Z',
+    });
+  });
+
+  it('starts a subscription with the settings chosen when its channel-add job was accepted', async () => {
+    const w = await world();
+    const id = w.source.addChannel('chosen');
+    w.source.publish(id, 'c', w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
+    const added = await w.jobs.whenSettled((await w.channels.addChannel('@chosen', { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 })).job.id);
+    const first = await w.jobs.whenSettled(added.result!.followUpJobId!);
+    expect(first.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5, windowStart: '2026-10-01T04:00:00.000Z' });
+    expect(first.progress).toMatchObject({ total: 5 });
+    expect((await w.channelStore.list())[0]).toMatchObject({
+      settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 },
+      lastDispatchedAt: '2026-10-15T04:00:00.000Z', nextCheckAt: '2026-10-15T05:00:00.000Z',
+    });
+    await expect(w.channels.addChannel('@chosen', { intervalMinutes: 7 })).rejects.toMatchObject({ code: 'invalid_request' });
   });
 });
 
@@ -341,14 +364,14 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     ]);
     expect(collectedIds(w)).toEqual([ids[0]]);
 
-    // Resuming forgets the cursor and backfills with the current policy.
+    // Resuming forgets the cursor and backfills with the subscription's settings.
     w.source.holdCaptures = false;
-    Object.assign(w.policy, { backfillWindow: '1w', backfillMaxItems: 1 });
+    await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
     const resumed = await w.channels.setChannelEnabled(id, true);
-    expect(resumed.channel).toMatchObject({ enabled: true, cursor: null });
+    expect(resumed.channel).toMatchObject({ enabled: true, cursor: null, settings: { backfillWindow: '1w', backfillMaxItems: 5 } });
     const backfill = await w.jobs.whenSettled(resumed.submission!.job.id);
-    expect(backfill).toMatchObject({ scope: { trigger: 'resume', mode: 'backfill', maxItems: 1 } });
-    expect(backfill.items!.map((item) => item.sourceId)).toEqual([ids[1]]);
+    expect(backfill).toMatchObject({ scope: { trigger: 'resume', mode: 'backfill', maxItems: 5 } });
+    expect(backfill.items!.map((item) => item.sourceId)).toEqual([ids[1], ids[2]]);
 
     // A pause that lands while the listing is read discards what the listing found.
     let release!: () => void;

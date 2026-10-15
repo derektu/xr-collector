@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { RecognitionAction, UrlRecognition } from '../core/types.js';
+import type { CollectionPolicy, RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../core/types.js';
 import { api } from './api-client.js';
+import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { currentRecognition, initials } from './source-presentation.js';
-import { backfillPhrase, subscribeSummary } from './subscription-presentation.js';
+import { resumeSummary, subscribeSummary } from './subscription-presentation.js';
 
 const RECOGNIZE_DELAY_MS = 500;
 
@@ -22,13 +23,14 @@ export interface AddResult {
 
 /**
  * The Add Content dialog. Pasting an address asks the service what it is; the card and buttons
- * come from that answer, so the dialog needs no knowledge of individual source types.
+ * come from that answer, and a new subscription's settings fields from its source type's
+ * declaration, so the dialog needs no knowledge of individual source types.
  */
-export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
+export function AddContent({ sourceTypes, onClose, onDone, onOpenSource }: {
+  sourceTypes: SourceTypeInfo[];
   onClose: () => void;
   onDone: (result: AddResult) => void;
   onOpenSource: (type: string, id: string) => void;
-  onOpenSettings: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -36,6 +38,8 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
   const [recognition, setRecognition] = useState<Recognition>({ state: 'idle' });
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  /** The settings chosen on the card; they belong to the recognition they were chosen for. */
+  const [chosen, setChosen] = useState<{ recognition: UrlRecognition; settings: CollectionPolicy } | null>(null);
   const sequence = useRef(0);
 
   useEffect(() => {
@@ -68,7 +72,10 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
     setBusy(true);
     setFailure(null);
     try {
-      await api.performAction(action);
+      const settings = chosen?.recognition === found ? chosen.settings : found.settings;
+      await api.performAction(action.id === 'subscribe' && settings
+        ? { ...action, request: { ...action.request, body: { ...action.request.body, settings } } }
+        : action);
       const title = found.target?.title;
       const message = action.id === 'collect' ? '已開始收集影片，完成後會出現在文件中。'
         : action.id === 'subscribe' ? `已訂閱「${title}」，開始首次收集。`
@@ -90,6 +97,8 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
   const answer = currentRecognition(recognition.state === 'done' ? recognition : null, url);
   const found = answer?.recognition ?? null;
   const primary = answer?.primary ?? null;
+  const fields = sourceTypes.find((type) => type.id === found?.sourceType)?.settings ?? [];
+  const settings = found && chosen?.recognition === found ? chosen.settings : found?.settings ?? null;
   return <dialog ref={dialog} className="add-dialog" aria-label="加入內容" data-testid="add-dialog"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
@@ -104,7 +113,8 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
 
       {recognition.state === 'recognizing' ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
       {recognition.state === 'error' ? <p className="add-problem" role="alert">{recognition.message}</p> : null}
-      {found ? <RecognitionCard recognition={found} onOpenSource={onOpenSource} onOpenSettings={onOpenSettings} /> : null}
+      {found ? <RecognitionCard recognition={found} fields={fields} settings={settings} disabled={busy}
+        onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } })} onOpenSource={onOpenSource} /> : null}
       {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
 
       <div className="dialog-actions">
@@ -115,10 +125,14 @@ export function AddContent({ onClose, onDone, onOpenSource, onOpenSettings }: {
   </dialog>;
 }
 
-function RecognitionCard({ recognition, onOpenSource, onOpenSettings }: {
+function RecognitionCard({ recognition, fields, settings, disabled, onSettings, onOpenSource }: {
   recognition: UrlRecognition;
+  fields: SourceSettingField[];
+  /** The settings a new subscription will start with. */
+  settings: CollectionPolicy | null;
+  disabled: boolean;
+  onSettings: (patch: Partial<CollectionPolicy>) => void;
   onOpenSource: (type: string, id: string) => void;
-  onOpenSettings: () => void;
 }) {
   if (recognition.status === 'unsupported' || recognition.status === 'unavailable') {
     return <div className="recognition-card problem" role="alert" data-testid="recognition-card">
@@ -145,15 +159,21 @@ function RecognitionCard({ recognition, onOpenSource, onOpenSettings }: {
     </div>;
   }
   const subscription = recognition.subscription;
-  const policy = recognition.policy;
   return <div className="recognition-card" data-testid="recognition-card">
     <span className="avatar" aria-hidden="true">{initials(target.title ?? '')}</span>
     <div className="card-main">
       <p className="card-kind"><Icon name={recognition.sourceType ?? 'file'} size={14} />{recognition.kindLabel}</p>
       <p className="card-title">{target.title}{subscription ? <span className={`status-chip ${subscription.enabled ? 'tracking' : 'paused'}`}>{subscription.enabled ? '已訂閱' : '已暫停'}</span> : null}</p>
-      {!subscription && policy ? <p>{subscribeSummary(policy).text}所有訂閱共用<button type="button" className="inline-link" onClick={onOpenSettings}>自動收集設定</button>。</p> : null}
-      {subscription?.enabled ? <p>這個頻道已在來源中，會依自動收集設定持續檢查新影片。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看來源</button></p> : null}
-      {subscription && !subscription.enabled && policy ? <p>這個訂閱已暫停。恢復後補收{backfillPhrase(policy)}，再依自動收集設定持續檢查。</p> : null}
+      {!subscription && settings ? <>
+        <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false)}</p>
+        <div className="card-settings">
+          <CollectionSettingsFields idPrefix="add-settings" fields={fields} value={settings} onChange={onSettings}
+            backfillLabel="首次收集" backfillLead="最近" disabled={disabled} />
+          <p className="hint">訂閱後可以在來源詳情頁修改。</p>
+        </div>
+      </> : null}
+      {subscription?.enabled ? <p>這個頻道已在來源中，會依它的收集設定持續檢查新影片。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看來源</button></p> : null}
+      {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(subscription.settings)}</p> : null}
     </div>
   </div>;
 }

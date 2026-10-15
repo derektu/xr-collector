@@ -1,6 +1,5 @@
-import type { ChannelSchedule, CollectionJob, CollectionPolicy, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
-import { intervalLabel } from '../channels/collection-policy.js';
-import { backfillPhrase, triggerLabel } from './subscription-presentation.js';
+import type { ChannelSchedule, CollectionJob, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
+import { triggerLabel } from './subscription-presentation.js';
 
 /** Label of a source's status chip; a running job shows its item progress. */
 export function sourceStatusLabel(source: Pick<Subscription, 'status' | 'activeJob'>): string {
@@ -134,12 +133,22 @@ export function jobRecordLabel(record: SourceJobRecord, now: Date = new Date()):
   return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : '沒有新影片'}${suffix}`, active: false };
 }
 
-/** The shared settings a subscription follows, in one sentence. */
-export function sharedPolicySummary(policy: CollectionPolicy & { enabled: boolean }): string {
-  const checks = policy.enabled
-    ? `${policy.intervalMinutes === 1440 ? '每天' : `每 ${intervalLabel(policy.intervalMinutes).replace(' 分', ' 分鐘')}`}檢查新影片`
-    : '自動收集已暫停';
-  return `${checks}；首次訂閱與恢復時補收${backfillPhrase(policy)}。`;
+/**
+ * The check times under the source list: the newest finished check and the subscription due
+ * next, each with its source name, so both match that source's detail page.
+ */
+export function checkTimesLine(schedule: Pick<ChannelSchedule, 'enabled' | 'lastCheck' | 'nextCheck'>, now: Date = new Date()): string {
+  const last = schedule.lastCheck ? `${shortTimeLabel(schedule.lastCheck.at, now)}（${schedule.lastCheck.title}）` : '尚未檢查';
+  if (!schedule.enabled) return `上次檢查 ${last} · 自動收集已暫停`;
+  const next = schedule.nextCheck ? `${shortTimeLabel(schedule.nextCheck.at, now)}（${schedule.nextCheck.title}）` : '沒有追蹤中的來源';
+  return `上次檢查 ${last} · 下一個檢查 ${next}`;
+}
+
+/** When one source is checked next, as its detail page shows it. */
+export function nextCheckLabel(source: Pick<Subscription, 'enabled' | 'nextCheckAt'>, autoCollection: boolean | null, now: Date = new Date()): string {
+  if (!source.enabled) return '已暫停';
+  if (autoCollection === false) return '自動收集已暫停';
+  return source.nextCheckAt ? shortTimeLabel(source.nextCheckAt, now) : '尚未排定';
 }
 
 function pad(value: number): string {

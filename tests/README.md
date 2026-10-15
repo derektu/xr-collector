@@ -10,7 +10,7 @@
 | `capture` | yt-dlp 輸出解析與來源 adapter |
 | `sources` | 來源網址辨識 |
 | `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試 |
-| `channels` | 訂閱、Global 設定與時間邊界、補收／增量發現與游標、暫停／移除收斂、頻道工作提交與排程；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
+| `channels` | 訂閱、各訂閱的收集設定與 version 1 轉換、時間邊界、補收／增量發現與游標、暫停／移除收斂、頻道工作提交與排程；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
 | `vault` | 文件格式、資料包、還原與合併恢復 |
 | `search` | 搜尋狀態、索引與真實引擎 |
 | `server` | HTTP 契約與 Agent 授權 |

@@ -10,7 +10,6 @@ import { exportVault } from '../../src/vault/vault-package.js';
 import { compareFiles, mergeFiles, packageFiles } from '../../src/vault/vault-merge.js';
 import { lineDiff } from '../../src/web/line-diff.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
-import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
 import { createHttpApp } from '../../src/server/app.js';
 import type { CapturedTranscript, SavedDocument, TranscriptSearch, MergePreview, MergeChoice } from '../../src/core/types.js';
@@ -116,7 +115,8 @@ describe('merge comparison and choices', () => {
   });
   it('merges channels independently, preserves local-only channels and ignores order and addedAt-only changes', async () => {
     const { local, incoming, workspace } = await fixture();
-    const channel = { id: 'UC1', title: '本機頻道', enabled: true, url: 'https://www.youtube.com/channel/UC1', addedAt: '2026-01-01' };
+    const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+    const channel = { id: 'UC1', title: '本機頻道', enabled: true, url: 'https://www.youtube.com/channel/UC1', addedAt: '2026-01-01', settings };
     await new JsonChannelStore(local).add(channel);
     await new JsonChannelStore(local).add({ ...channel, id: 'UC-local' });
     await new JsonChannelStore(incoming).add({ ...channel, enabled: false });
@@ -127,32 +127,52 @@ describe('merge comparison and choices', () => {
     expect((await workspace.channels.listChannels()).map((c) => [c.id, c.enabled])).toEqual([['UC1', false], ['UC-local', true], ['UC-new', true]]);
     const again = await workspace.previewMerge(buffer);
     expect(again.items.filter((item) => item.kind === 'channel').every((item) => item.state === 'same')).toBe(true);
-    // Discovery progress describes collection, not the subscription choice.
-    const progress = { cursor: { videoId: 'abcdefghijk', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-10-01', backlog: true };
-    const withProgress = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([{ ...channel, ...progress }]))]]);
-    const withoutProgress = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([channel]))]]);
+    // Discovery progress and check times describe collection, not the subscription choice.
+    const progress = {
+      cursor: { videoId: 'abcdefghijk', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-10-01', backlog: true,
+      nextCheckAt: '2026-10-01T00:30:00.000Z', lastDispatchedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const v2 = (rows: unknown[]) => Buffer.from(JSON.stringify({ version: 2, channels: rows }));
+    const withProgress = new Map([['settings/youtube-channels.json', v2([{ ...channel, ...progress }])]]);
+    const withoutProgress = new Map([['settings/youtube-channels.json', v2([channel])]]);
     expect(compareFiles(withoutProgress, withProgress).map((item) => item.state)).toEqual(['same']);
+    // An imported subscription is planned again after the merge rather than keeping the other Vault's times.
     const adopted = mergeFiles(new Map(), withProgress, compareFiles(new Map(), withProgress), {});
-    expect(JSON.parse(adopted.get('settings/youtube-channels.json')!.toString())).toEqual([{ ...channel, ...progress }]);
-    const a = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([channel, { ...channel, id: 'UC2' }]))]]);
-    const b = new Map([['settings/youtube-channels.json', Buffer.from(JSON.stringify([{ ...channel, id: 'UC2' }, { ...channel, addedAt: '2000' }]))]]);
+    expect(JSON.parse(adopted.get('settings/youtube-channels.json')!.toString())).toEqual({
+      version: 2, channels: [{ ...channel, ...progress, nextCheckAt: null, lastDispatchedAt: null }],
+    });
+    const a = new Map([['settings/youtube-channels.json', v2([channel, { ...channel, id: 'UC2' }])]]);
+    const b = new Map([['settings/youtube-channels.json', v2([{ ...channel, id: 'UC2' }, { ...channel, addedAt: '2000' }])]]);
     expect(compareFiles(a, b).every((item) => item.state === 'same')).toBe(true);
   });
-  it('shows scheduling settings, pauses adopted schedule and preserves local execution history', async () => {
+  it('lists different settings as a conflict of that subscription and compares packages of both versions alike', async () => {
     const { local, incoming, workspace } = await fixture();
-    const store = new JsonChannelScheduleStore(local);
-    const original = { ...(await store.load()), enabled: false, intervalMinutes: 30, lastCompletedAt: '2026-01-01' };
-    await store.save(original);
-    await new JsonChannelScheduleStore(incoming).save({
-      ...original, enabled: true, intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20,
-      lastCompletedAt: '2099-01-01', nextRunAt: '2000-01-01',
-    });
+    const base = { title: '頻道', enabled: true, addedAt: '2026-01-01' };
+    const settings = { intervalMinutes: 60, backfillWindow: '2w' as const, backfillMaxItems: 20 };
+    await new JsonChannelStore(local).add({ ...base, id: 'UCsame', url: 'https://www.youtube.com/channel/UCsame', settings });
+    await new JsonChannelStore(local).add({ ...base, id: 'UCdiff', url: 'https://www.youtube.com/channel/UCdiff', settings });
+    // The incoming Vault is a package with shared settings: 60 minutes, 2 weeks, 20 videos.
+    await file(incoming, 'settings/youtube-channels.json', JSON.stringify([
+      { ...base, id: 'UCsame', url: 'https://www.youtube.com/channel/UCsame' },
+      { ...base, id: 'UCdiff', url: 'https://www.youtube.com/channel/UCdiff' },
+    ]));
+    await file(incoming, 'settings/youtube-schedule.json', JSON.stringify({
+      version: 1, enabled: true, intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20,
+      lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null,
+    }));
+    await workspace.channels.updateSettings('UCdiff', { intervalMinutes: 15 });
     const preview = await workspace.previewMerge(await exportVault(incoming));
-    expect(preview.items.find((item) => item.kind === 'schedule')).toMatchObject({ state: 'conflict' });
-    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({
-      enabled: false, intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20, lastCompletedAt: '2026-01-01', nextRunAt: null,
+    expect(preview.items.filter((item) => item.kind === 'channel').map((item) => [item.key, item.state])).toEqual([
+      ['channel:UCsame', 'same'], ['channel:UCdiff', 'conflict'],
+    ]);
+    expect(preview.items.find((item) => item.key === 'channel:UCdiff')).toMatchObject({
+      localText: expect.stringContaining('"intervalMinutes": 15'), incomingText: expect.stringContaining('"intervalMinutes": 60'),
     });
+    // The automatic collection switch is never a merge item; this Vault keeps its own.
+    expect(preview.items.some((item) => item.key === 'settings/youtube-schedule.json')).toBe(false);
+    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
+    expect((await workspace.channels.listChannels()).find((channel) => channel.id === 'UCdiff')!.settings).toEqual(settings);
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: true });
   });
   it('compares binary attachments, versions and management files without deleting absent files', async () => {
     const { local, incoming, workspace } = await fixture();
@@ -191,8 +211,8 @@ describe('transaction and HTTP', () => {
     await add(local, 'newlocal001');
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(workspace.status().message).toContain('重新比對');
-    const row = { id: 'UC1', title: '', url: '', enabled: false, addedAt: '' };
-    await file(incoming, 'settings/youtube-channels.json', JSON.stringify([row, row]));
+    const row = { id: 'UC1', title: '', url: '', enabled: false, addedAt: '', settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } };
+    await file(incoming, 'settings/youtube-channels.json', JSON.stringify({ version: 2, channels: [row, row] }));
     await expect(workspace.previewMerge(await exportVault(incoming))).rejects.toThrow('重複');
   });
   it('restores every file and search result after a partial indexing failure and can retry', async () => {

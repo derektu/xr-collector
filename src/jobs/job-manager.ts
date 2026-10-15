@@ -75,8 +75,6 @@ export interface JobManagerOptions {
   documents: Collector;
   channels: ChannelStore;
   limits?: Partial<JobLimits>;
-  /** The Global policy a new subscription's first collection snapshots. */
-  policy?: () => Promise<CollectionPolicy>;
   retry?: Partial<RetryPolicy>;
   now?: () => Date;
   createId?: () => string;
@@ -156,16 +154,16 @@ export class JobManager {
   }
 
   /**
-   * Resolves a channel address and subscribes to it. A new subscription starts its first collection
-   * with the backfill range of the policy in force now; an existing one is left as it is.
+   * Resolves a channel address and subscribes to it. A new subscription starts with `settings` (the
+   * source type's defaults when omitted) and its first collection uses their backfill range; an
+   * existing subscription keeps its own state and settings.
    */
-  async submitChannelAdd(url: string): Promise<JobSubmission> {
+  async submitChannelAdd(url: string, settings: CollectionPolicy = DEFAULT_POLICY): Promise<JobSubmission> {
     const input = classifyYouTubeInput(url);
     if (input.kind !== 'channel') throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
-    const policy = await (this.options.policy?.() ?? Promise.resolve(DEFAULT_POLICY));
     const submission = this.enqueue('youtube.channel-add', `channel-add:${input.url.toLowerCase()}`, {
       id: null, url: input.url, title: null,
-    }, null, { scope: backfillScope('subscribe', policy, this.now()) });
+    }, null, { scope: backfillScope('subscribe', settings, this.now()), checkpoint: { settings: { ...settings } } });
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -478,7 +476,7 @@ export class JobManager {
     key: string,
     source: Omit<CollectionJob['source'], 'type'>,
     parentId: string | null,
-    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore'> = {},
+    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore' | 'checkpoint'> = {},
   ): JobSubmission {
     if (this.closed) throw new CollectorError('vault_busy', '服務正在停止，無法接受新的收集工作。');
     const activeId = this.activeByKey.get(key);
@@ -730,8 +728,13 @@ export class JobManager {
       checkpoint: { ...job.checkpoint, subscribing: { channelId: resolved.id, title: resolved.title, url: resolved.url } },
     });
     await this.options.store.flush();
+    // The first collection below is this subscription's first check; the next one is an interval later.
+    const settings = job.checkpoint?.settings ?? DEFAULT_POLICY;
+    const now = this.now();
     const channel = await this.options.channels.add({
-      ...resolved, enabled: true, addedAt: this.now().toISOString(), cursor: null, lastCheckedAt: null, backlog: false,
+      ...resolved, enabled: true, addedAt: now.toISOString(), cursor: null, lastCheckedAt: null, backlog: false,
+      settings: { ...settings }, lastDispatchedAt: now.toISOString(),
+      nextCheckAt: new Date(now.getTime() + settings.intervalMinutes * 60_000).toISOString(),
     });
     this.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`, sourceId: channel.id });
     this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
@@ -746,6 +749,7 @@ export class JobManager {
     this.start(job, 'discover');
     const channel: YouTubeChannel = {
       id: job.source.id!, title: job.source.title ?? job.source.id!, url: job.source.url, enabled: true, addedAt: job.createdAt,
+      settings: DEFAULT_POLICY,
     };
     // Jobs accepted before scopes existed collect like a first subscription with the default policy.
     const scope = job.scope ?? backfillScope('scheduled', DEFAULT_POLICY, new Date(job.createdAt));

@@ -126,7 +126,10 @@ export interface ChannelCursor {
   recentIds: string[];
 }
 
-/** A subscribed YouTube channel. Discovery progress is portable collection progress and lives with it. */
+/**
+ * A subscribed YouTube channel. Its collection settings, discovery progress and check times are
+ * portable Vault data and live with it.
+ */
 export interface YouTubeChannel {
   id: string;
   title: string;
@@ -134,6 +137,15 @@ export interface YouTubeChannel {
   /** False while the subscription is paused. */
   enabled: boolean;
   addedAt: string;
+  /** Check interval and backfill range of this subscription. */
+  settings: CollectionPolicy;
+  /**
+   * When the scheduler checks this subscription next; null while it is paused or until the
+   * scheduler first plans it. Automatic collection being off leaves the time in place.
+   */
+  nextCheckAt?: string | null;
+  /** The last time a check of this subscription was submitted, by any trigger except a follow-up batch. */
+  lastDispatchedAt?: string | null;
   /** Null until the first discovery, and again after a resume. */
   cursor?: ChannelCursor | null;
   /** The last discovery that finished listing the channel. */
@@ -162,7 +174,7 @@ export interface Subscription extends YouTubeChannel {
 
 export type BackfillWindow = '1w' | '2w' | '1m' | '3m' | '6m';
 
-/** Global collection settings shared by every subscription. */
+/** Collection settings of one subscription. */
 export interface CollectionPolicy {
   intervalMinutes: number;
   backfillWindow: BackfillWindow;
@@ -171,9 +183,12 @@ export interface CollectionPolicy {
 
 export interface ChannelPreview {
   channel: { id: string; title: string; url: string };
-  /** The existing subscription for this channel, or null when it is not subscribed. */
-  subscription: { enabled: boolean } | null;
-  policy: CollectionPolicy & { enabled: boolean };
+  /** The existing subscription for this channel with its own settings, or null when it is not subscribed. */
+  subscription: { enabled: boolean; settings: CollectionPolicy } | null;
+  /** The settings of the existing subscription, or the source type's defaults for a new one. */
+  settings: CollectionPolicy;
+  /** Whether automatic collection is on. */
+  autoCollection: boolean;
 }
 
 /** What one kind of address of a source type can do: collect a single item or subscribe to new ones. */
@@ -192,6 +207,8 @@ export interface SourceSettingField {
   key: keyof CollectionPolicy;
   label: string;
   options: Array<{ value: string | number; label: string }>;
+  /** The value a new subscription starts with. */
+  default: string | number;
 }
 
 /** The public part of a source type declaration; the UI builds entry, filters and icons from it. */
@@ -227,10 +244,12 @@ export interface UrlRecognition {
   url: string;
   /** The video or channel; a video's title is null because recognition does not contact the source. */
   target: { id: string; title: string | null; url: string } | null;
-  /** The existing subscription of a recognized channel. */
-  subscription: { id: string; enabled: boolean } | null;
-  /** The settings a new subscription would use. */
-  policy: (CollectionPolicy & { enabled: boolean }) | null;
+  /** The existing subscription of a recognized channel, with its own settings. */
+  subscription: { id: string; enabled: boolean; settings: CollectionPolicy } | null;
+  /** The settings a new subscription starts with: the source type's defaults. */
+  settings: CollectionPolicy | null;
+  /** Whether automatic collection is on; null when the address is not a subscription. */
+  autoCollection: boolean | null;
   actions: RecognitionAction[];
   login: { sourceType: DocumentSourceType; label: string; message: string } | null;
   /** Why the address cannot be used, for `unsupported` and `unavailable`. */
@@ -342,6 +361,8 @@ export type JobStopKind = 'shutdown' | 'crash';
 export interface JobCheckpoint {
   /** A video job saved this document; a resume only updates the index. */
   savedDocumentId?: string;
+  /** A channel-add job: the settings the new subscription starts with, chosen when the job was accepted. */
+  settings?: CollectionPolicy;
   /** A channel-add job resolved this channel and is subscribing to it. */
   subscribing?: { channelId: string; title: string; url: string };
   /** A channel job recorded its discovered videos; the subscription cursor follows them. */
@@ -455,26 +476,25 @@ export interface JobEvent {
   sourceId?: string;
 }
 
-export type ChannelScheduleStatus = 'paused' | 'scheduled' | 'running';
+/** `paused` while automatic collection is off; `scheduled` while it is on. */
+export type ChannelScheduleStatus = 'paused' | 'scheduled';
 
-export interface ChannelScheduleLastResult {
-  runId: string | null;
-  created: number;
-  existing: number;
-  failed: number;
-  error?: string;
+/** One subscription's check time as the schedule summary reports it. */
+export interface ScheduledCheck {
+  channelId: string;
+  title: string;
+  at: string;
 }
 
+/** Automatic collection across subscriptions; each subscription keeps its own interval. */
 export interface ChannelSchedule {
+  /** The automatic collection switch. */
   enabled: boolean;
-  intervalMinutes: number;
-  backfillWindow: BackfillWindow;
-  backfillMaxItems: number;
   status: ChannelScheduleStatus;
-  lastAttemptAt: string | null;
-  lastCompletedAt: string | null;
-  nextRunAt: string | null;
-  lastResult: ChannelScheduleLastResult | null;
+  /** The subscription whose `lastCheckedAt` is the newest. */
+  lastCheck: ScheduledCheck | null;
+  /** The enabled subscription due first; null while automatic collection is off. */
+  nextCheck: ScheduledCheck | null;
 }
 
 export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
@@ -563,7 +583,7 @@ export interface TransferStatus {
 export type MergeChoice = 'local' | 'incoming';
 export interface MergeItem {
   key: string;
-  kind: 'document' | 'channel' | 'schedule' | 'file';
+  kind: 'document' | 'channel' | 'file';
   label: string;
   state: 'new' | 'same' | 'conflict';
   localTime: string | null;

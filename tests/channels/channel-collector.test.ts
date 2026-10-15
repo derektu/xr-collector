@@ -33,6 +33,15 @@ class MemoryChannelStore implements ChannelStore {
     return this.update(id, { enabled });
   }
 
+  async updateMany(patches: Map<string, ChannelPatch>): Promise<YouTubeChannel[]> {
+    const updated: YouTubeChannel[] = [];
+    for (const [id, patch] of patches) {
+      const channel = await this.update(id, patch);
+      if (channel) updated.push(channel);
+    }
+    return updated;
+  }
+
   async update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null> {
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
@@ -66,7 +75,7 @@ function setup(source: Partial<YouTubeSource> = {}) {
     store,
     jobs,
     channels: new ChannelCollector(store, jobs, {
-      policy: async () => ({ enabled: true, ...DEFAULT_POLICY }),
+      autoCollection: async () => true,
       resolveChannel: async () => { throw new Error('not used'); },
       documents: async () => [],
     }),
@@ -82,7 +91,7 @@ describe('ChannelCollector', () => {
     const submission = await channels.addChannel('https://www.youtube.com/@sample');
     expect(submission.job).toMatchObject({ kind: 'youtube.channel-add', state: 'queued' });
     expect(await jobs.whenSettled(submission.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created', channelId: 'UC123' } });
-    expect(store.channels).toEqual([expect.objectContaining({ id: 'UC123', title: '測試頻道', enabled: true })]);
+    expect(store.channels).toEqual([expect.objectContaining({ id: 'UC123', title: '測試頻道', enabled: true, settings: DEFAULT_POLICY })]);
     await jobs.close();
   });
 
@@ -123,5 +132,6 @@ function channel(id: string, enabled: boolean): YouTubeChannel {
     url: `https://www.youtube.com/channel/${id}/videos`,
     enabled,
     addedAt: '2026-09-17T00:00:00.000Z',
+    settings: DEFAULT_POLICY,
   };
 }

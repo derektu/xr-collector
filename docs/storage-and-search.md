@@ -8,7 +8,8 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | --- | --- |
 | Vault 標記檔 | Vault 根目錄的 `xr-collector-vault.json`；不納入 Vault 資料包 |
 | YouTube Markdown | Vault 的 `documents/youtube/` |
-| 訂閱與發現進度、自動收集設定 | Vault 的 `settings/youtube-channels.json`、`settings/youtube-schedule.json` |
+| 訂閱、各訂閱的收集設定、發現進度與檢查時間 | Vault 的 `settings/youtube-channels.json` |
+| 自動收集總開關 | Vault 的 `settings/youtube-schedule.json` |
 | 附件、保留版本、管理檔案 | Vault 的 `attachments/`、`versions/`、`management/`；隨完整資料包交換 |
 | Meilisearch database | 裝置上的搜尋資料目錄；不納入 Vault 資料包 |
 | profile、Agent 連線檔與 token | 裝置資料；不納入 Vault 資料包 |
@@ -28,13 +29,19 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 ## 匯出與還原
 
-`.xr-vault` 是 version 1 JSON 資料包：檔案使用 Base64，檔案內容與清單以 SHA-256 檢查完整性。限制為 128 MiB 包大小、80 MiB 解碼內容、10000 個檔案。系統驗證路徑、衝突、checksum、版本及支援的資料格式；checksum 不等於來源簽章。
+`.xr-vault` 是 version 2 JSON 資料包：檔案使用 Base64，檔案內容與清單以 SHA-256 檢查完整性。還原與合併也讀 version 1 資料包。限制為 128 MiB 包大小、80 MiB 解碼內容、10000 個檔案。系統驗證路徑、衝突、checksum、版本及支援的資料格式；checksum 不等於來源簽章。
 
-還原在目前 Vault 旁的 `<vault>.restored/` 下建立獨立 Vault 並寫入新的標記檔，驗證資料及搜尋索引後才切換 active Vault，原 Vault 保留。還原保存訂閱、發現進度與自動收集設定，但自動收集暫停；再次開啟由使用者操作。切換前失敗保留原資料與選址。Vault 匯出／還原期間，程式阻止衝突寫入。
+還原在目前 Vault 旁的 `<vault>.restored/` 下建立獨立 Vault 並寫入新的標記檔，驗證資料及搜尋索引後才切換 active Vault，原 Vault 保留。還原保存訂閱、發現進度與各訂閱的收集設定，但自動收集暫停；再次開啟由使用者操作。切換前失敗保留原資料與選址。Vault 匯出／還原期間，程式阻止衝突寫入。
 
 ## 合併與恢復
 
-先預覽，再由使用者逐項決定差異。相同項目跳過、新項目加入、來源缺少的本機項目保留；時間戳不自動決定覆寫。頻道以 ID 比對，附件與管理檔案以路徑及內容比對。套用前核對預覽是否過期。
+先預覽，再由使用者逐項決定差異。相同項目跳過、新項目加入、來源缺少的本機項目保留；時間戳不自動決定覆寫。頻道以 ID 比對，名稱、網址、暫停狀態或收集設定不同即列為該訂閱的衝突；發現進度與檢查時間不算差異，採用匯入的訂閱時從合併後起算下一次檢查。自動收集總開關屬於被合併的 Vault，不列入比對。附件與管理檔案以路徑及內容比對。套用前核對預覽是否過期。
+
+### 訂閱設定的格式版本
+
+`youtube-channels.json` version 2 是 `{ "version": 2, "channels": [...] }`，每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` version 2 只有 `enabled`。Version 1 的頻道檔是陣列，所有訂閱共用 version 1 排程檔的頻率與補收設定。
+
+Vault 開啟時與資料包解開後，version 1 的頻道檔轉成 version 2：共用設定與檢查時間複製到每個訂閱。是否轉換只看頻道檔版本；頻道檔先寫，排程檔後寫，兩次寫入之間中斷時不會重轉，殘留的 version 1 排程檔只讀總開關。舊版程式讀到 version 2 的頻道檔或資料包時明確拒絕，不會改用共用設定。
 
 有實際異動時，先建立合併前資料包與 journal。套用失敗會復原檔案及搜尋；復原失敗則保留恢復資料、停止寫入與排程，重啟先處理 journal。合併期間文件／搜尋 API 暫時拒絕存取，狀態 API 仍可查詢。備份及 journal 在恢復完成前必須保留。
 

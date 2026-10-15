@@ -33,9 +33,11 @@ const capture: CapturedTranscript = {
 };
 async function seed(root: string) {
   await new MarkdownVault(root).add(capture);
-  await new JsonChannelStore(root).add({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z' });
-  await new JsonChannelScheduleStore(root).save({ enabled: true, intervalMinutes: 60,
-    nextRunAt: '2099-01-01T00:00:00.000Z', lastAttemptAt: null, lastCompletedAt: null, lastResult: null });
+  await new JsonChannelStore(root).add({
+    id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+    settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
+  });
+  await new JsonChannelScheduleStore(root).save({ enabled: true });
   await mkdir(path.join(root, 'attachments'), { recursive: true });
   await writeFile(path.join(root, 'attachments/sample.bin'), Buffer.from([0, 1, 128, 255]));
   await mkdir(path.join(root, 'versions'), { recursive: true });
@@ -95,7 +97,7 @@ describe('portable vault package', () => {
     expect(await readFile(path.join(b, 'attachments/sample.bin'))).toEqual(Buffer.from([0, 1, 128, 255]));
     expect(await readFile(path.join(b, 'versions/retained.md'), 'utf8')).toBe('retained version');
     expect(await new JsonChannelStore(b).list()).toEqual(await new JsonChannelStore(a).list());
-    expect(await new JsonChannelScheduleStore(b).load()).toMatchObject({ enabled: false, nextRunAt: null, intervalMinutes: 60 });
+    expect(await new JsonChannelScheduleStore(b).load()).toEqual({ enabled: false });
     expect(await new JsonChannelScheduleStore(a).load()).toMatchObject({ enabled: true });
   });
   it.each(['../outside', '/absolute', 'attachments/../escape', 'attachments\\escape', 'attachments/C:bad', 'attachments/CON', 'attachments/trailing.', 'settings/credentials.json'])('rejects unsafe/unsupported path %s', async (file) => {
@@ -124,7 +126,7 @@ describe('portable vault package', () => {
       (data: typeof good) => { data.files[0].data = 'YQ=='; },
       (data: typeof good) => { data.files.find((entry: { path: string }) => entry.path === 'attachments/sample.bin').data = Buffer.from([0, 1, 128, 254]).toString('base64'); },
       (data: typeof good) => { data.files.pop(); },
-      (data: typeof good) => { data.version = 2; },
+      (data: typeof good) => { data.version = 3; },
       (data: typeof good) => { data.files[0].data += '!!'; },
     ]) {
       const data = structuredClone(good); mutate(data);
@@ -279,22 +281,50 @@ it('rejects a checksum-valid document with an unsupported document type', async 
   await expect(unpackVault(invalid, path.join(root, 'destination'), () => undefined)).rejects.toThrow('格式無效');
 });
 
-describe('portable subscription settings (S-T10)', () => {
-  it('carries subscription progress and backfill settings through export and restore, paused', async () => {
+describe('portable subscription settings (S-T10, A4)', () => {
+  const sharedChannels = JSON.stringify([
+    { id: 'UC123', title: '頻道一', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'UC456', title: '頻道二', url: 'https://www.youtube.com/channel/UC456', enabled: false, addedAt: '2026-01-02T00:00:00.000Z' },
+  ]);
+
+  it('carries each subscription with its settings and progress through a version 2 package, paused', async () => {
     const root = await temp(); const source = path.join(root, 'source'); await seed(source);
     const cursor = { videoId: 'dQw4w9WgXcQ', publishedAt: '2026-10-01T00:00:00.000Z', recentIds: ['dQw4w9WgXcQ'] };
-    await new JsonChannelStore(source).update('UC123', { cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', backlog: false });
-    const schedule = new JsonChannelScheduleStore(source);
-    await schedule.save({ ...(await schedule.load()), backfillWindow: '3m', backfillMaxItems: 20 });
+    const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
+    await new JsonChannelStore(source).update('UC123', { cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', backlog: false, settings });
+    const exported = await exportVault(source);
+    const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string; data: string }[] };
+    expect(parsed.version).toBe(2);
+    const channelsFile = parsed.files.find((file) => file.path === 'settings/youtube-channels.json')!;
+    expect(JSON.parse(Buffer.from(channelsFile.data, 'base64').toString())).toMatchObject({ version: 2, channels: [{ id: 'UC123', settings }] });
     const workspace = await open(path.join(root, 'B'));
 
-    workspace.restore(await exportVault(source)); await waitForRestore(workspace);
+    workspace.restore(exported); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
-    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z' })]);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, intervalMinutes: 60, backfillWindow: '3m', backfillMaxItems: 20, nextRunAt: null });
+    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', settings })]);
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, nextCheck: null });
   });
 
-  it('restores a first-round package with the default backfill, an offered interval and a backfill for its subscriptions', async () => {
+  it('restores a package with shared settings by giving them to every subscription', async () => {
+    const root = await temp(); const workspace = await open(path.join(root, 'B'));
+    workspace.restore(packageOf([
+      { path: 'settings/youtube-channels.json', data: sharedChannels },
+      { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 20, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: '2026-10-15T00:00:00.000Z', lastResult: null }) },
+    ]));
+    await waitForRestore(workspace);
+    expect(workspace.status().state).toBe('completed');
+    const settings = { intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 20 };
+    expect(await workspace.channels.listChannels()).toEqual([
+      expect.objectContaining({ id: 'UC123', enabled: true, settings }),
+      expect.objectContaining({ id: 'UC456', enabled: false, settings }),
+    ]);
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
+    const root2 = workspace.status().vaultPath;
+    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-channels.json'), 'utf8'))).toMatchObject({ version: 2 });
+    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: false });
+  });
+
+  it('restores a package from before the backfill settings with the default backfill and an offered interval', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
     workspace.restore(packageOf([
       { path: 'settings/youtube-channels.json', data: JSON.stringify([{ id: 'UC123', title: '第一輪頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]) },
@@ -302,9 +332,21 @@ describe('portable subscription settings (S-T10)', () => {
     ]));
     await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 });
+    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } })]);
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
     const [submission] = await workspace.channels.startRun({ trigger: 'manual' });
     expect(submission!.job.scope).toMatchObject({ mode: 'backfill', maxItems: 10 });
     await workspace.jobs.whenSettled(submission!.job.id);
+  });
+
+  it('converts an existing Vault with shared settings when it opens', async () => {
+    const root = await temp(); const vault = path.join(root, 'A');
+    await mkdir(path.join(vault, 'settings'), { recursive: true });
+    await writeFile(path.join(vault, 'settings/youtube-channels.json'), sharedChannels);
+    await writeFile(path.join(vault, 'settings/youtube-schedule.json'), JSON.stringify({ version: 1, enabled: true, intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null }));
+    const workspace = await open(vault);
+    const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 };
+    expect((await workspace.channels.listChannels()).map((channel) => channel.settings)).toEqual([settings, settings]);
+    expect(JSON.parse(await readFile(path.join(vault, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: true });
   });
 });

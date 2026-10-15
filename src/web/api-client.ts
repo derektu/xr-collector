@@ -88,13 +88,27 @@ export const api = {
     return result.schedule;
   },
 
-  /** Saves the given Global settings; fields left out keep their value. */
-  async updateChannelSchedule(patch: Partial<CollectionPolicy & { enabled: boolean }>): Promise<ChannelSchedule> {
+  /** Turns automatic collection on or off. */
+  async setAutoCollection(enabled: boolean): Promise<ChannelSchedule> {
     const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule', {
       method: 'PUT',
-      body: JSON.stringify(patch),
+      body: JSON.stringify({ enabled }),
     });
     return result.schedule;
+  },
+
+  /** Saves some of one subscription's settings; fields left out keep their value. */
+  async updateChannelSettings(id: string, settings: Partial<CollectionPolicy>): Promise<YouTubeChannel> {
+    const result = await request<{ channel: YouTubeChannel }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ settings }),
+    });
+    return result.channel;
+  },
+
+  /** Gives every other subscription of the same type this subscription's settings. */
+  applyChannelSettings(id: string): Promise<{ updated: number; paused: number }> {
+    return request<{ updated: number; paused: number }>(`/api/youtube/channels/${encodeURIComponent(id)}/apply-settings`, { method: 'POST' });
   },
 
   async listChannels(signal?: AbortSignal): Promise<Subscription[]> {
@@ -109,10 +123,10 @@ export const api = {
     })).preview;
   },
 
-  addChannel(url: string): Promise<JobSubmission> {
+  addChannel(url: string, settings?: Partial<CollectionPolicy>): Promise<JobSubmission> {
     return request<JobSubmission>('/api/youtube/channels', {
       method: 'POST',
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(settings ? { url, settings } : { url }),
     });
   },
 

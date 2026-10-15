@@ -22,14 +22,15 @@ await add(incoming, 'abcdefghijk', fixture.title, '共同的第一段。\n\n匯�
 for (const target of [local, incoming]) await add(target, 'same0000001', '相同文件', '相同內容應跳過。');
 await add(local, 'localonly01', '只在本機', '來源缺少這份文件，合併後仍保留。山岳考察。');
 await add(incoming, 'new00000001', '新增文件', '新增沙漠研究。');
-const channel = { id: 'UC-demo', title: '合成測試頻道', url: 'https://www.youtube.com/channel/UC-demo', enabled: true, addedAt: '2026-09-18T00:00:00.000Z' };
+const channel = { id: 'UC-demo', title: '合成測試頻道', url: 'https://www.youtube.com/channel/UC-demo', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+  settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } };
 await new JsonChannelStore(local).add(channel);
-await new JsonChannelStore(incoming).add({ ...channel, title: '匯入頻道名稱', enabled: false });
+await new JsonChannelStore(incoming).add({ ...channel, title: '匯入頻道名稱', enabled: false, settings: { ...channel.settings, intervalMinutes: 180 } });
 await new JsonChannelStore(incoming).add({ ...channel, id: 'UC-new', title: '新增頻道', url: 'https://www.youtube.com/channel/UC-new', enabled: false });
-for (const [target, intervalMinutes] of [[local, 60], [incoming, 180]]) {
-  await new JsonChannelScheduleStore(target).save({ enabled: false, intervalMinutes, nextRunAt: null, lastAttemptAt: null, lastCompletedAt: null, lastResult: null });
+for (const [target, marker] of [[local, 60], [incoming, 180]]) {
+  await new JsonChannelScheduleStore(target).save({ enabled: false });
   await mkdir(path.join(target, 'attachments'), { recursive: true });
-  await writeFile(path.join(target, 'attachments', 'sample.bin'), Buffer.from([0, 128, intervalMinutes]));
+  await writeFile(path.join(target, 'attachments', 'sample.bin'), Buffer.from([0, 128, marker]));
 }
 await writeFile(path.join(root, 'incoming.xr-vault'), await exportVault(incoming));
 await writeFile(path.join(root, 'local-before.xr-vault'), await exportVault(local));

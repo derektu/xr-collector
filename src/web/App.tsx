@@ -135,7 +135,7 @@ export default function App() {
   } else if (sourceRoute) {
     body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
       onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onOpenDocuments={(source) => go('/documents', listStateSearch({ query: '', source, page: 1 }), { returnable: true })}
-      onOpenActivity={() => navigate('activity')} onOpenSettings={() => navigate('settings')} onChanged={announce}
+      onOpenActivity={() => navigate('activity')} onChanged={announce}
       onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} active={active} schedule={status.schedule} revision={status.revision}
@@ -163,7 +163,7 @@ export default function App() {
       <div className={readerId ? 'page reader-page' : 'page'} data-testid={`page-${readerId ? 'reader' : sourceRoute ? 'source-detail' : page}`}>{body}</div>
       {notice ? <p key={notice.key} className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="notice">{notice.text}</p> : null}
     </main>
-    {adding ? <AddContent onClose={() => setAdding(false)} onDone={added}
-      onOpenSource={(type, id) => { setAdding(false); openSource(type, id); }} onOpenSettings={() => { setAdding(false); navigate('settings'); }} /> : null}
+    {adding ? <AddContent sourceTypes={sourceTypes} onClose={() => setAdding(false)} onDone={added}
+      onOpenSource={(type, id) => { setAdding(false); openSource(type, id); }} /> : null}
   </div>;
 }

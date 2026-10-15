@@ -15,7 +15,7 @@ export interface CollectionStatus {
 }
 
 /**
- * Background collection as the whole shell sees it: active jobs and the shared schedule, polled
+ * Background collection as the whole shell sees it: active jobs and the schedule summary, polled
  * quickly while something runs and slowly otherwise. `announce` reloads at once after the UI
  * itself started or changed work.
  */
@@ -37,7 +37,7 @@ export function useCollectionStatus(enabled: boolean): CollectionStatus & { anno
         const [page, schedule] = await Promise.all([api.listJobs({ state: 'active', limit: 100 }), api.getChannelSchedule()]);
         if (!alive || current !== sequence) return;
         const active = activeJobs(page.jobs);
-        const key = JSON.stringify([active.map((job) => [job.id, job.state, job.progress?.done]), schedule.lastAttemptAt, schedule.enabled]);
+        const key = JSON.stringify([active.map((job) => [job.id, job.state, job.progress?.done]), schedule.lastCheck?.at, schedule.enabled]);
         const changed = key !== lastKey;
         lastKey = key;
         setStatus((previous) => ({ active, schedule, revision: changed ? previous.revision + 1 : previous.revision }));
