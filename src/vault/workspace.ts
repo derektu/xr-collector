@@ -129,9 +129,10 @@ export class VaultWorkspace {
     try {
       const buffer = await exportVault(this.current.root);
       this.statusValue = { ...this.statusValue, state: 'completed', message: '資料包已建立。' };
+      this.record('info', 'vault.exported', '已建立知識庫資料包。');
       return buffer;
     } catch (error) {
-      this.fail(error);
+      this.fail(error, '匯出');
       throw error;
     } finally {
       this.locked = false;
@@ -142,7 +143,7 @@ export class VaultWorkspace {
   restore(buffer: Buffer): TransferStatus {
     this.begin('validating');
     this.preview = null;
-    this.operation = this.restoreOnce(buffer).catch((error: unknown) => this.fail(error)).finally(() => { this.operation = null; });
+    this.operation = this.restoreOnce(buffer).catch((error: unknown) => this.fail(error, '還原')).finally(() => { this.operation = null; });
     return this.status();
   }
 
@@ -171,8 +172,10 @@ export class VaultWorkspace {
       await previous.jobs.close();
       await previous.runtime.close().catch((error: unknown) => console.error('Previous search shutdown failed', error));
       this.statusValue = { ...this.statusValue, state: 'completed', message: '已切換到還原的獨立 vault。排程已暫停。' };
+      // Device-level, so both the previous and the restored Vault show the switch.
+      this.record('info', 'vault.restored', `已還原資料包並切換到獨立知識庫：${this.current.root}`, null);
     } catch (error) {
-      this.fail(error);
+      this.fail(error, '還原');
     } finally {
       try {
         if (candidate) {
@@ -204,7 +207,7 @@ export class VaultWorkspace {
       this.preview = { value, baseline: fingerprint(local), incoming: buffer };
       this.statusValue = { ...this.statusValue, state: 'completed', message: '比對完成，請選擇差異的處理方式。' };
       return value;
-    } catch (error) { this.fail(error); throw error; }
+    } catch (error) { this.fail(error, '比對'); throw error; }
     finally {
       try { if (directory) await rm(directory, { recursive: true, force: true }); }
       finally { this.locked = false; this.current.schedule.setSuspended(false); }
@@ -223,7 +226,7 @@ export class VaultWorkspace {
     if (!choices || typeof choices !== 'object' || Array.isArray(choices)) throw new CollectorError('invalid_request', '合併選擇格式無效。');
     const preview = this.preview;
     this.begin('validating');
-    this.operation = this.mergeOnce(preview, choices).catch((error: unknown) => this.fail(error)).finally(() => { this.operation = null; });
+    this.operation = this.mergeOnce(preview, choices).catch((error: unknown) => this.fail(error, '合併')).finally(() => { this.operation = null; });
     return this.status();
   }
 
@@ -283,6 +286,7 @@ export class VaultWorkspace {
       if (!changes.size) {
         this.preview = null;
         this.statusValue = { ...this.statusValue, state: 'completed', message: '合併完成，沒有需要寫入的變更。' };
+        this.record('info', 'vault.merged', '合併完成，沒有需要寫入的變更。');
         return;
       }
       const backup = `${root}.before-merge-${randomUUID()}.xr-vault`;
@@ -308,6 +312,7 @@ export class VaultWorkspace {
       journalWritten = false;
       this.preview = null;
       this.statusValue = { ...this.statusValue, state: 'completed', message: `合併完成。合併前資料包：${backup}` };
+      this.record('info', 'vault.merged', `合併完成，寫入 ${changes.size} 個檔案。合併前資料包：${backup}`);
     } catch (error) {
       if (journalWritten) {
         try {
@@ -333,9 +338,19 @@ export class VaultWorkspace {
     await this.current.schedule.start();
   }
 
-  private fail(error: unknown): void {
+  private fail(error: unknown, operation: string): void {
     this.statusValue = { ...this.statusValue, state: 'error', message: error instanceof CollectorError
       ? error.message : '資料搬移失敗，請確認資料包、磁碟空間與搜尋服務後重試。' };
+    this.record('error', 'vault.transfer_failed', `${operation}失敗：${this.statusValue.message}`,
+      undefined, error instanceof CollectorError ? error.code : undefined);
+  }
+
+  /** Records a Vault operation in the device activity log, under the active Vault unless `vaultPath` says otherwise. */
+  private record(severity: 'info' | 'error', eventType: string, message: string, vaultPath?: string | null, errorCode?: string): void {
+    this.jobStore.event({
+      severity, eventType, message, vaultPath: vaultPath === undefined ? this.current.root : vaultPath, jobId: null,
+      ...(errorCode ? { errorCode } : {}),
+    });
   }
 
   /** Each Vault path gets its own rebuildable search database on this device. */
@@ -363,6 +378,7 @@ export class VaultWorkspace {
       documents: collector,
       channels: channelStore,
       legacySettings: () => readLegacySettings(root),
+      checkChannel: async (channelId) => (await bundle.channels.startRun({ trigger: 'manual', channelIds: [channelId] }))[0]!,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
     });

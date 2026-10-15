@@ -1,6 +1,6 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { FastifyInstance } from 'fastify';
-import type { ChannelCollection, ChannelScheduleManagement, CollectionJobs, VaultSetup } from './app.js';
+import type { ActivityAccess, ChannelCollection, ChannelScheduleManagement, CollectionJobs, VaultSetup } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -9,6 +9,7 @@ import { createHttpApp, waitForHttpAppIdle } from './app.js';
 export interface StartServerOptions {
   collector?: Collector;
   jobs?: CollectionJobs;
+  activity?: ActivityAccess;
   transfer?: VaultWorkspace;
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
@@ -34,6 +35,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const app = await createHttpApp({
     ...(options.collector ? { collector: options.collector } : {}),
     ...(options.jobs ? { jobs: options.jobs } : {}),
+    ...(options.activity ? { activity: options.activity } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.channels ? { channels: options.channels } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),

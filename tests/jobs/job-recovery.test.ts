@@ -19,6 +19,7 @@ import {
 import { JobManager, type JobLimits, type RetryPolicy } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource } from '../../src/sources/youtube/adapter.js';
+import { readEventFiles } from '../activity/event-files.js';
 
 // Interrupted work continues after a restart. A "crash" flushes the job store and opens the same
 // directory again without closing the manager: the atomic snapshot on disk is what a killed process
@@ -228,8 +229,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       eventType: string; jobId: string | null; errorCode?: string; attempt?: number; nextAttemptAt?: string; stopReason?: string; message: string;
     }>> {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const text = await readFile(path.join(directory, 'events.jsonl'), 'utf8').catch(() => '');
-      return text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      return readEventFiles(directory);
     },
   };
 }

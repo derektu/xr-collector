@@ -17,6 +17,7 @@ import {
 import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource } from '../../src/sources/youtube/adapter.js';
+import { readEventFiles } from '../activity/event-files.js';
 
 const VAULT = '/vaults/a';
 
@@ -366,7 +367,7 @@ describe('JobStore', () => {
     expect(channelJob.items?.map((item) => item.state)).toEqual(['completed', 'interrupted']);
     expect(reopened.list(VAULT).filter((job) => job.state === 'interrupted').length).toBeGreaterThanOrEqual(2);
 
-    const events = (await readFile(path.join(directory, 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const events = await readEventFiles(directory);
     expect(events.map((event) => event.eventType)).toEqual(expect.arrayContaining([
       'job.accepted', 'job.started', 'channel.discovered', 'document.saved', 'job.completed', 'job.interrupted',
     ]));

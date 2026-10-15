@@ -152,7 +152,17 @@ export class ChannelScheduler {
     const now = this.now().getTime();
     const due = channels.filter((channel) => channel.enabled && channel.nextCheckAt && new Date(channel.nextCheckAt).getTime() <= now);
     if (due.length === 0) return;
-    await this.runner.startRun({ trigger: 'scheduled', channelIds: due.map((channel) => channel.id) }).catch(reportScheduleError);
+    this.options.recordEvent?.({
+      severity: 'info', eventType: 'schedule.dispatched', message: `定時檢查開始：${due.length} 個訂閱到了檢查時間。`,
+    });
+    await this.runner.startRun({ trigger: 'scheduled', channelIds: due.map((channel) => channel.id) }).catch((error: unknown) => {
+      reportScheduleError(error);
+      this.options.recordEvent?.({
+        severity: 'error', eventType: 'schedule.failed',
+        message: error instanceof CollectorError ? `定時檢查無法派工：${error.message}` : '定時檢查無法派工。',
+        ...(error instanceof CollectorError ? { errorCode: error.code } : {}),
+      });
+    });
   }
 
   private async ensureLoaded(): Promise<StoredChannelSchedule> {

@@ -9,6 +9,9 @@ export const AGENT_CONNECTION_SCHEMA_VERSION = 1;
 export async function startAgentAccess(options: {
   collector?: StartServerOptions['collector'];
   jobs?: StartServerOptions['jobs'];
+  activity?: StartServerOptions['activity'];
+  /** Receives the Agent token so the activity log can mask it wherever it appears. */
+  protectSecret?: (secret: string) => void;
   transfer?: StartServerOptions['transfer'];
   channels?: StartServerOptions['channels'];
   schedule?: StartServerOptions['schedule'];
@@ -22,9 +25,11 @@ export async function startAgentAccess(options: {
 }) {
   if (!options.instanceId) throw new Error('Agent discovery instance ID must not be empty');
   const token = randomBytes(32).toString('hex');
+  options.protectSecret?.(token);
   const server = await startServer({
     ...(options.collector ? { collector: options.collector } : {}),
     ...(options.jobs ? { jobs: options.jobs } : {}),
+    ...(options.activity ? { activity: options.activity } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.channels ? { channels: options.channels } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),

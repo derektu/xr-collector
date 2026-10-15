@@ -441,6 +441,12 @@ export interface CollectionJob {
   checkpoint?: JobCheckpoint;
   /** A video a channel job queued that the user also submitted directly; stopping the subscription never skips it. */
   claimedByUser?: boolean;
+  /** The failed job this one retries at the user's request. */
+  retryOf?: string;
+  /** The job that retries this failed one; a job is retried once. */
+  retriedBy?: string;
+  /** Some of this job's activity events could not be written to the device log. */
+  activityIncomplete?: boolean;
 }
 
 export interface JobSubmission {
@@ -454,18 +460,28 @@ export interface JobPage {
   nextCursor: string | null;
 }
 
-/** Minimal durable timeline entry that the Activity view reads later. */
+export type EventSeverity = 'info' | 'warning' | 'error';
+
+/**
+ * One entry of the device activity log. Severity says how serious the entry is; outcome says what a
+ * finished job produced, so a skipped video is an `info` entry with outcome `skipped`. Optional fields
+ * appear when the entry concerns them.
+ */
 export interface JobEvent {
   eventId: string;
   timestamp: string;
-  severity: 'info' | 'warning' | 'error';
+  severity: EventSeverity;
   eventType: string;
   message: string;
+  /** Null for events that belong to no Vault. */
   vaultPath: string | null;
   jobId: string | null;
   phase?: JobPhase;
   outcome?: JobOutcome;
+  skipReason?: SkipReason;
   errorCode?: string;
+  /** Masked diagnostic output, such as the end of an external tool's stderr. */
+  detail?: string;
   /** The failed attempt a retry event follows. */
   attempt?: number;
   /** When a retried job starts its next attempt. */
@@ -473,7 +489,63 @@ export interface JobEvent {
   /** Why a resumed job stopped: a normal shutdown, an abnormal end, or `unknown` for a stop recorded without it. */
   stopReason?: JobStopKind | 'unknown';
   documentId?: string;
+  /** Video ID or channel ID the event concerns. */
   sourceId?: string;
+  /** Display title of the video or channel. */
+  sourceTitle?: string;
+  /** The subscription (channel ID) the event belongs to, for channel jobs and the videos they queued. */
+  subscriptionId?: string;
+  /** The channel job that queued this video job. */
+  parentJobId?: string;
+  trigger?: ChannelJobTrigger;
+  /** The failed job a manual retry follows. */
+  retryOf?: string;
+}
+
+/** Filters of an activity query; every filter given must match. */
+export interface ActivityQuery {
+  severity?: EventSeverity[];
+  eventType?: string[];
+  /** A job's own events, the events of the videos it queued and of the job that retries it. */
+  jobId?: string;
+  subscriptionId?: string;
+  /** Inclusive lower bound, ISO time. */
+  since?: string;
+  /** Exclusive upper bound, ISO time. */
+  until?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+/** Whether the activity log keeps up with what happens. */
+export interface ActivityLogHealth {
+  state: 'ok' | 'failing';
+  /** Events waiting to be written after a failed write. */
+  pending: number;
+  /** Events lost because too many waited; they never reach the log. */
+  dropped: number;
+  lastFailureAt: string | null;
+  lastError: string | null;
+  /** Unreadable lines found in the log files. */
+  skippedLines: number;
+}
+
+export interface ActivityPage {
+  /** Newest first. */
+  events: JobEvent[];
+  nextCursor: string | null;
+  retentionDays: number;
+  log: ActivityLogHealth;
+}
+
+/** Top-level job counts of the active Vault. */
+export interface JobSummary {
+  active: number;
+  /** Completed since `since`. */
+  completed: number;
+  /** Failed since `since` and not retried. */
+  failed: number;
+  since: string;
 }
 
 /** `paused` while automatic collection is off; `scheduled` while it is on. */
@@ -536,6 +608,7 @@ export type CollectorErrorCode =
   | 'channel_paused'
   | 'out_of_range'
   | 'job_not_found'
+  | 'job_not_retryable'
   | 'unsupported_url'
   | 'queue_full'
   | 'invalid_request';
@@ -564,11 +637,14 @@ export interface VaultSetupResult {
 
 export class CollectorError extends Error {
   readonly code: CollectorErrorCode;
+  /** Diagnostic output of an external tool, such as yt-dlp stderr; masked and shortened before it is recorded. */
+  readonly detail: string | undefined;
 
-  constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions) {
+  constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions & { detail?: string }) {
     super(message, options);
     this.name = 'CollectorError';
     this.code = code;
+    this.detail = options?.detail;
   }
 }
 

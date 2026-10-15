@@ -10,7 +10,7 @@ import {
   type VaultSetupStatus,
 } from '../core/types.js';
 import { JobStore } from '../jobs/job-store.js';
-import type { VaultSetup } from '../server/app.js';
+import type { ActivityAccess, VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
 import { startServer, type RunningServer } from '../server/start.js';
 import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-directory.js';
@@ -70,6 +70,7 @@ export class CollectorRuntime {
     initial: Opening,
     agentAccess: AgentAccess,
     server: RunningServer,
+    private readonly jobStore: JobStore | null,
   ) {
     this.instanceId = instanceId;
     this.profilePath = path.resolve(options.profilePath);
@@ -99,9 +100,15 @@ export class CollectorRuntime {
       vaultPath: initial.workspace?.status().vaultPath ?? null, message: '服務啟動中。',
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
-    const workspaceServices: VaultServiceOptions | null = options.workspace
-      ? { ...options.workspace, jobStore: await JobStore.open(path.join(options.profilePath, 'jobs')) }
-      : null;
+    const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs')) : null;
+    const workspaceServices: VaultServiceOptions | null = options.workspace && jobStore ? { ...options.workspace, jobStore } : null;
+    // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
+    const activity: ActivityAccess | undefined = jobStore ? {
+      query: (query) => jobStore.activity.query(query, {
+        vaultPath: (runtime ? runtime.workspaceValue : initial.workspace)?.status().vaultPath ?? null,
+      }),
+      health: () => jobStore.activity.health(),
+    } : undefined;
     const services = options.workspace ? {
       collector: forwarding(() => current().collector),
       jobs: forwarding(() => current().jobs),
@@ -120,23 +127,26 @@ export class CollectorRuntime {
       if (workspaceServices) initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       agentAccess = await startAgentAccess({
         ...services, instanceId,
+        ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
         connectionFile: options.connectionFile,
         skillPath: options.skillPath,
         runtimeStatus, notReady, vaultSetup,
       });
       const server = await startServer({
         ...services,
+        ...(activity ? { activity } : {}),
         port: options.uiPort,
         ...(options.uiHost ? { host: options.uiHost } : {}),
         ...(options.webRoot ? { webRoot: options.webRoot } : {}),
         agentInfo: agentAccess.info,
         runtimeStatus, notReady, vaultSetup,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server);
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore);
       return runtime;
     } catch (error) {
       await agentAccess?.close().catch(() => undefined);
       await initial.workspace?.close().catch(() => undefined);
+      await jobStore?.close().catch(() => undefined);
       throw error;
     }
   }
@@ -254,7 +264,9 @@ export class CollectorRuntime {
     // including work whose client disconnected, before the workspace stops.
     const listeners = await Promise.allSettled([this.server.close(), this.agentAccess.close()]);
     const workspace = this.workspaceValue ? await Promise.allSettled([this.workspaceValue.close()]) : [];
-    const failed = [...listeners, ...workspace]
+    // Jobs and activity close last; the workspace records interrupted jobs into them while it stops.
+    const store = this.jobStore ? await Promise.allSettled([this.jobStore.close()]) : [];
+    const failed = [...listeners, ...workspace, ...store]
       .find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (!failed) {
       this.stateValue = 'stopped';

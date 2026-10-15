@@ -32,7 +32,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   onBack: () => void;
   onOpenDocument: (documentId: string) => void;
   onOpenDocuments: (source: string) => void;
-  onOpenActivity: () => void;
+  onOpenActivity: (filter: { job?: string; source?: string }) => void;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
   onRemoved: (message: string) => void;
 }) {
@@ -172,12 +172,14 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
           </li>)}</ul>}
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={onOpenActivity}>全部活動</button></div>
+        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={() => onOpenActivity({ source: source.id })} data-testid="all-activity">全部活動</button></div>
         {recentJobs.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
           : <ul className="plain-list records">{recentJobs.map((record) => {
             const label = jobRecordLabel(record);
             return <li key={record.id} className={record.state}>
-              <span className="title">{label.title}</span><span className="muted">{label.detail}</span>
+              <button type="button" className="record-link" onClick={() => onOpenActivity({ job: record.id })} title="查看此次工作" data-testid={`record-${record.id}`}>
+                <span className="title">{label.title}</span><span className="muted">{label.detail}</span>
+              </button>
               {label.active && record.progress && record.progress.total > 0 ? <progress value={record.progress.done} max={record.progress.total} aria-label={`${label.title}進度`} /> : null}
             </li>;
           })}</ul>}
