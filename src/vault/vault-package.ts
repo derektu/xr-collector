@@ -6,17 +6,21 @@ import { MarkdownVault } from './markdown-vault.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { migrateSubscriptionSettings } from '../channels/subscription-files.js';
+import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 
 export const PACKAGE_LIMIT = 128 * 1024 * 1024;
 const CONTENT_LIMIT = 80 * 1024 * 1024;
 const FILE_LIMIT = 10_000;
 interface Entry { path: string; size: number; sha256: string; data: string }
 /**
- * Version 2 packages carry subscriptions with their own collection settings. Version 1 packages
- * (shared settings in the schedule file) are still read; their Vault is converted after unpacking.
+ * Version 3 packages carry deletion records (`settings/deleted-documents.json`) next to
+ * subscriptions with their own collection settings. Version 2 packages have no deletion records;
+ * version 1 packages also share one set of collection settings in the schedule file, and their
+ * Vault is converted after unpacking. A program that reads up to version 2 refuses a version 3
+ * package, so it never restores a Vault while silently dropping its deletions.
  */
-interface VaultPackage { format: 'xr-collector-vault'; version: 1 | 2; files: Entry[]; sha256: string }
-const PACKAGE_VERSION = 2;
+interface VaultPackage { format: 'xr-collector-vault'; version: 1 | 2 | 3; files: Entry[]; sha256: string }
+const PACKAGE_VERSION = 3;
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const manifestDigest = (files: Entry[]) => digest(JSON.stringify(files.map(({ path, size, sha256 }) => ({ path, size, sha256 }))));
 
@@ -30,7 +34,7 @@ export function safePath(value: string): boolean {
   if (segments.some((part) => !part || part === '.' || part === '..'
     || /[\\\x00-\x1f\x7f:<>"|?*]/u.test(part) || /[. ]$/u.test(part)
     || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/iu.test(part))) return false;
-  return /^(documents\/youtube\/[A-Za-z0-9_-]{11}\.md|settings\/youtube-(channels|schedule)\.json)$/u.test(value)
+  return /^(documents\/youtube\/[A-Za-z0-9_-]{11}\.md|settings\/youtube-(channels|schedule)\.json|settings\/deleted-documents\.json)$/u.test(value)
     || /^(attachments|versions|management)\/.+/u.test(value);
 }
 
@@ -66,7 +70,7 @@ export async function exportVault(root: string): Promise<Buffer> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  for (const name of ['youtube-channels.json', 'youtube-schedule.json']) await visit(`settings/${name}`);
+  for (const name of ['youtube-channels.json', 'youtube-schedule.json', 'deleted-documents.json']) await visit(`settings/${name}`);
   const result: VaultPackage = { format: 'xr-collector-vault', version: PACKAGE_VERSION, files, sha256: manifestDigest(files) };
   const buffer = Buffer.from(JSON.stringify(result));
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
@@ -77,7 +81,7 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
   if (buffer.length > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
   let parsed: VaultPackage;
   try { parsed = JSON.parse(buffer.toString('utf8')) as VaultPackage; } catch { invalid('資料包不是有效的 JSON。'); }
-  if (!parsed || parsed.format !== 'xr-collector-vault' || (parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.files)
+  if (!parsed || parsed.format !== 'xr-collector-vault' || ![1, 2, 3].includes(parsed.version) || !Array.isArray(parsed.files)
     || parsed.files.length > FILE_LIMIT) invalid('不支援的資料包格式或版本。');
   const seen = new Set<string>();
   const decoded: { path: string; bytes: Buffer }[] = [];
@@ -98,6 +102,17 @@ export async function unpackVault(buffer: Buffer, destination: string, progress:
     decoded.push({ path: entry.path, bytes });
   }
   if (parsed.sha256 !== manifestDigest(parsed.files)) invalid('資料包清單校驗失敗。');
+  const deletions = decoded.find((entry) => entry.path === DELETIONS_FILE);
+  if (deletions) {
+    if (parsed.version < 3) invalid('資料包版本不含刪除紀錄，卻帶有刪除紀錄檔。');
+    let records;
+    try { records = deletionsFromJson(JSON.parse(deletions.bytes.toString('utf8'))); } catch { invalid('資料包中的刪除紀錄格式無效。'); }
+    // Deletions finish before an export, so a package holding a deleted item's document is inconsistent.
+    const documents = new Set(decoded.map((entry) => entry.path));
+    if (records.some((record) => documents.has(`documents/${record.sourceType}/${record.sourceId}.md`))) {
+      invalid('資料包中同一份文件同時有內容與刪除紀錄。');
+    }
+  }
   for (const key of seen) {
     const parts = key.split('/');
     while (parts.length > 1) {

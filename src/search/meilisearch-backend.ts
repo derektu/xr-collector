@@ -105,7 +105,7 @@ export class MeilisearchBackend implements SearchBackend {
         method: 'PATCH',
         body: JSON.stringify({
           searchableAttributes: ['title', 'publisherName', 'bodyMarkdown'],
-          filterableAttributes: ['sourceType', 'publisherId', 'publishedAtEpoch'],
+          filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
           pagination: { maxTotalHits: MAX_TOTAL_HITS },
         }),
       },
@@ -177,8 +177,20 @@ export class MeilisearchBackend implements SearchBackend {
     await this.waitForTask(task.taskUid);
   }
 
-  async search(query: SearchQuery): Promise<SearchResponse> {
+  async remove(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const task = await this.request<TaskReference>(
+      `/indexes/${INDEX_UID}/documents/delete-batch`,
+      { method: 'POST', body: JSON.stringify(ids.map(indexKey)) },
+    );
+    await this.waitForTask(task.taskUid);
+  }
+
+  async search(query: SearchQuery, excludeIds: string[] = []): Promise<SearchResponse> {
     const filter: string[] = [];
+    if (excludeIds.length > 0) {
+      filter.push(`id NOT IN [${excludeIds.map((id) => JSON.stringify(id)).join(', ')}]`);
+    }
     if (query.sourceType) {
       filter.push(`sourceType = ${JSON.stringify(query.sourceType)}`);
     }

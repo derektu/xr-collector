@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError, type VaultInspection } from '../core/types.js';
+import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 
 /** Root file that marks a directory as a self-contained XR Collector Vault. */
 export const VAULT_MARKER = 'xr-collector-vault.json';
@@ -17,7 +18,7 @@ export interface VaultMarker {
 
 /** Operating-system files that do not make a directory non-empty. */
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
-const SETTINGS_FILES = ['youtube-channels.json', 'youtube-schedule.json'];
+const SETTINGS_FILES = ['youtube-channels.json', 'youtube-schedule.json', 'deleted-documents.json'];
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -103,12 +104,19 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   if (problem) return { kind: 'invalid', path: root, reason: problem };
 
   for (const name of SETTINGS_FILES) {
+    let value: unknown;
     try {
-      JSON.parse(await readFile(path.join(root, 'settings', name), 'utf8'));
+      value = JSON.parse(await readFile(path.join(root, 'settings', name), 'utf8'));
     } catch (error) {
       if (errorCode(error) === 'ENOENT') continue;
       return { kind: 'invalid', path: root, reason: error instanceof SyntaxError
         ? `知識庫設定檔 settings/${name} 格式錯誤。` : unreadableReason(error, `知識庫設定檔 settings/${name}`) };
+    }
+    // Deletion records keep deleted documents from returning, so an unreadable file must not be skipped.
+    if (`settings/${name}` === DELETIONS_FILE) {
+      try { deletionsFromJson(value); } catch {
+        return { kind: 'invalid', path: root, reason: `知識庫設定檔 ${DELETIONS_FILE} 格式錯誤或版本不支援，請更新程式或修正檔案後再開啟。` };
+      }
     }
   }
   try {

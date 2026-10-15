@@ -9,6 +9,7 @@ import type {
   SavedDocument,
   SubtitleKind,
 } from '../core/types.js';
+import { collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
 
 interface StoredMetadata {
   type: 'Transcript';
@@ -69,24 +70,52 @@ function toSavedDocument(metadata: StoredMetadata, bodyMarkdown: string): SavedD
   };
 }
 
+export interface MarkdownVaultOptions {
+  /** The clock behind both `collected_at` and deletion times, so the two compare on one time source. */
+  now?: () => Date;
+}
+
+/** What opening a Vault found of deletions a stop left unfinished. */
+export interface DeletionRecovery {
+  /** Deletions whose document file was still there; the file is removed now. */
+  completed: DeletionRecord[];
+  /** Explicit re-collections that saved the document but did not lift the deletion; the record is lifted now. */
+  cleared: DeletionRecord[];
+}
+
+/**
+ * Markdown documents of one Vault and its deletion records. A document with a deletion record is
+ * invisible when it was collected no later than the deletion, so the record alone makes a deletion
+ * take effect, before the file is gone.
+ */
 export class MarkdownVault implements DocumentVault {
   private readonly documentsDir: string;
+  readonly deletions: DeletionLedger;
+  readonly now: () => Date;
 
-  constructor(private readonly rootDir: string) {
+  constructor(private readonly rootDir: string, options: MarkdownVaultOptions = {}) {
     this.documentsDir = path.join(rootDir, 'documents', 'youtube');
+    this.now = options.now ?? (() => new Date());
+    this.deletions = new DeletionLedger(rootDir, this.now);
   }
 
   async getBySourceId(sourceId: string): Promise<SavedDocument | null> {
     return this.read(`youtube:${sourceId}`);
   }
 
-  async add(capture: CapturedTranscript): Promise<SavedDocument> {
+  /**
+   * Saves a captured transcript unless a visible document of the same item exists, which is returned
+   * instead. `collectedAt` stamps an explicit re-collection after its deletion time.
+   */
+  async add(capture: CapturedTranscript, options: { collectedAt?: Date } = {}): Promise<SavedDocument> {
     await mkdir(this.documentsDir, { recursive: true });
     const id = `youtube:${capture.videoId}`;
     const existing = await this.read(id);
     if (existing) return existing;
+    // A file hidden by its deletion record is the deleted document; the new one takes its place.
+    await rm(this.pathForSourceId(capture.videoId), { force: true });
 
-    const collectedAt = new Date().toISOString();
+    const collectedAt = (options.collectedAt ?? this.now()).toISOString();
     const metadata: StoredMetadata = {
       type: 'Transcript',
       title: capture.title,
@@ -125,12 +154,12 @@ export class MarkdownVault implements DocumentVault {
       await rm(temporaryPath, { force: true });
     }
 
-    const saved = await this.read(id);
+    const saved = await this.readStored(id);
     if (!saved) throw new Error('Document was not saved');
     return saved;
   }
 
-  /** Metadata of every document, without bodies, newest collection first. */
+  /** Metadata of every visible document, without bodies, newest collection first. */
   async list(): Promise<DocumentMetadata[]> {
     let files: string[];
     try {
@@ -140,19 +169,62 @@ export class MarkdownVault implements DocumentVault {
       throw error;
     }
 
-    const documents = await Promise.all(
-      files.filter((file) => file.endsWith('.md')).map((file) => this.readFile(path.join(this.documentsDir, file))),
-    );
+    const [documents, deletions] = await Promise.all([
+      Promise.all(files.filter((file) => file.endsWith('.md')).map((file) => this.readFile(path.join(this.documentsDir, file)))),
+      this.deletionTimes(),
+    ]);
     return documents
-      .filter((document): document is SavedDocument => document !== null)
+      .filter((document): document is SavedDocument => document !== null && !hidden(document, deletions))
       .map(({ bodyMarkdown: _body, ...metadata }) => metadata)
       .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
   }
 
+  /** A visible document; null when it does not exist or its deletion hides it. */
   async read(id: string): Promise<SavedDocument | null> {
-    const match = /^youtube:([A-Za-z0-9_-]{11})$/.exec(id);
-    if (!match?.[1]) return null;
-    return this.readFile(this.pathForSourceId(match[1]));
+    const document = await this.readStored(id);
+    if (!document) return null;
+    const deletion = await this.deletions.get(id);
+    return deletion && collectedBeforeDeletion(document.collectedAt, deletion.deletedAt) ? null : document;
+  }
+
+  /** Removes a document file; a missing file is already removed. */
+  async remove(id: string): Promise<void> {
+    const sourceId = sourceIdOf(id);
+    if (!sourceId) return;
+    await rm(this.pathForSourceId(sourceId), { force: true });
+  }
+
+  /**
+   * Finishes what a stop left between a deletion record and its document file: a file collected
+   * no later than its deletion is removed, and a newer file, saved by an explicit re-collection,
+   * lifts the record.
+   */
+  async recoverDeletions(): Promise<DeletionRecovery> {
+    const recovery: DeletionRecovery = { completed: [], cleared: [] };
+    for (const record of await this.deletions.list()) {
+      const id = deletionId(record);
+      const document = await this.readStored(id);
+      if (!document) continue;
+      if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
+        await this.remove(id);
+        recovery.completed.push(record);
+      } else {
+        await this.deletions.clear(id);
+        recovery.cleared.push(record);
+      }
+    }
+    return recovery;
+  }
+
+  /** A document file as stored, whether or not a deletion hides it. */
+  private async readStored(id: string): Promise<SavedDocument | null> {
+    const sourceId = sourceIdOf(id);
+    if (!sourceId) return null;
+    return this.readFile(this.pathForSourceId(sourceId));
+  }
+
+  private async deletionTimes(): Promise<Map<string, string>> {
+    return new Map((await this.deletions.list()).map((record) => [deletionId(record), record.deletedAt]));
   }
 
   private pathForSourceId(sourceId: string): string {
@@ -168,4 +240,13 @@ export class MarkdownVault implements DocumentVault {
       throw error;
     }
   }
+}
+
+function sourceIdOf(id: string): string | null {
+  return /^youtube:([A-Za-z0-9_-]{11})$/.exec(id)?.[1] ?? null;
+}
+
+function hidden(document: SavedDocument, deletions: Map<string, string>): boolean {
+  const deletedAt = deletions.get(document.id);
+  return deletedAt !== undefined && collectedBeforeDeletion(document.collectedAt, deletedAt);
 }

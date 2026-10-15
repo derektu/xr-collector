@@ -64,7 +64,7 @@ export function jobProgressLabel(job: CollectionJob): string | null {
 
 const SKIP_LABELS: Record<SkipReason, string> = {
   out_of_range: '超出補收範圍', subscription_paused: '訂閱已暫停', subscription_removed: '訂閱已移除',
-  superseded: '已由較新的工作接續',
+  superseded: '已由較新的工作接續', deleted: '文件已刪除',
 };
 
 export function skipReasonLabel(reason: SkipReason | undefined): string {
