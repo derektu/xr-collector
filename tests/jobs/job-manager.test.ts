@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -289,6 +289,38 @@ describe('JobManager', () => {
     expect(manager.get(queued.job.id)).toMatchObject({ state: 'interrupted', error: { code: 'interrupted' } });
     expect(source.captures).toEqual([videoId(1)]);
   });
+
+  it('records channel discovery and channel adding cut short by close as interrupted, not failed', async () => {
+    const { manager, source, channels } = setup();
+    let releaseDiscovery!: () => void;
+    let releaseResolve!: () => void;
+    source.discover = async () => {
+      await new Promise<void>((resolve) => { releaseDiscovery = resolve; });
+      return videos(3, 'c');
+    };
+    source.resolveChannel = async () => {
+      await new Promise<void>((resolve) => { releaseResolve = resolve; });
+      return { id: 'UC-LATE', title: '晚到的頻道', url: 'https://www.youtube.com/channel/UC-LATE/videos' };
+    };
+    const discovering = await manager.submitChannel(channel('UC-DISCOVER'));
+    await vi.waitFor(() => expect(manager.get(discovering.job.id).phase).toBe('discover'));
+
+    const closing = manager.close();
+    releaseDiscovery();
+    await closing;
+    expect(manager.get(discovering.job.id)).toMatchObject({ state: 'interrupted', items: null, error: { code: 'interrupted' } });
+    expect(source.captures).toEqual([]);
+
+    const second = setup({ limits: { discovery: 1 } });
+    second.source.resolveChannel = source.resolveChannel;
+    const adding = await second.manager.submit('@late');
+    await vi.waitFor(() => expect(second.manager.get(adding.job.id).phase).toBe('resolve'));
+    const closingSecond = second.manager.close();
+    releaseResolve();
+    await closingSecond;
+    expect(second.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', error: { code: 'interrupted' } });
+    expect(channels.channels).toEqual([]);
+  });
 });
 
 describe('JobStore', () => {
@@ -326,4 +358,28 @@ describe('JobStore', () => {
     source.release(videoId(1, 's'));
     await manager.close();
   });
+
+  it.each(['', '{"version":1,"jobs":"broken"}', '{"version":99,"jobs":[]}'])(
+    'sets aside an unreadable jobs file %j and starts with no history',
+    async (contents) => {
+      directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-corrupt-'));
+      await writeFile(path.join(directory, 'jobs.json'), contents);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const store = await JobStore.open(directory, () => new Date('2026-10-15T01:02:03.456Z'));
+        expect(store.list(VAULT)).toEqual([]);
+        expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
+        expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);
+        expect(error).toHaveBeenCalledOnce();
+
+        const { manager, source } = setup({ store });
+        source.holdCaptures = false;
+        await manager.whenSettled((await manager.submitVideo(watchUrl(videoId(9)))).job.id);
+        await store.flush();
+        expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs).toHaveLength(1);
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
 });

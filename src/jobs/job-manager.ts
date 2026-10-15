@@ -307,6 +307,8 @@ export class JobManager {
       if (job.kind === 'youtube.channel-add') await this.addChannel(job);
       else await this.discoverChannel(job);
     } catch (error) {
+      // A step cut short by shutdown is left for close() to record as interrupted.
+      if (this.closed) return;
       this.finish(job, 'failed', { outcome: 'failed' }, errorDetails(error));
     }
   }
@@ -318,6 +320,8 @@ export class JobManager {
     const channel = existing ?? await this.options.channels.add({
       ...resolved, enabled: true, addedAt: this.now().toISOString(),
     });
+    // The service stopped while resolving; close() records the job as interrupted.
+    if (this.closed) return;
     this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
     const followUp = this.enqueueChannel(channel);
     this.finish(job, 'completed', {
@@ -331,6 +335,8 @@ export class JobManager {
       id: job.source.id!, title: job.source.title ?? job.source.id!, url: job.source.url, enabled: true, addedAt: job.createdAt,
     };
     const videos = await this.options.source.discover(channel, this.channelVideoLimit);
+    // The service stopped while discovering; close() records the job as interrupted.
+    if (this.closed) return;
     const items: JobItem[] = videos.map((video) => {
       const item: JobItem = {
         sourceId: video.id, title: video.title, url: video.url, jobId: null, state: 'queued', outcome: null, error: null,
