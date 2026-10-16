@@ -147,6 +147,11 @@ app.whenReady().then(async () => {
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+  // The folder comes from the runtime, never from the page, so the page can only reveal the active Vault.
+  ipcMain.handle('xrCollector:desktop:revealVault', () => {
+    const vaultPath = runtime?.workspace?.status().vaultPath;
+    if (vaultPath) shell.showItemInFolder(vaultPath);
+  });
   const capture = new YtDlpCapture({
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),

@@ -356,7 +356,11 @@ export interface JobRecovery {
   lastStop?: JobStopKind;
 }
 
-export type JobStopKind = 'shutdown' | 'crash';
+/**
+ * How a job stopped: the service closed normally, ended abnormally, moved the Vault to another
+ * location, or switched to another Vault.
+ */
+export type JobStopKind = 'shutdown' | 'crash' | 'vault_move' | 'vault_switch';
 
 /** What a restart needs to continue a job without repeating finished steps. Internal to the service. */
 export interface JobCheckpoint {
@@ -429,6 +433,12 @@ export interface CollectionJob {
   state: JobState;
   phase: JobPhase | null;
   vaultPath: string;
+  /**
+   * ID of the Vault the job belongs to. A job counts as the Vault's only when both its path and ID
+   * match, so another Vault later placed at the same path, or a copy of the Vault elsewhere, never
+   * continues it. Absent for a job of a Vault without an ID.
+   */
+  vaultId?: string;
   parentId: string | null;
   source: {
     type: 'youtube';
@@ -488,6 +498,8 @@ export interface JobEvent {
   message: string;
   /** Null for events that belong to no Vault. */
   vaultPath: string | null;
+  /** ID of the Vault the event belongs to; absent for events of a Vault without an ID. */
+  vaultId?: string;
   jobId: string | null;
   phase?: JobPhase;
   outcome?: JobOutcome;
@@ -642,6 +654,9 @@ export type CollectorErrorCode =
   | 'queue_full'
   | 'file_exists'
   | 'transfer_cancelled'
+  | 'vault_location_fixed'
+  | 'vault_unidentified'
+  | 'insufficient_space'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */
@@ -679,15 +694,16 @@ export class CollectorError extends Error {
   }
 }
 
-export type TransferOperation = 'export' | 'merge' | 'restore';
+export type TransferOperation = 'export' | 'merge' | 'restore' | 'move' | 'open';
 
 /**
- * Progress of the one Vault export, merge or restore that runs at a time. `waiting` means the
- * operation waits for the collection steps already running to finish; queued collection waits
- * until the operation ends.
+ * Progress of the one Vault export, merge, restore, move or switch that runs at a time. `waiting`
+ * means the operation waits for the collection steps already running to finish; queued collection
+ * waits until the operation ends.
  */
 export interface TransferStatus {
-  state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'indexing' | 'completed' | 'error';
+  state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'copying' | 'verifying' | 'indexing' | 'cleaning'
+    | 'completed' | 'error';
   operation: TransferOperation | null;
   message: string;
   completedFiles: number;
@@ -699,6 +715,8 @@ export interface TransferStatus {
   result: TransferResult | null;
   /** The error code of a failed operation, such as `vault_busy`; null unless `state` is `error`. */
   errorCode: CollectorErrorCode | null;
+  /** Why the active Vault cannot be moved or another Vault opened; null when both are possible. */
+  relocationUnavailable: { code: CollectorErrorCode; message: string } | null;
 }
 
 export interface TransferResult {
@@ -716,6 +734,17 @@ export interface TransferResult {
   previousVaultPath?: string;
   interruptedJobs?: number;
   autoCollectionPaused?: boolean;
+  /** Move and open: unfinished jobs of the Vault now in use that continue after the switch. */
+  resumedJobs?: number;
+  /** Move: a part of the previous location that could not be removed and is left for the person to delete. */
+  leftoverPath?: string;
+}
+
+/** Where a move would place the active Vault and the space it needs there. */
+export interface MoveCheck {
+  targetPath: string;
+  requiredBytes: number;
+  availableBytes: number;
 }
 
 export type MergeChoice = 'local' | 'incoming';

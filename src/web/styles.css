@@ -435,3 +435,5 @@ span.reader-publisher { color:var(--text-muted); }
 .documents-summary { margin:0 2px; }
 .source-detail { display:flex; flex-direction:column; gap:20px; }
 .source-detail .back-link { margin-bottom:-6px; }
+.vault-background { margin-top:12px; color:var(--secondary); font-size:13px; }
+.confirm-dialog p.move-leftover { color:var(--warning); }

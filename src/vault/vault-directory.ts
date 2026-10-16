@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
@@ -14,7 +15,14 @@ export interface VaultMarker {
   formatVersion: number;
   createdAt: string;
   createdBy: string;
+  /**
+   * Identity of the Vault: written when the Vault is created or restored and kept when it moves.
+   * Packages never carry the marker, so every restore gets a new ID.
+   */
+  id?: string;
 }
+
+const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** Operating-system files that do not make a directory non-empty. */
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
@@ -126,10 +134,10 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   }
 }
 
-/** Writes the marker that turns an empty directory into a Vault. */
+/** Writes the marker that turns an empty directory into a Vault, with a new Vault ID. */
 export async function writeVaultMarker(root: string, createdBy: string, now = new Date()): Promise<void> {
   const marker: VaultMarker = {
-    format: VAULT_FORMAT, formatVersion: VAULT_FORMAT_VERSION, createdAt: localTimestamp(now), createdBy,
+    format: VAULT_FORMAT, formatVersion: VAULT_FORMAT_VERSION, createdAt: localTimestamp(now), createdBy, id: randomUUID(),
   };
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
 }
@@ -149,4 +157,42 @@ export async function createVaultDirectory(input: string, createdBy: string): Pr
       ? '沒有權限寫入這個目錄。' : `無法建立知識庫（${code ?? '未知錯誤'}）。`);
   }
   return inspection.path;
+}
+
+/** The Vault ID in a Vault's marker, or null when the marker has none or cannot be read. */
+export async function readVaultId(root: string): Promise<string | null> {
+  try {
+    const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8')) as Partial<VaultMarker> | null;
+    return marker && typeof marker.id === 'string' && VAULT_ID.test(marker.id) ? marker.id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the Vault's ID, giving a Vault without one a new ID first. The marker is replaced through a
+ * temporary file and keeps every other field. A Vault whose marker cannot be written opens without
+ * an ID: the failure is logged and null returned, so a read-only Vault still opens.
+ */
+export async function ensureVaultId(root: string): Promise<string | null> {
+  const markerFile = path.join(root, VAULT_MARKER);
+  let marker: Record<string, unknown>;
+  try {
+    marker = JSON.parse(await readFile(markerFile, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    console.warn(`Unable to read the Vault marker of ${root}`, error);
+    return null;
+  }
+  if (typeof marker.id === 'string' && VAULT_ID.test(marker.id)) return marker.id;
+  const id = randomUUID();
+  const temporary = `${markerFile}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify({ ...marker, id }, null, 2)}\n`, { flag: 'wx' });
+    await rename(temporary, markerFile);
+    return id;
+  } catch (error) {
+    console.warn(`Unable to give the Vault at ${root} an ID; it opens without one`, error);
+    await rm(temporary, { force: true }).catch(() => undefined);
+    return null;
+  }
 }

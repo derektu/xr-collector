@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { MergeItem } from '../../src/core/types.js';
 import {
-  besideVault, choiceText, exportFileName, itemName, lastExportLabel, mergeCounts, mergeGroups, progressText, sizeLabel, transferRunning,
+  besideVault, choiceText, exportFileName, itemName, lastExportLabel, mergeCounts, mergeGroups, moveTargetIn, progressText, relocates, revealLabel, sizeLabel,
+  transferRunning,
 } from '../../src/web/transfer-presentation.js';
 
 const item = (fields: Partial<MergeItem>): MergeItem => ({
@@ -44,5 +45,17 @@ describe('backup presentation', () => {
     expect(choiceText(item({ kind: 'deletion', state: 'conflict', deletedOn: 'incoming' }))).toMatchObject({ local: '保留文件', incoming: '套用刪除' });
     expect(choiceText(item({ kind: 'channel', state: 'conflict' })).summary).toContain('收集進度一律保留本機');
     expect(choiceText(item({ kind: 'document', state: 'conflict' }))).toMatchObject({ local: '保留本機版本', incoming: '採用備份版本' });
+  });
+
+  it('names move targets, the file manager and the operations that switch Vaults', () => {
+    expect(moveTargetIn('/Volumes/Backup', '/Users/a/Documents/XR Collector')).toBe('/Volumes/Backup/XR Collector');
+    expect(moveTargetIn('/Volumes/Backup/', '/Users/a/XR Collector/')).toBe('/Volumes/Backup/XR Collector');
+    expect(moveTargetIn('D:\\Data', 'C:\\Users\\a\\XR Collector')).toBe('D:\\Data\\XR Collector');
+    expect(revealLabel('darwin')).toBe('在 Finder 顯示');
+    expect(revealLabel('win32')).toBe('在檔案總管顯示');
+    expect(relocates({ operation: 'move' })).toBe(true);
+    expect(relocates({ operation: 'restore' })).toBe(false);
+    expect(progressText({ state: 'copying', message: '正在複製檔案…', completedFiles: 4, totalFiles: 10 })).toBe('正在複製檔案…（4／10）');
+    expect(sizeLabel(3 * 1024 ** 3)).toBe('3.0 GB');
   });
 });

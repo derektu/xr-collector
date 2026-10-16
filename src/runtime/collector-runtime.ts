@@ -104,9 +104,8 @@ export class CollectorRuntime {
     const workspaceServices: VaultServiceOptions | null = options.workspace && jobStore ? { ...options.workspace, jobStore } : null;
     // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
     const activity: ActivityAccess | undefined = jobStore ? {
-      query: (query) => jobStore.activity.query(query, {
-        vaultPath: (runtime ? runtime.workspaceValue : initial.workspace)?.status().vaultPath ?? null,
-      }),
+      query: (query) => jobStore.activity.query(query,
+        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
       health: () => jobStore.activity.health(),
     } : undefined;
     const services = options.workspace ? {
@@ -158,8 +157,11 @@ export class CollectorRuntime {
     selection: VaultSelection,
   ): Promise<Opening> {
     const createdBy = options.createdBy ?? 'XR Collector';
+    const fixedLocation = Boolean(options.explicitVaultPath);
     const open = async (root: string): Promise<Opening> => ({
-      workspace: await VaultWorkspace.open({ ...services, root, selection, createdBy, profilePath: path.resolve(options.profilePath) }), failure: null, message: '',
+      workspace: await VaultWorkspace.open({
+        ...services, root, selection, createdBy, profilePath: path.resolve(options.profilePath), fixedLocation,
+      }), failure: null, message: '',
     });
     const unusable = (failurePath: string, reason: string): Opening => ({
       workspace: null, failure: { path: failurePath, reason }, message: `目前選擇的 Vault 無法使用：${reason}請在 UI Onboarding 重新選擇 Vault。`,

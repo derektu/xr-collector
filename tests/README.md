@@ -12,7 +12,7 @@
 | `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試 |
 | `activity` | 活動記錄的日檔與舊檔相容、30 天保留與跨時區日界、cursor 分頁、篩選、遮蔽、寫入失敗、手動重試、工作摘要，以及 Vault 鎖與 Not Ready 時的查詢 |
 | `channels` | 訂閱、各訂閱的收集設定與 version 1 轉換、時間邊界、補收／增量發現與游標、暫停／移除收斂、頻道工作提交與排程；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
-| `vault` | 文件格式與文件路徑、資料包（含刪除紀錄與未知欄位）、匯出到檔案、還原到指定資料夾與切換、合併的差異粒度與恢復、資料交換期間的收集暫停 |
+| `vault` | 文件格式與文件路徑、資料包（含刪除紀錄與未知欄位）、匯出到檔案、還原到指定資料夾與切換、合併的差異粒度與恢復、資料交換期間的收集暫停、知識庫搬移（目標檢查、逐檔驗證、失敗注入、中斷恢復、清理失敗）、同庫識別與開啟其他知識庫 |
 | `search` | 搜尋狀態、索引與真實引擎 |
 | `server` | HTTP 契約與 Agent 授權 |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
@@ -23,7 +23,7 @@
 
 ## 真實搜尋與平台邊界
 
-`npm run test:meilisearch:mac` 下載 Mac runtime，再執行 search、Agent、還原與合併四個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少 binary 時會 skip。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這四項真實引擎驗收。
+`npm run test:meilisearch:mac` 下載 Mac runtime，再執行 search、Agent、還原、合併與搬移五個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少 binary 時會 skip。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這五項真實引擎驗收。
 
 `tooling` 的工作區建立整合案例只在 Mac／Windows 執行，Linux 另 skip 一項。平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 

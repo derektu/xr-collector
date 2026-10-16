@@ -87,14 +87,40 @@ export class JobStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  /** Jobs of one Vault, newest first; jobs created in the same millisecond keep their submission order. */
-  list(vaultPath: string): CollectionJob[] {
+  /**
+   * Jobs of one Vault, newest first; jobs created in the same millisecond keep their submission order.
+   * A job belongs to the Vault when both its path and its Vault ID match; `vaultId` null selects the
+   * jobs at the path that carry no ID.
+   */
+  list(vaultPath: string, vaultId: string | null = null): CollectionJob[] {
     // The map keeps insertion order, and the sort is stable, so reversing first puts later submissions first.
     return [...this.jobs.values()]
-      .filter((job) => job.vaultPath === vaultPath)
+      .filter((job) => belongsTo(job, vaultPath, vaultId))
       .reverse()
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map((job) => structuredClone(job));
+  }
+
+  /**
+   * Gives the jobs at `vaultPath` that carry no Vault ID to the Vault with `vaultId`; called when a
+   * Vault opens, so jobs recorded before Vaults had IDs stay with the Vault at their path.
+   */
+  claim(vaultPath: string, vaultId: string): void {
+    let changed = false;
+    for (const job of this.jobs.values()) {
+      if (job.vaultPath === vaultPath && job.vaultId === undefined) { job.vaultId = vaultId; changed = true; }
+    }
+    if (changed) this.scheduleFlush();
+  }
+
+  /** Records the jobs of the Vault with `vaultId` at its new location after a move. */
+  rebind(fromPath: string, toPath: string, vaultId: string): number {
+    let count = 0;
+    for (const job of this.jobs.values()) {
+      if (job.vaultPath === fromPath && job.vaultId === vaultId) { job.vaultPath = toPath; count += 1; }
+    }
+    if (count) this.scheduleFlush();
+    return count;
   }
 
   put(job: CollectionJob): void {
@@ -123,9 +149,11 @@ export class JobStore {
         ? { ...item, state: 'interrupted' } : item) ?? null,
     };
     this.jobs.set(job.id, interrupted);
+    // A move or a switch of Vaults pauses jobs on purpose; only an unplanned stop is a warning.
+    const planned = options.stop === 'vault_move' || options.stop === 'vault_switch';
     this.event({
-      severity: 'warning', eventType: 'job.interrupted', message,
-      vaultPath: job.vaultPath, jobId: job.id, ...(job.phase ? { phase: job.phase } : {}),
+      severity: planned ? 'info' : 'warning', eventType: 'job.interrupted', message,
+      vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id, ...(job.phase ? { phase: job.phase } : {}),
       ...(job.source.id ? { sourceId: job.source.id } : {}),
     });
     this.scheduleFlush();
@@ -203,6 +231,10 @@ export class JobStore {
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     for (const job of finished.slice(0, Math.max(0, finished.length - FINISHED_JOB_LIMIT))) this.jobs.delete(job.id);
   }
+}
+
+function belongsTo(job: CollectionJob, vaultPath: string, vaultId: string | null): boolean {
+  return job.vaultPath === vaultPath && (job.vaultId ?? null) === vaultId;
 }
 
 /**

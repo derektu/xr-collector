@@ -136,6 +136,9 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   queue_full: 503,
   file_exists: 409,
   transfer_cancelled: 409,
+  vault_location_fixed: 409,
+  vault_unidentified: 409,
+  insufficient_space: 507,
   no_subtitles: 422,
   video_unavailable: 422,
   capture_failed: 502,
@@ -265,6 +268,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { cancelled: true };
     });
     app.post('/api/vault/cancel', async () => transfer.cancelWait());
+    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move/check', async (request) => transfer.checkMove(request.body?.targetPath));
+    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move', async (request, reply) => {
+      return reply.code(202).send(await transfer.move(request.body?.targetPath));
+    });
+    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', async (request, reply) => {
+      return reply.code(202).send(await transfer.openOther(request.body?.path));
+    });
     app.get('/api/vault/restore/suggestion', async () => ({ path: await transfer.suggestRestoreFolder() }));
     app.post<{ Body: Buffer | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
       if (Buffer.isBuffer(request.body)) return reply.code(202).send(await transfer.restore(request.body));

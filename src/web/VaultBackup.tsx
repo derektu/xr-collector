@@ -9,7 +9,7 @@ import {
 
 const POLL_MS = 400;
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
+export const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
 
 type Open =
   | { kind: 'export'; file?: { path: string; overwrite: boolean } }
@@ -71,7 +71,7 @@ export function BackupSection({ vaultPath, activeJobs, onChanged }: {
 }
 
 /** A modal dialog that cannot be dismissed with Escape while `busy`. */
-function Modal({ title, wide, busy, onDismiss, children, testId }: {
+export function Modal({ title, wide, busy, onDismiss, children, testId }: {
   title: string; wide?: boolean; busy: boolean; onDismiss: () => void; children: ReactNode; testId: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -87,14 +87,14 @@ function Modal({ title, wide, busy, onDismiss, children, testId }: {
   </dialog>;
 }
 
-interface TransferProgress {
+export interface TransferProgress {
   text: string;
   /** The transfer still waits for collection steps and can be cancelled. */
   waiting: boolean;
 }
 
 /** Progress of the running transfer, read from the status while `active`. */
-function useTransferProgress(active: boolean): TransferProgress {
+export function useTransferProgress(active: boolean): TransferProgress {
   const [progress, setProgress] = useState<TransferProgress>({ text: '', waiting: false });
   useEffect(() => {
     if (!active) { setProgress({ text: '', waiting: false }); return undefined; }
@@ -113,7 +113,7 @@ function useTransferProgress(active: boolean): TransferProgress {
   return progress;
 }
 
-async function followTransfer(): Promise<TransferStatus> {
+export async function followTransfer(): Promise<TransferStatus> {
   for (;;) {
     const status = await api.vaultTransferStatus();
     if (!transferRunning(status)) return status;
@@ -122,7 +122,7 @@ async function followTransfer(): Promise<TransferStatus> {
 }
 
 /** The progress line; while the transfer waits for collection steps it offers to cancel. */
-function Progress({ progress, fallback }: { progress: TransferProgress; fallback: string }) {
+export function Progress({ progress, fallback }: { progress: TransferProgress; fallback: string }) {
   const [problem, setProblem] = useState<string | null>(null);
   async function cancel(): Promise<void> {
     setProblem(null);
@@ -137,7 +137,7 @@ function Progress({ progress, fallback }: { progress: TransferProgress; fallback
   </>;
 }
 
-function PathField({ label, value, onChange, testId, hint }: {
+export function PathField({ label, value, onChange, testId, hint }: {
   label: string; value: string; onChange: (value: string) => void; testId: string; hint?: string;
 }) {
   return <label className="path-field">
