@@ -13,13 +13,20 @@ import { PACKAGE_LIMIT } from './vault-package.js';
 
 const invalid = (message: string): never => { throw new CollectorError('invalid_request', message); };
 
-/** The real location of a path, resolving symbolic links of whichever ancestors exist. */
-async function resolved(target: string): Promise<string> {
+/** Resolves symbolic links of an existing path, as `fs.realpath` does; tests replace it to stand for another file system. */
+export type RealPath = (target: string) => Promise<string>;
+
+/**
+ * The real location of a path, resolving symbolic links of whichever ancestors exist. On a
+ * case-insensitive volume the real path also carries the spelling stored on disk, so two spellings
+ * of one folder resolve to the same location.
+ */
+export async function resolved(target: string, real: RealPath = realpath): Promise<string> {
   const missing: string[] = [];
   let current = path.resolve(target);
   for (;;) {
     try {
-      return path.join(await realpath(current), ...missing.reverse());
+      return path.join(await real(current), ...missing.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = path.dirname(current);
@@ -31,9 +38,20 @@ async function resolved(target: string): Promise<string> {
 }
 
 /** Whether `target` is `folder` or inside it, after resolving symbolic links. */
-export async function isWithin(target: string, folder: string): Promise<boolean> {
-  const relative = path.relative(await resolved(folder), await resolved(target));
+export async function isWithin(target: string, folder: string, real: RealPath = realpath): Promise<boolean> {
+  const relative = path.relative(await resolved(folder, real), await resolved(target, real));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+const WORK_FOLDER = /\.(?:moving|moved|restoring)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/**
+ * Whether a folder carries the name of a move's or restore's working folder (`.moving-<UUID>`,
+ * `.moved-<UUID>`, `.restoring-<UUID>`). Recovery at startup deletes such folders, so they never
+ * become a Vault in use, a move target or a restore target.
+ */
+export function isWorkFolder(folder: string): boolean {
+  return WORK_FOLDER.test(path.basename(path.resolve(folder)));
 }
 
 /** Folders a package file or restored Vault may not be placed in: the active Vault and the profile. */
@@ -97,6 +115,7 @@ export async function writePackageFile(file: string, bytes: Buffer): Promise<voi
  */
 export async function checkRestoreFolder(value: unknown, folders: ProtectedFolders): Promise<string> {
   const folder = absolute(value, '請提供還原知識庫的完整路徑。');
+  if (isWorkFolder(folder)) invalid('這是搬移或還原使用的暫存資料夾，請選擇其他位置。');
   await refuseProtected(folder, folders, '還原的知識庫');
   if (await isWithin(folders.vaultRoot, folder)) invalid('還原的知識庫不能包含目前的知識庫。');
   const inspection = await inspectVaultDirectory(folder);

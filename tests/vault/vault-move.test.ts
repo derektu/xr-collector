@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createVaultDirectory, readVaultId, VAULT_MARKER } from '../../src/vault/vault-directory.js';
-import { MOVE_JOURNAL, previousLocations, recordPreviousLocation } from '../../src/vault/vault-move.js';
+import { checkMoveTarget, MOVE_JOURNAL, previousLocations, recordPreviousLocation } from '../../src/vault/vault-move.js';
 import { exportVault } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace, type MoveFault, type WorkspaceOptions } from '../../src/vault/workspace.js';
@@ -175,8 +175,6 @@ describe('move target checks (A-01)', () => {
       [path.join(root, 'missing', 'deeper'), 'invalid_request', '上層目錄也不存在'],
     ];
     if (process.getuid?.() !== 0) cases.push([path.join(root, 'Locked', 'Vault'), 'invalid_request', '沒有權限']);
-    // A case-insensitive volume finds the source under another spelling.
-    if (existsSync(source.toLowerCase()) && source.toLowerCase() !== source) cases.push([source.toLowerCase(), 'invalid_request', '就是目前的知識庫']);
     for (const [target, code, message] of cases) {
       await expect(workspace.move(target), target).rejects.toMatchObject({ code, message: expect.stringContaining(message) });
     }
@@ -193,6 +191,65 @@ describe('move target checks (A-01)', () => {
     await expect(workspace.checkMove(path.join(root, 'New Place'))).resolves.toMatchObject({ targetPath: path.join(root, 'New Place') });
     gated.open();
     await workspace.jobs.whenSettled(running.job.id);
+  });
+
+  it('compares locations after resolving them, so another spelling on a case-insensitive volume is the same folder', async () => {
+    const context = await setup();
+    const { source, profile } = context;
+    const lower = path.join(path.dirname(source), path.basename(source).toLowerCase());
+    // Stands for a case-insensitive volume on any file system: the lower-case spelling resolves to the Vault.
+    const real = async (target: string) => target.toLowerCase() === source.toLowerCase() ? realpath(source) : realpath(target);
+    const folders = { vaultRoot: source, profilePath: profile };
+    await expect(checkMoveTarget(lower, folders, 0, { real })).rejects.toMatchObject({ message: expect.stringContaining('就是目前的知識庫') });
+    await expect(checkMoveTarget(path.join(lower, 'inside'), folders, 0, { real }))
+      .rejects.toMatchObject({ message: expect.stringContaining('目前的知識庫裡') });
+  });
+
+  it('refuses a location whose real ancestors include another Vault, and working folders of a move or restore', async () => {
+    const context = await setup();
+    const { root } = context;
+    await createVaultDirectory(path.join(root, 'Other'), 'XR Collector test');
+    await mkdir(path.join(root, 'Other', 'sub'));
+    await symlink(path.join(root, 'Other', 'sub'), path.join(root, 'LinkSub'));
+    const workspace = await open(context);
+    await expect(workspace.checkMove(path.join(root, 'LinkSub', 'New'))).rejects.toMatchObject({ message: expect.stringContaining('另一個知識庫裡') });
+    const working = path.join(root, 'Vault.moved-00000000-0000-4000-8000-000000000000');
+    await expect(workspace.checkMove(working)).rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
+    await expect(workspace.restore(await exportVault(context.source), path.join(root, 'X.restoring-00000000-0000-4000-8000-000000000000')))
+      .rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
+    expect(workspace.status().vaultPath).toBe(context.source);
+  });
+
+  it('answers vault_busy while an operation runs, reports file system failures as a refused location, and reuses the Vault size', async () => {
+    const context = await setup();
+    const target = path.join(context.root, 'Moved');
+    const gated = gatedCapture(new Set([IDS[0]!]));
+    let failStatfs = false;
+    const workspace = await open(context, {
+      capture: gated.capture,
+      statfs: async (folder) => {
+        if (failStatfs) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        return { bavail: 1_000_000, bsize: 4096, folder } as never;
+      },
+    });
+    const first = await workspace.checkMove(target);
+    await writeFile(path.join(context.source, 'attachments', 'large.bin'), Buffer.alloc(32 * 1024 * 1024));
+    expect((await workspace.checkMove(target)).requiredBytes).toBe(first.requiredBytes);
+    failStatfs = true;
+    const app = await createHttpApp({ transfer: workspace });
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/vault/move/check', payload: { targetPath: target } });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe('invalid_request');
+    } finally { await app.close(); }
+    failStatfs = false;
+    const job = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
+    await expect.poll(() => gated.started.length).toBe(1);
+    await workspace.move(target);
+    await expect(workspace.checkMove(path.join(context.root, 'Elsewhere'))).rejects.toMatchObject({ code: 'vault_busy' });
+    workspace.cancelWait();
+    gated.open();
+    await workspace.jobs.whenSettled(job.job.id);
   });
 
   it('refuses a Vault holding a symbolic link', async () => {
@@ -383,7 +440,7 @@ describe('a move that fails before the switch (A-05)', () => {
 });
 
 describe('a move interrupted by a stop (A-06)', () => {
-  it.each(['copying', 'placed', 'prepared', 'committed', 'cleaning'] as MoveFault[])('finishes or takes back a move stopped at %s', async (phase) => {
+  it.each(['copying', 'placed', 'prepared', 'selected', 'committed', 'cleaning'] as MoveFault[])('finishes or takes back a move stopped at %s', async (phase) => {
     const context = await setup();
     const { root, source } = context;
     const target = path.join(root, 'Moved');
@@ -405,7 +462,8 @@ describe('a move interrupted by a stop (A-06)', () => {
     if (phase === 'cleaning') await first.jobs.whenSettled(queued.job.id);
     await jobStore.flush();
     // The process ends here; the next start reads only what reached the disk.
-    const committed = phase === 'committed' || phase === 'cleaning';
+    // `selected`: the selection names the new location while the journal still says `placed`.
+    const committed = phase === 'selected' || phase === 'committed' || phase === 'cleaning';
     const restarted = await open(context);
     expect(restarted.status().vaultPath).toBe(committed ? target : source);
     expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
@@ -472,6 +530,126 @@ describe('cleaning the original location after the switch (A-07)', () => {
     const reopened = await open(context, { jobStore: stores[0]! });
     expect(reopened.status().vaultPath).toBe(target);
     expect(existsSync(leftover!)).toBe(false);
+  });
+});
+
+describe('an original location that is in use again', () => {
+  it('keeps a leftover original opened again, with its new documents and jobs, through switches and restarts', async () => {
+    const context = await setup(path.join('Parent', 'Vault'));
+    const { source } = context;
+    const parent = path.dirname(source);
+    const target = path.join(context.root, 'Moved');
+    const jobStore = await JobStore.open(context.jobsDir);
+    stores.push(jobStore);
+    let workspace = await open(context, { jobStore }, false);
+    await chmod(parent, 0o555);
+    restore.push(() => chmod(parent, 0o755));
+    await workspace.move(target);
+    await settled(workspace);
+    expect(workspace.status().result?.leftoverPath).toBe(source);
+    await chmod(parent, 0o755);
+    // The person opens the leftover original again and keeps collecting there.
+    await workspace.openOther(source);
+    await settled(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: source });
+    expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
+    const added = await workspace.jobs.submitVideo(urlOf(IDS[2]!));
+    expect((await workspace.jobs.whenSettled(added.job.id)).state).toBe('completed');
+    await workspace.openOther(target);
+    await settled(workspace);
+    await workspace.close();
+    workspace = await open(context, { jobStore }, false);
+    expect(workspace.status().vaultPath).toBe(target);
+    await workspace.openOther(source);
+    await settled(workspace);
+    await workspace.close();
+    workspace = await open(context, { jobStore });
+    expect(workspace.status().vaultPath).toBe(source);
+    expect(await new MarkdownVault(source).read(`youtube:${IDS[2]}`)).not.toBeNull();
+    expect(workspace.jobs.get(added.job.id)).toMatchObject({ state: 'completed', vaultPath: source });
+    expect(existsSync(path.join(source, VAULT_MARKER))).toBe(true);
+  });
+
+  it('refuses to open the removal folder of a move', async () => {
+    const context = await setup();
+    const workspace = await open(context, { moveFaults: (phase) => { if (phase === 'cleaning') throw new Error('EBUSY'); } });
+    await workspace.move(path.join(context.root, 'Moved'));
+    await settled(workspace);
+    const leftover = workspace.status().result!.leftoverPath!;
+    await expect(workspace.openOther(leftover)).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('暫存資料夾') });
+    expect(workspace.status().state).toBe('completed');
+    expect(existsSync(leftover)).toBe(true);
+  });
+
+  it('drops a committed journal whose original is the selected Vault, without moving jobs or deleting it', async () => {
+    const context = await setup();
+    const { source, root } = context;
+    const target = path.join(root, 'Moved');
+    await cp(source, target, { recursive: true });
+    const jobStore = await JobStore.open(context.jobsDir);
+    stores.push(jobStore);
+    const gated = gatedCapture(new Set([IDS[0]!]));
+    const first = await open(context, { jobStore, capture: gated.capture }, false);
+    await first.jobs.submitVideo(urlOf(IDS[0]!));
+    const left = await first.jobs.submitVideo(urlOf(IDS[1]!));
+    await expect.poll(() => gated.started.length).toBe(1);
+    gated.open();
+    await first.close();
+    await context.selection.write(source);
+    await writeFile(path.join(context.profile, MOVE_JOURNAL), JSON.stringify({
+      version: 1, vaultId: await readVaultId(source), source, target, staging: `${target}.moving-00000000-0000-4000-8000-000000000000`,
+      phase: 'switched', marker: null, emptyTarget: false, removal: null,
+    }));
+    const reopened = await open(context, { jobStore });
+    expect(reopened.status().vaultPath).toBe(source);
+    expect(existsSync(path.join(source, VAULT_MARKER))).toBe(true);
+    expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
+    expect((await reopened.jobs.whenSettled(left.job.id)).vaultPath).toBe(source);
+  });
+
+  it('finishes removing an original whose rename to the removal name never happened, and reports one it cannot remove', async () => {
+    for (const locked of [false, true]) {
+      const context = await setup(path.join('Parent', 'Vault'));
+      const { source, root } = context;
+      const target = path.join(root, 'Moved');
+      await cp(source, target, { recursive: true });
+      await context.selection.write(target);
+      await mkdir(context.profile, { recursive: true });
+      await writeFile(path.join(context.profile, MOVE_JOURNAL), JSON.stringify({
+        version: 1, vaultId: await readVaultId(source), source, target, staging: `${target}.moving-00000000-0000-4000-8000-000000000000`,
+        phase: 'cleaning', marker: null, emptyTarget: false, removal: `${source}.moved-00000000-0000-4000-8000-000000000001`,
+      }));
+      if (locked) {
+        await chmod(path.dirname(source), 0o555);
+        restore.push(() => chmod(path.dirname(source), 0o755));
+      }
+      const workspace = await open(context);
+      expect(workspace.status().vaultPath).toBe(target);
+      if (!locked) {
+        expect(existsSync(source)).toBe(false);
+        expect(await leftovers(path.dirname(source))).toEqual([]);
+        expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
+      } else {
+        expect(existsSync(path.join(source, VAULT_MARKER))).toBe(true);
+        const events = (await stores.at(-1)!.activity.query({}, { vaultPath: null })).events;
+        expect(events.find((event) => event.eventType === 'vault.move_cleanup_failed')?.message).toContain(source);
+      }
+    }
+  });
+
+  it('leaves an unfinished move alone when the location was fixed at startup', async () => {
+    const context = await setup();
+    await mkdir(context.profile, { recursive: true });
+    const journal = JSON.stringify({
+      version: 1, vaultId: await readVaultId(context.source), source: context.source, target: path.join(context.root, 'Moved'),
+      staging: `${path.join(context.root, 'Moved')}.moving-00000000-0000-4000-8000-000000000000`, phase: 'switched', marker: null, emptyTarget: false, removal: null,
+    });
+    await writeFile(path.join(context.profile, MOVE_JOURNAL), journal);
+    const workspace = await open(context, { fixedLocation: true });
+    expect(await readFile(path.join(context.profile, MOVE_JOURNAL), 'utf8')).toBe(journal);
+    expect(existsSync(path.join(context.source, VAULT_MARKER))).toBe(true);
+    const events = (await stores[0]!.activity.query({}, workspace.activityScope())).events;
+    expect(events.find((event) => event.eventType === 'vault.move_pending')).toMatchObject({ severity: 'warning' });
   });
 });
 
@@ -554,6 +732,32 @@ describe('Vault identity (A-08)', () => {
     await expect(workspace.openOther(context.root)).rejects.toMatchObject({ code: 'vault_unidentified' });
     const events = (await stores[0]!.activity.query({}, workspace.activityScope())).events;
     expect(events.find((event) => event.eventType === 'vault.unidentified')).toMatchObject({ severity: 'warning' });
+  });
+
+  it('never gives jobs recorded at a path to a Vault moved there, whether the move fails or succeeds', async () => {
+    const context = await setup();
+    const target = path.join(context.root, 'Moved');
+    await mkdir(context.jobsDir, { recursive: true });
+    const at = '2026-10-01T00:00:00.000Z';
+    await writeFile(path.join(context.jobsDir, 'jobs.json'), JSON.stringify({ version: 1, jobs: [{
+      id: 'legacy-at-target', kind: 'youtube.video', state: 'interrupted', phase: null, vaultPath: target, parentId: null,
+      source: { type: 'youtube', id: IDS[3], url: urlOf(IDS[3]!), title: null }, createdAt: at, startedAt: null, finishedAt: at, updatedAt: at,
+      progress: null, items: null, result: null, error: { code: 'interrupted', message: 'stopped' },
+      recovery: { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: at, lastResumedAt: null, lastStop: 'shutdown' },
+    }] }));
+    let fail = true;
+    const workspace = await open(context, { moveFaults: (phase) => { if (fail && phase === 'prepared') throw new Error('index'); } });
+    await workspace.move(target);
+    await settled(workspace);
+    expect(workspace.status().state).toBe('error');
+    expect(stores[0]!.get('legacy-at-target')!.vaultId).toBeUndefined();
+    fail = false;
+    await workspace.move(target);
+    await settled(workspace);
+    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target });
+    expect(stores[0]!.get('legacy-at-target')).toMatchObject({ state: 'interrupted' });
+    expect(stores[0]!.get('legacy-at-target')!.vaultId).toBeUndefined();
+    expect(() => workspace.jobs.get('legacy-at-target')).toThrow();
   });
 
   it('keeps a bounded list of locations per Vault', async () => {
