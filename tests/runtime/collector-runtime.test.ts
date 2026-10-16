@@ -489,6 +489,47 @@ describe('CollectorRuntime Vault setup', () => {
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('lets an Agent move the Vault, reopens the new location after restart and keeps the Agent entry (A-11)', async () => {
+    const search: TranscriptSearch = {
+      status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
+      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
+    };
+    const base = await options({ capture: vi.fn() }, search);
+    const { explicitVaultPath: _explicit, ...value } = base.value;
+    const setup = { ...base, value };
+    await writeVaultMarker(await mkdir(setup.vaultPath, { recursive: true }).then(() => setup.vaultPath), 'XR Collector test');
+    await writeFile(path.join(setup.value.profilePath, 'vault-selection.json'), JSON.stringify({ path: setup.vaultPath }));
+    const first = await CollectorRuntime.start(setup.value);
+    const agent = await agentClient(setup.value.connectionFile);
+    const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-moved`);
+    cleanups.push(() => rm(target, { recursive: true, force: true }));
+    const moved = await agent('/api/vault/move', { targetPath: target });
+    expect(moved.status).toBe(202);
+    await expect.poll(async () => (await (await agent('/api/vault/status')).json()).state, { timeout: 10_000 }).toBe('completed');
+    expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));
+    await first.close();
+
+    const second = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => second.close());
+    expect(second.status()).toMatchObject({ state: 'ready', vaultPath: path.resolve(target) });
+    const again = await agentClient(setup.value.connectionFile);
+    expect((await (await again('/api/health')).json()).runtime).toMatchObject({ instanceId: second.instanceId, vaultPath: path.resolve(target) });
+    await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 20_000);
+
+  it('refuses to move or switch a Vault the app was started with (A-10)', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => runtime.close());
+    const status = await (await fetch(`${runtime.server.url}/api/vault/status`)).json();
+    expect(status.relocationUnavailable).toMatchObject({ code: 'vault_location_fixed' });
+    const refused = await fetch(`${runtime.server.url}/api/vault/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: setup.value.profilePath }),
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe('vault_location_fixed');
+  });
+
   it('reports a damaged selection file or Vault as Not Ready', async () => {
     const setup = await selected();
     await writeFile(path.join(setup.value.profilePath, 'vault-selection.json'), '{');

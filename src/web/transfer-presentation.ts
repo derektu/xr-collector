@@ -30,7 +30,24 @@ export function fileName(filePath: string): string {
 export function sizeLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+/** The move target for a chosen parent folder: the parent with the Vault folder's own name. */
+export function moveTargetIn(parent: string, vaultPath: string): string {
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
+  return `${parent.replace(/[\\/]+$/u, '')}${separator}${fileName(vaultPath.replace(/[\\/]+$/u, ''))}`;
+}
+
+/** The button that shows a folder in the file manager of `platform` (a Node.js platform name). */
+export function revealLabel(platform: string): string {
+  return platform === 'darwin' ? '在 Finder 顯示' : platform === 'win32' ? '在檔案總管顯示' : '在檔案管理員顯示';
+}
+
+/** The operations that switch the Vault in use and therefore reload the app when they complete. */
+export function relocates(status: Pick<TransferStatus, 'operation'> | null): boolean {
+  return status?.operation === 'move' || status?.operation === 'open';
 }
 
 /** Whether a transfer is still running and the dialog should keep polling. */
@@ -40,7 +57,7 @@ export function transferRunning(status: Pick<TransferStatus, 'state'> | null): b
 
 /** One line of progress: the status message with the file count while files are written. */
 export function progressText(status: Pick<TransferStatus, 'state' | 'message' | 'completedFiles' | 'totalFiles'>): string {
-  return status.state === 'extracting' && status.totalFiles > 0
+  return (status.state === 'extracting' || status.state === 'copying') && status.totalFiles > 0
     ? `${status.message}（${status.completedFiles}／${status.totalFiles}）`
     : status.message;
 }

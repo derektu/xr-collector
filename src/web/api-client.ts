@@ -11,6 +11,7 @@ import type {
   JobSubmission,
   MergeChoice,
   MergePreview,
+  MoveCheck,
   TransferStatus,
   SavedDocument,
   SearchQuery,
@@ -309,7 +310,22 @@ export const api = {
     await request('/api/vault/merge/cancel', { method: 'POST', body: JSON.stringify({ id }) });
   },
 
-  /** Cancels a backup, restore or merge that is still waiting for collection steps. */
+  /** Checks a new location for the active Vault without moving it; refusals arrive as `ApiError`. */
+  checkVaultMove(targetPath: string, signal?: AbortSignal): Promise<MoveCheck> {
+    return request<MoveCheck>('/api/vault/move/check', { method: 'POST', body: JSON.stringify({ targetPath }), signal });
+  },
+
+  /** Moves the active Vault to `targetPath` and continues its work there; follow `vaultTransferStatus`. */
+  moveVault(targetPath: string): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/move', { method: 'POST', body: JSON.stringify({ targetPath }) });
+  },
+
+  /** Switches to another existing Vault; follow `vaultTransferStatus`. */
+  openOtherVault(path: string): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/open', { method: 'POST', body: JSON.stringify({ path }) });
+  },
+
+  /** Cancels a Vault operation that is still waiting for collection steps. */
   cancelTransfer(): Promise<TransferStatus> {
     return request<TransferStatus>('/api/vault/cancel', { method: 'POST' });
   },

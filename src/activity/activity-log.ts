@@ -41,9 +41,23 @@ export interface ActivityLogOptions {
   lookupJob?: (id: string) => CollectionJob | undefined;
 }
 
-/** Which Vault's activity a query reads: one Vault (with Vault-less events), or every event when null. */
+/**
+ * Which Vault's activity a query reads: one Vault (with Vault-less events), or every event when
+ * `vaultPath` is null. An event that carries a Vault ID belongs to the Vault with that ID wherever it
+ * was recorded; an event without one belongs to the Vault at its path, which includes the locations
+ * the Vault was moved from (`previousPaths`). `vaultId` null means the Vault has no ID, so events of
+ * Vaults with IDs are not its own; leaving it out compares paths only.
+ */
 export interface ActivityScope {
   vaultPath: string | null;
+  vaultId?: string | null;
+  previousPaths?: readonly string[];
+}
+
+function inScope(event: JobEvent, scope: ActivityScope): boolean {
+  if (scope.vaultPath === null || event.vaultPath === null) return true;
+  if (scope.vaultId !== undefined && event.vaultId) return event.vaultId === scope.vaultId;
+  return event.vaultPath === scope.vaultPath || (scope.previousPaths ?? []).includes(event.vaultPath);
 }
 
 interface CachedFile {
@@ -149,7 +163,7 @@ export class ActivityLog {
     const matches: JobEvent[] = [];
     for (const stored of await this.readAll()) {
       if (stored.timestamp < cutoff) continue;
-      if (scope.vaultPath !== null && stored.vaultPath !== null && stored.vaultPath !== scope.vaultPath) continue;
+      if (!inScope(stored, scope)) continue;
       const event = this.enrich(stored, lookup);
       if (!matchesQuery(event, query, lookup)) continue;
       if (after && compareEvents(event, after) >= 0) continue;
@@ -383,6 +397,7 @@ function parseEvent(line: string): JobEvent | null {
       ...value,
       severity: value.severity === 'warning' || value.severity === 'error' ? value.severity : 'info',
       vaultPath: typeof value.vaultPath === 'string' ? value.vaultPath : null,
+      ...(typeof value.vaultId === 'string' ? { vaultId: value.vaultId } : { vaultId: undefined }),
       jobId: typeof value.jobId === 'string' ? value.jobId : null,
       // Timestamps compare as text, so every one is stored in the same UTC form.
       timestamp: new Date(value.timestamp).toISOString(),

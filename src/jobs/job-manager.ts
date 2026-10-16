@@ -20,6 +20,7 @@ import {
   type JobResult,
   type JobRetry,
   type JobState,
+  type JobStopKind,
   type JobSubmission,
   type JobSummary,
   type SkipReason,
@@ -92,6 +93,8 @@ export function settingsFromScope(scope: ChannelJobScope | undefined, acceptedAt
 export interface JobManagerOptions {
   /** The Vault every job of this manager writes to. */
   vaultPath: string;
+  /** ID of that Vault; null for a Vault without an ID, whose jobs are then known by path alone. */
+  vaultId?: string | null;
   store: JobStore;
   source: YouTubeSource;
   documents: Collector;
@@ -173,6 +176,17 @@ export class JobManager {
 
   get vaultPath(): string { return this.options.vaultPath; }
 
+  private get vaultId(): string | null { return this.options.vaultId ?? null; }
+
+  private vaultTag(): { vaultId?: string } {
+    return this.vaultId ? { vaultId: this.vaultId } : {};
+  }
+
+  /** Whether a stored job belongs to this manager's Vault: the same path and the same Vault ID. */
+  private owns(job: CollectionJob): boolean {
+    return job.vaultPath === this.options.vaultPath && (job.vaultId ?? null) === this.vaultId;
+  }
+
   /** Accepts a pasted video or channel address according to its syntax. */
   async submit(url: string): Promise<JobSubmission> {
     const input = classifyYouTubeInput(url);
@@ -212,7 +226,7 @@ export class JobManager {
 
   get(id: string): CollectionJob {
     const job = this.options.store.get(id);
-    if (!job || job.vaultPath !== this.options.vaultPath) {
+    if (!job || !this.owns(job)) {
       throw new CollectorError('job_not_found', '找不到這個收集工作。');
     }
     return publicJob(job);
@@ -221,7 +235,7 @@ export class JobManager {
   /** Top-level jobs, newest first. Videos a channel job started appear as that job's items. */
   list(query: JobListQuery = {}): JobPage {
     const limit = query.limit ?? 20;
-    let jobs = this.options.store.list(this.options.vaultPath).filter((job) => job.parentId === null);
+    let jobs = this.options.store.list(this.options.vaultPath, this.vaultId).filter((job) => job.parentId === null);
     if (query.state === 'active') jobs = jobs.filter((job) => ACTIVE.has(job.state));
     if (query.cursor) {
       const index = jobs.findIndex((job) => job.id === query.cursor);
@@ -238,7 +252,7 @@ export class JobManager {
    */
   channelJobs(): Map<string, CollectionJob[]> {
     const byChannel = new Map<string, CollectionJob[]>();
-    for (const job of this.options.store.list(this.options.vaultPath)) {
+    for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
       if (job.kind !== 'youtube.channel' || !job.source.id) continue;
       const jobs = byChannel.get(job.source.id) ?? [];
       jobs.push(job);
@@ -292,7 +306,7 @@ export class JobManager {
    */
   async retry(id: string): Promise<JobSubmission> {
     const job = this.options.store.get(id);
-    if (!job || job.vaultPath !== this.options.vaultPath) throw new CollectorError('job_not_found', '找不到這個收集工作。');
+    if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
     if (job.parentId !== null) {
       throw new CollectorError('job_not_retryable', '頻道收集中的影片隨頻道工作處理，請重試頻道工作。');
     }
@@ -341,7 +355,7 @@ export class JobManager {
   summary(since: string): JobSummary {
     const bound = new Date(since).toISOString();
     const summary: JobSummary = { active: 0, completed: 0, failed: 0, since: bound };
-    for (const job of this.options.store.list(this.options.vaultPath)) {
+    for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
       if (job.parentId !== null) continue;
       if (ACTIVE.has(job.state)) summary.active += 1;
       else if (!job.finishedAt || job.finishedAt < bound) continue;
@@ -353,7 +367,7 @@ export class JobManager {
 
   /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
   recordEvent(entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
-    this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, jobId: null });
+    this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, ...this.vaultTag(), jobId: null });
   }
 
   /**
@@ -433,7 +447,7 @@ export class JobManager {
     const pending: CollectionJob[] = [];
     const seen = new Set<string>();
     // The list is newest first, so a job whose key was already seen has a later job of the same target.
-    for (const job of store.list(this.options.vaultPath)) {
+    for (const job of store.list(this.options.vaultPath, this.vaultId)) {
       const key = jobKey(job);
       const later = seen.has(key);
       seen.add(key);
@@ -571,7 +585,9 @@ export class JobManager {
     this.event(job, {
       severity: 'info', eventType: 'job.resumed', stopReason,
       message: stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
-        : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。' : '服務重新啟動後接續收集工作。',
+        : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。'
+          : stopReason === 'vault_move' ? '知識庫搬移完成，接續收集工作。'
+            : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。',
     });
     if (waitsForVideos || !options.queue) return job;
     const waitMs = job.retry?.nextAttemptAt ? new Date(job.retry.nextAttemptAt).getTime() - this.now().getTime() : 0;
@@ -596,13 +612,13 @@ export class JobManager {
 
   /**
    * Stops starting work, waits for running steps, and records what is left as interrupted with
-   * `reason`, which says why the jobs stopped.
+   * `reason`, which says why the jobs stopped, and `stop`, the kind of stop.
    */
-  async close(reason = '服務停止時工作尚未完成；已保存的內容保留。'): Promise<void> {
+  async close(reason = '服務停止時工作尚未完成；已保存的內容保留。', stop: JobStopKind = 'shutdown'): Promise<void> {
     this.closed = true;
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
-      this.options.store.interrupt(job, reason, { stop: 'shutdown' });
+      this.options.store.interrupt(job, reason, { stop });
       this.release(job);
       this.notifySettled(this.options.store.get(job.id)!);
     }
@@ -662,6 +678,7 @@ export class JobManager {
       state: 'queued',
       phase: null,
       vaultPath: this.options.vaultPath,
+      ...this.vaultTag(),
       parentId,
       source: { type: 'youtube', ...source },
       createdAt: timestamp,
@@ -1112,7 +1129,7 @@ export class JobManager {
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     const subscriptionId = this.subscriptionOf(job);
     this.options.store.event({
-      ...entry, vaultPath: job.vaultPath, jobId: job.id,
+      ...entry, vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
       ...(job.source.id ? { sourceId: job.source.id } : {}),
       ...(job.source.title ? { sourceTitle: job.source.title } : {}),
       ...(subscriptionId ? { subscriptionId } : {}),

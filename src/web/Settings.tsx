@@ -3,6 +3,7 @@ import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
 import { BackupSection } from './VaultBackup.js';
+import { VaultLocationSection } from './VaultLocation.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
@@ -31,11 +32,7 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
-      <section className="settings-section" data-testid="settings-vault">
-        <h2>知識庫</h2>
-        <code className="setting-path">{vaultPath}</code>
-        {counts ? <p className="hint">{counts.documents} 份文件・{counts.sources} 個來源</p> : null}
-      </section>
+      <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} />
       {vaultPath ? <BackupSection vaultPath={vaultPath} activeJobs={activeJobs} onChanged={onChanged} /> : null}
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">

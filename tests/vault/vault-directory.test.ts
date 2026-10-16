@@ -73,8 +73,8 @@ describe('createVaultDirectory', () => {
     expect(marker).toEqual({
       format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector 9.9.9',
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/u),
+      id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     });
-    expect(Object.keys(marker)).not.toContain('id');
     expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'existing', documentCount: 0 });
   });
 
