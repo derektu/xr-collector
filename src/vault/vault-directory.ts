@@ -170,29 +170,30 @@ export async function readVaultId(root: string): Promise<string | null> {
 }
 
 /**
- * Returns the Vault's ID, giving a Vault without one a new ID first. The marker is replaced through a
- * temporary file and keeps every other field. A Vault whose marker cannot be written opens without
- * an ID: the failure is logged and null returned, so a read-only Vault still opens.
+ * Returns the Vault's ID, giving a Vault without one a new ID first; `created` says this call wrote
+ * it. The marker is replaced through a temporary file and keeps every other field. A Vault whose
+ * marker cannot be written opens without an ID: the failure is logged and the ID is null, so a
+ * read-only Vault still opens.
  */
-export async function ensureVaultId(root: string): Promise<string | null> {
+export async function ensureVaultId(root: string): Promise<{ id: string | null; created: boolean }> {
   const markerFile = path.join(root, VAULT_MARKER);
   let marker: Record<string, unknown>;
   try {
     marker = JSON.parse(await readFile(markerFile, 'utf8')) as Record<string, unknown>;
   } catch (error) {
     console.warn(`Unable to read the Vault marker of ${root}`, error);
-    return null;
+    return { id: null, created: false };
   }
-  if (typeof marker.id === 'string' && VAULT_ID.test(marker.id)) return marker.id;
+  if (typeof marker.id === 'string' && VAULT_ID.test(marker.id)) return { id: marker.id, created: false };
   const id = randomUUID();
   const temporary = `${markerFile}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify({ ...marker, id }, null, 2)}\n`, { flag: 'wx' });
     await rename(temporary, markerFile);
-    return id;
+    return { id, created: true };
   } catch (error) {
     console.warn(`Unable to give the Vault at ${root} an ID; it opens without one`, error);
     await rm(temporary, { force: true }).catch(() => undefined);
-    return null;
+    return { id: null, created: false };
   }
 }

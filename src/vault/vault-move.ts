@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import { access, chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, statfs, utimes } from 'node:fs/promises';
+import { access, chmod, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, statfs, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import type { JobStore } from '../jobs/job-store.js';
 import { inspectVaultDirectory, readVaultId, VAULT_MARKER } from './vault-directory.js';
-import { isWithin, markerDigest, writePackageFile, type ProtectedFolders } from './transfer-files.js';
+import { isWithin, isWorkFolder, markerDigest, resolved, writePackageFile, type ProtectedFolders, type RealPath } from './transfer-files.js';
 
 /**
  * Files of a Vault move: checking the new location, copying and verifying the Vault, the profile
@@ -92,27 +92,38 @@ export interface MoveTarget {
   availableBytes: number;
 }
 
+/** How `checkMoveTarget` reads the file system; tests replace either to stand for another volume. */
+export interface MoveCheckSystem {
+  free?: StatFs | undefined;
+  real?: RealPath | undefined;
+}
+
 /**
  * Checks the new location of a move: an absolute path that does not exist yet (in an existing,
- * writable folder) or is an empty folder; not a symbolic link; not the active Vault, inside it or
- * containing it; not inside the profile or another Vault; on a volume with room for the Vault plus
- * the margin. Locations are compared after resolving symbolic links, which also folds letter case on
- * a case-insensitive volume.
+ * writable folder) or is an empty folder; not a symbolic link or a working folder of a move or
+ * restore; not the active Vault, inside it or containing it; not inside the profile or another
+ * Vault; on a volume with room for the Vault plus the margin. Locations and their ancestors are
+ * compared after resolving symbolic links, which also folds letter case on a case-insensitive volume.
  */
 export async function checkMoveTarget(
-  value: unknown, folders: ProtectedFolders, vaultBytes: number, free: StatFs = statfs,
+  value: unknown, folders: ProtectedFolders, vaultBytes: number, system: MoveCheckSystem = {},
 ): Promise<MoveTarget> {
+  const real = system.real ?? realpath;
   if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value)) invalid('請提供新位置的完整路徑。');
   const target = path.resolve(value as string);
+  if (isWorkFolder(target)) invalid('這是搬移或還原使用的暫存資料夾，請選擇其他位置。');
   if ((await lstatOrNull(target))?.isSymbolicLink()) invalid('新位置不能是符號連結，請選擇實際的資料夾。');
-  if (await isWithin(target, folders.vaultRoot)) {
-    invalid(await isWithin(folders.vaultRoot, target) ? '新位置就是目前的知識庫，請選擇其他位置。' : '新位置不能在目前的知識庫裡。');
+  if (await isWithin(target, folders.vaultRoot, real)) {
+    invalid(await isWithin(folders.vaultRoot, target, real) ? '新位置就是目前的知識庫，請選擇其他位置。' : '新位置不能在目前的知識庫裡。');
   }
-  if (await isWithin(folders.vaultRoot, target)) invalid('新位置不能包含目前的知識庫。');
-  if (await isWithin(target, folders.profilePath)) invalid('新位置不能放在程式資料目錄裡。');
-  for (let ancestor = path.dirname(target); ; ancestor = path.dirname(ancestor)) {
-    if (await lstatOrNull(path.join(ancestor, VAULT_MARKER))) invalid('新位置不能放在另一個知識庫裡。');
-    if (path.dirname(ancestor) === ancestor) break;
+  if (await isWithin(folders.vaultRoot, target, real)) invalid('新位置不能包含目前的知識庫。');
+  if (await isWithin(target, folders.profilePath, real)) invalid('新位置不能放在程式資料目錄裡。');
+  // Both the written ancestors and the real ones: a symbolic link may lead into another Vault.
+  for (const start of new Set([path.dirname(target), path.dirname(await resolved(target, real))])) {
+    for (let ancestor = start; ; ancestor = path.dirname(ancestor)) {
+      if (await lstatOrNull(path.join(ancestor, VAULT_MARKER))) invalid('新位置不能放在另一個知識庫裡。');
+      if (path.dirname(ancestor) === ancestor) break;
+    }
   }
   const inspection = await inspectVaultDirectory(target);
   if (inspection.kind === 'existing') invalid('這個位置已經有另一個知識庫，搬移不會覆蓋它。請選擇不存在或空的資料夾。');
@@ -125,7 +136,7 @@ export async function checkMoveTarget(
     invalid('沒有權限寫入新位置。');
   }
   const requiredBytes = vaultBytes + moveMargin(vaultBytes);
-  const space = await free(await nearestExisting(target));
+  const space = await (system.free ?? statfs)(await nearestExisting(target));
   const availableBytes = Number(space.bavail) * Number(space.bsize);
   if (availableBytes < requiredBytes) {
     throw new CollectorError('insufficient_space',
@@ -285,13 +296,42 @@ export interface MoveRecovery {
   reboundJobs: number;
   /** What could not be removed; null when nothing is left. */
   leftover: string | null;
+  /**
+   * The original location or its removal folder is the Vault being opened or selected, so the
+   * journal was dropped without touching jobs or folders.
+   */
+  released: boolean;
+}
+
+/** Whether a kept Vault is one of `folders` or inside it. */
+async function anyKeptIn(kept: readonly (string | null)[], folders: readonly (string | null)[]): Promise<boolean> {
+  for (const folder of folders) {
+    if (!folder) continue;
+    for (const candidate of kept) if (candidate && await isWithin(candidate, folder)) return true;
+  }
+  return false;
+}
+
+/** Whether `root` is the source or removal folder of the move recorded in the profile, or inside one. */
+export async function belongsToMove(profilePath: string, root: string): Promise<boolean> {
+  const journal = await readMoveJournal(profilePath);
+  if (!journal || journal === 'unreadable') return false;
+  return anyKeptIn([root], [typeof journal.source === 'string' ? journal.source : null,
+    typeof journal.removal === 'string' ? journal.removal : null]);
+}
+
+/** Whether the profile records a move in progress. */
+export async function hasMoveJournal(profilePath: string): Promise<boolean> {
+  return (await readMoveJournal(profilePath)) !== null;
 }
 
 /**
  * Takes a move that a stop interrupted forward or back, before any Vault opens. The move counts as
- * committed when its journal reached `switched` or the device selection names its target; then its
- * jobs are recorded at the target and the original location is removed, unless the original is the
- * selection or the Vault being opened (`kept`). Otherwise the staging folder is removed, a placed
+ * committed when its journal reached `switched` or the device selection names its target. When the
+ * original or its removal folder is the selection or the Vault being opened (`kept`), the journal is
+ * dropped and nothing else changes. Otherwise a committed move records its jobs at the target and
+ * removes the original location: by deleting the removal folder, or, when the rename to it never
+ * happened, by renaming and deleting an original that still carries the moved Vault's ID. Otherwise the staging folder is removed, a placed
  * target carrying the moved marker is taken back (leaving an empty folder where the move found one),
  * and the target's search database is removed. A journal naming folders the move did not create is
  * dropped without touching them.
@@ -329,18 +369,29 @@ export async function recoverMove(
     }
     await options.removeSearch(record.target);
     await clearMoveJournal(profilePath);
-    return { committed, vaultId: record.vaultId, source: record.source, target: record.target, reboundJobs: 0, leftover: null };
+    return { committed, vaultId: record.vaultId, source: record.source, target: record.target, reboundJobs: 0, leftover: null, released: false };
+  }
+  const result = { committed, vaultId: record.vaultId, source: record.source, target: record.target };
+  // The original, or its removal folder, is in use again: the move no longer owns it or its jobs.
+  if (await anyKeptIn(options.kept, [record.source, record.removal])) {
+    await clearMoveJournal(profilePath);
+    return { ...result, reboundJobs: 0, leftover: null, released: true };
   }
   const reboundJobs = options.jobStore.rebind(record.source, record.target, record.vaultId);
   await options.jobStore.flush();
-  await writeMoveJournal(profilePath, { ...record, phase: record.removal ? 'cleaning' : 'switched' });
-  if (!record.removal && (options.kept.includes(record.source) || await readVaultId(record.source) !== record.vaultId)) {
-    // The original is in use again, or something else now sits there: it is not the move's to remove.
-    await clearMoveJournal(profilePath);
-    return { committed, vaultId: record.vaultId, source: record.source, target: record.target, reboundJobs, leftover: null };
+  let removal = record;
+  if (record.removal && !await lstatOrNull(record.removal)) {
+    // Stopped after recording the removal name and before the rename: the original may still be whole.
+    removal = { ...record, phase: 'switched', removal: null };
   }
-  const { leftover } = await removeOriginal(profilePath, record);
-  return { committed, vaultId: record.vaultId, source: record.source, target: record.target, reboundJobs, leftover };
+  await writeMoveJournal(profilePath, { ...removal, phase: removal.removal ? 'cleaning' : 'switched' });
+  if (!removal.removal && await readVaultId(removal.source) !== removal.vaultId) {
+    // Nothing of the move is left at the original location, or something else now sits there.
+    await clearMoveJournal(profilePath);
+    return { ...result, reboundJobs, leftover: null, released: false };
+  }
+  const { leftover } = await removeOriginal(profilePath, removal);
+  return { ...result, reboundJobs, leftover, released: false };
 }
 
 /**
