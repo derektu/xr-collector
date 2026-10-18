@@ -93,7 +93,7 @@ Authorization: Bearer <token>
 - 404 `document_not_found`：文件已不存在，重新 browse/search。404 `document_deleted`：使用者刪除了這份文件；讀取或再次刪除都會得到這個結果，要重新取得須由使用者確認後以單支影片網址收集。404 `channel_not_found`／`job_not_found`：重新取得目前頻道或工作列表。409 `job_not_retryable`：工作不可重試，查看它的 `retriedBy`；頻道底下的影片改為重試它的 `parentId` 頻道工作。409 `channel_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_channel`：依參數或網址格式修正請求；400 `unsupported_url`：播放清單不支援，請改用單支影片網址。409 `vault_busy`：等待目前收集步驟或資料交換完成後重試；Vault 匯出與合併比對等待執行中的收集步驟超過 2 分鐘時也回 409（還原與套用合併見 status 的 `errorCode`）。409 `file_exists`：匯出位置已有檔案，經使用者同意後帶 `overwrite: true`。409 `transfer_cancelled`：資料交換在等待收集步驟時被取消，資料未變更。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。503 `rate_limited`：YouTube 暫時限制連線，在 `error.retryAt` 之後再試；不要在冷卻期間反覆呼叫。409 `vault_location_fixed`：不能搬移或開啟其他 Vault，原因見 status 的 `relocationUnavailable`。507 `insufficient_space`：搬移或還原目標的可用空間不足，請使用者改選位置或釋出空間。
 - 工作的 `error.code` 沿用擷取錯誤：`no_subtitles`、`video_unavailable` 為來源本身的結果，重試通常不會改變；`network_error` 表示自動重試已用完，`capture_failed` 不自動重試，兩者都可稍後以 `POST /api/jobs/:id/retry` 重試。
 - 503 `vault_not_ready`：尚未設定 Vault，或先前選擇的 Vault 無法使用。依「Vault 設定」處理，不要自行建立替代路徑或重試寫入。
-- 422 `vault_invalid`：目錄不能建立或開啟為知識庫，`message` 說明原因。請使用者改選目錄，不要修改目錄內容。409 `vault_already_set`：已經有使用中的知識庫，不需再設定。
+- 422 `vault_invalid`：目錄不能建立或開啟為知識庫，`message` 說明原因。請使用者改選目錄，不要修改目錄內容。文件列表、搜尋狀態或匯出遇到讀不出來的文件檔時也回這個錯誤，`message` 帶該檔案路徑；告知使用者修正或移除該檔案，不要自行修改。409 `vault_already_set`：已經有使用中的知識庫，不需再設定。
 
 ## 訂閱與自動收集
 

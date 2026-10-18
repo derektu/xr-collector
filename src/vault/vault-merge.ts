@@ -87,13 +87,11 @@ async function channels(files: FileSource): Promise<Map<string, YouTubeChannel>>
 }
 
 /**
- * The added time, check times and out-of-range videos describe collection, not the subscription
- * choice, so they never conflict; the title, URL, paused state and settings do.
+ * What a person chooses between for a subscription: its title, URL, paused state and settings.
+ * Collection progress, check times and fields the program does not use never conflict.
  */
-function subscriptionContent({
-  addedAt: _time, lastCheckedAt: _checked, outOfRange: _outOfRange, nextCheckAt: _next, lastDispatchedAt: _dispatched, ...rest
-}: YouTubeChannel): string {
-  return canonical(rest);
+function subscriptionContent({ title, url, enabled, settings }: YouTubeChannel): string {
+  return canonical({ title, url, enabled, settings });
 }
 
 /** Deletion records of one side by document ID. */

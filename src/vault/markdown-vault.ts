@@ -9,6 +9,7 @@ import type {
   SavedDocument,
   SubtitleKind,
 } from '../core/types.js';
+import { CollectorError } from '../core/types.js';
 import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
 import { documentKeyFromPath } from './document-paths.js';
 
@@ -53,9 +54,11 @@ function parseFrontmatter(content: string): { metadata: StoredMetadata; body: st
  * read as a document: unparseable frontmatter, an unsupported format, or an ID that differs from
  * the file name. Such a file is the Vault's own data gone bad, so listing and export stop and name it.
  */
-export class DocumentFileError extends Error {
+/** A file named as a document that is not one; listings and exports fail with its path. */
+export class DocumentFileError extends CollectorError {
   constructor(readonly file: string, options?: ErrorOptions) {
-    super(`Invalid document file: ${file}`, options);
+    super('vault_invalid', `知識庫文件無法讀取，請修正或移除這個檔案後再試：${file}`, options);
+    this.name = 'DocumentFileError';
   }
 }
 

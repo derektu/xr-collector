@@ -11,7 +11,7 @@ import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-stor
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
-import { DocumentFileError, MarkdownVault, parseDocument } from './markdown-vault.js';
+import { MarkdownVault, parseDocument } from './markdown-vault.js';
 import { VAULT_MARKER } from './vault-directory.js';
 import type { FileSource } from './vault-merge.js';
 
@@ -84,13 +84,7 @@ export interface RegisteredFiles {
  */
 export async function registeredFiles(root: string): Promise<RegisteredFiles> {
   const vault = new MarkdownVault(root);
-  let documents;
-  try {
-    documents = await vault.list();
-  } catch (error) {
-    if (error instanceof DocumentFileError) invalid(`知識庫文件無法讀取，請修正或移除這個檔案後再試：${error.file}`);
-    throw error;
-  }
+  const documents = await vault.list();
   const portable = await vault.portableDeletions();
   const files: RegisteredFile[] = [];
   for (const document of documents) {
@@ -188,7 +182,10 @@ export async function writePackage(
       const measure = new Measure(FILE_LIMIT, () => new CollectorError('invalid_request', `知識庫檔案超過 64 MiB，無法匯出：${entry.path}`));
       measure.on('end', () => rows.push({ path: entry.path, size: measure.size, sha256: measure.hash.digest('hex') }));
       const source = entry.bytes ? Readable.from([entry.bytes]) : createReadStream(entry.absolute!);
-      source.on('error', (error: Error) => measure.destroy(error));
+      source.on('error', (error: Error) => measure.destroy(
+        new CollectorError('invalid_request', `知識庫檔案在匯出途中無法讀取，請稍後再試：${entry.path}`, { cause: error })));
+      // The zip does not listen for errors of the streams it reads, so a failed file ends the output and with it the export.
+      measure.on('error', (error: Error) => output.destroy(error));
       done(null, source.pipe(measure));
     });
   }

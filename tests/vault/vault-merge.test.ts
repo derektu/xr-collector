@@ -183,6 +183,14 @@ describe('merge comparison and choices', () => {
     expect((await workspace.channels.listChannels()).find((channel) => channel.id === 'UCdiff')!.settings).toEqual(settings);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: true });
   });
+  it('does not list subscriptions that differ only in fields the program does not use', async () => {
+    const row = { id: 'UCold', title: '頻道', url: 'https://www.youtube.com/channel/UCold', enabled: true, addedAt: '2026-01-01',
+      settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } };
+    const channels = (extra: object) => new Map([['settings/youtube-channels.json',
+      Buffer.from(JSON.stringify({ version: 2, channels: [{ ...row, ...extra }] }))]]);
+    const items = await itemsOf(channels({ cursor: 'local-cursor', backlog: ['a'] }), channels({ cursor: 'incoming-cursor' }));
+    expect(items.map((item) => [item.key, item.state])).toEqual([['channel:UCold', 'same']]);
+  });
   it('refuses to merge documents whose source IDs differ in letter case alone', async () => {
     const { local, incoming, workspace } = await fixture();
     await add(local, 'Caseid00001', '大寫'); await add(incoming, 'caseid00001', '小寫');
