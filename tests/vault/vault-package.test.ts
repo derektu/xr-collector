@@ -157,7 +157,7 @@ describe('registered files only (PKG-02)', () => {
     const root = path.join(await temp(), 'Vault'); await seed(root);
     await writeFile(path.join(root, 'documents/youtube/abcdefghijk.md'), 'no frontmatter');
     await expect(new MarkdownVault(root).list()).rejects.toMatchObject({ file: 'documents/youtube/abcdefghijk.md' });
-    await expect(registeredFiles(root)).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
+    await expect(registeredFiles(root)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
     // A document whose ID differs from its file name is no document of that name.
     await writeFile(path.join(root, 'documents/youtube/abcdefghijk.md'), (await readFile(path.join(root, 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8')));
     await expect(registeredFiles(root)).rejects.toMatchObject({ message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
@@ -262,6 +262,61 @@ describe('large Vaults (PKG-04)', () => {
     await settled(workspace);
     expect(workspace.status()).toMatchObject({ state: 'error', errorCode: 'insufficient_space', vaultPath: root });
     expect(existsSync(path.join(at, 'Restored'))).toBe(false);
+  });
+});
+
+describe('files that fail while an export reads them', () => {
+  async function documentFile(root: string, id: string, body: string) {
+    const template = await readFile(path.join(root, `documents/youtube/${capture.videoId}.md`), 'utf8');
+    await writeFile(path.join(root, `documents/youtube/${id}.md`), template.replaceAll(capture.videoId, id).replace(/\n\n[\s\S]*$/u, `\n\n${body}\n`));
+  }
+  const leftovers = async (folder: string) => (await readdir(folder)).filter((name) => name.includes('.xr-vault'));
+
+  it('answers an export holding a document over 64 MiB with an error naming it and leaves no file', async () => {
+    const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
+    await documentFile(root, 'huge0000001', 'x'.repeat(65 * 1024 * 1024));
+    const workspace = await open(root);
+    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' }, payload: { path: path.join(at, 'out.xr-vault') },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.message).toContain('documents/youtube/huge0000001.md');
+      expect(await leftovers(at)).toEqual([]);
+      expect(workspace.status().state).toBe('error');
+    } finally { await app.close(); }
+  }, 60_000);
+
+  it('fails an export whose document disappears while it is written, naming the file and leaving none', async () => {
+    const at = await temp(); const root = path.join(at, 'Vault');
+    // The vanishing document is the oldest, so the export reads it last, after the large one.
+    await new MarkdownVault(root, { now: () => new Date('2020-01-01T00:00:00.000Z') })
+      .add({ ...capture, videoId: 'vanish00001', sourceUrl: 'https://www.youtube.com/watch?v=vanish00001' });
+    await new MarkdownVault(root).add(capture);
+    await documentFile(root, capture.videoId, createHash('sha256').update('seed').digest('hex').repeat(600_000));
+    const workspace = await open(root);
+    const exported = workspace.exportTo(path.join(at, 'out.xr-vault'));
+    await expect.poll(async () => (await leftovers(at)).length, { interval: 1 }).toBe(1);
+    await rm(path.join(root, 'documents/youtube/vanish00001.md'));
+    await expect(exported).rejects.toThrow('documents/youtube/vanish00001.md');
+    expect(await leftovers(at)).toEqual([]);
+  }, 60_000);
+});
+
+describe('document files that cannot be read', () => {
+  it('fails listings over HTTP with the path of the file', async () => {
+    const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
+    const workspace = await open(root);
+    await writeFile(path.join(root, 'documents/youtube/broken00001.md'), 'not a document');
+    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+    try {
+      for (const url of ['/api/documents', '/api/search/status']) {
+        const response = await app.inject({ url });
+        expect(response.statusCode).toBe(422);
+        expect(response.json().error).toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('documents/youtube/broken00001.md') });
+      }
+    } finally { await app.close(); }
   });
 });
 
