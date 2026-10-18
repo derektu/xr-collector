@@ -34,6 +34,11 @@ export function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+/** What an export left out: files in the Vault folder that belong to no record of the Vault. */
+export function unregisteredText(count: number): string {
+  return `知識庫資料夾中有 ${count} 個不屬於知識庫的檔案沒有包含在備份裡。`;
+}
+
 /** The move target for a chosen parent folder: the parent with the Vault folder's own name. */
 export function moveTargetIn(parent: string, vaultPath: string): string {
   const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
@@ -63,9 +68,9 @@ export function progressText(status: Pick<TransferStatus, 'state' | 'message' | 
 }
 
 const GROUP_TITLES: Record<MergeItem['kind'], string> = {
-  document: '文件', channel: '訂閱', deletion: '刪除紀錄', file: '其他檔案',
+  document: '文件', channel: '訂閱', deletion: '刪除紀錄',
 };
-const GROUP_ORDER: MergeItem['kind'][] = ['document', 'channel', 'deletion', 'file'];
+const GROUP_ORDER: MergeItem['kind'][] = ['document', 'channel', 'deletion'];
 
 export interface MergeGroup {
   kind: MergeItem['kind'];
@@ -105,7 +110,6 @@ export function choiceText(item: MergeItem): { summary: string; local: string; i
       document: '備份中的新文件，會加入知識庫。',
       channel: '備份中的新訂閱，會連同它的收集設定與進度加入。',
       deletion: '備份中的刪除紀錄，這份文件以後不會被自動收集抓回。',
-      file: '備份中的新檔案，會加入知識庫。',
     };
     return { summary: added[item.kind], local: '', incoming: '' };
   }
@@ -117,8 +121,7 @@ export function choiceText(item: MergeItem): { summary: string; local: string; i
   if (item.kind === 'channel') {
     return { summary: '兩邊的名稱、網址、暫停狀態或收集設定不同；收集進度一律保留本機。', local: '保留本機設定', incoming: '採用備份設定' };
   }
-  if (item.kind === 'document') return { summary: '兩邊的內容不同。', local: '保留本機版本', incoming: '採用備份版本' };
-  return { summary: '兩邊的檔案內容不同。', local: '保留本機版本', incoming: '採用備份版本' };
+  return { summary: '兩邊的內容不同。', local: '保留本機版本', incoming: '採用備份版本' };
 }
 
 /** "本機 2026-10-01 14:03:05・備份 2026-10-02 09:00:00", for the times an item has. */

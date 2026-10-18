@@ -10,7 +10,8 @@ import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createVaultDirectory, readVaultId, VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { checkMoveTarget, MOVE_JOURNAL, previousLocations, recordPreviousLocation } from '../../src/vault/vault-move.js';
-import { exportVault } from '../../src/vault/vault-package.js';
+import { inspectVaultDirectory } from '../../src/vault/vault-directory.js';
+import { packageBytes, packageFiles } from './package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace, type MoveFault, type WorkspaceOptions } from '../../src/vault/workspace.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
@@ -215,7 +216,7 @@ describe('move target checks (A-01)', () => {
     await expect(workspace.checkMove(path.join(root, 'LinkSub', 'New'))).rejects.toMatchObject({ message: expect.stringContaining('另一個知識庫裡') });
     const working = path.join(root, 'Vault.moved-00000000-0000-4000-8000-000000000000');
     await expect(workspace.checkMove(working)).rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
-    await expect(workspace.restore(await exportVault(context.source), path.join(root, 'X.restoring-00000000-0000-4000-8000-000000000000')))
+    await expect(workspace.restore(await packageBytes(context.source), path.join(root, 'X.restoring-00000000-0000-4000-8000-000000000000')))
       .rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
     expect(workspace.status().vaultPath).toBe(context.source);
   });
@@ -668,7 +669,7 @@ describe('Vault identity (A-08)', () => {
     gated.open();
     await a.close();
     expect(jobStore.get(left.job.id)).toMatchObject({ state: 'interrupted', vaultId: await readVaultId(source) });
-    expect((await exportVault(source)).toString()).not.toContain(VAULT_MARKER);
+    expect([...(await packageFiles(await packageBytes(source))).keys()]).not.toContain(VAULT_MARKER);
     // A copy of A elsewhere carries the same ID but is not where the job was accepted.
     const copy = path.join(root, 'Copy');
     await cp(source, copy, { recursive: true });
@@ -677,7 +678,7 @@ describe('Vault identity (A-08)', () => {
     await copied.close();
     expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
     // Another Vault restored at A's path after A is gone does not take the job either.
-    const backup = await exportVault(source);
+    const backup = await packageBytes(source);
     await rm(source, { recursive: true });
     const other = path.join(root, 'Other');
     await createVaultDirectory(other, 'XR Collector test');
@@ -696,42 +697,15 @@ describe('Vault identity (A-08)', () => {
     expect((await back.jobs.whenSettled(left.job.id)).state).toBe('completed');
   });
 
-  it('gives a Vault without an ID one when it opens, and its earlier jobs stay with it', async () => {
+  it('refuses a Vault whose marker has no ID and leaves the marker as it was', async () => {
     const context = await setup();
     const marker = JSON.parse(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')) as Record<string, unknown>;
     delete marker.id;
-    await writeFile(path.join(context.source, VAULT_MARKER), JSON.stringify(marker));
-    await mkdir(context.jobsDir, { recursive: true });
-    const at = '2026-10-01T00:00:00.000Z';
-    await writeFile(path.join(context.jobsDir, 'jobs.json'), JSON.stringify({ version: 1, jobs: [{
-      id: 'legacy-job', kind: 'youtube.video', state: 'interrupted', phase: null, vaultPath: context.source, parentId: null,
-      source: { type: 'youtube', id: IDS[2], url: urlOf(IDS[2]!), title: null }, createdAt: at, startedAt: null, finishedAt: at, updatedAt: at,
-      progress: null, items: null, result: null, error: { code: 'interrupted', message: 'stopped' },
-      recovery: { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: at, lastResumedAt: null, lastStop: 'shutdown' },
-    }] }));
-    const workspace = await open(context);
-    const id = await readVaultId(context.source);
-    expect(id).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(JSON.parse(await readFile(path.join(context.source, VAULT_MARKER), 'utf8'))).toEqual({ ...marker, id });
-    expect((await workspace.jobs.whenSettled('legacy-job')).state).toBe('completed');
-    expect(workspace.jobs.get('legacy-job').vaultId).toBe(id);
-  });
-
-  it.skipIf(process.getuid?.() === 0)('opens a read-only Vault without an ID, warns, and refuses to move or switch it', async () => {
-    const context = await setup();
-    const marker = JSON.parse(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')) as Record<string, unknown>;
-    delete marker.id;
-    await writeFile(path.join(context.source, VAULT_MARKER), JSON.stringify(marker));
-    await chmod(context.source, 0o555);
-    restore.push(() => chmod(context.source, 0o755));
-    const workspace = await open(context);
-    expect(await readVaultId(context.source)).toBeNull();
-    expect(workspace.status().relocationUnavailable).toMatchObject({ code: 'vault_unidentified', message: expect.stringContaining('識別碼') });
-    expect((await workspace.collector.list()).length).toBe(1);
-    await expect(workspace.move(path.join(context.root, 'Moved'))).rejects.toMatchObject({ code: 'vault_unidentified' });
-    await expect(workspace.openOther(context.root)).rejects.toMatchObject({ code: 'vault_unidentified' });
-    const events = (await stores[0]!.activity.query({}, workspace.activityScope())).events;
-    expect(events.find((event) => event.eventType === 'vault.unidentified')).toMatchObject({ severity: 'warning' });
+    const text = JSON.stringify(marker);
+    await writeFile(path.join(context.source, VAULT_MARKER), text);
+    expect(await inspectVaultDirectory(context.source)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('識別碼') });
+    await expect(open(context)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('識別碼') });
+    expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(text);
   });
 
   it('never gives jobs recorded at a path to a Vault moved there, whether the move fails or succeeds', async () => {

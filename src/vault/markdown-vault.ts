@@ -10,6 +10,7 @@ import type {
   SubtitleKind,
 } from '../core/types.js';
 import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
+import { documentKeyFromPath } from './document-paths.js';
 
 interface StoredMetadata {
   type: 'Transcript';
@@ -46,6 +47,26 @@ function parseFrontmatter(content: string): { metadata: StoredMetadata; body: st
     body: match[2] ?? '',
   };
 }
+
+/**
+ * A document file the Vault lists by its name (`documents/youtube/<source ID>.md`) that cannot be
+ * read as a document: unparseable frontmatter, an unsupported format, or an ID that differs from
+ * the file name. Such a file is the Vault's own data gone bad, so listing and export stop and name it.
+ */
+export class DocumentFileError extends Error {
+  constructor(readonly file: string, options?: ErrorOptions) {
+    super(`Invalid document file: ${file}`, options);
+  }
+}
+
+/** A document from the text of its file; throws when the text is not a supported document. */
+export function parseDocument(content: string): SavedDocument {
+  const { metadata, body } = parseFrontmatter(content);
+  return toSavedDocument(metadata, body.trim());
+}
+
+/** How many document files a listing reads at once, so memory stays flat however large the Vault is. */
+const READ_CONCURRENCY = 16;
 
 function toSavedDocument(metadata: StoredMetadata, bodyMarkdown: string): SavedDocument {
   return {
@@ -172,7 +193,11 @@ export class MarkdownVault implements DocumentVault {
     return saved;
   }
 
-  /** Metadata of every visible document, without bodies, newest collection first. */
+  /**
+   * Metadata of every visible document, without bodies, newest collection first. Only files named
+   * `<source ID>.md` are documents; any other file in the folder belongs to someone else and is not
+   * read. A document file that cannot be read fails the listing with a `DocumentFileError`.
+   */
   async list(): Promise<DocumentMetadata[]> {
     let files: string[];
     try {
@@ -182,14 +207,32 @@ export class MarkdownVault implements DocumentVault {
       throw error;
     }
 
-    const [documents, deletions] = await Promise.all([
-      Promise.all(files.filter((file) => file.endsWith('.md')).map((file) => this.readFile(path.join(this.documentsDir, file)))),
-      this.deletionTimes(),
-    ]);
-    return documents
-      .filter((document): document is SavedDocument => document !== null && !hidden(document, deletions))
-      .map(({ bodyMarkdown: _body, ...metadata }) => metadata)
-      .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
+    const names = files.filter((file) => documentKeyFromPath(`documents/youtube/${file}`) !== null);
+    const deletions = await this.deletionTimes();
+    const metadata: DocumentMetadata[] = [];
+    for (let start = 0; start < names.length; start += READ_CONCURRENCY) {
+      const batch = await Promise.all(names.slice(start, start + READ_CONCURRENCY).map((file) => this.readListed(file)));
+      for (const document of batch) {
+        if (!document || hidden(document, deletions)) continue;
+        const { bodyMarkdown: _body, ...rest } = document;
+        // A copy, because strings parsed out of the file can keep the whole file text in memory.
+        metadata.push(structuredClone(rest));
+      }
+    }
+    return metadata.sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
+  }
+
+  /** A listed document file; its ID must match its name. */
+  private async readListed(file: string): Promise<SavedDocument | null> {
+    const relative = `documents/youtube/${file}`;
+    let document: SavedDocument | null;
+    try {
+      document = await this.readFile(path.join(this.documentsDir, file));
+    } catch (error) {
+      throw new DocumentFileError(relative, { cause: error });
+    }
+    if (document && document.id !== `youtube:${file.slice(0, -'.md'.length)}`) throw new DocumentFileError(relative);
+    return document;
   }
 
   /** A visible document; null when it does not exist or its deletion hides it. */
@@ -268,8 +311,7 @@ export class MarkdownVault implements DocumentVault {
 
   private async readFile(filePath: string): Promise<SavedDocument | null> {
     try {
-      const { metadata, body } = parseFrontmatter(await readFile(filePath, 'utf8'));
-      return toSavedDocument(metadata, body.trim());
+      return parseDocument(await readFile(filePath, 'utf8'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;

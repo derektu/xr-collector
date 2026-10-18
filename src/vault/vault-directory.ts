@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 
@@ -19,14 +20,23 @@ export interface VaultMarker {
    * Identity of the Vault: written when the Vault is created or restored and kept when it moves.
    * Packages never carry the marker, so every restore gets a new ID.
    */
-  id?: string;
+  id: string;
 }
 
 const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** Operating-system files that do not make a directory non-empty. */
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
-const SETTINGS_FILES = ['youtube-channels.json', 'youtube-schedule.json', 'deleted-documents.json'];
+/**
+ * Settings files and what each must read as. An unreadable deletion file would let deleted
+ * documents return, and a subscription or schedule file of another version would be misread, so
+ * any of them failing makes the directory no Vault this program opens.
+ */
+const SETTINGS_FILES: readonly { file: string; check: (value: unknown) => unknown }[] = [
+  { file: CHANNELS_FILE, check: channelsFromJson },
+  { file: SCHEDULE_FILE, check: scheduleEnabledFromJson },
+  { file: DELETIONS_FILE, check: deletionsFromJson },
+];
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -57,6 +67,9 @@ function markerProblem(value: unknown): string | null {
   }
   if ((marker.formatVersion ?? 0) > VAULT_FORMAT_VERSION) {
     return `此知識庫由較新版本的 XR Collector 建立（格式版本 ${marker.formatVersion}），請更新程式後再開啟。`;
+  }
+  if (typeof marker.id !== 'string' || !VAULT_ID.test(marker.id)) {
+    return '知識庫標記檔沒有識別碼，不是目前支援的知識庫格式，無法開啟。';
   }
   return null;
 }
@@ -111,20 +124,17 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   const problem = markerProblem(marker);
   if (problem) return { kind: 'invalid', path: root, reason: problem };
 
-  for (const name of SETTINGS_FILES) {
+  for (const { file, check } of SETTINGS_FILES) {
     let value: unknown;
     try {
-      value = JSON.parse(await readFile(path.join(root, 'settings', name), 'utf8'));
+      value = JSON.parse(await readFile(path.join(root, file), 'utf8'));
     } catch (error) {
       if (errorCode(error) === 'ENOENT') continue;
       return { kind: 'invalid', path: root, reason: error instanceof SyntaxError
-        ? `知識庫設定檔 settings/${name} 格式錯誤。` : unreadableReason(error, `知識庫設定檔 settings/${name}`) };
+        ? `知識庫設定檔 ${file} 格式錯誤。` : unreadableReason(error, `知識庫設定檔 ${file}`) };
     }
-    // Deletion records keep deleted documents from returning, so an unreadable file must not be skipped.
-    if (`settings/${name}` === DELETIONS_FILE) {
-      try { deletionsFromJson(value); } catch {
-        return { kind: 'invalid', path: root, reason: `知識庫設定檔 ${DELETIONS_FILE} 格式錯誤或版本不支援，請更新程式或修正檔案後再開啟。` };
-      }
+    try { check(value); } catch {
+      return { kind: 'invalid', path: root, reason: `知識庫設定檔 ${file} 格式錯誤或不是目前支援的版本，無法開啟。` };
     }
   }
   try {
@@ -166,34 +176,5 @@ export async function readVaultId(root: string): Promise<string | null> {
     return marker && typeof marker.id === 'string' && VAULT_ID.test(marker.id) ? marker.id : null;
   } catch {
     return null;
-  }
-}
-
-/**
- * Returns the Vault's ID, giving a Vault without one a new ID first; `created` says this call wrote
- * it. The marker is replaced through a temporary file and keeps every other field. A Vault whose
- * marker cannot be written opens without an ID: the failure is logged and the ID is null, so a
- * read-only Vault still opens.
- */
-export async function ensureVaultId(root: string): Promise<{ id: string | null; created: boolean }> {
-  const markerFile = path.join(root, VAULT_MARKER);
-  let marker: Record<string, unknown>;
-  try {
-    marker = JSON.parse(await readFile(markerFile, 'utf8')) as Record<string, unknown>;
-  } catch (error) {
-    console.warn(`Unable to read the Vault marker of ${root}`, error);
-    return { id: null, created: false };
-  }
-  if (typeof marker.id === 'string' && VAULT_ID.test(marker.id)) return { id: marker.id, created: false };
-  const id = randomUUID();
-  const temporary = `${markerFile}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify({ ...marker, id }, null, 2)}\n`, { flag: 'wx' });
-    await rename(temporary, markerFile);
-    return { id, created: true };
-  } catch (error) {
-    console.warn(`Unable to give the Vault at ${root} an ID; it opens without one`, error);
-    await rm(temporary, { force: true }).catch(() => undefined);
-    return { id: null, created: false };
   }
 }

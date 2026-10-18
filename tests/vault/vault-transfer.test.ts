@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { exportVault, unpackVault } from '../../src/vault/vault-package.js';
+import { ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, streamBytes, unpackBytes } from './package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
@@ -31,7 +31,7 @@ const capture: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ', sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
   title: '跨機搬移測試', channelId: 'UC123', channelTitle: '測試頻道', publishedAt: null,
   languageCode: 'zh-Hant', languageName: '中文', subtitleKind: 'manual',
-  bodyMarkdown: '獨立森林觀測資料。\n\n![附件](../../attachments/sample.bin)',
+  bodyMarkdown: '獨立森林觀測資料。',
 };
 async function seed(root: string) {
   await new MarkdownVault(root).add(capture);
@@ -40,17 +40,9 @@ async function seed(root: string) {
     settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
   await new JsonChannelScheduleStore(root).save({ enabled: true });
-  await mkdir(path.join(root, 'attachments'), { recursive: true });
-  await writeFile(path.join(root, 'attachments/sample.bin'), Buffer.from([0, 1, 128, 255]));
-  await mkdir(path.join(root, 'versions'), { recursive: true });
-  await writeFile(path.join(root, 'versions/retained.md'), 'retained version');
 }
-const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-function packageOf(files: { path: string; data: string }[]) {
-  const entries = files.map((file) => ({ path: file.path, data: Buffer.from(file.data).toString('base64'), size: Buffer.byteLength(file.data), sha256: sha(file.data) }));
-  return Buffer.from(JSON.stringify({ format: 'xr-collector-vault', version: 1, files: entries,
-    sha256: sha(JSON.stringify(entries.map(({ path, size, sha256 }) => ({ path, size, sha256 })))) }));
-}
+/** The files of a Vault's package, which say what a restore or merge would carry. */
+const filesOf = async (root: string) => packageFiles(await packageBytes(root));
 function fakeSearch(root: string): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
@@ -69,8 +61,10 @@ function fakeSearch(root: string): TranscriptSearch {
 /** Opens the Vault the device selection points at, as the runtime does at startup. */
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> = {}) {
   const selection = new VaultSelection(`${root}.selection.json`);
+  const selected = await selection.read();
+  if (!selected) await ensureMarker(root);
   const workspace = await VaultWorkspace.open({
-    root: await selection.read() ?? root, selection, profilePath: `${root}.profile`, createdBy: 'XR Collector test', capture: { capture: async () => capture },
+    root: selected ?? root, selection, profilePath: `${root}.profile`, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: `${root}-search`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
@@ -84,65 +78,11 @@ async function waitForRestore(workspace: VaultWorkspace) {
   await expect.poll(() => workspace.status().state, { timeout: 5000 }).toMatch(/^(completed|error)$/u);
 }
 
-describe('portable vault package', () => {
-  it('preserves document, binary attachment, versions and channels; excludes device files and pauses schedule', async () => {
-    const root = await temp(); const a = path.join(root, 'A'); const b = path.join(root, 'B');
-    await seed(a);
-    await writeFile(path.join(a, 'agent-connection.json'), '{"token":"private-device-token"}');
-    await writeFile(path.join(a, 'settings/credentials.json'), '{"password":"secret"}');
-    const buffer = await exportVault(a);
-    expect(buffer.toString()).not.toContain(a);
-    expect(buffer.toString()).not.toContain('agent-connection');
-    expect(buffer.toString()).not.toContain('credentials');
-    await mkdir(b);
-    await unpackVault(buffer, b, () => undefined);
-    expect(await new MarkdownVault(b).read(`youtube:${capture.videoId}`)).toEqual(await new MarkdownVault(a).read(`youtube:${capture.videoId}`));
-    expect(await readFile(path.join(b, 'attachments/sample.bin'))).toEqual(Buffer.from([0, 1, 128, 255]));
-    expect(await readFile(path.join(b, 'versions/retained.md'), 'utf8')).toBe('retained version');
-    expect(await new JsonChannelStore(b).list()).toEqual(await new JsonChannelStore(a).list());
-    expect(await new JsonChannelScheduleStore(b).load()).toEqual({ enabled: false });
-    expect(await new JsonChannelScheduleStore(a).load()).toMatchObject({ enabled: true });
-  });
-  it.each(['../outside', '/absolute', 'attachments/../escape', 'attachments\\escape', 'attachments/C:bad', 'attachments/CON', 'attachments/trailing.', 'settings/credentials.json'])('rejects unsafe/unsupported path %s', async (file) => {
-    const root = await temp();
-    await expect(unpackVault(packageOf([{ path: file, data: 'unsafe' }]), root, () => undefined)).rejects.toThrow();
-    expect(await readdir(root)).toEqual([]);
-  });
-  it('rejects symlinks during export', async () => {
-    const root = await temp(); await mkdir(path.join(root, 'attachments'));
-    const target = await temp();
-    await writeFile(path.join(target, 'outside.txt'), 'outside vault');
-    await symlink(target, path.join(root, 'attachments/link'), process.platform === 'win32' ? 'junction' : 'dir');
-    await expect(exportVault(root)).rejects.toThrow('符號連結');
-  });
-  it('rejects duplicate, case-collision and file/directory collision paths before writing', async () => {
-    const root = await temp();
-    for (const paths of [['attachments/a', 'attachments/a'], ['attachments/A', 'attachments/a'], ['attachments/a', 'attachments/a/b']]) {
-      await expect(unpackVault(packageOf(paths.map((path) => ({ path, data: 'x' }))), root, () => undefined)).rejects.toThrow();
-      expect(await readdir(root)).toEqual([]);
-    }
-  });
-  it('rejects corrupt bytes, missing files, wrong version and invalid base64', async () => {
-    const root = await temp(); await seed(path.join(root, 'source'));
-    const good = JSON.parse((await exportVault(path.join(root, 'source'))).toString());
-    for (const mutate of [
-      (data: typeof good) => { data.files[0].data = 'YQ=='; },
-      (data: typeof good) => { data.files.find((entry: { path: string }) => entry.path === 'attachments/sample.bin').data = Buffer.from([0, 1, 128, 254]).toString('base64'); },
-      (data: typeof good) => { data.files.pop(); },
-      (data: typeof good) => { data.version = 4; },
-      (data: typeof good) => { data.files[0].data += '!!'; },
-    ]) {
-      const data = structuredClone(good); mutate(data);
-      await expect(unpackVault(Buffer.from(JSON.stringify(data)), path.join(root, 'target'), () => undefined)).rejects.toThrow();
-    }
-  });
-});
-
 describe('workspace transfer through HTTP', () => {
   it('restores as independent B, switches UI/Agent services, preserves old B and persists selection after restart', async () => {
     const root = await temp(); const a = path.join(root, 'A'); const b = path.join(root, 'B');
     await seed(a);
-    const buffer = await exportVault(a);
+    const buffer = await packageBytes(a);
     await rm(a, { recursive: true }); // A is unavailable for every restore, browse and search operation.
     await new MarkdownVault(b).add({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'B 原資料' });
     const workspace = await open(b);
@@ -178,12 +118,16 @@ describe('workspace transfer through HTTP', () => {
       if (destination !== b && fail) search.rebuild = async () => { throw new Error('index unavailable'); };
       return { search, close: async () => undefined };
     } });
-    const before = await exportVault(b);
-    for (const buffer of [Buffer.from('bad json'), packageOf([{ path: 'settings/youtube-channels.json', data: '{}' }]), packageOf([{ path: `documents/youtube/${capture.videoId}.md`, data: 'bad metadata' }]), before]) {
+    const before = await packageBytes(b);
+    const files = await filesOf(b);
+    for (const buffer of [
+      Buffer.from('bad json'), await packageOf([{ path: 'settings/youtube-channels.json', data: '{}' }]),
+      await packageOf([{ path: `documents/youtube/${capture.videoId}.md`, data: 'bad metadata' }]), before,
+    ]) {
       await workspace.restore(buffer); await waitForRestore(workspace);
       expect(workspace.status().state).toBe('error');
       expect(workspace.status().vaultPath).toBe(b);
-      expect(await exportVault(b)).toEqual(before);
+      expect(await filesOf(b)).toEqual(files);
       expect((await readdir(root)).filter((name) => /還原|restoring/u.test(name))).toEqual([]);
       await expect(readFile(`${b}.profile/vault-restore-journal.json`)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(`${b}.selection.json`)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -211,12 +155,12 @@ describe('workspace transfer through HTTP', () => {
       const pending = workspace.export();
       expect(workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' });
       expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
-      await expect(workspace.restore(packageOf([]))).rejects.toMatchObject({ code: 'vault_busy' });
+      await expect(workspace.restore(await packageOf([]))).rejects.toMatchObject({ code: 'vault_busy' });
       release();
-      const buffer = await pending;
+      const exported = await pending;
       // The finished capture is in the package; the queued video did not start while the Vault was held.
-      expect(JSON.parse(buffer.toString()).files.map((file: { path: string }) => file.path)).toContain(`documents/youtube/${capture.videoId}.md`);
       expect(started).toEqual([capture.videoId]);
+      expect([...(await packageFiles(await streamBytes(exported))).keys()]).toContain(`documents/youtube/${capture.videoId}.md`);
       expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'export' });
       await workspace.jobs.whenSettled(first.job.id);
       expect((await workspace.jobs.whenSettled(second.job.id)).state).toBe('completed');
@@ -236,7 +180,7 @@ describe('workspace transfer through HTTP', () => {
     expect(() => workspace.enterWrite()()).not.toThrow();
     release();
     expect((await workspace.jobs.whenSettled(job.job.id)).state).toBe('completed');
-    await expect(workspace.export()).resolves.toBeInstanceOf(Buffer);
+    await expect(workspace.export()).resolves.toBeInstanceOf(Readable);
   });
   it('allows an authenticated Agent to invoke transfer routes', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
@@ -259,8 +203,9 @@ describe('workspace transfer through HTTP', () => {
 it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('rebuilds real Meilisearch on B without A and searches again after B restarts', async () => {
   const root = await temp(); const a = path.join(root, 'A'); const b = path.join(root, 'B');
   await seed(a);
-  const buffer = await exportVault(a);
+  const buffer = await packageBytes(a);
   await rm(a, { recursive: true });
+  await ensureMarker(b);
   const selection = new VaultSelection(`${b}.selection.json`);
   const options = { root: b, selection, profilePath: `${b}.profile`, createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
@@ -290,15 +235,15 @@ it('waits for a running channel discovery before exporting', async () => {
   const exported = workspace.export();
   expect(workspace.status().state).toBe('waiting');
   release();
-  await expect(exported).resolves.toBeInstanceOf(Buffer);
+  await expect(exported).resolves.toBeInstanceOf(Readable);
 });
 
 it('rejects invalid schedule data and empty package restores to an empty paused vault', async () => {
   const root = await temp(); const workspace = await open(path.join(root, 'B'));
-  await workspace.restore(packageOf([{ path: 'settings/youtube-schedule.json', data: '{"version":1,"enabled":true}' }]));
+  await workspace.restore(await packageOf([{ path: 'settings/youtube-schedule.json', data: '{"version":1,"enabled":true}' }]));
   await waitForRestore(workspace);
   expect(workspace.status().state).toBe('error');
-  await workspace.restore(packageOf([])); await waitForRestore(workspace);
+  await workspace.restore(await packageOf([])); await waitForRestore(workspace);
   expect(workspace.status().state).toBe('completed');
   expect(await workspace.collector.list()).toEqual([]);
   expect((await workspace.schedule.getSchedule()).enabled).toBe(false);
@@ -308,76 +253,51 @@ it('rejects invalid schedule data and empty package restores to an empty paused 
 it('rejects a checksum-valid document with an unsupported document type', async () => {
   const root = await temp(); await seed(path.join(root, 'source'));
   const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
-  const invalid = packageOf([{ path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown.replace('type: Transcript', 'type: Article') }]);
-  await expect(unpackVault(invalid, path.join(root, 'destination'), () => undefined)).rejects.toThrow('格式無效');
+  const invalid = await packageOf([{ path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown.replace('type: Transcript', 'type: Article') }]);
+  await expect(unpackBytes(invalid, path.join(root, 'destination'))).rejects.toThrow('格式無效');
 });
 
 describe('portable subscription settings (S-T10, A4)', () => {
-  const sharedChannels = JSON.stringify([
-    { id: 'UC123', title: '頻道一', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' },
-    { id: 'UC456', title: '頻道二', url: 'https://www.youtube.com/channel/UC456', enabled: false, addedAt: '2026-01-02T00:00:00.000Z' },
-  ]);
-
-  it('carries each subscription with its settings and progress through a current package, paused', async () => {
+  it('carries each subscription with its settings and progress through a package, paused', async () => {
     const root = await temp(); const source = path.join(root, 'source'); await seed(source);
     const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
-    await new JsonChannelStore(source).update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings });
-    const exported = await exportVault(source);
-    const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string; data: string }[] };
-    expect(parsed.version).toBe(3);
-    const channelsFile = parsed.files.find((file) => file.path === 'settings/youtube-channels.json')!;
-    expect(JSON.parse(Buffer.from(channelsFile.data, 'base64').toString())).toMatchObject({ version: 2, channels: [{ id: 'UC123', settings }] });
+    const outOfRange = [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }];
+    await new JsonChannelStore(source).update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
+    const exported = await packageBytes(source);
+    expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()))
+      .toMatchObject({ version: 2, channels: [{ id: 'UC123', settings, outOfRange }] });
     const workspace = await open(path.join(root, 'B'));
 
     await workspace.restore(exported); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
-    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', lastCheckedAt: '2026-10-14T00:00:00.000Z', settings })]);
+    expect(await workspace.channels.listChannels())
+      .toEqual([expect.objectContaining({ id: 'UC123', lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange })]);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, nextCheck: null });
   });
 
-  it('restores a package with shared settings by giving them to every subscription', async () => {
-    const root = await temp(); const workspace = await open(path.join(root, 'B'));
-    await workspace.restore(packageOf([
-      { path: 'settings/youtube-channels.json', data: sharedChannels },
-      { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 20, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: '2026-10-15T00:00:00.000Z', lastResult: null }) },
-    ]));
-    await waitForRestore(workspace);
-    expect(workspace.status().state).toBe('completed');
-    const settings = { intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 20 };
-    expect(await workspace.channels.listChannels()).toEqual([
-      expect.objectContaining({ id: 'UC123', enabled: true, settings }),
-      expect.objectContaining({ id: 'UC456', enabled: false, settings }),
-    ]);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
-    const root2 = workspace.status().vaultPath;
-    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-channels.json'), 'utf8'))).toMatchObject({ version: 2 });
-    expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: false, legacySettings: settings });
+  it('opens and exports a Vault whose subscriptions carry fields no longer in use, keeping them', async () => {
+    const root = await temp(); const source = path.join(root, 'source'); await seed(source);
+    const file = path.join(source, 'settings/youtube-channels.json');
+    const stored = JSON.parse(await readFile(file, 'utf8')) as { channels: Record<string, unknown>[] };
+    stored.channels[0] = { ...stored.channels[0], cursor: { videoId: 'cursor00001', publishedAt: null, recentIds: ['cursor00001'] }, backlog: false };
+    await writeFile(file, JSON.stringify(stored));
+    const workspace = await open(source);
+    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', backlog: false })]);
+    const exported = await streamBytes(await workspace.export());
+    expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()).channels[0])
+      .toMatchObject({ id: 'UC123', cursor: { videoId: 'cursor00001' }, backlog: false });
   });
 
-  it('restores a package from before the range settings with the default range and an offered interval', async () => {
+  it('refuses a package whose settings files are not the current version', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
-    await workspace.restore(packageOf([
-      { path: 'settings/youtube-channels.json', data: JSON.stringify([{ id: 'UC123', title: '第一輪頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]) },
-      { path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 45, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null }) },
-    ]));
-    await waitForRestore(workspace);
-    expect(workspace.status().state).toBe('completed');
-    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } })]);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
-    const [submission] = await workspace.channels.startRun({ trigger: 'manual' });
-    expect(submission!.job.scope).toEqual({ trigger: 'manual' });
-    await workspace.jobs.whenSettled(submission!.job.id);
-  });
-
-  it('converts an existing Vault with shared settings when it opens', async () => {
-    const root = await temp(); const vault = path.join(root, 'A');
-    await mkdir(path.join(vault, 'settings'), { recursive: true });
-    await writeFile(path.join(vault, 'settings/youtube-channels.json'), sharedChannels);
-    await writeFile(path.join(vault, 'settings/youtube-schedule.json'), JSON.stringify({ version: 1, enabled: true, intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20, lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null }));
-    const workspace = await open(vault);
-    const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 };
-    expect((await workspace.channels.listChannels()).map((channel) => channel.settings)).toEqual([settings, settings]);
-    expect(JSON.parse(await readFile(path.join(vault, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: true, legacySettings: settings });
+    const shared = JSON.stringify([{ id: 'UC123', title: '頻道一', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]);
+    for (const files of [
+      [{ path: 'settings/youtube-channels.json', data: shared }],
+      [{ path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 60 }) }],
+    ]) {
+      await workspace.restore(await packageOf(files)); await waitForRestore(workspace);
+      expect(workspace.status()).toMatchObject({ state: 'error', vaultPath: path.join(root, 'B'), message: expect.stringContaining('訂閱或排程設定格式無效') });
+    }
   });
 });
 
@@ -387,21 +307,15 @@ describe('deletion records in packages (A6)', () => {
     sourceType: 'youtube', sourceId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除的影片',
     publisherId: 'UC123', publisherName: '測試頻道', deletedAt: '2026-10-15T00:00:00.000Z',
   };
-  function versioned(version: number, files: { path: string; data: string }[]) {
-    const data = JSON.parse(packageOf(files).toString()) as { version: number };
-    data.version = version;
-    return Buffer.from(JSON.stringify(data));
-  }
 
-  it('exports deletions in a version 3 package and a restore keeps them in force', async () => {
+  it('exports deletions and a restore keeps them in force', async () => {
     const root = await temp(); const source = path.join(root, 'source'); await seed(source);
     await new MarkdownVault(source).add({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title });
     await new Collector(new MarkdownVault(source)).delete(`youtube:${deletedId}`);
-    const exported = await exportVault(source);
-    const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string }[] };
-    expect(parsed.version).toBe(3);
-    expect(parsed.files.map((file) => file.path)).toContain(DELETIONS_FILE);
-    expect(parsed.files.map((file) => file.path)).not.toContain(`documents/youtube/${deletedId}.md`);
+    const exported = await packageBytes(source);
+    const paths = (await manifestOf(exported)).files.map((file) => file.path);
+    expect(paths).toContain(DELETIONS_FILE);
+    expect(paths).not.toContain(`documents/youtube/${deletedId}.md`);
 
     const workspace = await open(path.join(root, 'B'));
     await workspace.restore(exported); await waitForRestore(workspace);
@@ -411,31 +325,22 @@ describe('deletion records in packages (A6)', () => {
     expect((await workspace.collector.list()).map((document) => document.sourceId)).toEqual([capture.videoId]);
   });
 
-  it('still restores version 2 packages, which carry no deletions', async () => {
-    const root = await temp(); await seed(path.join(root, 'source'));
-    const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
-    const target = path.join(root, 'v2');
-    await unpackVault(versioned(2, [{ path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown }]), target, () => undefined);
-    expect((await new MarkdownVault(target).list()).map((document) => document.sourceId)).toEqual([capture.videoId]);
-  });
-
   it.each([
-    ['a version 2 package with a deletions file', 2, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [record] }) }]],
-    ['a malformed deletions file', 3, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [{ ...record, sourceId: 'short' }] }) }]],
-    ['an unknown deletions version', 3, [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 9, deleted: [] }) }]],
-  ])('rejects %s', async (_name, version, files) => {
+    ['a malformed deletions file', [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [{ ...record, sourceId: 'short' }] }) }]],
+    ['an unknown deletions version', [{ path: DELETIONS_FILE, data: JSON.stringify({ version: 9, deleted: [] }) }]],
+  ])('rejects %s', async (_name, files) => {
     const root = await temp();
-    await expect(unpackVault(versioned(version as number, files as { path: string; data: string }[]), path.join(root, 'target'), () => undefined)).rejects.toThrow('刪除紀錄');
+    await expect(unpackBytes(await packageOf(files), path.join(root, 'target'))).rejects.toThrow('刪除紀錄');
   });
 
   it('rejects a package holding both a document and its deletion record', async () => {
     const root = await temp(); await seed(path.join(root, 'source'));
     const markdown = await readFile(path.join(root, 'source', 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
-    const both = versioned(3, [
+    const both = await packageOf([
       { path: 'documents/youtube/dQw4w9WgXcQ.md', data: markdown },
       { path: DELETIONS_FILE, data: JSON.stringify({ version: 1, deleted: [{ ...record, sourceId: 'dQw4w9WgXcQ', sourceUrl: capture.sourceUrl }] }) },
     ]);
-    await expect(unpackVault(both, path.join(root, 'target'), () => undefined)).rejects.toThrow('同時有內容與刪除紀錄');
+    await expect(unpackBytes(both, path.join(root, 'target'))).rejects.toThrow('同時有內容與刪除紀錄');
   });
 });
 
@@ -452,7 +357,7 @@ it('refuses a document deletion while a restore holds the Vault (A7)', async () 
     },
   });
   const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
-  await workspace.restore(await exportVault(a));
+  await workspace.restore(await packageBytes(a));
   const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
   await expect.poll(async () => (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409);
   release(); await waitForRestore(workspace);

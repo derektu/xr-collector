@@ -1,6 +1,6 @@
+import { Readable } from 'node:stream';
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { YouTubePacing } from '../capture/youtube-gate.js';
-import { PACKAGE_LIMIT } from '../vault/vault-package.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
@@ -142,7 +142,6 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   file_exists: 409,
   transfer_cancelled: 409,
   vault_location_fixed: 409,
-  vault_unidentified: 409,
   insufficient_space: 507,
   no_subtitles: 422,
   video_unavailable: 422,
@@ -248,7 +247,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
-    app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: PACKAGE_LIMIT }, (_request, body, done) => done(null, body));
+    // A package body is handed on as a stream and written to a file, so its size is never limited by memory.
+    app.addContentTypeParser('application/octet-stream', (_request, payload, done) => done(null, payload));
     app.get('/api/vault/status', async () => transfer.status());
     // A JSON body names local files by absolute path; a byte body carries the package itself.
     // JSON requests need a CORS preflight, which this server never grants, so only the app's own
@@ -257,12 +257,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (request.body && typeof request.body === 'object' && 'path' in request.body) {
         return transfer.exportTo(request.body.path, request.body.overwrite === true);
       }
-      const buffer = await transfer.export();
+      const stream = await transfer.export();
       return reply.type('application/octet-stream')
-        .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(buffer);
+        .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(stream);
     });
-    app.post<{ Body: Buffer | { path?: unknown } }>('/api/vault/merge/preview', { bodyLimit: PACKAGE_LIMIT }, async (request) => {
-      if (Buffer.isBuffer(request.body)) return transfer.previewMerge(request.body);
+    app.post<{ Body: Readable | { path?: unknown } }>('/api/vault/merge/preview', async (request) => {
+      if (request.body instanceof Readable) return transfer.previewMerge(request.body);
       if (request.body && typeof request.body === 'object' && 'path' in request.body) return transfer.previewMergeFrom(request.body.path);
       throw new CollectorError('invalid_request', '請提供 .xr-vault 資料包或它的完整路徑。');
     });
@@ -282,8 +282,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return reply.code(202).send(await transfer.openOther(request.body?.path));
     });
     app.get('/api/vault/restore/suggestion', async () => ({ path: await transfer.suggestRestoreFolder() }));
-    app.post<{ Body: Buffer | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', { bodyLimit: PACKAGE_LIMIT }, async (request, reply) => {
-      if (Buffer.isBuffer(request.body)) return reply.code(202).send(await transfer.restore(request.body));
+    app.post<{ Body: Readable | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', async (request, reply) => {
+      if (request.body instanceof Readable) return reply.code(202).send(await transfer.restore(request.body));
       if (request.body && typeof request.body === 'object' && 'packagePath' in request.body) {
         return reply.code(202).send(await transfer.restoreFrom(request.body.packagePath, request.body.targetPath));
       }
@@ -310,7 +310,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return;
     }
     if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 413) {
-      void reply.status(413).send({ error: { code: 'invalid_request', message: '資料包超過 128 MiB。' } });
+      void reply.status(413).send({ error: { code: 'invalid_request', message: '請求內容過大。' } });
       return;
     }
     app.log.error(error);

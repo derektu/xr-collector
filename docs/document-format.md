@@ -31,6 +31,6 @@
 
 合併比對完整 frontmatter 與正文；收集／異動時間及序列化差異不單獨形成內容衝突。合併沒有提供一般正文編輯、草稿或垃圾桶生命週期。
 
-Vault 也可攜帶 `attachments/`、`versions/` 與 `management/` 檔案；這不代表程式已實作附件編輯器、版本瀏覽器或 Derived pipeline。完整資料包責任見 [儲存與搜尋](storage-and-search.md)。
+只有檔名是 `documents/<來源類型>/<來源 ID>.md` 的檔案是文件；Vault 資料夾中的其他檔案不屬於知識庫，程式不讀取，也不放進資料包。文件檔讀不出這個格式，或 frontmatter 的 ID 與檔名不符時，列表與匯出失敗並指出該檔案。資料包內容見 [儲存與搜尋](storage-and-search.md#資料包)。
 
-Round 2 改動文件欄位、來源身分或刪除紀錄時，須同步定義第一輪文件的讀取與遷移行為，並驗證資料包還原及合併；不得只更換新文件的 writer。
+文件欄位、來源身分或刪除紀錄的定義與 reader、writer、資料包還原及合併一起修改並驗證，不只更換文件的 writer。

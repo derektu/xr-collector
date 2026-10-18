@@ -338,8 +338,12 @@ describe('CollectorRuntime', () => {
     const settings = path.join(setup.vaultPath, 'settings');
     await mkdir(settings, { recursive: true });
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
-    // A version 2 file needs no conversion, so the Vault opens and the bad subscriptions stop the scheduler.
-    await writeFile(path.join(settings, 'youtube-channels.json'), JSON.stringify({ version: 2, channels: 'bad' }));
+    // The Vault passes inspection; its schedule file goes bad once search has started, so the scheduler fails to load it.
+    const createSearch = setup.value.workspace.createSearch;
+    setup.value.workspace.createSearch = async (root) => {
+      await writeFile(path.join(settings, 'youtube-schedule.json'), JSON.stringify({ version: 2, enabled: 'bad' }));
+      return createSearch(root);
+    };
     await expect(CollectorRuntime.start(setup.value)).rejects.toThrow();
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });
