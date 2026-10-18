@@ -178,7 +178,7 @@ function SourceRow({ source, icon, onOpen, onChanged }: { source: SourceEntry; i
 
   const toggle = () => void run(async () => {
     await api.setChannelEnabled(source.id, paused);
-    return paused ? `已恢復「${source.title}」，開始補收。` : `已暫停「${source.title}」。`;
+    return paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`;
   });
 
   return <div className={`source-row ${source.status}`} role="row" data-testid={`source-row-${source.id}`}>

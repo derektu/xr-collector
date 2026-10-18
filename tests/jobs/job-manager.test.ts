@@ -7,7 +7,6 @@ import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CapturedTranscript,
-  type ChannelJobScope,
   type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
@@ -67,9 +66,6 @@ class MemoryChannels implements ChannelStore {
   }
 }
 
-/** A backfill wide enough that every listed video is in range. */
-const WIDE: ChannelJobScope = { trigger: 'manual', mode: 'backfill', windowStart: '2000-01-01T00:00:00.000Z', maxItems: 50, cursor: null };
-
 /** A YouTube source whose captures wait until the test releases them. */
 class ControlledSource implements YouTubeSource {
   readonly captures: string[] = [];
@@ -120,16 +116,20 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
     ...(options.limits ? { limits: options.limits } : {}),
     createId: () => `job-${++sequence}`,
   });
-  /** Subscribes to the channel and starts one wide backfill of it. */
+  /** Subscribes to the channel and checks it once. */
   const collect = (subscribed: YouTubeChannel) => {
     if (!channels.channels.some((candidate) => candidate.id === subscribed.id)) channels.channels.push(subscribed);
-    return manager.submitChannel(subscribed, WIDE);
+    return manager.submitChannel(subscribed, 'manual');
   };
   return { manager, vault, channels, source, search, store, collect };
 }
 
 function channel(id: string, title = id): YouTubeChannel {
-  return { id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z' };
+  // Listed videos carry no publish time, so they are all in range; the limit is the largest offered.
+  return {
+    id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
+    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
+  };
 }
 
 function videos(count: number, prefix: string): DiscoveredYouTubeVideo[] {

@@ -42,11 +42,11 @@ export const youtubeSourceType: SourceTypeDeclaration = {
       options: INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) })),
     },
     {
-      key: 'backfillWindow', label: '補收時間範圍', default: DEFAULT_POLICY.backfillWindow,
+      key: 'backfillWindow', label: '時間範圍', default: DEFAULT_POLICY.backfillWindow,
       options: BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) })),
     },
     {
-      key: 'backfillMaxItems', label: '補收數量', default: DEFAULT_POLICY.backfillMaxItems,
+      key: 'backfillMaxItems', label: '數量上限', default: DEFAULT_POLICY.backfillMaxItems,
       options: BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 支影片` })),
     },
   ],

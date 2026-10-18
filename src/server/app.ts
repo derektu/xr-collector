@@ -477,7 +477,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return reply.code(202).send(await channels.addChannel(request.body.url, settings));
     });
 
-    // Settings change first, so a resume in the same request backfills with the new range.
+    // Settings change first, so the check a resume in the same request starts uses the new range.
     app.patch<{
       Params: { id: string };
       Body: { enabled?: unknown; settings?: unknown } | null;

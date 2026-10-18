@@ -1,14 +1,14 @@
 import path from 'node:path';
 import { DEFAULT_POLICY, isBackfillLimit, isBackfillWindow, isCollectionPolicy, normalizeInterval } from './collection-policy.js';
 import { readJsonFile, writeJsonFile } from './json-file.js';
-import type { ChannelCursor, CollectionPolicy, YouTubeChannel } from '../core/types.js';
+import type { CollectionPolicy, YouTubeChannel } from '../core/types.js';
 
 /**
  * Vault files of YouTube subscriptions, relative to the Vault root.
  *
  * `youtube-channels.json` version 2 is `{ version: 2, channels: [...] }`: every subscription carries
  * its own settings and check times. Version 1 is a bare array of subscriptions that share the
- * interval and backfill range of `youtube-schedule.json` version 1. `youtube-schedule.json`
+ * interval and collection range of `youtube-schedule.json` version 1. `youtube-schedule.json`
  * version 2 holds the automatic collection switch and, in a converted Vault, `legacySettings`.
  *
  * A version 1 Vault is converted once, the first time it is opened: the shared settings are copied
@@ -22,7 +22,7 @@ export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 export interface ChannelsFile { version: 2; channels: YouTubeChannel[] }
 export interface ScheduleFile { version: 2; enabled: boolean; legacySettings?: CollectionPolicy }
 
-/** Version 1 schedule fields that the conversion reads; interval values before backfill settings existed may be any whole minute. */
+/** Version 1 schedule fields that the conversion reads; interval values before range settings existed may be any whole minute. */
 interface LegacySchedule {
   enabled: boolean;
   intervalMinutes: number;
@@ -48,13 +48,20 @@ export function channelsFromJson(value: unknown, schedule: unknown): YouTubeChan
   if (value === undefined) return [];
   if (Array.isArray(value)) {
     if (!value.every(isLegacyChannel)) throw new InvalidSubscriptionFile('Invalid YouTube channel settings');
-    return value.map((channel) => convertChannel(channel, legacySchedule(schedule)));
+    return value.map((channel) => convertChannel(withoutRetiredFields(channel), legacySchedule(schedule)));
   }
   const file = value as Partial<ChannelsFile> | null;
   if (!file || file.version !== 2 || !Array.isArray(file.channels) || !file.channels.every(isChannel)) {
     throw new InvalidSubscriptionFile('Invalid YouTube channel settings');
   }
-  return file.channels;
+  return file.channels.map(withoutRetiredFields);
+}
+
+/** Discovery fields that subscriptions no longer use; a file that still has them reads without them. */
+const RETIRED_FIELDS = ['cursor', 'backlog'];
+
+function withoutRetiredFields<T extends object>(channel: T): T {
+  return Object.fromEntries(Object.entries(channel).filter(([key]) => !RETIRED_FIELDS.includes(key))) as T;
 }
 
 /** The automatic collection switch of a schedule file of either version; a Vault without one collects automatically. */
@@ -117,8 +124,8 @@ export async function migrateSubscriptionSettings(root: string): Promise<boolean
 }
 
 /**
- * The shared settings of a version 1 schedule file. Files written before the backfill settings
- * existed load with the default backfill and the nearest offered interval; a Vault without a
+ * The shared settings of a version 1 schedule file. Files written before the range settings
+ * existed load with the default range and the nearest offered interval; a Vault without a
  * schedule file uses the defaults.
  */
 function legacySchedule(value: unknown): SharedSettings | null {
@@ -160,9 +167,7 @@ function isLegacyChannel(value: unknown): value is LegacyChannel {
     && typeof channel.url === 'string'
     && typeof channel.enabled === 'boolean'
     && typeof channel.addedAt === 'string'
-    && (channel.cursor === undefined || channel.cursor === null || isCursor(channel.cursor))
-    && isOptionalTime(channel.lastCheckedAt)
-    && (channel.backlog === undefined || typeof channel.backlog === 'boolean');
+    && isOptionalTime(channel.lastCheckedAt);
 }
 
 function isChannel(value: unknown): value is YouTubeChannel {
@@ -173,13 +178,4 @@ function isChannel(value: unknown): value is YouTubeChannel {
 
 function isOptionalTime(value: unknown): boolean {
   return value === undefined || value === null || typeof value === 'string';
-}
-
-function isCursor(value: unknown): value is ChannelCursor {
-  if (!value || typeof value !== 'object') return false;
-  const cursor = value as Partial<ChannelCursor>;
-  return typeof cursor.videoId === 'string'
-    && (cursor.publishedAt === null || typeof cursor.publishedAt === 'string')
-    && Array.isArray(cursor.recentIds)
-    && cursor.recentIds.every((id) => typeof id === 'string');
 }

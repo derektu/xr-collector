@@ -117,18 +117,9 @@ export interface SearchResponse {
   limit: number;
 }
 
-/** Where incremental discovery of a subscription stops: the newest video already handed to a job. */
-export interface ChannelCursor {
-  videoId: string;
-  /** Approximate publish time from the channel listing; null when the listing gave none. */
-  publishedAt: string | null;
-  /** Recently accepted or listed video IDs, newest first, so a deleted cursor video still ends discovery. */
-  recentIds: string[];
-}
-
 /**
- * A subscribed YouTube channel. Its collection settings, discovery progress and check times are
- * portable Vault data and live with it.
+ * A subscribed YouTube channel. Its collection settings and check times are portable Vault data and
+ * live with it.
  */
 export interface YouTubeChannel {
   id: string;
@@ -137,21 +128,17 @@ export interface YouTubeChannel {
   /** False while the subscription is paused. */
   enabled: boolean;
   addedAt: string;
-  /** Check interval and backfill range of this subscription. */
+  /** Check interval and the range every check of this subscription collects. */
   settings: CollectionPolicy;
   /**
    * When the scheduler checks this subscription next; null while it is paused or until the
    * scheduler first plans it. Automatic collection being off leaves the time in place.
    */
   nextCheckAt?: string | null;
-  /** The last time a check of this subscription was submitted, by any trigger except a follow-up batch. */
+  /** The last time a check of this subscription was submitted. */
   lastDispatchedAt?: string | null;
-  /** Null until the first discovery, and again after a resume. */
-  cursor?: ChannelCursor | null;
   /** The last discovery that finished listing the channel. */
   lastCheckedAt?: string | null;
-  /** True when incremental discovery left newer videos for a follow-up batch. */
-  backlog?: boolean;
 }
 
 /**
@@ -174,7 +161,11 @@ export interface Subscription extends YouTubeChannel {
 
 export type BackfillWindow = '1w' | '2w' | '1m' | '3m' | '6m';
 
-/** Collection settings of one subscription. */
+/**
+ * Collection settings of one subscription. Every check collects the newest `backfillMaxItems`
+ * videos published within `backfillWindow` before the check, leaving out the ones already
+ * collected or deleted.
+ */
 export interface CollectionPolicy {
   intervalMinutes: number;
   backfillWindow: BackfillWindow;
@@ -296,20 +287,15 @@ export interface SourceDetail {
   recentJobs: SourceJobRecord[];
 }
 
-/** Why a channel job was started; it decides the labels and, with the cursor, the discovery mode. */
-export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual' | 'backlog';
+/** Why a channel job was started; it decides the job's labels. Every trigger discovers videos the same way. */
+export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual';
 
 /**
- * The discovery range a channel job accepted. Backfill takes the newest uncollected videos published
- * since `windowStart`, at most `maxItems`; incremental takes every video newer than `cursor`.
- * Later settings changes never alter an accepted scope.
+ * What a channel job records about why it runs. The range it collects is not part of it: discovery
+ * reads the subscription's settings when it starts and measures the range back from that moment.
  */
 export interface ChannelJobScope {
   trigger: ChannelJobTrigger;
-  mode: 'backfill' | 'incremental';
-  windowStart: string;
-  maxItems: number;
-  cursor: ChannelCursor | null;
 }
 
 export type JobKind = 'youtube.video' | 'youtube.channel' | 'youtube.channel-add';
@@ -377,11 +363,11 @@ export interface JobCheckpoint {
   settings?: CollectionPolicy;
   /** A channel-add job resolved this channel and is subscribing to it. */
   subscribing?: { channelId: string; title: string; url: string };
-  /** A channel job recorded its discovered videos; the subscription cursor follows them. */
-  discovered?: { at: string; cursor: ChannelCursor | null; backlog: boolean; cursorSaved: boolean };
+  /** A channel job recorded its discovered videos at this time; the subscription's last check time follows it. */
+  discovered?: { at: string };
   /**
    * A channel job retrying the failed videos of an earlier one collects exactly these videos: it
-   * runs no discovery, leaves the subscription cursor alone and applies no backfill bound.
+   * runs no discovery, leaves the subscription's last check time alone and applies no range bound.
    */
   retryItems?: Array<{ sourceId: string; title: string; url: string }>;
 }
@@ -413,8 +399,6 @@ export interface JobProgress {
 export interface JobResult {
   outcome: JobOutcome;
   skipReason?: SkipReason;
-  /** A channel job that left newer videos for a follow-up batch. */
-  backlog?: boolean;
   documentId?: string;
   /** The document is stored in the Vault. */
   saved?: boolean;
@@ -452,9 +436,9 @@ export interface CollectionJob {
   finishedAt: string | null;
   updatedAt: string;
   progress: JobProgress | null;
-  /** The accepted discovery range of a channel or channel-add job. */
+  /** Why a channel job runs. */
   scope?: ChannelJobScope;
-  /** For a video found by backfill: videos published before this time are skipped. */
+  /** For a video a channel job found: the start of that check's range; a video published earlier is skipped. */
   publishedNotBefore?: string;
   items: JobItem[] | null;
   result: JobResult | null;

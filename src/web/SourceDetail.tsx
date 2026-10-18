@@ -81,7 +81,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     setBusy(true);
     try {
       await api.setChannelEnabled(source.id, paused);
-      onChanged(paused ? `已恢復「${source.title}」，開始補收。` : `已暫停「${source.title}」。`);
+      onChanged(paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`);
     } catch (error) {
       onChanged(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
     } finally {
@@ -157,7 +157,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       </div>
       <div className="panel-body">
         <CollectionSettingsFields idPrefix="detail-settings" fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
-          onChange={saveSettings} backfillLabel="暫停後恢復時" backfillLead="補收最近" />
+          onChange={saveSettings} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下一次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
       </div>

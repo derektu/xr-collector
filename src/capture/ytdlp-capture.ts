@@ -121,7 +121,7 @@ export class YtDlpCapture implements YouTubeCapture {
   async capture(video: YouTubeVideoRef, options: CaptureOptions = {}): Promise<CapturedTranscript> {
     const info = await this.readInfo(video);
     if (options.publishedNotBefore && !publishedSince(publishedAtFromInfo(info), options.publishedNotBefore)) {
-      throw new CollectorError('out_of_range', '這支影片的發布時間早於補收範圍。');
+      throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
     }
     const track = chooseSubtitleTrack(tracksFromInfo(info));
     if (!track) {

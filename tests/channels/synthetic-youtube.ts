@@ -45,6 +45,8 @@ export class SyntheticYouTube implements YouTubeSource {
   readonly channels = new Map<string, { title: string; videos: SyntheticVideo[] }>();
   readonly captures: string[] = [];
   readonly listingRequests: Array<{ channelId: string } & ListingPage> = [];
+  /** Captures of these videos fail with the given error. */
+  readonly failures = new Map<string, CollectorError>();
   holdCaptures = false;
   holdDiscovery: Promise<void> | null = null;
   discoveryFailure: CollectorError | null = null;
@@ -94,9 +96,11 @@ export class SyntheticYouTube implements YouTubeSource {
       channel.videos.filter((candidate) => candidate.id === video.videoId).map((candidate) => ({ channelId, channel, candidate })))[0];
     if (!found) throw new CollectorError('video_unavailable', '影片不存在。');
     if (options.publishedNotBefore && !publishedSince(found.candidate.publishedAt, options.publishedNotBefore)) {
-      throw new CollectorError('out_of_range', '這支影片的發布時間早於補收範圍。');
+      throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
     }
     this.captures.push(video.videoId);
+    const failure = this.failures.get(video.videoId);
+    if (failure) throw failure;
     if (this.holdCaptures) await new Promise<void>((resolve) => this.waiting.set(video.videoId, resolve));
     return {
       videoId: video.videoId, sourceUrl: video.canonicalUrl, title: `合成影片 ${video.videoId}`,

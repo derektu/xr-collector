@@ -12,8 +12,6 @@ export const DEFAULT_POLICY: CollectionPolicy = {
   backfillMaxItems: 10,
 };
 
-const HOUR_MS = 60 * 60_000;
-
 export function isIntervalOption(value: unknown): value is number {
   return INTERVAL_OPTIONS.includes(value as (typeof INTERVAL_OPTIONS)[number]);
 }
@@ -62,15 +60,15 @@ export function assertPolicyPatch(patch: Partial<CollectionPolicy>): void {
     throw new CollectorError('invalid_request', `檢查頻率必須是 ${INTERVAL_OPTIONS.join('、')} 分鐘之一。`);
   }
   if (patch.backfillWindow !== undefined && !isBackfillWindow(patch.backfillWindow)) {
-    throw new CollectorError('invalid_request', `補收範圍必須是 ${BACKFILL_WINDOWS.join('、')} 之一。`);
+    throw new CollectorError('invalid_request', `時間範圍必須是 ${BACKFILL_WINDOWS.join('、')} 之一。`);
   }
   if (patch.backfillMaxItems !== undefined && !isBackfillLimit(patch.backfillMaxItems)) {
-    throw new CollectorError('invalid_request', `補收則數必須是 ${BACKFILL_LIMITS.join('、')} 之一。`);
+    throw new CollectorError('invalid_request', `數量上限必須是 ${BACKFILL_LIMITS.join('、')} 之一。`);
   }
 }
 
 /**
- * Start of the backfill range ending at `now`, in the device's local time zone. Weeks are 7-day
+ * Start of the collection range ending at `now`, in the device's local time zone. Weeks are 7-day
  * steps; months are calendar months, and a day the earlier month lacks becomes its last day
  * (31 March minus one month is 28 or 29 February).
  */
@@ -101,14 +99,6 @@ export function publishedInstant(value: string | null | undefined): number | nul
 export function publishedSince(value: string | null | undefined, start: Date | string): boolean {
   const instant = publishedInstant(value);
   return instant === null || instant >= new Date(start).getTime();
-}
-
-/**
- * Without a successful check for this long, the next check is treated like a restart and uses the
- * backfill limits, so sleep or a long outage never replays every missed period.
- */
-export function catchUpThresholdMs(intervalMinutes: number): number {
-  return Math.max(24 * HOUR_MS, 3 * intervalMinutes * 60_000);
 }
 
 const WINDOW_LABELS: Record<BackfillWindow, string> = { '1w': '1 週', '2w': '2 週', '1m': '1 個月', '3m': '3 個月', '6m': '6 個月' };

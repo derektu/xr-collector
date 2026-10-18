@@ -26,8 +26,13 @@ const read = async (root: string, name: string) => JSON.parse(await readFile(pat
 function row(id: string, enabled = true) {
   return {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled, addedAt: '2026-09-01T00:00:00.000Z',
-    cursor: null, lastCheckedAt: '2026-10-15T03:30:00.000Z', backlog: false,
+    lastCheckedAt: '2026-10-15T03:30:00.000Z',
   };
+}
+
+/** A subscription row as it was stored while discovery kept a cursor. */
+function rowWithCursor(id: string, enabled = true) {
+  return { ...row(id, enabled), cursor: { videoId: 'cursor00001', publishedAt: null, recentIds: ['cursor00001'] }, backlog: false };
 }
 
 /** A Vault as the shared-settings version wrote it: three subscriptions and one schedule file. */
@@ -39,7 +44,7 @@ const sharedSchedule = {
 
 describe('subscription settings conversion (A1)', () => {
   it('copies the shared settings and check times to every subscription once', async () => {
-    const root = await vault({ channels: [row('UCa'), row('UCb'), row('UCc', false)], schedule: sharedSchedule });
+    const root = await vault({ channels: [rowWithCursor('UCa'), row('UCb'), row('UCc', false)], schedule: sharedSchedule });
     expect(await migrateSubscriptionSettings(root)).toBe(true);
     const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20 };
     expect(await read(root, 'youtube-channels.json')).toEqual({
@@ -124,6 +129,20 @@ describe('JsonChannelStore', () => {
     expect(await read(root, 'youtube-channels.json')).toMatchObject({ version: 2 });
     await restarted.remove('UCa');
     expect((await new JsonChannelStore(root).list()).map((channel) => channel.id)).toEqual(['UCb']);
+  });
+
+  it('reads subscriptions that still carry a discovery cursor without it, and saves them without it (R-10)', async () => {
+    const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+    const root = await vault({ channels: { version: 2, channels: [{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }] } });
+    const store = new JsonChannelStore(root);
+    const listed = await store.list();
+    expect(listed).toEqual([{ ...row('UCa'), settings }, { ...row('UCb'), settings }]);
+    await store.update('UCa', { enabled: false });
+    const saved = await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> };
+    for (const channel of saved.channels) {
+      expect(channel).not.toHaveProperty('cursor');
+      expect(channel).not.toHaveProperty('backlog');
+    }
   });
 
   it('saves the automatic collection switch as version 2; a Vault without the file collects automatically', async () => {

@@ -66,7 +66,7 @@ describe('activity presentation', () => {
     expect(summaryLabel({ active: 2, completed: 14, failed: 1 })).toBe('進行中 2 · 今天完成 14 · 失敗 1');
     expect(jobStatusText(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toBe('已加入');
     expect(jobStatusText(job({
-      kind: 'youtube.channel', state: 'running', phase: 'capture', scope: { trigger: 'scheduled', mode: 'incremental', windowStart: '', maxItems: 10, cursor: null },
+      kind: 'youtube.channel', state: 'running', phase: 'capture', scope: { trigger: 'scheduled' },
       progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 },
     }))).toBe('收集影片 4／10');
     expect(jobStatusText(job({ state: 'failed', error: { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。（已嘗試 3 次）' } })))

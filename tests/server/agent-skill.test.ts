@@ -76,10 +76,12 @@ describe('Agent Skill', () => {
     expect(skill).toContain(`只接受 ${INTERVAL_OPTIONS.join('、')}`);
     expect(skill).toContain(BACKFILL_WINDOWS.map((window) => `\`${window}\``).join('、'));
     expect(skill).toContain(`（${BACKFILL_LIMITS.join('、')}）`);
-    for (const term of ['backfillWindow', 'backfillMaxItems', 'channel_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_paused', '`backlog`']) {
+    for (const term of ['backfillWindow', 'backfillMaxItems', 'channel_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_paused', '每次檢查']) {
       expect(skill).toContain(term);
     }
     expect(skill).not.toContain('1–10080');
+    // Every check follows one rule; there is no incremental mode or follow-up batch.
+    for (const retired of ['增量', '`backlog`', '游標']) expect(skill).not.toContain(retired);
   });
 
   it('documents the source list and URL recognition contract', async () => {

@@ -205,7 +205,7 @@ describe('manual retry (A-T9)', () => {
     const failed = await manager.whenSettled((await manager.submitChannelAdd('https://www.youtube.com/@retry', settings)).job.id);
     expect(failed.state).toBe('failed');
     const retried = await manager.retry(failed.id);
-    expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id, scope: { maxItems: 5 } });
+    expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id });
     expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(channels.channels[0]!.settings).toEqual(settings);
   });
@@ -233,7 +233,7 @@ describe('manual retry (A-T9)', () => {
     expect(manager.get(failedAgain.id).retriedBy).toBeUndefined();
   });
 
-  it('collects the failed videos of a channel job again, without discovery or moving the subscription cursor', async () => {
+  it('collects the failed videos of a channel job again, without discovery or recording a check', async () => {
     const { manager, source, channels, collector, vault } = setup();
     channels.channels.push(subscription('UC3'));
     const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
@@ -245,7 +245,7 @@ describe('manual retry (A-T9)', () => {
     expect(failed).toMatchObject({ state: 'failed', error: { code: 'all_items_failed' } });
     const checked = { ...channels.channels[0]! };
 
-    // The subscription has moved past these videos: a new check would find nothing.
+    // The videos left the listing: a new check would find nothing.
     source.channelVideos.set('UC3', []);
     source.discoverFailures.push(new CollectorError('capture_failed', '這次重試不應該重新發現影片。'));
     const retried = await manager.retry(failed.id);
@@ -255,7 +255,7 @@ describe('manual retry (A-T9)', () => {
     expect(done.items!.map((item) => item.sourceId)).toEqual(['mmmmmmmmmmm', 'nnnnnnnnnnn']);
     expect(done.items!.every((item) => manager.get(item.jobId!).publishedNotBefore === undefined)).toBe(true);
     expect(source.discoverFailures).toHaveLength(1);
-    expect(channels.channels[0]).toMatchObject({ cursor: checked.cursor, lastCheckedAt: checked.lastCheckedAt });
+    expect(channels.channels[0]!.lastCheckedAt).toBe(checked.lastCheckedAt);
     expect(await vault.getBySourceId('nnnnnnnnnnn')).not.toBeNull();
     expect(manager.get(failed.id).retriedBy).toBe(retried.job.id);
     await expect(manager.retry(failed.id)).rejects.toMatchObject({ code: 'job_not_retryable' });

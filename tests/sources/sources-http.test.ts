@@ -218,7 +218,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     const added = await send('POST', '/api/youtube/channels', { url: '@alpha', settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 } });
     expect(added.status).toBe(202);
     const first = await w.jobs.whenSettled((await w.jobs.whenSettled(added.body.job.id)).result!.followUpJobId!);
-    expect(first.scope).toMatchObject({ maxItems: 5 });
+    expect(first.progress).toMatchObject({ total: 5 });
     await send('POST', '/api/youtube/channels', { url: '@beta' });
     await send('POST', '/api/youtube/channels', { url: '@gamma', settings: { backfillMaxItems: 20 } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
@@ -267,9 +267,9 @@ describe('per-subscription settings over HTTP (A5)', () => {
     await w.jobs.whenSettled((await w.jobs.whenSettled(defaults.body.job.id)).result!.followUpJobId!);
     expect((await w.get(`/api/sources/youtube/${delta}`)).body.source.settings).toEqual({ intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 });
 
-    // A resume and a settings change in one request backfill with the new range.
+    // A resume and a settings change in one request check with the new range.
     const resumed = await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
-    expect(resumed.body).toMatchObject({ channel: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume', maxItems: 20 } } } });
+    expect(resumed.body).toMatchObject({ channel: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
     await w.app.close();
   });

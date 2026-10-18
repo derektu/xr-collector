@@ -1,17 +1,14 @@
 import type { CollectionPolicy, SourceSettingField } from '../core/types.js';
 
 /**
- * The collection settings of one subscription as a check interval row and a backfill sentence.
- * Options and labels come from the source type's declared fields; `backfillLabel` names when the
- * backfill applies, such as the first collection or a resume.
+ * The collection settings of one subscription as a check interval row and a sentence saying what
+ * every check collects. Options and labels come from the source type's declared fields.
  */
-export function CollectionSettingsFields({ idPrefix, fields, value, onChange, backfillLabel, backfillLead, disabled = false }: {
+export function CollectionSettingsFields({ idPrefix, fields, value, onChange, disabled = false }: {
   idPrefix: string;
   fields: SourceSettingField[];
   value: CollectionPolicy;
   onChange: (patch: Partial<CollectionPolicy>) => void;
-  backfillLabel: string;
-  backfillLead: string;
   disabled?: boolean;
 }) {
   const field = (key: keyof CollectionPolicy) => fields.find((candidate) => candidate.key === key);
@@ -33,12 +30,12 @@ export function CollectionSettingsFields({ idPrefix, fields, value, onChange, ba
       {select('intervalMinutes', { id: `${idPrefix}-interval` })}
     </div> : null}
     <div className="policy-row">
-      <span>{backfillLabel}</span>
+      <span>每次檢查</span>
       <span className="policy-sentence">
-        <span>{backfillLead}</span>
-        {select('backfillWindow', { 'aria-label': `${backfillLabel}時間範圍` })}
+        <span>收集最近</span>
+        {select('backfillWindow', { 'aria-label': field('backfillWindow')?.label ?? '時間範圍' })}
         <span>內最新的</span>
-        {select('backfillMaxItems', { 'aria-label': `${backfillLabel}數量` })}
+        {select('backfillMaxItems', { 'aria-label': field('backfillMaxItems')?.label ?? '數量上限' })}
       </span>
     </div>
   </div>;

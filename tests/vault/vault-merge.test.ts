@@ -136,9 +136,9 @@ describe('merge comparison and choices', () => {
     expect((await workspace.channels.listChannels()).map((c) => [c.id, c.enabled])).toEqual([['UC1', false], ['UC-local', true], ['UC-new', true]]);
     const again = await workspace.previewMerge(buffer);
     expect(again.items.filter((item) => item.kind === 'channel').every((item) => item.state === 'same')).toBe(true);
-    // Discovery progress and check times describe collection, not the subscription choice.
+    // Check times describe collection, not the subscription choice.
     const progress = {
-      cursor: { videoId: 'abcdefghijk', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-10-01', backlog: true,
+      lastCheckedAt: '2026-10-01',
       nextCheckAt: '2026-10-01T00:30:00.000Z', lastDispatchedAt: '2026-10-01T00:00:00.000Z',
     };
     const v2 = (rows: unknown[]) => Buffer.from(JSON.stringify({ version: 2, channels: rows }));
@@ -539,12 +539,12 @@ describe('conflict granularity (T3)', () => {
 
   it('takes the imported settings of a subscription and keeps the local collection progress', () => {
     const localProgress = {
-      addedAt: '2025-12-01T00:00:00.000Z', cursor: { videoId: 'localcursor', publishedAt: null, recentIds: ['localcursor'] },
-      lastCheckedAt: '2026-10-10T00:00:00.000Z', backlog: true, nextCheckAt: '2026-10-10T06:00:00.000Z', lastDispatchedAt: '2026-10-10T00:00:00.000Z',
+      addedAt: '2025-12-01T00:00:00.000Z',
+      lastCheckedAt: '2026-10-10T00:00:00.000Z', nextCheckAt: '2026-10-10T06:00:00.000Z', lastDispatchedAt: '2026-10-10T00:00:00.000Z',
     };
     const incomingRow = {
       ...channel, title: '備份的名稱', enabled: false, settings: { ...settings, intervalMinutes: 720 },
-      cursor: { videoId: 'othercursor', publishedAt: null, recentIds: [] }, lastCheckedAt: '2026-01-02T00:00:00.000Z', backlog: false,
+      lastCheckedAt: '2026-01-02T00:00:00.000Z',
     };
     const local = new Map([['settings/youtube-channels.json', v2([{ ...channel, ...localProgress }], { laterField: 'kept' })]]);
     const incoming = new Map([['settings/youtube-channels.json', v2([incomingRow])]]);
@@ -553,11 +553,11 @@ describe('conflict granularity (T3)', () => {
     const merged = JSON.parse(mergeFiles(local, incoming, items, { 'channel:UC1': 'incoming' }).get('settings/youtube-channels.json')!.toString());
     expect(merged).toEqual({ version: 2, laterField: 'kept', channels: [{
       ...channel, title: '備份的名稱', enabled: false, settings: { ...settings, intervalMinutes: 720 },
-      addedAt: localProgress.addedAt, cursor: localProgress.cursor, lastCheckedAt: localProgress.lastCheckedAt, backlog: true,
+      addedAt: localProgress.addedAt, lastCheckedAt: localProgress.lastCheckedAt,
       nextCheckAt: null, lastDispatchedAt: null,
     }] });
     // Progress alone never makes a difference.
-    expect(compareFiles(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, cursor: incomingRow.cursor, backlog: false }])]]))
+    expect(compareFiles(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, lastCheckedAt: incomingRow.lastCheckedAt }])]]))
       .map((item) => item.state)).toEqual(['same']);
   });
 
@@ -567,12 +567,11 @@ describe('conflict granularity (T3)', () => {
     await write(local, channel);
     await write(incoming, { ...channel, title: '備份的名稱' });
     let preview = await workspace.previewMerge(await exportVault(incoming));
-    // A scheduled check after the comparison moves the cursor and the check times.
-    const cursor = { videoId: 'movedcursor', publishedAt: null, recentIds: ['movedcursor'] };
-    await write(local, { ...channel, cursor, lastCheckedAt: '2026-10-16T00:00:00.000Z', nextCheckAt: '2026-10-16T06:00:00.000Z', lastDispatchedAt: '2026-10-16T00:00:00.000Z' });
+    // A scheduled check after the comparison moves the check times.
+    await write(local, { ...channel, lastCheckedAt: '2026-10-16T00:00:00.000Z', nextCheckAt: '2026-10-16T06:00:00.000Z', lastDispatchedAt: '2026-10-16T00:00:00.000Z' });
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(workspace.status()).toMatchObject({ state: 'completed' });
-    expect(JSON.parse(await readFile(path.join(local, 'settings/youtube-channels.json'), 'utf8')).channels[0]).toMatchObject({ title: '備份的名稱', cursor });
+    expect(JSON.parse(await readFile(path.join(local, 'settings/youtube-channels.json'), 'utf8')).channels[0]).toMatchObject({ title: '備份的名稱', lastCheckedAt: '2026-10-16T00:00:00.000Z' });
 
     await add(incoming, 'new00000001', '新增沙漠');
     preview = await workspace.previewMerge(await exportVault(incoming));
