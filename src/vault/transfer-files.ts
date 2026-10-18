@@ -3,7 +3,6 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile 
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import { inspectVaultDirectory, VAULT_MARKER } from './vault-directory.js';
-import { PACKAGE_LIMIT } from './vault-package.js';
 
 /**
  * Local files of Vault export, restore and merge: package files a person or Agent names by path,
@@ -67,14 +66,13 @@ function absolute(value: unknown, message: string): string {
   return path.normalize(value as string);
 }
 
-/** Reads a package file a caller named by its absolute path. */
-export async function readPackageFile(value: unknown): Promise<Buffer> {
-  const file = absolute(value, '請提供資料包檔案的完整路徑。');
+/** Checks a package file a caller named by its absolute path and returns that path. */
+export async function checkPackageFile(value: unknown): Promise<string> {
+  const file = absolute(value, '請提供備份檔案的完整路徑。');
   let info;
-  try { info = await stat(file); } catch { invalid('找不到這個資料包檔案。'); }
+  try { info = await stat(file); } catch { invalid('找不到這個備份檔案。'); }
   if (!info!.isFile()) invalid('這個路徑不是檔案。');
-  if (info!.size > PACKAGE_LIMIT) invalid('資料包超過 128 MiB。');
-  return readFile(file);
+  return file;
 }
 
 /**
@@ -98,8 +96,8 @@ export async function checkExportFile(value: unknown, overwrite: boolean, folder
   return file;
 }
 
-/** Writes a package through a temporary file beside it, so the named file is either whole or untouched. */
-export async function writePackageFile(file: string, bytes: Buffer): Promise<void> {
+/** Writes a file through a temporary file beside it, so the named file is either whole or untouched. */
+export async function writeAtomically(file: string, bytes: Buffer): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
@@ -168,7 +166,7 @@ export interface RestoreJournal {
 
 export async function writeRestoreJournal(profilePath: string, journal: RestoreJournal): Promise<void> {
   await mkdir(profilePath, { recursive: true });
-  await writePackageFile(path.join(profilePath, RESTORE_JOURNAL), Buffer.from(JSON.stringify(journal)));
+  await writeAtomically(path.join(profilePath, RESTORE_JOURNAL), Buffer.from(JSON.stringify(journal)));
 }
 
 export async function clearRestoreJournal(profilePath: string): Promise<void> {
@@ -232,7 +230,7 @@ export async function readLastExport(profilePath: string, vaultRoot: string): Pr
 export async function recordExport(profilePath: string, vaultRoot: string, at: string): Promise<void> {
   const vaults = await readExportLog(profilePath);
   await mkdir(profilePath, { recursive: true });
-  await writePackageFile(path.join(profilePath, EXPORT_LOG),
+  await writeAtomically(path.join(profilePath, EXPORT_LOG),
     Buffer.from(`${JSON.stringify({ version: 1, vaults: { ...vaults, [vaultRoot]: at } }, null, 2)}\n`));
 }
 

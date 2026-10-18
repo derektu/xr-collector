@@ -6,7 +6,7 @@ import {
   documentId, documentIdFromPath, documentKeyFromId, documentKeyFromPath, documentPath, documentPathFromId,
 } from '../../src/vault/document-paths.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { safePath } from '../../src/vault/vault-package.js';
+import { packagePath } from '../../src/vault/vault-package.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -30,9 +30,9 @@ describe('document paths', () => {
     for (const id of ['web:dQw4w9WgXcQ', 'youtube:short', 'dQw4w9WgXcQ', 'youtube:dQw4w9WgXcQ:x']) {
       expect(documentKeyFromId(id), id).toBeNull();
     }
-    expect(safePath('documents/youtube/dQw4w9WgXcQ.md')).toBe(true);
-    expect(safePath('documents/web/dQw4w9WgXcQ.md')).toBe(false);
-    expect(safePath('settings/future.json')).toBe(false);
+    expect(packagePath('documents/youtube/dQw4w9WgXcQ.md')).toBe(true);
+    expect(packagePath('documents/web/dQw4w9WgXcQ.md')).toBe(false);
+    expect(packagePath('settings/future.json')).toBe(false);
   });
 
   it('names the same file the Vault writes a document to', async () => {

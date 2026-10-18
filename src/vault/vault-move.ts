@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import type { JobStore } from '../jobs/job-store.js';
 import { inspectVaultDirectory, readVaultId, VAULT_MARKER } from './vault-directory.js';
-import { isWithin, isWorkFolder, markerDigest, resolved, writePackageFile, type ProtectedFolders, type RealPath } from './transfer-files.js';
+import { isWithin, isWorkFolder, markerDigest, resolved, writeAtomically, type ProtectedFolders, type RealPath } from './transfer-files.js';
 
 /**
  * Files of a Vault move: checking the new location, copying and verifying the Vault, the profile
@@ -76,7 +76,8 @@ async function lstatOrNull(target: string) {
   }
 }
 
-async function nearestExisting(target: string): Promise<string> {
+/** The path itself or its nearest ancestor that exists. */
+export async function nearestExisting(target: string): Promise<string> {
   let current = target;
   for (;;) {
     if (await lstatOrNull(current)) return current;
@@ -238,7 +239,7 @@ export interface MoveJournal {
 
 export async function writeMoveJournal(profilePath: string, journal: MoveJournal): Promise<void> {
   await mkdir(profilePath, { recursive: true });
-  await writePackageFile(path.join(profilePath, MOVE_JOURNAL), Buffer.from(JSON.stringify(journal)));
+  await writeAtomically(path.join(profilePath, MOVE_JOURNAL), Buffer.from(JSON.stringify(journal)));
 }
 
 export async function clearMoveJournal(profilePath: string): Promise<void> {
@@ -427,6 +428,6 @@ export async function recordPreviousLocation(profilePath: string, vaultId: strin
   delete vaults[vaultId];
   const kept = Object.entries(vaults).slice(-(VAULTS_KEPT - 1));
   await mkdir(profilePath, { recursive: true });
-  await writePackageFile(path.join(profilePath, LOCATIONS_FILE),
+  await writeAtomically(path.join(profilePath, LOCATIONS_FILE),
     Buffer.from(`${JSON.stringify({ version: 1, vaults: Object.fromEntries([...kept, [vaultId, paths]]) }, null, 2)}\n`));
 }

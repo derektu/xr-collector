@@ -85,11 +85,6 @@ export interface JobManagerOptions {
   createId?: () => string;
   /** Starts a timer and returns its cancel function; retries wait through it. */
   setTimer?: (callback: () => void, ms: number) => () => void;
-  /**
-   * The shared settings a converted Vault gave its subscriptions; a subscription job accepted
-   * before the conversion carries no settings of its own and subscribes with these.
-   */
-  legacySettings?: () => Promise<CollectionPolicy | null>;
   /** Checks one subscription now, as a manual check does; a failed channel job is retried through it. */
   checkChannel?: (channelId: string) => Promise<JobSubmission>;
   /** The device's YouTube request channel; its cooldowns pause every YouTube step of this manager. */
@@ -1068,15 +1063,9 @@ export class JobManager {
     }, null);
   }
 
-  /**
-   * The settings a subscription job subscribes with: the ones accepted with it, or for a job
-   * accepted before subscriptions had their own settings, the shared settings the Vault's
-   * conversion gave every other subscription, else the source type's defaults.
-   */
+  /** The settings a subscription job subscribes with: the ones accepted with it, else the source type's defaults. */
   private async acceptedSettings(job: CollectionJob): Promise<CollectionPolicy> {
-    if (job.checkpoint?.settings) return job.checkpoint.settings;
-    const legacy = await this.options.legacySettings?.();
-    return { ...(legacy ?? DEFAULT_POLICY) };
+    return job.checkpoint?.settings ?? { ...DEFAULT_POLICY };
   }
 
   /**

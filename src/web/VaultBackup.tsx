@@ -4,7 +4,7 @@ import { api, ApiError } from './api-client.js';
 import { lineDiff } from './line-diff.js';
 import {
   besideVault, choiceText, exportFileName, fileName, itemName, itemTimes, lastExportLabel, mergeCounts, mergeGroups,
-  progressText, sizeLabel, transferRunning,
+  progressText, sizeLabel, transferRunning, unregisteredText,
 } from './transfer-presentation.js';
 
 const POLL_MS = 400;
@@ -178,7 +178,7 @@ function ExportDialog({ vaultPath, file, onClose }: {
 
   return <Modal title="匯出備份" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">
     {phase === 'input' ? <>
-      <p>備份包含文件、附件、訂閱與各自的收集設定、收集進度及刪除紀錄。搜尋索引、收集工作記錄與登入資料留在這台電腦。</p>
+      <p>備份包含知識庫的文件、訂閱與各自的收集設定、收集進度、自動收集開關及刪除紀錄。知識庫資料夾裡的其他檔案、搜尋索引、收集工作記錄與登入資料不包含在內。</p>
       <PathField label="備份檔案位置" value={target} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .xr-vault 結尾。" />
     </> : null}
     {phase === 'running' ? <Progress progress={progress} fallback="處理中…" /> : null}
@@ -191,6 +191,7 @@ function ExportDialog({ vaultPath, file, onClose }: {
       <p className="transfer-done" role="status">備份已建立。</p>
       <code className="setting-path" data-testid="export-result-path">{result.exportPath}</code>
       {result.exportBytes !== undefined ? <p className="hint">{sizeLabel(result.exportBytes)}</p> : null}
+      {result.unregisteredFiles ? <p className="hint" data-testid="export-unregistered">{unregisteredText(result.unregisteredFiles)}</p> : null}
     </> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">

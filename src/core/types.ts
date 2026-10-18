@@ -684,7 +684,6 @@ export type CollectorErrorCode =
   | 'file_exists'
   | 'transfer_cancelled'
   | 'vault_location_fixed'
-  | 'vault_unidentified'
   | 'insufficient_space'
   | 'invalid_request';
 
@@ -755,6 +754,8 @@ export interface TransferResult {
   /** Export: the written package file and its size. */
   exportPath?: string;
   exportBytes?: number;
+  /** Export: files in the Vault folder that belong to no record of the Vault and are not in the package. */
+  unregisteredFiles?: number;
   /** Merge: files written and the package of the Vault as it was before the merge. */
   writtenFiles?: number;
   mergeBackupPath?: string;
@@ -786,11 +787,12 @@ export type MergeChoice = 'local' | 'incoming';
  */
 export interface MergeItem {
   key: string;
-  kind: 'document' | 'channel' | 'file' | 'deletion';
+  kind: 'document' | 'channel' | 'deletion';
   label: string;
   state: 'new' | 'same' | 'conflict';
   localTime: string | null;
   incomingTime: string | null;
+  /** The content of each side, for items that need a choice; empty for new and identical items. */
   localText: string;
   incomingText: string;
   /** Deletion items: which side holds the deletion record. */
@@ -800,7 +802,7 @@ export interface MergePreview {
   id: string;
   items: MergeItem[];
   /** The description a package carries, when it carries one. */
-  package: { version: number; exportedAt: string | null; createdBy: string | null };
+  package: { exportedAt: string | null; createdBy: string | null };
 }
 
 /**

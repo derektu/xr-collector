@@ -1,10 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { MarkdownVault } from '../dist/node/vault/markdown-vault.js';
 import { JsonChannelStore } from '../dist/node/channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../dist/node/channels/json-channel-schedule-store.js';
-import { exportVault } from '../dist/node/vault/vault-package.js';
+import { writePackage } from '../dist/node/vault/vault-package.js';
 
 const { values } = parseArgs({ options: { output: { type: 'string' } } });
 const root = values.output ? path.resolve(values.output) : path.resolve('.data', 'merge-demo', new Date().toISOString().replace(/[:.]/g, '-'));
@@ -27,11 +27,7 @@ const channel = { id: 'UC-demo', title: '合成測試頻道', url: 'https://www.
 await new JsonChannelStore(local).add(channel);
 await new JsonChannelStore(incoming).add({ ...channel, title: '匯入頻道名稱', enabled: false, settings: { ...channel.settings, intervalMinutes: 180 } });
 await new JsonChannelStore(incoming).add({ ...channel, id: 'UC-new', title: '新增頻道', url: 'https://www.youtube.com/channel/UC-new', enabled: false });
-for (const [target, marker] of [[local, 60], [incoming, 180]]) {
-  await new JsonChannelScheduleStore(target).save({ enabled: false });
-  await mkdir(path.join(target, 'attachments'), { recursive: true });
-  await writeFile(path.join(target, 'attachments', 'sample.bin'), Buffer.from([0, 128, marker]));
-}
-await writeFile(path.join(root, 'incoming.xr-vault'), await exportVault(incoming));
-await writeFile(path.join(root, 'local-before.xr-vault'), await exportVault(local));
+for (const target of [local, incoming]) await new JsonChannelScheduleStore(target).save({ enabled: false });
+await writePackage(incoming, path.join(root, 'incoming.xr-vault'));
+await writePackage(local, path.join(root, 'local-before.xr-vault'));
 console.log(`合成資料：${root}\n在 validation 工作區還原 local-before.xr-vault，再選 incoming.xr-vault 比對合併。`);

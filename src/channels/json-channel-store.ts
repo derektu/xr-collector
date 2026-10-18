@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { YouTubeChannel } from '../core/types.js';
 import { readJsonFile, writeJsonFile } from './json-file.js';
-import { CHANNELS_FILE, channelsFromJson, isLegacyChannelsJson, SCHEDULE_FILE, type ChannelsFile } from './subscription-files.js';
+import { CHANNELS_FILE, channelsFromJson, type ChannelsFile } from './subscription-files.js';
 
 export type ChannelPatch = Partial<Omit<YouTubeChannel, 'id' | 'addedAt'>>;
 
@@ -99,10 +99,7 @@ export class JsonChannelStore implements ChannelStore {
 
   private async readChannels(): Promise<YouTubeChannel[]> {
     const value = await readJsonFile(path.join(this.root, CHANNELS_FILE));
-    // A version 1 file is normally converted when the Vault opens; reading one here keeps a store
-    // used on its own correct, and the next write stores version 2.
-    const schedule = isLegacyChannelsJson(value) ? await readJsonFile(path.join(this.root, SCHEDULE_FILE)) : undefined;
-    return channelsFromJson(value, schedule).sort((left, right) => left.addedAt.localeCompare(right.addedAt));
+    return channelsFromJson(value).sort((left, right) => left.addedAt.localeCompare(right.addedAt));
   }
 
   private async writeChannels(channels: YouTubeChannel[]): Promise<void> {

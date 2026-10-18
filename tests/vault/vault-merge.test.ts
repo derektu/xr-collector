@@ -6,9 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { exportVault, unpackVault } from '../../src/vault/vault-package.js';
-import { createHash } from 'node:crypto';
-import { compareFiles, mergeFiles, packageFiles } from '../../src/vault/vault-merge.js';
+import { compareFiles, memorySource, mergeFiles, type FileChanges } from '../../src/vault/vault-merge.js';
+import { ensureMarker, packageBytes, packageFiles, packageOf, unpackBytes } from './package-fixtures.js';
 import { lineDiff } from '../../src/web/line-diff.js';
 import { Collector } from '../../src/core/collector.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
@@ -57,6 +56,7 @@ async function fixture(real = false) {
     search: async ({ query }) => ({ hits: [...docs.values()].filter((doc) => doc.bodyMarkdown.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown })), total: docs.size, offset: 0, limit: 50 }),
   };
   await search.rebuild(); vi.mocked(search.rebuild).mockClear();
+  await ensureMarker(local);
   const options = { root: local, selection: new VaultSelection(path.join(root, 'selection.json')), profilePath: path.join(root, 'profile'), createdBy: 'XR Collector test', capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1' }), listVideos: async () => [] },
     searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData: path.join(root, 'search'),
@@ -65,6 +65,12 @@ async function fixture(real = false) {
   await new Promise((resolve) => setTimeout(resolve, 10));
   return { root, local, incoming, workspace, search, options };
 }
+/** What a package of the Vault would hold, to tell whether a merge changed it. */
+const snapshot = async (root: string) => packageFiles(await packageBytes(root));
+/** Merge items of two sides held in memory. */
+const itemsOf = async (local: Map<string, Buffer>, incoming: Map<string, Buffer>) => (await compareFiles(memorySource(local), memorySource(incoming))).items;
+/** The bytes a merge writes to a settings file. */
+const written = (changes: FileChanges, file: string) => (changes.get(file) as { bytes: Buffer }).bytes.toString();
 async function wait(workspace: VaultWorkspace) {
   await expect.poll(() => workspace.status().state, { timeout: 10_000 }).toMatch(/^(completed|error)$/);
 }
@@ -78,7 +84,7 @@ describe('merge comparison and choices', () => {
     await add(local, 'localonly01', '僅本機的山岳');
     await add(local, 'same0000001', '相同內容'); await add(incoming, 'same0000001', '相同內容');
     await add(incoming, 'new00000001', '新增沙漠');
-    const buffer = await exportVault(incoming); const preview = await workspace.previewMerge(buffer);
+    const buffer = await packageBytes(incoming); const preview = await workspace.previewMerge(buffer);
     expect(preview.items.map((item) => [item.key, item.state])).toEqual([
       ['documents/youtube/abcdefghijk.md', 'conflict'], ['documents/youtube/new00000001.md', 'new'], ['documents/youtube/same0000001.md', 'same'],
     ]);
@@ -89,13 +95,13 @@ describe('merge comparison and choices', () => {
     expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(0);
     expect((await workspace.search.search({ query: '沙漠' })).hits).toHaveLength(1);
     expect(search.index).toHaveBeenCalledTimes(2); expect(search.rebuild).not.toHaveBeenCalled();
-    const before = await exportVault(local);
+    const before = await snapshot(local);
     const again = await workspace.previewMerge(buffer);
     expect(again.items.every((item) => item.state === 'same')).toBe(true);
     workspace.applyMerge(again.id, {}); await wait(workspace);
-    expect(await exportVault(local)).toEqual(before); expect(search.index).toHaveBeenCalledTimes(2);
+    expect(await snapshot(local)).toEqual(before); expect(search.index).toHaveBeenCalledTimes(2);
     const backupName = (await readdir(path.dirname(local))).find((name) => name.includes('before-merge'))!;
-    expect(packageFiles(await readFile(path.join(path.dirname(local), backupName))).get('documents/youtube/abcdefghijk.md')!.toString()).toContain('森林');
+    expect((await packageFiles(await readFile(path.join(path.dirname(local), backupName)))).get('documents/youtube/abcdefghijk.md')!.toString()).toContain('森林');
   });
   it.each(['local', 'incoming'] as const)('honors %s choice even when imported content has an older date', async (choice) => {
     const { local, incoming, workspace } = await fixture();
@@ -103,7 +109,7 @@ describe('merge comparison and choices', () => {
     const old = (await readFile(path.join(incoming, name), 'utf8')).replace(/collected_at: .*/u, 'collected_at: 2000-01-01T00:00:00.000Z');
     await file(incoming, name, old);
     const before = await readFile(path.join(local, name));
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items[0]!.incomingTime).toBe('2000-01-01T00:00:00.000Z');
     workspace.applyMerge(preview.id, choices(preview, choice)); await wait(workspace);
     expect(await readFile(path.join(local, name))).toEqual(choice === 'local' ? before : Buffer.from(old));
@@ -119,7 +125,7 @@ describe('merge comparison and choices', () => {
       [original.replace('森林', '森林\n\n新增段落'), 'conflict'],
     ]) {
       await file(incoming, name, text!);
-      const preview = await workspace.previewMerge(await exportVault(incoming)); expect(preview.items[0]!.state).toBe(expected);
+      const preview = await workspace.previewMerge(await packageBytes(incoming)); expect(preview.items[0]!.state).toBe(expected);
     }
   });
   it('merges channels independently, preserves local-only channels and ignores order and addedAt-only changes', async () => {
@@ -130,7 +136,7 @@ describe('merge comparison and choices', () => {
     await new JsonChannelStore(local).add({ ...channel, id: 'UC-local' });
     await new JsonChannelStore(incoming).add({ ...channel, enabled: false });
     await new JsonChannelStore(incoming).add({ ...channel, id: 'UC-new' });
-    const buffer = await exportVault(incoming); const preview = await workspace.previewMerge(buffer);
+    const buffer = await packageBytes(incoming); const preview = await workspace.previewMerge(buffer);
     expect(preview.items.find((item) => item.key === 'channel:UC1')?.state).toBe('conflict');
     workspace.applyMerge(preview.id, { ...choices(preview, 'local'), 'channel:UC1': 'incoming' }); await wait(workspace);
     expect((await workspace.channels.listChannels()).map((c) => [c.id, c.enabled])).toEqual([['UC1', false], ['UC-local', true], ['UC-new', true]]);
@@ -144,33 +150,27 @@ describe('merge comparison and choices', () => {
     const v2 = (rows: unknown[]) => Buffer.from(JSON.stringify({ version: 2, channels: rows }));
     const withProgress = new Map([['settings/youtube-channels.json', v2([{ ...channel, ...progress }])]]);
     const withoutProgress = new Map([['settings/youtube-channels.json', v2([channel])]]);
-    expect(compareFiles(withoutProgress, withProgress).map((item) => item.state)).toEqual(['same']);
+    expect((await itemsOf(withoutProgress, withProgress)).map((item) => item.state)).toEqual(['same']);
     // An imported subscription is planned again after the merge rather than keeping the other Vault's times.
-    const adopted = mergeFiles(new Map(), withProgress, compareFiles(new Map(), withProgress), {});
-    expect(JSON.parse(adopted.get('settings/youtube-channels.json')!.toString())).toEqual({
+    const adopted = await mergeFiles(memorySource(new Map()), memorySource(withProgress), await itemsOf(new Map(), withProgress), {});
+    expect(JSON.parse(written(adopted, 'settings/youtube-channels.json'))).toEqual({
       version: 2, channels: [{ ...channel, ...progress, nextCheckAt: null, lastDispatchedAt: null }],
     });
     const a = new Map([['settings/youtube-channels.json', v2([channel, { ...channel, id: 'UC2' }])]]);
     const b = new Map([['settings/youtube-channels.json', v2([{ ...channel, id: 'UC2' }, { ...channel, addedAt: '2000' }])]]);
-    expect(compareFiles(a, b).every((item) => item.state === 'same')).toBe(true);
+    expect((await itemsOf(a, b)).every((item) => item.state === 'same')).toBe(true);
   });
-  it('lists different settings as a conflict of that subscription and compares packages of both versions alike', async () => {
+  it('lists different settings as a conflict of that subscription', async () => {
     const { local, incoming, workspace } = await fixture();
     const base = { title: '頻道', enabled: true, addedAt: '2026-01-01' };
     const settings = { intervalMinutes: 60, backfillWindow: '2w' as const, backfillMaxItems: 20 };
     await new JsonChannelStore(local).add({ ...base, id: 'UCsame', url: 'https://www.youtube.com/channel/UCsame', settings });
     await new JsonChannelStore(local).add({ ...base, id: 'UCdiff', url: 'https://www.youtube.com/channel/UCdiff', settings });
-    // The incoming Vault is a package with shared settings: 60 minutes, 2 weeks, 20 videos.
-    await file(incoming, 'settings/youtube-channels.json', JSON.stringify([
-      { ...base, id: 'UCsame', url: 'https://www.youtube.com/channel/UCsame' },
-      { ...base, id: 'UCdiff', url: 'https://www.youtube.com/channel/UCdiff' },
-    ]));
-    await file(incoming, 'settings/youtube-schedule.json', JSON.stringify({
-      version: 1, enabled: true, intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 20,
-      lastAttemptAt: null, lastCompletedAt: null, nextRunAt: null, lastResult: null,
-    }));
+    await new JsonChannelStore(incoming).add({ ...base, id: 'UCsame', url: 'https://www.youtube.com/channel/UCsame', settings });
+    await new JsonChannelStore(incoming).add({ ...base, id: 'UCdiff', url: 'https://www.youtube.com/channel/UCdiff', settings });
+    await file(incoming, 'settings/youtube-schedule.json', JSON.stringify({ version: 2, enabled: false }));
     await workspace.channels.updateSettings('UCdiff', { intervalMinutes: 15 });
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items.filter((item) => item.kind === 'channel').map((item) => [item.key, item.state])).toEqual([
       ['channel:UCsame', 'same'], ['channel:UCdiff', 'conflict'],
     ]);
@@ -183,36 +183,25 @@ describe('merge comparison and choices', () => {
     expect((await workspace.channels.listChannels()).find((channel) => channel.id === 'UCdiff')!.settings).toEqual(settings);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: true });
   });
-  it('compares binary attachments, versions and management files without deleting absent files', async () => {
+  it('refuses to merge documents whose source IDs differ in letter case alone', async () => {
     const { local, incoming, workspace } = await fixture();
-    for (const root of [local, incoming]) await file(root, 'versions/same.md', 'same');
-    await file(local, 'attachments/a.bin', Buffer.from([0, 128, 1])); await file(incoming, 'attachments/a.bin', Buffer.from([0, 128, 2]));
-    await file(local, 'management/only-local.json', '{}'); await file(incoming, 'management/new.json', '{"new":true}');
-    const preview = await workspace.previewMerge(await exportVault(incoming));
-    expect(preview.items.find((item) => item.key === 'attachments/a.bin')).toMatchObject({ state: 'conflict', incomingText: expect.stringContaining('SHA-256') });
-    workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
-    expect(await readFile(path.join(local, 'attachments/a.bin'))).toEqual(Buffer.from([0, 128, 2]));
-    expect(await readFile(path.join(local, 'management/only-local.json'), 'utf8')).toBe('{}');
-    expect(await readFile(path.join(local, 'management/new.json'), 'utf8')).toBe('{"new":true}');
-  });
-  it.each([['attachments/A', 'attachments/a'], ['attachments/a', 'attachments/a/b']])('rejects cross-vault path collisions: %s / %s', async (left, right) => {
-    const { local, incoming, workspace } = await fixture(); await file(local, left, 'local'); await file(incoming, right, 'incoming');
-    const before = await exportVault(local);
-    await expect(workspace.previewMerge(await exportVault(incoming))).rejects.toThrow('衝突');
-    expect(await exportVault(local)).toEqual(before);
+    await add(local, 'Caseid00001', '大寫'); await add(incoming, 'caseid00001', '小寫');
+    const before = await snapshot(local);
+    await expect(workspace.previewMerge(await packageBytes(incoming))).rejects.toThrow('大小寫');
+    expect(await snapshot(local)).toEqual(before);
   });
 });
 
 describe('transaction and HTTP', () => {
   it('cancels a preview without changing data and rejects its token afterward', async () => {
-    const { local, incoming, workspace } = await fixture(); const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming)); workspace.cancelMerge(preview.id);
-    expect(await exportVault(local)).toEqual(before);
+    const { local, incoming, workspace } = await fixture(); const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming)); workspace.cancelMerge(preview.id);
+    expect(await snapshot(local)).toEqual(before);
     expect(() => workspace.applyMerge(preview.id, choices(preview))).toThrow('失效');
   });
   it('rejects changed local state, missing/unknown decisions and duplicate channel IDs', async () => {
     const { local, incoming, workspace } = await fixture();
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     for (const decision of [{}, { fake: 'local' }]) {
       workspace.applyMerge(preview.id, decision as Record<string, MergeChoice>); await wait(workspace);
       expect(workspace.status().state).toBe('error');
@@ -222,17 +211,17 @@ describe('transaction and HTTP', () => {
     expect(workspace.status().message).toContain('重新比對');
     const row = { id: 'UC1', title: '', url: '', enabled: false, addedAt: '', settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } };
     await file(incoming, 'settings/youtube-channels.json', JSON.stringify({ version: 2, channels: [row, row] }));
-    await expect(workspace.previewMerge(await exportVault(incoming))).rejects.toThrow('重複');
+    await expect(workspace.previewMerge(await packageBytes(incoming))).rejects.toThrow('重複');
   });
   it('restores every file and search result after a partial indexing failure and can retry', async () => {
     const { local, incoming, workspace, search } = await fixture();
     await add(incoming, 'new00000001', '新增沙漠');
-    const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     const realIndex = vi.mocked(search.index).getMockImplementation()!;
     vi.mocked(search.index).mockImplementationOnce(realIndex).mockRejectedValueOnce(new Error('disk/index failure'));
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
-    expect(workspace.status().state).toBe('error'); expect(await exportVault(local)).toEqual(before);
+    expect(workspace.status().state).toBe('error'); expect(await snapshot(local)).toEqual(before);
     expect(search.rebuild).toHaveBeenCalledTimes(1);
     expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(1);
     expect((await workspace.search.search({ query: '沙漠' })).hits).toHaveLength(0);
@@ -242,8 +231,8 @@ describe('transaction and HTTP', () => {
   it('rolls back a file-write failure after an earlier file has been replaced', async () => {
     const { local, incoming, workspace } = await fixture();
     await add(incoming, 'new00000001', '新增沙漠');
-    const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     const originalRename = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).rename;
     let failed = false;
     vi.mocked(rename).mockImplementation(async (from, to) => {
@@ -255,33 +244,33 @@ describe('transaction and HTTP', () => {
     try {
       workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
       expect(failed).toBe(true); expect(workspace.status().state).toBe('error');
-      expect(await exportVault(local)).toEqual(before);
+      expect(await snapshot(local)).toEqual(before);
       expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(1);
       expect((await workspace.search.search({ query: '海洋' })).hits).toHaveLength(0);
     } finally { vi.mocked(rename).mockImplementation(originalRename); }
   });
   it('recovers an interrupted journal before startup exposes the vault', async () => {
     const { local, workspace, options } = await fixture();
-    const before = await exportVault(local);
+    const bytes = await packageBytes(local); const before = await packageFiles(bytes);
     await workspace.close();
-    const backup = `${local}.before-merge-interrupted.xr-vault`; await writeFile(backup, before);
+    const backup = `${local}.before-merge-interrupted.xr-vault`; await writeFile(backup, bytes);
     const changed = 'documents/youtube/abcdefghijk.md'; const added = 'documents/youtube/new00000001.md';
     await writeFile(`${local}.merge-journal.json`, JSON.stringify({ backup, paths: [changed, added] }));
     await file(local, changed, 'partially written invalid document'); await add(local, 'new00000001');
     await file(local, `${added}.12345678-1234-1234-1234-123456789012.tmp`, 'interrupted temporary write');
     const restarted = await VaultWorkspace.open(options); workspaces.push(restarted);
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
     expect((await restarted.search.search({ query: '森林' })).hits).toHaveLength(1);
   });
   it('keeps the journal and blocks writes if rollback search also fails; restart repairs data and search', async () => {
-    const { local, incoming, workspace, search, options } = await fixture(); const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const { local, incoming, workspace, search, options } = await fixture(); const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     vi.mocked(search.index).mockRejectedValueOnce(new Error('fail')); vi.mocked(search.rebuild).mockRejectedValueOnce(new Error('fail rollback'));
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(workspace.status().message).toContain('重新啟動'); expect(() => workspace.enterWrite()).toThrow();
     await workspace.close();
     const restarted = await VaultWorkspace.open(options); workspaces.push(restarted);
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
     await expect(readFile(`${local}.merge-journal.json`)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await restarted.search.search({ query: '森林' })).hits).toHaveLength(1);
   });
@@ -296,7 +285,7 @@ describe('transaction and HTTP', () => {
     const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, search: workspace.search, transfer: workspace });
     const agent = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test' });
     try {
-      const response = await app.inject({ method: 'POST', url: '/api/vault/merge/preview', headers: { 'content-type': 'application/octet-stream' }, payload: await exportVault(incoming) });
+      const response = await app.inject({ method: 'POST', url: '/api/vault/merge/preview', headers: { 'content-type': 'application/octet-stream' }, payload: await packageBytes(incoming) });
       expect(response.statusCode).toBe(200); const preview = response.json() as MergePreview;
       let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
       vi.mocked(search.index).mockImplementationOnce(async () => held);
@@ -312,7 +301,7 @@ describe('transaction and HTTP', () => {
       const agentPreview = await agent.inject({
         method: 'POST', url: '/api/vault/merge/preview',
         headers: { authorization: 'Bearer test', 'content-type': 'application/octet-stream' },
-        payload: await exportVault(incoming),
+        payload: await packageBytes(incoming),
       });
       expect(agentPreview.statusCode).toBe(200);
       const cancelled = await agent.inject({
@@ -324,12 +313,12 @@ describe('transaction and HTTP', () => {
     } finally { await app.close(); await agent.close(); await access.close(); }
   });
   it('empty package is a no-op; a malformed preview leaves the vault unchanged', async () => {
-    const { root, local, workspace } = await fixture(); const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(path.join(root, 'empty')));
+    const { root, local, workspace } = await fixture(); const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(path.join(root, 'empty')));
     expect(preview.items).toEqual([]); workspace.applyMerge(preview.id, {}); await wait(workspace);
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
     await expect(workspace.previewMerge(Buffer.from('bad'))).rejects.toThrow();
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
   });
 });
 
@@ -338,7 +327,7 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('updates r
   await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
   expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(1);
   await add(incoming, 'new00000001', '沙漠探險');
-  const preview = await workspace.previewMerge(await exportVault(incoming));
+  const preview = await workspace.previewMerge(await packageBytes(incoming));
   workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
   expect(workspace.status().state).toBe('completed');
   expect((await workspace.search.search({ query: '森林' })).hits).toHaveLength(0);
@@ -357,7 +346,7 @@ describe('deletion records in a merge (A6)', () => {
   it.each(['local', 'incoming'] as const)('asks once when the package deleted a document the Vault keeps (%s)', async (choice) => {
     const { local, incoming, workspace, search } = await fixture();
     await deleteIn(incoming);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items.map((item) => [item.key, item.kind, item.state])).toEqual([[`deletion:${id}`, 'deletion', 'conflict']]);
     expect(preview.items[0]!.label).toBe('刪除紀錄：本機標題');
 
@@ -378,7 +367,7 @@ describe('deletion records in a merge (A6)', () => {
   it.each(['local', 'incoming'] as const)('asks once when the Vault deleted a document the package has (%s)', async (choice) => {
     const { local, incoming, workspace } = await fixture();
     await workspace.collector.delete(id);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items.map((item) => [item.key, item.state])).toEqual([[`deletion:${id}`, 'conflict']]);
 
     workspace.applyMerge(preview.id, choices(preview, choice)); await wait(workspace);
@@ -400,7 +389,7 @@ describe('deletion records in a merge (A6)', () => {
     await workspace.collector.delete(id);
     await deleteIn(incoming);
 
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items.map((item) => [item.key, item.state])).toEqual([
       ['deletion:youtube:gone0000001', 'new'], [`deletion:${id}`, 'same'],
     ]);
@@ -423,16 +412,16 @@ describe('deletion records in a merge (A6)', () => {
     await deleteLeavingFile(local, new Date(Date.now() + 60_000));
     expect(existsSync(path.join(local, documentPath))).toBe(true);
 
-    const exported = await exportVault(local);
-    const files = packageFiles(exported);
+    const exported = await packageBytes(local);
+    const files = await packageFiles(exported);
     expect(files.has(documentPath)).toBe(false);
     expect(JSON.parse(files.get(DELETIONS_FILE)!.toString()).deleted.map((r: { sourceId: string }) => r.sourceId)).toEqual([capture.videoId]);
     const restored = path.join(root, 'restored');
-    await unpackVault(exported, restored, () => undefined);
+    await unpackBytes(exported, restored);
     expect(await new MarkdownVault(restored).list()).toEqual([]);
     expect(await records(restored)).toEqual([capture.videoId]);
 
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items.map((item) => [item.key, item.state])).toEqual([[`deletion:${id}`, 'conflict']]);
     workspace.applyMerge(preview.id, choices(preview, 'incoming')); await wait(workspace);
     expect(workspace.status().state).toBe('completed');
@@ -447,7 +436,7 @@ describe('deletion records in a merge (A6)', () => {
     });
     await new MarkdownVault(local, { now: () => new Date(Date.now() + 60_000) }).add(capture);
 
-    const files = packageFiles(await exportVault(local));
+    const files = await snapshot(local);
     expect(files.has(documentPath)).toBe(true);
     expect(JSON.parse(files.get(DELETIONS_FILE)!.toString()).deleted).toEqual([]);
   });
@@ -456,8 +445,8 @@ describe('deletion records in a merge (A6)', () => {
     const { local, incoming, workspace } = await fixture();
     await deleteLeavingFile(local, new Date(Date.now() + 60_000));
     await add(incoming, 'new00000001', '新增沙漠');
-    const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     const originalRename = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).rename;
     vi.mocked(rename).mockImplementation(async (from, to) => {
       if (String(to) === path.join(local, 'documents/youtube/new00000001.md')) throw new Error('simulated disk write failure');
@@ -469,24 +458,21 @@ describe('deletion records in a merge (A6)', () => {
 
     expect(workspace.status().state).toBe('error');
     expect(workspace.status().message).not.toContain('重新啟動');
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
     expect(() => workspace.enterWrite()()).not.toThrow();
   });
 
   it('recovers from a merge backup that holds a document next to its record', async () => {
     const { local, workspace, options } = await fixture();
-    const files = packageFiles(await exportVault(local));
+    const files = await snapshot(local);
     await workspace.close();
-    // A backup with both is still restored: recovery checks the format, not this agreement.
+    // A backup with both is still restored: recovery checks the package, not this agreement.
     files.set(DELETIONS_FILE, Buffer.from(JSON.stringify({ version: 1, deleted: [{
       sourceType: 'youtube', sourceId: capture.videoId, sourceUrl: capture.sourceUrl, title: capture.title,
       publisherId: 'UC1', publisherName: '頻道', deletedAt: new Date(Date.now() + 60_000).toISOString(),
     }] })));
-    const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
-    const entries = [...files].map(([file, data]) => ({ path: file, size: data.length, sha256: sha(data), data: data.toString('base64') }));
     const backup = `${local}.before-merge-both.xr-vault`;
-    await writeFile(backup, JSON.stringify({ format: 'xr-collector-vault', version: 3, files: entries,
-      sha256: sha(JSON.stringify(entries.map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })))) }));
+    await writeFile(backup, await packageOf([...files].map(([file, data]) => ({ path: file, data }))));
     await writeFile(`${local}.merge-journal.json`, JSON.stringify({ backup, paths: [DELETIONS_FILE] }));
 
     const restarted = await VaultWorkspace.open(options); workspaces.push(restarted);
@@ -498,13 +484,13 @@ describe('deletion records in a merge (A6)', () => {
   it('restores the document and the deletions file when applying a deletion fails', async () => {
     const { local, incoming, workspace, search } = await fixture();
     await deleteIn(incoming);
-    const before = await exportVault(local);
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const before = await snapshot(local);
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     vi.mocked(search.remove).mockRejectedValueOnce(new Error('index failure'));
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
 
     expect(workspace.status().state).toBe('error');
-    expect(await exportVault(local)).toEqual(before);
+    expect(await snapshot(local)).toEqual(before);
     expect(existsSync(path.join(local, DELETIONS_FILE))).toBe(false);
     expect(await workspace.collector.list()).toHaveLength(1);
   });
@@ -537,7 +523,7 @@ describe('conflict granularity (T3)', () => {
   const channel = { id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1', enabled: true, addedAt: '2026-01-01T00:00:00.000Z', settings };
   const v2 = (rows: unknown[], extra: Record<string, unknown> = {}) => Buffer.from(JSON.stringify({ version: 2, ...extra, channels: rows }));
 
-  it('takes the imported settings of a subscription and keeps the local collection progress', () => {
+  it('takes the imported settings of a subscription and keeps the local collection progress', async () => {
     const localProgress = {
       addedAt: '2025-12-01T00:00:00.000Z',
       lastCheckedAt: '2026-10-10T00:00:00.000Z', nextCheckAt: '2026-10-10T06:00:00.000Z', lastDispatchedAt: '2026-10-10T00:00:00.000Z',
@@ -548,16 +534,16 @@ describe('conflict granularity (T3)', () => {
     };
     const local = new Map([['settings/youtube-channels.json', v2([{ ...channel, ...localProgress }], { laterField: 'kept' })]]);
     const incoming = new Map([['settings/youtube-channels.json', v2([incomingRow])]]);
-    const items = compareFiles(local, incoming);
+    const items = await itemsOf(local, incoming);
     expect(items.map((item) => [item.key, item.state])).toEqual([['channel:UC1', 'conflict']]);
-    const merged = JSON.parse(mergeFiles(local, incoming, items, { 'channel:UC1': 'incoming' }).get('settings/youtube-channels.json')!.toString());
+    const merged = JSON.parse(written(await mergeFiles(memorySource(local), memorySource(incoming), items, { 'channel:UC1': 'incoming' }), 'settings/youtube-channels.json'));
     expect(merged).toEqual({ version: 2, laterField: 'kept', channels: [{
       ...channel, title: '備份的名稱', enabled: false, settings: { ...settings, intervalMinutes: 720 },
       addedAt: localProgress.addedAt, lastCheckedAt: localProgress.lastCheckedAt,
       nextCheckAt: null, lastDispatchedAt: null,
     }] });
     // Progress alone never makes a difference.
-    expect(compareFiles(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, lastCheckedAt: incomingRow.lastCheckedAt }])]]))
+    expect((await itemsOf(local, new Map([['settings/youtube-channels.json', v2([{ ...channel, lastCheckedAt: incomingRow.lastCheckedAt }])]])))
       .map((item) => item.state)).toEqual(['same']);
   });
 
@@ -566,7 +552,7 @@ describe('conflict granularity (T3)', () => {
     const write = (root: string, row: Record<string, unknown>) => file(root, 'settings/youtube-channels.json', JSON.stringify({ version: 2, channels: [row] }));
     await write(local, channel);
     await write(incoming, { ...channel, title: '備份的名稱' });
-    let preview = await workspace.previewMerge(await exportVault(incoming));
+    let preview = await workspace.previewMerge(await packageBytes(incoming));
     // A scheduled check after the comparison moves the check times.
     await write(local, { ...channel, lastCheckedAt: '2026-10-16T00:00:00.000Z', nextCheckAt: '2026-10-16T06:00:00.000Z', lastDispatchedAt: '2026-10-16T00:00:00.000Z' });
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
@@ -574,7 +560,7 @@ describe('conflict granularity (T3)', () => {
     expect(JSON.parse(await readFile(path.join(local, 'settings/youtube-channels.json'), 'utf8')).channels[0]).toMatchObject({ title: '備份的名稱', lastCheckedAt: '2026-10-16T00:00:00.000Z' });
 
     await add(incoming, 'new00000001', '新增沙漠');
-    preview = await workspace.previewMerge(await exportVault(incoming));
+    preview = await workspace.previewMerge(await packageBytes(incoming));
     await edit(local);
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(workspace.status()).toMatchObject({ state: 'error', message: expect.stringContaining('重新比對') });
@@ -587,20 +573,20 @@ describe('conflict granularity (T3)', () => {
     await new Collector(new MarkdownVault(incoming)).delete(id);
     const deletions = path.join(local, DELETIONS_FILE);
     await file(local, DELETIONS_FILE, JSON.stringify({ version: 1, deleted: [], laterField: 'kept' }));
-    const preview = await workspace.previewMerge(await exportVault(incoming));
+    const preview = await workspace.previewMerge(await packageBytes(incoming));
     expect(preview.items).toEqual([expect.objectContaining({ key: `deletion:${id}`, deletedOn: 'incoming', state: 'conflict' })]);
     workspace.applyMerge(preview.id, choices(preview)); await wait(workspace);
     expect(JSON.parse(await readFile(deletions, 'utf8'))).toMatchObject({ version: 1, laterField: 'kept', deleted: [{ sourceId: capture.videoId }] });
 
     const other = await fixture();
     await other.workspace.collector.delete(id);
-    const reverse = await other.workspace.previewMerge(await exportVault(other.incoming));
+    const reverse = await other.workspace.previewMerge(await packageBytes(other.incoming));
     expect(reverse.items).toEqual([expect.objectContaining({ key: `deletion:${id}`, deletedOn: 'local', state: 'conflict' })]);
   });
 
-  it('compares a document without a collector section on all of its metadata', () => {
+  it('compares a document without a collector section on all of its metadata', async () => {
     const bytes = (body: string) => Buffer.from(`---\ntitle: 無來源段落\nnote: x\n---\n${body}`);
-    const items = compareFiles(new Map([['documents/youtube/abcdefghijk.md', bytes('一')]]), new Map([['documents/youtube/abcdefghijk.md', bytes('二')]]));
+    const items = await itemsOf(new Map([['documents/youtube/abcdefghijk.md', bytes('一')]]), new Map([['documents/youtube/abcdefghijk.md', bytes('二')]]));
     expect(items).toEqual([expect.objectContaining({ kind: 'document', state: 'conflict', label: '無來源段落 (abcdefghijk.md)', localTime: null, incomingTime: null })]);
   });
 });

@@ -101,18 +101,6 @@ export class JobStore {
       .map((job) => structuredClone(job));
   }
 
-  /**
-   * Gives the jobs at `vaultPath` that carry no Vault ID to the Vault with `vaultId`; called when a
-   * Vault opens, so jobs recorded before Vaults had IDs stay with the Vault at their path.
-   */
-  claim(vaultPath: string, vaultId: string): void {
-    let changed = false;
-    for (const job of this.jobs.values()) {
-      if (job.vaultPath === vaultPath && job.vaultId === undefined) { job.vaultId = vaultId; changed = true; }
-    }
-    if (changed) this.scheduleFlush();
-  }
-
   /** Records the jobs of the Vault with `vaultId` at its new location after a move. */
   rebind(fromPath: string, toPath: string, vaultId: string): number {
     let count = 0;
