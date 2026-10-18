@@ -128,6 +128,26 @@ describe('first subscription (S-T3)', () => {
     ]);
     expect(first.progress).toMatchObject({ created: 1, skipped: 1, failed: 0 });
     expect(collectedIds(w)).toEqual([inside]);
+
+    // The next check keeps it as a candidate without asking YouTube again.
+    expect((await w.channelStore.list())[0]!.outOfRange).toEqual([{ videoId: borderline, before: '2026-09-15T04:00:00.000Z' }]);
+    w.advance(HOUR);
+    const [next] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
+    expect(next).toMatchObject({ state: 'completed', result: { outcome: 'empty' }, items: [] });
+    expect(w.jobs.list({ state: 'all', limit: 100 }).jobs.filter((job) => job.kind === 'youtube.video')).toHaveLength(0);
+
+    // A wider range starts before the recorded one, so the video is checked again and now collected.
+    await w.channels.updateSettings(id, { backfillWindow: '3m' });
+    w.advance(HOUR);
+    const [wider] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
+    expect(wider!.items).toEqual([expect.objectContaining({ sourceId: borderline, outcome: 'created' })]);
+    expect((await w.channelStore.list())[0]!.outOfRange).toEqual([{ videoId: borderline, before: '2026-09-15T04:00:00.000Z' }]);
+
+    // Once the video leaves the candidates, the record goes with it.
+    w.source.channels.get(id)!.videos.splice(1, 1);
+    w.advance(HOUR);
+    await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
+    expect((await w.channelStore.list())[0]!.outOfRange).toEqual([]);
   });
 
   it('leaves an existing subscription as it is and starts no collection', async () => {

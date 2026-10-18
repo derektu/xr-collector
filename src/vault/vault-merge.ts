@@ -66,11 +66,11 @@ function channels(files: Files): Map<string, YouTubeChannel> {
 }
 
 /**
- * The added time and check times describe collection, not the subscription choice, so they
- * never conflict; the title, URL, paused state and settings do.
+ * The added time, check times and out-of-range videos describe collection, not the subscription
+ * choice, so they never conflict; the title, URL, paused state and settings do.
  */
 function subscriptionContent({
-  addedAt: _time, lastCheckedAt: _checked, nextCheckAt: _next, lastDispatchedAt: _dispatched, ...rest
+  addedAt: _time, lastCheckedAt: _checked, outOfRange: _outOfRange, nextCheckAt: _next, lastDispatchedAt: _dispatched, ...rest
 }: YouTubeChannel): string {
   return canonical(rest);
 }
@@ -233,8 +233,8 @@ export function mergeFiles(local: Files, incoming: Files, items: MergeItem[], ch
 
 /** The collection progress of a subscription, which a merge never replaces. */
 function collectionProgress(row: YouTubeChannel): Partial<YouTubeChannel> {
-  const { addedAt, lastCheckedAt } = row;
-  return { addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}) };
+  const { addedAt, lastCheckedAt, outOfRange } = row;
+  return { addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}) };
 }
 
 /** The top-level fields of a JSON settings file, or none when it is missing or not an object. */

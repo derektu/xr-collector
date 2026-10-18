@@ -21,6 +21,7 @@ import {
   type JobStopKind,
   type JobSubmission,
   type JobSummary,
+  type OutOfRangeVideo,
   type SkipReason,
   type YouTubeChannel,
 } from '../core/types.js';
@@ -177,7 +178,7 @@ export class JobManager {
     if (input.kind !== 'channel') throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
     const submission = this.enqueue('youtube.channel-add', `channel-add:${input.url.toLowerCase()}`, {
       id: null, url: input.url, title: null,
-    }, null, { checkpoint: { settings: { ...settings } } });
+    }, null, { scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...settings } } });
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -288,7 +289,7 @@ export class JobManager {
     } else if (job.kind === 'youtube.channel-add') {
       const settings = await this.acceptedSettings(job);
       submission = this.enqueue('youtube.channel-add', jobKey(job), { id: null, url: job.source.url, title: null }, null, {
-        checkpoint: { settings: { ...settings } }, retryOf: job.id,
+        scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...settings } }, retryOf: job.id,
       });
     } else if (job.items && job.items.length > 0) {
       const retryItems = job.items.filter((item) => item.state === 'failed')
@@ -773,6 +774,7 @@ export class JobManager {
       }, null);
     } catch (error) {
       if (error instanceof CollectorError && (error.code === 'out_of_range' || error.code === 'document_deleted')) {
+        if (error.code === 'out_of_range') await this.recordOutOfRange(job);
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: error.code === 'out_of_range' ? 'out_of_range' : 'deleted' }, null);
         return;
       }
@@ -921,16 +923,20 @@ export class JobManager {
       return;
     }
     const channel: YouTubeChannel = { ...subscription, title: job.source.title ?? subscription.title, url: job.source.url };
+    const windowStart = backfillWindowStart(this.now(), subscription.settings.backfillWindow);
+    // A range that starts no earlier than the one that skipped a video still leaves it out.
+    const outside = new Set((subscription.outOfRange ?? [])
+      .filter((entry) => entry.before <= windowStart.toISOString()).map((entry) => entry.videoId));
     const discovery = retryItems
       ? {
+        candidates: null,
         videos: retryItems.map((item) => ({ id: item.sourceId, title: item.title, url: item.url })),
         publishedNotBefore: null,
       }
       : await discoverChannelVideos(
-        this.options.source, channel,
-        { windowStart: backfillWindowStart(this.now(), subscription.settings.backfillWindow), maxItems: subscription.settings.backfillMaxItems },
-        // Collected and deleted videos stay candidates that are not collected, so they still fill the item limit.
-        (videoId) => this.options.documents.isKnown(videoId),
+        this.options.source, channel, { windowStart, maxItems: subscription.settings.backfillMaxItems },
+        // Collected, deleted and out-of-range videos stay candidates that are not collected, so they still fill the item limit.
+        async (videoId) => outside.has(videoId) || this.options.documents.isKnown(videoId),
       );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
@@ -970,7 +976,7 @@ export class JobManager {
       this.completeChannelIfDone(job);
       return;
     }
-    const saved = await this.recordCheck(channel.id, discovered.at);
+    const saved = await this.recordCheck(channel.id, discovered.at, new Set(discovery.candidates ?? []));
     if (!saved) this.stopChannel(channel.id, 'subscription_removed');
     else if (!saved.enabled) this.stopChannel(channel.id, 'subscription_paused');
     if (this.jobs.has(job.id)) this.completeChannelIfDone(job);
@@ -978,12 +984,34 @@ export class JobManager {
 
   /**
    * Records a check of the subscription at `at`, keeping a later check time already recorded, and
-   * returns the subscription, or null once it is removed. Recording the same check again changes nothing.
+   * returns the subscription, or null once it is removed. Recording the same check again changes
+   * nothing. With the check's `candidates`, out-of-range videos that are no longer candidates are
+   * forgotten.
    */
-  private async recordCheck(channelId: string, at: string): Promise<YouTubeChannel | null> {
+  private async recordCheck(channelId: string, at: string, candidates?: ReadonlySet<string>): Promise<YouTubeChannel | null> {
     const current = (await this.options.channels.list()).find((candidate) => candidate.id === channelId);
+    if (candidates && current?.outOfRange?.some((entry) => !candidates.has(entry.videoId))) {
+      await this.updateOutOfRange(channelId, (entries) => entries.filter((entry) => candidates.has(entry.videoId)));
+    }
     if (!current || (current.lastCheckedAt && current.lastCheckedAt >= at)) return current ?? null;
     return this.options.channels.update(channelId, { lastCheckedAt: at });
+  }
+
+  /** Remembers that a channel job's video was published before the range start it was checked against. */
+  private async recordOutOfRange(video: CollectionJob): Promise<void> {
+    const channelId = video.parentId ? this.jobs.get(video.parentId)?.source.id : null;
+    const before = video.publishedNotBefore;
+    const videoId = video.source.id;
+    if (!channelId || !before || !videoId) return;
+    await this.updateOutOfRange(channelId, (entries) => [...entries.filter((entry) => entry.videoId !== videoId), { videoId, before }]);
+  }
+
+  /** Changes a subscription's out-of-range videos in one serialized store update. */
+  private async updateOutOfRange(channelId: string, change: (entries: OutOfRangeVideo[]) => OutOfRangeVideo[]): Promise<void> {
+    await this.options.channels.updateWith((channels) => {
+      const current = channels.find((candidate) => candidate.id === channelId);
+      return current ? new Map([[channelId, { outOfRange: change(current.outOfRange ?? []) }]]) : new Map();
+    });
   }
 
   /** Null while the subscription exists and is enabled; otherwise why its work stops. */

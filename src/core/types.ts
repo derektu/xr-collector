@@ -139,6 +139,20 @@ export interface YouTubeChannel {
   lastDispatchedAt?: string | null;
   /** The last discovery that finished listing the channel. */
   lastCheckedAt?: string | null;
+  /**
+   * Candidates whose exact publish time a capture found earlier than that check's range start,
+   * `before`. Publish times do not change, so a check whose range starts no earlier than `before`
+   * keeps such a video as a candidate it does not collect, without asking YouTube again. Only
+   * videos that are still candidates are kept.
+   */
+  outOfRange?: OutOfRangeVideo[];
+}
+
+/** A video a check found to be published before its range start. */
+export interface OutOfRangeVideo {
+  videoId: string;
+  /** The range start of the check that skipped it; the video was published before this time. */
+  before: string;
 }
 
 /**
