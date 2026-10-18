@@ -79,7 +79,7 @@ export function AddContent({ sourceTypes, onClose, onDone, onOpenSource }: {
       const title = found.target?.title;
       const message = action.id === 'collect' ? '已開始收集影片，完成後會出現在文件中。'
         : action.id === 'subscribe' ? `已訂閱「${title}」，開始首次收集。`
-          : `已恢復「${title}」，開始補收。`;
+          : `已恢復「${title}」，開始檢查。`;
       onDone({ message, ...(found.kind === 'channel' && found.target && found.sourceType ? { source: { type: found.sourceType, id: found.target.id } } : {}) });
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '操作失敗，請稍後再試。');
@@ -168,7 +168,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
         <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false)}</p>
         <div className="card-settings">
           <CollectionSettingsFields idPrefix="add-settings" fields={fields} value={settings} onChange={onSettings}
-            backfillLabel="首次收集" backfillLead="最近" disabled={disabled} />
+            disabled={disabled} />
           <p className="hint">訂閱後可以在來源詳情頁修改。</p>
         </div>
       </> : null}

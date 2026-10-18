@@ -43,15 +43,14 @@ describe('job presentation', () => {
   });
 
   it('labels channel jobs by why they ran and states skipped work', () => {
-    const scope = { mode: 'backfill' as const, windowStart: '2026-09-15T00:00:00.000Z', maxItems: 10, cursor: null };
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'subscribe' } }))).toBe('首次收集');
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'resume' } }))).toBe('恢復補收');
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { ...scope, trigger: 'manual', mode: 'incremental' } }))).toBe('立即檢查');
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'subscribe' } }))).toBe('首次收集');
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'resume' } }))).toBe('恢復後檢查');
+    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'manual' } }))).toBe('立即檢查');
     expect(jobKindLabel(job({ kind: 'youtube.channel' }))).toBe('頻道收集');
     expect(jobProgressLabel(job({ kind: 'youtube.channel', progress: { total: 3, done: 3, created: 1, existing: 0, failed: 0, skipped: 2 } })))
       .toBe('已處理 3 / 3（新增 1・已存在 0・略過 2・失敗 0）');
     expect(jobResultLabel(job({ kind: 'youtube.channel', result: { outcome: 'skipped', skipReason: 'subscription_paused' } }))).toBe('略過：訂閱已暫停');
-    expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出補收範圍');
+    expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出收集範圍');
   });
 
 

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   backfillWindowStart,
-  catchUpThresholdMs,
   normalizeInterval,
   publishedSince,
 } from '../../src/channels/collection-policy.js';
@@ -60,11 +59,5 @@ describe('policy limits', () => {
   it('maps any stored interval to an offered one', () => {
     expect([1, 15, 16, 30, 45, 60, 61, 180, 200, 720, 1000, 1440, 10_080].map(normalizeInterval))
       .toEqual([15, 15, 30, 30, 60, 60, 180, 180, 360, 720, 1440, 1440, 1440]);
-  });
-
-  it('treats a check as a catch-up after a day, or three intervals when that is longer', () => {
-    expect(catchUpThresholdMs(30)).toBe(24 * 3_600_000);
-    expect(catchUpThresholdMs(720)).toBe(36 * 3_600_000);
-    expect(catchUpThresholdMs(1440)).toBe(72 * 3_600_000);
   });
 });

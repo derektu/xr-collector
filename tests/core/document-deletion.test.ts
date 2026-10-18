@@ -7,7 +7,6 @@ import { Collector, type CollectorOptions } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CapturedTranscript,
-  type ChannelJobScope,
   type SavedDocument,
   type YouTubeChannel,
   type YouTubeVideoRef,
@@ -21,7 +20,6 @@ import { inspectVaultDirectory, writeVaultMarker } from '../../src/vault/vault-d
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
 const CHANNEL = 'UCdeletiontestchannel000';
-const WIDE: ChannelJobScope = { trigger: 'manual', mode: 'backfill', windowStart: '2000-01-01T00:00:00.000Z', maxItems: 50, cursor: null };
 
 let directories: string[] = [];
 let stores: JobStore[] = [];
@@ -45,7 +43,7 @@ function captured(id: string): CapturedTranscript {
 class MemoryChannels implements ChannelStore {
   readonly channels: YouTubeChannel[] = [{
     id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
-    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
   }];
   async list() { return this.channels.map((channel) => ({ ...channel })); }
   async add(channel: YouTubeChannel) { this.channels.push(channel); return channel; }
@@ -146,8 +144,8 @@ async function world(options: { holdAdds?: boolean } = {}) {
       const submission = await manager.submitVideo(watchUrl(id));
       return manager.whenSettled(submission.job.id);
     },
-    async checkChannel(manager: JobManager, scope: ChannelJobScope = WIDE) {
-      const submission = await manager.submitChannel(channels.channels[0]!, scope);
+    async checkChannel(manager: JobManager) {
+      const submission = await manager.submitChannel(channels.channels[0]!, 'manual');
       return manager.whenSettled(submission.job.id);
     },
   };
@@ -338,20 +336,22 @@ describe('deletion transaction and recovery (A2)', () => {
 });
 
 describe('deletions and collection (A4)', () => {
-  it('passes over deleted videos in channel checks, so they take no place within the item limit', async () => {
+  it('leaves deleted videos out of channel checks, where they still take their place within the item limit', async () => {
     const w = await world();
     const { manager } = await w.boot();
     const [a, b, c] = [vid('alpha'), vid('bravo'), vid('charlie')];
     await w.collect(manager, a);
     w.tick();
     await w.collector.delete(`youtube:${a}`);
-    w.source.listing = [a, b, c];
+    w.channels.channels[0]!.settings = { ...w.channels.channels[0]!.settings, backfillMaxItems: 5 };
+    w.source.listing = [a, b, c, vid('delta'), vid('echo'), vid('foxtrot')];
 
-    const job = await w.checkChannel(manager, { ...WIDE, maxItems: 2 });
+    const job = await w.checkChannel(manager);
 
-    expect(job.items?.map((item) => item.sourceId)).toEqual([b, c]);
-    expect(w.source.captures).toEqual([a, b, c]);
-    expect((await w.collector.list()).map((document) => document.sourceId).sort()).toEqual([b, c].sort());
+    // The newest five are the candidates; the deleted one is dropped and not replaced by an older video.
+    expect(job.items?.map((item) => item.sourceId)).toEqual([b, c, vid('delta'), vid('echo')]);
+    expect(w.source.captures).toEqual([a, b, c, vid('delta'), vid('echo')]);
+    expect((await w.collector.list()).map((document) => document.sourceId)).not.toContain(a);
   });
 
   it('collects a deleted video again only for an explicit request that succeeds, then treats it as collected', async () => {
@@ -483,7 +483,7 @@ describe('deletion races (A5)', () => {
     const [hold, a] = [vid('hold'), vid('alpha')];
     w.source.listing = [hold, a];
     w.source.held.add(hold);
-    const channel = await manager.submitChannel(w.channels.channels[0]!, WIDE);
+    const channel = await manager.submitChannel(w.channels.channels[0]!, 'manual');
     await w.source.capturing(hold);
     // The user claims the queued video, the document arrives and is deleted, then the user asks again.
     expect(await manager.submitVideo(watchUrl(a))).toMatchObject({ deduplicated: true });
@@ -506,7 +506,7 @@ describe('deletion races (A5)', () => {
     const [a, b] = [vid('alpha'), vid('bravo')];
     w.source.listing = [a, b];
     w.source.held.add(a);
-    await first.manager.submitChannel(w.channels.channels[0]!, WIDE);
+    await first.manager.submitChannel(w.channels.channels[0]!, 'manual');
     await w.source.capturing(a);
     const explicit = await first.manager.submitVideo(watchUrl(b));
     // Both videos exist and are deleted while the jobs wait; then the service stops abruptly.

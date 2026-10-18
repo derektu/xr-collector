@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { classifyYtDlpError } from '../../src/capture/ytdlp-capture.js';
+import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
 import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CapturedTranscript,
-  type ChannelJobScope,
   type CollectionJob,
   type CollectionPolicy,
   type DocumentSummary,
@@ -237,7 +237,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
 function channel(id: string): YouTubeChannel {
   return {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(),
-    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
   };
 }
 
@@ -247,8 +247,6 @@ function listed(count: number, prefix: string): DiscoveredYouTubeVideo[] {
     return { id, title: `影片 ${id}`, url: watchUrl(id), publishedAt: null, upcoming: false };
   });
 }
-
-const WIDE: ChannelJobScope = { trigger: 'manual', mode: 'backfill', windowStart: '2000-01-01T00:00:00.000Z', maxItems: 50, cursor: null };
 
 describe('restart compatibility (R-T1)', () => {
   it('reads a jobs file without recovery fields and resumes it, except work a later job took over', async () => {
@@ -260,10 +258,10 @@ describe('restart compatibility (R-T1)', () => {
     const legacy: CollectionJob[] = [
       { ...base, id: 'old-channel', kind: 'youtube.channel', state: 'interrupted', phase: 'discover',
         source: { type: 'youtube', id: 'UC-legacy', url: 'https://www.youtube.com/channel/UC-legacy/videos', title: '舊頻道' },
-        createdAt: '2026-10-01T00:00:00.000Z', scope: WIDE, error: { code: 'interrupted', message: '服務停止。' } },
+        createdAt: '2026-10-01T00:00:00.000Z', scope: { trigger: 'manual' }, error: { code: 'interrupted', message: '服務停止。' } },
       { ...base, id: 'new-channel', kind: 'youtube.channel', state: 'completed', phase: 'capture',
         source: { type: 'youtube', id: 'UC-legacy', url: 'https://www.youtube.com/channel/UC-legacy/videos', title: '舊頻道' },
-        createdAt: '2026-10-02T00:00:00.000Z', scope: WIDE, result: { outcome: 'empty' } },
+        createdAt: '2026-10-02T00:00:00.000Z', scope: { trigger: 'manual' }, result: { outcome: 'empty' } },
       { ...base, id: 'running-video', kind: 'youtube.video', state: 'running', phase: 'capture',
         source: { type: 'youtube', id: videoId(1), url: watchUrl(videoId(1)), title: null }, createdAt: '2026-10-03T00:00:00.000Z' },
       { ...base, id: 'interrupted-video', kind: 'youtube.video', state: 'interrupted', phase: null,
@@ -373,7 +371,6 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
     const chosen = { intervalMinutes: 180, backfillWindow: '2w' as const, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@chosen', chosen);
-    expect(adding.job.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5 });
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
 
     const g2 = await w.crash(g1);
@@ -381,14 +378,14 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
     const followUp = await g2.manager.whenSettled(done.result!.followUpJobId!);
 
     expect(w.channels.channels).toEqual([expect.objectContaining({ settings: chosen })]);
-    expect(followUp.scope).toMatchObject({ trigger: 'subscribe', maxItems: 5 });
+    expect(followUp.scope).toEqual({ trigger: 'subscribe' });
     // The chosen settings serve the restart only; the job as UI and Agents read it has no checkpoint.
     expect(done).not.toHaveProperty('checkpoint');
   });
 });
 
 describe('channel-add jobs accepted before subscriptions had their own settings (A3)', () => {
-  /** A subscribing job as the shared-settings version stored it: a first-collection range and no settings. */
+  /** A subscribing job as the shared-settings version stored it: no settings of its own. */
   async function acceptedBeforeConversion(w: Awaited<ReturnType<typeof world>>, accepted: CollectionPolicy) {
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@legacy', accepted);
@@ -410,13 +407,13 @@ describe('channel-add jobs accepted before subscriptions had their own settings 
     expect(w.channels.channels).toEqual([expect.objectContaining({
       settings: shared, nextCheckAt: new Date(T0.getTime() + 60 * 60_000).toISOString(),
     })]);
-    expect(followUp.scope).toMatchObject({ trigger: 'subscribe', maxItems: 20 });
+    expect(followUp.scope).toEqual({ trigger: 'subscribe' });
   });
 
-  it('recovers the backfill range from the accepted range when the Vault kept no shared settings', async () => {
+  it('subscribes with the default settings when the Vault kept no shared settings', async () => {
     const w = await world();
     await acceptedBeforeConversion(w, { intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20 });
-    expect(w.channels.channels).toEqual([expect.objectContaining({ settings: { intervalMinutes: 30, backfillWindow: '3m', backfillMaxItems: 20 } })]);
+    expect(w.channels.channels).toEqual([expect.objectContaining({ settings: DEFAULT_POLICY })]);
   });
 });
 
@@ -434,23 +431,23 @@ describe('channel-add jobs and the first scheduled check (R-T3)', () => {
     const g2 = await w.boot((source) => { source.holdDiscovery = true; });
     await g2.manager.resume();
     // The scheduler starts right after resume; its first check is due at once.
-    const scheduled = await g2.manager.submitChannel(subscribed, { ...WIDE, trigger: 'scheduled', maxItems: 1 });
+    const scheduled = await g2.manager.submitChannel(subscribed, 'scheduled');
     const added = g2.manager.get(adding.job.id);
 
     expect(added).toMatchObject({ state: 'completed', result: { outcome: 'created', followUpJobId: scheduled.job.id } });
-    expect(scheduled).toMatchObject({ deduplicated: true, job: { scope: { trigger: 'subscribe', maxItems: 10 } } });
+    expect(scheduled).toMatchObject({ deduplicated: true, job: { scope: { trigger: 'subscribe' } } });
     expect(w.script.resolves).toBe(1);
   });
 });
 
 describe('channel jobs across restarts (R-T4)', () => {
-  it('continues the recorded videos without discovering again, untruncated, and owes its cursor update', async () => {
+  it('continues the recorded videos without discovering again, untruncated, and records its check (R-06)', async () => {
     const w = await world();
     const subscribed = channel('UC-resume-channel');
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(6, 'c'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'c'))).toBe(true));
     g1.source.release(videoId(0, 'c'));
     await vi.waitFor(() => expect(g1.source.held.has(videoId(1, 'c'))).toBe(true));
@@ -459,8 +456,9 @@ describe('channel jobs across restarts (R-T4)', () => {
     const childIds = g1.manager.get(accepted.job.id).items!.map((item) => item.jobId);
 
     const g2 = await w.crash(g1);
-    // The scheduler's first check after a restart joins the resumed job with its own, smaller range.
-    const scheduled = await g2.manager.submitChannel(subscribed, { ...WIDE, trigger: 'scheduled', maxItems: 2 });
+    // The scheduler's first check after a restart joins the resumed job, even after the limit was lowered.
+    w.channels.channels[0]!.settings = { ...subscribed.settings, backfillMaxItems: 5 };
+    const scheduled = await g2.manager.submitChannel(subscribed, 'scheduled');
     const done = await g2.manager.whenSettled(accepted.job.id);
 
     expect(scheduled).toMatchObject({ deduplicated: true, job: { id: accepted.job.id } });
@@ -469,59 +467,66 @@ describe('channel jobs across restarts (R-T4)', () => {
     expect(w.script.discoveries).toBe(1);
     expect(w.script.captures.filter((id) => id === videoId(0, 'c'))).toHaveLength(1);
     expect(w.script.captures.filter((id) => id === videoId(1, 'c'))).toHaveLength(1);
-    expect(w.channels.channels[0]).toMatchObject({ cursor: { videoId: videoId(0, 'c') }, lastCheckedAt: T0.toISOString() });
+    expect(w.channels.channels[0]).toMatchObject({ lastCheckedAt: T0.toISOString() });
   });
 
-  it('finishes the cursor update a restart cut short', async () => {
+  it('records the check time a restart cut short', async () => {
     const w = await world();
-    const subscribed = channel('UC-owed-cursor');
+    const subscribed = channel('UC-owed-check');
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(2, 'o'));
     w.channels.hangAfterUpdate = true;
     const g1 = await w.boot();
-    const accepted = await g1.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
-    expect(w.channels.channels[0]!.cursor).toBeUndefined();
+    expect(w.channels.channels[0]!.lastCheckedAt).toBeUndefined();
 
     const g2 = await w.crash(g1);
     const done = await g2.manager.whenSettled(accepted.job.id);
 
     expect(done).toMatchObject({ state: 'completed', progress: { total: 2, created: 2 } });
     expect(w.script.discoveries).toBe(1);
-    expect(w.channels.channels[0]).toMatchObject({ cursor: { videoId: videoId(0, 'o') }, lastCheckedAt: T0.toISOString() });
+    expect(w.channels.channels[0]).toMatchObject({ lastCheckedAt: T0.toISOString() });
   });
 
-  it('never moves a cursor back over a later check', async () => {
+  it('never moves the check time back over a later check', async () => {
     const w = await world();
     const subscribed = channel('UC-later-check');
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(1, 'l'));
     w.channels.hangAfterUpdate = true;
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
-    const later = { videoId: 'later000001', publishedAt: null, recentIds: ['later000001'] };
-    Object.assign(w.channels.channels[0]!, { cursor: later, lastCheckedAt: '2026-10-15T07:00:00.000Z' });
+    w.channels.channels[0]!.lastCheckedAt = '2026-10-15T07:00:00.000Z';
 
     const g2 = await w.crash(g1);
     await g2.manager.whenSettled(accepted.job.id);
 
-    expect(w.channels.channels[0]).toMatchObject({ cursor: later, lastCheckedAt: '2026-10-15T07:00:00.000Z' });
+    expect(w.channels.channels[0]).toMatchObject({ lastCheckedAt: '2026-10-15T07:00:00.000Z' });
   });
 
-  it('discovers again with the accepted scope when stopped before recording videos', async () => {
+  it('discovers with the settings and time of the restart when stopped before recording videos (R-06)', async () => {
     const w = await world();
     const subscribed = channel('UC-rediscover');
     w.channels.channels.push(subscribed);
-    w.script.channelVideos.set(subscribed.id, listed(3, 'd'));
+    const videos = listed(3, 'd').map((video, index) => ({ ...video, publishedAt: new Date(T0.getTime() + index * 60_000).toISOString() }));
+    w.script.channelVideos.set(subscribed.id, videos.reverse());
     const g1 = await w.boot((source) => { source.holdDiscovery = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, { ...WIDE, maxItems: 2 });
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('discover'));
 
+    // While the service is down the limit is lowered and time moves on.
+    w.channels.channels[0]!.settings = { ...subscribed.settings, backfillWindow: '1w', backfillMaxItems: 5 };
+    w.script.channelVideos.set(subscribed.id, [...listed(6, 'e'), ...videos]);
+    w.clock.now = new Date(T0.getTime() + 3 * 24 * 60 * 60_000);
     const g2 = await w.crash(g1);
     const done = await g2.manager.whenSettled(accepted.job.id);
 
-    expect(done).toMatchObject({ state: 'completed', progress: { total: 2, created: 2 }, scope: { maxItems: 2 } });
+    expect(done).toMatchObject({ state: 'completed', progress: { total: 5, created: 5 }, scope: { trigger: 'manual' } });
+    expect(done.items!.map((item) => item.sourceId)).toEqual(listed(5, 'e').map((video) => video.id));
+    const child = g2.manager.get(done.items![0]!.jobId!);
+    expect(child.publishedNotBefore).toBe(new Date(w.clock.now.getTime() - 7 * 24 * 60 * 60_000).toISOString());
   });
 });
 
@@ -532,7 +537,7 @@ describe('subscriptions that stopped (R-T5)', () => {
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(3, 'p'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'p'))).toBe(true));
     w.channels.channels[0]!.enabled = false;
     g1.manager.stopChannel(subscribed.id, 'subscription_paused');
@@ -553,7 +558,7 @@ describe('subscriptions that stopped (R-T5)', () => {
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(3, 'x'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'x'))).toBe(true));
     const claimed = await g1.manager.submitVideo(watchUrl(videoId(2, 'x')));
     expect(claimed.deduplicated).toBe(true);
@@ -599,7 +604,7 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const id = videoId(0, 'i');
     w.script.captureFailures.set(id, [network()]);
     const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
-    const accepted = await g.manager.submitChannel(subscribed, WIDE);
+    const accepted = await g.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
     g.source.release(id);
     await vi.waitFor(() => expect(g.manager.get(accepted.job.id).items![0]!.retry?.nextAttemptAt).toBe('2026-10-15T06:00:30.000Z'));
@@ -639,7 +644,7 @@ describe('automatic retries (R-T6, R-T7)', () => {
     w.script.discoverFailures.push(network());
     w.script.resolveFailures.push(network());
     const g = await w.boot();
-    const discovering = await g.manager.submitChannel(subscribed, WIDE);
+    const discovering = await g.manager.submitChannel(subscribed, 'manual');
     await vi.waitFor(() => expect(g.manager.get(discovering.job.id).retry?.nextAttemptAt).toBeTruthy());
     g.fireTimers();
     expect(await g.manager.whenSettled(discovering.job.id)).toMatchObject({ state: 'completed', retry: { attempts: 1 } });

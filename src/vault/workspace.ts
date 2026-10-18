@@ -158,7 +158,6 @@ export class VaultWorkspace {
     try {
       // Interrupted jobs continue before the scheduler can submit a check of the same channel.
       await workspace.current.jobs.resume();
-      workspace.current.channels.followResumedBacklogs();
       await workspace.current.schedule.start();
     } catch (error) {
       await workspace.current.jobs.close().catch(() => undefined);
@@ -456,10 +455,7 @@ export class VaultWorkspace {
       });
     }
     await step('Previous search shutdown failed', () => previous.runtime.close());
-    await step('Resuming jobs failed', async () => {
-      await this.current.jobs.resume();
-      this.current.channels.followResumedBacklogs();
-    });
+    await step('Resuming jobs failed', () => this.current.jobs.resume());
     await step('Schedule start failed', () => this.current.schedule.start());
     this.lastExportedAt = await readLastExport(this.options.profilePath, this.current.root);
     this.previousPaths = await previousLocations(this.options.profilePath, this.current.vaultId);

@@ -1,11 +1,10 @@
 import type { ChannelStore } from './json-channel-store.js';
-import { assertPolicyPatch, catchUpThresholdMs, DEFAULT_POLICY } from './collection-policy.js';
-import { backfillScope, type JobManager } from '../jobs/job-manager.js';
+import { assertPolicyPatch, DEFAULT_POLICY } from './collection-policy.js';
+import type { JobManager } from '../jobs/job-manager.js';
 import type { ResolvedYouTubeChannel } from '../sources/youtube/adapter.js';
 import { classifyYouTubeInput } from '../sources/youtube/url.js';
 import {
   CollectorError,
-  type ChannelJobScope,
   type ChannelJobTrigger,
   type ChannelPreview,
   type CollectionJob,
@@ -36,7 +35,7 @@ export interface ChannelCollectorOptions {
 }
 
 export interface StartRunRequest {
-  trigger: Extract<ChannelJobTrigger, 'scheduled' | 'manual' | 'backlog'>;
+  trigger: Extract<ChannelJobTrigger, 'scheduled' | 'manual'>;
   /** Only these subscriptions; by default every enabled one. */
   channelIds?: string[];
 }
@@ -51,15 +50,13 @@ export interface ApplySettingsResult {
 
 export interface ChannelEnabledResult {
   channel: YouTubeChannel;
-  /** The backfill job a resume started. */
+  /** The check a resume started. */
   submission: JobSubmission | null;
 }
 
 /** Subscriptions and the entry points that turn them into collection jobs. */
 export class ChannelCollector {
   private readonly now: () => Date;
-  /** Subscriptions not checked since this time are checked with backfill limits, as after a restart. */
-  private readonly startedAt: Date;
 
   constructor(
     private readonly store: ChannelStore,
@@ -67,7 +64,6 @@ export class ChannelCollector {
     private readonly options: ChannelCollectorOptions,
   ) {
     this.now = options.now ?? (() => new Date());
-    this.startedAt = this.now();
   }
 
   listChannels(): Promise<YouTubeChannel[]> {
@@ -93,9 +89,7 @@ export class ChannelCollector {
       const failed = channel.enabled && !job && lastDeciding?.state === 'failed';
       return {
         ...channel,
-        cursor: channel.cursor ?? null,
         lastCheckedAt: channel.lastCheckedAt ?? null,
-        backlog: channel.backlog ?? false,
         nextCheckAt: channel.nextCheckAt ?? null,
         lastDispatchedAt: channel.lastDispatchedAt ?? null,
         status: !channel.enabled ? 'paused' : job ? 'collecting' : failed ? 'error' : 'tracking',
@@ -130,7 +124,7 @@ export class ChannelCollector {
   }
 
   /**
-   * Accepts a channel address; the job resolves it, subscribes and runs the first backfill. Settings
+   * Accepts a channel address; the job resolves it, subscribes and runs the first check. Settings
    * left out of `settings` take the source type's defaults.
    */
   async addChannel(inputUrl: string, settings: Partial<CollectionPolicy> = {}): Promise<JobSubmission> {
@@ -140,8 +134,8 @@ export class ChannelCollector {
 
   /**
    * Changes one subscription's settings. A new interval counts from the subscription's last check
-   * and is due at once if that time has passed; backfill settings apply to its next backfill. No
-   * work starts, and accepted jobs keep the range they were accepted with.
+   * and is due at once if that time has passed; a new range applies to every check whose discovery
+   * starts afterwards, queued ones included. No work starts.
    */
   async updateSettings(id: string, patch: Partial<CollectionPolicy>): Promise<YouTubeChannel> {
     assertPolicyPatch(patch);
@@ -157,7 +151,7 @@ export class ChannelCollector {
 
   /**
    * Gives every other subscription of the same type this subscription's settings. Paused ones take
-   * them too and stay paused, so a later resume backfills with them. No work starts.
+   * them too and stay paused, so the check a later resume starts uses them. No work starts.
    */
   async applySettingsToAll(id: string): Promise<ApplySettingsResult> {
     const now = this.now();
@@ -191,15 +185,15 @@ export class ChannelCollector {
   }
 
   /**
-   * Pausing stops the subscription's queued work; resuming forgets the cursor and starts a backfill
-   * with the subscription's settings. Setting the state it already has changes nothing.
+   * Pausing stops the subscription's queued work; resuming starts a check. Setting the state it
+   * already has changes nothing.
    */
   async setChannelEnabled(id: string, enabled: boolean): Promise<ChannelEnabledResult> {
     const current = (await this.store.list()).find((channel) => channel.id === id);
     if (!current) throw notFound();
     if (current.enabled === enabled) return { channel: current, submission: null };
     if (!enabled) {
-      const channel = await this.store.update(id, { enabled: false, backlog: false, nextCheckAt: null });
+      const channel = await this.store.update(id, { enabled: false, nextCheckAt: null });
       if (!channel) throw notFound();
       this.jobs.stopChannel(id, 'subscription_paused');
       this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${channel.title}」。`, ...subject(id, channel.title) });
@@ -207,12 +201,12 @@ export class ChannelCollector {
     }
     const now = this.now();
     const channel = await this.store.update(id, {
-      enabled: true, cursor: null, backlog: false,
+      enabled: true,
       lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, current.settings.intervalMinutes).toISOString(),
     });
     if (!channel) throw notFound();
     this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.resumed', message: `已恢復「${channel.title}」。`, ...subject(id, channel.title) });
-    const submission = await this.jobs.submitChannel(channel, backfillScope('resume', channel.settings, now));
+    const submission = await this.jobs.submitChannel(channel, 'resume');
     return { channel, submission };
   }
 
@@ -228,10 +222,9 @@ export class ChannelCollector {
 
   /**
    * Submits one collection job per subscription: the listed ones, or every enabled one. A channel
-   * whose job is still active returns that job, and its cursor waits for the next check. Each
-   * checked subscription's next automatic check moves on, also when it joined an active job: a
-   * scheduled check keeps its rhythm from the time that came due, any other dispatch counts an
-   * interval from now. A follow-up batch continues a check and moves nothing.
+   * whose job is still queued or running returns that job, so the check joins it. Each checked
+   * subscription's next automatic check moves on, also when it joined an active job: a scheduled
+   * check keeps its rhythm from the time that came due, any other dispatch counts an interval from now.
    */
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
     const allChannels = await this.store.list();
@@ -256,60 +249,20 @@ export class ChannelCollector {
     }
     const now = this.now();
     const submissions: JobSubmission[] = [];
-    for (const channel of selected) {
-      const submission = await this.jobs.submitChannel(channel, this.scopeFor(channel, request.trigger));
-      submissions.push(submission);
-      if (!submission.deduplicated) this.followBacklog(submission.job.id, channel.id);
-    }
-    if (request.trigger !== 'backlog') {
-      const ids = new Set(selected.map((channel) => channel.id));
-      // Computed from the current rows, so a settings change made meanwhile keeps its interval and
-      // a subscription paused meanwhile gets no next check.
-      await this.store.updateWith((channels) => new Map(channels
-        .filter((channel) => ids.has(channel.id) && channel.enabled)
-        .map((channel) => [channel.id, {
-          lastDispatchedAt: now.toISOString(), nextCheckAt: nextCheckAfterDispatch(channel, request.trigger, now).toISOString(),
-        }] as const)));
-    }
+    for (const channel of selected) submissions.push(await this.jobs.submitChannel(channel, request.trigger));
+    const ids = new Set(selected.map((channel) => channel.id));
+    // Computed from the current rows, so a settings change made meanwhile keeps its interval and
+    // a subscription paused meanwhile gets no next check.
+    await this.store.updateWith((channels) => new Map(channels
+      .filter((channel) => ids.has(channel.id) && channel.enabled)
+      .map((channel) => [channel.id, {
+        lastDispatchedAt: now.toISOString(), nextCheckAt: nextCheckAfterDispatch(channel, request.trigger, now).toISOString(),
+      }] as const)));
     return submissions;
   }
 
   whenSettled(jobId: string): Promise<CollectionJob> {
     return this.jobs.whenSettled(jobId);
-  }
-
-  /**
-   * Backfill when the subscription has no cursor or was not checked successfully since this service
-   * started or within the catch-up threshold; otherwise incremental from the cursor.
-   */
-  private scopeFor(channel: YouTubeChannel, trigger: StartRunRequest['trigger']): ChannelJobScope {
-    const now = this.now();
-    const { settings } = channel;
-    const backfill = backfillScope(trigger, settings, now);
-    const lastChecked = channel.lastCheckedAt ? new Date(channel.lastCheckedAt).getTime() : null;
-    if (!channel.cursor || lastChecked === null || lastChecked < this.startedAt.getTime()
-      || now.getTime() - lastChecked > catchUpThresholdMs(settings.intervalMinutes)) {
-      return backfill;
-    }
-    return { ...backfill, mode: 'incremental', cursor: channel.cursor };
-  }
-
-  /** Resumed channel jobs that left newer videos behind are followed by the next batch, as when they started. */
-  followResumedBacklogs(): void {
-    for (const [channelId] of this.jobs.channelJobs()) {
-      const job = this.jobs.activeChannelJob(channelId);
-      if (job) this.followBacklog(job.id, channelId);
-    }
-  }
-
-  /** A job that left newer videos behind is followed at once by the next batch while the subscription stays enabled. */
-  private followBacklog(jobId: string, channelId: string): void {
-    void this.jobs.whenSettled(jobId).then(async (job) => {
-      if (!job.result?.backlog) return;
-      const channel = (await this.store.list()).find((candidate) => candidate.id === channelId);
-      if (!channel?.enabled) return;
-      await this.startRun({ trigger: 'backlog', channelIds: [channelId] });
-    }).catch((error: unknown) => console.error('Follow-up channel batch failed', error));
   }
 }
 

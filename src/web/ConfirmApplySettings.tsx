@@ -46,7 +46,7 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
     onCancel={(event) => { event.preventDefault(); onCancel(); }}>
     <h2 id="confirm-apply-title">套用到所有 {source.kindLabel}？</h2>
     <p>{count ? `把這組收集設定套用到${count}？` : '正在讀取來源…'}</p>
-    {others && others.paused > 0 ? <p className="hint">已暫停的來源會保持暫停，恢復時使用新的補收範圍。</p> : null}
+    {others && others.paused > 0 ? <p className="hint">已暫停的來源會保持暫停，恢復後的檢查使用這組設定。</p> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">
       <button type="button" className="button" onClick={onCancel}>取消</button>

@@ -320,9 +320,8 @@ describe('portable subscription settings (S-T10, A4)', () => {
 
   it('carries each subscription with its settings and progress through a current package, paused', async () => {
     const root = await temp(); const source = path.join(root, 'source'); await seed(source);
-    const cursor = { videoId: 'dQw4w9WgXcQ', publishedAt: '2026-10-01T00:00:00.000Z', recentIds: ['dQw4w9WgXcQ'] };
     const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
-    await new JsonChannelStore(source).update('UC123', { cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', backlog: false, settings });
+    await new JsonChannelStore(source).update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings });
     const exported = await exportVault(source);
     const parsed = JSON.parse(exported.toString()) as { version: number; files: { path: string; data: string }[] };
     expect(parsed.version).toBe(3);
@@ -332,7 +331,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
 
     await workspace.restore(exported); await waitForRestore(workspace);
     expect(workspace.status().state).toBe('completed');
-    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', cursor, lastCheckedAt: '2026-10-14T00:00:00.000Z', settings })]);
+    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', lastCheckedAt: '2026-10-14T00:00:00.000Z', settings })]);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, nextCheck: null });
   });
 
@@ -355,7 +354,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     expect(JSON.parse(await readFile(path.join(root2, 'settings/youtube-schedule.json'), 'utf8'))).toEqual({ version: 2, enabled: false, legacySettings: settings });
   });
 
-  it('restores a package from before the backfill settings with the default backfill and an offered interval', async () => {
+  it('restores a package from before the range settings with the default range and an offered interval', async () => {
     const root = await temp(); const workspace = await open(path.join(root, 'B'));
     await workspace.restore(packageOf([
       { path: 'settings/youtube-channels.json', data: JSON.stringify([{ id: 'UC123', title: '第一輪頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01T00:00:00.000Z' }]) },
@@ -366,7 +365,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } })]);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false });
     const [submission] = await workspace.channels.startRun({ trigger: 'manual' });
-    expect(submission!.job.scope).toMatchObject({ mode: 'backfill', maxItems: 10 });
+    expect(submission!.job.scope).toEqual({ trigger: 'manual' });
     await workspace.jobs.whenSettled(submission!.job.id);
   });
 
