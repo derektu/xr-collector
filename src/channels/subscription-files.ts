@@ -173,7 +173,9 @@ function isLegacyChannel(value: unknown): value is LegacyChannel {
 function isChannel(value: unknown): value is YouTubeChannel {
   if (!isLegacyChannel(value)) return false;
   const channel = value as Partial<YouTubeChannel>;
-  return isCollectionPolicy(channel.settings) && isOptionalTime(channel.nextCheckAt) && isOptionalTime(channel.lastDispatchedAt);
+  return isCollectionPolicy(channel.settings) && isOptionalTime(channel.nextCheckAt) && isOptionalTime(channel.lastDispatchedAt)
+    && (channel.outOfRange === undefined || (Array.isArray(channel.outOfRange)
+      && channel.outOfRange.every((entry) => typeof entry?.videoId === 'string' && typeof entry.before === 'string')));
 }
 
 function isOptionalTime(value: unknown): boolean {

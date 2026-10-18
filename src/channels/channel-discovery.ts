@@ -16,6 +16,8 @@ export interface DiscoveryRange {
 }
 
 export interface DiscoveryResult {
+  /** IDs of every candidate, collected or not, newest first. */
+  candidates: string[];
   /** Videos to collect, newest first. */
   videos: DiscoveredYouTubeVideo[];
   /** The start of the range; a capture skips a video whose exact publish time is earlier. */
@@ -27,7 +29,8 @@ type ListingSource = Pick<YouTubeSource, 'discover'>;
 /**
  * Decides which videos one check of a channel collects. The candidates are the newest `maxItems`
  * listed videos published since `windowStart`, upcoming streams left out; of them, the ones
- * `isKnown` reports (collected or deleted) are dropped and the rest collected. A dropped candidate
+ * `isKnown` reports (collected, deleted or known to be outside the range) are dropped and the rest
+ * collected. A dropped candidate
  * is never replaced by an older video, so a check collects nothing older than the newest
  * `maxItems` videos of its range.
  *
@@ -54,5 +57,5 @@ export async function discoverChannelVideos(
   }
   const videos: DiscoveredYouTubeVideo[] = [];
   for (const video of candidates) if (!(await isKnown(video.id))) videos.push(video);
-  return { videos, publishedNotBefore: range.windowStart.toISOString() };
+  return { candidates: candidates.map((video) => video.id), videos, publishedNotBefore: range.windowStart.toISOString() };
 }

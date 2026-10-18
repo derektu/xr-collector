@@ -371,6 +371,8 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
     const chosen = { intervalMinutes: 180, backfillWindow: '2w' as const, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@chosen', chosen);
+    // Its activity events are labelled as a first collection.
+    expect(adding.job.scope).toEqual({ trigger: 'subscribe' });
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
 
     const g2 = await w.crash(g1);

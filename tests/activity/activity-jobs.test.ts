@@ -205,7 +205,7 @@ describe('manual retry (A-T9)', () => {
     const failed = await manager.whenSettled((await manager.submitChannelAdd('https://www.youtube.com/@retry', settings)).job.id);
     expect(failed.state).toBe('failed');
     const retried = await manager.retry(failed.id);
-    expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id });
+    expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id, scope: { trigger: 'subscribe' } });
     expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(channels.channels[0]!.settings).toEqual(settings);
   });
