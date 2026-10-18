@@ -101,6 +101,27 @@ npm run validation -- stop --workspace <workspace>
 
 stop 正常關閉此次應用程式，保留資料與證據。同一工作區再 start 可驗證重啟。來源、計畫或 commit 改變時建立新 run，避免混合不同版本。無法正常退出時核對指定 PID／視窗，不按 image name 強制結束所有 Electron。
 
+### 背景驗收模式
+
+以 Playwright `_electron.launch` 操作的原生 Desktop 驗收，預設設定環境變數 `XR_COLLECTOR_VALIDATION_HIDDEN=1`。此模式下主視窗建立後不顯示、不取得焦點，macOS 在程式啟動時即隱藏 Dock 圖示，`second-instance` 等事件也不把視窗帶到前景；視窗關閉 `backgroundThrottling`，隱藏時照常繪製與執行計時器。Playwright 透過 DevTools 協定操作網頁內容與截圖，不依賴視窗顯示，因此截圖是即時的完整畫面，開發者可以同時在同一台機器上工作，不會被跳出的視窗打斷或誤觸受測程式。`XR_COLLECTOR_VALIDATION_HIDDEN` 與 `XR_COLLECTOR_VALIDATION_WINDOW_SIZE` 同屬驗收專用設定，不出現在使用者介面；未設定時 App 照一般方式顯示視窗。
+
+會開啟原生對話框的 scenario（例如選擇資料夾、選擇備份檔），在主程序以 `electronApp.evaluate` 替換 `dialog.showOpenDialog`、`dialog.showSaveDialog` 的回應，回傳 run 目錄內的路徑並記錄呼叫參數，不開啟真的對話框：
+
+```js
+await electronApp.evaluate(({ dialog }, folder) => {
+  globalThis.__dialogCalls = [];
+  dialog.showOpenDialog = async (...args) => {
+    globalThis.__dialogCalls.push(args.at(-1));
+    return { canceled: false, filePaths: [folder] };
+  };
+}, folderInRunDirectory);
+```
+
+以下情況關閉背景模式，並在 issue 的驗收計畫註明執行時會跳出視窗：
+
+- scenario 驗證的是視窗顯示、聚焦、Dock、Tray／選單列本身。
+- 使用前述 `npm run validation -- start` 與 `capture --window`。這條流程以原生工具擷取應用程式視窗，需要可見視窗。
+
 ## 4. 跨機彙整與 PR 交付
 
 ```sh

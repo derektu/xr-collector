@@ -16,6 +16,13 @@ const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 const hasExplicitProfile = Boolean(explicitProfile);
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
 
+// Background validation mode, for native acceptance runs only: the window is never shown or
+// focused and macOS shows no Dock icon, so a developer keeps working on the same machine while
+// Playwright drives and screenshots the page. The Dock icon is hidden at program start so it
+// never appears during launch.
+const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
+if (validationHidden) app.dock?.hide();
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
@@ -68,12 +75,14 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       sandbox: true,
       preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.cjs'),
+      // A hidden window keeps painting and running timers, so screenshots show the live page.
+      backgroundThrottling: !validationHidden,
     },
   });
   // The app has no menu commands of its own; macOS keeps the default menu for
   // standard Edit and Quit shortcuts.
   if (process.platform !== 'darwin') window.removeMenu();
-  window.once('ready-to-show', () => window.show());
+  if (!validationHidden) window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url);
     return { action: 'deny' };
@@ -89,7 +98,7 @@ async function createWindow(): Promise<void> {
 }
 
 app.on('second-instance', () => {
-  if (!mainWindow) return;
+  if (!mainWindow || validationHidden) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.focus();
 });
