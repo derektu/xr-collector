@@ -219,6 +219,8 @@ describe('the local side has not changed since the shared sync point (SYNC-02)',
     await changeB(b);
     // A checks its subscription after the export: progress is no change of content.
     await new JsonChannelStore(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
+    // B pauses automatic collection; the switch belongs to each Vault and never travels with an import.
+    await new JsonChannelScheduleStore(b.vault).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     const before = await items(a.vault);
 
@@ -678,14 +680,20 @@ describe('collection during an import (SYNC-10)', () => {
 });
 
 describe('creating a Vault from an export file (SYNC-11)', () => {
-  it('gives the new Vault its own ID, the export as its sync point and paused collection', async () => {
+  it('gives the new Vault its own ID, the export as its sync point and the export\'s collection switch', async () => {
     const { a, b, first } = await pair();
     expect(await readVaultId(b.vault)).not.toBe(await readVaultId(a.vault));
     const points = JSON.parse(await readFile(path.join(b.vault, SYNC_FILE), 'utf8')).points;
     expect(points).toEqual([expect.objectContaining({ id: ((await manifestOf(await readFile(first))).sync as { id: string }).id, kind: 'import', machine: 'A' })]);
-    expect(await scheduleOn(b.vault)).toBe(false);
+    expect(await scheduleOn(b.vault)).toBe(true);
     expect(await items(b.vault)).toEqual(await items(a.vault));
     expect(existsSync(path.join(b.profile, IMPORT_JOURNAL))).toBe(true);
+
+    // A paused Vault's export creates a paused Vault.
+    await new JsonChannelScheduleStore(a.vault).save({ enabled: false });
+    const c = await machine('C', path.dirname(path.dirname(a.vault)));
+    await importAsNew(c, await exportFrom(a, 'a-paused'));
+    expect(await scheduleOn(c.vault)).toBe(false);
   });
 
   it('refuses an invalid file, a folder with content or a working folder, leaving the folder as it was', async () => {

@@ -4,13 +4,14 @@ import { dateTimeLabel } from './document-presentation.js';
 const pad = (value: number) => String(value).padStart(2, '0');
 const day = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-const clock = (date: Date) => `${day(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+const time = (date: Date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+const clock = (date: Date) => `${day(date)} ${time(date)}`;
 
-/** "上次同步 2026-10-19 14:03（匯出）" or "…（匯入自 公司 Mac）"; a Vault without a sync point says so. */
+/** "上次匯出 10-19 14:03" or "上次匯入 10-19 14:03"; a Vault without a sync point says so. */
 export function lastSyncLabel(sync: SyncPointSummary | null): string {
   if (!sync) return '尚未匯出或匯入';
-  const how = sync.kind === 'export' ? '匯出' : sync.machine ? `匯入自 ${sync.machine}` : '匯入';
-  return `上次同步 ${clock(new Date(sync.at))}（${how}）`;
+  const at = new Date(sync.at);
+  return `上次${sync.kind === 'export' ? '匯出' : '匯入'} ${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${time(at)}`;
 }
 
 export function fileName(filePath: string): string {
@@ -26,7 +27,7 @@ export function sizeLabel(bytes: number): string {
 
 /** What an export left out: files in the Vault folder that belong to no record of the Vault. */
 export function unregisteredText(count: number): string {
-  return `知識庫資料夾中有 ${count} 個不屬於知識庫的檔案沒有包含在匯出檔裡。`;
+  return `${count} 個非知識庫檔案未包含。`;
 }
 
 /** The move target for a chosen parent folder: the parent with the Vault folder's own name. */
@@ -62,31 +63,29 @@ export function countsText(counts: ImportCounts): string {
   return `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
 }
 
-/** "公司 Mac 於 2026-10-19 14:03 匯出", for the export file being imported. */
-export function sourceText(source: { machine: string | null; exportedAt: string | null }): string {
-  const machine = source.machine ?? '另一台電腦';
-  return source.exportedAt ? `${machine} 於 ${clock(new Date(source.exportedAt))} 匯出` : `${machine} 匯出`;
+/** "2026-10-19 14:03 匯出", for the export file being imported; null when the file has no export time. */
+export function sourceText(source: { exportedAt: string | null }): string | null {
+  return source.exportedAt ? `${clock(new Date(source.exportedAt))} 匯出` : null;
 }
 
-/** What an import found, in a sentence above its choices. */
-export function situationText(situation: ImportSituation): string {
+/** The sentence an import shows above its choices; a file whose changes simply apply needs none. */
+export function situationText(situation: ImportSituation): string | null {
   return {
-    incoming: '本機自上次同步後沒有變更，匯入檔的新增、修改與刪除會直接套用。',
-    both: '本機與匯入檔自上次同步後都有變更。',
-    unrelated: '這份匯出檔與目前的知識庫沒有共同的同步點（各自建立，或從未互相匯入）。',
-    nothing: '沒有需要匯入的內容：匯入檔的內容本機都已包含。',
+    incoming: null,
+    both: null,
+    unrelated: '這個檔案來自另一個知識庫，合併只新增、不刪除。',
+    nothing: '沒有需要匯入的內容。',
   }[situation];
 }
 
 /**
- * One side of a conflict: "本機（家裡 Mac）・2026-10-19 14:03", "…・已刪除・時間不明", or
- * "…・沒有這一項" for a side without the item, which has no time to show.
+ * One side of a conflict: "本機・2026-10-19 14:03:07", "匯入檔・已刪除・時間不明", or
+ * "本機・沒有這一項" for a side without the item, which has no time to show.
  */
 export function sideText(label: string, side: ImportSide): string {
-  const who = side.machine ? `${label}（${side.machine}）` : label;
-  if (side.state === 'absent') return `${who}・沒有這一項`;
+  if (side.state === 'absent') return `${label}・沒有這一項`;
   const state = side.state === 'deleted' ? '・已刪除' : '';
-  return `${who}${state}・${side.time ? dateTimeLabel(side.time) : '時間不明'}`;
+  return `${label}${state}・${side.time ? dateTimeLabel(side.time) : '時間不明'}`;
 }
 
 /** The kind of a conflict, named for people. */

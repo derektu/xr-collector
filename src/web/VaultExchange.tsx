@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ImportChoice, ImportConflict, ImportMode, ImportPreview, TransferResult, TransferStatus } from '../core/types.js';
 import { api, ApiError } from './api-client.js';
 import {
-  conflictKind, countsText, lastSyncLabel, progressText, sideText, sizeLabel, situationText, sourceText, transferRunning,
+  conflictKind, countsText, lastSyncLabel, progressText, revealLabel, sideText, situationText, sourceText, transferRunning,
   unregisteredText,
 } from './transfer-presentation.js';
 
@@ -143,6 +143,12 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
   const progress = useTransferProgress(phase === 'running');
   const started = useRef(false);
   const chosen = useRef('');
+  const desktop = window.xrCollectorDesktop;
+
+  async function reveal(): Promise<void> {
+    setFailure(null);
+    try { await desktop?.revealExport(); } catch (error) { setFailure(errorText(error, '無法開啟資料夾。')); }
+  }
 
   useEffect(() => {
     if (file) return;
@@ -169,21 +175,17 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
 
   return <Modal title="匯出知識庫" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">
     {phase === 'input' ? <>
-      <p>匯出檔包含知識庫的文件、訂閱與各自的收集設定、自動收集開關及刪除紀錄，可以在另一台電腦匯入，也可以當作備份。知識庫資料夾裡的其他檔案、搜尋索引、收集工作記錄與登入資料不包含在內。</p>
       <PathField label="匯出檔位置" value={target} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .zip 結尾。" />
     </> : null}
     {phase === 'running' ? <Progress progress={progress} fallback="處理中…" /> : null}
     {phase === 'exists' ? <div data-testid="export-exists">
-      <p>這個位置已經有同名的檔案：</p>
+      <p>已有同名檔案，要覆蓋嗎？</p>
       <code className="setting-path">{chosen.current}</code>
-      <p>要用目前的知識庫取代它嗎？原本的檔案內容會被覆寫。</p>
     </div> : null}
     {phase === 'done' && result ? <>
-      <p className="transfer-done" role="status">已匯出。</p>
+      <p className="transfer-done" role="status">匯出完成。</p>
       <code className="setting-path" data-testid="export-result-path">{result.exportPath}</code>
-      {result.exportBytes !== undefined ? <p className="hint">{sizeLabel(result.exportBytes)}</p> : null}
       {result.unregisteredFiles ? <p className="hint" data-testid="export-unregistered">{unregisteredText(result.unregisteredFiles)}</p> : null}
-      <p className="hint">在另一台電腦以「匯入…」選擇這個檔案。</p>
     </> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">
@@ -193,8 +195,9 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
       </> : null}
       {phase === 'exists' ? <>
         <button type="button" className="button" onClick={() => { if (file) onClose(); else setPhase('input'); }} data-testid="export-keep">取消</button>
-        <button type="button" className="button primary" onClick={() => void run(chosen.current, true)} data-testid="export-replace">取代</button>
+        <button type="button" className="button primary" onClick={() => void run(chosen.current, true)} data-testid="export-replace">覆蓋</button>
       </> : null}
+      {phase === 'done' && desktop ? <button type="button" className="button" onClick={() => void reveal()} data-testid="export-reveal">{revealLabel(desktop.platform)}</button> : null}
       {phase === 'done' || phase === 'failed' ? <button type="button" className="button primary" onClick={onClose} data-testid="transfer-close">完成</button> : null}
     </div>
   </Modal>;
@@ -288,48 +291,39 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     else if (conflicts.length) setPhase('conflicts');
     else void apply('merge');
   };
+  const exported = preview ? sourceText(preview.package) : null;
   const header = preview ? <p className="merge-source" data-testid="import-source">
-    <span>{preview.package.fileName}</span><span className="hint">・{sourceText(preview.package)}</span>
+    <span>{preview.package.fileName}</span>{exported ? <span className="hint">・{exported}</span> : null}
   </p> : null;
+  const situation = preview ? situationText(preview.situation) : null;
   const done = result?.result;
 
   return <Modal title="匯入" wide busy={phase === 'comparing' || phase === 'applying'}
     onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="import-dialog">
     {phase === 'input' ? <>
-      <p>選擇另一台電腦（或這台電腦先前）匯出的檔案。匯入前會先比對，只有兩邊都改過的項目需要你決定。</p>
       <PathField label="匯出檔" value={source} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
     </> : null}
     {phase === 'comparing' ? <Progress progress={progress} fallback="正在比對…" /> : null}
     {phase === 'preview' && preview ? <div data-testid={`import-${preview.situation}`}>
       {header}
-      <p>{situationText(preview.situation)}</p>
+      {situation ? <p>{situation}</p> : null}
       {preview.situation === 'incoming' ? <p className="merge-counts" data-testid="import-counts">{countsText(preview.incoming)}</p> : null}
       {preview.situation === 'both' || preview.situation === 'unrelated' ? <div className="import-options" role="radiogroup" aria-label="匯入方式">
         <label className={mode === 'merge' ? 'import-option active' : 'import-option'} data-testid="import-mode-merge">
           <input type="radio" name="import-mode" checked={mode === 'merge'} onChange={() => setMode('merge')} />
           <div><strong>合併</strong>
-            <span>{preview.situation === 'unrelated'
-              ? `只新增，不刪除：${countsText(preview.incoming)}。`
-              : `匯入檔的變更直接套用：${countsText(preview.incoming)}。`}
-            {conflicts.length ? `${conflicts.length} 項兩邊內容不同，需要選擇保留哪一邊。` : '沒有需要選擇的項目。'}</span></div>
+            {conflicts.length ? <span>{conflicts.length} 項需要選擇</span> : null}</div>
         </label>
         <label className={mode === 'replace' ? 'import-option active' : 'import-option'} data-testid="import-mode-replace">
           <input type="radio" name="import-mode" checked={mode === 'replace'} onChange={() => setMode('replace')} />
           <div><strong>完全以匯入內容取代</strong>
-            <span>知識庫會變得與匯入檔相同，失去本機 {preview.replaceLoses} 項變更。</span></div>
+            <span>本機 {preview.replaceLoses} 項變更會被取代</span></div>
         </label>
       </div> : null}
-      {preview.situation === 'nothing' && preview.replaceLoses > 0 ? <p className="hint import-secondary">
-        本機有 {preview.replaceLoses} 項內容與匯入檔不同。如果是想回到匯入檔的內容（例如用匯入前自動匯出的檔案復原），可以改為完全以匯入內容取代。</p> : null}
-      {preview.situation !== 'nothing' ? <ul className="fact-list">
-        <li>在目前的知識庫原地套用，位置不變。</li>
-        <li>套用前會先把目前的內容匯出到匯出資料夾，需要時可以再匯入回來。</li>
-        <li>自動收集開關與各訂閱的收集進度維持本機。</li>
-      </ul> : null}
     </div> : null}
     {phase === 'conflicts' && preview ? <>
       {header}
-      <p>{conflicts.length} 項在兩邊的內容不同，請選擇要保留哪一邊。其餘變更會直接套用。</p>
+      <p>{conflicts.length} 項兩邊不同，請選擇要保留哪一邊。</p>
       {conflicts.length > 1 ? <div className="merge-bulk">
         <button type="button" className="button small" onClick={() => chooseAll('local')}>全部保留本機</button>
         <button type="button" className="button small" onClick={() => chooseAll('incoming')}>全部採用匯入檔</button>
@@ -339,19 +333,14 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     </> : null}
     {phase === 'replace' && preview ? <div data-testid="import-replace-confirm">
       {header}
-      <p>知識庫的文件、訂閱與刪除紀錄會完全變成匯入檔的內容，本機 {preview.replaceLoses} 項不同的內容會被取代或移除。</p>
-      <ul className="fact-list">
-        <li>套用前會先把目前的內容匯出到匯出資料夾，需要時可以再匯入回來。</li>
-        <li>自動收集開關與各訂閱的收集進度維持本機；知識庫資料夾裡不屬於知識庫的檔案不受影響。</li>
-      </ul>
+      <p>本機 {preview.replaceLoses} 項會被取代或移除。</p>
     </div> : null}
     {phase === 'applying' ? <Progress progress={progress} fallback="正在匯入…" /> : null}
     {phase === 'done' && result && done ? <div data-testid="import-done">
-      <p className="transfer-done" role="status">{done.importMode === 'replace' ? '已完全以匯入內容取代。' : '匯入完成。'}</p>
+      <p className="transfer-done" role="status">匯入完成。</p>
       {done.imported ? <p className="merge-counts">{countsText(done.imported)}</p> : null}
       {done.searchRebuildNeeded ? <p className="add-problem" role="alert" data-testid="import-search-stale">
-        搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。</p> : null}
-      {done.preImportExportPath ? <><p>匯入前的內容已匯出到：</p><code className="setting-path" data-testid="import-backup-path">{done.preImportExportPath}</code></> : null}
+        搜尋索引需要重建：到設定按「重建索引」。</p> : null}
     </div> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">

@@ -24,7 +24,7 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   const [error, setError] = useState<string>();
   const [mode, setMode] = useState<'choose' | 'import'>('choose');
   const [packagePath, setPackagePath] = useState<string | null>(null);
-  const [imported, setImported] = useState<{ result: VaultSetupResult; collecting: boolean } | null>(null);
+  const [imported, setImported] = useState<VaultSetupResult | null>(null);
   const sequence = useRef(0);
   const desktop = window.xrCollectorDesktop;
 
@@ -94,7 +94,7 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     setBusy(true);
     setError(undefined);
     try {
-      setImported({ result: await api.setupVault('import', folder, file), collecting: false });
+      setImported(await api.setupVault('import', folder, file));
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === 'vault_already_set') {
         onStatus(await api.getVaultSetup());
@@ -107,23 +107,8 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     }
   }
 
-  async function enableCollection(): Promise<void> {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await api.setAutoCollection(true);
-      setImported((current) => current ? { ...current, collecting: true } : current);
-    } catch (failure) {
-      setError(errorMessage(failure));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (imported) {
-    return <ImportDone vaultPath={imported.result.vault.vaultPath ?? ''} documentCount={imported.result.documentCount}
-      collecting={imported.collecting} busy={busy} {...(error ? { error } : {})}
-      onEnableCollection={() => void enableCollection()} onEnter={() => onReady(imported.result)} />;
+    return <ImportDone vaultPath={imported.vault.vaultPath ?? ''} documentCount={imported.documentCount} onEnter={() => onReady(imported)} />;
   }
 
   if (mode === 'import') {

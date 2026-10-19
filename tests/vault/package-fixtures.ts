@@ -122,10 +122,10 @@ export async function withPackage<T>(bytes: Buffer, use: (reader: PackageReader)
 }
 
 /** Checks package bytes as an import does and writes their files into `destination`. */
-export async function unpackBytes(bytes: Buffer, destination: string, options: { pauseSchedule?: boolean } = {}): Promise<void> {
+export async function unpackBytes(bytes: Buffer, destination: string): Promise<void> {
   await withPackage(bytes, async (reader) => {
     await checkPackageContent(reader);
     await mkdir(destination, { recursive: true });
-    await unpackPackage(reader, destination, () => undefined, options);
+    await unpackPackage(reader, destination, () => undefined);
   });
 }

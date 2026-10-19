@@ -499,7 +499,7 @@ describe('CollectorRuntime Vault setup', () => {
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('creates a Vault from an export file while Not Ready, paused, and refuses an invalid file leaving the folder as it was (SYNC-11)', async () => {
+  it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (SYNC-11)', async () => {
     const setup = await selected();
     const source = path.join(setup.value.profilePath, 'source');
     await new MarkdownVault(source).add({
@@ -532,7 +532,7 @@ describe('CollectorRuntime Vault setup', () => {
     expect(imported.status).toBe(200);
     expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: empty }, documentCount: 1 });
     expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: empty });
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule.enabled).toBe(false);
+    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule.enabled).toBe(true);
     expect((await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).lastSync).toMatchObject({ kind: 'import' });
     expect(JSON.parse(await readFile(path.join(empty, 'xr-collector-sync.json'), 'utf8')).points).toHaveLength(1);
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });

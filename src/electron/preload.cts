@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   chooseExportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseExportFile'),
   chooseImportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseImportFile'),
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),
+  revealExport: () => ipcRenderer.invoke('xrCollector:desktop:revealExport'),
   platform: process.platform,
 });
