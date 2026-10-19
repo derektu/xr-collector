@@ -239,7 +239,11 @@ export class CollectorRuntime {
       }
       let workspace: VaultWorkspace;
       try {
-        workspace = await VaultWorkspace.open({ ...this.services, root, selection: this.selection, createdBy, profilePath: this.profilePath });
+        // An imported Vault keeps its import journal until the selection names it, so a failure or a
+        // stop before that takes the new folder back.
+        workspace = await VaultWorkspace.open({
+          ...this.services, root, selection: this.selection, createdBy, profilePath: this.profilePath, pendingImport: action === 'import',
+        });
       } catch (error) {
         console.error('Vault services failed to start', error);
         if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);

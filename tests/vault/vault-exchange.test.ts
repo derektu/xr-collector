@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 import { Collector } from '../../src/core/collector.js';
-import type { ImportChoice } from '../../src/core/types.js';
+import type { ImportChoice, SavedDocument } from '../../src/core/types.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
@@ -19,7 +19,7 @@ import { registeredFiles, registeredSource } from '../../src/vault/vault-package
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { itemStates, syncItems } from '../../src/vault/vault-sync.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
-import { channel, cleanUp, fileOf, importFile, machine, open, seed, settings, settled, temp, video, type Machine } from './exchange-fixtures.js';
+import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, settled, temp, video, type Machine } from './exchange-fixtures.js';
 import { manifestOf, packageFiles, packageOf, tampered } from './package-fixtures.js';
 
 afterEach(cleanUp);
@@ -103,6 +103,7 @@ describe('sync points (SYNC-01)', () => {
     expect([...(await packageFiles(await readFile(first))).keys()]).not.toContain(SYNC_FILE);
     expect(manifest.files.map((file) => file.path)).not.toContain(SYNC_FILE);
 
+    await add(a.vault, D4);
     const second = await using(a, async (workspace) => {
       const status = await workspace.exportTo(path.join(a.exports, 'a-2.zip'));
       expect(status.result!.unregisteredFiles).toBe(0);
@@ -116,11 +117,72 @@ describe('sync points (SYNC-01)', () => {
     const a = await machine('A'); await seed(a.vault);
     const ids: string[] = [];
     for (let index = 0; index < SYNC_HISTORY + 2; index += 1) {
+      await add(a.vault, `bbbbbbbbbb${index}`);
       const file = await exportFrom(a, `a-${index}`);
       ids.unshift(((await manifestOf(await readFile(file))).sync as { id: string }).id);
     }
     const points = JSON.parse(await readFile(path.join(a.vault, SYNC_FILE), 'utf8')).points as { id: string }[];
     expect(points.map((point) => point.id)).toEqual(ids.slice(0, SYNC_HISTORY));
+  });
+
+  it('adds no sync point for an export whose content equals the newest one, so backups keep the shared point', async () => {
+    const { a, b, first } = await pair();
+    const firstId = ((await manifestOf(await readFile(first))).sync as { id: string }).id;
+    const before = await readFile(path.join(a.vault, SYNC_FILE), 'utf8');
+    const backups: string[] = [];
+    for (let index = 0; index < SYNC_HISTORY + 1; index += 1) backups.push(await exportFrom(a, `backup-${index}`));
+    expect(await readFile(path.join(a.vault, SYNC_FILE), 'utf8')).toBe(before);
+    for (const backup of backups) expect((await manifestOf(await readFile(backup))).sync).toMatchObject({ id: firstId, ancestors: [] });
+    // B, created from the first export, still shares a point with A after all those exports.
+    await changeB(b);
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => { expect((await workspace.previewImport(file)).situation).toBe('incoming'); });
+    // A backup holds the same content as the shared point, so B finds nothing new in it.
+    await using(b, async (workspace) => { expect((await workspace.previewImport(backups[0]!)).situation).toBe('nothing'); });
+  });
+
+  it('records what the written file holds when the Vault changes while it is written', async () => {
+    const { a, first } = await pair();
+    const firstId = ((await manifestOf(await readFile(first))).sync as { id: string }).id;
+    const points = async () => JSON.parse(await readFile(path.join(a.vault, SYNC_FILE), 'utf8')).points as { id: string; items: Record<string, string> }[];
+    /** Runs `during` once, before or after the first export file is written. */
+    const racing = (workspace: VaultWorkspace, when: 'before' | 'after', during: () => Promise<void>) => {
+      const target = workspace as unknown as { pack: (...args: unknown[]) => Promise<unknown> };
+      const pack = target.pack.bind(workspace);
+      let ran = false;
+      target.pack = async (...args) => {
+        if (!ran && when === 'before') { ran = true; await during(); }
+        const written = await pack(...args);
+        if (!ran && when === 'after') { ran = true; await during(); }
+        return written;
+      };
+    };
+
+    // An edit after the file is written stays out of the sync point, so importing the file never takes it back.
+    await edit(a.vault, D1, '匯出前的段落');
+    const second = await using(a, async (workspace) => {
+      racing(workspace, 'after', () => edit(a.vault, D1, '匯出時才加的段落'));
+      return (await workspace.exportTo(path.join(a.exports, 'a-2.zip'))).result!.exportPath!;
+    });
+    const secondId = ((await manifestOf(await readFile(second))).sync as { id: string }).id;
+    expect((await points())[0]).toMatchObject({ id: secondId });
+    expect(new Map(Object.entries((await points())[0]!.items))).not.toEqual(await items(a.vault));
+    await using(a, async (workspace) => {
+      expect(await workspace.previewImport(second)).toMatchObject({ situation: 'nothing', replaceLoses: 1 });
+    });
+
+    // A file begun under the newest point's ID that ends up holding other content gets an ID of its own.
+    const current = await exportFrom(a, 'a-current');
+    const currentId = ((await manifestOf(await readFile(current))).sync as { id: string }).id;
+    const third = await using(a, async (workspace) => {
+      racing(workspace, 'before', () => add(a.vault, D4));
+      return (await workspace.exportTo(path.join(a.exports, 'a-3.zip'))).result!.exportPath!;
+    });
+    const manifest = await manifestOf(await readFile(third));
+    expect(manifest.sync).toMatchObject({ ancestors: [currentId, secondId, firstId] });
+    expect((manifest.sync as { id: string }).id).not.toBe(currentId);
+    expect((await points()).map((point) => point.id)).toEqual([(manifest.sync as { id: string }).id, currentId, secondId, firstId]);
+    expect(new Map(Object.entries((await points())[0]!.items))).toEqual(await items(a.vault));
   });
 
   it('moves with the Vault', async () => {
@@ -451,16 +513,87 @@ describe('an import stopped while it applies (SYNC-09)', () => {
     });
   });
 
-  it.each(stops)('finishes or drops an import that fails %s, then accepts work again', async (_name, at, expected) => {
+  it.each(stops)('opens a Vault whose process stopped %s as a whole state when it is opened as another Vault', async (_name, at, expected) => {
+    const { root, a, file, before, after } = await prepared();
+    const stopped = await machine('stopped', root);
+    await using(a, async (workspace) => { await importFile(workspace, file); }, {
+      importFaults: async (phase, count) => { if (at(phase, count)) await cp(a.vault, stopped.vault, { recursive: true }); },
+    });
+    const c = await machine('C', root);
+    await using(c, async (workspace) => {
+      await workspace.openOther(stopped.vault); await settled(workspace);
+      expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: stopped.vault });
+      expect(await workFolders(stopped.vault)).toEqual([]);
+      expect(await items(stopped.vault)).toEqual(expected === 'before' ? before : after);
+      if (expected === 'after') {
+        expect((await workspace.search.search({ query: `${D4} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D4}`]);
+        expect(workspace.status().lastSync).toMatchObject({ kind: 'import', machine: 'B' });
+      }
+      expect((await workspace.previewImport(file)).situation).toBe(expected === 'before' ? 'incoming' : 'nothing');
+    });
+  });
+
+  it.each(stops)('drops or finishes an import that fails %s, reporting what happened, then accepts work again', async (_name, at, expected) => {
     const { a, file, before, after } = await prepared();
     await using(a, async (workspace) => {
       await importFile(workspace, file).catch(() => undefined);
-      expect(workspace.status()).toMatchObject({ state: 'error', operation: 'import' });
+      if (expected === 'before') {
+        expect(workspace.status()).toMatchObject({ state: 'error', operation: 'import', lastSync: { kind: 'export', machine: 'A' } });
+      } else {
+        // Past the journal the import is carried out, so it is reported as done.
+        expect(workspace.status()).toMatchObject({
+          state: 'completed', operation: 'import', errorCode: null, lastSync: { kind: 'import', machine: 'B' },
+          result: { importMode: 'merge', imported: { added: 2, modified: 2, removed: 2 } },
+        });
+        expect(workspace.status().message).toContain('匯入完成：新增 2、修改 2、刪除 2');
+        expect((await workspace.search.search({ query: `${D4} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D4}`]);
+      }
       expect(await workFolders(a.vault)).toEqual([]);
       expect(await items(a.vault)).toEqual(expected === 'before' ? before : after);
       expect(() => workspace.enterWrite()()).not.toThrow();
       expect((await workspace.previewImport(file)).situation).toBe(expected === 'before' ? 'incoming' : 'nothing');
     }, { importFaults: (phase, count) => { if (at(phase, count)) throw new Error('disk stopped'); } });
+  });
+
+  it('rebuilds the search index when updating it after an import fails, and reports a done import when that fails too', async () => {
+    const { a, file, after } = await prepared();
+    const failing = { index: false, rebuild: false };
+    const createSearch = async (destination: string) => {
+      const search = fakeSearch(destination);
+      return {
+        search: {
+          ...search,
+          index: async (document: SavedDocument) => { if (failing.index) throw new Error('index stopped'); await search.index(document); },
+          rebuild: async () => { if (failing.rebuild) throw new Error('index stopped'); await search.rebuild(); },
+        },
+        close: async () => undefined,
+      };
+    };
+    const shared = await temp();
+    await cp(a.vault, path.join(shared, 'A'), { recursive: true });
+    await using(a, async (workspace) => {
+      failing.index = true;
+      const { status } = await importFile(workspace, file);
+      expect(status).toMatchObject({ state: 'completed', lastSync: { kind: 'import', machine: 'B' } });
+      expect(status.result!.searchRebuildNeeded).toBeUndefined();
+      expect((await workspace.search.search({ query: `${D4} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D4}`]);
+    }, { createSearch });
+    expect(await items(a.vault)).toEqual(after);
+
+    // The same import on a copy taken before it, with the rebuild failing as well.
+    const copy: Machine = { ...a, vault: path.join(shared, 'A') };
+    await rm(path.join(a.profile, 'vault-selection.json'), { force: true });
+    await using(copy, async (workspace) => {
+      failing.index = true; failing.rebuild = true;
+      const { status } = await importFile(workspace, file);
+      expect(status).toMatchObject({
+        state: 'completed', errorCode: null, lastSync: { kind: 'import', machine: 'B' },
+        result: { importMode: 'merge', searchRebuildNeeded: true, imported: { added: 2, modified: 2, removed: 2 } },
+      });
+      expect(status.message).toContain('匯入已完成，搜尋索引需要重建');
+      expect(() => workspace.enterWrite()()).not.toThrow();
+    }, { createSearch });
+    expect(await items(copy.vault)).toEqual(after);
   });
 
   it('answers reads with vault_busy while files are put in place', async () => {
@@ -610,6 +743,19 @@ describe('creating a Vault from an export file (SYNC-11)', () => {
     expect(await readdir(target)).toContain('documents');
     expect(existsSync(journalFile)).toBe(false);
   });
+  it('keeps the import journal while the new Vault opens before the selection names it, so a stop there takes it back', async () => {
+    const { root, first } = await pair();
+    const c = await machine('C', root); await seed(c.vault);
+    const target = path.join(root, 'Imported');
+    const journalFile = path.join(c.profile, IMPORT_JOURNAL);
+    await importNewVault({ packageFile: first, folder: target, profilePath: c.profile, createdBy: 'XR Collector test' });
+    // Onboarding opens the new Vault, then the program stops before the selection is written.
+    await using(c, async (workspace) => { expect(workspace.status().vaultPath).toBe(target); }, { root: target, pendingImport: true });
+    expect(existsSync(journalFile)).toBe(true);
+    await using(c, async (workspace) => { expect(workspace.status().vaultPath).toBe(c.vault); });
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(journalFile)).toBe(false);
+  });
 });
 
 describe('export and import over HTTP (SYNC-12)', () => {
@@ -661,7 +807,7 @@ describe('export and import over HTTP (SYNC-12)', () => {
     for (const term of [
       '/api/vault/export/suggestion', '/api/vault/import/preview', '/api/vault/import/apply', '/api/vault/import/cancel', '"packagePath"',
       '`file_exists`', '`transfer_cancelled`', '`vault.imported`', '`vault.sync_unreadable`', '"mode":"merge"', '"mode":"replace"', '`situation`',
-      '`replaceLoses`', '.zip', `${SYNC_HISTORY} 個同步點`, '自動匯出不記錄同步點', '/api/vault/cancel', '`errorCode`', '"action":"import"',
+      '`replaceLoses`', '.zip', `${SYNC_HISTORY} 個同步點`, '自動匯出不記錄同步點', '沿用那個同步點', '`searchRebuildNeeded: true`', '/api/vault/cancel', '`errorCode`', '"action":"import"',
     ]) {
       expect(skill, term).toContain(term);
     }

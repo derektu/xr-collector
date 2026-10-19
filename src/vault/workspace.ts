@@ -18,7 +18,7 @@ import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
-import { machineName, readSyncHistory, sharedPoint, SYNC_FILE, syncFileBytes, syncSummary, type SyncHistory } from './sync-points.js';
+import { machineName, readSyncHistory, sharedPoint, SYNC_FILE, syncFileBytes, syncSummary, type SyncHistory, type SyncPoint } from './sync-points.js';
 import { chosenKeys, compareItems, itemStates, planChanges, syncItems, type Comparison, type ItemStates } from './vault-sync.js';
 import { applyInPlace, checkFreeSpace, finishInPlaceImports, importedPoint, type ImportFault } from './vault-import.js';
 import {
@@ -89,6 +89,12 @@ export interface WorkspaceOptions {
   moveFaults?: (phase: MoveFault, count?: number) => void | Promise<void>;
   /** Called at each step of an in-place import, for tests that make a step fail or stop there; see `ImportFault`. */
   importFaults?: (phase: ImportFault, count?: number) => void | Promise<void>;
+  /**
+   * The Vault was just created by an import from Onboarding that is complete only once the caller
+   * writes the device selection. Opening it leaves the import journal in the profile, so a failure
+   * or a stop before that write still lets the import be taken back.
+   */
+  pendingImport?: boolean;
 }
 
 /**
@@ -105,6 +111,16 @@ const SIZE_REUSE_MS = 60_000;
  * digest of the local items, the shared sync point and the file it stands on.
  */
 interface Preview { value: ImportPreview; comparison: Comparison; baseline: string; file: string; identity: string }
+
+/** An import whose journal may be written: what it changes and what it reports once its files are in place. */
+interface AppliedImport {
+  preview: Preview;
+  mode: ImportMode;
+  counts: ImportCounts;
+  changes: ReadonlyMap<string, unknown>;
+  backup: string;
+  point: SyncPoint;
+}
 
 /** Service references stay stable for both UI and Agent while the active vault changes. */
 export function forwarding<T extends object>(target: () => T): T {
@@ -166,7 +182,7 @@ export class VaultWorkspace {
     } else {
       await workspace.recoverMove(selected, root);
     }
-    await recoverImport(options.profilePath, [selected, root]);
+    if (!options.pendingImport) await recoverImport(options.profilePath, [selected, root]);
     // An import a stop interrupted after its commit point is finished before anything reads the Vault.
     const finished = await finishInPlaceImports(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
@@ -308,7 +324,10 @@ export class VaultWorkspace {
   /**
    * Writes the export of the active Vault to `file`, or to the suggested file in the export folder
    * when `file` is left out; an existing file is replaced only with `overwrite`. The export is a
-   * sync point: the Vault records its items under the ID the file carries before the file appears.
+   * sync point: the Vault records the items the written file holds under the ID the file carries,
+   * before the file appears. When those items equal the newest sync point's, the file carries that
+   * point's ID and no point is added, so exports taken as backups never push older shared points
+   * out of the history.
    */
   async exportTo(file?: unknown, overwrite = false): Promise<TransferStatus> {
     let requested = file;
@@ -321,20 +340,33 @@ export class VaultWorkspace {
       const root = this.current.root;
       const exportedAt = new Date();
       const history = await readSyncHistory(root);
-      const id = randomUUID();
+      const newest = history.points[0];
+      const unchanged = newest && sameItems(syncItems(await itemStates(registeredSource(await registeredFiles(root)))), newest.items);
+      let id = unchanged ? newest.id : randomUUID();
       // Written beside the target and renamed, so the named file is either a whole export or untouched.
       const temporary = `${target}.${randomUUID()}.tmp`;
       let written: WrittenPackage;
       try {
-        written = await this.pack(temporary, exportedAt, { id, ancestors: history.points.map((point) => point.id) });
-        const items = syncItems(await itemStates(registeredSource(await registeredFiles(root))));
-        await writeAtomically(path.join(root, SYNC_FILE),
-          syncFileBytes({ id, at: exportedAt.toISOString(), kind: 'export', machine: this.machine, items }, history.points));
+        for (;;) {
+          written = await this.pack(temporary, exportedAt, { id, ancestors: history.points.map((point) => point.id).filter((entry) => entry !== id) });
+          // The point holds what the file holds, even when the Vault changed while it was written.
+          const items = await packedItems(temporary);
+          if (newest && id === newest.id) {
+            if (sameItems(items, newest.items)) break;
+            // The Vault changed while the file was written; it is written again under an ID of its own.
+            await rm(temporary, { force: true });
+            id = randomUUID();
+            continue;
+          }
+          await writeAtomically(path.join(root, SYNC_FILE),
+            syncFileBytes({ id, at: exportedAt.toISOString(), kind: 'export', machine: this.machine, items }, history.points));
+          break;
+        }
         await rename(temporary, target);
       } finally {
         await rm(temporary, { force: true });
       }
-      this.lastSync = { at: exportedAt.toISOString(), kind: 'export', machine: this.machine };
+      this.lastSync = syncSummary(await readSyncHistory(root));
       const result: TransferResult = { exportPath: target, exportBytes: (await stat(target)).size, unregisteredFiles: written.unregisteredFiles };
       const others = result.unregisteredFiles ? `知識庫資料夾中有 ${result.unregisteredFiles} 個不屬於知識庫的檔案沒有包含。` : '';
       this.statusValue = { ...this.statusValue, state: 'completed', message: `已匯出：${target}${others}`, result };
@@ -610,6 +642,9 @@ export class VaultWorkspace {
     try {
       await this.settleCollection();
       this.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
+      // An import a stop interrupted after its commit point is finished before anything reads the Vault;
+      // the rebuild below then indexes the finished content.
+      await finishInPlaceImports(root);
       candidate = await this.makeBundle(root);
       await candidate.runtime.search.rebuild();
       await candidate.schedule.getSchedule();
@@ -773,7 +808,7 @@ export class VaultWorkspace {
     const root = this.current.root;
     let reader: PackageReader | null = null;
     let safeToResume = true;
-    let applying = false;
+    let applied: AppliedImport | null = null;
     try {
       await this.settleCollection();
       this.progress('validating', '正在檢查本機資料…');
@@ -798,44 +833,71 @@ export class VaultWorkspace {
       await checkFreeSpace(root, incomingBytes, this.options.statfs);
       const point = importedPoint(reader, current.incoming, new Date());
       this.mergeWriting = true;
-      applying = true;
+      applied = { preview, mode, counts, changes, backup, point };
       this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在套用匯入的內容…', completedFiles: 0, totalFiles: changes.size + 1 };
       await applyInPlace(root, reader, changes, syncFileBytes(point, current.history.points), (done, total) => {
         this.statusValue = { ...this.statusValue, completedFiles: done, totalFiles: total };
       }, this.options.importFaults);
-      applying = false;
-      this.progress('indexing', '正在更新搜尋索引…');
-      if (mode === 'replace') await this.current.runtime.search.rebuild();
-      else await this.indexChanged(changes);
-      await this.reloadSchedule();
-      this.mergeWriting = false;
-      this.dropPreview();
-      this.lastSync = { at: point.at, kind: 'import', machine: point.machine };
-      const summary = `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
-      const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
-      this.statusValue = {
-        ...this.statusValue, state: 'completed', message: `${how}：${summary}。匯入前的內容已匯出到 ${backup}`,
-        result: { importMode: mode, imported: counts, writtenFiles: changes.size, preImportExportPath: backup },
-      };
-      this.record('info', 'vault.imported', `${how}（${preview.value.package.fileName}）：${summary}。匯入前的內容已匯出到 ${backup}`);
+      await this.importApplied(applied, mode === 'replace');
     } catch (error) {
-      if (applying) {
-        // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
-        try {
-          if (await finishInPlaceImports(root)) {
-            await this.current.runtime.search.rebuild();
-            await this.reloadSchedule();
-          }
-        } catch {
-          safeToResume = false;
-          throw new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。');
-        }
+      if (!applied) throw error;
+      // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
+      let finished: boolean;
+      try {
+        finished = await finishInPlaceImports(root);
+      } catch (again) {
+        console.error('Finishing an interrupted import failed', again);
+        safeToResume = false;
+        throw new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。');
       }
-      throw error;
+      if (!finished) throw error;
+      console.error('An import failed while it put files in place and was carried out to its end', error);
+      await this.importApplied(applied, true);
     } finally {
       reader?.close();
       if (safeToResume) { this.mergeWriting = false; this.end(); }
     }
+  }
+
+  /**
+   * Completes an import whose files are in place: updates the search index (rebuilding it when
+   * `rebuild` is set or an update fails), reloads the schedule and reports the import as done. An
+   * index that cannot be rebuilt either leaves the import done, with the rebuild left to the person.
+   */
+  private async importApplied(applied: AppliedImport, rebuild: boolean): Promise<void> {
+    this.progress('indexing', '正在更新搜尋索引…');
+    let indexed = true;
+    try {
+      if (rebuild) await this.current.runtime.search.rebuild();
+      else await this.indexChanged(applied.changes);
+      await this.reloadSchedule();
+    } catch (error) {
+      console.error('Updating the search index after an import failed; rebuilding it', error);
+      try {
+        await this.current.runtime.search.rebuild();
+        await this.reloadSchedule();
+      } catch (again) {
+        console.error('Rebuilding the search index after an import failed', again);
+        indexed = false;
+      }
+    }
+    this.mergeWriting = false;
+    this.dropPreview();
+    const { point, counts, mode, backup, changes } = applied;
+    this.lastSync = { at: point.at, kind: 'import', machine: point.machine };
+    const summary = `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
+    const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
+    const done = indexed ? `${how}：${summary}。` : `匯入已完成，搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。${summary}。`;
+    this.statusValue = {
+      ...this.statusValue, state: 'completed', errorCode: null, message: `${done}匯入前的內容已匯出到 ${backup}`,
+      result: {
+        importMode: mode, imported: counts, writtenFiles: changes.size, preImportExportPath: backup, ...(indexed ? {} : { searchRebuildNeeded: true }),
+      },
+    };
+    const file = applied.preview.value.package.fileName;
+    this.record(indexed ? 'info' : 'warning', 'vault.imported', indexed
+      ? `${how}（${file}）：${summary}。匯入前的內容已匯出到 ${backup}`
+      : `匯入已完成（${file}）：${summary}。搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。匯入前的內容已匯出到 ${backup}`);
   }
 
   /** Brings the search index up to date with the documents an import wrote or removed. */
@@ -966,6 +1028,16 @@ export class VaultWorkspace {
 /** Runs one step of a switch that has already happened; a failure is logged and the switch goes on. */
 async function step(label: string, work: () => Promise<unknown>): Promise<void> {
   try { await work(); } catch (error) { console.error(label, error); }
+}
+
+/** The sync items an export file holds. */
+async function packedItems(file: string): Promise<ReadonlyMap<string, string>> {
+  const reader = await openPackage(file);
+  try { return syncItems(await itemStates(reader)); } finally { reader.close(); }
+}
+
+function sameItems(left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean {
+  return left.size === right.size && [...left].every(([key, digest]) => right.get(key) === digest);
 }
 
 /** Free space that never runs out, for a check that has already reserved its space. */
