@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MoveCheck, TransferStatus } from '../core/types.js';
 import { api } from './api-client.js';
-import { errorText, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultBackup.js';
+import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
 import { moveTargetIn, relocates, revealLabel, sizeLabel, transferRunning } from './transfer-presentation.js';
 
 const CHECK_DELAY_MS = 350;
@@ -16,15 +16,16 @@ type Open = { kind: 'move' | 'open'; resume: boolean };
 let background: 'move' | 'open' | null = null;
 
 /**
- * Settings section for the active Vault: where it is, what it holds, and the actions that change
- * where the app reads it from (move it, or open another Vault). Both actions are unavailable when the
- * status names a reason, such as a location fixed at startup.
+ * Settings section for the active Vault: where it is, what it holds, the actions that change where
+ * the app reads it from (move it, or open another Vault), and its export and import. Moving and
+ * opening are unavailable when the status names a reason, such as a location fixed at startup.
  */
-export function VaultLocationSection({ vaultPath, activeJobs, counts }: {
+export function VaultLocationSection({ vaultPath, activeJobs, counts, onChanged }: {
   vaultPath: string | null;
   /** Collection jobs not yet finished; switching Vaults names how many pause. */
   activeJobs: number;
   counts: { documents: number; sources: number } | null;
+  onChanged: (message: string) => void;
 }) {
   const desktop = window.xrCollectorDesktop;
   const [status, setStatus] = useState<TransferStatus | null>(null);
@@ -80,6 +81,7 @@ export function VaultLocationSection({ vaultPath, activeJobs, counts }: {
         data-testid="vault-open-other">開啟其他知識庫…</button>
     </div>
     {unavailable ? <p className="hint" data-testid="vault-relocation-unavailable">{unavailable.message}</p> : null}
+    {current ? <ExchangeActions onChanged={onChanged} /> : null}
     {running && !open && status ? <div className="transfer-progress-line vault-background" data-testid="vault-background">
       <p className="transfer-progress" role="status"><span className="spinner" aria-hidden="true" />{status.message}</p>
       <button type="button" className="button small" onClick={() => {

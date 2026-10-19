@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapturedTranscript, TranscriptSearch } from '../../src/core/types.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
+import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import { importNewVault } from '../../src/vault/vault-import.js';
+import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
+import { packageBytes } from '../vault/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { readEventFiles } from '../activity/event-files.js';
 
@@ -31,7 +35,7 @@ async function options(capture: CollectorRuntimeOptions['workspace']['capture'],
           resolve: async () => ({ id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' }),
           listVideos: async () => [],
         },
-        searchBinary: 'unused', searchData: path.join(root, 'search'),
+        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'),
         createSearch: async () => ({ search: search ?? new UnavailableTranscriptSearch('test'), close: closeSearch }),
       },
       connectionFile: path.join(root, 'agent-connection.json'),
@@ -492,6 +496,61 @@ describe('CollectorRuntime Vault setup', () => {
     expect((await created.json()).vault).toMatchObject({ state: 'ready', vaultPath: replacement, failure: null });
     expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: replacement });
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('creates a Vault from an export file while Not Ready, paused, and refuses an invalid file leaving the folder as it was (SYNC-11)', async () => {
+    const setup = await selected();
+    const source = path.join(setup.value.profilePath, 'source');
+    await new MarkdownVault(source).add({
+      videoId: 'runtime0001', sourceUrl: 'https://www.youtube.com/watch?v=runtime0001', title: 'Runtime', channelId: 'UC-runtime', channelTitle: 'Runtime',
+      publishedAt: null, languageCode: 'en', languageName: 'English', subtitleKind: 'manual', bodyMarkdown: 'Body.',
+    });
+    await new JsonChannelScheduleStore(source).save({ enabled: true });
+    const file = path.join(setup.value.profilePath, 'export.zip');
+    await writeFile(file, await packageBytes(source));
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => runtime.close());
+    const ui = (body: unknown) => fetch(`${runtime.server.url}/api/vault/setup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const empty = path.join(setup.value.profilePath, 'Empty');
+    await mkdir(empty);
+    for (const [body, code] of [
+      [{ action: 'import', path: empty }, 'invalid_request'],
+      [{ action: 'import', path: empty, packagePath: path.join(setup.value.profilePath, 'none.zip') }, 'invalid_request'],
+      [{ action: 'import', path: empty, packagePath: path.join(setup.value.profilePath, 'export.xr-vault') }, 'invalid_request'],
+    ] as const) {
+      const response = await ui(body);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe(code);
+    }
+    expect(await readdir(empty)).toEqual([]);
+    expect(runtime.status().state).toBe('not_ready');
+
+    const imported = await ui({ action: 'import', path: empty, packagePath: file });
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: empty }, documentCount: 1 });
+    expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: empty });
+    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule.enabled).toBe(false);
+    expect((await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).lastSync).toMatchObject({ kind: 'import' });
+    expect(JSON.parse(await readFile(path.join(empty, 'xr-collector-sync.json'), 'utf8')).points).toHaveLength(1);
+    await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('takes back a Vault an import from Onboarding left before the selection named it', async () => {
+    const setup = await selected();
+    const source = path.join(setup.value.profilePath, 'source');
+    await mkdir(source);
+    await writeVaultMarker(source, 'XR Collector test');
+    const file = path.join(setup.value.profilePath, 'export.zip');
+    await writeFile(file, await packageBytes(source));
+    const target = path.join(setup.value.profilePath, 'Imported');
+    await importNewVault({ packageFile: file, folder: target, profilePath: setup.value.profilePath, createdBy: 'XR Collector test' });
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => runtime.close());
+    expect(runtime.status().state).toBe('not_ready');
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('lets an Agent move the Vault, reopens the new location after restart and keeps the Agent entry (A-11)', async () => {

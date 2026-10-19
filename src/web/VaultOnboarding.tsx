@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { api, ApiError } from './api-client.js';
-import { Onboarding, type VaultAction, type VaultInspection } from './Onboarding.js';
+import { ImportDone, ImportOnboarding, Onboarding, type VaultAction, type VaultInspection } from './Onboarding.js';
 
 /** How often a waiting Onboarding checks whether an Agent finished setup through the API. */
 const STATUS_POLL_MS = 3000;
@@ -10,7 +10,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '發生未預期的錯誤，請重試。';
 }
 
-/** Connects the Onboarding screen to the Vault setup API and the desktop folder picker. */
+/**
+ * Connects the Onboarding screens to the Vault setup API and the desktop pickers: create or open a
+ * Vault, or create one from an export file and decide on automatic collection before entering.
+ */
 export function VaultOnboarding({ status, onStatus, onReady }: {
   status: VaultSetupStatus;
   onStatus: (status: VaultSetupStatus) => void;
@@ -19,16 +22,19 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   const [inspection, setInspection] = useState<VaultInspection>({ kind: 'none' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [mode, setMode] = useState<'choose' | 'import'>('choose');
+  const [packagePath, setPackagePath] = useState<string | null>(null);
+  const [imported, setImported] = useState<{ result: VaultSetupResult; collecting: boolean } | null>(null);
   const sequence = useRef(0);
   const desktop = window.xrCollectorDesktop;
 
   useEffect(() => {
-    if (busy) return undefined;
+    if (busy || imported) return undefined;
     const timer = window.setInterval(() => {
       void api.getVaultSetup().then((next) => { if (next.state === 'ready') onStatus(next); }).catch(() => undefined);
     }, STATUS_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [busy, onStatus]);
+  }, [busy, imported, onStatus]);
 
   async function inspect(path: string, clearError = true): Promise<void> {
     const current = ++sequence.current;
@@ -74,6 +80,69 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     }
   }
 
+  async function choosePackage(): Promise<void> {
+    if (!desktop) return;
+    try {
+      const file = await desktop.chooseImportFile();
+      if (file) { setPackagePath(file); setError(undefined); }
+    } catch (failure) {
+      setError(`無法開啟檔案選擇視窗：${errorMessage(failure)}`);
+    }
+  }
+
+  async function importFrom(file: string, folder: string): Promise<void> {
+    setBusy(true);
+    setError(undefined);
+    try {
+      setImported({ result: await api.setupVault('import', folder, file), collecting: false });
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === 'vault_already_set') {
+        onStatus(await api.getVaultSetup());
+        return;
+      }
+      setError(errorMessage(failure));
+      await inspect(folder, false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enableCollection(): Promise<void> {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.setAutoCollection(true);
+      setImported((current) => current ? { ...current, collecting: true } : current);
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (imported) {
+    return <ImportDone vaultPath={imported.result.vault.vaultPath ?? ''} documentCount={imported.result.documentCount}
+      collecting={imported.collecting} busy={busy} {...(error ? { error } : {})}
+      onEnableCollection={() => void enableCollection()} onEnter={() => onReady(imported.result)} />;
+  }
+
+  if (mode === 'import') {
+    return <ImportOnboarding
+      packagePath={packagePath}
+      inspection={inspection}
+      suggestedPath={status.suggestedPath}
+      busy={busy}
+      {...(error ? { error } : {})}
+      pathEntry={desktop ? 'dialog' : 'manual'}
+      onChoosePackage={() => void choosePackage()}
+      onSubmitPackage={(path) => { setPackagePath(path); setError(undefined); }}
+      onChooseDirectory={() => void chooseDirectory()}
+      onSubmitPath={(path) => void inspect(path)}
+      onImport={(file, folder) => void importFrom(file, folder)}
+      onBack={() => { setMode('choose'); setError(undefined); }}
+    />;
+  }
+
   return <Onboarding
     inspection={inspection}
     suggestedPath={status.suggestedPath}
@@ -84,5 +153,6 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     onChooseDirectory={() => void chooseDirectory()}
     onSubmitPath={(path) => void inspect(path)}
     onContinue={(action, path) => void continueWith(action, path)}
+    onImport={() => { setMode('import'); setError(undefined); }}
   />;
 }

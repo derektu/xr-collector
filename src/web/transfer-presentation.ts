@@ -1,26 +1,16 @@
-import type { MergeItem, TransferStatus } from '../core/types.js';
+import type { ImportConflict, ImportCounts, ImportSide, ImportSituation, SyncPointSummary, TransferStatus } from '../core/types.js';
 import { dateTimeLabel } from './document-presentation.js';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 const day = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-/** "上次匯出 2026-10-01 14:03"; a Vault this device never exported says so. */
-export function lastExportLabel(value: string | null): string {
-  if (!value) return '尚未匯出';
-  const date = new Date(value);
-  return `上次匯出 ${day(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
+const clock = (date: Date) => `${day(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 
-export function exportFileName(now: Date): string {
-  return `XR Collector 備份 ${day(now)}.xr-vault`;
-}
-
-/** A path beside `vaultPath`, written with the separator the Vault path uses. */
-export function besideVault(vaultPath: string, name: string): string {
-  const separator = vaultPath.includes('\\') && !vaultPath.includes('/') ? '\\' : '/';
-  const trimmed = vaultPath.replace(/[\\/]+$/u, '');
-  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  return `${cut >= 0 ? trimmed.slice(0, cut) : trimmed}${separator}${name}`;
+/** "上次同步 2026-10-19 14:03（匯出）" or "…（匯入自 公司 Mac）"; a Vault without a sync point says so. */
+export function lastSyncLabel(sync: SyncPointSummary | null): string {
+  if (!sync) return '尚未匯出或匯入';
+  const how = sync.kind === 'export' ? '匯出' : sync.machine ? `匯入自 ${sync.machine}` : '匯入';
+  return `上次同步 ${clock(new Date(sync.at))}（${how}）`;
 }
 
 export function fileName(filePath: string): string {
@@ -36,7 +26,7 @@ export function sizeLabel(bytes: number): string {
 
 /** What an export left out: files in the Vault folder that belong to no record of the Vault. */
 export function unregisteredText(count: number): string {
-  return `知識庫資料夾中有 ${count} 個不屬於知識庫的檔案沒有包含在備份裡。`;
+  return `知識庫資料夾中有 ${count} 個不屬於知識庫的檔案沒有包含在匯出檔裡。`;
 }
 
 /** The move target for a chosen parent folder: the parent with the Vault folder's own name. */
@@ -67,68 +57,39 @@ export function progressText(status: Pick<TransferStatus, 'state' | 'message' | 
     : status.message;
 }
 
-const GROUP_TITLES: Record<MergeItem['kind'], string> = {
-  document: '文件', channel: '訂閱', deletion: '刪除紀錄',
-};
-const GROUP_ORDER: MergeItem['kind'][] = ['document', 'channel', 'deletion'];
-
-export interface MergeGroup {
-  kind: MergeItem['kind'];
-  title: string;
-  /** New items and items that need a choice; identical items are only counted. */
-  items: MergeItem[];
-  same: number;
+/** "新增 3、修改 1、刪除 2". */
+export function countsText(counts: ImportCounts): string {
+  return `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
 }
 
-export function mergeCounts(items: MergeItem[]): { added: number; same: number; conflicts: number } {
+/** "公司 Mac 於 2026-10-19 14:03 匯出", for the export file being imported. */
+export function sourceText(source: { machine: string | null; exportedAt: string | null }): string {
+  const machine = source.machine ?? '另一台電腦';
+  return source.exportedAt ? `${machine} 於 ${clock(new Date(source.exportedAt))} 匯出` : `${machine} 匯出`;
+}
+
+/** What an import found, in a sentence above its choices. */
+export function situationText(situation: ImportSituation): string {
   return {
-    added: items.filter((item) => item.state === 'new').length,
-    same: items.filter((item) => item.state === 'same').length,
-    conflicts: items.filter((item) => item.state === 'conflict').length,
-  };
+    incoming: '本機自上次同步後沒有變更，匯入檔的新增、修改與刪除會直接套用。',
+    both: '本機與匯入檔自上次同步後都有變更。',
+    unrelated: '這份匯出檔與目前的知識庫沒有共同的同步點（各自建立，或從未互相匯入）。',
+    nothing: '沒有需要匯入的內容：匯入檔的內容本機都已包含。',
+  }[situation];
 }
 
-/** Items by kind, choices first, leaving out kinds the package and the Vault do not differ in. */
-export function mergeGroups(items: MergeItem[]): MergeGroup[] {
-  return GROUP_ORDER.map((kind) => {
-    const ofKind = items.filter((item) => item.kind === kind);
-    const shown = ofKind.filter((item) => item.state !== 'same')
-      .sort((a, b) => Number(b.state === 'conflict') - Number(a.state === 'conflict'));
-    return { kind, title: GROUP_TITLES[kind], items: shown, same: ofKind.length - shown.length };
-  }).filter((group) => group.items.length > 0 || group.same > 0);
+/**
+ * One side of a conflict: "本機（家裡 Mac）・2026-10-19 14:03", "…・已刪除・時間不明", or
+ * "…・沒有這一項" for a side without the item, which has no time to show.
+ */
+export function sideText(label: string, side: ImportSide): string {
+  const who = side.machine ? `${label}（${side.machine}）` : label;
+  if (side.state === 'absent') return `${who}・沒有這一項`;
+  const state = side.state === 'deleted' ? '・已刪除' : '';
+  return `${who}${state}・${side.time ? dateTimeLabel(side.time) : '時間不明'}`;
 }
 
-/** The name of an item without the kind prefix its group heading already says. */
-export function itemName(item: MergeItem): string {
-  return item.kind === 'deletion' ? item.label.replace(/^刪除紀錄：/u, '') : item.label;
-}
-
-/** What a difference is, and what each choice keeps, in the words of its kind. */
-export function choiceText(item: MergeItem): { summary: string; local: string; incoming: string } {
-  if (item.state === 'new') {
-    const added: Record<MergeItem['kind'], string> = {
-      document: '備份中的新文件，會加入知識庫。',
-      channel: '備份中的新訂閱，會連同它的收集設定與進度加入。',
-      deletion: '備份中的刪除紀錄，這份文件以後不會被自動收集抓回。',
-    };
-    return { summary: added[item.kind], local: '', incoming: '' };
-  }
-  if (item.kind === 'deletion') {
-    return item.deletedOn === 'local'
-      ? { summary: '這份文件在本機已刪除，備份中仍有內容。', local: '維持刪除', incoming: '復原文件' }
-      : { summary: '這份文件在備份中已刪除，本機仍保留。', local: '保留文件', incoming: '套用刪除' };
-  }
-  if (item.kind === 'channel') {
-    return { summary: '兩邊的名稱、網址、暫停狀態或收集設定不同；收集進度一律保留本機。', local: '保留本機設定', incoming: '採用備份設定' };
-  }
-  return { summary: '兩邊的內容不同。', local: '保留本機版本', incoming: '採用備份版本' };
-}
-
-/** "本機 2026-10-01 14:03:05・備份 2026-10-02 09:00:00", for the times an item has. */
-export function itemTimes(item: Pick<MergeItem, 'localTime' | 'incomingTime'>): string {
-  const label = (value: string | null) => {
-    if (!value) return '未提供';
-    return Number.isNaN(Date.parse(value)) ? value : dateTimeLabel(value);
-  };
-  return `本機 ${label(item.localTime)}・備份 ${label(item.incomingTime)}`;
+/** The kind of a conflict, named for people. */
+export function conflictKind(conflict: Pick<ImportConflict, 'kind'>): string {
+  return conflict.kind === 'channel' ? '訂閱' : '文件';
 }

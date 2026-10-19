@@ -1,18 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { Collector } from '../core/collector.js';
 import {
-  CollectorError, type JobStopKind, type MergePreview, type MergeChoice, type MoveCheck, type TransferOperation, type TransferResult,
-  type TransferStatus, type TranscriptSearch,
+  CollectorError, type ExportSuggestion, type ImportChoice, type ImportCounts, type ImportMode, type ImportPreview, type JobStopKind,
+  type MoveCheck, type SyncPointSummary, type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
 } from '../core/types.js';
 import { ChannelCollector } from '../channels/channel-collector.js';
 import { ChannelScheduler } from '../channels/channel-scheduler.js';
 import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
+import { canonicalJson } from '../channels/subscription-files.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import type { YouTubePacing } from '../capture/youtube-gate.js';
 import { JobStore } from '../jobs/job-store.js';
@@ -20,17 +18,17 @@ import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
-import { compareFiles, mergeFiles } from './vault-merge.js';
+import { machineName, readSyncHistory, sharedPoint, SYNC_FILE, syncFileBytes, syncSummary, type SyncHistory } from './sync-points.js';
+import { chosenKeys, compareItems, itemStates, planChanges, syncItems, type Comparison, type ItemStates } from './vault-sync.js';
+import { applyInPlace, checkFreeSpace, finishInPlaceImports, importedPoint, type ImportFault } from './vault-import.js';
 import {
-  checkPackageContent, openPackage, packagePath, registeredFiles, registeredSource, unpackedBytes, unpackPackage, writePackage,
-  type PackageReader, type WrittenPackage,
+  checkPackageContent, openPackage, registeredFiles, registeredSource, writePackage, type PackageReader, type PackageSync, type WrittenPackage,
 } from './vault-package.js';
 import { documentIdFromPath } from './document-paths.js';
 import {
-  checkExportFile, checkPackageFile, checkRestoreFolder, clearRestoreJournal, isWithin, isWorkFolder, markerDigest, readLastExport, recordExport,
-  recoverRestore, stagingFolder, suggestRestoreFolder, writeRestoreJournal, type RestoreJournal,
+  checkExportFile, checkPackageFile, exportFileName, isWithin, isWorkFolder, markerDigest, preImportFileName, recoverImport, writeAtomically,
 } from './transfer-files.js';
-import { inspectVaultDirectory, readVaultId, writeVaultMarker } from './vault-directory.js';
+import { inspectVaultDirectory, readVaultId } from './vault-directory.js';
 import {
   belongsToMove, checkMoveTarget, clearMoveJournal, copyTree, formatBytes, hasMoveJournal, moveMargin, movingFolder, nearestExisting, previousLocations,
   recordPreviousLocation, recoverMove, removeOriginal, scanVault, treeBytes, verifyTree, writeMoveJournal, type MoveJournal, type StatFs,
@@ -50,13 +48,17 @@ interface Bundle {
 export interface WorkspaceOptions {
   /** Absolute path of a Vault that the caller has already inspected. */
   root: string;
-  /** Device record of the active Vault; writing it is the commit point of a restore, move or switch. */
+  /** Device record of the active Vault; writing it is the commit point of a move or switch. */
   selection: VaultSelection;
   /**
-   * Device profile folder: export times, the journals of a restore or move in progress, and the
+   * Device profile folder: the journals of a move or an import from Onboarding in progress, and the
    * locations each Vault was moved from live here.
    */
   profilePath: string;
+  /** Folder exports go to when no other place is chosen, and where an import exports the Vault before it applies. */
+  exportFolder: string;
+  /** Name of this machine in exports and conflicts; defaults to `machineName()`. */
+  machineName?: string;
   /** How long a transfer waits for running collection steps; defaults to the job manager's limit. */
   holdTimeoutMs?: number;
   /** Application name and version written into markers of Vaults it creates. */
@@ -85,6 +87,8 @@ export interface WorkspaceOptions {
    * (by never settling). `copying` is called after each copied entry with its count.
    */
   moveFaults?: (phase: MoveFault, count?: number) => void | Promise<void>;
+  /** Called at each step of an in-place import, for tests that make a step fail or stop there; see `ImportFault`. */
+  importFaults?: (phase: ImportFault, count?: number) => void | Promise<void>;
 }
 
 /**
@@ -97,13 +101,10 @@ export type MoveFault = 'copying' | 'copied' | 'verified' | 'placed' | 'prepared
 const SIZE_REUSE_MS = 60_000;
 
 /**
- * Profile folder of package files in transit: packages a request body carried, kept until the
- * restore or merge using them ends, and exports streamed back to a request. Emptied at startup.
+ * An import comparison waiting to be applied: the export file it compared, what it found, and a
+ * digest of the local items, the shared sync point and the file it stands on.
  */
-const TRANSFER_FOLDER = 'transfers';
-
-/** A merge comparison waiting for choices: the package it compared, and whether this program owns that file. */
-interface Preview { value: MergePreview; baseline: string; file: string; owned: boolean; identity: string }
+interface Preview { value: ImportPreview; comparison: Comparison; baseline: string; file: string; identity: string }
 
 /** Service references stay stable for both UI and Agent while the active vault changes. */
 export function forwarding<T extends object>(target: () => T): T {
@@ -127,8 +128,8 @@ export class VaultWorkspace {
   private releaseJobs: (() => void) | null = null;
   /** Cancels the running transfer while it waits for collection; null once it has started its work. */
   private waitAbort: AbortController | null = null;
-  private lastExportedAt: string | null = null;
-  private statusValue: Omit<TransferStatus, 'vaultPath' | 'lastExportedAt' | 'relocationUnavailable'> = {
+  private lastSync: SyncPointSummary | null = null;
+  private statusValue: Omit<TransferStatus, 'vaultPath' | 'lastSync' | 'relocationUnavailable'> = {
     state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
   };
   readonly collector = forwarding(() => this.current.collector);
@@ -146,13 +147,14 @@ export class VaultWorkspace {
   private constructor(private readonly options: WorkspaceOptions) {
     this.jobStore = options.jobStore ?? JobStore.memory();
     this.holdTimeoutMs = options.holdTimeoutMs;
+    this.machine = options.machineName ?? machineName();
   }
+  private readonly machine: string;
 
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
     const workspace = new VaultWorkspace(options);
     const root = options.root;
     const selected = await options.selection.read().catch(() => null);
-    await rm(path.join(options.profilePath, TRANSFER_FOLDER), { recursive: true, force: true });
     // The selected Vault and the one being opened are never taken back, whatever the journals say.
     if (options.fixedLocation && await hasMoveJournal(options.profilePath)) {
       // A fixed location ignores the selection, so the journal cannot tell which side is in use;
@@ -164,13 +166,14 @@ export class VaultWorkspace {
     } else {
       await workspace.recoverMove(selected, root);
     }
-    await recoverRestore(options.profilePath, [selected, root]);
-    const recovered = await workspace.recoverMerge(root);
+    await recoverImport(options.profilePath, [selected, root]);
+    // An import a stop interrupted after its commit point is finished before anything reads the Vault.
+    const finished = await finishInPlaceImports(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
-    workspace.lastExportedAt = await readLastExport(options.profilePath, root);
+    workspace.lastSync = syncSummary(await readSyncHistory(root));
     workspace.previousPaths = await previousLocations(options.profilePath, workspace.current.vaultId);
-    if (recovered) {
-      try { await workspace.current.runtime.search.rebuild(); await rm(`${root}.merge-journal.json`); }
+    if (finished) {
+      try { await workspace.current.runtime.search.rebuild(); }
       catch (error) { await workspace.current.runtime.close(); throw error; }
     }
     try {
@@ -188,7 +191,7 @@ export class VaultWorkspace {
   status(): TransferStatus {
     const problem = this.relocationProblem();
     return {
-      ...this.statusValue, vaultPath: this.current.root, lastExportedAt: this.lastExportedAt,
+      ...this.statusValue, vaultPath: this.current.root, lastSync: this.lastSync,
       relocationUnavailable: problem ? { code: problem.code, message: problem.message } : null,
     };
   }
@@ -207,7 +210,7 @@ export class VaultWorkspace {
   }
 
   assertReadable(): void {
-    if (this.mergeWriting) throw new CollectorError('vault_busy', '正在合併或復原資料，請稍後再讀取。');
+    if (this.mergeWriting) throw new CollectorError('vault_busy', '正在套用匯入的內容，請稍後再讀取。');
   }
 
   /** Acquired by HTTP writes before any handler can yield. */
@@ -215,7 +218,7 @@ export class VaultWorkspace {
     if (this.locked) {
       const operation = this.statusValue.operation;
       throw new CollectorError('vault_busy', operation === 'move' ? '正在搬移知識庫，請等搬移完成後再操作。'
-        : operation === 'open' ? '正在開啟其他知識庫，請等它完成後再操作。' : '正在備份、還原或合併知識庫，請等它完成後再操作。');
+        : operation === 'open' ? '正在開啟其他知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
     }
     this.requests += 1;
     let released = false;
@@ -296,201 +299,55 @@ export class VaultWorkspace {
     this.statusValue = { ...this.statusValue, state, message };
   }
 
-  /** The package of the active Vault as a stream of a temporary file, which is removed once the stream closes. */
-  async export(): Promise<Readable> {
-    return this.run('export', '匯出', async () => {
-      const exportedAt = new Date();
-      const file = await this.transferFile();
-      try {
-        const written = await this.pack(file, exportedAt);
-        await this.exported(exportedAt, { exportBytes: (await stat(file)).size, unregisteredFiles: written.unregisteredFiles });
-      } catch (error) {
-        await rm(file, { force: true });
-        throw error;
-      }
-      const stream = createReadStream(file);
-      stream.on('close', () => { void rm(file, { force: true }); });
-      return stream;
-    });
+  /** Where an export goes when no other place is chosen: the export folder and a file name of today. */
+  exportSuggestion(): ExportSuggestion {
+    const folder = this.options.exportFolder;
+    return { folder, path: path.join(folder, exportFileName(new Date())) };
   }
 
-  /** Writes the package of the active Vault to a file; an existing file is replaced only with `overwrite`. */
-  async exportTo(file: unknown, overwrite = false): Promise<TransferStatus> {
-    const target = await checkExportFile(file, overwrite, this.folders);
+  /**
+   * Writes the export of the active Vault to `file`, or to the suggested file in the export folder
+   * when `file` is left out; an existing file is replaced only with `overwrite`. The export is a
+   * sync point: the Vault records its items under the ID the file carries before the file appears.
+   */
+  async exportTo(file?: unknown, overwrite = false): Promise<TransferStatus> {
+    let requested = file;
+    if (requested === undefined || requested === null) {
+      await mkdir(this.options.exportFolder, { recursive: true });
+      requested = this.exportSuggestion().path;
+    }
+    const target = await checkExportFile(requested, overwrite, this.folders);
     return this.run('export', '匯出', async () => {
+      const root = this.current.root;
       const exportedAt = new Date();
-      // Written beside the target and renamed, so the named file is either a whole package or untouched.
+      const history = await readSyncHistory(root);
+      const id = randomUUID();
+      // Written beside the target and renamed, so the named file is either a whole export or untouched.
       const temporary = `${target}.${randomUUID()}.tmp`;
       let written: WrittenPackage;
       try {
-        written = await this.pack(temporary, exportedAt);
+        written = await this.pack(temporary, exportedAt, { id, ancestors: history.points.map((point) => point.id) });
+        const items = syncItems(await itemStates(registeredSource(await registeredFiles(root))));
+        await writeAtomically(path.join(root, SYNC_FILE),
+          syncFileBytes({ id, at: exportedAt.toISOString(), kind: 'export', machine: this.machine, items }, history.points));
         await rename(temporary, target);
       } finally {
         await rm(temporary, { force: true });
       }
-      await this.exported(exportedAt, { exportPath: target, exportBytes: (await stat(target)).size, unregisteredFiles: written.unregisteredFiles });
+      this.lastSync = { at: exportedAt.toISOString(), kind: 'export', machine: this.machine };
+      const result: TransferResult = { exportPath: target, exportBytes: (await stat(target)).size, unregisteredFiles: written.unregisteredFiles };
+      const others = result.unregisteredFiles ? `知識庫資料夾中有 ${result.unregisteredFiles} 個不屬於知識庫的檔案沒有包含。` : '';
+      this.statusValue = { ...this.statusValue, state: 'completed', message: `已匯出：${target}${others}`, result };
+      this.record('info', 'vault.exported', `已匯出知識庫：${target}${others}`);
       return this.status();
     });
   }
 
-  private async pack(file: string, exportedAt: Date): Promise<WrittenPackage> {
-    this.progress('exporting', '正在建立備份…');
-    return writePackage(this.current.root, file, { createdBy: this.options.createdBy, exportedAt });
-  }
-
-  /** A new file name in the profile's transfer folder. */
-  private async transferFile(): Promise<string> {
-    const folder = path.join(this.options.profilePath, TRANSFER_FOLDER);
-    await mkdir(folder, { recursive: true, mode: 0o700 });
-    return path.join(folder, `${randomUUID()}.xr-vault`);
-  }
-
-  /** Saves a package a request carried into the transfer folder; the operation using it removes it. */
-  private async receive(input: Buffer | Readable): Promise<string> {
-    const file = await this.transferFile();
-    try {
-      await pipeline(Buffer.isBuffer(input) ? Readable.from([input]) : input, createWriteStream(file, { flags: 'wx', mode: 0o600 }));
-    } catch (error) {
-      await rm(file, { force: true });
-      throw error;
-    }
-    return file;
-  }
-
-  private async exported(at: Date, result: TransferResult): Promise<void> {
-    const time = at.toISOString();
-    try {
-      await recordExport(this.options.profilePath, this.current.root, time);
-    } catch (error) {
-      // The package is complete either way; only the remembered time is lost.
-      console.error('Unable to record the export time', error);
-    }
-    this.lastExportedAt = time;
-    const where = result.exportPath ? `：${result.exportPath}` : '。';
-    const others = result.unregisteredFiles ? `知識庫資料夾中有 ${result.unregisteredFiles} 個不屬於知識庫的檔案沒有包含。` : '';
-    this.statusValue = { ...this.statusValue, state: 'completed', message: `備份已建立${where}${others}`, result };
-    this.record('info', 'vault.exported', `已匯出知識庫備份${where}${others}`);
-  }
-
-  /** A free folder beside the active Vault for a restore. */
-  suggestRestoreFolder(): Promise<string> {
-    return suggestRestoreFolder(this.current.root, new Date());
-  }
-
-  /** Restores a package file into a new Vault and switches to it; progress is in `status`. */
-  async restoreFrom(packageFile: unknown, folder: unknown): Promise<TransferStatus> {
-    return this.restoreFile(await checkPackageFile(packageFile), folder ?? undefined, false);
-  }
-
-  /** Restores a package a request carried; see `restoreFile`. */
-  async restore(input: Buffer | Readable, folder?: unknown): Promise<TransferStatus> {
-    return this.restoreFile(await this.receive(input), folder, true);
-  }
-
-  /**
-   * Restores a package into a new Vault in `folder` (a free folder beside the active Vault when
-   * omitted) and switches to it once it is complete. The active Vault stays where it is; its
-   * unfinished collection jobs stop with the switch and continue when it is opened again. A package
-   * file this program `owns` is removed when the restore ends.
-   */
-  private async restoreFile(file: string, folder: unknown, owns: boolean): Promise<TransferStatus> {
-    let target: string;
-    try {
-      this.lock('restore');
-    } catch (error) {
-      if (owns) await rm(file, { force: true });
-      throw error;
-    }
-    try {
-      target = await checkRestoreFolder(folder ?? await this.suggestRestoreFolder(), this.folders);
-    } catch (error) {
-      this.fail(error, '還原');
-      this.end();
-      if (owns) await rm(file, { force: true });
-      throw error;
-    }
-    this.dropPreview();
-    this.operation = this.restoreOnce(file, target)
-      .finally(async () => { if (owns) await rm(file, { force: true }); this.operation = null; });
-    return this.status();
-  }
-
-  /** Refuses a restore whose files would not fit on the disk of `folder`, with the same margin as a move. */
-  private async checkSpace(folder: string, bytes: number): Promise<void> {
-    const required = bytes + moveMargin(bytes);
-    const space = await (this.options.statfs ?? statfs)(await nearestExisting(folder));
-    const available = Number(space.bavail) * Number(space.bsize);
-    if (available < required) {
-      throw new CollectorError('insufficient_space', `還原位置的磁碟空間不足：需要 ${formatBytes(required)}，只有 ${formatBytes(available)} 可用。`);
-    }
-  }
-
-  private async restoreOnce(file: string, target: string): Promise<void> {
-    const profile = this.options.profilePath;
-    let journal: RestoreJournal | null = null;
-    let placed = false;
-    let candidate: Bundle | null = null;
-    let previous: Bundle | null = null;
-    let reader: PackageReader | null = null;
-    try {
-      await this.settleCollection();
-      this.progress('validating', '正在檢查備份…');
-      reader = await openPackage(file);
-      await checkPackageContent(reader);
-      await this.checkSpace(path.dirname(target), unpackedBytes(reader));
-      journal = { staging: stagingFolder(target), target, placed: false, marker: null, emptyTarget: false };
-      await writeRestoreJournal(profile, journal);
-      await mkdir(journal.staging, { mode: 0o700 });
-      await unpackPackage(reader, journal.staging, (done, total) => {
-        this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在還原檔案…', completedFiles: done, totalFiles: total };
-      });
-      reader.close();
-      reader = null;
-      await writeVaultMarker(journal.staging, this.options.createdBy);
-      // The chosen folder holds at most entries a file manager adds by itself; the staging folder takes its place.
-      await checkRestoreFolder(target, this.folders);
-      // Recorded before the rename, so a stop at any point after it can take the restored folder back.
-      journal = { ...journal, placed: true, marker: await markerDigest(journal.staging), emptyTarget: await pathExists(target) };
-      await writeRestoreJournal(profile, journal);
-      if (journal.emptyTarget) await rm(target, { recursive: true });
-      await rename(journal.staging, target);
-      placed = true;
-      this.progress('indexing', '正在建立新知識庫的搜尋索引…');
-      candidate = await this.makeBundle(target);
-      // The candidate owns a separate search database; failed preparation leaves the active vault intact.
-      await candidate.runtime.search.rebuild();
-      await candidate.schedule.getSchedule();
-      previous = await this.commit(candidate);
-      placed = false;
-      candidate = null;
-    } catch (error) {
-      this.fail(error, '還原');
-    }
-    reader?.close();
-    try {
-      if (candidate) {
-        await candidate.schedule.close();
-        await candidate.jobs.close();
-        await candidate.runtime.close();
-      }
-      // A restore that fails after placing its folder takes it back, leaving the chosen folder as it was.
-      if (placed && journal) {
-        await rename(target, journal.staging);
-        await this.removeSearchData(target);
-      }
-      if (journal?.emptyTarget && !await pathExists(target)) await mkdir(target);
-      if (journal) {
-        await rm(journal.staging, { recursive: true, force: true });
-        await clearRestoreJournal(profile);
-      }
-    } catch (error) {
-      console.error('Restore cleanup failed', error);
-    }
-    try {
-      if (previous) await this.finishRestore(previous, target);
-    } finally {
-      this.end();
-    }
+  private async pack(file: string, exportedAt: Date, sync: Pick<PackageSync, 'id' | 'ancestors'>): Promise<WrittenPackage> {
+    this.progress('exporting', '正在匯出…');
+    return writePackage(this.current.root, file, {
+      createdBy: this.options.createdBy, exportedAt, sync: { ...sync, vaultId: this.current.vaultId, machine: this.machine },
+    });
   }
 
   /**
@@ -534,25 +391,9 @@ export class VaultWorkspace {
     await step('Previous search shutdown failed', () => previous.runtime.close());
     await step('Resuming jobs failed', () => this.current.jobs.resume());
     await step('Schedule start failed', () => this.current.schedule.start());
-    this.lastExportedAt = await readLastExport(this.options.profilePath, this.current.root);
+    this.lastSync = syncSummary(await readSyncHistory(this.current.root));
     this.previousPaths = await previousLocations(this.options.profilePath, this.current.vaultId);
     return { interruptedJobs, resumedJobs: this.current.jobs.unfinishedCount() };
-  }
-
-  /** Settles the switch to a restored Vault; the previous Vault's jobs continue when it is opened again. */
-  private async finishRestore(previous: Bundle, target: string): Promise<void> {
-    const { interruptedJobs } = await this.switchTo(previous, {
-      reason: '切換到還原的知識庫時工作尚未完成；回到原知識庫時接續。', stop: 'vault_switch', moved: false,
-    });
-    const jobs = interruptedJobs ? `原知識庫有 ${interruptedJobs} 個收集工作暫停，回到原知識庫時會接續。` : '';
-    this.statusValue = {
-      ...this.statusValue, state: 'completed', errorCode: null,
-      message: `已還原到新的知識庫並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`,
-      result: { previousVaultPath: previous.root, interruptedJobs, autoCollectionPaused: true },
-    };
-    // Device-level, so both the previous and the restored Vault show the switch.
-    this.record('info', 'vault.restored',
-      `已從備份還原新的知識庫 ${target} 並切換使用，自動收集已暫停。原知識庫保留在 ${previous.root}。${jobs}`, null);
   }
 
   /** Checks a move of the active Vault to `target` without starting it. */
@@ -626,7 +467,7 @@ export class VaultWorkspace {
       await this.fault('verified');
       // The location may have changed while copying; space is already taken by the copy itself.
       await checkMoveTarget(target, this.folders, 0, { free: unlimitedSpace });
-      journal = { ...journal, phase: 'placed', marker: await markerDigest(journal.staging), emptyTarget: await pathExists(target) };
+      journal = { ...journal, phase: 'placed', marker: await markerDigest(journal.staging), emptyTarget: await exists(target) };
       await writeMoveJournal(profile, journal);
       if (journal.emptyTarget) await rm(target, { recursive: true });
       await rename(journal.staging, target);
@@ -654,7 +495,7 @@ export class VaultWorkspace {
         }
         // A move that fails before the switch takes its copy back, leaving the new location as it was.
         if (placed && journal) await rename(target, journal.staging);
-        if (journal?.emptyTarget && !await pathExists(target)) await mkdir(target);
+        if (journal?.emptyTarget && !await exists(target)) await mkdir(target);
         if (journal) {
           await rm(journal.staging, { recursive: true, force: true });
           await this.removeSearchData(target);
@@ -711,18 +552,13 @@ export class VaultWorkspace {
 
   /**
    * Device records that follow a committed move, in the running app and in recovery at startup: the
-   * previous location joins the Vault's history, the export time moves to the new path, and the
-   * search database of the previous path is removed. Each step that fails is logged.
+   * previous location joins the Vault's history and the search database of the previous path is
+   * removed. Each step that fails is logged. The sync points live in the Vault and move with it.
    */
   private async settleRelocation(vaultId: string, source: string, target: string): Promise<void> {
     const profile = this.options.profilePath;
     await step('Recording the previous location failed', () => recordPreviousLocation(profile, vaultId, source, target));
-    await step('Carrying the export time failed', async () => {
-      const time = await readLastExport(profile, source);
-      if (time && !await readLastExport(profile, target)) await recordExport(profile, target, time);
-    });
     await step('Previous search database removal failed', () => this.removeSearchData(source));
-    if (this.current?.root === target) this.lastExportedAt = await readLastExport(profile, target);
   }
 
   private moveFailed(error: unknown, source: string): void {
@@ -752,7 +588,7 @@ export class VaultWorkspace {
     }
     const root = path.resolve(value);
     if (isWorkFolder(root)) {
-      throw new CollectorError('invalid_request', '這是搬移或還原使用的暫存資料夾，不能當作知識庫開啟。請開啟搬移後的新位置。');
+      throw new CollectorError('invalid_request', '這是搬移或匯入使用的暫存資料夾，不能當作知識庫開啟。請開啟搬移後的新位置。');
     }
     if (await isWithin(root, this.current.root)) {
       throw new CollectorError('invalid_request', await isWithin(this.current.root, root)
@@ -829,185 +665,188 @@ export class VaultWorkspace {
     }
   }
 
-  /** Compares a package file with the active Vault. */
-  async previewMergeFrom(file: unknown): Promise<MergePreview> {
-    return this.previewFile(await checkPackageFile(file), false);
-  }
-
-  /** Compares a package a request carried with the active Vault. */
-  async previewMerge(input: Buffer | Readable): Promise<MergePreview> {
-    return this.previewFile(await this.receive(input), true);
+  /**
+   * Compares an export file with the active Vault and keeps the comparison for `applyImport`. The
+   * file stays where it is; the comparison is dropped when another Vault operation starts.
+   */
+  async previewImport(file: unknown): Promise<ImportPreview> {
+    const source = await checkPackageFile(file);
+    return this.run('import', '匯入', async () => {
+      // A comparison refused for a busy Vault leaves the previous one usable.
+      this.dropPreview();
+      this.progress('validating', '正在檢查匯出檔…');
+      const reader = await openPackage(source);
+      try {
+        await checkPackageContent(reader);
+        this.progress('validating', '正在比對…');
+        const { comparison, baseline } = await this.compare(reader);
+        const { exportedAt, sync } = reader.manifest;
+        const value: ImportPreview = {
+          id: randomUUID(), situation: comparison.situation,
+          package: { fileName: path.basename(source), exportedAt: exportedAt ?? null, machine: sync?.machine ?? null },
+          incoming: comparison.incoming, conflicts: comparison.conflicts, replaceLoses: comparison.replaceLoses,
+        };
+        this.preview = { value, comparison, baseline, file: source, identity: reader.identity };
+        this.statusValue = { ...this.statusValue, state: 'completed', message: '比對完成。' };
+        return value;
+      } finally {
+        reader.close();
+      }
+    });
   }
 
   /**
-   * Compares a package with the active Vault and keeps the comparison for `applyMerge`. The package
-   * file stays where it is until the merge is applied or the comparison is dropped; a file this
-   * program `owns` is removed then.
+   * Compares the local items, the newest sync point the file and the Vault share, and the file's
+   * items. The baseline digest covers what an apply stands on: the local items, the shared point
+   * and the file. Collection progress and check times are no items, so a check the scheduler runs
+   * after a preview leaves the baseline as it was.
    */
-  private async previewFile(file: string, owns: boolean): Promise<MergePreview> {
-    let kept = false;
-    try {
-      return await this.run('merge', '比對', async () => {
-        // A comparison refused for a busy Vault leaves the previous one usable.
-        this.dropPreview();
-        this.progress('validating', '正在檢查備份…');
-        const reader = await openPackage(file);
-        try {
-          await checkPackageContent(reader);
-          this.progress('validating', '正在比對…');
-          const { items, baseline } = await compareFiles(registeredSource(await registeredFiles(this.current.root)), reader);
-          const { exportedAt, createdBy } = reader.manifest;
-          const value: MergePreview = { id: randomUUID(), items, package: { exportedAt: exportedAt ?? null, createdBy: createdBy ?? null } };
-          this.preview = { value, baseline, file, owned: owns, identity: reader.identity };
-          kept = true;
-          this.statusValue = { ...this.statusValue, state: 'completed', message: '比對完成，請選擇差異的處理方式。' };
-          return value;
-        } finally {
-          reader.close();
-        }
-      });
-    } finally {
-      if (owns && !kept) await rm(file, { force: true });
-    }
+  private async compare(reader: PackageReader): Promise<{
+    comparison: Comparison; baseline: string; history: SyncHistory; local: ItemStates; incoming: ItemStates;
+  }> {
+    const root = this.current.root;
+    const history = await readSyncHistory(root);
+    if (history.problem) this.record('warning', 'vault.sync_unreadable', `${history.problem}這次匯入視為兩邊沒有共同同步點。`);
+    const local = await itemStates(registeredSource(await registeredFiles(root)));
+    const incoming = await itemStates(reader);
+    const sync = reader.manifest.sync;
+    const base = sharedPoint(history, sync ? [sync.id, ...sync.ancestors] : []);
+    const comparison = compareItems(local, base?.items ?? null, incoming, { local: this.machine, incoming: sync?.machine ?? null });
+    const baseline = createHash('sha256').update(canonicalJson([[...syncItems(local)], base?.id ?? null, reader.identity])).digest('hex');
+    return { comparison, baseline, history, local, incoming };
   }
 
-  /** Forgets the comparison waiting for choices and removes its package file when this program owns it. */
+  /** Forgets the comparison waiting to be applied. */
   private dropPreview(): void {
-    const preview = this.preview;
     this.preview = null;
-    if (preview?.owned) void rm(preview.file, { force: true }).catch(() => undefined);
   }
 
-  cancelMerge(id: string): void {
-    if (this.locked) throw new CollectorError('vault_busy', '正在套用合併，請等待結果。');
-    if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇資料包。');
+  cancelImport(id: string): void {
+    if (this.locked) throw new CollectorError('vault_busy', '正在套用匯入，請等待結果。');
+    if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇匯入檔。');
     this.dropPreview();
-    this.statusValue = { ...this.statusValue, state: 'idle', operation: null, message: '已取消合併，資料未變更。', result: null };
+    this.statusValue = { ...this.statusValue, state: 'idle', operation: null, message: '已取消匯入，資料未變更。', result: null };
   }
 
-  applyMerge(id: string, choices: Record<string, MergeChoice>): TransferStatus {
-    if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新比對。');
-    if (!choices || typeof choices !== 'object' || Array.isArray(choices)) throw new CollectorError('invalid_request', '合併選擇格式無效。');
+  /**
+   * Applies a compared import in place: a merge takes the file's own changes and the conflicts
+   * chosen for it, a replace makes every item what the file holds. Progress is in `status`.
+   */
+  applyImport(id: string, mode: unknown, choices?: Record<string, ImportChoice>): TransferStatus {
+    if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇匯入檔。');
+    if (mode !== 'merge' && mode !== 'replace') throw new CollectorError('invalid_request', 'mode 必須是 merge 或 replace。');
+    if (choices !== undefined && (!choices || typeof choices !== 'object' || Array.isArray(choices))) {
+      throw new CollectorError('invalid_request', '衝突選擇格式無效。');
+    }
     const preview = this.preview;
-    this.lock('merge');
-    this.operation = this.mergeOnce(preview, choices).catch((error: unknown) => this.fail(error, '合併')).finally(() => { this.operation = null; });
+    if (mode === 'merge' && preview.value.situation === 'nothing') throw new CollectorError('invalid_request', '沒有需要匯入的內容。');
+    if (mode === 'replace' && !preview.comparison.differing.length) throw new CollectorError('invalid_request', '本機內容已與匯入檔相同。');
+    chosenKeys(preview.comparison, mode, choices);
+    this.lock('import');
+    this.operation = this.importOnce(preview, mode, choices).catch((error: unknown) => this.fail(error, '匯入')).finally(() => { this.operation = null; });
     return this.status();
   }
 
-  private async atomicFile(file: string, bytes: Buffer): Promise<void> {
-    await mkdir(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${randomUUID()}.tmp`;
-    try { await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 }); await rename(temporary, file); }
-    finally { await rm(temporary, { force: true }); }
-  }
-
   /**
-   * Puts back the files an interrupted merge was writing, from the package of the Vault as it was
-   * before the merge: `<vault>.merge-journal.json` is `{ "backup": "<package>", "paths": [...] }`.
+   * Exports the Vault as it is into the export folder before an import changes it, so a wrong
+   * import can be undone by importing this file. It records no sync point; its manifest names the
+   * Vault's sync points as its ancestors.
    */
-  private async recoverMerge(root: string): Promise<boolean> {
-    const journal = `${root}.merge-journal.json`;
-    let data: { backup: string; paths: string[] };
-    try { data = JSON.parse(await readFile(journal, 'utf8')) as typeof data; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
-    if (!data || typeof data.backup !== 'string' || !Array.isArray(data.paths)
-      || !data.paths.every((entry) => typeof entry === 'string' && packagePath(entry))) {
-      throw new Error('Invalid merge recovery journal');
-    }
-    const backup = await openPackage(data.backup);
+  private async preImportExport(history: SyncHistory): Promise<string> {
+    const folder = this.options.exportFolder;
+    await mkdir(folder, { recursive: true });
+    const now = new Date();
+    const name = preImportFileName(now);
+    let target = path.join(folder, name);
+    for (let index = 2; await exists(target); index += 1) target = path.join(folder, name.replace(/\.zip$/u, ` (${index}).zip`));
+    const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      for (const relative of data.paths) {
-        const target = path.join(root, relative);
-        let entries: string[];
-        try { entries = await readdir(path.dirname(target)); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; entries = []; }
-        for (const name of entries) {
-          const prefix = `${path.basename(target)}.`;
-          if (name.startsWith(prefix) && /^[0-9a-f-]{36}\.tmp$/u.test(name.slice(prefix.length))) {
-            await rm(path.join(path.dirname(target), name), { force: true });
-          }
-        }
-        if (backup.has(relative)) await this.atomicFile(target, await backup.read(relative));
-        else await rm(target, { force: true });
-      }
+      await this.pack(temporary, now, { id: null, ancestors: history.points.map((point) => point.id) });
+      await rename(temporary, target);
     } finally {
-      backup.close();
+      await rm(temporary, { force: true });
     }
-    // Keep the journal until the caller has also repaired the search projection.
-    return true;
+    return target;
   }
 
-  private async mergeOnce(preview: Preview, choices: Record<string, MergeChoice>): Promise<void> {
+  private async importOnce(preview: Preview, mode: ImportMode, choices: Record<string, ImportChoice> | undefined): Promise<void> {
     const root = this.current.root;
-    const journal = `${root}.merge-journal.json`;
-    let journalWritten = false;
-    let safeToResume = true;
     let reader: PackageReader | null = null;
+    let safeToResume = true;
+    let applying = false;
     try {
       await this.settleCollection();
       this.progress('validating', '正在檢查本機資料…');
       reader = await openPackage(preview.file);
-      const local = registeredSource(await registeredFiles(root));
-      if (reader.identity !== preview.identity || (await compareFiles(local, reader)).baseline !== preview.baseline) {
+      const current = reader.identity === preview.identity ? await this.compare(reader) : null;
+      if (!current || current.baseline !== preview.baseline) {
         this.dropPreview();
-        throw new CollectorError('invalid_request', '本機資料或備份檔案在比對後有變更，請重新比對。');
+        throw new CollectorError('invalid_request', '本機資料或匯入檔在比對後有變更，請重新選擇匯入檔。');
       }
-      const changes = await mergeFiles(local, reader, preview.value.items, choices);
-      if (!changes.size) {
-        this.dropPreview();
-        this.statusValue = { ...this.statusValue, state: 'completed', message: '合併完成，沒有需要寫入的變更。', result: { writtenFiles: 0 } };
-        this.record('info', 'vault.merged', '合併完成，沒有需要寫入的變更。');
-        return;
+      const keys = chosenKeys(current.comparison, mode, choices);
+      const changes = await planChanges(registeredSource(await registeredFiles(root)), reader, keys);
+      const counts: ImportCounts = { added: 0, modified: 0, removed: 0 };
+      for (const key of keys) {
+        const before = current.local.get(key)?.state === 'present';
+        const after = current.incoming.get(key)?.state === 'present';
+        if (before && after) counts.modified += 1; else if (after) counts.added += 1; else counts.removed += 1;
       }
-      const backup = `${root}.before-merge-${randomUUID()}.xr-vault`;
-      await writePackage(root, backup);
-      await this.atomicFile(journal, Buffer.from(JSON.stringify({ backup, paths: [...changes.keys()] })));
-      journalWritten = true;
+      this.progress('exporting', '正在匯出目前的內容…');
+      const backup = await this.preImportExport(current.history);
+      const incomingBytes = [...changes.values()].reduce((sum, change) => sum + (!change ? 0
+        : 'bytes' in change ? change.bytes.length : reader!.manifest.files.find((row) => row.path === change.incoming)?.size ?? 0), 0);
+      await checkFreeSpace(root, incomingBytes, this.options.statfs);
+      const point = importedPoint(reader, current.incoming, new Date());
       this.mergeWriting = true;
-      this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在合併資料…', completedFiles: 0, totalFiles: changes.size };
-      for (const [relative, change] of changes) {
-        if (!change) await rm(path.join(root, relative), { force: true });
-        else await this.atomicFile(path.join(root, relative), 'bytes' in change ? change.bytes : await reader.read(change.incoming));
-        this.statusValue.completedFiles += 1;
-      }
+      applying = true;
+      this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在套用匯入的內容…', completedFiles: 0, totalFiles: changes.size + 1 };
+      await applyInPlace(root, reader, changes, syncFileBytes(point, current.history.points), (done, total) => {
+        this.statusValue = { ...this.statusValue, completedFiles: done, totalFiles: total };
+      }, this.options.importFaults);
+      applying = false;
       this.progress('indexing', '正在更新搜尋索引…');
-      const vault = new MarkdownVault(root);
-      for (const [relative, change] of changes) {
-        const id = documentIdFromPath(relative);
-        if (!id) continue;
-        if (!change) {
-          await this.current.runtime.search.remove(id);
-          continue;
-        }
-        const document = await vault.read(id);
-        if (!document) throw new Error('Merged document missing');
-        await this.current.runtime.search.index(document);
-      }
+      if (mode === 'replace') await this.current.runtime.search.rebuild();
+      else await this.indexChanged(changes);
       await this.reloadSchedule();
-      await rm(journal);
-      journalWritten = false;
+      this.mergeWriting = false;
       this.dropPreview();
+      this.lastSync = { at: point.at, kind: 'import', machine: point.machine };
+      const summary = `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
+      const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
       this.statusValue = {
-        ...this.statusValue, state: 'completed', message: `合併完成，寫入 ${changes.size} 個檔案。合併前的資料已備份到 ${backup}`,
-        result: { writtenFiles: changes.size, mergeBackupPath: backup },
+        ...this.statusValue, state: 'completed', message: `${how}：${summary}。匯入前的內容已匯出到 ${backup}`,
+        result: { importMode: mode, imported: counts, writtenFiles: changes.size, preImportExportPath: backup },
       };
-      this.record('info', 'vault.merged', `合併完成，寫入 ${changes.size} 個檔案。合併前的資料已備份到 ${backup}`);
+      this.record('info', 'vault.imported', `${how}（${preview.value.package.fileName}）：${summary}。匯入前的內容已匯出到 ${backup}`);
     } catch (error) {
-      if (journalWritten) {
+      if (applying) {
+        // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
         try {
-          await this.recoverMerge(root);
-          await this.current.runtime.search.rebuild();
-          await this.reloadSchedule();
-          await rm(journal);
+          if (await finishInPlaceImports(root)) {
+            await this.current.runtime.search.rebuild();
+            await this.reloadSchedule();
+          }
         } catch {
           safeToResume = false;
-          throw new CollectorError('vault_busy', `合併未完成，已停止寫入與排程。請重新啟動以復原；復原紀錄：${journal}`);
+          throw new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。');
         }
       }
       throw error;
     } finally {
       reader?.close();
       if (safeToResume) { this.mergeWriting = false; this.end(); }
+    }
+  }
+
+  /** Brings the search index up to date with the documents an import wrote or removed. */
+  private async indexChanged(changes: ReadonlyMap<string, unknown>): Promise<void> {
+    const vault = new MarkdownVault(this.current.root);
+    for (const relative of changes.keys()) {
+      const id = documentIdFromPath(relative);
+      if (!id) continue;
+      const document = await vault.read(id).catch(() => null);
+      if (document) await this.current.runtime.search.index(document);
+      else await this.current.runtime.search.remove(id);
     }
   }
 
@@ -1027,7 +866,7 @@ export class VaultWorkspace {
     this.statusValue = {
       ...this.statusValue, state: 'error', result: null,
       errorCode: error instanceof CollectorError ? error.code : null,
-      message: error instanceof CollectorError ? error.message : '操作失敗，請確認備份檔案、磁碟空間與搜尋服務後重試。',
+      message: error instanceof CollectorError ? error.message : '操作失敗，請確認匯出檔、磁碟空間與搜尋服務後重試。',
     };
     this.record('error', 'vault.transfer_failed', `${operation}失敗：${this.statusValue.message}`,
       undefined, error instanceof CollectorError ? error.code : undefined);
@@ -1148,7 +987,7 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-async function pathExists(target: string): Promise<boolean> {
+async function exists(target: string): Promise<boolean> {
   try { await lstat(target); return true; } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;

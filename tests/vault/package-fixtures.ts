@@ -19,7 +19,7 @@ export const sha = (value: string | Buffer) => createHash('sha256').update(value
 export async function packageBytes(root: string, info: { createdBy?: string; exportedAt?: Date } = {}): Promise<Buffer> {
   const folder = await mkdtemp(path.join(tmpdir(), 'xr-package-'));
   try {
-    const file = path.join(folder, `${randomUUID()}.xr-vault`);
+    const file = path.join(folder, `${randomUUID()}.zip`);
     await writePackage(root, file, info);
     return await readFile(file);
   } finally {
@@ -112,7 +112,7 @@ export async function ensureMarker(root: string): Promise<void> {
 export async function withPackage<T>(bytes: Buffer, use: (reader: PackageReader) => Promise<T>): Promise<T> {
   const folder = await mkdtemp(path.join(tmpdir(), 'xr-package-'));
   try {
-    const file = path.join(folder, 'package.xr-vault');
+    const file = path.join(folder, 'package.zip');
     await writeFile(file, bytes);
     const reader = await openPackage(file);
     try { return await use(reader); } finally { reader.close(); }
@@ -121,7 +121,7 @@ export async function withPackage<T>(bytes: Buffer, use: (reader: PackageReader)
   }
 }
 
-/** Checks package bytes as a restore does and writes their files into `destination`. */
+/** Checks package bytes as an import does and writes their files into `destination`. */
 export async function unpackBytes(bytes: Buffer, destination: string, options: { pauseSchedule?: boolean } = {}): Promise<void> {
   await withPackage(bytes, async (reader) => {
     await checkPackageContent(reader);

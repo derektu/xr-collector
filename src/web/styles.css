@@ -205,7 +205,7 @@ dialog::backdrop { background:var(--overlay); }
 .settings-section .button { margin-top:14px; }
 .setting-path { display:block; margin-top:10px; overflow-wrap:anywhere; color:var(--primary); font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
 
-/* Backup, merge and restore */
+/* Export and import */
 .settings-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
 .settings-section .settings-line .button { margin-top:0; }
 .transfer-dialog[open] { display:flex; flex-direction:column; gap:4px; }
@@ -225,9 +225,7 @@ dialog::backdrop { background:var(--overlay); }
 .confirm-dialog p.merge-counts { color:var(--primary); font-size:15px; font-weight:600; }
 .merge-bulk { display:flex; gap:8px; margin-top:12px; }
 .merge-groups { min-height:0; overflow:auto; margin-top:12px; padding-right:4px; }
-.merge-group + .merge-group { margin-top:14px; }
-.merge-group h3 { display:flex; align-items:baseline; gap:10px; margin:0 0 6px; font-size:14px; }
-.merge-group ul { margin:0; padding:0; list-style:none; }
+.merge-groups > ul { margin:0; padding:0; list-style:none; }
 .merge-row { padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--card); }
 .merge-row + .merge-row { margin-top:8px; }
 .merge-row.conflict { border-color:color-mix(in srgb, var(--warning) 45%, var(--border)); }
@@ -238,14 +236,15 @@ dialog::backdrop { background:var(--overlay); }
 .merge-state.new { color:var(--tracking-fg); background:var(--tracking-bg); }
 .merge-state.conflict { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
 .merge-choice { margin-top:10px; }
-.merge-diff-toggle { display:block; margin:10px 0 0; font-size:12px; }
-.merge-diff { max-height:260px; overflow:auto; margin:6px 0 0; padding:10px; border-radius:8px; background:var(--base); color:var(--text-body); font-size:12px; line-height:1.5; white-space:pre-wrap; }
-.diff-added { color:var(--tracking-fg); background:color-mix(in srgb, var(--ok) 14%, transparent); }
-.diff-removed { color:var(--error-fg); background:color-mix(in srgb, var(--error) 12%, transparent); }
+.merge-sides { margin:6px 0 0; padding:0; list-style:none; color:var(--secondary); font-size:12px; line-height:1.7; }
 .merge-missing { margin-right:auto; align-self:center; }
-.restore-schedule { margin-top:12px; padding:12px 14px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); }
-.confirm-dialog .restore-schedule p { margin-top:0; }
-.restore-schedule .button { margin-top:10px; }
+.import-options { display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+.import-option { display:flex; gap:10px; align-items:flex-start; padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--card); cursor:pointer; }
+.import-option.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+.import-option input { margin-top:3px; }
+.import-option strong { display:block; color:var(--primary); font-size:14px; }
+.import-option span { display:block; margin-top:2px; color:var(--secondary); font-size:13px; }
+.import-secondary { margin-top:12px; }
 .setting-card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .save-state { font-size:12px; font-weight:650; color:var(--secondary); }
 .save-state.saved { color:var(--ok); }

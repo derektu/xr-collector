@@ -9,8 +9,6 @@ import type {
   DocumentSources,
   JobPage,
   JobSubmission,
-  MergeChoice,
-  MergePreview,
   MoveCheck,
   TransferStatus,
   SavedDocument,
@@ -29,6 +27,10 @@ import type {
   UrlRecognition,
   VaultInspection,
   VaultSetupAction,
+  ExportSuggestion,
+  ImportChoice,
+  ImportMode,
+  ImportPreview,
   VaultSetupResult,
   VaultSetupStatus,
 } from '../core/types.js';
@@ -81,10 +83,10 @@ export const api = {
     })).inspection;
   },
 
-  setupVault(action: VaultSetupAction, path: string): Promise<VaultSetupResult> {
+  setupVault(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult> {
     return request<VaultSetupResult>('/api/vault/setup', {
       method: 'POST',
-      body: JSON.stringify({ action, path }),
+      body: JSON.stringify({ action, path, ...(packagePath ? { packagePath } : {}) }),
     });
   },
 
@@ -293,21 +295,28 @@ export const api = {
     return request<TransferStatus>('/api/vault/status');
   },
 
-  /** Writes a backup of the active Vault to an absolute path on this computer. */
+  /** The export folder and today's export file in it. */
+  exportSuggestion(): Promise<ExportSuggestion> {
+    return request<ExportSuggestion>('/api/vault/export/suggestion');
+  },
+
+  /** Writes the export of the active Vault to an absolute `.zip` path on this computer. */
   exportVault(path: string, overwrite: boolean): Promise<TransferStatus> {
     return request<TransferStatus>('/api/vault/export', { method: 'POST', body: JSON.stringify({ path, overwrite }) });
   },
 
-  previewMerge(path: string): Promise<MergePreview> {
-    return request<MergePreview>('/api/vault/merge/preview', { method: 'POST', body: JSON.stringify({ path }) });
+  /** Compares an export file with the active Vault. */
+  previewImport(path: string): Promise<ImportPreview> {
+    return request<ImportPreview>('/api/vault/import/preview', { method: 'POST', body: JSON.stringify({ path }) });
   },
 
-  applyMerge(id: string, choices: Record<string, MergeChoice>): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/merge/apply', { method: 'POST', body: JSON.stringify({ id, choices }) });
+  /** Applies a compared import; follow `vaultTransferStatus`. */
+  applyImport(id: string, mode: ImportMode, choices: Record<string, ImportChoice>): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/import/apply', { method: 'POST', body: JSON.stringify({ id, mode, choices }) });
   },
 
-  async cancelMerge(id: string): Promise<void> {
-    await request('/api/vault/merge/cancel', { method: 'POST', body: JSON.stringify({ id }) });
+  async cancelImport(id: string): Promise<void> {
+    await request('/api/vault/import/cancel', { method: 'POST', body: JSON.stringify({ id }) });
   },
 
   /** Checks a new location for the active Vault without moving it; refusals arrive as `ApiError`. */
@@ -328,15 +337,6 @@ export const api = {
   /** Cancels a Vault operation that is still waiting for collection steps. */
   cancelTransfer(): Promise<TransferStatus> {
     return request<TransferStatus>('/api/vault/cancel', { method: 'POST' });
-  },
-
-  async restoreSuggestion(): Promise<string> {
-    return (await request<{ path: string }>('/api/vault/restore/suggestion')).path;
-  },
-
-  /** Restores a backup into a new Vault at `targetPath` and switches to it; follow `vaultTransferStatus`. */
-  restoreVault(packagePath: string, targetPath: string): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/restore', { method: 'POST', body: JSON.stringify({ packagePath, targetPath }) });
   },
 };
 

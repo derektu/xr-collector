@@ -5,9 +5,9 @@ import { CollectorError } from '../core/types.js';
 import { inspectVaultDirectory, VAULT_MARKER } from './vault-directory.js';
 
 /**
- * Local files of Vault export, restore and merge: package files a person or Agent names by path,
- * the folder a restore creates, and the device records of both. Device records live in the profile,
- * never in a Vault, so exporting or restoring never changes the data it describes.
+ * Local files of Vault export and import: export files a person or Agent names by path, the export
+ * folder and its file names, the folder an import from Onboarding creates, and the profile record
+ * of that import while it runs.
  */
 
 const invalid = (message: string): never => { throw new CollectorError('invalid_request', message); };
@@ -42,18 +42,18 @@ export async function isWithin(target: string, folder: string, real: RealPath = 
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-const WORK_FOLDER = /\.(?:moving|moved|restoring)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const WORK_FOLDER = /\.(?:moving|moved|importing)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /**
- * Whether a folder carries the name of a move's or restore's working folder (`.moving-<UUID>`,
- * `.moved-<UUID>`, `.restoring-<UUID>`). Recovery at startup deletes such folders, so they never
- * become a Vault in use, a move target or a restore target.
+ * Whether a folder carries the name of a move's or import's working folder (`.moving-<UUID>`,
+ * `.moved-<UUID>`, `.importing-<UUID>`). Recovery at startup deletes such folders, so they never
+ * become a Vault in use, a move target or an import target.
  */
 export function isWorkFolder(folder: string): boolean {
   return WORK_FOLDER.test(path.basename(path.resolve(folder)));
 }
 
-/** Folders a package file or restored Vault may not be placed in: the active Vault and the profile. */
+/** Folders an export file may not be placed in: the active Vault and the profile. */
 export interface ProtectedFolders { vaultRoot: string; profilePath: string }
 
 async function refuseProtected(target: string, folders: ProtectedFolders, what: string): Promise<void> {
@@ -66,26 +66,27 @@ function absolute(value: unknown, message: string): string {
   return path.normalize(value as string);
 }
 
-/** Checks a package file a caller named by its absolute path and returns that path. */
+/** Checks an export file a caller named by its absolute path (a `.zip` file) and returns that path. */
 export async function checkPackageFile(value: unknown): Promise<string> {
-  const file = absolute(value, '請提供備份檔案的完整路徑。');
+  const file = absolute(value, '請提供匯出檔的完整路徑。');
+  if (!/\.zip$/iu.test(file)) invalid('只能匯入 XR Collector 的 .zip 匯出檔。');
   let info;
-  try { info = await stat(file); } catch { invalid('找不到這個備份檔案。'); }
+  try { info = await stat(file); } catch { invalid('找不到這個匯出檔。'); }
   if (!info!.isFile()) invalid('這個路徑不是檔案。');
   return file;
 }
 
 /**
- * Checks where an export may be written: an absolute `.xr-vault` path in an existing folder,
- * outside the active Vault and the profile. An existing file is replaced only with `overwrite`.
+ * Checks where an export may be written: an absolute `.zip` path in an existing folder, outside the
+ * active Vault and the profile. An existing file is replaced only with `overwrite`.
  */
 export async function checkExportFile(value: unknown, overwrite: boolean, folders: ProtectedFolders): Promise<string> {
-  const file = absolute(value, '請提供備份檔案的完整路徑。');
-  if (!/\.xr-vault$/iu.test(file)) invalid('備份檔名必須以 .xr-vault 結尾。');
-  await refuseProtected(file, folders, '備份檔案');
+  const file = absolute(value, '請提供匯出檔的完整路徑。');
+  if (!/\.zip$/iu.test(file)) invalid('匯出檔名必須以 .zip 結尾。');
+  await refuseProtected(file, folders, '匯出檔');
   let parent;
-  try { parent = await stat(path.dirname(file)); } catch { invalid('備份檔案所在的資料夾不存在。'); }
-  if (!parent!.isDirectory()) invalid('備份檔案所在的資料夾不存在。');
+  try { parent = await stat(path.dirname(file)); } catch { invalid('匯出檔所在的資料夾不存在。'); }
+  if (!parent!.isDirectory()) invalid('匯出檔所在的資料夾不存在。');
   try {
     const existing = await lstat(file);
     if (!existing.isFile()) invalid('這個路徑已有資料夾或其他項目，請換一個檔名。');
@@ -94,6 +95,31 @@ export async function checkExportFile(value: unknown, overwrite: boolean, folder
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   return file;
+}
+
+/** Name of the folder exports go to by default, inside the person's Documents folder. */
+export const EXPORT_FOLDER_NAME = 'XR Collector 匯出';
+
+/**
+ * The default export folder: `XR_COLLECTOR_EXPORT_DIR` when set, otherwise `XR Collector 匯出` in
+ * `documents`. `paths` joins with the separators of the platform the folder is on.
+ */
+export function exportFolder(documents: string, paths: Pick<typeof path, 'join'> = path): string {
+  const configured = process.env.XR_COLLECTOR_EXPORT_DIR?.trim();
+  return configured ? path.resolve(configured) : paths.join(documents, EXPORT_FOLDER_NAME);
+}
+
+const pad = (value: number) => String(value).padStart(2, '0');
+const localDay = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
+/** "XR Collector 匯出 2026-10-19.zip", in local time. */
+export function exportFileName(now: Date): string {
+  return `XR Collector 匯出 ${localDay(now)}.zip`;
+}
+
+/** "XR Collector 匯入前 2026-10-19 143005.zip", in local time: the export an import takes before it applies. */
+export function preImportFileName(now: Date): string {
+  return `XR Collector 匯入前 ${localDay(now)} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
 }
 
 /** Writes a file through a temporary file beside it, so the named file is either whole or untouched. */
@@ -108,55 +134,37 @@ export async function writeAtomically(file: string, bytes: Buffer): Promise<void
 }
 
 /**
- * Checks the folder a restore creates its Vault in: an absolute path that does not exist yet or is
- * an empty folder, outside the active Vault and the profile.
+ * Checks the folder an import from Onboarding creates its Vault in: an absolute path that does not
+ * exist yet or is an empty folder, and not a working folder of a move or import.
  */
-export async function checkRestoreFolder(value: unknown, folders: ProtectedFolders): Promise<string> {
-  const folder = absolute(value, '請提供還原知識庫的完整路徑。');
-  if (isWorkFolder(folder)) invalid('這是搬移或還原使用的暫存資料夾，請選擇其他位置。');
-  await refuseProtected(folder, folders, '還原的知識庫');
-  if (await isWithin(folders.vaultRoot, folder)) invalid('還原的知識庫不能包含目前的知識庫。');
+export async function checkImportFolder(value: unknown): Promise<string> {
+  const folder = absolute(value, '請提供新知識庫的完整路徑。');
+  if (isWorkFolder(folder)) invalid('這是搬移或匯入使用的暫存資料夾，請選擇其他位置。');
   const inspection = await inspectVaultDirectory(folder);
   if (inspection.kind === 'invalid') invalid(inspection.reason);
   if (inspection.kind !== 'empty') invalid('這個資料夾已經有內容，請選擇不存在或空的資料夾。');
-  return folder;
+  return inspection.path;
 }
 
-/**
- * A free folder beside the active Vault, named after it and the date: "XR Collector 還原 2026-10-16".
- * A Vault that is itself a restore lends its original name, so names do not pile up.
- */
-export async function suggestRestoreFolder(vaultRoot: string, now: Date): Promise<string> {
-  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const name = path.basename(vaultRoot).replace(/ 還原 \d{4}-\d{2}-\d{2}(?: \(\d+\))?$/u, '');
-  const base = path.join(path.dirname(vaultRoot), `${name} 還原 ${date}`);
-  for (let index = 1; ; index += 1) {
-    const candidate = index === 1 ? base : `${base} (${index})`;
-    try { await lstat(candidate); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return candidate;
-      throw error;
-    }
-  }
-}
+const STAGING = /\.importing-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-const STAGING = /\.restoring-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
-/** The temporary folder a restore unpacks into, beside the folder it becomes. */
+/** The temporary folder an import from Onboarding unpacks into, beside the folder it becomes. */
 export function stagingFolder(folder: string): string {
-  return `${folder}.restoring-${randomUUID()}`;
+  return `${folder}.importing-${randomUUID()}`;
 }
 
 /**
- * Profile record of a restore in progress, kept until the device selection names the restored Vault:
+ * Profile record of an import from Onboarding in progress, kept until the device selection names
+ * the new Vault:
  * `{ "staging": "<path>", "target": "<path>", "placed": <boolean>, "marker": "<sha256>", "emptyTarget": <boolean> }`.
- * A restore unpacks into the staging folder and renames it to the target once it is complete.
- * `placed` is set just before that rename; `marker` is the digest of the Vault marker the restore
- * wrote, which tells the restored folder apart from anything else at the target path, and
- * `emptyTarget` says the target was an empty folder the restore replaced.
+ * The import unpacks into the staging folder and renames it to the target once it is complete.
+ * `placed` is set just before that rename; `marker` is the digest of the Vault marker the import
+ * wrote, which tells the new folder apart from anything else at the target path, and `emptyTarget`
+ * says the target was an empty folder the import replaced.
  */
-export const RESTORE_JOURNAL = 'vault-restore-journal.json';
+export const IMPORT_JOURNAL = 'vault-import-journal.json';
 
-export interface RestoreJournal {
+export interface ImportJournal {
   staging: string;
   target: string;
   placed: boolean;
@@ -164,13 +172,13 @@ export interface RestoreJournal {
   emptyTarget: boolean;
 }
 
-export async function writeRestoreJournal(profilePath: string, journal: RestoreJournal): Promise<void> {
+export async function writeImportJournal(profilePath: string, journal: ImportJournal): Promise<void> {
   await mkdir(profilePath, { recursive: true });
-  await writeAtomically(path.join(profilePath, RESTORE_JOURNAL), Buffer.from(JSON.stringify(journal)));
+  await writeAtomically(path.join(profilePath, IMPORT_JOURNAL), Buffer.from(JSON.stringify(journal)));
 }
 
-export async function clearRestoreJournal(profilePath: string): Promise<void> {
-  await rm(path.join(profilePath, RESTORE_JOURNAL), { force: true });
+export async function clearImportJournal(profilePath: string): Promise<void> {
+  await rm(path.join(profilePath, IMPORT_JOURNAL), { force: true });
 }
 
 /** The digest of a Vault's marker file, or null when it has none. */
@@ -184,18 +192,17 @@ export async function markerDigest(folder: string): Promise<string | null> {
 }
 
 /**
- * Takes back a restore a stop interrupted, unless `kept` names its target (the device selection and
- * the Vault being opened):
- * the staging folder is removed, and a target folder whose marker is the one the restore wrote is
- * renamed back to a staging name and removed, leaving an empty folder where the restore found one.
- * Only folders named like a restore's staging folder and a target carrying the restore's own marker
- * are touched; a journal naming anything else is dropped without touching it. Returns the folders
- * removed.
+ * Takes back an import from Onboarding a stop interrupted, unless `kept` names its target (the
+ * device selection and the Vault being opened): the staging folder is removed, and a target folder
+ * whose marker is the one the import wrote is renamed back to a staging name and removed, leaving
+ * an empty folder where the import found one. Only folders named like an import's staging folder
+ * and a target carrying the import's own marker are touched; a journal naming anything else is
+ * dropped without touching it. Returns the folders removed.
  */
-export async function recoverRestore(profilePath: string, kept: readonly (string | null)[]): Promise<string[]> {
-  let journal: Partial<RestoreJournal> | null;
+export async function recoverImport(profilePath: string, kept: readonly (string | null)[]): Promise<string[]> {
+  let journal: Partial<ImportJournal> | null;
   try {
-    journal = JSON.parse(await readFile(path.join(profilePath, RESTORE_JOURNAL), 'utf8')) as Partial<RestoreJournal>;
+    journal = JSON.parse(await readFile(path.join(profilePath, IMPORT_JOURNAL), 'utf8')) as Partial<ImportJournal>;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     journal = null;
@@ -207,7 +214,7 @@ export async function recoverRestore(profilePath: string, kept: readonly (string
     removed.push(staging);
     const target = journal?.target;
     if (journal?.placed === true && typeof target === 'string' && path.isAbsolute(target)
-      && staging.startsWith(`${target}.restoring-`) && !kept.includes(target)
+      && staging.startsWith(`${target}.importing-`) && !kept.includes(target)
       && typeof journal.marker === 'string' && await markerDigest(target) === journal.marker) {
       await rename(target, staging);
       await rm(staging, { recursive: true, force: true });
@@ -215,34 +222,8 @@ export async function recoverRestore(profilePath: string, kept: readonly (string
       removed.push(target);
     }
   }
-  await clearRestoreJournal(profilePath);
+  await clearImportJournal(profilePath);
   return removed;
-}
-
-/** Profile record of when each Vault was last exported: `{ "version": 1, "vaults": { "<path>": "<ISO time>" } }`. */
-export const EXPORT_LOG = 'vault-exports.json';
-
-export async function readLastExport(profilePath: string, vaultRoot: string): Promise<string | null> {
-  const vaults = await readExportLog(profilePath);
-  return vaults[vaultRoot] ?? null;
-}
-
-export async function recordExport(profilePath: string, vaultRoot: string, at: string): Promise<void> {
-  const vaults = await readExportLog(profilePath);
-  await mkdir(profilePath, { recursive: true });
-  await writeAtomically(path.join(profilePath, EXPORT_LOG),
-    Buffer.from(`${JSON.stringify({ version: 1, vaults: { ...vaults, [vaultRoot]: at } }, null, 2)}\n`));
-}
-
-async function readExportLog(profilePath: string): Promise<Record<string, string>> {
-  try {
-    const value = JSON.parse(await readFile(path.join(profilePath, EXPORT_LOG), 'utf8')) as { vaults?: unknown };
-    if (!value.vaults || typeof value.vaults !== 'object') return {};
-    return Object.fromEntries(Object.entries(value.vaults).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-  } catch {
-    // A missing or unreadable record only means the time is unknown.
-    return {};
-  }
 }
 
 /** Whether a folder exists and holds nothing. */

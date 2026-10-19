@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { YouTubeChannel } from '../core/types.js';
 import { readJsonFile, writeJsonFile } from './json-file.js';
-import { CHANNELS_FILE, channelsFromJson, type ChannelsFile } from './subscription-files.js';
+import { CHANNELS_FILE, channelsFromJson, subscriptionContent, type ChannelsFile } from './subscription-files.js';
 
 export type ChannelPatch = Partial<Omit<YouTubeChannel, 'id' | 'addedAt'>>;
 
@@ -36,9 +36,10 @@ export class JsonChannelStore implements ChannelStore {
       const channels = await this.readChannels();
       const existing = channels.find((candidate) => candidate.id === channel.id);
       if (existing) return existing;
-      channels.push(channel);
+      const added = { ...channel, updatedAt: channel.updatedAt ?? channel.addedAt };
+      channels.push(added);
       await this.writeChannels(channels);
-      return channel;
+      return added;
     });
   }
 
@@ -63,7 +64,7 @@ export class JsonChannelStore implements ChannelStore {
       if (index < 0) return null;
       const current = channels[index];
       if (!current) return null;
-      const updated = { ...current, ...patch };
+      const updated = stamped(current, { ...current, ...patch });
       channels[index] = updated;
       await this.writeChannels(channels);
       return updated;
@@ -82,7 +83,7 @@ export class JsonChannelStore implements ChannelStore {
       const next = channels.map((channel) => {
         const patch = patches.get(channel.id);
         if (!patch) return channel;
-        const changed = { ...channel, ...patch };
+        const changed = stamped(channel, { ...channel, ...patch });
         updated.push(changed);
         return changed;
       });
@@ -106,4 +107,9 @@ export class JsonChannelStore implements ChannelStore {
     const file: ChannelsFile = { version: 2, channels };
     await writeJsonFile(path.join(this.root, CHANNELS_FILE), file);
   }
+}
+
+/** A changed subscription, with `updatedAt` set to now when what the person sets on it differs. */
+function stamped(before: YouTubeChannel, after: YouTubeChannel): YouTubeChannel {
+  return subscriptionContent(before) === subscriptionContent(after) ? after : { ...after, updatedAt: new Date().toISOString() };
 }

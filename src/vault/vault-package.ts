@@ -13,18 +13,24 @@ import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-do
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
 import { MarkdownVault, parseDocument } from './markdown-vault.js';
 import { VAULT_MARKER } from './vault-directory.js';
-import type { FileSource } from './vault-merge.js';
+import { SYNC_FILE } from './sync-points.js';
+import type { FileSource } from './vault-sync.js';
 
 /**
- * The `.xr-vault` package: a zip of the files a Vault registers, each at its path relative to the
+ * The export file (`.zip`): a zip of the files a Vault registers, each at its path relative to the
  * Vault root, text compressed with deflate, plus `manifest.json`:
  *
  * ```json
  * { "format": "xr-collector-package", "formatVersion": 1,
  *   "exportedAt": "<ISO time>", "createdBy": "<program>",
+ *   "sync": { "id": "<UUID>" | null, "ancestors": ["<UUID>"], "vaultId": "<UUID>", "machine": "<name>" },
  *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
  *   "files": [{ "path": "documents/youtube/<ID>.md", "size": 0, "sha256": "<hex>" }] }
  * ```
+ *
+ * `sync` names the sync point the export took (null for the export taken automatically before an
+ * import, which takes none), the earlier sync points of the exporting Vault, newest first, and the
+ * Vault and machine it came from; an import looks for the first of these its own Vault also has.
  *
  * The registered files are the documents `MarkdownVault.list` returns and the three settings
  * files. Nothing else in the Vault folder is read or packed, so files a person keeps there never
@@ -43,14 +49,18 @@ const ENTRY_LIMIT = MANIFEST_LIMIT / 64;
 const SETTINGS = [CHANNELS_FILE, SCHEDULE_FILE, DELETIONS_FILE] as const;
 /** Operating-system files that are never counted as a person's files in the Vault. */
 const SYSTEM_FILES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
+/** Working folder of an import being applied in place, inside the Vault: `.xr-collector-import-<UUID>`. */
+export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
 export interface ManifestFile { path: string; size: number; sha256: string }
+export interface PackageSync { id: string | null; ancestors: string[]; vaultId: string; machine: string }
 export interface PackageManifest {
   format: typeof PACKAGE_FORMAT;
   formatVersion: typeof PACKAGE_FORMAT_VERSION;
   exportedAt?: string;
   createdBy?: string;
+  sync?: PackageSync;
   summary?: PackageSummary;
   files: ManifestFile[];
 }
@@ -140,8 +150,9 @@ async function countOthers(root: string, relative: string, owned: ReadonlySet<st
   for (const entry of entries) {
     if (SYSTEM_FILES.has(entry.name)) continue;
     const child = relative ? `${relative}/${entry.name}` : entry.name;
+    if (!relative && entry.isDirectory() && entry.name.startsWith(IMPORT_STAGING_PREFIX)) continue;
     if (entry.isDirectory()) count += await countOthers(root, child, owned);
-    else if (!owned.has(child) && child !== VAULT_MARKER) count += 1;
+    else if (!owned.has(child) && child !== VAULT_MARKER && child !== SYNC_FILE) count += 1;
   }
   return count;
 }
@@ -164,10 +175,10 @@ export interface WrittenPackage { unregisteredFiles: number; summary: PackageSum
 /**
  * Writes the package of a Vault to `file`, a new file. Each registered file streams into the zip
  * in turn and its digest is taken on the way; the manifest goes last, once every digest is known.
- * `info` describes the package for people choosing it; the merge backup leaves it out.
+ * `info` describes the package for people choosing it and for an import comparing it.
  */
 export async function writePackage(
-  root: string, file: string, info: { createdBy?: string; exportedAt?: Date } = {},
+  root: string, file: string, info: { createdBy?: string; exportedAt?: Date; sync?: PackageSync } = {},
 ): Promise<WrittenPackage> {
   const registered = await registeredFiles(root);
   // Opening first refuses an existing file before any entry is read, so only a file this call created is removed on failure.
@@ -193,6 +204,7 @@ export async function writePackage(
     const manifest: PackageManifest = {
       format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
+      ...(info.sync ? { sync: info.sync } : {}),
       summary: registered.summary, files: rows,
     };
     done(null, Readable.from([Buffer.from(JSON.stringify(manifest))]));
@@ -232,48 +244,48 @@ export async function openPackage(file: string): Promise<PackageReader> {
   try {
     zip = await yauzl.openPromise(file, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true });
   } catch {
-    invalid('這不是 XR Collector 的備份檔案（無法以 zip 讀取）。');
+    invalid('這不是 XR Collector 的匯出檔（無法以 zip 讀取）。');
   }
   try {
-    if (zip.entryCount > ENTRY_LIMIT + 1) invalid('備份檔案的項目數量超出可處理的範圍。');
+    if (zip.entryCount > ENTRY_LIMIT + 1) invalid('匯出檔的項目數量超出可處理的範圍。');
     const entries = new Map<string, yauzl.Entry>();
     const folded = new Set<string>();
     try {
       for await (const entry of zip.eachEntry()) {
         const name = entry.fileName;
-        if (name.endsWith('/') || entry.isEncrypted() || !entry.canDecodeFileData()) invalid('備份檔案含有無法處理的項目。');
+        if (name.endsWith('/') || entry.isEncrypted() || !entry.canDecodeFileData()) invalid('匯出檔含有無法處理的項目。');
         const key = name.toLocaleLowerCase('en-US');
-        if (folded.has(key)) invalid('備份檔案含有重複或只差大小寫的路徑。');
+        if (folded.has(key)) invalid('匯出檔含有重複或只差大小寫的路徑。');
         folded.add(key);
         entries.set(name, entry);
       }
     } catch (error) {
       if (error instanceof CollectorError) throw error;
-      invalid('備份檔案已損壞或含有不安全的路徑。');
+      invalid('匯出檔已損壞或含有不安全的路徑。');
     }
     const manifestEntry = entries.get(MANIFEST);
-    if (!manifestEntry) invalid('這不是 XR Collector 的備份檔案（缺少 manifest.json）。');
-    if (manifestEntry.uncompressedSize > MANIFEST_LIMIT) invalid('備份檔案的 manifest.json 超過 64 MiB。');
+    if (!manifestEntry) invalid('這不是 XR Collector 的匯出檔（缺少 manifest.json）。');
+    if (manifestEntry.uncompressedSize > MANIFEST_LIMIT) invalid('匯出檔的 manifest.json 超過 64 MiB。');
     const manifestBytes = await readEntry(zip, manifestEntry, MANIFEST_LIMIT);
     const manifest = parseManifest(manifestBytes);
     const rows = new Map(manifest.files.map((row) => [row.path, row]));
     for (const row of manifest.files) {
       const entry = entries.get(row.path);
-      if (!entry) invalid(`備份檔案缺少 manifest 列出的檔案：${row.path}`);
-      if (entry.uncompressedSize !== row.size) invalid(`備份檔案的內容與 manifest 不一致：${row.path}`);
+      if (!entry) invalid(`匯出檔缺少 manifest 列出的檔案：${row.path}`);
+      if (entry.uncompressedSize !== row.size) invalid(`匯出檔的內容與 manifest 不一致：${row.path}`);
     }
     for (const name of entries.keys()) {
-      if (name !== MANIFEST && !rows.has(name)) invalid(`備份檔案含有 manifest 沒有列出的項目：${name}`);
+      if (name !== MANIFEST && !rows.has(name)) invalid(`匯出檔含有 manifest 沒有列出的項目：${name}`);
     }
     const open = async (name: string): Promise<{ stream: Readable; measure: Measure; row: ManifestFile }> => {
       const row = rows.get(name);
       if (!row) throw new Error(`Not in the package: ${name}`);
       const stream = await zip.openReadStreamPromise(entries.get(name)!);
-      const measure = new Measure(row.size, () => new CollectorError('invalid_request', `備份檔案的內容與 manifest 不一致：${name}`));
+      const measure = new Measure(row.size, () => new CollectorError('invalid_request', `匯出檔的內容與 manifest 不一致：${name}`));
       return { stream, measure, row };
     };
     const verify = (measure: Measure, row: ManifestFile) => {
-      if (measure.size !== row.size || measure.hash.digest('hex') !== row.sha256) invalid(`備份檔案的內容與 manifest 不一致：${row.path}`);
+      if (measure.size !== row.size || measure.hash.digest('hex') !== row.sha256) invalid(`匯出檔的內容與 manifest 不一致：${row.path}`);
     };
     return {
       manifest,
@@ -287,7 +299,7 @@ export async function openPackage(file: string): Promise<PackageReader> {
           await pipeline(stream, measure, async (source: AsyncIterable<Buffer>) => { for await (const chunk of source) chunks.push(chunk); });
         } catch (error) {
           if (error instanceof CollectorError) throw error;
-          invalid(`備份檔案已損壞：${name}`);
+          invalid(`匯出檔已損壞：${name}`);
         }
         verify(measure, row);
         return Buffer.concat(chunks);
@@ -300,7 +312,7 @@ export async function openPackage(file: string): Promise<PackageReader> {
         } catch (error) {
           await rm(target, { force: true }).catch(() => undefined);
           if (error instanceof CollectorError || (error as NodeJS.ErrnoException).code) throw error;
-          invalid(`備份檔案已損壞：${name}`);
+          invalid(`匯出檔已損壞：${name}`);
         }
       },
       close: () => zip.close(),
@@ -317,39 +329,44 @@ async function readEntry(zip: yauzl.ZipFile, entry: yauzl.Entry, limit: number):
   try {
     for await (const chunk of await zip.openReadStreamPromise(entry) as AsyncIterable<Buffer>) {
       size += chunk.length;
-      if (size > limit) invalid('備份檔案的 manifest.json 超過 64 MiB。');
+      if (size > limit) invalid('匯出檔的 manifest.json 超過 64 MiB。');
       chunks.push(chunk);
     }
   } catch (error) {
     if (error instanceof CollectorError) throw error;
-    invalid('備份檔案已損壞。');
+    invalid('匯出檔已損壞。');
   }
   return Buffer.concat(chunks);
 }
 
 function parseManifest(bytes: Buffer): PackageManifest {
   let value: Partial<PackageManifest>;
-  try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('備份檔案的 manifest.json 格式無效。'); }
-  if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的備份檔案。');
-  if (value.formatVersion !== PACKAGE_FORMAT_VERSION) invalid('不支援這個備份檔案的格式版本。');
-  if (!Array.isArray(value.files)) invalid('備份檔案的 manifest.json 格式無效。');
+  try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
+  if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
+  if (value.formatVersion !== PACKAGE_FORMAT_VERSION) invalid('不支援這個匯出檔的格式版本。');
+  if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
   const seen = new Set<string>();
   for (const row of value.files as unknown[]) {
     const file = row as Partial<ManifestFile> | null;
     if (!file || typeof file.path !== 'string' || !packagePath(file.path)) {
-      invalid(`備份檔案含有不支援的路徑：${typeof file?.path === 'string' ? file.path : '(無效)'}`);
+      invalid(`匯出檔含有不支援的路徑：${typeof file?.path === 'string' ? file.path : '(無效)'}`);
     }
-    if (!Number.isSafeInteger(file.size) || file.size! < 0 || file.size! > FILE_LIMIT) invalid(`備份檔案中的檔案大小無效或超過 64 MiB：${file.path}`);
-    if (typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(file.sha256)) invalid(`備份檔案中的校驗碼無效：${file.path}`);
+    if (!Number.isSafeInteger(file.size) || file.size! < 0 || file.size! > FILE_LIMIT) invalid(`匯出檔中的檔案大小無效或超過 64 MiB：${file.path}`);
+    if (typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(file.sha256)) invalid(`匯出檔中的校驗碼無效：${file.path}`);
     const key = file.path.toLocaleLowerCase('en-US');
-    if (seen.has(key)) invalid('備份檔案含有重複或只差大小寫的路徑。');
+    if (seen.has(key)) invalid('匯出檔含有重複或只差大小寫的路徑。');
     seen.add(key);
   }
   const summary = value.summary;
+  const sync = value.sync as Partial<PackageSync> | undefined;
+  const syncValid = !!sync && typeof sync === 'object' && (sync.id === null || typeof sync.id === 'string')
+    && Array.isArray(sync.ancestors) && sync.ancestors.every((id) => typeof id === 'string')
+    && typeof sync.vaultId === 'string' && typeof sync.machine === 'string';
   return {
     format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
     ...(typeof value.exportedAt === 'string' ? { exportedAt: value.exportedAt } : {}),
     ...(typeof value.createdBy === 'string' ? { createdBy: value.createdBy } : {}),
+    ...(syncValid ? { sync: { id: sync.id!, ancestors: [...sync.ancestors!], vaultId: sync.vaultId!, machine: sync.machine! } } : {}),
     ...(summary && typeof summary === 'object' && [summary.documents, summary.subscriptions, summary.deletions].every(Number.isSafeInteger)
       ? { summary: { documents: summary.documents, subscriptions: summary.subscriptions, deletions: summary.deletions } } : {}),
     files: (value.files as ManifestFile[]).map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })),
@@ -362,7 +379,7 @@ export function unpackedBytes(reader: PackageReader): number {
 }
 
 /**
- * Checks what a package holds before a restore or merge uses it: every document is a document of
+ * Checks what a package holds before an import uses it: every document is a document of
  * its path, the settings files read as current settings, and no document sits next to the deletion
  * record that would hide it (an export never writes both).
  */
@@ -371,20 +388,20 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
   let records;
   try { records = deletionsFromJson(await json(DELETIONS_FILE)); } catch (error) {
     if (error instanceof CollectorError) throw error;
-    invalid('備份檔案中的刪除紀錄格式無效。');
+    invalid('匯出檔中的刪除紀錄格式無效。');
   }
-  if (records.some((record) => reader.has(documentPath(record)))) invalid('備份檔案中同一份文件同時有內容與刪除紀錄。');
+  if (records.some((record) => reader.has(documentPath(record)))) invalid('匯出檔中同一份文件同時有內容與刪除紀錄。');
   let channels;
   try {
     channels = channelsFromJson(await json(CHANNELS_FILE));
     scheduleEnabledFromJson(await json(SCHEDULE_FILE));
   } catch (error) {
     if (error instanceof CollectorError) throw error;
-    invalid('備份檔案中的訂閱或排程設定格式無效。');
+    invalid('匯出檔中的訂閱或排程設定格式無效。');
   }
   const ids = new Set<string>();
   for (const channel of channels) {
-    if (ids.has(channel.id)) invalid(`備份檔案中的訂閱 ID 重複：${channel.id}`);
+    if (ids.has(channel.id)) invalid(`匯出檔中的訂閱 ID 重複：${channel.id}`);
     ids.add(channel.id);
   }
   for (const file of reader.paths()) {
@@ -392,17 +409,17 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
     if (!key) continue;
     const bytes = await reader.read(file);
     let document;
-    try { document = parseDocument(bytes.toString('utf8')); } catch { invalid(`備份檔案中的文件格式無效：${file}`); }
+    try { document = parseDocument(bytes.toString('utf8')); } catch { invalid(`匯出檔中的文件格式無效：${file}`); }
     if (document.id !== documentId(key) || document.sourceType !== key.sourceType || document.sourceId !== key.sourceId
       || typeof document.title !== 'string' || typeof document.publisher?.name !== 'string'
       || typeof document.collectedAt !== 'string' || typeof document.sourceUrl !== 'string') {
-      invalid(`備份檔案中的文件格式無效：${file}`);
+      invalid(`匯出檔中的文件格式無效：${file}`);
     }
   }
 }
 
 export interface UnpackOptions {
-  /** Pause automatic collection in the unpacked Vault; a restored Vault starts paused. */
+  /** Pause automatic collection in the unpacked Vault; a Vault created from an export file starts paused. */
   pauseSchedule?: boolean;
 }
 
@@ -423,7 +440,7 @@ export async function unpackPackage(
   }
 }
 
-/** The registered files of a Vault as one side of a merge. */
+/** The registered files of a Vault as one side of an import. */
 export function registeredSource(registered: RegisteredFiles): FileSource {
   const files = new Map(registered.files.map((file) => [file.path, file]));
   return {

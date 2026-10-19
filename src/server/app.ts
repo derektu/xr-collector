@@ -1,4 +1,3 @@
-import { Readable } from 'node:stream';
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { YouTubePacing } from '../capture/youtube-gate.js';
 import { existsSync } from 'node:fs';
@@ -21,7 +20,7 @@ import {
   type CollectionJob,
   type JobPage,
   type JobSubmission,
-  type MergeChoice,
+  type ImportChoice,
   type ChannelSchedule,
   type DocumentFilter,
   type DocumentSourceType,
@@ -79,7 +78,7 @@ const SCHEDULE_FIELDS = new Set(['enabled']);
 export interface VaultSetup {
   status(): VaultSetupStatus;
   inspect(path: string): Promise<VaultInspection>;
-  setup(action: VaultSetupAction, path: string): Promise<VaultSetupResult>;
+  setup(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult>;
 }
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
@@ -220,12 +219,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       return { inspection: await vaultSetup.inspect(request.body.path) };
     });
-    app.post<{ Body: { action?: unknown; path?: unknown } }>('/api/vault/setup', async (request) => {
-      const { action, path: vaultPath } = request.body ?? {};
-      if ((action !== 'create' && action !== 'open') || typeof vaultPath !== 'string' || vaultPath.trim() === '') {
-        throw new CollectorError('invalid_request', '請提供 action（create 或 open）與知識庫目錄路徑。');
+    app.post<{ Body: { action?: unknown; path?: unknown; packagePath?: unknown } }>('/api/vault/setup', async (request) => {
+      const { action, path: vaultPath, packagePath } = request.body ?? {};
+      if ((action !== 'create' && action !== 'open' && action !== 'import') || typeof vaultPath !== 'string' || vaultPath.trim() === '') {
+        throw new CollectorError('invalid_request', '請提供 action（create、open 或 import）與知識庫目錄路徑。');
       }
-      return vaultSetup.setup(action, vaultPath);
+      if (action === 'import' && (typeof packagePath !== 'string' || packagePath.trim() === '')) {
+        throw new CollectorError('invalid_request', '從匯出檔建立知識庫時，請提供匯出檔的完整路徑 packagePath。');
+      }
+      return vaultSetup.setup(action, vaultPath, typeof packagePath === 'string' ? packagePath : undefined);
     });
   }
 
@@ -247,30 +249,20 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
-    // A package body is handed on as a stream and written to a file, so its size is never limited by memory.
-    app.addContentTypeParser('application/octet-stream', (_request, payload, done) => done(null, payload));
     app.get('/api/vault/status', async () => transfer.status());
-    // A JSON body names local files by absolute path; a byte body carries the package itself.
-    // JSON requests need a CORS preflight, which this server never grants, so only the app's own
-    // pages and authorized Agents can name files.
-    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', async (request, reply) => {
-      if (request.body && typeof request.body === 'object' && 'path' in request.body) {
-        return transfer.exportTo(request.body.path, request.body.overwrite === true);
-      }
-      const stream = await transfer.export();
-      return reply.type('application/octet-stream')
-        .header('Content-Disposition', 'attachment; filename="xr-collector.xr-vault"').send(stream);
+    // Export and import name local files by absolute path. JSON requests need a CORS preflight,
+    // which this server never grants, so only the app's own pages and authorized Agents can name files.
+    app.get('/api/vault/export/suggestion', async () => transfer.exportSuggestion());
+    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', async (request) => {
+      return transfer.exportTo(request.body?.path, request.body?.overwrite === true);
     });
-    app.post<{ Body: Readable | { path?: unknown } }>('/api/vault/merge/preview', async (request) => {
-      if (request.body instanceof Readable) return transfer.previewMerge(request.body);
-      if (request.body && typeof request.body === 'object' && 'path' in request.body) return transfer.previewMergeFrom(request.body.path);
-      throw new CollectorError('invalid_request', '請提供 .xr-vault 資料包或它的完整路徑。');
-    });
-    app.post<{ Body: { id: string; choices: Record<string, MergeChoice> } }>('/api/vault/merge/apply', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
-      return reply.code(202).send(transfer.applyMerge(request.body?.id, request.body?.choices));
-    });
-    app.post<{ Body: { id: string } }>('/api/vault/merge/cancel', async (request) => {
-      transfer.cancelMerge(request.body?.id);
+    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/import/preview', async (request) => transfer.previewImport(request.body?.path));
+    app.post<{ Body: { id?: unknown; mode?: unknown; choices?: Record<string, ImportChoice> } | undefined }>(
+      '/api/vault/import/apply', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
+        return reply.code(202).send(transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode, request.body?.choices));
+      });
+    app.post<{ Body: { id?: unknown } | undefined }>('/api/vault/import/cancel', async (request) => {
+      transfer.cancelImport(String(request.body?.id ?? ''));
       return { cancelled: true };
     });
     app.post('/api/vault/cancel', async () => transfer.cancelWait());
@@ -280,14 +272,6 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
     app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', async (request, reply) => {
       return reply.code(202).send(await transfer.openOther(request.body?.path));
-    });
-    app.get('/api/vault/restore/suggestion', async () => ({ path: await transfer.suggestRestoreFolder() }));
-    app.post<{ Body: Readable | { packagePath?: unknown; targetPath?: unknown } }>('/api/vault/restore', async (request, reply) => {
-      if (request.body instanceof Readable) return reply.code(202).send(await transfer.restore(request.body));
-      if (request.body && typeof request.body === 'object' && 'packagePath' in request.body) {
-        return reply.code(202).send(await transfer.restoreFrom(request.body.packagePath, request.body.targetPath));
-      }
-      throw new CollectorError('invalid_request', '請提供 .xr-vault 資料包或它的完整路徑。');
     });
   }
 
@@ -311,6 +295,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
     if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 413) {
       void reply.status(413).send({ error: { code: 'invalid_request', message: '請求內容過大。' } });
+      return;
+    }
+    if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 415) {
+      void reply.status(415).send({ error: { code: 'invalid_request', message: '請以 JSON 送出請求；檔案以本機的完整路徑指定。' } });
       return;
     }
     app.log.error(error);

@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
-import { BackupSection } from './VaultBackup.js';
 import { VaultLocationSection } from './VaultLocation.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
 /**
- * Device and Vault settings: Vault location, backups, search index and appearance. Collection
+ * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
 export function Settings({ vaultPath, activeJobs, themePreference, onThemePreference, onChanged }: {
@@ -32,8 +31,7 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
-      <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} />
-      {vaultPath ? <BackupSection vaultPath={vaultPath} activeJobs={activeJobs} onChanged={onChanged} /> : null}
+      <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} onChanged={onChanged} />
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>

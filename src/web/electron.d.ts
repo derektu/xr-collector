@@ -3,12 +3,13 @@ import type { ElectronThemeBridge } from './app-shell.js';
 export interface DesktopBridge {
   chooseDirectory(defaultPath?: string): Promise<string | null>;
   /**
-   * Native save dialog for a backup file, starting at `defaultPath`; null when cancelled.
-   * `overwrite` is true when the dialog itself confirmed replacing an existing file.
+   * Native save dialog for an export file, starting at today's file in the export folder (created
+   * when missing); null when cancelled. `overwrite` is true when the dialog itself confirmed
+   * replacing an existing file.
    */
-  chooseBackupToSave(defaultPath: string): Promise<{ path: string; overwrite: boolean } | null>;
-  /** Native open dialog for a backup file; null when cancelled. */
-  chooseBackupToOpen(): Promise<string | null>;
+  chooseExportFile(): Promise<{ path: string; overwrite: boolean } | null>;
+  /** Native open dialog for an export file, starting in the export folder; null when cancelled. */
+  chooseImportFile(): Promise<string | null>;
   /** Shows the active Vault folder in Finder or File Explorer. */
   revealVault(): Promise<void>;
   /** Operating system of the desktop app, for labels such as Finder or File Explorer. */

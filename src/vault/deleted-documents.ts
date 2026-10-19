@@ -10,7 +10,7 @@ import { documentId, isSourceId, isSourceType } from './document-paths.js';
  *
  * `{ "version": 1, "deleted": [record, ...] }`. A record is keyed by `sourceType` and `sourceId`,
  * which together form the document ID (`youtube:<video ID>`), and keeps the title and publisher so
- * a merge or a deleted-document page can still name the item.
+ * an import or a deleted-document page can still name the item.
  */
 export const DELETIONS_FILE = 'settings/deleted-documents.json';
 const DELETIONS_VERSION = 1;
@@ -75,8 +75,8 @@ export function deletionsToJson(records: DeletionRecord[]): DeletionsFile {
 }
 
 /**
- * The deletions file of one Vault. Reads go to the file every time, so records written by a merge
- * or restore are seen at once; writes from this process run one after another.
+ * The deletions file of one Vault. Reads go to the file every time, so records written by an
+ * import are seen at once; writes from this process run one after another.
  */
 export class DeletionLedger {
   private readonly filePath: string;

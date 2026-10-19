@@ -10,7 +10,7 @@ import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { createHttpApp, type ActivityAccess, type HttpAppOptions } from '../../src/server/app.js';
 
-// The activity and job query routes: device data readable while a merge holds the Vault and before
+// The activity and job query routes: device data readable while an import holds the Vault and before
 // one is chosen, the same contract for the UI and Agents, and parameter validation.
 
 const VAULT = '/vaults/http';
@@ -68,7 +68,7 @@ async function settled(app: Awaited<ReturnType<typeof createHttpApp>>, id: strin
 }
 
 describe('activity and job routes (A-T8, A-T10)', () => {
-  it('stays readable while a merge holds the Vault, and before a Vault is chosen', async () => {
+  it('stays readable while an import holds the Vault, and before a Vault is chosen', async () => {
     const { collector, jobs, activity } = services();
     const transfer = {
       assertReadable: () => { throw new CollectorError('vault_busy', '正在合併或復原資料，請稍後再讀取。'); },
@@ -135,7 +135,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       workspace: {
         capture: { capture: async () => { throw new Error('unused'); } } as never,
         channelSource: { resolve: async () => { throw new Error('unused'); }, listVideos: async () => [] },
-        searchBinary: 'unused', searchData: path.join(root, 'search'),
+        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       },
       connectionFile: path.join(root, 'agent-connection.json'),

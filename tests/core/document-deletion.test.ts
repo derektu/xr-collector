@@ -438,7 +438,7 @@ describe('deletion races (A5)', () => {
     const blocker = await manager.submitVideo(watchUrl(hold));
     await w.source.capturing(hold);
     const early = await manager.submitVideo(watchUrl(a));
-    // The document arrives another way, such as a merge, and is deleted while the job waits.
+    // The document arrives another way, such as an import, and is deleted while the job waits.
     w.tick();
     await w.vault.add(captured(a));
     w.tick();

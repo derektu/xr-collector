@@ -224,11 +224,11 @@ describe('filters (A-T5)', () => {
     log.record(event('2026-10-15T01:04:00.000Z', { jobId: 'again', eventType: 'job.retry_requested', retryOf: 'other' }));
     log.record(event('2026-10-15T01:05:00.000Z', { eventType: 'subscription.paused', sourceId: 'UC1' }));
     log.record(event('2026-10-15T01:06:00.000Z', { vaultPath: '/vaults/b', eventType: 'job.started' }));
-    log.record(event('2026-10-15T01:07:00.000Z', { vaultPath: null, eventType: 'vault.restored' }));
+    log.record(event('2026-10-15T01:07:00.000Z', { vaultPath: null, eventType: 'vault.imported' }));
     const types = async (query: Parameters<ActivityLog['query']>[0], vaultPath: string | null = VAULT) =>
       (await log.query(query, { vaultPath })).events.map((entry) => entry.eventType).reverse();
 
-    expect(await types({})).toEqual(['job.accepted', 'document.saved', 'job.retry_scheduled', 'job.failed', 'job.retry_requested', 'subscription.paused', 'vault.restored']);
+    expect(await types({})).toEqual(['job.accepted', 'document.saved', 'job.retry_scheduled', 'job.failed', 'job.retry_requested', 'subscription.paused', 'vault.imported']);
     expect(await types({}, null)).toHaveLength(8);
     expect(await types({ severity: ['warning', 'error'] })).toEqual(['job.retry_scheduled', 'job.failed']);
     expect(await types({ eventType: ['document.saved'] })).toEqual(['document.saved']);

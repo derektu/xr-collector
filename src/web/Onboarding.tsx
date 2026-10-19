@@ -22,6 +22,8 @@ export interface OnboardingProps {
   onChooseDirectory: () => void;
   onSubmitPath?: (path: string) => void;
   onContinue: (action: VaultAction, path: string) => void;
+  /** Switches to creating the Vault from an export file. */
+  onImport?: () => void;
 }
 
 function FolderIcon() {
@@ -40,7 +42,7 @@ function inspectionPresentation(inspection: VaultInspection): { label: string; d
   return { label: '尚未選擇', detail: '選擇一個空目錄，或已經存在的 XR Collector 知識庫。', tone: 'neutral' };
 }
 
-export function Onboarding({ inspection, suggestedPath, originalFailure, busy = false, error, pathEntry = 'dialog', onChooseDirectory, onSubmitPath, onContinue }: OnboardingProps) {
+export function Onboarding({ inspection, suggestedPath, originalFailure, busy = false, error, pathEntry = 'dialog', onChooseDirectory, onSubmitPath, onContinue, onImport }: OnboardingProps) {
   const [typedPath, setTypedPath] = useState('');
   const presentation = inspectionPresentation(inspection);
   const selectedPath = inspection.kind === 'none' ? null : inspection.path;
@@ -82,7 +84,127 @@ export function Onboarding({ inspection, suggestedPath, originalFailure, busy = 
           if (presentation.action && selectedPath) onContinue(presentation.action, selectedPath);
         }}>{busy ? '處理中…' : primaryLabel}</button>
         {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
-        <p className="onboarding-footnote">XR Collector 只會在你確認後建立或開啟知識庫。</p>
+        {onImport ? <button className="onboarding-secondary" type="button" disabled={busy} onClick={onImport} data-testid="onboarding-import">
+          從匯出檔匯入…</button> : null}
+        <p className="onboarding-footnote">XR Collector 只會在你確認後建立或開啟知識庫。另一台電腦已有知識庫時，可以用它的匯出檔直接建立。</p>
+      </section>
+    </main>
+  </div>;
+}
+
+export interface ImportOnboardingProps {
+  packagePath: string | null;
+  /** The folder the new Vault goes in; it must be missing or empty. */
+  inspection: VaultInspection;
+  suggestedPath: string;
+  busy: boolean;
+  error?: string;
+  pathEntry: 'dialog' | 'manual';
+  onChoosePackage: () => void;
+  onSubmitPackage: (path: string) => void;
+  onChooseDirectory: () => void;
+  onSubmitPath: (path: string) => void;
+  onImport: (packagePath: string, folder: string) => void;
+  onBack: () => void;
+}
+
+function FileIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.75h7l4 4v12.5H7Z" /><path d="M14 3.75v4h4" /></svg>;
+}
+
+/**
+ * Onboarding for a machine that has no Vault yet while another machine has one: choose that
+ * machine's export file and where the new Vault goes, and the Vault is created from the file.
+ */
+export function ImportOnboarding({
+  packagePath, inspection, suggestedPath, busy, error, pathEntry, onChoosePackage, onSubmitPackage, onChooseDirectory, onSubmitPath, onImport, onBack,
+}: ImportOnboardingProps) {
+  const [typedPackage, setTypedPackage] = useState('');
+  const [typedPath, setTypedPath] = useState('');
+  const folder = inspection.kind === 'none' ? null : inspection.path;
+  const folderState = inspection.kind === 'empty' ? { label: '可建立', tone: 'ready', detail: '知識庫會建立在這裡。' }
+    : inspection.kind === 'existing' ? { label: '無法使用', tone: 'error', detail: '這裡已經是知識庫。匯入需要不存在或空的資料夾；要使用這個知識庫請返回並開啟它。' }
+      : inspection.kind === 'invalid' ? { label: '無法使用', tone: 'error', detail: inspection.reason }
+        : inspection.kind === 'inspecting' ? { label: '正在檢查', tone: 'checking', detail: '正在確認這個目錄…' }
+          : { label: '尚未選擇', tone: 'neutral', detail: '選擇不存在或空的資料夾。' };
+  const ready = !!packagePath && inspection.kind === 'empty' && !busy;
+
+  return <div className="onboarding-screen">
+    <header className="onboarding-header">
+      <div className="onboarding-brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div>
+    </header>
+    <main className="onboarding-main">
+      <section className="onboarding-card" aria-labelledby="onboarding-import-title" data-testid="onboarding-import-card">
+        <p className="eyebrow">開始使用</p>
+        <h1 id="onboarding-import-title">從匯出檔建立知識庫</h1>
+        <p className="onboarding-intro">選擇另一台電腦匯出的檔案，以及這台電腦的知識庫位置。之後兩台電腦以匯出與匯入互相帶著知識庫工作。</p>
+
+        <div className="directory-heading"><span id="import-package-label">匯出檔</span>
+          <span className={`directory-status ${packagePath ? 'ready' : 'neutral'}`}>{packagePath ? '已選擇' : '尚未選擇'}</span></div>
+        {pathEntry === 'manual' ? <form className="directory-control" aria-labelledby="import-package-label" onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          if (typedPackage.trim()) onSubmitPackage(typedPackage.trim());
+        }}>
+          <span className="directory-icon"><FileIcon /></span>
+          <input className="directory-input" aria-labelledby="import-package-label" value={typedPackage} placeholder="/完整路徑/XR Collector 匯出 2026-10-19.zip"
+            spellCheck={false} onChange={(event) => setTypedPackage(event.target.value)} data-testid="onboarding-package-input" />
+          <button className="choose-directory" type="submit" disabled={busy || !typedPackage.trim()}>使用這個檔案</button>
+        </form> : <div className="directory-control" aria-labelledby="import-package-label">
+          <span className="directory-icon"><FileIcon /></span>
+          <span className={`directory-path ${packagePath ? '' : 'directory-path-empty'}`}>{packagePath ?? '尚未選擇匯出檔'}</span>
+          <button className="choose-directory" type="button" onClick={onChoosePackage} disabled={busy}>選擇匯出檔</button>
+        </div>}
+        <p className="directory-detail" data-testid="onboarding-package-path">{packagePath && pathEntry === 'manual' ? packagePath : ''}</p>
+
+        <div className="directory-heading"><span id="import-folder-label">知識庫目錄</span><span className={`directory-status ${folderState.tone}`}>{folderState.label}</span></div>
+        {pathEntry === 'manual' ? <form className="directory-control" aria-labelledby="import-folder-label" onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          if (typedPath.trim()) onSubmitPath(typedPath.trim());
+        }}>
+          <span className="directory-icon"><FolderIcon /></span>
+          <input className="directory-input" aria-labelledby="import-folder-label" value={typedPath} placeholder={suggestedPath} spellCheck={false}
+            onChange={(event) => setTypedPath(event.target.value)} data-testid="onboarding-folder-input" />
+          <button className="choose-directory" type="submit" disabled={busy || inspection.kind === 'inspecting' || !typedPath.trim()}>檢查目錄</button>
+        </form> : <div className="directory-control" aria-labelledby="import-folder-label">
+          <span className="directory-icon"><FolderIcon /></span>
+          <span className={`directory-path ${folder ? '' : 'directory-path-empty'}`}>{folder ?? '尚未選擇目錄'}</span>
+          <button className="choose-directory" type="button" onClick={onChooseDirectory} disabled={busy || inspection.kind === 'inspecting'}>選擇目錄</button>
+        </div>}
+        <p className={`directory-detail ${folderState.tone}`} aria-live="polite">{folderState.detail}</p>
+        {inspection.kind === 'none' ? <p className="suggested-path">建議位置：<code>{suggestedPath}</code></p> : null}
+
+        <button className="onboarding-primary" type="button" disabled={!ready} onClick={() => { if (packagePath && folder) onImport(packagePath, folder); }}
+          data-testid="onboarding-import-confirm">{busy ? '正在匯入…' : '匯入並建立知識庫'}</button>
+        {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
+        <button className="onboarding-secondary" type="button" disabled={busy} onClick={onBack}>返回</button>
+        <p className="onboarding-footnote">新知識庫的自動收集會先暫停，確認內容後再開啟。</p>
+      </section>
+    </main>
+  </div>;
+}
+
+/** The screen after a Vault was created from an export file: what it holds and the paused automatic collection. */
+export function ImportDone({ vaultPath, documentCount, collecting, busy, error, onEnableCollection, onEnter }: {
+  vaultPath: string; documentCount: number; collecting: boolean; busy: boolean; error?: string;
+  onEnableCollection: () => void; onEnter: () => void;
+}) {
+  return <div className="onboarding-screen">
+    <header className="onboarding-header">
+      <div className="onboarding-brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div>
+    </header>
+    <main className="onboarding-main">
+      <section className="onboarding-card" aria-labelledby="onboarding-done-title" data-testid="onboarding-import-done">
+        <p className="eyebrow">完成</p>
+        <h1 id="onboarding-done-title">已從匯出檔建立知識庫</h1>
+        <p className="onboarding-intro">包含 {documentCount} 份文件，位置：</p>
+        <code className="onboarding-code">{vaultPath}</code>
+        <div className="onboarding-note" data-testid="onboarding-collection">
+          {collecting ? <p>自動收集已開啟。</p>
+            : <><p>自動收集目前暫停。確認內容沒問題後再開啟，兩台電腦都開啟時會各自收集同樣的訂閱。</p>
+              <button className="choose-directory" type="button" disabled={busy} onClick={onEnableCollection} data-testid="onboarding-enable-collection">開啟自動收集</button></>}
+        </div>
+        {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
+        <button className="onboarding-primary" type="button" onClick={onEnter} data-testid="onboarding-enter">開始使用</button>
       </section>
     </main>
   </div>;
