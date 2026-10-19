@@ -110,7 +110,7 @@ describe('Agent Skill', () => {
 
   it('documents deletion, its records and explicit collection again', async () => {
     const skill = await readFile(skillPath, 'utf8');
-    for (const term of ['`DELETE /api/documents/:id`', '`document_deleted`', '`skipReason` 為 `deleted`', '`kind: deletion`', '`indexed: false`',
+    for (const term of ['`DELETE /api/documents/:id`', '`document_deleted`', '`skipReason` 為 `deleted`', '`present`／`deleted`／`absent`', '`indexed: false`',
       '`document.deleted`', '`document.recollected`', '以單支網址明確收集']) {
       expect(skill).toContain(term);
     }

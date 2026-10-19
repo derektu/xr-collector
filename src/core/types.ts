@@ -128,6 +128,11 @@ export interface YouTubeChannel {
   /** False while the subscription is paused. */
   enabled: boolean;
   addedAt: string;
+  /**
+   * When the person last set the title, URL, paused state or settings, starting with the
+   * subscription itself; an import shows it beside a conflict. Absent when unknown.
+   */
+  updatedAt?: string | null;
   /** Check interval and the range every check of this subscription collects. */
   settings: CollectionPolicy;
   /**
@@ -693,7 +698,7 @@ export type VaultInspection =
   | { kind: 'existing'; path: string; documentCount: number }
   | { kind: 'invalid'; path: string; reason: string };
 
-export type VaultSetupAction = 'create' | 'open';
+export type VaultSetupAction = 'create' | 'open' | 'import';
 
 /** Device-side Vault location state shared by Onboarding, Settings and Agents. */
 export interface VaultSetupStatus {
@@ -725,12 +730,12 @@ export class CollectorError extends Error {
   }
 }
 
-export type TransferOperation = 'export' | 'merge' | 'restore' | 'move' | 'open';
+export type TransferOperation = 'export' | 'import' | 'move' | 'open';
 
 /**
- * Progress of the one Vault export, merge, restore, move or switch that runs at a time. `waiting`
- * means the operation waits for the collection steps already running to finish; queued collection
- * waits until the operation ends.
+ * Progress of the one Vault export, import, move or switch that runs at a time. `waiting` means the
+ * operation waits for the collection steps already running to finish; queued collection waits until
+ * the operation ends.
  */
 export interface TransferStatus {
   state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'copying' | 'verifying' | 'indexing' | 'cleaning'
@@ -740,8 +745,8 @@ export interface TransferStatus {
   completedFiles: number;
   totalFiles: number;
   vaultPath: string;
-  /** When this device last exported the active Vault; null when it never has. */
-  lastExportedAt: string | null;
+  /** The newest sync point of the active Vault: its last export or import; null when it has none. */
+  lastSync: SyncPointSummary | null;
   /** What the last finished operation produced; null while one runs or after a failure. */
   result: TransferResult | null;
   /** The error code of a failed operation, such as `vault_busy`; null unless `state` is `error`. */
@@ -750,23 +755,31 @@ export interface TransferStatus {
   relocationUnavailable: { code: CollectorErrorCode; message: string } | null;
 }
 
+/** When and where a sync point was taken, and whether an export or an import took it. */
+export interface SyncPointSummary {
+  at: string;
+  kind: 'export' | 'import';
+  /** The machine whose content the sync point holds: this machine for an export, the exporting machine for an import. */
+  machine: string | null;
+}
+
 export interface TransferResult {
-  /** Export: the written package file and its size. */
+  /** Export: the written export file and its size. */
   exportPath?: string;
   exportBytes?: number;
-  /** Export: files in the Vault folder that belong to no record of the Vault and are not in the package. */
+  /** Export: files in the Vault folder that belong to no record of the Vault and are not in the export. */
   unregisteredFiles?: number;
-  /** Merge: files written and the package of the Vault as it was before the merge. */
+  /** Import: how it was applied, the changes it made, and the export of the Vault as it was before. */
+  importMode?: ImportMode;
+  imported?: ImportCounts;
   writtenFiles?: number;
-  mergeBackupPath?: string;
+  preImportExportPath?: string;
   /**
-   * Restore: the Vault in use before the switch, which stays where it is, and how many of its
+   * Open: the Vault in use before the switch, which stays where it is, and how many of its
    * collection jobs stopped with the switch; they continue when that Vault is opened again.
-   * The restored Vault starts with automatic collection paused.
    */
   previousVaultPath?: string;
   interruptedJobs?: number;
-  autoCollectionPaused?: boolean;
   /** Move and open: unfinished jobs of the Vault now in use that continue after the switch. */
   resumedJobs?: number;
   /** Move: a part of the previous location that could not be removed and is left for the person to delete. */
@@ -780,29 +793,52 @@ export interface MoveCheck {
   availableBytes: number;
 }
 
-export type MergeChoice = 'local' | 'incoming';
-/**
- * One difference between the local Vault and an imported package. A `deletion` item pairs a
- * deletion record on one side with the document or nothing on the other side.
- */
-export interface MergeItem {
-  key: string;
-  kind: 'document' | 'channel' | 'deletion';
-  label: string;
-  state: 'new' | 'same' | 'conflict';
-  localTime: string | null;
-  incomingTime: string | null;
-  /** The content of each side, for items that need a choice; empty for new and identical items. */
-  localText: string;
-  incomingText: string;
-  /** Deletion items: which side holds the deletion record. */
-  deletedOn?: 'local' | 'incoming';
+/** Where an export goes when no other place is chosen: the export folder and a file name of today. */
+export interface ExportSuggestion {
+  folder: string;
+  path: string;
 }
-export interface MergePreview {
+
+/**
+ * How an import file relates to the active Vault, from comparing the local content, the newest
+ * sync point both share, and the file:
+ * - `incoming`: only the file changed since the shared sync point; its changes apply as they are.
+ * - `both`: both sides changed; a merge asks only about items both changed differently.
+ * - `unrelated`: no shared sync point; a merge only adds, and differing items need a choice.
+ * - `nothing`: the Vault already holds everything the file brings.
+ */
+export type ImportSituation = 'incoming' | 'both' | 'unrelated' | 'nothing';
+export type ImportMode = 'merge' | 'replace';
+export type ImportChoice = 'local' | 'incoming';
+
+export interface ImportCounts { added: number; modified: number; removed: number }
+
+/** One side of a conflict: whether the item exists there, and when it last changed when that is known. */
+export interface ImportSide {
+  state: 'present' | 'deleted' | 'absent';
+  time: string | null;
+  machine: string | null;
+}
+
+/** An item both sides changed differently since the shared sync point, or that differs without one. */
+export interface ImportConflict {
+  /** `document:<document ID>` or `channel:<channel ID>`. */
+  key: string;
+  kind: 'document' | 'channel';
+  label: string;
+  local: ImportSide;
+  incoming: ImportSide;
+}
+
+export interface ImportPreview {
   id: string;
-  items: MergeItem[];
-  /** The description a package carries, when it carries one. */
-  package: { exportedAt: string | null; createdBy: string | null };
+  situation: ImportSituation;
+  package: { fileName: string; exportedAt: string | null; machine: string | null };
+  /** The changes a merge takes from the file without asking. */
+  incoming: ImportCounts;
+  conflicts: ImportConflict[];
+  /** Local items that replacing the Vault with the file's content would change or remove. */
+  replaceLoses: number;
 }
 
 /**

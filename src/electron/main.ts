@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
@@ -6,6 +6,7 @@ import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
+import { exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -125,33 +126,35 @@ app.whenReady().then(async () => {
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
-  const backupFilters: Electron.FileFilter[] = [{ name: 'XR Collector 備份', extensions: ['xr-vault'] }];
-  ipcMain.handle('xrCollector:desktop:chooseBackupToSave', async (event, defaultPath: unknown) => {
+  // Exports go to this folder unless the person picks another place; the import dialog opens here too.
+  const exports = exportFolder(app.getPath('documents'));
+  const exportFilters: Electron.FileFilter[] = [{ name: 'XR Collector 匯出檔', extensions: ['zip'] }];
+  ipcMain.handle('xrCollector:desktop:chooseExportFile', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
-    const fallback = path.join(app.getPath('documents'), 'XR Collector 備份.xr-vault');
-    const requested = typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? defaultPath : fallback;
+    await mkdir(exports, { recursive: true });
     const options: Electron.SaveDialogOptions = {
-      title: '匯出備份',
+      title: '匯出知識庫',
       buttonLabel: '匯出',
-      defaultPath: path.join(await existingDirectory(path.dirname(requested)), path.basename(requested)),
-      filters: backupFilters,
+      defaultPath: path.join(exports, exportFileName(new Date())),
+      filters: exportFilters,
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     };
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return null;
     // The dialog confirmed replacing the file it showed. A name given the extension here was not
     // confirmed, so the export dialog asks before replacing a file of that name.
-    return /\.xr-vault$/iu.test(result.filePath)
+    return /\.zip$/iu.test(result.filePath)
       ? { path: result.filePath, overwrite: true }
-      : { path: `${result.filePath}.xr-vault`, overwrite: false };
+      : { path: `${result.filePath}.zip`, overwrite: false };
   });
-  ipcMain.handle('xrCollector:desktop:chooseBackupToOpen', async (event) => {
+  ipcMain.handle('xrCollector:desktop:chooseImportFile', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
+    await mkdir(exports, { recursive: true });
     const options: Electron.OpenDialogOptions = {
-      title: '選擇備份檔案',
+      title: '選擇匯出檔',
       buttonLabel: '選擇',
-      defaultPath: app.getPath('documents'),
-      filters: backupFilters,
+      defaultPath: exports,
+      filters: exportFilters,
       properties: ['openFile'],
     };
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
@@ -183,6 +186,7 @@ app.whenReady().then(async () => {
       capture, channelSource, pacing: youtubeGate,
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
+      exportFolder: exports,
     },
     ...(process.env.XR_COLLECTOR_VAULT ? { explicitVaultPath: path.resolve(process.env.XR_COLLECTOR_VAULT) } : {}),
     suggestedVaultPath,

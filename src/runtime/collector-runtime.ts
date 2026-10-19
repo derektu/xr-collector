@@ -13,7 +13,9 @@ import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
 import { startServer, type RunningServer } from '../server/start.js';
+import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
 import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-directory.js';
+import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
 import { forwarding, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
 
@@ -120,11 +122,15 @@ export class CollectorRuntime {
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),
-      setup: (action, vaultPath) => runtime!.setup(action, vaultPath),
+      setup: (action, vaultPath, packagePath) => runtime!.setup(action, vaultPath, packagePath),
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
     try {
-      if (workspaceServices) initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
+      if (workspaceServices) {
+        // An import from Onboarding a stop interrupted is taken back unless the selection already names its Vault.
+        await recoverImport(options.profilePath, [await selection.read().catch(() => null)]);
+        initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
+      }
       agentAccess = await startAgentAccess({
         ...services, instanceId,
         ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
@@ -200,8 +206,12 @@ export class CollectorRuntime {
     };
   }
 
-  /** Creates or opens a Vault while Not Ready, then starts its services and remembers the location. */
-  async setup(action: VaultSetupAction, vaultPath: string): Promise<VaultSetupResult> {
+  /**
+   * Creates, opens or imports a Vault while Not Ready, then starts its services and remembers the
+   * location. An import creates the Vault in `vaultPath` (missing or empty) from the export file
+   * `packagePath`, with automatic collection paused.
+   */
+  async setup(action: VaultSetupAction, vaultPath: string, packagePath?: string): Promise<VaultSetupResult> {
     if (!this.services) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');
     if (this.closing) throw new CollectorError('vault_busy', '服務正在停止。');
     if (this.workspaceValue) throw new CollectorError('vault_already_set', '已經有使用中的知識庫。更換位置請使用搬移功能。');
@@ -214,6 +224,12 @@ export class CollectorRuntime {
       let documentCount = 0;
       if (action === 'create') {
         root = await createVaultDirectory(vaultPath, createdBy);
+      } else if (action === 'import') {
+        root = await importNewVault({
+          packageFile: packagePath, folder: vaultPath, profilePath: this.profilePath, createdBy,
+          ...(this.services.statfs ? { statfs: this.services.statfs } : {}),
+        });
+        documentCount = (await inspectVaultDirectory(root).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
       } else {
         const inspection: VaultInspection = await inspectVaultDirectory(vaultPath);
         if (inspection.kind === 'empty') throw new CollectorError('vault_invalid', '這個目錄還不是知識庫，請改用建立。');
@@ -226,14 +242,17 @@ export class CollectorRuntime {
         workspace = await VaultWorkspace.open({ ...this.services, root, selection: this.selection, createdBy, profilePath: this.profilePath });
       } catch (error) {
         console.error('Vault services failed to start', error);
+        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
         throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });
       }
       try {
         await this.selection.write(root);
       } catch (error) {
         await workspace.close().catch(() => undefined);
+        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
         throw new CollectorError('vault_invalid', '無法保存知識庫位置，請確認程式資料目錄可寫入後重試。', { cause: error });
       }
+      if (action === 'import') await clearImportJournal(this.profilePath);
       this.workspaceValue = workspace;
       this.failure = null;
       this.stateValue = 'ready';

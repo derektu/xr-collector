@@ -13,6 +13,8 @@ import { checkMoveTarget, MOVE_JOURNAL, previousLocations, recordPreviousLocatio
 import { inspectVaultDirectory } from '../../src/vault/vault-directory.js';
 import { packageBytes, packageFiles } from './package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
+import { checkImportFolder } from '../../src/vault/transfer-files.js';
+import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultWorkspace, type MoveFault, type WorkspaceOptions } from '../../src/vault/workspace.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
 
@@ -127,7 +129,7 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> = {}, t
     root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: path.join(context.profile, 'search'),
+    searchBinary: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'),
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     jobStore, jobLimits: { capture: 1 },
     ...overrides,
@@ -206,7 +208,7 @@ describe('move target checks (A-01)', () => {
       .rejects.toMatchObject({ message: expect.stringContaining('目前的知識庫裡') });
   });
 
-  it('refuses a location whose real ancestors include another Vault, and working folders of a move or restore', async () => {
+  it('refuses a location whose real ancestors include another Vault, and working folders of a move or import', async () => {
     const context = await setup();
     const { root } = context;
     await createVaultDirectory(path.join(root, 'Other'), 'XR Collector test');
@@ -216,7 +218,7 @@ describe('move target checks (A-01)', () => {
     await expect(workspace.checkMove(path.join(root, 'LinkSub', 'New'))).rejects.toMatchObject({ message: expect.stringContaining('另一個知識庫裡') });
     const working = path.join(root, 'Vault.moved-00000000-0000-4000-8000-000000000000');
     await expect(workspace.checkMove(working)).rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
-    await expect(workspace.restore(await packageBytes(context.source), path.join(root, 'X.restoring-00000000-0000-4000-8000-000000000000')))
+    await expect(checkImportFolder(path.join(root, 'X.importing-00000000-0000-4000-8000-000000000000')))
       .rejects.toMatchObject({ message: expect.stringContaining('暫存資料夾') });
     expect(workspace.status().vaultPath).toBe(context.source);
   });
@@ -269,8 +271,9 @@ describe('moving a Vault', () => {
     const target = path.join(root, 'Moved', 'XR Collector');
     await mkdir(path.dirname(target));
     const workspace = await open(context);
-    await workspace.export();
-    const exportedAt = workspace.status().lastExportedAt;
+    await workspace.exportTo();
+    const lastSync = workspace.status().lastSync;
+    expect(lastSync).toMatchObject({ kind: 'export' });
     const id = await readVaultId(source);
     const before = await tree(source);
     expect(workspace.status().relocationUnavailable).toBeNull();
@@ -278,7 +281,7 @@ describe('moving a Vault', () => {
     expect(accepted).toMatchObject({ operation: 'move' });
     await settled(workspace);
     expect(workspace.status()).toMatchObject({
-      state: 'completed', operation: 'move', vaultPath: target, lastExportedAt: exportedAt,
+      state: 'completed', operation: 'move', vaultPath: target, lastSync,
       result: { previousVaultPath: source, resumedJobs: 0 }, message: expect.stringContaining('原位置已清除'),
     });
     expect(await tree(target)).toEqual(before);
@@ -677,15 +680,13 @@ describe('Vault identity (A-08)', () => {
     expect(copied.jobs.list({ state: 'all' }).jobs).toEqual([]);
     await copied.close();
     expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
-    // Another Vault restored at A's path after A is gone does not take the job either.
-    const backup = await packageBytes(source);
+    // A Vault imported from A's export at A's path after A is gone does not take the job either.
+    const exported = path.join(root, 'A.zip');
+    await writeFile(exported, await packageBytes(source));
     await rm(source, { recursive: true });
-    const other = path.join(root, 'Other');
-    await createVaultDirectory(other, 'XR Collector test');
-    const b = await open({ ...context, source: other }, { jobStore }, false);
-    await b.restore(backup, source);
-    await settled(b);
-    expect(b.status()).toMatchObject({ state: 'completed', vaultPath: source });
+    await importNewVault({ packageFile: exported, folder: source, profilePath: path.join(root, 'b-profile'), createdBy: 'XR Collector test' });
+    const b = await open({ ...context, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore }, false);
+    expect(b.status().vaultPath).toBe(source);
     expect(b.jobs.list({ state: 'all' }).jobs).toEqual([]);
     expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
     await b.close();

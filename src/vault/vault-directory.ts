@@ -17,8 +17,8 @@ export interface VaultMarker {
   createdAt: string;
   createdBy: string;
   /**
-   * Identity of the Vault: written when the Vault is created or restored and kept when it moves.
-   * Packages never carry the marker, so every restore gets a new ID.
+   * Identity of the Vault: written when the Vault is created or imported and kept when it moves.
+   * Export files never carry the marker, so every Vault created from one gets a new ID.
    */
   id: string;
 }

@@ -32,6 +32,7 @@ const runtime = await CollectorRuntime.start({
     },
     searchBinary: 'unused',
     searchData: path.join(profilePath, 'search'),
+    exportFolder: path.join(profilePath, 'exports'),
     createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
   },
   connectionFile: path.join(profilePath, 'agent-connection.json'),

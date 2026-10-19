@@ -102,7 +102,7 @@ export interface MoveCheckSystem {
 /**
  * Checks the new location of a move: an absolute path that does not exist yet (in an existing,
  * writable folder) or is an empty folder; not a symbolic link or a working folder of a move or
- * restore; not the active Vault, inside it or containing it; not inside the profile or another
+ * import; not the active Vault, inside it or containing it; not inside the profile or another
  * Vault; on a volume with room for the Vault plus the margin. Locations and their ancestors are
  * compared after resolving symbolic links, which also folds letter case on a case-insensitive volume.
  */

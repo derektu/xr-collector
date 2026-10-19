@@ -15,6 +15,9 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { inspectVaultDirectory, VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { MANIFEST, registeredFiles, writePackage } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
+import { SYNC_FILE } from '../../src/vault/sync-points.js';
+import { exportFileName } from '../../src/vault/transfer-files.js';
+import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
@@ -89,7 +92,7 @@ async function open(root: string, overrides: Partial<Parameters<typeof VaultWork
     root, selection: new VaultSelection(`${root}.selection.json`), profilePath: `${root}.profile`, createdBy: 'XR Collector test',
     capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: `${root}-search`,
+    searchBinary: '', searchData: `${root}-search`, exportFolder: `${root}.exports`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     ...overrides,
   });
@@ -141,11 +144,16 @@ describe('registered files only (PKG-02)', () => {
 
     const workspace = await open(root);
     expect((await workspace.collector.list()).map((document) => document.sourceId).sort()).toEqual(['abcdefghijk', 'dQw4w9WgXcQ']);
-    const file = path.join(at, 'backup.xr-vault');
+    const file = path.join(at, 'export.zip');
     const status = await workspace.exportTo(file);
     expect(status).toMatchObject({ state: 'completed', result: { exportPath: file, unregisteredFiles: personal + 1 } });
     expect(status.message).toContain(`${personal + 1} 個不屬於知識庫的檔案`);
     expect([...(await packageFiles(await readFile(file))).keys()].sort()).toEqual(REGISTERED);
+    // The sync file the export wrote belongs to the Vault: never packed, never counted as a person's file.
+    expect(existsSync(path.join(root, SYNC_FILE))).toBe(true);
+    const again = await workspace.exportTo(path.join(at, 'again.zip'));
+    expect(again.result?.unregisteredFiles).toBe(personal + 1);
+    expect([...(await packageFiles(await readFile(path.join(at, 'again.zip')))).keys()].sort()).toEqual(REGISTERED);
   });
 
   it('reports no others for a Vault holding only its own files', async () => {
@@ -229,7 +237,7 @@ describe('refusing packages (PKG-03)', () => {
 });
 
 describe('large Vaults (PKG-04)', () => {
-  it('exports, restores and compares a Vault of more than 128 MiB', async () => {
+  it('exports, compares and imports a Vault of more than 128 MiB', async () => {
     const at = await temp(); const root = path.join(at, 'Vault');
     const vault = new MarkdownVault(root);
     await vault.add(capture);
@@ -241,27 +249,26 @@ describe('large Vaults (PKG-04)', () => {
       await writeFile(path.join(root, `documents/youtube/${id}.md`), template.replaceAll(capture.videoId, id).replace(/\n\n[\s\S]*$/u, `\n\n${body}\n`));
     }
     const workspace = await open(root);
-    const file = path.join(at, 'big.xr-vault');
+    const file = path.join(at, 'big.zip');
     const status = await workspace.exportTo(file);
     expect(status.state).toBe('completed');
     expect((await manifestOf(await readFile(file))).files.reduce((sum, row) => sum + row.size, 0)).toBeGreaterThan(128 * 1024 * 1024);
-    const preview = await workspace.previewMergeFrom(file);
-    expect(preview.items.filter((item) => item.state === 'same')).toHaveLength(46);
-    expect(preview.items.every((item) => item.localText === '' && item.incomingText === '')).toBe(true);
-    workspace.cancelMerge(preview.id);
-    await workspace.restoreFrom(file, path.join(at, 'Restored'));
-    await settled(workspace);
-    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: path.join(at, 'Restored') });
-    expect(await workspace.collector.list()).toHaveLength(46);
+    const preview = await workspace.previewImport(file);
+    expect(preview).toMatchObject({ situation: 'nothing', replaceLoses: 0, conflicts: [] });
+    workspace.cancelImport(preview.id);
+    const created = await importNewVault({ packageFile: file, folder: path.join(at, 'Imported'), profilePath: `${root}.other-profile`, createdBy: 'test' });
+    expect(await new MarkdownVault(created).list()).toHaveLength(46);
   }, 60_000);
 
-  it('refuses a restore that does not fit on the disk, leaving the target as it was', async () => {
+  it('refuses an import that does not fit on the disk, leaving the target as it was', async () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
-    const workspace = await open(root, { statfs: async () => ({ bavail: 1, bsize: 4096 }) });
-    await workspace.restore(await packageBytes(root), path.join(at, 'Restored'));
-    await settled(workspace);
-    expect(workspace.status()).toMatchObject({ state: 'error', errorCode: 'insufficient_space', vaultPath: root });
-    expect(existsSync(path.join(at, 'Restored'))).toBe(false);
+    const file = path.join(at, 'small.zip');
+    await writeFile(file, await packageBytes(root));
+    await expect(importNewVault({
+      packageFile: file, folder: path.join(at, 'Imported'), profilePath: `${root}.profile`, createdBy: 'test',
+      statfs: async () => ({ bavail: 1, bsize: 4096 }),
+    })).rejects.toMatchObject({ code: 'insufficient_space' });
+    expect(existsSync(path.join(at, 'Imported'))).toBe(false);
   });
 });
 
@@ -270,7 +277,7 @@ describe('files that fail while an export reads them', () => {
     const template = await readFile(path.join(root, `documents/youtube/${capture.videoId}.md`), 'utf8');
     await writeFile(path.join(root, `documents/youtube/${id}.md`), template.replaceAll(capture.videoId, id).replace(/\n\n[\s\S]*$/u, `\n\n${body}\n`));
   }
-  const leftovers = async (folder: string) => (await readdir(folder)).filter((name) => name.includes('.xr-vault'));
+  const leftovers = async (folder: string) => (await readdir(folder)).filter((name) => name.includes('.zip'));
 
   it('answers an export holding a document over 64 MiB with an error naming it and leaves no file', async () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
@@ -279,7 +286,7 @@ describe('files that fail while an export reads them', () => {
     const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     try {
       const response = await app.inject({
-        method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' }, payload: { path: path.join(at, 'out.xr-vault') },
+        method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' }, payload: { path: path.join(at, 'out.zip') },
       });
       expect(response.statusCode).toBe(400);
       expect(response.json().error.message).toContain('documents/youtube/huge0000001.md');
@@ -296,7 +303,7 @@ describe('files that fail while an export reads them', () => {
     await new MarkdownVault(root).add(capture);
     await documentFile(root, capture.videoId, createHash('sha256').update('seed').digest('hex').repeat(600_000));
     const workspace = await open(root);
-    const exported = workspace.exportTo(path.join(at, 'out.xr-vault'));
+    const exported = workspace.exportTo(path.join(at, 'out.zip'));
     await expect.poll(async () => (await leftovers(at)).length, { interval: 1 }).toBe(1);
     await rm(path.join(root, 'documents/youtube/vanish00001.md'));
     await expect(exported).rejects.toThrow('documents/youtube/vanish00001.md');
@@ -320,54 +327,30 @@ describe('document files that cannot be read', () => {
   });
 });
 
-describe('package bodies over HTTP (PKG-05)', () => {
-  it('streams an export, takes a package body for a preview and a restore, and removes the files it kept', async () => {
+describe('local paths only over HTTP (PKG-05)', () => {
+  it('writes an export without a path into the export folder and takes no package bodies', async () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     const workspace = await open(root);
     const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     const headers = { authorization: 'Bearer test-token' };
     try {
+      const suggestion = (await app.inject({ url: '/api/vault/export/suggestion', headers })).json();
+      expect(suggestion).toEqual({ folder: `${root}.exports`, path: path.join(`${root}.exports`, exportFileName(new Date())) });
       const exported = await app.inject({ method: 'POST', url: '/api/vault/export', headers });
       expect(exported.statusCode).toBe(200);
-      expect(exported.headers['content-type']).toBe('application/octet-stream');
-      expect([...(await packageFiles(exported.rawPayload)).keys()].sort()).toEqual(REGISTERED);
-      expect(workspace.status().result).toMatchObject({ exportBytes: exported.rawPayload.length, unregisteredFiles: 0 });
-      const transfers = path.join(`${root}.profile`, 'transfers');
-      await expect.poll(async () => readdir(transfers)).toEqual([]);
+      expect(exported.json()).toMatchObject({ state: 'completed', result: { exportPath: suggestion.path } });
+      expect([...(await packageFiles(await readFile(suggestion.path))).keys()].sort()).toEqual(REGISTERED);
+      expect((await app.inject({ method: 'POST', url: '/api/vault/export', headers })).json()).toMatchObject({ error: { code: 'file_exists' } });
 
       const body = { ...headers, 'content-type': 'application/octet-stream' };
-      const preview = await app.inject({ method: 'POST', url: '/api/vault/merge/preview', headers: body, payload: exported.rawPayload });
-      expect(preview.statusCode).toBe(200);
-      expect(await readdir(transfers)).toHaveLength(1);
-      await app.inject({ method: 'POST', url: '/api/vault/merge/cancel', headers, payload: { id: preview.json().id } });
-      await expect.poll(async () => readdir(transfers)).toEqual([]);
-      const refused = await app.inject({ method: 'POST', url: '/api/vault/merge/preview', headers: body, payload: Buffer.from('not a zip') });
-      expect(refused.json()).toMatchObject({ error: { code: 'invalid_request' } });
-      expect(await readdir(transfers)).toEqual([]);
-
-      const restore = await app.inject({ method: 'POST', url: '/api/vault/restore', headers: body, payload: exported.rawPayload });
-      expect(restore.statusCode).toBe(202);
-      await settled(workspace);
-      expect(workspace.status().state).toBe('completed');
-      expect(await readdir(transfers)).toEqual([]);
+      const bytes = await readFile(suggestion.path);
+      for (const url of ['/api/vault/import/preview', '/api/vault/export']) {
+        expect((await app.inject({ method: 'POST', url, headers: body, payload: bytes })).statusCode).toBe(415);
+      }
+      for (const url of ['/api/vault/restore', '/api/vault/restore/suggestion', '/api/vault/merge/preview', '/api/vault/merge/apply', '/api/vault/merge/cancel']) {
+        expect((await app.inject({ method: url.endsWith('suggestion') ? 'GET' : 'POST', url, headers, payload: {} })).statusCode, url).toBe(404);
+      }
     } finally { await app.close(); }
-  });
-});
-
-describe('merge texts', () => {
-  it('carries the content of both sides only for items that need a choice', async () => {
-    const at = await temp(); const local = path.join(at, 'Local'); const incoming = path.join(at, 'Incoming');
-    await seed(local); await seed(incoming);
-    const file = path.join(incoming, 'documents/youtube/abcdefghijk.md');
-    await writeFile(file, (await readFile(file, 'utf8')).replace('第二份', '改過的標題'));
-    await new MarkdownVault(incoming).add({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' });
-    const workspace = await open(local);
-    const preview = await workspace.previewMerge(await packageBytes(incoming));
-    const byState = (state: string) => preview.items.filter((item) => item.state === state);
-    expect(byState('conflict').map((item) => item.key)).toEqual(['documents/youtube/abcdefghijk.md']);
-    expect(byState('conflict')[0]).toMatchObject({ localText: expect.stringContaining('第二份'), incomingText: expect.stringContaining('改過的標題') });
-    for (const item of [...byState('new'), ...byState('same')]) expect([item.localText, item.incomingText]).toEqual(['', '']);
-    expect(preview.package).toEqual({ exportedAt: null, createdBy: null });
   });
 });
 
@@ -386,15 +369,21 @@ describe('Vaults of an earlier format (CMP-01)', () => {
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toHaveProperty('id');
   });
 
-  it('writes the merge backup as a package of the same format', async () => {
+  it('writes the export taken before an import as a package of the same format, without a sync point of its own', async () => {
     const at = await temp(); const local = path.join(at, 'Local'); const incoming = path.join(at, 'Incoming');
     await seed(local); await seed(incoming);
     await new MarkdownVault(incoming).add({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' });
     const workspace = await open(local);
-    const preview = await workspace.previewMerge(await packageBytes(incoming));
-    workspace.applyMerge(preview.id, {}); await settled(workspace);
-    const backup = workspace.status().result!.mergeBackupPath!;
-    expect((await manifestOf(await readFile(backup))).format).toBe('xr-collector-package');
+    const file = path.join(at, 'incoming.zip');
+    await writeFile(file, await packageBytes(incoming));
+    const preview = await workspace.previewImport(file);
+    expect(preview.situation).toBe('unrelated');
+    workspace.applyImport(preview.id, 'merge', {}); await settled(workspace);
+    const backup = workspace.status().result!.preImportExportPath!;
+    expect(path.dirname(backup)).toBe(`${local}.exports`);
+    expect(path.basename(backup)).toMatch(/^XR Collector 匯入前 \d{4}-\d{2}-\d{2} \d{6}\.zip$/u);
+    const manifest = await manifestOf(await readFile(backup));
+    expect(manifest).toMatchObject({ format: 'xr-collector-package', sync: { id: null, ancestors: [] } });
     expect([...(await zipEntries(await readFile(backup))).keys()]).not.toContain('documents/youtube/new00000001.md');
     expect(createHash('sha256').update(await readFile(path.join(local, 'documents/youtube/new00000001.md'))).digest('hex'))
       .toBe(createHash('sha256').update(await readFile(path.join(incoming, 'documents/youtube/new00000001.md'))).digest('hex'));
@@ -403,7 +392,7 @@ describe('Vaults of an earlier format (CMP-01)', () => {
 
 it('never writes over an existing file', async () => {
   const root = path.join(await temp(), 'Vault'); await seed(root);
-  const file = path.join(root, '..', 'exists.xr-vault');
+  const file = path.join(root, '..', 'exists.zip');
   await writeFile(file, 'keep');
   await expect(writePackage(root, file)).rejects.toMatchObject({ code: 'EEXIST' });
   expect(await readFile(file, 'utf8')).toBe('keep');
