@@ -774,6 +774,8 @@ export interface TransferResult {
   imported?: ImportCounts;
   writtenFiles?: number;
   preImportExportPath?: string;
+  /** Import: the files are in place but the search index could not be updated; the person rebuilds it. */
+  searchRebuildNeeded?: boolean;
   /**
    * Open: the Vault in use before the switch, which stays where it is, and how many of its
    * collection jobs stopped with the switch; they continue when that Vault is opened again.

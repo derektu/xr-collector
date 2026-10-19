@@ -8,6 +8,7 @@ import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtim
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
+import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 import { packageBytes } from '../vault/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
@@ -551,6 +552,56 @@ describe('CollectorRuntime Vault setup', () => {
     expect(runtime.status().state).toBe('not_ready');
     await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('takes back the imported Vault when its search cannot start or its location cannot be saved (SYNC-11)', async () => {
+    const setup = await selected();
+    const source = path.join(setup.value.profilePath, 'source');
+    await mkdir(source);
+    await writeVaultMarker(source, 'XR Collector test');
+    const file = path.join(setup.value.profilePath, 'export.zip');
+    await writeFile(file, await packageBytes(source));
+    const target = path.join(setup.value.profilePath, 'Imported');
+    let searchFails = true;
+    const createSearch = setup.value.workspace.createSearch;
+    const runtime = await CollectorRuntime.start({
+      ...setup.value,
+      workspace: {
+        ...setup.value.workspace,
+        createSearch: async (root: string) => {
+          if (searchFails && root === target) throw new Error('search stopped');
+          return createSearch(root);
+        },
+      },
+    });
+    cleanups.push(() => runtime.close());
+    const journal = path.join(setup.value.profilePath, 'vault-import-journal.json');
+    const selection = path.join(setup.value.profilePath, 'vault-selection.json');
+    const importing = () => fetch(`${runtime.server.url}/api/vault/setup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import', path: target, packagePath: file }),
+    });
+
+    const failedSearch = await importing();
+    expect(failedSearch.status).toBe(422);
+    expect((await failedSearch.json()).error.message).toContain('無法啟動');
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(journal)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    searchFails = false;
+    const write = vi.spyOn(VaultSelection.prototype, 'write').mockRejectedValueOnce(new Error('disk full'));
+    const failedSelection = await importing();
+    expect(failedSelection.status).toBe(422);
+    expect((await failedSelection.json()).error.message).toContain('無法保存知識庫位置');
+    write.mockRestore();
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(journal)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(selection)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runtime.status().state).toBe('not_ready');
+
+    const imported = await importing();
+    expect(imported.status).toBe(200);
+    expect(runtime.status()).toMatchObject({ state: 'ready', vaultPath: target });
+    await expect(readFile(journal)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('lets an Agent move the Vault, reopens the new location after restart and keeps the Agent entry (A-11)', async () => {

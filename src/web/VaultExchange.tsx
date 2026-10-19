@@ -349,6 +349,8 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     {phase === 'done' && result && done ? <div data-testid="import-done">
       <p className="transfer-done" role="status">{done.importMode === 'replace' ? '已完全以匯入內容取代。' : '匯入完成。'}</p>
       {done.imported ? <p className="merge-counts">{countsText(done.imported)}</p> : null}
+      {done.searchRebuildNeeded ? <p className="add-problem" role="alert" data-testid="import-search-stale">
+        搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。</p> : null}
       {done.preImportExportPath ? <><p>匯入前的內容已匯出到：</p><code className="setting-path" data-testid="import-backup-path">{done.preImportExportPath}</code></> : null}
     </div> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
