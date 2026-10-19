@@ -40,7 +40,7 @@ describe('workspace transfer through HTTP', () => {
       expect(workspace.status().vaultPath).toBe(target);
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
       expect((await app.inject(`/api/documents/youtube:${capture.videoId}`)).json().document.bodyMarkdown).toBe(capture.bodyMarkdown);
-      expect((await app.inject('/api/youtube/schedule')).json().schedule.enabled).toBe(false);
+      expect((await app.inject('/api/youtube/schedule')).json().schedule.enabled).toBe(true);
       expect(workspace.status().lastSync).toMatchObject({ kind: 'import' });
       expect(JSON.parse(await readFile(path.join(target, VAULT_MARKER), 'utf8'))).toMatchObject({ format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector test' });
     } finally { await app.close(); }
@@ -48,7 +48,7 @@ describe('workspace transfer through HTTP', () => {
     const restarted = await open(b);
     expect(restarted.status().vaultPath).toBe(target);
     expect(await restarted.collector.list()).toHaveLength(1);
-    expect((await restarted.schedule.getSchedule()).enabled).toBe(false);
+    expect((await restarted.schedule.getSchedule()).enabled).toBe(true);
     const [submission] = await restarted.channels.startRun({ trigger: 'manual' });
     expect(submission!.job.source.id).toBe('UC123');
     await restarted.jobs.whenSettled(submission!.job.id);
@@ -131,7 +131,7 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('builds re
   try {
     await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
     await expect.poll(async () => (await workspace.search.search({ query: '森林觀測' })).hits[0]?.id, { timeout: 10_000 }).toBe(`youtube:${capture.videoId}`);
-    expect((await workspace.schedule.getSchedule()).enabled).toBe(false);
+    expect((await workspace.schedule.getSchedule()).enabled).toBe(true);
   } finally { await workspace.close(); }
   const restarted = await open(b, real, false);
   try {
@@ -163,7 +163,7 @@ it('rejects a checksum-valid document with an unsupported document type', async 
 });
 
 describe('portable subscription settings (S-T10, A4)', () => {
-  it('carries each subscription with its settings and progress into a new Vault, paused', async () => {
+  it('carries each subscription with its settings and progress, and the collection switch, into a new Vault', async () => {
     const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
     await seed(a.vault);
     const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
@@ -176,7 +176,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     const workspace = await open(b);
     expect(await workspace.channels.listChannels())
       .toEqual([expect.objectContaining({ id: 'UC123', lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange })]);
-    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: false, nextCheck: null });
+    expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: true });
   });
 
   it('opens and exports a Vault whose subscriptions carry fields no longer in use, keeping them', async () => {

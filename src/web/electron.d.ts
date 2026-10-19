@@ -12,6 +12,8 @@ export interface DesktopBridge {
   chooseImportFile(): Promise<string | null>;
   /** Shows the active Vault folder in Finder or File Explorer. */
   revealVault(): Promise<void>;
+  /** Shows the file the last finished export wrote in Finder or File Explorer. */
+  revealExport(): Promise<void>;
   /** Operating system of the desktop app, for labels such as Finder or File Explorer. */
   platform: string;
 }

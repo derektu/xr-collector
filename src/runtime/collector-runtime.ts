@@ -209,7 +209,7 @@ export class CollectorRuntime {
   /**
    * Creates, opens or imports a Vault while Not Ready, then starts its services and remembers the
    * location. An import creates the Vault in `vaultPath` (missing or empty) from the export file
-   * `packagePath`, with automatic collection paused.
+   * `packagePath`; the automatic collection switch is the one the export file holds.
    */
   async setup(action: VaultSetupAction, vaultPath: string, packagePath?: string): Promise<VaultSetupResult> {
     if (!this.services) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');

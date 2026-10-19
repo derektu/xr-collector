@@ -131,8 +131,8 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
  * Creates a Vault in `folder` (missing or empty) from an export file, for a machine that has no
  * Vault yet. The files unpack into a staging folder beside the target, which becomes the Vault
  * once complete; the profile journal lets the next start take back an import a stop interrupted.
- * The new Vault gets its own ID, starts with automatic collection paused, and holds the export's
- * sync point, so its first exchange with the exporting Vault compares against it.
+ * The new Vault gets its own ID, keeps the automatic collection switch the export file holds, and
+ * holds the export's sync point, so its first exchange with the exporting Vault compares against it.
  */
 export async function importNewVault(options: {
   packageFile: unknown; folder: unknown; profilePath: string; createdBy: string; statfs?: StatFs;
@@ -147,7 +147,7 @@ export async function importNewVault(options: {
     journal = { staging: stagingFolder(target), target, placed: false, marker: null, emptyTarget: false };
     await writeImportJournal(options.profilePath, journal);
     await mkdir(journal.staging, { mode: 0o700 });
-    await unpackPackage(reader, journal.staging, () => undefined, { pauseSchedule: true });
+    await unpackPackage(reader, journal.staging, () => undefined);
     const point = importedPoint(reader, await itemStates(reader), new Date());
     await writeFile(path.join(journal.staging, SYNC_FILE), syncFileBytes(point, []), { flag: 'wx', mode: 0o600 });
     reader.close();

@@ -165,6 +165,12 @@ app.whenReady().then(async () => {
     const vaultPath = runtime?.workspace?.status().vaultPath;
     if (vaultPath) shell.showItemInFolder(vaultPath);
   });
+  // Likewise the export file is the one the last finished export wrote, as the runtime reports it.
+  ipcMain.handle('xrCollector:desktop:revealExport', () => {
+    const status = runtime?.workspace?.status();
+    const exportPath = status?.operation === 'export' && status.state === 'completed' ? status.result?.exportPath : undefined;
+    if (exportPath) shell.showItemInFolder(exportPath);
+  });
   // One request channel for every YouTube request this process makes.
   const youtubeGate = await YouTubeGate.open({
     statePath: path.join(app.getPath('userData'), 'youtube-pacing.json'),

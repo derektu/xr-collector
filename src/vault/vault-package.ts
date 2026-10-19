@@ -7,7 +7,6 @@ import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
 import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
-import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
@@ -418,14 +417,9 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
   }
 }
 
-export interface UnpackOptions {
-  /** Pause automatic collection in the unpacked Vault; a Vault created from an export file starts paused. */
-  pauseSchedule?: boolean;
-}
-
 /** Writes the files of a checked package into `destination`, a new private folder. */
 export async function unpackPackage(
-  reader: PackageReader, destination: string, progress: (done: number, total: number) => void, options: UnpackOptions = {},
+  reader: PackageReader, destination: string, progress: (done: number, total: number) => void,
 ): Promise<void> {
   const files = reader.paths();
   for (const [index, file] of files.entries()) {
@@ -433,10 +427,6 @@ export async function unpackPackage(
     await mkdir(path.dirname(target), { recursive: true });
     await reader.extract(file, target);
     progress(index + 1, files.length);
-  }
-  if (options.pauseSchedule ?? true) {
-    const store = new JsonChannelScheduleStore(destination);
-    await store.save({ ...await store.load(), enabled: false });
   }
 }
 

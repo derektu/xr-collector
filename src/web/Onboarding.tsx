@@ -86,7 +86,7 @@ export function Onboarding({ inspection, suggestedPath, originalFailure, busy = 
         {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
         {onImport ? <button className="onboarding-secondary" type="button" disabled={busy} onClick={onImport} data-testid="onboarding-import">
           從匯出檔匯入…</button> : null}
-        <p className="onboarding-footnote">XR Collector 只會在你確認後建立或開啟知識庫。另一台電腦已有知識庫時，可以用它的匯出檔直接建立。</p>
+        <p className="onboarding-footnote">XR Collector 只會在你確認後建立或開啟知識庫。</p>
       </section>
     </main>
   </div>;
@@ -123,7 +123,7 @@ export function ImportOnboarding({
   const [typedPath, setTypedPath] = useState('');
   const folder = inspection.kind === 'none' ? null : inspection.path;
   const folderState = inspection.kind === 'empty' ? { label: '可建立', tone: 'ready', detail: '知識庫會建立在這裡。' }
-    : inspection.kind === 'existing' ? { label: '無法使用', tone: 'error', detail: '這裡已經是知識庫。匯入需要不存在或空的資料夾；要使用這個知識庫請返回並開啟它。' }
+    : inspection.kind === 'existing' ? { label: '無法使用', tone: 'error', detail: '這裡已經是知識庫，請選空資料夾。' }
       : inspection.kind === 'invalid' ? { label: '無法使用', tone: 'error', detail: inspection.reason }
         : inspection.kind === 'inspecting' ? { label: '正在檢查', tone: 'checking', detail: '正在確認這個目錄…' }
           : { label: '尚未選擇', tone: 'neutral', detail: '選擇不存在或空的資料夾。' };
@@ -137,7 +137,6 @@ export function ImportOnboarding({
       <section className="onboarding-card" aria-labelledby="onboarding-import-title" data-testid="onboarding-import-card">
         <p className="eyebrow">開始使用</p>
         <h1 id="onboarding-import-title">從匯出檔建立知識庫</h1>
-        <p className="onboarding-intro">選擇另一台電腦匯出的檔案，以及這台電腦的知識庫位置。之後兩台電腦以匯出與匯入互相帶著知識庫工作。</p>
 
         <div className="directory-heading"><span id="import-package-label">匯出檔</span>
           <span className={`directory-status ${packagePath ? 'ready' : 'neutral'}`}>{packagePath ? '已選擇' : '尚未選擇'}</span></div>
@@ -177,17 +176,13 @@ export function ImportOnboarding({
           data-testid="onboarding-import-confirm">{busy ? '正在匯入…' : '匯入並建立知識庫'}</button>
         {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
         <button className="onboarding-secondary" type="button" disabled={busy} onClick={onBack}>返回</button>
-        <p className="onboarding-footnote">新知識庫的自動收集會先暫停，確認內容後再開啟。</p>
       </section>
     </main>
   </div>;
 }
 
-/** The screen after a Vault was created from an export file: what it holds and the paused automatic collection. */
-export function ImportDone({ vaultPath, documentCount, collecting, busy, error, onEnableCollection, onEnter }: {
-  vaultPath: string; documentCount: number; collecting: boolean; busy: boolean; error?: string;
-  onEnableCollection: () => void; onEnter: () => void;
-}) {
+/** The screen after a Vault was created from an export file: how many documents it holds and where. */
+export function ImportDone({ vaultPath, documentCount, onEnter }: { vaultPath: string; documentCount: number; onEnter: () => void }) {
   return <div className="onboarding-screen">
     <header className="onboarding-header">
       <div className="onboarding-brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div>
@@ -196,14 +191,8 @@ export function ImportDone({ vaultPath, documentCount, collecting, busy, error, 
       <section className="onboarding-card" aria-labelledby="onboarding-done-title" data-testid="onboarding-import-done">
         <p className="eyebrow">完成</p>
         <h1 id="onboarding-done-title">已從匯出檔建立知識庫</h1>
-        <p className="onboarding-intro">包含 {documentCount} 份文件，位置：</p>
+        <p className="onboarding-intro">{documentCount} 份文件</p>
         <code className="onboarding-code">{vaultPath}</code>
-        <div className="onboarding-note" data-testid="onboarding-collection">
-          {collecting ? <p>自動收集已開啟。</p>
-            : <><p>自動收集目前暫停。確認內容沒問題後再開啟，兩台電腦都開啟時會各自收集同樣的訂閱。</p>
-              <button className="choose-directory" type="button" disabled={busy} onClick={onEnableCollection} data-testid="onboarding-enable-collection">開啟自動收集</button></>}
-        </div>
-        {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
         <button className="onboarding-primary" type="button" onClick={onEnter} data-testid="onboarding-enter">開始使用</button>
       </section>
     </main>

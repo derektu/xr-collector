@@ -5,15 +5,14 @@ import {
 } from '../../src/web/transfer-presentation.js';
 
 describe('export and import presentation', () => {
-  it('names the newest sync point, sizes and what an export left out', () => {
+  it('names the newest sync point without the machine, sizes and what an export left out', () => {
     expect(lastSyncLabel(null)).toBe('尚未匯出或匯入');
     const at = new Date(2026, 9, 1, 14, 3).toISOString();
-    expect(lastSyncLabel({ at, kind: 'export', machine: '家裡 Mac' })).toBe('上次同步 2026-10-01 14:03（匯出）');
-    expect(lastSyncLabel({ at, kind: 'import', machine: '公司 Mac' })).toBe('上次同步 2026-10-01 14:03（匯入自 公司 Mac）');
-    expect(lastSyncLabel({ at, kind: 'import', machine: null })).toBe('上次同步 2026-10-01 14:03（匯入）');
+    expect(lastSyncLabel({ at, kind: 'export', machine: '家裡 Mac' })).toBe('上次匯出 10-01 14:03');
+    expect(lastSyncLabel({ at, kind: 'import', machine: '公司 Mac' })).toBe('上次匯入 10-01 14:03');
     expect(sizeLabel(512)).toBe('512 B');
     expect(sizeLabel(2048)).toBe('2.0 KB');
-    expect(unregisteredText(2)).toBe('知識庫資料夾中有 2 個不屬於知識庫的檔案沒有包含在匯出檔裡。');
+    expect(unregisteredText(2)).toBe('2 個非知識庫檔案未包含。');
   });
 
   it('reports progress while a transfer runs', () => {
@@ -23,20 +22,21 @@ describe('export and import presentation', () => {
     expect(progressText({ state: 'waiting', message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0 })).toBe('正在等待目前的收集步驟完成…');
   });
 
-  it('describes what an import found and where the file came from', () => {
+  it('describes what an import found and when the file was exported, in as few words as a decision needs', () => {
     expect(countsText({ added: 3, modified: 1, removed: 2 })).toBe('新增 3、修改 1、刪除 2');
-    expect(sourceText({ machine: '公司 Mac', exportedAt: new Date(2026, 9, 19, 9, 5).toISOString() })).toBe('公司 Mac 於 2026-10-19 09:05 匯出');
-    expect(sourceText({ machine: null, exportedAt: null })).toBe('另一台電腦 匯出');
-    expect(situationText('incoming')).toContain('直接套用');
-    expect(situationText('unrelated')).toContain('沒有共同的同步點');
-    expect(situationText('nothing')).toContain('沒有需要匯入的內容');
+    expect(sourceText({ exportedAt: new Date(2026, 9, 19, 9, 5).toISOString() })).toBe('2026-10-19 09:05 匯出');
+    expect(sourceText({ exportedAt: null })).toBeNull();
+    expect(situationText('incoming')).toBeNull();
+    expect(situationText('both')).toBeNull();
+    expect(situationText('unrelated')).toBe('這個檔案來自另一個知識庫，合併只新增、不刪除。');
+    expect(situationText('nothing')).toBe('沒有需要匯入的內容。');
   });
 
-  it('shows each side of a conflict with its machine and time, or says the time is unknown', () => {
+  it('shows each side of a conflict with its time and no machine, or says the time is unknown', () => {
     const time = new Date(2026, 9, 19, 14, 3, 7).toISOString();
-    expect(sideText('本機', { state: 'present', time, machine: '家裡 Mac' })).toBe('本機（家裡 Mac）・2026-10-19 14:03:07');
+    expect(sideText('本機', { state: 'present', time, machine: '家裡 Mac' })).toBe('本機・2026-10-19 14:03:07');
     expect(sideText('匯入檔', { state: 'deleted', time: null, machine: null })).toBe('匯入檔・已刪除・時間不明');
-    expect(sideText('本機', { state: 'absent', time: null, machine: '家裡 Mac' })).toBe('本機（家裡 Mac）・沒有這一項');
+    expect(sideText('本機', { state: 'absent', time: null, machine: '家裡 Mac' })).toBe('本機・沒有這一項');
     expect(conflictKind({ kind: 'channel' })).toBe('訂閱');
     expect(conflictKind({ kind: 'document' })).toBe('文件');
   });
