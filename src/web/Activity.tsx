@@ -118,7 +118,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
         : { filter: requested, events: page.events, nextCursor: page.nextCursor, health: page.log });
       setLogError(null);
     }).catch((error: unknown) => {
-      if (currentFilter.current === requested) setLogError(error instanceof Error ? error.message : '無法讀取活動記錄。');
+      if (currentFilter.current === requested) setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
     });
   }, [filter, refresh]);
 
@@ -188,7 +188,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
   const jobs = [...(active ?? []), ...(recent?.jobs ?? [])];
 
   return <>
-    <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>活動</h1></div>
+    <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>記錄</h1></div>
 
     <section className="activity-card" aria-labelledby="activity-jobs" data-testid="activity-jobs">
       <div className="activity-card-heading">
@@ -211,9 +211,9 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
             aria-pressed={state.level === option.value} onClick={() => change({ level: option.value })} data-testid={`level-${option.value}`}>{option.label}</button>)}
         </div>
         <span className="panel-spacer" />
-        <label className="source-select"><span className="visually-hidden">來源</span>
+        <label className="source-select"><span className="visually-hidden">訂閱</span>
           <select value={state.source ?? ''} onChange={(event) => change({ source: event.target.value || null })} data-testid="log-source">
-            <option value="">所有來源</option>
+            <option value="">所有訂閱</option>
             {subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.title}</option>)}
             {sourceKnown ? null : <option value={state.source!}>{state.source}</option>}
           </select>

@@ -12,7 +12,7 @@ import type {
 } from './types.js';
 import { CollectorError } from './types.js';
 import { documentExcerpt } from './document-text.js';
-import { collectedBeforeDeletion, type DeletionLedger } from '../vault/deleted-documents.js';
+import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
 import type { NewJobEvent } from '../jobs/job-store.js';
 
 /** Filter value that selects documents saved without a publisher ID. */
@@ -188,6 +188,21 @@ export class Collector {
     });
   }
 
+  /**
+   * Records the deletion of an item that has no document yet, such as a video still capturing, so
+   * a capture that finishes later is not saved (`document_deleted`) unless an explicit request
+   * comes after the record. An item already in the Vault or already deleted is left alone.
+   */
+  recordDeletion(entry: Omit<DeletionRecord, 'deletedAt'>): Promise<void> {
+    const id = deletionId(entry);
+    return this.exclusive(id, async () => {
+      const { deletions } = this.vault;
+      if (!deletions) throw new CollectorError('invalid_request', '這個知識庫不支援刪除文件。');
+      if (await this.vault.read(id) || await deletions.get(id)) return;
+      await deletions.record(entry);
+    });
+  }
+
   /** Runs `work` after every earlier operation on the same item has finished. */
   private exclusive<T>(id: string, work: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(id) ?? Promise.resolve();
@@ -220,8 +235,11 @@ export class Collector {
     };
   }
 
-  /** Document counts per source type and publisher, named after the subscription list when present. */
-  async sources(subscriptions: { youtube: YouTubeChannel[] }): Promise<DocumentSources> {
+  /**
+   * Document counts per source type and publisher, named after the subscription list when present,
+   * otherwise after the removal record of a removed subscription.
+   */
+  async sources(subscriptions: { youtube: YouTubeChannel[]; removedYoutube?: Array<{ id: string; title: string }> }): Promise<DocumentSources> {
     const documents = await this.vault.list();
     const groups = new Map<DocumentMetadata['sourceType'], Map<string, DocumentSourcePublisher>>();
     for (const document of documents) {
@@ -231,16 +249,19 @@ export class Collector {
       const entry = publishers.get(key);
       // Documents arrive newest first, so the first name seen is the most recent one.
       if (entry) entry.count += 1;
-      else publishers.set(key, { id: document.publisher.id, name: document.publisher.name, count: 1, subscribed: false });
+      else publishers.set(key, { id: document.publisher.id, name: document.publisher.name, count: 1, subscribed: false, removed: false });
     }
     const channels = new Map(subscriptions.youtube.map((channel) => [channel.id, channel]));
+    const removals = new Map((subscriptions.removedYoutube ?? []).map((record) => [record.id, record]));
     return {
       total: documents.length,
       groups: [...groups.entries()].map(([sourceType, publishers]) => {
         const list = [...publishers.values()].map((publisher) => {
           const channel = sourceType === 'youtube' && publisher.id ? channels.get(publisher.id) : undefined;
           if (publisher.id === null) return { ...publisher, name: '未知頻道', subscribed: null };
-          return channel ? { ...publisher, name: channel.title || publisher.name, subscribed: true } : publisher;
+          if (channel) return { ...publisher, name: channel.title || publisher.name, subscribed: true };
+          const removal = sourceType === 'youtube' && publisher.id ? removals.get(publisher.id) : undefined;
+          return removal ? { ...publisher, name: removal.title || publisher.name, removed: true } : publisher;
         }).sort(comparePublishers);
         return {
           sourceType,

@@ -302,7 +302,10 @@ export class JobManager {
     return publicJob(job);
   }
 
-  /** Top-level jobs, newest first. Videos a channel job started appear as that job's items. */
+  /**
+   * Top-level jobs, newest first. Videos a channel job started appear as that job's items, shown
+   * `running` while their video job runs.
+   */
   list(query: JobListQuery = {}): JobPage {
     const limit = query.limit ?? 20;
     let jobs = this.options.store.list(this.options.vaultPath, this.vaultId).filter((job) => job.parentId === null);
@@ -312,7 +315,7 @@ export class JobManager {
       if (index < 0) throw new CollectorError('invalid_request', '分頁位置已失效，請重新讀取第一頁。');
       jobs = jobs.slice(index + 1);
     }
-    const page = jobs.slice(0, limit).map(publicJob);
+    const page = jobs.slice(0, limit).map((job) => this.withLiveItems(publicJob(job)));
     return { jobs: page, nextCursor: jobs.length > limit ? page[page.length - 1]!.id : null };
   }
 
@@ -331,12 +334,66 @@ export class JobManager {
     return byChannel;
   }
 
-  /** The channel collection job of this subscription that is still queued or running. */
+  /**
+   * The channel collection job of this subscription that is still queued or running. Its items
+   * show `running` while their video job runs, so a caller can tell a check that collects from one
+   * whose videos wait behind other work.
+   */
   activeChannelJob(channelId: string): CollectionJob | null {
     for (const job of this.jobs.values()) {
-      if (job.kind === 'youtube.channel' && job.source.id === channelId && !this.stoppedJobs.has(job.id)) return structuredClone(job);
+      if (job.kind !== 'youtube.channel' || job.source.id !== channelId || this.stoppedJobs.has(job.id)) continue;
+      return this.withLiveItems(structuredClone(job));
     }
     return null;
+  }
+
+  /** Items record their video's outcome when it ends; meanwhile a running video shows as `running`. */
+  private withLiveItems(job: CollectionJob): CollectionJob {
+    if (!job.items) return job;
+    return {
+      ...job,
+      items: job.items.map((item) => item.state === 'queued' && item.jobId && this.jobs.get(item.jobId)?.state === 'running'
+        ? { ...item, state: 'running' } : item),
+    };
+  }
+
+  /**
+   * Subscription requests still queued or running, oldest first, with the channel each one has
+   * resolved to so far (null before resolution).
+   */
+  activeChannelAdds(): Array<{ job: CollectionJob; channelId: string | null; title: string | null }> {
+    return [...this.jobs.values()]
+      .filter((job) => job.kind === 'youtube.channel-add')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((job) => {
+        const subscribing = job.checkpoint?.subscribing;
+        return {
+          job: publicJob(structuredClone(job)),
+          channelId: job.result?.channelId ?? subscribing?.channelId ?? null,
+          title: job.source.title ?? subscribing?.title ?? null,
+        };
+      });
+  }
+
+  /**
+   * Video captures still queued or running that may save a document of this channel: the videos a
+   * job of the channel requested, stopped jobs included, and every single-video request, whose
+   * channel is known only once it is captured.
+   */
+  pendingCaptures(channelId: string): { channelVideos: CollectionJob[]; singleVideos: CollectionJob[] } {
+    const channelVideoIds = new Set<string>();
+    for (const job of this.jobs.values()) {
+      if (job.kind !== 'youtube.channel' || job.source.id !== channelId) continue;
+      for (const item of job.items ?? []) if (item.jobId) channelVideoIds.add(item.jobId);
+    }
+    const channelVideos: CollectionJob[] = [];
+    const singleVideos: CollectionJob[] = [];
+    for (const job of this.jobs.values()) {
+      if (job.kind !== 'youtube.video' || !ACTIVE.has(job.state)) continue;
+      if (channelVideoIds.has(job.id)) channelVideos.push(structuredClone(job));
+      else if (job.parentId === null) singleVideos.push(structuredClone(job));
+    }
+    return { channelVideos, singleVideos };
   }
 
   /**

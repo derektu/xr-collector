@@ -866,8 +866,10 @@ export class VaultWorkspace {
     }
   }
 
+  /** Restarts the schedule after an import; imported subscriptions arrive without a next check time and get one first. */
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
+    await this.current.channels.planChecks({ reset: false });
     this.current.schedule = makeScheduler(this.current);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
@@ -941,6 +943,8 @@ export class VaultWorkspace {
     });
     const channels = new ChannelCollector(channelStore, jobs, {
       autoCollection, resolveChannel: (url, signal) => source.resolveChannel(url, { priority: 'interactive', signal }), documents: () => collector.list(),
+      deleteDocument: (id) => collector.delete(id),
+      recordDeletion: (entry) => collector.recordDeletion(entry),
     });
     for (const record of recovery.completed) {
       jobs.recordEvent({

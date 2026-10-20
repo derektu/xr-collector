@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   createBrowserThemeStore,
+  navigation,
   radioIndexForKey,
   resolveTheme,
   routeForPath,
+  settingsNavigation,
+  sidebarStatus,
   themePreferenceFromValue,
 } from '../../src/web/app-shell.js';
 
@@ -16,6 +19,15 @@ describe('App Shell routes', () => {
     expect(routeForPath('/documents/youtube%3Aabc')).toBe('documents');
     expect(routeForPath('/sources/youtube/UC123')).toBe('sources');
     expect(routeForPath('/not-a-page')).toBe('sources');
+  });
+});
+
+describe('sidebar (N75-T1)', () => {
+  it('lists Subscriptions, Documents and Log in order with Settings apart, and shows 更新中 only while jobs run', () => {
+    expect(navigation.map((item) => [item.page, item.label])).toEqual([['sources', '訂閱'], ['documents', '文件'], ['activity', '記錄']]);
+    expect(settingsNavigation).toMatchObject({ page: 'settings', label: '設定' });
+    expect(sidebarStatus(0)).toBeNull();
+    expect(sidebarStatus(2)).toBe('更新中');
   });
 });
 

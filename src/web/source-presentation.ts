@@ -1,17 +1,6 @@
 import type { ChannelSchedule, CollectionJob, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
 import { triggerLabel } from './subscription-presentation.js';
 
-/** Label of a source's status chip; a running job shows its item progress. */
-export function sourceStatusLabel(source: Pick<Subscription, 'status' | 'activeJob'>): string {
-  if (source.status === 'paused') return '已暫停';
-  if (source.status === 'error') return '錯誤';
-  if (source.status === 'collecting') {
-    const job = source.activeJob;
-    return job && job.total > 0 ? `收集中 ${job.done}／${job.total}` : '收集中';
-  }
-  return '追蹤中';
-}
-
 /** A compact local time: "今天 13:30", "昨天 21:05", "10-14 08:00" this year, "2025-12-31" before. */
 export function shortTimeLabel(value: string, now: Date = new Date()): string {
   const date = new Date(value);
@@ -58,11 +47,6 @@ export function filterSources(sources: SourceEntry[], state: SourceListState): S
     && (!query || source.title.toLocaleLowerCase().includes(query)));
 }
 
-/** The single-item row is not a source of any type, so only the unfiltered list shows it. */
-export function showsSingleItems(state: SourceListState, documentCount: number): boolean {
-  return documentCount > 0 && !state.type && state.query.trim() === '';
-}
-
 export function sourcePath(type: string, id: string): string {
   return `/sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
 }
@@ -80,22 +64,6 @@ export function sourceRouteForPath(pathname: string): { type: string; id: string
 /** Top-level jobs still queued or running; a channel job counts once however many videos it holds. */
 export function activeJobs(jobs: CollectionJob[]): CollectionJob[] {
   return jobs.filter((job) => job.parentId === null && (job.state === 'queued' || job.state === 'running'));
-}
-
-/** The sidebar's background state: collecting now, waiting for the next automatic check, or paused. */
-export function backgroundStatus(activeCount: number, schedule: Pick<ChannelSchedule, 'enabled'> | null): { tone: 'busy' | 'on' | 'off'; text: string } {
-  if (activeCount > 0) return { tone: 'busy', text: '背景收集中' };
-  if (schedule && !schedule.enabled) return { tone: 'off', text: '自動收集已暫停' };
-  return { tone: 'on', text: '自動收集開啟' };
-}
-
-/** "正在收集 2 項：A（4／10）、B" for the banner above the source list. */
-export function collectingSummary(jobs: CollectionJob[]): string {
-  const parts = jobs.map((job) => {
-    const title = job.source.title ?? job.source.url;
-    return job.progress && job.progress.total > 0 ? `${title}（${job.progress.done}／${job.progress.total}）` : title;
-  });
-  return `正在收集 ${jobs.length} 項：${parts.join('、')}`;
 }
 
 /** First letters of a source name for its avatar. */
@@ -134,21 +102,21 @@ export function jobRecordLabel(record: SourceJobRecord, now: Date = new Date()):
 }
 
 /**
- * The check times under the source list: the newest finished check and the subscription due
- * next, each with its source name, so both match that source's detail page.
+ * The check times under the subscription list: the newest finished check and the subscription due
+ * next, each with its name, so both match that subscription's detail page.
  */
 export function checkTimesLine(schedule: Pick<ChannelSchedule, 'enabled' | 'lastCheck' | 'nextCheck'>, now: Date = new Date()): string {
   const last = schedule.lastCheck ? `${shortTimeLabel(schedule.lastCheck.at, now)}（${schedule.lastCheck.title}）` : '尚未檢查';
-  if (!schedule.enabled) return `上次檢查 ${last} · 自動收集已暫停`;
-  const next = schedule.nextCheck ? `${shortTimeLabel(schedule.nextCheck.at, now)}（${schedule.nextCheck.title}）` : '沒有追蹤中的來源';
-  return `上次檢查 ${last} · 下一個檢查 ${next}`;
+  if (!schedule.enabled) return `上次檢查 ${last} · 自動檢查已關閉`;
+  if (!schedule.nextCheck) return `上次檢查 ${last}`;
+  return `上次檢查 ${last} · 下次檢查 ${shortTimeLabel(schedule.nextCheck.at, now)}（${schedule.nextCheck.title}）`;
 }
 
-/** When one source is checked next, as its detail page shows it. */
+/** When one subscription is checked next, as its detail page shows it. */
 export function nextCheckLabel(source: Pick<Subscription, 'enabled' | 'nextCheckAt'>, autoCollection: boolean | null, now: Date = new Date()): string {
   if (!source.enabled) return '已暫停';
-  if (autoCollection === false) return '自動收集已暫停';
-  return source.nextCheckAt ? shortTimeLabel(source.nextCheckAt, now) : '尚未排定';
+  if (autoCollection === false) return '自動檢查已關閉';
+  return source.nextCheckAt ? shortTimeLabel(source.nextCheckAt, now) : '排隊中';
 }
 
 function pad(value: number): string {

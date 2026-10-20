@@ -100,7 +100,7 @@ export class ChannelScheduler {
    */
   async updateSchedule(input: UpdateChannelSchedule): Promise<ChannelSchedule> {
     if (typeof input?.enabled !== 'boolean') {
-      throw new CollectorError('invalid_request', '自動收集開關必須是 true 或 false。');
+      throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
     }
     const current = await this.ensureLoaded();
     if (current.enabled !== input.enabled) {
@@ -108,7 +108,7 @@ export class ChannelScheduler {
       await this.store.save(current);
       if (current.enabled) await this.runner.planChecks({ reset: true });
       this.options.recordEvent?.({
-        severity: 'info', eventType: 'schedule.updated', message: current.enabled ? '已開啟自動收集。' : '已暫停自動收集。',
+        severity: 'info', eventType: 'schedule.updated', message: current.enabled ? '已開啟自動檢查。' : '已關閉自動檢查。',
       });
     }
     return this.getSchedule();

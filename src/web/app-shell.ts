@@ -8,6 +8,22 @@ export type ShellPage = 'sources' | 'documents' | 'settings' | 'activity';
 
 const pagePaths: Record<ShellPage, string> = { sources: '/', documents: '/documents', settings: '/settings', activity: '/activity' };
 
+/** One sidebar entry. */
+export interface NavigationItem { page: ShellPage; label: string; icon: string }
+
+/** The sidebar pages in order; Settings sits apart at the bottom. */
+export const navigation: readonly NavigationItem[] = [
+  { page: 'sources', label: '訂閱', icon: 'sources' },
+  { page: 'documents', label: '文件', icon: 'documents' },
+  { page: 'activity', label: '記錄', icon: 'activity' },
+];
+export const settingsNavigation: NavigationItem = { page: 'settings', label: '設定', icon: 'settings' };
+
+/** The sidebar status line: shown only while jobs run. */
+export function sidebarStatus(activeJobs: number): string | null {
+  return activeJobs > 0 ? '更新中' : null;
+}
+
 export function routeForPath(pathname: string): ShellPage {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   if (normalized.startsWith('/documents/')) return 'documents';

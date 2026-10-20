@@ -57,16 +57,19 @@ export interface SourceOptionGroup {
   options: SourceOption[];
 }
 
-/** One grouped menu: all sources, then per source type its own "all" entry followed by its publishers. */
+/**
+ * One grouped menu: every channel, then per source type its own "all" entry followed by its
+ * publishers. A publisher whose subscription was removed is marked; one only added item by item is not.
+ */
 export function sourceOptions(sources: DocumentSources | null): { all: SourceOption; groups: SourceOptionGroup[] } {
-  const all = { value: '', label: `全部來源（${sources?.total ?? 0}）` };
+  const all = { value: '', label: `全部頻道（${sources?.total ?? 0}）` };
   const groups = (sources?.groups ?? []).map((group) => ({
     label: group.label,
     options: [
-      { value: group.sourceType, label: `${group.label}（全部）（${group.count}）` },
+      { value: group.sourceType, label: `${group.label}・全部（${group.count}）` },
       ...group.publishers.map((publisher) => ({
         value: `${group.sourceType}:${publisher.id ?? 'none'}`,
-        label: `${publisher.name}${publisher.subscribed === false ? '・未訂閱' : ''}（${publisher.count}）`,
+        label: `${publisher.name}${publisher.removed ? '・已移除' : ''}（${publisher.count}）`,
       })),
     ],
   }));
@@ -174,9 +177,6 @@ function localDate(date: Date): string {
 function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
-
-/** What deleting a document does, as the confirmation states it. */
-export const DELETE_CONFIRMATION = '文件會從知識庫與搜尋移除。之後的自動收集與頻道收集會略過這支影片；要再收集，請貼上這支影片的網址。訂閱不受影響。';
 
 /**
  * The page a loaded list should show: the same page while it has rows, otherwise the last page that

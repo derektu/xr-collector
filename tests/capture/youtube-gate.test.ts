@@ -239,7 +239,8 @@ describe('cooldown after YouTube limits requests (P-T4)', () => {
     expect(reopened.status().state).toBe('idle');
 
     // A cooldown that ended while the service was stopped is over at the next start.
-    await reopened.flush();
+    // Advancing the clock also ended the first gate's cooldown; both gates finish writing first.
+    await Promise.all([first.flush(), reopened.flush()]);
     await writeFile(statePath, JSON.stringify({ cooldownUntil: new Date(h.clock() - 1).toISOString(), level: 3, lastLimitedAt: null }));
     const later = await YouTubeGate.open({ ...h.options, statePath });
     expect(later.status()).toMatchObject({ state: 'idle', cooldownUntil: null, level: 3 });

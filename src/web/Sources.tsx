@@ -1,36 +1,39 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ChannelSchedule, CollectionJob, SourceEntry, SourceList, SourceTypeInfo } from '../core/types.js';
+import type { ChannelSchedule, PendingSubscription, SourceEntry, SourceList, SourceTypeInfo } from '../core/types.js';
+import { SUBSCRIPTION_ADD_ITEMS, type AddMode } from './add-menu.js';
+import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import {
   checkTimesLine,
-  collectingSummary,
+  displayUrl,
   filterSources,
-  showsSingleItems,
   shortTimeLabel,
   sourcePath,
-  sourceStatusLabel,
   type SourceListState,
 } from './source-presentation.js';
+import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 
 export interface SourcesProps {
   state: SourceListState;
   onState: (state: SourceListState) => void;
   sourceTypes: SourceTypeInfo[];
-  active: CollectionJob[];
   schedule: ChannelSchedule | null;
   /** Changes whenever background work changes, so the list reloads. */
   revision: number;
-  onAdd: () => void;
+  /** Opens the add dialog the menu item names. */
+  onAdd: (mode: AddMode) => void;
   onOpenSource: (type: string, id: string) => void;
-  onOpenActivity: () => void;
   /** Reports a finished action and refreshes the shell's view of background work. */
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }
 
-/** All sources in one list, with type and name filters and per-row pause, resume and more actions. */
-export function Sources({ state, onState, sourceTypes, active, schedule, revision, onAdd, onOpenSource, onOpenActivity, onChanged }: SourcesProps) {
+/**
+ * Every subscription in one list, with type and name filters and per-row pause, resume and more
+ * actions. A subscription request appears at once and becomes its subscription row when resolved.
+ */
+export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd, onOpenSource, onChanged }: SourcesProps) {
   const [list, setList] = useState<SourceList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -40,7 +43,7 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
   useEffect(() => {
     const controller = new AbortController();
     api.listSources(controller.signal).then((next) => { setList(next); setLoadError(null); }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取來源。');
+      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取訂閱。');
     });
     return () => controller.abort();
   }, [revision]);
@@ -51,7 +54,7 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
     setChecking(true);
     try {
       const submissions = await api.checkAllChannels();
-      onChanged(`已開始檢查 ${submissions.length} 個來源。`);
+      onChanged(`已開始檢查 ${submissions.length} 個訂閱。`);
     } catch (error) {
       onChanged(error instanceof Error ? error.message : '無法開始檢查。', 'error');
     } finally {
@@ -59,82 +62,80 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
     }
   }
 
-  async function setAutoCollection(enabled: boolean): Promise<void> {
+  async function setAutoCheck(enabled: boolean): Promise<void> {
     setSwitching(true);
     try {
       await api.setAutoCollection(enabled);
-      onChanged(enabled ? '已開啟自動收集。' : '已暫停自動收集。');
+      onChanged(enabled ? '已開啟自動檢查。' : '已關閉自動檢查。');
     } catch (error) {
-      onChanged(error instanceof Error ? error.message : '無法變更自動收集。', 'error');
+      onChanged(error instanceof Error ? error.message : '無法變更自動檢查。', 'error');
     } finally {
       setSwitching(false);
     }
   }
 
   const sources = list?.sources ?? [];
+  const pending = (list?.pending ?? []).filter((entry) => matchesPending(entry, state));
   const visible = filterSources(sources, state);
   const enabledCount = sources.filter((source) => source.enabled).length;
-  const single = list && showsSingleItems(state, list.unsubscribed.documentCount) ? list.unsubscribed : null;
-  const empty = list !== null && sources.length === 0 && list.unsubscribed.documentCount === 0;
+  const empty = list !== null && sources.length === 0 && list.pending.length === 0;
   const typeLabel = (type: string) => sourceTypes.find((candidate) => candidate.id === type);
+  const now = new Date();
 
   return <>
     <div className="page-header">
-      <h1 className="page-title" tabIndex={-1} data-page-heading>來源</h1>
+      <h1 className="page-title" tabIndex={-1} data-page-heading>訂閱</h1>
       <div className="header-actions">
         {schedule ? <label className="header-switch" data-testid="auto-collection">
-          自動收集
+          自動檢查
           <input type="checkbox" role="switch" checked={schedule.enabled} disabled={switching}
-            onChange={(event) => void setAutoCollection(event.target.checked)} data-testid="auto-collection-switch" />
+            onChange={(event) => void setAutoCheck(event.target.checked)} data-testid="auto-collection-switch" />
           <span className="switch" aria-hidden="true" />
         </label> : null}
         <button type="button" className="button" disabled={checking || enabledCount === 0} onClick={() => void checkAll()} data-testid="check-all">
           <Icon name="refresh" size={15} />{checking ? '檢查中…' : '立即檢查'}
         </button>
-        <button type="button" className="button" onClick={onAdd}><Icon name="plus" size={15} />新增來源</button>
+        <AddMenu label="新增訂閱" items={SUBSCRIPTION_ADD_ITEMS} onChoose={onAdd} testId="add-subscription" />
       </div>
     </div>
-
-    {active.length > 0 ? <button type="button" className="collecting-banner" onClick={onOpenActivity} data-testid="collecting-banner">
-      <span className="pulse" aria-hidden="true" /><span>{collectingSummary(active)}</span><span className="banner-link">查看活動</span>
-    </button> : null}
 
     {loadError ? <p className="load-error" role="alert">{loadError}</p> : null}
     {list === null && !loadError ? <p className="loading" role="status">正在讀取…</p> : null}
 
     {empty ? <section className="empty-state" data-testid="sources-empty">
-      <h2>還沒有來源</h2>
-      <p>貼上 YouTube 影片或頻道網址開始收集。訂閱頻道後，新影片會自動加入知識庫。</p>
-      <button type="button" className="button primary" onClick={onAdd}><Icon name="plus" size={15} />加入內容</button>
+      <h2>還沒有訂閱</h2>
+      <AddMenu label="新增訂閱" items={SUBSCRIPTION_ADD_ITEMS} onChoose={onAdd} primary align="start" testId="add-subscription-empty" />
     </section> : null}
 
     {list && !empty ? <>
       <div className="filter-bar">
-        <div className="chips" role="group" aria-label="來源類型">
+        <div className="chips" role="group" aria-label="類型">
           <button type="button" className={state.type ? 'chip' : 'chip active'} aria-pressed={!state.type} onClick={() => onState({ ...state, type: '' })}>全部 <span>{sources.length}</span></button>
           {sourceTypes.map((type) => <button key={type.id} type="button" className={state.type === type.id ? 'chip active' : 'chip'} aria-pressed={state.type === type.id}
             onClick={() => onState({ ...state, type: type.id })}><Icon name={type.icon} size={14} />{type.label} <span>{list.types.find((entry) => entry.type === type.id)?.count ?? 0}</span></button>)}
         </div>
         <label className="filter-input">
-          <span className="visually-hidden">篩選來源</span>
+          <span className="visually-hidden">篩選訂閱</span>
           <Icon name="search" size={14} />
-          <input type="search" value={draft} placeholder="篩選來源" onChange={(event) => { setDraft(event.target.value); onState({ ...state, query: event.target.value }); }} data-testid="sources-filter" />
+          <input type="search" value={draft} placeholder="篩選訂閱" onChange={(event) => { setDraft(event.target.value); onState({ ...state, query: event.target.value }); }} data-testid="sources-filter" />
         </label>
       </div>
 
-      <div className="source-table" role="table" aria-label="來源清單" data-testid="source-table">
+      <div className="source-table" role="table" aria-label="訂閱清單" data-testid="source-table">
         <div className="source-row head" role="row">
           <span role="columnheader">名稱</span><span role="columnheader" className="numeric">文件</span><span role="columnheader">最近新增</span><span role="columnheader">狀態</span><span role="columnheader"><span className="visually-hidden">動作</span></span>
         </div>
-        {visible.map((source) => <SourceRow key={`${source.type}:${source.id}`} source={source} icon={typeLabel(source.type)?.icon ?? 'file'}
+        {visible.map((source) => <SourceRow key={`${source.type}:${source.id}`} source={source} icon={typeLabel(source.type)?.icon ?? 'file'} now={now}
           onOpen={() => onOpenSource(source.type, source.id)} onChanged={onChanged} />)}
-        {single ? <div className="source-row single" role="row" data-testid="single-items-row">
-          <span role="cell" className="source-name"><SourceTypeBadge icon="file" /><span><span className="name">單篇收集</span><span className="kind">不屬於訂閱來源的文件</span></span></span>
-          <span role="cell" className="numeric">{single.documentCount}</span>
-          <span role="cell" className="muted">{single.lastCollectedAt ? shortTimeLabel(single.lastCollectedAt) : '—'}</span>
-          <span role="cell" /><span role="cell" />
-        </div> : null}
-        {visible.length === 0 && !single ? <p className="table-empty" data-testid="sources-no-match">沒有符合的來源。</p> : null}
+        {pending.map((entry) => <div key={entry.jobId} className="source-row pending" role="row" data-testid={`pending-row-${entry.jobId}`}>
+          <span role="cell" className="source-name"><SourceTypeBadge icon="youtube" />
+            <span><span className="name">{entry.title ?? displayUrl(entry.url)}</span><span className="kind">YouTube 頻道</span></span></span>
+          <span role="cell" className="numeric">—</span>
+          <span role="cell" className="muted">—</span>
+          <span role="cell"><span className={`status-chip ${subscriptionStatusTone(entry.checkStatus)}`}>{subscriptionStatusText(entry.checkStatus, now)}</span></span>
+          <span role="cell" />
+        </div>)}
+        {visible.length === 0 && pending.length === 0 ? <p className="table-empty" data-testid="sources-no-match">沒有符合的訂閱。</p> : null}
       </div>
     </> : null}
 
@@ -142,7 +143,14 @@ export function Sources({ state, onState, sourceTypes, active, schedule, revisio
   </>;
 }
 
-function SourceRow({ source, icon, onOpen, onChanged }: { source: SourceEntry; icon: string; onOpen: () => void; onChanged: SourcesProps['onChanged'] }) {
+/** A subscription request matches the filters by its address or resolved title. YouTube is the only type with subscription requests. */
+function matchesPending(entry: PendingSubscription, state: SourceListState): boolean {
+  const query = state.query.trim().toLocaleLowerCase();
+  return (!state.type || state.type === 'youtube')
+    && (!query || (entry.title ?? entry.url).toLocaleLowerCase().includes(query));
+}
+
+function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEntry; icon: string; now: Date; onOpen: () => void; onChanged: SourcesProps['onChanged'] }) {
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -188,7 +196,7 @@ function SourceRow({ source, icon, onOpen, onChanged }: { source: SourceEntry; i
     </span>
     <span role="cell" className="numeric">{source.documentCount}</span>
     <span role="cell" className="muted">{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</span>
-    <span role="cell"><span className={`status-chip ${source.status}`} title={source.lastError?.message}>{sourceStatusLabel(source)}</span></span>
+    <span role="cell"><span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="subscription-status">{subscriptionStatusText(source.checkStatus, now)}</span></span>
     <span role="cell" className="row-actions">
       {paused
         ? <button type="button" className="button small" disabled={busy} onClick={toggle}>恢復</button>

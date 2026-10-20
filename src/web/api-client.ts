@@ -149,8 +149,9 @@ export const api = {
     );
   },
 
-  async removeChannel(id: string): Promise<{ documentsKept: number }> {
-    return request<{ removed: true; documentsKept: number }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
+  /** Removes a subscription, keeping or deleting its documents. */
+  async removeChannel(id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
+    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`/api/youtube/channels/${encodeURIComponent(id)}?documents=${documents}`, {
       method: 'DELETE',
     });
   },
