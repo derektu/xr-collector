@@ -1,4 +1,4 @@
-import type { CollectionJob, JobItem, JobPhase, JobRetry, JobState, SkipReason } from '../core/types.js';
+import type { CollectionJob, JobItem, JobPhase, JobRetry, JobState, JobWait, SkipReason } from '../core/types.js';
 import { channelJobLabel } from './subscription-presentation.js';
 
 const STATE_LABELS: Record<JobState, string> = {
@@ -14,7 +14,8 @@ export function jobKindLabel(job: CollectionJob): string {
   return '訂閱頻道';
 }
 
-export function jobStateLabel(job: Pick<CollectionJob, 'state' | 'retry'>): string {
+export function jobStateLabel(job: Pick<CollectionJob, 'state' | 'retry' | 'wait'>): string {
+  if (job.state === 'queued' && job.wait) return '等待中';
   if (job.state === 'queued' && job.retry?.nextAttemptAt) return '等待重試';
   return STATE_LABELS[job.state];
 }
@@ -36,6 +37,12 @@ function clockTime(value: string): string {
 export function retryLabel(retry: JobRetry | null | undefined): string | null {
   if (!retry?.nextAttemptAt) return null;
   return `${retry.lastError.message}・${clockTime(retry.nextAttemptAt)} 自動重試（第 ${retry.attempts + 1}／${retry.maxAttempts} 次）`;
+}
+
+/** Why a queued job waits for YouTube: "YouTube 限制連線，約 14:05 繼續". */
+export function waitLabel(wait: JobWait | null | undefined): string | null {
+  if (!wait) return null;
+  return `YouTube 限制連線，約 ${clockTime(wait.until)} 繼續`;
 }
 
 /** Whether the job continued after the service restarted. */

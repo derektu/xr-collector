@@ -38,4 +38,11 @@ describe('chooseSubtitleTrack', () => {
       ]),
     ).toEqual(track('en-orig', 'automatic', true));
   });
+
+  it('prefers the -orig automatic track over another original automatic track of the language', () => {
+    expect(chooseSubtitleTrack([track('en', 'automatic', true), track('en-orig', 'automatic', true)]))
+      .toEqual(track('en-orig', 'automatic', true));
+    expect(chooseSubtitleTrack([track('ja', 'automatic', true), track('ja-orig', 'automatic', true)]))
+      .toEqual(track('ja-orig', 'automatic', true));
+  });
 });

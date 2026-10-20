@@ -30,7 +30,7 @@ describe('Agent Skill', () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
       collector: stub, jobs: stub, activity: stub, transfer: stub, channels: stub, schedule: stub, search: stub, vaultSetup: stub,
-      agentToken: 'skill-test',
+      pacing: stub, agentToken: 'skill-test',
     };
     const app = await createHttpApp(options);
     await app.ready();
@@ -53,6 +53,7 @@ describe('Agent Skill', () => {
       { method: 'GET', url: '/api/activity' },
       { method: 'GET', url: '/api/jobs/summary' },
       { method: 'POST', url: '/api/jobs/:id/retry' },
+      { method: 'GET', url: '/api/youtube/pacing' },
     ]));
     for (const route of routes) {
       expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);

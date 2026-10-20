@@ -172,18 +172,19 @@ describe('CollectorRuntime', () => {
       body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${id}` }),
     })).json()).job.id as string;
     const ids = [await submit('restart0001'), await submit('restart0002'), await submit('restart0003')];
-    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+    // One capture runs at a time; the other two wait in the queue.
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
 
     const closing = first.close();
-    for (const release of releases) release();
+    for (const release of releases.splice(0)) release();
     await closing;
-    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledTimes(1);
 
     const second = await CollectorRuntime.start(setup.value);
     cleanups.push(() => second.close());
-    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(3));
-    for (const release of releases) release();
     await vi.waitFor(async () => {
+      for (const release of releases.splice(0)) release();
+      expect(capture).toHaveBeenCalledTimes(3);
       const page = await (await fetch(`${second.server.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
       expect(Object.fromEntries(page.jobs.map((job) => [job.id, job.state]))).toEqual({
         [ids[0]!]: 'completed', [ids[1]!]: 'completed', [ids[2]!]: 'completed',

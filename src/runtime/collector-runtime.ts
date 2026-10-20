@@ -115,6 +115,7 @@ export class CollectorRuntime {
       channels: forwarding(() => current().channels),
       schedule: forwarding(() => current().schedule),
       search: forwarding<TranscriptSearch>(() => current().search),
+      ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),
     } : {};
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),

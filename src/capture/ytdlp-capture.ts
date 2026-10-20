@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chooseSubtitleTrack, type SubtitleTrack } from '../core/language.js';
@@ -11,8 +11,10 @@ import {
 } from '../core/types.js';
 import { publishedSince } from '../channels/collection-policy.js';
 import type { CaptureOptions, YouTubeCapture } from '../sources/youtube/adapter.js';
+import type { GatePriority } from './youtube-gate.js';
 
 interface YtDlpFormat {
+  ext?: string;
   name?: string;
   url?: string;
 }
@@ -44,19 +46,50 @@ interface Json3Transcript {
   events?: Json3Event[];
 }
 
-export interface YtDlpCaptureOptions {
-  binaryPath?: string;
-  javaScriptRuntimePath?: string;
-  timeoutMs?: number;
-}
-
-interface CommandResult {
+export interface CommandResult {
   stdout: string;
   stderr: string;
 }
 
+/** Runs yt-dlp with the given arguments; failures are already classified as CollectorError. */
+export type YtDlpRunner = (args: string[]) => Promise<CommandResult>;
+
+/** The YouTube request channel as yt-dlp callers use it. */
+export interface RequestGate {
+  run<T>(priority: GatePriority, request: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+}
+
+/** Without a gate, requests run directly; used by tests and tools that make a single request. */
+export const UNGATED: RequestGate = { run: (_priority, request) => request() };
+
+export interface YtDlpCaptureOptions {
+  binaryPath?: string;
+  javaScriptRuntimePath?: string;
+  timeoutMs?: number;
+  /** Every yt-dlp request waits its turn here. */
+  gate?: RequestGate;
+  run?: YtDlpRunner;
+}
+
 function firstTrackName(formats: YtDlpFormat[] | undefined): string | null {
   return formats?.find((format) => format.name)?.name ?? null;
+}
+
+/**
+ * The format yt-dlp downloads for `--sub-format json3`: its subtitle selection takes the last json3
+ * entry of the code, else the last entry.
+ */
+function downloadedFormat(formats: YtDlpFormat[]): YtDlpFormat | undefined {
+  return formats.findLast((format) => format.ext === 'json3') ?? formats.at(-1);
+}
+
+function isTranslation(format: YtDlpFormat | undefined): boolean {
+  if (!format?.url) return true;
+  try {
+    return new URL(format.url).searchParams.has('tlang');
+  } catch {
+    return true;
+  }
 }
 
 function tracksFromInfo(info: YtDlpInfo): SubtitleTrack[] {
@@ -71,9 +104,9 @@ function tracksFromInfo(info: YtDlpInfo): SubtitleTrack[] {
       code,
       name: firstTrackName(formats),
       kind: 'automatic' as const,
-      isOriginal:
-        code.endsWith('-orig') ||
-        formats.some((format) => format.url && !new URL(format.url).searchParams.has('tlang')),
+      // A code lists several sources; only the format yt-dlp would download decides whether the
+      // track is in the spoken language or translated into it.
+      isOriginal: code.endsWith('-orig') || !isTranslation(downloadedFormat(formats)),
     }),
   );
   return [...manual, ...automatic];
@@ -111,15 +144,23 @@ export class YtDlpCapture implements YouTubeCapture {
   private readonly binaryPath: string;
   private readonly javaScriptRuntimePath: string | null;
   private readonly timeoutMs: number;
+  private readonly gate: RequestGate;
+  private readonly runner: YtDlpRunner;
 
   constructor(options: YtDlpCaptureOptions = {}) {
     this.binaryPath = options.binaryPath ?? 'yt-dlp';
     this.javaScriptRuntimePath = options.javaScriptRuntimePath ?? null;
     this.timeoutMs = options.timeoutMs ?? 90_000;
+    this.gate = options.gate ?? UNGATED;
+    this.runner = options.run ?? ((args) => this.runCommand(args));
   }
 
+  /**
+   * Reads the video's information, then downloads one subtitle track from that information. These
+   * are two YouTube requests, each taking its own turn in the gate.
+   */
   async capture(video: YouTubeVideoRef, options: CaptureOptions = {}): Promise<CapturedTranscript> {
-    const info = await this.readInfo(video);
+    const { info, raw } = await this.readInfo(video, options.signal);
     if (options.publishedNotBefore && !publishedSince(publishedAtFromInfo(info), options.publishedNotBefore)) {
       throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
     }
@@ -130,8 +171,15 @@ export class YtDlpCapture implements YouTubeCapture {
 
     const workDir = await mkdtemp(path.join(tmpdir(), 'xr-collector-caption-'));
     try {
-      await this.run([
-        '--no-playlist',
+      // The subtitle request reuses the information just read instead of loading the video page again.
+      // Without `webpage_url`, a failed download ends the request; yt-dlp would otherwise load the
+      // page again on its own, outside the gate.
+      const infoFile = path.join(workDir, 'info.json');
+      const { webpage_url: _pageUrl, ...pageless } = JSON.parse(raw) as Record<string, unknown>;
+      await writeFile(infoFile, JSON.stringify(pageless), 'utf8');
+      await this.request([
+        '--load-info-json',
+        infoFile,
         '--skip-download',
         '--write-subs',
         '--write-auto-subs',
@@ -141,8 +189,7 @@ export class YtDlpCapture implements YouTubeCapture {
         'json3',
         '--output',
         path.join(workDir, 'caption.%(ext)s'),
-        video.canonicalUrl,
-      ]);
+      ], options.signal);
 
       const files = await readdir(workDir);
       const subtitleFile = files.find((file) => file.endsWith('.json3'));
@@ -173,15 +220,15 @@ export class YtDlpCapture implements YouTubeCapture {
     }
   }
 
-  private async readInfo(video: YouTubeVideoRef): Promise<YtDlpInfo> {
-    const { stdout } = await this.run([
+  private async readInfo(video: YouTubeVideoRef, signal: AbortSignal | undefined): Promise<{ info: YtDlpInfo; raw: string }> {
+    const { stdout } = await this.request([
       '--no-playlist',
       '--skip-download',
       '--dump-single-json',
       video.canonicalUrl,
-    ]);
+    ], signal);
     try {
-      return JSON.parse(stdout) as YtDlpInfo;
+      return { info: JSON.parse(stdout) as YtDlpInfo, raw: stdout };
     } catch (error) {
       throw new CollectorError('capture_failed', '無法解析影片資訊。', { cause: error });
     }
@@ -194,11 +241,15 @@ export class YtDlpCapture implements YouTubeCapture {
     return ['--js-runtimes', runtime, '--remote-components', 'ejs:github', '--no-progress'];
   }
 
-  private run(args: string[]): Promise<CommandResult> {
+  private request(args: string[], signal: AbortSignal | undefined): Promise<CommandResult> {
+    return this.gate.run('background', () => this.runner([...this.runtimeArgs(), ...args]), signal);
+  }
+
+  private runCommand(args: string[]): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
       execFile(
         this.binaryPath,
-        [...this.runtimeArgs(), ...args],
+        args,
         {
           timeout: this.timeoutMs,
           maxBuffer: 32 * 1024 * 1024,
@@ -230,14 +281,15 @@ export function classifyYtDlpError(
   const details = `${error.message}\n${stderr}`;
   // The end of stderr names the failure; the activity log masks and shortens it further.
   const diagnostic = stderr.trim() ? { detail: stderr.trim().slice(-4000) } : {};
-  // Rate limiting is temporary, so it shares the retryable network code.
-  if (/http error 429|too many requests/i.test(details)) {
-    return new CollectorError('network_error', 'YouTube 暫時限制連線，請稍後再試。', {
+  // YouTube limiting requests is checked first: its "sign in to confirm you're not a bot" wording
+  // must not read as an unavailable video.
+  if (/http error 429|too many requests|confirm you['’]re not a bot|rate-limited by youtube/i.test(details)) {
+    return new CollectorError('rate_limited', 'YouTube 暫時限制連線。', {
       cause: error, ...diagnostic,
     });
   }
   if (
-    /video (?:is )?unavailable|private video|members[- ]only|sign in to confirm|age[- ]restricted|not available/i.test(
+    /video (?:is )?unavailable|private video|members[- ]only|sign in to confirm your age|age[- ]restricted|not available/i.test(
       details,
     )
   ) {

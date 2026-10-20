@@ -21,7 +21,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 UI 與 Agent 共用 Collector、Vault、收集工作、頻道、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token，可操作所有現有業務 routes；跨程序服務依下述固定裝置入口發現 active runtime。
 
-收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：頻道解析與探索、影片擷取各有並行上限，擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與頻道物件，因此工作只寫入提交時的 Vault。YouTube 的網路操作集中在 `YouTubeSource` adapter，工作與保存流程只依賴這個介面。Scheduler 到期時提交頻道工作即返回，以工作結束的通知記錄上次結果。
+收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：頻道解析與探索、影片擷取各有並行上限（擷取一次一支），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與頻道物件，因此工作只寫入提交時的 Vault。YouTube 的網路操作集中在 `YouTubeSource` adapter，工作與保存流程只依賴這個介面。每個程序有一條 YouTube 請求通道（`YouTubeGate`），所有 yt-dlp 請求都經過它：同一時間只有一個請求，相鄰請求間隨機等待 4–12 秒，讓取用節奏接近一般使用者、不形成固定規律。YouTube 限制連線時通道冷卻（5 分鐘起、連續限制加倍、上限 60 分鐘），冷卻狀態存於 profile 的 `youtube-pacing.json`；冷卻期間工作留在佇列並標示等待，不消耗重試次數。字幕選擇只採原文軌道：自動字幕以 yt-dlp 實際下載的格式判斷是否為翻譯，同一語言優先 `-orig` 軌道。Scheduler 到期時提交頻道工作即返回，以工作結束的通知記錄上次結果。
 
 ## Runtime 與資料
 

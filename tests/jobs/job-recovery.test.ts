@@ -633,9 +633,9 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(w.script.captures).toEqual([videoId(5)]);
   });
 
-  it('classifies rate limiting as a transient network failure', () => {
+  it('classifies rate limiting as its own code, not a failed network attempt', () => {
     const error = classifyYtDlpError(new Error('Command failed'), 'ERROR: [youtube] abc: HTTP Error 429: Too Many Requests');
-    expect(error.code).toBe('network_error');
+    expect(error.code).toBe('rate_limited');
   });
 
   it('retries channel discovery and channel resolution', async () => {

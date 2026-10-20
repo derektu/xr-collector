@@ -16,6 +16,7 @@ export async function startAgentAccess(options: {
   channels?: StartServerOptions['channels'];
   schedule?: StartServerOptions['schedule'];
   search?: StartServerOptions['search'];
+  pacing?: StartServerOptions['pacing'];
   instanceId: string;
   connectionFile: string;
   skillPath: string;
@@ -34,6 +35,7 @@ export async function startAgentAccess(options: {
     ...(options.channels ? { channels: options.channels } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
+    ...(options.pacing ? { pacing: options.pacing } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
