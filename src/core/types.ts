@@ -342,6 +342,15 @@ export interface JobRetry {
   lastError: JobError;
 }
 
+/**
+ * Why a queued job waits without spending an attempt. `rate_limited`: YouTube limited requests and
+ * every YouTube step waits until `until`, when the job continues by itself.
+ */
+export interface JobWait {
+  reason: 'rate_limited';
+  until: string;
+}
+
 /** How a job continued across service restarts. */
 export interface JobRecovery {
   resumedCount: number;
@@ -398,6 +407,8 @@ export interface JobItem {
   error: JobError | null;
   /** Retry state of the video job that collects this item. */
   retry?: JobRetry;
+  /** Cooldown wait of the video job that collects this item. */
+  wait?: JobWait;
 }
 
 export interface JobProgress {
@@ -458,6 +469,8 @@ export interface CollectionJob {
   result: JobResult | null;
   error: JobError | null;
   retry?: JobRetry;
+  /** Set while the job is queued behind a YouTube cooldown. */
+  wait?: JobWait;
   recovery?: JobRecovery;
   checkpoint?: JobCheckpoint;
   /** A video a channel job queued that the user also submitted directly; stopping the subscription never skips it. */
@@ -509,6 +522,10 @@ export interface JobEvent {
   attempt?: number;
   /** When a retried job starts its next attempt. */
   nextAttemptAt?: string;
+  /** `youtube.rate_limited` and `job.deferred`: when YouTube requests continue. */
+  until?: string;
+  /** `youtube.rate_limited`: consecutive limits so far; the cooldown doubles with each one. */
+  level?: number;
   /** Why a resumed job stopped: a normal shutdown, an abnormal end, or `unknown` for a stop recorded without it. */
   stopReason?: JobStopKind | 'unknown';
   documentId?: string;
@@ -572,6 +589,19 @@ export interface JobSummary {
 }
 
 /** `paused` while automatic collection is off; `scheduled` while it is on. */
+/**
+ * The YouTube request channel of this device. `cooldown`: YouTube limited requests and none is sent
+ * before `cooldownUntil`; `busy`: a request runs; `waiting`: requests wait for their turn; `idle`:
+ * nothing is pending. `level` counts consecutive limits; `waitRangeMs` is the random gap between
+ * two requests.
+ */
+export interface YouTubePacingStatus {
+  state: 'idle' | 'busy' | 'waiting' | 'cooldown';
+  cooldownUntil: string | null;
+  level: number;
+  waitRangeMs: { min: number; max: number };
+}
+
 export type ChannelScheduleStatus = 'paused' | 'scheduled';
 
 /** One subscription's check time as the schedule summary reports it. */
@@ -639,6 +669,7 @@ export type CollectorErrorCode =
   | 'no_subtitles'
   | 'video_unavailable'
   | 'network_error'
+  | 'rate_limited'
   | 'capture_failed'
   | 'document_not_found'
   | 'document_deleted'
@@ -683,12 +714,15 @@ export class CollectorError extends Error {
   readonly code: CollectorErrorCode;
   /** Diagnostic output of an external tool, such as yt-dlp stderr; masked and shortened before it is recorded. */
   readonly detail: string | undefined;
+  /** For `rate_limited`: when YouTube requests continue. */
+  readonly retryAt: string | undefined;
 
-  constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions & { detail?: string }) {
+  constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions & { detail?: string; retryAt?: string }) {
     super(message, options);
     this.name = 'CollectorError';
     this.code = code;
     this.detail = options?.detail;
+    this.retryAt = options?.retryAt;
   }
 }
 

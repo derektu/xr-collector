@@ -9,7 +9,9 @@ import {
   jobStateLabel,
   recoveryLabel,
   retryLabel,
+  waitLabel,
 } from '../../src/web/job-presentation.js';
+import { jobStatusText } from '../../src/web/activity-presentation.js';
 
 const originalZone = process.env.TZ;
 beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
@@ -25,6 +27,16 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 }
 
 describe('job presentation', () => {
+  it('shows a job waiting for a YouTube cooldown with the time it continues', () => {
+    const wait = { reason: 'rate_limited' as const, until: '2026-10-15T06:05:00.000Z' };
+    const waiting = job({ state: 'queued', phase: 'capture', wait, retry: { attempts: 1, maxAttempts: 3, nextAttemptAt: null, lastError: { code: 'network_error', message: 'x' } } });
+    expect(jobStateLabel(waiting)).toBe('等待中');
+    expect(waitLabel(wait)).toBe('YouTube 限制連線，約 14:05 繼續');
+    expect(jobStatusText(waiting)).toBe('等待中・YouTube 限制連線，約 14:05 繼續');
+    expect(waitLabel(undefined)).toBeNull();
+    expect(jobStatusText(job({ state: 'running', phase: 'capture' }))).toBe('擷取字幕');
+  });
+
   it('states saving and indexing separately for a video', () => {
     expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toBe('文件已保存・已更新搜尋');
     expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: false } }))).toBe('文件已保存，搜尋更新失敗');

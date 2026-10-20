@@ -112,7 +112,7 @@ let tick = 0;
 /** Each reading is a millisecond later, so events keep the order they happened in. */
 const clock = () => new Date(T0.getTime() + tick++);
 
-function setup(store: JobStore = JobStore.memory(clock)) {
+function setup(store: JobStore = JobStore.memory(clock), limits: { capture?: number } = {}) {
   const vault = new MemoryVault();
   const channels = new MemoryChannels();
   const source = new ScriptedSource();
@@ -121,7 +121,7 @@ function setup(store: JobStore = JobStore.memory(clock)) {
   let collector: ChannelCollector | null = null;
   const manager = new JobManager({
     vaultPath: VAULT, store, source, documents: new Collector(vault, { index: async () => undefined }), channels,
-    now: clock, createId: () => `job-${++sequence}`,
+    now: clock, createId: () => `job-${++sequence}`, limits,
     setTimer: (callback) => { timers.push(callback); return () => undefined; },
     checkChannel: async (id) => (await collector!.startRun({ trigger: 'manual', channelIds: [id] }))[0]!,
   });
@@ -296,7 +296,8 @@ describe('masked job errors (A-T6)', () => {
 
 describe('job summary and event fields', () => {
   it('counts active jobs and jobs finished since a time, leaving out retried failures', async () => {
-    const { manager, source } = setup();
+    // A second capture slot lets the retry finish while another capture is held.
+    const { manager, source } = setup(undefined, { capture: 2 });
     source.captureFailures.set('eeeeeeeeeee', [noSubtitles()]);
     source.captureFailures.set('fffffffffff', [noSubtitles()]);
     await manager.whenSettled((await manager.submitVideo(watchUrl('ggggggggggg'))).job.id);

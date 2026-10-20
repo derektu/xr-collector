@@ -1,5 +1,5 @@
 import type { YouTubeChannel } from '../core/types.js';
-import type { DiscoveredYouTubeVideo, YouTubeSource } from '../sources/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../sources/youtube/adapter.js';
 import { publishedSince } from './collection-policy.js';
 
 /** Videos read per listing request. */
@@ -42,10 +42,11 @@ export async function discoverChannelVideos(
   channel: YouTubeChannel,
   range: DiscoveryRange,
   isKnown: (videoId: string) => Promise<boolean>,
+  request: RequestOptions = {},
 ): Promise<DiscoveryResult> {
   const candidates: DiscoveredYouTubeVideo[] = [];
   scan: for (let offset = 0; offset < LISTING_SCAN_LIMIT && candidates.length < range.maxItems; offset += LISTING_PAGE) {
-    const page = await source.discover(channel, { offset, limit: LISTING_PAGE });
+    const page = await source.discover(channel, { offset, limit: LISTING_PAGE }, request);
     for (const video of page) {
       if (video.upcoming) continue;
       // The listing is newest first, so the first video before the range ends the scan.

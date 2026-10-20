@@ -28,7 +28,8 @@ export const PREVIEW_TIMEOUT_MS = 60_000;
 export interface ChannelCollectorOptions {
   /** Whether automatic collection is on; previews report it. */
   autoCollection: () => Promise<boolean>;
-  resolveChannel: (url: string) => Promise<ResolvedYouTubeChannel>;
+  /** Resolves a channel for a preview; aborting `signal` drops a request that has not started. */
+  resolveChannel: (url: string, signal: AbortSignal) => Promise<ResolvedYouTubeChannel>;
   documents: () => Promise<DocumentMetadata[]>;
   now?: () => Date;
   previewTimeoutMs?: number;
@@ -111,7 +112,7 @@ export class ChannelCollector {
     const input = classifyYouTubeInput(url);
     if (input.kind !== 'channel') throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
     const channel = await withTimeout(
-      this.options.resolveChannel(input.url),
+      (signal) => this.options.resolveChannel(input.url, signal),
       this.options.previewTimeoutMs ?? PREVIEW_TIMEOUT_MS,
     );
     const existing = (await this.store.list()).find((candidate) => candidate.id === channel.id);
@@ -300,12 +301,18 @@ function notFound(): CollectorError {
   return new CollectorError('channel_not_found', '找不到這個 YouTube 頻道訂閱。');
 }
 
-function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+/** Runs `work` for at most `timeoutMs`; on timeout its signal aborts, so a request still waiting its turn is dropped. */
+function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
+  const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new CollectorError('network_error', '解析頻道逾時，請稍後再試。')), timeoutMs);
+    timer = setTimeout(() => {
+      const error = new CollectorError('network_error', '解析頻道逾時，請稍後再試。');
+      abort.abort(error);
+      reject(error);
+    }, timeoutMs);
   });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([work(abort.signal), timeout]).finally(() => clearTimeout(timer));
 }
 
 /** The fields that tie a subscription event to its channel, so the activity view can show and filter it by source. */

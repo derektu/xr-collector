@@ -2,11 +2,12 @@ import { execFile } from 'node:child_process';
 import type {
   DiscoveredYouTubeVideo,
   ListingPage,
+  RequestOptions,
   ResolvedYouTubeChannel,
   YouTubeChannelSource,
 } from '../sources/youtube/adapter.js';
 import { CollectorError, type YouTubeChannel } from '../core/types.js';
-import { classifyYtDlpError } from './ytdlp-capture.js';
+import { classifyYtDlpError, UNGATED, type RequestGate } from './ytdlp-capture.js';
 
 interface YtDlpChannelEntry {
   id?: string;
@@ -34,6 +35,8 @@ export interface YtDlpChannelSourceOptions {
   binaryPath?: string;
   javaScriptRuntimePath?: string;
   timeoutMs?: number;
+  /** Every yt-dlp request waits its turn here. */
+  gate?: RequestGate;
   run?: CommandRunner;
 }
 
@@ -42,17 +45,19 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
   private readonly javaScriptRuntimePath: string | null;
   private readonly timeoutMs: number;
   private readonly commandRunner: CommandRunner;
+  private readonly gate: RequestGate;
 
   constructor(options: YtDlpChannelSourceOptions = {}) {
     this.binaryPath = options.binaryPath ?? 'yt-dlp';
     this.javaScriptRuntimePath = options.javaScriptRuntimePath ?? null;
     this.timeoutMs = options.timeoutMs ?? 90_000;
     this.commandRunner = options.run ?? ((args) => this.runCommand(args));
+    this.gate = options.gate ?? UNGATED;
   }
 
-  async resolve(inputUrl: string): Promise<ResolvedYouTubeChannel> {
+  async resolve(inputUrl: string, options: RequestOptions = {}): Promise<ResolvedYouTubeChannel> {
     const url = normalizeChannelUrl(inputUrl);
-    const info = await this.readInfo(url, { offset: 0, limit: 1 }, true);
+    const info = await this.readInfo(url, { offset: 0, limit: 1 }, true, options);
     const id = channelIdFromInfo(info);
     const title = info.channel?.trim() || info.uploader?.trim() || info.title?.trim();
     if (!id || !title) {
@@ -65,8 +70,8 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
     };
   }
 
-  async listVideos(channel: YouTubeChannel, page: ListingPage): Promise<DiscoveredYouTubeVideo[]> {
-    const info = await this.readInfo(channel.url, page, false);
+  async listVideos(channel: YouTubeChannel, page: ListingPage, options: RequestOptions = {}): Promise<DiscoveredYouTubeVideo[]> {
+    const info = await this.readInfo(channel.url, page, false, options);
     const seen = new Set<string>();
     return (info.entries ?? []).flatMap((entry) => {
       const id = entry.id?.trim();
@@ -87,10 +92,11 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
     url: string,
     page: ListingPage,
     resolvingChannel: boolean,
+    options: RequestOptions,
   ): Promise<YtDlpChannelInfo> {
     let output: string;
     try {
-      output = await this.commandRunner([
+      output = await this.gate.run(options.priority ?? 'background', () => this.commandRunner([
         ...this.runtimeArgs(),
         '--flat-playlist',
         '--extractor-args',
@@ -101,9 +107,12 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
         String(page.offset + page.limit),
         '--dump-single-json',
         url,
-      ]);
+      ]), options.signal);
     } catch (error) {
-      if (resolvingChannel && error instanceof CollectorError && error.code !== 'network_error') {
+      // A request given up before it started is not an answer about the channel.
+      if (options.signal?.aborted && error === options.signal.reason) throw error;
+      // Temporary failures keep their own code; anything else means the address names no readable channel.
+      if (resolvingChannel && error instanceof CollectorError && error.code !== 'network_error' && error.code !== 'rate_limited') {
         throw new CollectorError('invalid_channel', '無法讀取這個 YouTube 頻道。', {
           cause: error,
         });

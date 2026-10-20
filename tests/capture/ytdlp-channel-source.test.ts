@@ -87,4 +87,26 @@ describe('YtDlpChannelSource', () => {
       title: '行動版頻道',
     });
   });
+
+  it('passes a preview through the gate with its priority and keeps a YouTube limit as rate_limited', async () => {
+    const passes: string[] = [];
+    const source = new YtDlpChannelSource({
+      gate: { run: (priority, request) => { passes.push(priority); return request(); } },
+      run: async () => { throw new CollectorError('rate_limited', 'YouTube 暫時限制連線。'); },
+    });
+    await expect(source.resolve('https://www.youtube.com/@example', { priority: 'interactive' }))
+      .rejects.toMatchObject({ code: 'rate_limited' });
+    expect(passes).toEqual(['interactive']);
+  });
+
+  it('rethrows a request given up before it started instead of reading it as an unknown channel', async () => {
+    const abort = new AbortController();
+    const reason = new CollectorError('vault_busy', '收集步驟已暫停。');
+    abort.abort(reason);
+    const source = new YtDlpChannelSource({
+      gate: { run: (_priority, _request, signal) => Promise.reject(signal!.reason) },
+      run: async () => '{}',
+    });
+    await expect(source.resolve('https://www.youtube.com/@example', { signal: abort.signal })).rejects.toBe(reason);
+  });
 });

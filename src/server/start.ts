@@ -1,4 +1,5 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
+import type { YouTubePacing } from '../capture/youtube-gate.js';
 import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ChannelCollection, ChannelScheduleManagement, CollectionJobs, VaultSetup } from './app.js';
 import type { Collector } from '../core/collector.js';
@@ -14,6 +15,7 @@ export interface StartServerOptions {
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
+  pacing?: YouTubePacing;
   port: number;
   host?: string;
   webRoot?: string;
@@ -38,6 +40,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.activity ? { activity: options.activity } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.channels ? { channels: options.channels } : {}),
+    ...(options.pacing ? { pacing: options.pacing } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),

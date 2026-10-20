@@ -27,6 +27,7 @@ import {
 } from '../core/types.js';
 import { parseYouTubeVideoUrl } from '../core/video-url.js';
 import type { YouTubeSource } from '../sources/youtube/adapter.js';
+import type { PacingEvent, YouTubePacing } from '../capture/youtube-gate.js';
 import { classifyYouTubeInput } from '../sources/youtube/url.js';
 import { limitText, redact } from '../activity/redact.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
@@ -34,15 +35,21 @@ import type { JobStore, NewJobEvent } from './job-store.js';
 export interface JobLimits {
   /** Channel resolution and discovery running at once. */
   discovery: number;
-  /** Single-video captures running at once. */
+  /**
+   * Single-video captures running at once. Every YouTube request also passes the device's one
+   * request channel, so a higher number only lets a capture wait there for its turn.
+   */
   capture: number;
   /** Jobs waiting in both queues together; further submissions are refused. */
   maxQueued: number;
 }
 
-export const DEFAULT_JOB_LIMITS: JobLimits = { discovery: 1, capture: 2, maxQueued: 500 };
+export const DEFAULT_JOB_LIMITS: JobLimits = { discovery: 1, capture: 1, maxQueued: 500 };
 
-/** Automatic retries after a transient failure (`network_error`). */
+/**
+ * Automatic retries after a transient failure (`network_error`). A YouTube limit (`rate_limited`)
+ * is not a failed attempt: the job waits for the cooldown and continues.
+ */
 export interface RetryPolicy {
   /** Attempts in total, the first one included. */
   maxAttempts: number;
@@ -57,6 +64,9 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = { maxAttempts: 3, delaysMs: [30
  * crashing the service would otherwise be resumed into the same crash on every start.
  */
 export const MAX_UNCLEAN_STOPS = 3;
+
+/** A limit reported without a cooldown end (no request channel) waits this long. */
+const FALLBACK_COOLDOWN_MS = 5 * 60_000;
 
 const RETRYABLE: ReadonlySet<string> = new Set(['network_error']);
 
@@ -82,6 +92,8 @@ export interface JobManagerOptions {
   legacySettings?: () => Promise<CollectionPolicy | null>;
   /** Checks one subscription now, as a manual check does; a failed channel job is retried through it. */
   checkChannel?: (channelId: string) => Promise<JobSubmission>;
+  /** The device's YouTube request channel; its cooldowns pause every YouTube step of this manager. */
+  pacing?: YouTubePacing;
 }
 
 export interface JobListQuery {
@@ -130,6 +142,15 @@ export class JobManager {
   private closed = false;
   /** Number of holds in force; while any is, no queued step starts. */
   private holds = 0;
+  /**
+   * Aborted by a hold or close: steps still waiting for their YouTube turn give it up and return
+   * to the queue (or are left for close() to record), so neither waits on the request channel.
+   */
+  private stepAbort = new AbortController();
+  /** End of the YouTube cooldown in force; no step starts before it. */
+  private cooldownUntil: string | null = null;
+  private cancelCooldownTimer: (() => void) | null = null;
+  private readonly unsubscribePacing: () => void;
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
@@ -140,6 +161,89 @@ export class JobManager {
     });
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? (() => randomUUID());
+    this.unsubscribePacing = options.pacing?.subscribe((event) => this.onPacing(event)) ?? (() => undefined);
+    const until = options.pacing?.status().cooldownUntil;
+    if (until) this.enterCooldown(until);
+  }
+
+  /** Records the device's YouTube cooldowns in this Vault's activity and follows them. */
+  private onPacing(event: PacingEvent): void {
+    if (this.closed) return;
+    if (event.type === 'rate_limited') {
+      this.recordEvent({
+        severity: 'warning', eventType: 'youtube.rate_limited',
+        message: `YouTube 暫時限制連線，${clockTime(event.until)} 前暫停所有 YouTube 請求。`,
+        until: event.until, level: event.level, ...(event.detail ? { detail: event.detail } : {}),
+      });
+      this.enterCooldown(event.until);
+      return;
+    }
+    this.recordEvent({ severity: 'info', eventType: 'youtube.cooldown_ended', message: 'YouTube 限制已解除，繼續收集。' });
+    this.endCooldown();
+  }
+
+  /** Starts or extends the cooldown; every queued job then waits for it, as the job that hit the limit does. */
+  private enterCooldown(until: string): void {
+    if (this.cooldownUntil && this.cooldownUntil >= until) return;
+    this.cooldownUntil = until;
+    this.cancelCooldownTimer?.();
+    this.cancelCooldownTimer = this.setTimer(() => {
+      this.cancelCooldownTimer = null;
+      this.endCooldown();
+    }, Math.max(0, new Date(until).getTime() - this.now().getTime()));
+    for (const job of this.jobs.values()) {
+      if (job.state === 'queued') this.markWaiting(job);
+    }
+  }
+
+  /** Gives a queued job the wait of the cooldown in force; outside a cooldown it does nothing. */
+  private markWaiting(job: CollectionJob): void {
+    const until = this.cooldownUntil && new Date(this.cooldownUntil).getTime() > this.now().getTime()
+      ? this.cooldownUntil : this.options.pacing?.status().cooldownUntil ?? null;
+    if (!until || job.wait?.until === until) return;
+    this.update(job, { wait: { reason: 'rate_limited', until } });
+    this.syncItemWait(job);
+  }
+
+  /** Ends the cooldown: waiting jobs drop their wait and queued steps start again. */
+  private endCooldown(): void {
+    this.cancelCooldownTimer?.();
+    this.cancelCooldownTimer = null;
+    this.cooldownUntil = null;
+    if (this.closed) return;
+    for (const job of this.jobs.values()) {
+      if (!job.wait) continue;
+      this.clearWait(job);
+    }
+    this.pump();
+  }
+
+  private coolingDown(): boolean {
+    if (this.options.pacing?.status().state === 'cooldown') return true;
+    return this.cooldownUntil !== null && new Date(this.cooldownUntil).getTime() > this.now().getTime();
+  }
+
+  private clearWait(job: CollectionJob): void {
+    if (!job.wait) return;
+    delete job.wait;
+    this.update(job, {});
+    this.syncItemWait(job);
+  }
+
+  /** Channel jobs show the cooldown wait of each of their videos. */
+  private syncItemWait(video: CollectionJob): void {
+    for (const channelId of this.watchers.get(video.id) ?? []) {
+      const channel = this.jobs.get(channelId);
+      if (!channel?.items) continue;
+      this.update(channel, {
+        items: channel.items.map((item) => {
+          if (item.jobId !== video.id) return item;
+          const next = { ...item };
+          delete next.wait;
+          return video.wait ? { ...next, wait: video.wait } : next;
+        }),
+      });
+    }
   }
 
   get vaultPath(): string { return this.options.vaultPath; }
@@ -349,12 +453,17 @@ export class JobManager {
    */
   async hold(timeoutMs = HOLD_TIMEOUT_MS, signal?: AbortSignal): Promise<() => void> {
     this.holds += 1;
+    // Steps waiting for their YouTube turn go back to the queue instead of holding this up.
+    this.stepAbort.abort(new CollectorError('vault_busy', '收集步驟已暫停。'));
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
       this.holds -= 1;
-      if (this.holds === 0) this.pump();
+      if (this.holds === 0) {
+        this.stepAbort = new AbortController();
+        this.pump();
+      }
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
@@ -541,6 +650,11 @@ export class JobManager {
     this.keys.set(job.id, key);
     this.activeByKey.set(key, job.id);
     if (job.claimedByUser) this.manualClaims.add(job.id);
+    if (job.wait) {
+      // A cooldown still in force keeps the job waiting; one that ended while stopped is over.
+      if (new Date(job.wait.until).getTime() > this.now().getTime()) this.enterCooldown(job.wait.until);
+      else delete job.wait;
+    }
     this.options.store.put(job);
     const stopReason = job.recovery?.lastStop ?? 'unknown';
     this.event(job, {
@@ -551,6 +665,7 @@ export class JobManager {
             : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。',
     });
     if (waitsForVideos || !options.queue) return job;
+    this.markWaiting(job);
     const waitMs = job.retry?.nextAttemptAt ? new Date(job.retry.nextAttemptAt).getTime() - this.now().getTime() : 0;
     if (waitMs > 0) this.waitForAttempt(job, waitMs);
     else this.requeue(job);
@@ -577,6 +692,10 @@ export class JobManager {
    */
   async close(reason = '服務停止時工作尚未完成；已保存的內容保留。', stop: JobStopKind = 'shutdown'): Promise<void> {
     this.closed = true;
+    this.stepAbort.abort(new CollectorError('vault_busy', '服務正在停止。'));
+    this.unsubscribePacing();
+    this.cancelCooldownTimer?.();
+    this.cancelCooldownTimer = null;
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
       this.options.store.interrupt(job, reason, { stop });
@@ -656,24 +775,70 @@ export class JobManager {
     this.keys.set(job.id, key);
     this.activeByKey.set(key, job.id);
     this.requeue(job);
+    this.markWaiting(job);
     this.options.store.put(job);
     this.event(job, { severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
     return { job: structuredClone(job), deduplicated: false };
   }
 
-  /** Puts a job back in line: videos in their lane, channel work in the discovery queue. */
-  private requeue(job: CollectionJob): void {
+  /**
+   * Puts a job back in line: videos in their lane, channel work in the discovery queue. `front`
+   * returns a step that was stopped before it reached YouTube to the head of the line.
+   */
+  private requeue(job: CollectionJob, front = false): void {
     if (job.kind !== 'youtube.video') {
-      this.discoveryQueue.push(job.id);
+      if (front) this.discoveryQueue.unshift(job.id);
+      else this.discoveryQueue.push(job.id);
       return;
     }
     const lane = job.parentId ?? job.id;
     const queue = this.captureLanes.get(lane);
-    if (queue) queue.push(job.id);
-    else {
+    if (queue) {
+      if (front) queue.unshift(job.id);
+      else queue.push(job.id);
+    } else {
       this.captureLanes.set(lane, [job.id]);
-      this.laneOrder.push(lane);
+      if (front) this.laneOrder.unshift(lane);
+      else this.laneOrder.push(lane);
     }
+  }
+
+  /** A step stopped by a hold before its YouTube request returns to the queue without spending an attempt. */
+  private returnToQueue(job: CollectionJob): void {
+    this.update(job, { state: 'queued' });
+    this.syncItemWait(job);
+    this.requeue(job, true);
+  }
+
+  /**
+   * YouTube limited requests: the job waits in the queue for the cooldown and continues by itself.
+   * Its attempts are unchanged.
+   */
+  private deferForCooldown(job: CollectionJob, retryAt: string | undefined): void {
+    const until = retryAt ?? this.cooldownUntil
+      ?? new Date(this.now().getTime() + FALLBACK_COOLDOWN_MS).toISOString();
+    this.enterCooldown(until);
+    this.update(job, { state: 'queued', wait: { reason: 'rate_limited', until } });
+    this.event(job, {
+      severity: 'info', eventType: 'job.deferred', message: `YouTube 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
+      until, ...(job.phase ? { phase: job.phase } : {}),
+    });
+    this.syncItemWait(job);
+    this.requeue(job, true);
+  }
+
+  /** How a step that threw ended when the throw was not its own failure; true when handled. */
+  private handledInterruption(job: CollectionJob, error: unknown, signal: AbortSignal): boolean {
+    if (signal.aborted && error === signal.reason) {
+      // A close records the job as interrupted; a hold puts it back in line.
+      if (!this.closed) this.returnToQueue(job);
+      return true;
+    }
+    if (error instanceof CollectorError && error.code === 'rate_limited') {
+      if (!this.closed) this.deferForCooldown(job, error.retryAt);
+      return true;
+    }
+    return false;
   }
 
   private queuedCount(): number {
@@ -683,7 +848,8 @@ export class JobManager {
   }
 
   private pump(): void {
-    if (this.closed || this.holds > 0) return;
+    // Every step reads from YouTube, so none starts during a cooldown.
+    if (this.closed || this.holds > 0 || this.coolingDown()) return;
     while (this.runningDiscovery < this.limits.discovery && this.discoveryQueue.length > 0) {
       const id = this.discoveryQueue.shift()!;
       this.runningDiscovery += 1;
@@ -730,6 +896,7 @@ export class JobManager {
     // A job that reached the save phase, or recorded the saved document, before it stopped created
     // whatever document findExisting now returns for this video; that document is its own result.
     const savedEarlier = job.checkpoint?.savedDocumentId !== undefined || job.phase === 'save';
+    const { signal } = this.stepAbort;
     this.start(job, 'capture');
     try {
       const video = parseYouTubeVideoUrl(job.source.url);
@@ -743,7 +910,7 @@ export class JobManager {
       }
       if (!document) {
         const captured = await source.capture(
-          video, job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {},
+          video, { ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}), signal },
         );
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title } });
         // The save phase is on disk before the document is, so a restart knows who saved it.
@@ -778,6 +945,7 @@ export class JobManager {
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: error.code === 'out_of_range' ? 'out_of_range' : 'deleted' }, null);
         return;
       }
+      if (this.handledInterruption(job, error, signal)) return;
       this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
@@ -785,12 +953,14 @@ export class JobManager {
   private async runDiscovery(id: string): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
+    const { signal } = this.stepAbort;
     try {
-      if (job.kind === 'youtube.channel-add') await this.addChannel(job);
-      else await this.discoverChannel(job);
+      if (job.kind === 'youtube.channel-add') await this.addChannel(job, signal);
+      else await this.discoverChannel(job, signal);
     } catch (error) {
       // A step cut short by shutdown is left for close() to record as interrupted.
       if (this.closed) return;
+      if (this.handledInterruption(job, error, signal)) return;
       this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
@@ -852,13 +1022,13 @@ export class JobManager {
     }
   }
 
-  private async addChannel(job: CollectionJob): Promise<void> {
+  private async addChannel(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'resolve');
     // A job interrupted while subscribing already knows its channel and may have added it.
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
       ? { id: subscribing.channelId, title: subscribing.title, url: subscribing.url }
-      : await this.options.source.resolveChannel(job.source.url);
+      : await this.options.source.resolveChannel(job.source.url, { signal });
     const existing = (await this.options.channels.list()).find((channel) => channel.id === resolved.id);
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
@@ -914,7 +1084,7 @@ export class JobManager {
    * subscription's settings at this moment and is measured back from now, so a job that waited in
    * the queue or across a restart checks the range a check started now would.
    */
-  private async discoverChannel(job: CollectionJob): Promise<void> {
+  private async discoverChannel(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'discover');
     const retryItems = job.checkpoint?.retryItems;
     const subscription = (await this.options.channels.list()).find((candidate) => candidate.id === job.source.id);
@@ -937,6 +1107,7 @@ export class JobManager {
         this.options.source, channel, { windowStart, maxItems: subscription.settings.backfillMaxItems },
         // Collected, deleted and out-of-range videos stay candidates that are not collected, so they still fill the item limit.
         async (videoId) => outside.has(videoId) || this.options.documents.isKnown(videoId),
+        { signal },
       );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
@@ -953,6 +1124,7 @@ export class JobManager {
         const submission = this.enqueueVideo(video.url, job.id, discovery.publishedNotBefore, {}, video.title || null);
         item.jobId = submission.job.id;
         item.state = submission.job.state;
+        if (submission.job.wait) item.wait = submission.job.wait;
         const watching = this.watchers.get(submission.job.id) ?? new Set<string>();
         watching.add(job.id);
         this.watchers.set(submission.job.id, watching);
@@ -1053,12 +1225,14 @@ export class JobManager {
 
   private start(job: CollectionJob, phase: JobPhase): void {
     const timestamp = this.now().toISOString();
+    if (job.wait) delete job.wait;
     this.update(job, {
       state: 'running', phase, startedAt: job.startedAt ?? timestamp,
       ...(job.retry ? { retry: { ...job.retry, nextAttemptAt: null } } : {}),
     });
     // Channel items stop showing the wait once the next attempt starts.
     this.notifyItemRetry(job);
+    this.syncItemWait(job);
     this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
 
@@ -1125,10 +1299,16 @@ export class JobManager {
   }
 }
 
+function clockTime(value: string): string {
+  const date = new Date(value);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
 /** A channel job's item once the video job that collects it has finished. */
 function settledItem(item: JobItem, video: CollectionJob): JobItem {
+  const { wait: _wait, ...rest } = item;
   return {
-    ...item,
+    ...rest,
     state: video.state,
     outcome: video.result?.outcome === 'created' || video.result?.outcome === 'existing' || video.result?.outcome === 'skipped'
       ? video.result.outcome : null,

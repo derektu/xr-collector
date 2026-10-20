@@ -3,6 +3,7 @@ import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
+import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
@@ -161,18 +162,25 @@ app.whenReady().then(async () => {
     const vaultPath = runtime?.workspace?.status().vaultPath;
     if (vaultPath) shell.showItemInFolder(vaultPath);
   });
+  // One request channel for every YouTube request this process makes.
+  const youtubeGate = await YouTubeGate.open({
+    statePath: path.join(app.getPath('userData'), 'youtube-pacing.json'),
+    ...youtubeGateOptionsFromEnv(process.env),
+  });
   const capture = new YtDlpCapture({
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
+    gate: youtubeGate,
   });
   const channelSource = new YtDlpChannelSource({
     binaryPath: runtimePath('yt-dlp'),
     javaScriptRuntimePath: runtimePath('deno'),
+    gate: youtubeGate,
   });
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
     workspace: {
-      capture, channelSource,
+      capture, channelSource, pacing: youtubeGate,
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
     },

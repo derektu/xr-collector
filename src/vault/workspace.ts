@@ -12,6 +12,7 @@ import { JsonChannelStore } from '../channels/json-channel-store.js';
 import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
 import { migrateSubscriptionSettings, readLegacySettings } from '../channels/subscription-files.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
+import type { YouTubePacing } from '../capture/youtube-gate.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
@@ -64,6 +65,8 @@ export interface WorkspaceOptions {
   /** Device record of collection jobs; defaults to an in-memory store. */
   jobStore?: JobStore;
   jobLimits?: Partial<JobLimits>;
+  /** The device's YouTube request channel shared by the capture and channel source above. */
+  pacing?: YouTubePacing;
   jobRetry?: Partial<RetryPolicy>;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
@@ -998,9 +1001,10 @@ export class VaultWorkspace {
       checkChannel: async (channelId) => (await bundle.channels.startRun({ trigger: 'manual', channelIds: [channelId] }))[0]!,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
+      ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
     });
     const channels = new ChannelCollector(channelStore, jobs, {
-      autoCollection, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(),
+      autoCollection, resolveChannel: (url, signal) => source.resolveChannel(url, { priority: 'interactive', signal }), documents: () => collector.list(),
     });
     for (const record of recovery.completed) {
       jobs.recordEvent({

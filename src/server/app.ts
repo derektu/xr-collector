@@ -1,4 +1,5 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
+import type { YouTubePacing } from '../capture/youtube-gate.js';
 import { PACKAGE_LIMIT } from '../vault/vault-package.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -82,7 +83,9 @@ export interface VaultSetup {
 }
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
-const NOT_READY_ROUTES = new Set(['/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity']);
+const NOT_READY_ROUTES = new Set([
+  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/youtube/pacing',
+]);
 
 export interface HttpAppOptions {
   collector?: Collector;
@@ -92,6 +95,8 @@ export interface HttpAppOptions {
   channels?: ChannelCollection;
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
+  /** The device's YouTube request channel; readable whatever state the Vault is in. */
+  pacing?: YouTubePacing;
   webRoot?: string;
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
@@ -143,6 +148,7 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   video_unavailable: 422,
   capture_failed: 502,
   network_error: 503,
+  rate_limited: 503,
 };
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
@@ -294,8 +300,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof CollectorError) {
+      if (error.retryAt) {
+        const seconds = Math.max(1, Math.ceil((new Date(error.retryAt).getTime() - Date.now()) / 1000));
+        void reply.header('Retry-After', String(seconds));
+      }
       void reply.status(ERROR_STATUS[error.code]).send({
-        error: { code: error.code, message: error.message },
+        error: { code: error.code, message: error.message, ...(error.retryAt ? { retryAt: error.retryAt } : {}) },
       });
       return;
     }
@@ -317,6 +327,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       ...(options.activity ? { activityLog: options.activity.health() } : {}),
     };
   });
+
+  if (options.pacing) {
+    const pacing = options.pacing;
+    app.get('/api/youtube/pacing', async () => pacing.status());
+  }
 
   if (options.agentInfo && options.agentToken === undefined) {
     app.get('/api/agent/connection', async () => options.agentInfo);

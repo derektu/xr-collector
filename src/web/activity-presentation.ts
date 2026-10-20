@@ -1,5 +1,5 @@
 import type { ActivityLogHealth, ActivityQuery, CollectionJob, JobEvent, JobSummary } from '../core/types.js';
-import { jobKindLabel, jobPhaseLabel, jobResultLabel, jobStateLabel, jobTitle, retryLabel } from './job-presentation.js';
+import { jobKindLabel, jobPhaseLabel, jobResultLabel, jobStateLabel, jobTitle, retryLabel, waitLabel } from './job-presentation.js';
 import { triggerLabel } from './subscription-presentation.js';
 
 export type ActivityLevel = 'all' | 'errors' | 'added';
@@ -117,6 +117,8 @@ export function jobBadge(job: CollectionJob): string {
 /** What a job row says on its right: progress while it runs, the reason when it failed, the result when it finished. */
 export function jobStatusText(job: CollectionJob): string {
   if (job.state === 'queued' || job.state === 'running') {
+    const wait = job.state === 'queued' ? waitLabel(job.wait) : null;
+    if (wait) return `${jobStateLabel(job)}・${wait}`;
     const retry = retryLabel(job.retry);
     if (retry) return retry;
     const phase = jobPhaseLabel(job) ?? jobStateLabel(job);

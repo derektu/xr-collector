@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
+import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 
 const projectRoot = process.cwd();
@@ -16,15 +17,21 @@ const executable = (name: string) => process.platform === 'win32' ? `${name}.exe
 const binary = (environmentName: string, name: string) => process.env[environmentName]
   ?? path.join(runtimeRoot, executable(name));
 
+const youtubeGate = await YouTubeGate.open({
+  statePath: path.join(profilePath, 'youtube-pacing.json'),
+  ...youtubeGateOptionsFromEnv(process.env),
+});
 const captureOptions = {
   binaryPath: binary('XR_COLLECTOR_YTDLP', 'yt-dlp'),
   javaScriptRuntimePath: binary('XR_COLLECTOR_DENO', 'deno'),
+  gate: youtubeGate,
 };
 const runtime = await CollectorRuntime.start({
   profilePath,
   workspace: {
     capture: new YtDlpCapture(captureOptions),
     channelSource: new YtDlpChannelSource(captureOptions),
+    pacing: youtubeGate,
     searchBinary: binary('XR_COLLECTOR_MEILISEARCH', 'meilisearch'),
     searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
     searchPort,
