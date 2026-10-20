@@ -130,7 +130,8 @@ export interface YouTubeChannel {
   addedAt: string;
   /**
    * When the person last set the title, URL, paused state or settings, starting with the
-   * subscription itself; an import shows it beside a conflict. Absent when unknown.
+   * subscription itself. An import compares it with the other machine's time of the same
+   * subscription; when absent, `addedAt` stands for it.
    */
   updatedAt?: string | null;
   /** Check interval and the range every check of this subscription collects. */
@@ -745,22 +746,12 @@ export interface TransferStatus {
   completedFiles: number;
   totalFiles: number;
   vaultPath: string;
-  /** The newest sync point of the active Vault: its last export or import; null when it has none. */
-  lastSync: SyncPointSummary | null;
   /** What the last finished operation produced; null while one runs or after a failure. */
   result: TransferResult | null;
   /** The error code of a failed operation, such as `vault_busy`; null unless `state` is `error`. */
   errorCode: CollectorErrorCode | null;
   /** Why the active Vault cannot be moved or another Vault opened; null when both are possible. */
   relocationUnavailable: { code: CollectorErrorCode; message: string } | null;
-}
-
-/** When and where a sync point was taken, and whether an export or an import took it. */
-export interface SyncPointSummary {
-  at: string;
-  kind: 'export' | 'import';
-  /** The machine whose content the sync point holds: this machine for an export, the exporting machine for an import. */
-  machine: string | null;
 }
 
 export interface TransferResult {
@@ -771,9 +762,9 @@ export interface TransferResult {
   unregisteredFiles?: number;
   /** Import: how it was applied, the changes it made, and the export of the Vault as it was before. */
   importMode?: ImportMode;
-  imported?: ImportCounts;
+  imported?: ChangeCounts;
   writtenFiles?: number;
-  preImportExportPath?: string;
+  backupPath?: string;
   /** Import: the files are in place but the search index could not be updated; the person rebuilds it. */
   searchRebuildNeeded?: boolean;
   /**
@@ -801,46 +792,34 @@ export interface ExportSuggestion {
   path: string;
 }
 
-/**
- * How an import file relates to the active Vault, from comparing the local content, the newest
- * sync point both share, and the file:
- * - `incoming`: only the file changed since the shared sync point; its changes apply as they are.
- * - `both`: both sides changed; a merge asks only about items both changed differently.
- * - `unrelated`: no shared sync point; a merge only adds, and differing items need a choice.
- * - `nothing`: the Vault already holds everything the file brings.
- */
-export type ImportSituation = 'incoming' | 'both' | 'unrelated' | 'nothing';
 export type ImportMode = 'merge' | 'replace';
-export type ImportChoice = 'local' | 'incoming';
 
-export interface ImportCounts { added: number; modified: number; removed: number }
+/** Items an import adds, updates and removes, for one kind of item. */
+export interface ItemCounts { added: number; updated: number; removed: number }
 
-/** One side of a conflict: whether the item exists there, and when it last changed when that is known. */
-export interface ImportSide {
-  state: 'present' | 'deleted' | 'absent';
-  time: string | null;
-  machine: string | null;
-}
+/** What an import changes, by kind of item. */
+export interface ChangeCounts { documents: ItemCounts; subscriptions: ItemCounts }
 
-/** An item both sides changed differently since the shared sync point, or that differs without one. */
-export interface ImportConflict {
-  /** `document:<document ID>` or `channel:<channel ID>`. */
-  key: string;
-  kind: 'document' | 'channel';
-  label: string;
-  local: ImportSide;
-  incoming: ImportSide;
-}
-
+/**
+ * What importing an export file into the active Vault would change. Every document and
+ * subscription carries the time of its last change, and a deletion or removal is a change of its
+ * own; for each item the newer state wins, and a tie keeps the local one.
+ */
 export interface ImportPreview {
   id: string;
-  situation: ImportSituation;
+  /** The machine name is for diagnosis; the app does not show it. */
   package: { fileName: string; exportedAt: string | null; machine: string | null };
-  /** The changes a merge takes from the file without asking. */
-  incoming: ImportCounts;
-  conflicts: ImportConflict[];
-  /** Local items that replacing the Vault with the file's content would change or remove. */
-  replaceLoses: number;
+  /** What a merge changes: the items whose state in the file is newer. */
+  merge: ChangeCounts;
+  /** What replacing the Vault with the file's content changes; `removed` includes the items only the Vault has. */
+  replace: ChangeCounts;
+  /** Items that differ from the file where the Vault holds the newer state, including items only the Vault has. */
+  localNewer: number;
+  /**
+   * A merge still writes deletion records of documents the Vault never had, which `merge` does not
+   * count. Writing them keeps those videos from being collected again and coming back on later imports.
+   */
+  mergeRecords: boolean;
 }
 
 /**

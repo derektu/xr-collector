@@ -223,21 +223,6 @@ dialog::backdrop { background:var(--overlay); }
 .confirm-dialog p.transfer-done { color:var(--ok); font-weight:600; }
 .merge-source { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; color:var(--primary)!important; }
 .confirm-dialog p.merge-counts { color:var(--primary); font-size:15px; font-weight:600; }
-.merge-bulk { display:flex; gap:8px; margin-top:12px; }
-.merge-groups { min-height:0; overflow:auto; margin-top:12px; padding-right:4px; }
-.merge-groups > ul { margin:0; padding:0; list-style:none; }
-.merge-row { padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--card); }
-.merge-row + .merge-row { margin-top:8px; }
-.merge-row.conflict { border-color:color-mix(in srgb, var(--warning) 45%, var(--border)); }
-.merge-row-main { display:flex; align-items:center; gap:8px; min-width:0; }
-.merge-name { min-width:0; overflow-wrap:anywhere; font-size:14px; font-weight:600; }
-.confirm-dialog .merge-row p { margin-top:6px; font-size:13px; }
-.merge-state { flex:none; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
-.merge-state.new { color:var(--tracking-fg); background:var(--tracking-bg); }
-.merge-state.conflict { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
-.merge-choice { margin-top:10px; }
-.merge-sides { margin:6px 0 0; padding:0; list-style:none; color:var(--secondary); font-size:12px; line-height:1.7; }
-.merge-missing { margin-right:auto; align-self:center; }
 .import-options { display:flex; flex-direction:column; gap:8px; margin-top:14px; }
 .import-option { display:flex; gap:10px; align-items:flex-start; padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--card); cursor:pointer; }
 .import-option.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }

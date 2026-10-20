@@ -129,7 +129,7 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> = {}, t
     root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'),
+    searchBinary: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     jobStore, jobLimits: { capture: 1 },
     ...overrides,
@@ -272,8 +272,6 @@ describe('moving a Vault', () => {
     await mkdir(path.dirname(target));
     const workspace = await open(context);
     await workspace.exportTo();
-    const lastSync = workspace.status().lastSync;
-    expect(lastSync).toMatchObject({ kind: 'export' });
     const id = await readVaultId(source);
     const before = await tree(source);
     expect(workspace.status().relocationUnavailable).toBeNull();
@@ -281,7 +279,7 @@ describe('moving a Vault', () => {
     expect(accepted).toMatchObject({ operation: 'move' });
     await settled(workspace);
     expect(workspace.status()).toMatchObject({
-      state: 'completed', operation: 'move', vaultPath: target, lastSync,
+      state: 'completed', operation: 'move', vaultPath: target,
       result: { previousVaultPath: source, resumedJobs: 0 }, message: expect.stringContaining('原位置已清除'),
     });
     expect(await tree(target)).toEqual(before);

@@ -20,7 +20,6 @@ import {
   type CollectionJob,
   type JobPage,
   type JobSubmission,
-  type ImportChoice,
   type ChannelSchedule,
   type DocumentFilter,
   type DocumentSourceType,
@@ -257,10 +256,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return transfer.exportTo(request.body?.path, request.body?.overwrite === true);
     });
     app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/import/preview', async (request) => transfer.previewImport(request.body?.path));
-    app.post<{ Body: { id?: unknown; mode?: unknown; choices?: Record<string, ImportChoice> } | undefined }>(
-      '/api/vault/import/apply', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
-        return reply.code(202).send(transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode, request.body?.choices));
-      });
+    app.post<{ Body: { id?: unknown; mode?: unknown } | undefined }>('/api/vault/import/apply', async (request, reply) => {
+      return reply.code(202).send(transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode));
+    });
     app.post<{ Body: { id?: unknown } | undefined }>('/api/vault/import/cancel', async (request) => {
       transfer.cancelImport(String(request.body?.id ?? ''));
       return { cancelled: true };

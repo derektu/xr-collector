@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  conflictKind, countsText, lastSyncLabel, moveTargetIn, progressText, relocates, revealLabel, sideText, situationText, sizeLabel, sourceText,
-  transferRunning, unregisteredText,
+  changeText, hasChanges, localNewerText, moveTargetIn, progressText, relocates, removalText, revealLabel, sizeLabel, sourceText,
+  transferRunning,
 } from '../../src/web/transfer-presentation.js';
 
+const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', number>>, subscriptions: Partial<Record<'added' | 'updated' | 'removed', number>> = {}) => ({
+  documents: { added: 0, updated: 0, removed: 0, ...documents }, subscriptions: { added: 0, updated: 0, removed: 0, ...subscriptions },
+});
+
 describe('export and import presentation', () => {
-  it('names the newest sync point without the machine, sizes and what an export left out', () => {
-    expect(lastSyncLabel(null)).toBe('尚未匯出或匯入');
-    const at = new Date(2026, 9, 1, 14, 3).toISOString();
-    expect(lastSyncLabel({ at, kind: 'export', machine: '家裡 Mac' })).toBe('上次匯出 10-01 14:03');
-    expect(lastSyncLabel({ at, kind: 'import', machine: '公司 Mac' })).toBe('上次匯入 10-01 14:03');
+  it('names sizes', () => {
     expect(sizeLabel(512)).toBe('512 B');
     expect(sizeLabel(2048)).toBe('2.0 KB');
-    expect(unregisteredText(2)).toBe('2 個非知識庫檔案未包含。');
   });
 
   it('reports progress while a transfer runs', () => {
@@ -22,23 +21,17 @@ describe('export and import presentation', () => {
     expect(progressText({ state: 'waiting', message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0 })).toBe('正在等待目前的收集步驟完成…');
   });
 
-  it('describes what an import found and when the file was exported, in as few words as a decision needs', () => {
-    expect(countsText({ added: 3, modified: 1, removed: 2 })).toBe('新增 3、修改 1、刪除 2');
+  it('counts what an import changes by kind, in as few words as a decision needs', () => {
+    expect(changeText(counts({ added: 5, updated: 2, removed: 1 }, { added: 1 }))).toBe('新增 5 份文件、1 個訂閱；更新 2 份文件；刪除 1 份文件');
+    expect(changeText(counts({}, { removed: 2 }))).toBe('刪除 2 個訂閱');
+    expect(changeText(counts({}))).toBe('沒有變更');
+    expect(hasChanges(counts({}))).toBe(false);
+    expect(hasChanges(counts({}, { updated: 1 }))).toBe(true);
+    expect(removalText(counts({ removed: 1 }, { removed: 1 }))).toBe('會移除 1 份文件、1 個訂閱');
+    expect(removalText(counts({ added: 3 }))).toBeNull();
+    expect(localNewerText(6)).toBe('本機有 6 項較新的修改或刪除');
     expect(sourceText({ exportedAt: new Date(2026, 9, 19, 9, 5).toISOString() })).toBe('2026-10-19 09:05 匯出');
     expect(sourceText({ exportedAt: null })).toBeNull();
-    expect(situationText('incoming')).toBeNull();
-    expect(situationText('both')).toBeNull();
-    expect(situationText('unrelated')).toBe('這個檔案來自另一個知識庫，合併只新增、不刪除。');
-    expect(situationText('nothing')).toBe('沒有需要匯入的內容。');
-  });
-
-  it('shows each side of a conflict with its time and no machine, or says the time is unknown', () => {
-    const time = new Date(2026, 9, 19, 14, 3, 7).toISOString();
-    expect(sideText('本機', { state: 'present', time, machine: '家裡 Mac' })).toBe('本機・2026-10-19 14:03:07');
-    expect(sideText('匯入檔', { state: 'deleted', time: null, machine: null })).toBe('匯入檔・已刪除・時間不明');
-    expect(sideText('本機', { state: 'absent', time: null, machine: '家裡 Mac' })).toBe('本機・沒有這一項');
-    expect(conflictKind({ kind: 'channel' })).toBe('訂閱');
-    expect(conflictKind({ kind: 'document' })).toBe('文件');
   });
 
   it('names move targets, the file manager and the operations that switch Vaults', () => {

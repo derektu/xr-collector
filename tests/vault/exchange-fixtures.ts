@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect } from 'vitest';
 import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
 import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
-import type { CapturedTranscript, ImportChoice, ImportMode, SavedDocument, TranscriptSearch, YouTubeChannel } from '../../src/core/types.js';
+import type { CapturedTranscript, ImportMode, SavedDocument, TranscriptSearch, YouTubeChannel } from '../../src/core/types.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
@@ -72,13 +72,13 @@ export function fakeSearch(root: string): TranscriptSearch {
 }
 
 /** One machine: its Vault folder, its profile and its export folder. */
-export interface Machine { name: string; root: string; vault: string; profile: string; exports: string }
+export interface Machine { name: string; root: string; vault: string; profile: string; exports: string; backups: string }
 
 export async function machine(name: string, root?: string): Promise<Machine> {
   const base = root ?? await temp();
   const folder = path.join(base, name);
   await mkdir(folder, { recursive: true });
-  return { name, root: base, vault: path.join(folder, 'Vault'), profile: path.join(folder, 'profile'), exports: path.join(folder, 'exports') };
+  return { name, root: base, vault: path.join(folder, 'Vault'), profile: path.join(folder, 'profile'), exports: path.join(folder, 'exports'), backups: path.join(folder, 'backups') };
 }
 
 /** Opens the Vault the machine's selection names (its own Vault when none), as the runtime does at startup. */
@@ -88,7 +88,7 @@ export async function open(at: Machine, overrides: Partial<WorkspaceOptions> = {
   if (!selected) await ensureMarker(at.vault);
   const workspace = await VaultWorkspace.open({
     root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
-    exportFolder: at.exports, capture: { capture: async (target) => video(target.videoId) },
+    exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: path.join(at.profile, 'search'),
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
@@ -111,9 +111,9 @@ export async function fileOf(folder: string, name: string, bytes: Buffer): Promi
 }
 
 /** Previews and applies an import, returning the preview and the final status. */
-export async function importFile(workspace: VaultWorkspace, file: string, mode: ImportMode = 'merge', choices: Record<string, ImportChoice> = {}) {
+export async function importFile(workspace: VaultWorkspace, file: string, mode: ImportMode = 'merge') {
   const preview = await workspace.previewImport(file);
-  workspace.applyImport(preview.id, mode, choices);
+  workspace.applyImport(preview.id, mode);
   await settled(workspace);
   return { preview, status: workspace.status() };
 }

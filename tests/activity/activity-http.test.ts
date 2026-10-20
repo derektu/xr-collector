@@ -135,7 +135,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       workspace: {
         capture: { capture: async () => { throw new Error('unused'); } } as never,
         channelSource: { resolve: async () => { throw new Error('unused'); }, listVideos: async () => [] },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'),
+        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       },
       connectionFile: path.join(root, 'agent-connection.json'),

@@ -28,7 +28,6 @@ import type {
   VaultInspection,
   VaultSetupAction,
   ExportSuggestion,
-  ImportChoice,
   ImportMode,
   ImportPreview,
   VaultSetupResult,
@@ -311,8 +310,8 @@ export const api = {
   },
 
   /** Applies a compared import; follow `vaultTransferStatus`. */
-  applyImport(id: string, mode: ImportMode, choices: Record<string, ImportChoice>): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/import/apply', { method: 'POST', body: JSON.stringify({ id, mode, choices }) });
+  applyImport(id: string, mode: ImportMode): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/import/apply', { method: 'POST', body: JSON.stringify({ id, mode }) });
   },
 
   async cancelImport(id: string): Promise<void> {

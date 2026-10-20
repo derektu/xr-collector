@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
+import { CHANNELS_FILE, removalsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 
@@ -33,7 +33,7 @@ const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'deskto
  * any of them failing makes the directory no Vault this program opens.
  */
 const SETTINGS_FILES: readonly { file: string; check: (value: unknown) => unknown }[] = [
-  { file: CHANNELS_FILE, check: channelsFromJson },
+  { file: CHANNELS_FILE, check: removalsFromJson },
   { file: SCHEDULE_FILE, check: scheduleEnabledFromJson },
   { file: DELETIONS_FILE, check: deletionsFromJson },
 ];
