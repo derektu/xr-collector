@@ -1,19 +1,19 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { lstat, mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { CHANNELS_FILE, channelsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
+import { CHANNELS_FILE, channelsFromJson, removalsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
 import { MarkdownVault, parseDocument } from './markdown-vault.js';
 import { VAULT_MARKER } from './vault-directory.js';
-import { SYNC_FILE } from './sync-points.js';
-import type { FileSource } from './vault-sync.js';
+import type { FileSource } from './vault-merge.js';
 
 /**
  * The export file (`.zip`): a zip of the files a Vault registers, each at its path relative to the
@@ -22,14 +22,13 @@ import type { FileSource } from './vault-sync.js';
  * ```json
  * { "format": "xr-collector-package", "formatVersion": 1,
  *   "exportedAt": "<ISO time>", "createdBy": "<program>",
- *   "sync": { "id": "<UUID>" | null, "ancestors": ["<UUID>"], "vaultId": "<UUID>", "machine": "<name>" },
+ *   "source": { "vaultId": "<UUID>", "machine": "<name>" },
  *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
  *   "files": [{ "path": "documents/youtube/<ID>.md", "size": 0, "sha256": "<hex>" }] }
  * ```
  *
- * `sync` names the sync point the export took (null for the export taken automatically before an
- * import, which takes none), the earlier sync points of the exporting Vault, newest first, and the
- * Vault and machine it came from; an import looks for the first of these its own Vault also has.
+ * `source` names the Vault and the machine the export came from, for diagnosis; an import compares
+ * the files themselves, whose documents, subscriptions and records carry their own times.
  *
  * The registered files are the documents `MarkdownVault.list` returns and the three settings
  * files. Nothing else in the Vault folder is read or packed, so files a person keeps there never
@@ -53,13 +52,13 @@ export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
 export interface ManifestFile { path: string; size: number; sha256: string }
-export interface PackageSync { id: string | null; ancestors: string[]; vaultId: string; machine: string }
+export interface PackageSource { vaultId: string; machine: string }
 export interface PackageManifest {
   format: typeof PACKAGE_FORMAT;
   formatVersion: typeof PACKAGE_FORMAT_VERSION;
   exportedAt?: string;
   createdBy?: string;
-  sync?: PackageSync;
+  source?: PackageSource;
   summary?: PackageSummary;
   files: ManifestFile[];
 }
@@ -69,6 +68,15 @@ function invalid(message: string): never {
 }
 
 const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
+
+/**
+ * The name of this machine as export files and the activity log record it: `XR_COLLECTOR_MACHINE_NAME`
+ * when set, otherwise the host name without the `.local` suffix macOS adds.
+ */
+export function machineName(): string {
+  const configured = process.env.XR_COLLECTOR_MACHINE_NAME?.trim();
+  return configured || hostname().replace(/\.local$/iu, '') || '這台電腦';
+}
 
 /** Whether a path names a file a package may hold: a document file or one of the settings files. */
 export function packagePath(value: string): boolean {
@@ -151,7 +159,7 @@ async function countOthers(root: string, relative: string, owned: ReadonlySet<st
     const child = relative ? `${relative}/${entry.name}` : entry.name;
     if (!relative && entry.isDirectory() && entry.name.startsWith(IMPORT_STAGING_PREFIX)) continue;
     if (entry.isDirectory()) count += await countOthers(root, child, owned);
-    else if (!owned.has(child) && child !== VAULT_MARKER && child !== SYNC_FILE) count += 1;
+    else if (!owned.has(child) && child !== VAULT_MARKER) count += 1;
   }
   return count;
 }
@@ -177,7 +185,7 @@ export interface WrittenPackage { unregisteredFiles: number; summary: PackageSum
  * `info` describes the package for people choosing it and for an import comparing it.
  */
 export async function writePackage(
-  root: string, file: string, info: { createdBy?: string; exportedAt?: Date; sync?: PackageSync } = {},
+  root: string, file: string, info: { createdBy?: string; exportedAt?: Date; source?: PackageSource } = {},
 ): Promise<WrittenPackage> {
   const registered = await registeredFiles(root);
   // Opening first refuses an existing file before any entry is read, so only a file this call created is removed on failure.
@@ -203,7 +211,7 @@ export async function writePackage(
     const manifest: PackageManifest = {
       format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
-      ...(info.sync ? { sync: info.sync } : {}),
+      ...(info.source ? { source: info.source } : {}),
       summary: registered.summary, files: rows,
     };
     done(null, Readable.from([Buffer.from(JSON.stringify(manifest))]));
@@ -357,15 +365,13 @@ function parseManifest(bytes: Buffer): PackageManifest {
     seen.add(key);
   }
   const summary = value.summary;
-  const sync = value.sync as Partial<PackageSync> | undefined;
-  const syncValid = !!sync && typeof sync === 'object' && (sync.id === null || typeof sync.id === 'string')
-    && Array.isArray(sync.ancestors) && sync.ancestors.every((id) => typeof id === 'string')
-    && typeof sync.vaultId === 'string' && typeof sync.machine === 'string';
+  const source = value.source as Partial<PackageSource> | undefined;
+  const sourceValid = !!source && typeof source === 'object' && typeof source.vaultId === 'string' && typeof source.machine === 'string';
   return {
     format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
     ...(typeof value.exportedAt === 'string' ? { exportedAt: value.exportedAt } : {}),
     ...(typeof value.createdBy === 'string' ? { createdBy: value.createdBy } : {}),
-    ...(syncValid ? { sync: { id: sync.id!, ancestors: [...sync.ancestors!], vaultId: sync.vaultId!, machine: sync.machine! } } : {}),
+    ...(sourceValid ? { source: { vaultId: source.vaultId!, machine: source.machine! } } : {}),
     ...(summary && typeof summary === 'object' && [summary.documents, summary.subscriptions, summary.deletions].every(Number.isSafeInteger)
       ? { summary: { documents: summary.documents, subscriptions: summary.subscriptions, deletions: summary.deletions } } : {}),
     files: (value.files as ManifestFile[]).map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })),
@@ -379,8 +385,9 @@ export function unpackedBytes(reader: PackageReader): number {
 
 /**
  * Checks what a package holds before an import uses it: every document is a document of
- * its path, the settings files read as current settings, and no document sits next to the deletion
- * record that would hide it (an export never writes both).
+ * its path, the settings files read as current settings, no document sits next to the deletion
+ * record that would hide it, and no subscription next to its removal record (an export never
+ * writes either pair).
  */
 export async function checkPackageContent(reader: PackageReader): Promise<void> {
   const json = async (file: string) => (reader.has(file) ? JSON.parse((await reader.read(file)).toString('utf8')) as unknown : undefined);
@@ -391,8 +398,11 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
   }
   if (records.some((record) => reader.has(documentPath(record)))) invalid('匯出檔中同一份文件同時有內容與刪除紀錄。');
   let channels;
+  let removals;
   try {
-    channels = channelsFromJson(await json(CHANNELS_FILE));
+    const channelsFile = await json(CHANNELS_FILE);
+    channels = channelsFromJson(channelsFile);
+    removals = removalsFromJson(channelsFile);
     scheduleEnabledFromJson(await json(SCHEDULE_FILE));
   } catch (error) {
     if (error instanceof CollectorError) throw error;
@@ -402,6 +412,11 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
   for (const channel of channels) {
     if (ids.has(channel.id)) invalid(`匯出檔中的訂閱 ID 重複：${channel.id}`);
     ids.add(channel.id);
+  }
+  const removed = new Set<string>();
+  for (const record of removals) {
+    if (ids.has(record.id) || removed.has(record.id)) invalid(`匯出檔中的訂閱與移除紀錄重複：${record.id}`);
+    removed.add(record.id);
   }
   for (const file of reader.paths()) {
     const key = documentKeyFromPath(file);

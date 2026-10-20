@@ -17,6 +17,7 @@
 | `collector.publisher_id` | 有取得頻道 ID 時保存 |
 | `collector.published_at` | 有取得發布時間時保存，未知不以收集時間代替 |
 | `collector.collected_at` | 收集時間，ISO 8601 |
+| `collector.updated_at` | 程式修改文件內容的時間，ISO 8601；收集時不寫入，沒有這個欄位表示文件自收集後沒有被程式修改 |
 | `collector.content_extent` | `full`，表示所保存的字幕內容；不表示影片有任何字幕以外的內容被收集 |
 | `collector.subtitle.language_code` | 字幕語言 |
 | `collector.subtitle.language_name` | 有取得時保存 |
@@ -29,7 +30,7 @@
 
 現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的文件是固定欄位投影：來源無關的 `id`、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`、`publishedAt`、`collectedAt`，以及 YouTube 專屬的 `youtube`（字幕語言與人工／自動）。未知 frontmatter 不透過 API 呈現；讀取不改寫檔案，未知欄位保留在 Vault。沒有 `publisher_id` 的文件以 `publisher.id: null` 呈現。
 
-合併比對完整 frontmatter 與正文；收集／異動時間及序列化差異不單獨形成內容衝突。合併沒有提供一般正文編輯、草稿或垃圾桶生命週期。
+文件的修改時間是 `collector.updated_at`，沒有時是 `collector.collected_at`；匯入合併以它和另一台的修改時間或刪除時間比較，較新的為準。比較內容時忽略這兩個時間與序列化差異，所以兩台各自收集的同一支影片內容相同。在程式以外修改文件不更新這個時間。
 
 只有檔名是 `documents/<來源類型>/<來源 ID>.md` 的檔案是文件；Vault 資料夾中的其他檔案不屬於知識庫，程式不讀取，也不放進匯出檔。文件檔讀不出這個格式，或 frontmatter 的 ID 與檔名不符時，列表與匯出失敗並指出該檔案。匯出檔內容見 [儲存與搜尋](storage-and-search.md#匯出檔)。
 

@@ -15,7 +15,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/sources/youtube`、`src/capture` | YouTube 網址辨識、來源 adapter 介面與 yt-dlp 實作 |
 | `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工與裝置端持久紀錄 |
 | `src/channels` | 訂閱與各訂閱的收集設定、設定檔讀寫、每次檢查的收集規則（範圍內最新 N 則）、頻道工作提交及依各訂閱頻率的週期檢查 |
-| `src/vault` | Markdown 保存、active Vault、匯出檔、同步點與匯入、搬移與中斷恢復 |
+| `src/vault` | Markdown 保存、active Vault、匯出檔、以較新為準的匯入合併、搬移與中斷恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client |
 
@@ -39,4 +39,4 @@ Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工�
 
 安裝版將目前 active runtime 的 Agent 連線資訊發布到每位使用者固定的裝置入口：macOS Application Support 或 Windows LocalAppData 下的 `XR Collector/agent-connection.json`。此入口與安裝目錄及 Vault 分離；未打包執行與明確指定 profile 的執行只寫 profile-local 連線檔，因而不覆蓋正式入口。連線檔包含 schema version、instance ID、loopback URL 與每次啟動重建的 token。Agent 先以 authenticated health 比對 instance ID，才使用業務 API；保留的舊連線檔只表示曾啟動，不表示服務仍存活。
 
-改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／匯入（同步點比對）及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。
+改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／匯入（修改時間與刪除紀錄的比較）及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。

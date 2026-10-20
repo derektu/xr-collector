@@ -5,7 +5,7 @@ import { YtDlpCapture } from '../capture/ytdlp-capture.js';
 import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
-import { exportFolder } from '../vault/transfer-files.js';
+import { backupFolder, exportFolder } from '../vault/transfer-files.js';
 
 const projectRoot = process.cwd();
 const profilePath = path.resolve(process.env.XR_COLLECTOR_PROFILE ?? path.join(projectRoot, '.data'));
@@ -38,6 +38,7 @@ const runtime = await CollectorRuntime.start({
     searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
     searchPort,
     exportFolder: exportFolder(path.join(homedir(), 'Documents')),
+    backupFolder: backupFolder(path.join(homedir(), 'Documents')),
   },
   ...(explicitVaultPath ? { explicitVaultPath: path.resolve(explicitVaultPath) } : {}),
   createdBy: 'XR Collector (development server)',

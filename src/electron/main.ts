@@ -6,7 +6,7 @@ import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
 import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
-import { exportFileName, exportFolder } from '../vault/transfer-files.js';
+import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -193,6 +193,7 @@ app.whenReady().then(async () => {
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
+      backupFolder: backupFolder(app.getPath('documents')),
     },
     ...(process.env.XR_COLLECTOR_VAULT ? { explicitVaultPath: path.resolve(process.env.XR_COLLECTOR_VAULT) } : {}),
     suggestedVaultPath,

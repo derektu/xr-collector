@@ -8,17 +8,17 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | --- | --- |
 | Vault 標記檔 | Vault 根目錄的 `xr-collector-vault.json`；不納入匯出檔 |
 | YouTube Markdown | Vault 的 `documents/youtube/` |
-| 訂閱、各訂閱的收集設定、收集進度與檢查時間 | Vault 的 `settings/youtube-channels.json` |
+| 訂閱、各訂閱的收集設定、收集進度與檢查時間、訂閱的移除紀錄 | Vault 的 `settings/youtube-channels.json` |
 | 自動收集總開關 | Vault 的 `settings/youtube-schedule.json` |
 | 刪除紀錄 | Vault 的 `settings/deleted-documents.json` |
-| 同步點紀錄 | Vault 根目錄的 `xr-collector-sync.json`；屬於這個 Vault，跟著搬移，不納入匯出檔 |
 | 使用者自己放在 Vault 資料夾的其他檔案 | 不屬於知識庫，程式不讀取，也不納入匯出檔 |
 | Meilisearch database | 裝置上的搜尋資料目錄；不納入匯出檔 |
 | profile、Agent 連線檔與 token | 裝置資料；不納入匯出檔 |
 | active Vault 選址 | profile 的 `vault-selection.json`；裝置資料 |
 | 收集工作與活動記錄 | profile 的 `jobs/jobs.json` 與 `jobs/events/<UTC 日期>.jsonl`（較早版本的 `jobs/events.jsonl` 照常讀取）；活動記錄保留 30 天；裝置資料，不納入匯出檔 |
 | 匯入的工作資料夾 | Vault 內的 `.xr-collector-import-<UUID>/`，套用匯入期間存在，供中斷後完成套用 |
-| 匯出檔與匯入前的自動匯出 | 預設匯出目錄（`<文件>/XR Collector 匯出`，可由 `XR_COLLECTOR_EXPORT_DIR` 指定）或使用者選的位置；不屬於任何 Vault |
+| 匯出檔 | 預設匯出目錄（`<文件>/XR Collector 匯出`，可由 `XR_COLLECTOR_EXPORT_DIR` 指定）或使用者選的位置；不屬於任何 Vault |
+| 匯入前備份 | 備份目錄（`<文件>/XR Collector 備份`，可由 `XR_COLLECTOR_BACKUP_DIR` 指定）；不屬於任何 Vault |
 | 從匯出檔建立知識庫的 journal | profile 的 `vault-import-journal.json`（進行中匯入的暫存資料夾、目標、是否已改名與標記檔雜湊）；裝置資料 |
 | 搬移 journal 與歷史位置 | profile 的 `vault-move-journal.json`（進行中搬移的 Vault ID、原位置、目標、暫存資料夾、階段、標記檔雜湊與待刪名稱）與 `vault-locations.json`（每個 Vault ID 搬移前的位置，每份最多 20 筆）；裝置資料 |
 
@@ -45,8 +45,8 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | 欄位 | 內容 |
 | --- | --- |
 | `sourceType`、`sourceId` | 穩定的來源識別，例如 `youtube` 與影片 ID；兩者組成文件 ID `<sourceType>:<sourceId>`，同一項目只有一筆刪除紀錄 |
-| `sourceUrl`、`title`、`publisherId`、`publisherName` | 刪除時的來源網址、標題與發布者（`publisherId` 可為 null），供匯入衝突與已刪除文件頁顯示 |
-| `deletedAt` | 刪除意圖成立的時間，與文件 frontmatter 的 `collected_at` 由同一個時鐘產生 |
+| `sourceUrl`、`title`、`publisherId`、`publisherName` | 刪除時的來源網址、標題與發布者（`publisherId` 可為 null），供已刪除文件頁與查問題時辨認 |
+| `deletedAt` | 刪除意圖成立的時間，與文件 frontmatter 的 `collected_at` 由同一個時鐘產生；匯入合併時是這份文件「已刪除」狀態的時間 |
 
 沒有這個檔案表示沒有刪除紀錄。版本不認得、刪除紀錄格式錯誤或重複時，Vault 視為無法開啟並說明原因，不會忽略刪除紀錄而讓已刪除的文件被收集回來。
 
@@ -79,42 +79,40 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 ```json
 { "format": "xr-collector-package", "formatVersion": 1,
   "exportedAt": "<ISO 時間>", "createdBy": "<程式與版本>",
-  "sync": { "id": "<UUID>" | null, "ancestors": ["<UUID>"], "vaultId": "<UUID>", "machine": "<機器名稱>" },
+  "source": { "vaultId": "<UUID>", "machine": "<機器名稱>" },
   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
   "files": [{ "path": "documents/youtube/<來源 ID>.md", "size": 0, "sha256": "<hex>" }] }
 ```
 
-`sync` 是這份匯出的同步點 ID（匯入前的自動匯出為 null）、匯出那一刻 Vault 已有的同步點（新到舊）、知識庫 ID 與機器名稱。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
+`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
 
 匯出檔只放 Vault 登記的檔案，內容由 Vault 的紀錄決定，不掃描資料夾：
 
 - 文件：`MarkdownVault.list` 列得出、沒有被刪除紀錄隱藏的文件。只有檔名是 `documents/<來源類型>/<來源 ID>.md`（由 `src/vault/document-paths.ts` 依各來源的 ID 規則判斷）的檔案才是文件；這類檔案讀不出文件格式，或 frontmatter 的 ID 與檔名不符時，列表與匯出失敗並指出該檔案。
 - 設定：`settings/youtube-channels.json`、`settings/youtube-schedule.json`、`settings/deleted-documents.json`，存在時才放入。刪除紀錄套用與列表相同的可見性規則：文件較新的刪除紀錄不匯出，所以匯出檔不會同時有一份文件與隱藏它的刪除紀錄。
 
-Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一律不讀取、不打包，也不會讓匯出失敗；匯出只列出檔名計算數量，結果的 `unregisteredFiles` 與完成畫面（「N 個非知識庫檔案未包含。」）註明有多少這類檔案沒有包含。系統檔（`.DS_Store` 等）、標記檔、同步點紀錄與匯入的工作資料夾不計入，符號連結不跟隨，無法讀取的資料夾略過。
+Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一律不讀取、不打包，也不會讓匯出失敗；匯出只列出檔名計算數量，結果的 `unregisteredFiles` 與活動記錄註明有多少這類檔案沒有包含，完成畫面不顯示。系統檔（`.DS_Store` 等）、標記檔與匯入的工作資料夾不計入，符號連結不跟隨，無法讀取的資料夾略過。
 
 匯出與匯入都以串流讀寫 zip：匯出逐一把檔案串流寫入 zip，同時計算 SHA-256，最後寫入 manifest；讀取時只讀中央目錄與 manifest，各檔案在需要時才解壓並核對。記憶體只保存 manifest 與正在處理的檔案，匯出檔總大小沒有上限。會整份讀入記憶體檢查的檔案（文件與設定檔）每個最多 64 MiB，manifest 最多 64 MiB。
 
-匯出檔只以本機的完整路徑指定，副檔名必須是 `.zip`。匯出寫到使用者選的位置，或不指定時寫到預設匯出目錄的 `XR Collector 匯出 YYYY-MM-DD.zip`（目錄不存在時建立）；先寫到同一資料夾的暫存檔，完成後改名，所以指定的檔案不是完整的匯出就是保持原樣。同名檔案存在時回 `file_exists`，經使用者確認才取代。匯出位置不能在目前 Vault 或程式資料目錄內。
+匯出檔只以本機的完整路徑指定，副檔名必須是 `.zip`。匯出寫到使用者選的位置，或不指定時寫到預設匯出目錄的 `XR Collector 匯出 YYYY-MM-DD.zip`（目錄不存在時建立）；先寫到同一資料夾的暫存檔，完成後改名，所以指定的檔案不是完整的匯出就是保持原樣。匯出只讀取 Vault，不寫入任何檔案。同名檔案存在時回 `file_exists`，經使用者確認才取代。匯出位置不能在目前 Vault 或程式資料目錄內。
 
-匯入讀取匯出檔時拒絕下列情況，不寫入任何資料：不是 `.zip` 或不是 zip、manifest 缺少或格式識別、版本不符；zip 項目與 manifest 列出的檔案不完全一致；路徑不是文件或三個設定檔、不安全（絕對路徑、`..`、反斜線）、重複或只差大小寫；檔案大小或 SHA-256 與 manifest 不符（包含解壓後超過宣告大小的項目）；文件不是其路徑代表的文件、設定檔不是現行版本、訂閱 ID 重複、刪除紀錄格式錯誤，或同一份文件同時有內容與刪除紀錄。SHA-256 用於偵測損壞，不是來源簽章。設定檔與文件 frontmatter 中不認得的欄位在匯入後保留。
+匯入讀取匯出檔時拒絕下列情況，不寫入任何資料：不是 `.zip` 或不是 zip、manifest 缺少或格式識別、版本不符；zip 項目與 manifest 列出的檔案不完全一致；路徑不是文件或三個設定檔、不安全（絕對路徑、`..`、反斜線）、重複或只差大小寫；檔案大小或 SHA-256 與 manifest 不符（包含解壓後超過宣告大小的項目）；文件不是其路徑代表的文件、設定檔不是現行版本、訂閱 ID 重複、刪除或移除紀錄格式錯誤，或同一份文件同時有內容與刪除紀錄、同一個頻道同時有訂閱與移除紀錄。SHA-256 用於偵測損壞，不是來源簽章。設定檔與文件 frontmatter 中不認得的欄位在匯入後保留。
 
-### 同步點
+### 修改時間與刪除狀態
 
-同步點是 Vault 在某次匯出或匯入當下的內容：每個項目一個雜湊。項目以 `document:<文件 ID>` 與 `channel:<頻道 ID>` 為鍵；文件的雜湊涵蓋 metadata 與正文，但不含收集與異動時間（`collector.collected_at`、`collector.updated_at`），所以兩台各自收到同一支影片時內容相同；刪除紀錄成立的文件記為 `deleted`；訂閱的雜湊涵蓋名稱、網址、暫停狀態與收集設定，不含收集進度與檢查時間。
+匯入以每個項目的時間決定以哪一邊為準，這些時間由程式記錄並寫進匯出檔，不看檔案系統的修改時間：
 
-同步點記在 Vault 根目錄的 `xr-collector-sync.json`：
+| 項目 | 存在時的時間 | 刪除時的狀態與時間 |
+| --- | --- | --- |
+| 文件 | frontmatter 的 `collector.updated_at`（程式修改文件內容時寫入），沒有時是 `collector.collected_at` | `deleted-documents.json` 的刪除紀錄，時間是 `deletedAt` |
+| 訂閱 | `updatedAt`（變更名稱、網址、暫停狀態或收集設定時更新；收集進度與檢查時間不算），沒有時是 `addedAt` | `youtube-channels.json` 的 `removed` 中的移除紀錄，時間是 `removedAt` |
 
-```json
-{ "version": 1, "points": [{ "id": "<UUID>", "at": "<ISO 時間>", "kind": "export" | "import",
-  "machine": "<機器名稱>", "items": { "<項目鍵>": "<雜湊>" } }] }
-```
-
-紀錄保留最近 5 個同步點，新到舊。手動匯出（設定頁的「匯出…」與 `POST /api/vault/export`）記錄一個 `export` 同步點，ID 與匯出檔 manifest 的 `sync.id` 相同，項目取自剛寫好的暫存匯出檔（不是重讀 Vault），在匯出檔改名到位之前寫入，所以匯出期間在其他編輯器改的內容不會算進同步點，之後匯入這份檔案也不會把那些修改改回去。匯出內容與最新同步點相同時，匯出檔沿用那個同步點的 ID，`ancestors` 是其餘同步點，紀錄不新增，所以把匯出當備份反覆執行不會擠掉與其他電腦共有的同步點；以沿用的 ID 寫出的檔案若因寫出期間的修改而與該同步點不同，改以新的 ID 重新寫出並記錄。完成的匯入記錄一個 `import` 同步點，ID 是匯出檔的 `sync.id`（沒有時用 manifest 的雜湊），內容是匯出檔的項目，機器是匯出的那台。匯入前的自動匯出不記錄同步點，所以之後匯入這份自動匯出時，仍以這個 Vault 與其他電腦共有的同步點比對。同步點紀錄跟著 Vault 搬移與複製，不放進匯出檔；檔案無法讀取或格式錯誤時視為沒有同步點，比對時記錄 `vault.sync_unreadable` 警告，不阻止開啟。設定頁顯示最新同步點的時間與種類。
+刪除紀錄與移除紀錄永久保留，否則另一台還留著的文件或訂閱會在下次合併時回來。明確重新收集已刪除的影片時，文件的 `collected_at` 晚於 `deletedAt`，保存後解除刪除紀錄；同一個頻道再次訂閱時解除它的移除紀錄。這兩種情況的新狀態都比紀錄新，帶到另一台時也勝過那邊的紀錄。在程式以外修改文件不留下時間。
 
 ### 從匯出檔建立知識庫
 
-Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import` 在使用者指定的資料夾（不存在或為空）建立新的 Vault：先確認磁碟放得下匯出檔的檔案（與搬移相同，加上原大小 5%、至少 16 MiB 的餘量，不足時回 `insufficient_space`），再解開到同層的 `<目標>.importing-<唯一值>` 暫存資料夾，寫入匯出檔的同步點與新的標記檔，profile 的 `vault-import-journal.json` 記下暫存資料夾與目標；改名為目標之前，journal 先記下「已改名」與新標記檔的 SHA-256。之後啟動知識庫、寫入選址，選址寫入後才刪除 journal；搜尋服務無法啟動、選址寫入失敗，或程式在兩者之間停止時，journal 仍在，當下或下次啟動會收回這個資料夾。新 Vault 有自己的知識庫 ID，同步點等於匯出檔，所以之後與匯出的那台交換時從這裡比對；訂閱、收集進度、各訂閱的收集設定與自動收集開關都照匯出檔帶入；匯出的那台開著自動收集時，兩台會各自收集同樣的訂閱。完成畫面只顯示文件數與位置。
+Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import` 在使用者指定的資料夾（不存在或為空）建立新的 Vault：先確認磁碟放得下匯出檔的檔案（與搬移相同，加上原大小 5%、至少 16 MiB 的餘量，不足時回 `insufficient_space`），再解開到同層的 `<目標>.importing-<唯一值>` 暫存資料夾，寫入新的標記檔，profile 的 `vault-import-journal.json` 記下暫存資料夾與目標；改名為目標之前，journal 先記下「已改名」與新標記檔的 SHA-256。之後啟動知識庫、寫入選址，選址寫入後才刪除 journal；搜尋服務無法啟動、選址寫入失敗，或程式在兩者之間停止時，journal 仍在，當下或下次啟動會收回這個資料夾。新 Vault 有自己的知識庫 ID，內容與匯出檔相同；訂閱、收集進度、各訂閱的收集設定與自動收集開關都照匯出檔帶入；匯出的那台開著自動收集時，兩台會各自收集同樣的訂閱。完成畫面只顯示文件數與位置。
 
 失敗時目標回到原狀。中途停止時，下次啟動依 journal 收回：刪除名稱符合 `.importing-<唯一值>` 的暫存資料夾；已改名而選址與正在開啟的 Vault 都不是目標時，只有標記檔雜湊相同的目標資料夾會改回暫存名稱並刪除，原本是空資料夾的目標恢復為空資料夾。
 
@@ -146,32 +144,40 @@ Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import
 
 匯入只接受本機的 `.zip` 匯出檔，先比對，再由使用者選擇方式套用到目前的 Vault。匯出檔留在原處。
 
-比對找出共同同步點：匯出檔 `sync.id` 與 `sync.ancestors` 中，第一個本機同步點紀錄也有的那一個。接著逐項比較本機、共同同步點與匯出檔：
+比對逐項進行，項目以 `document:<文件 ID>` 與 `channel:<頻道 ID>` 為鍵，每個項目在一邊是存在、已刪除或沒有。兩邊都存在時比較內容：文件比較 metadata 與正文，忽略 `collector.collected_at` 與 `collector.updated_at`，所以兩台各自收到同一支影片時內容相同；訂閱比較名稱、網址、暫停狀態與收集設定。合併的規則是較新的狀態為準：
 
-- 兩邊相同：不處理。
-- 有共同同步點時，只有匯出檔在同步點之後變更的項目直接採用匯出檔；只有本機變更的保留本機；兩邊都變更而結果不同的列為衝突。兩邊都刪除同一份文件不算衝突。
-- 沒有共同同步點時，只有匯出檔有的項目加入，只有本機有的保留，兩邊都有而內容不同的列為衝突，因此不會刪除任何項目。匯出檔的刪除紀錄遇到本機沒有的文件時加入，遇到本機有的文件列為衝突。
+| 本機 | 匯出檔 | 合併的結果 |
+| --- | --- | --- |
+| 沒有 | 存在 | 新增 |
+| 沒有 | 已刪除 | 記下刪除紀錄，不計入數量 |
+| 任何狀態 | 沒有 | 保留本機 |
+| 存在 | 存在且內容相同 | 不處理，時間不同也一樣 |
+| 存在或已刪除 | 狀態不同且時間較新 | 採用匯出檔：更新、刪除或恢復 |
+| 已刪除 | 已刪除且時間較新 | 改用匯出檔的紀錄，不計入數量 |
+| 存在或已刪除 | 時間較舊或相同 | 保留本機 |
 
-比對結果的 `situation`：`incoming`（本機自共同同步點後沒有變更，套用後與匯出檔一致）、`both`（兩邊都有變更）、`unrelated`（沒有共同同步點）、`nothing`（沒有需要匯入的項目，例如重複匯入同一份檔案、匯入自己較早的匯出檔）。`incoming` 是新增、修改、刪除的項目數。每個衝突附上兩邊的狀態（存在、已刪除、沒有這一項）、修改時間與機器名稱，不附內容差異；畫面以「本機」「匯入檔」標示兩邊並顯示時間，不顯示機器名稱；文件的時間取 `collector.updated_at` 或 `collector.collected_at`，訂閱的時間取 `updatedAt`（使用者變更名稱、網址、暫停狀態或收集設定時更新，沒有時顯示「時間不明」）。`replaceLoses` 是完全取代時會失去的本機變更數：有共同同步點時是本機自同步點後變更、且與匯出檔不同的項目數，沒有時是本機有而與匯出檔不同的項目數。
+缺少或無法解析的時間視為最舊。預覽回傳 `merge` 與 `replace`：合併與完全取代各自會做的變更，分文件與訂閱，各有新增、更新、刪除的數量；以及 `localNewer`：兩邊不同而合併保留本機的項目數，包含只有本機有的項目，不含兩邊都不存在、只有紀錄不同的項目；以及 `mergeRecords`：合併仍有不計入數量的刪除紀錄要寫入。畫面以「新增 5 份文件、1 個訂閱；更新 2 份文件；刪除 1 份文件」的形式顯示合併的數量，選取「完全取代」時在選項下列出會移除的數量；合併沒有變更時顯示「沒有需要匯入的內容」，`localNewer` 大於 0 時列出「本機有 N 項較新的修改或刪除」並提供「完全取代…」；`mergeRecords` 為 true 時，按「完成」會套用合併寫入這些刪除紀錄，畫面不變，避免那些影片之後再被收集、在下次匯入時回到另一台。匯出檔的機器名稱只出現在 API 回應與活動記錄。
 
 套用有兩種方式：
 
-- 合併（`merge`）：套用只有匯出檔變更的項目，每個衝突由使用者選擇保留本機或採用匯出檔。`nothing` 不能合併。
-- 完全取代（`replace`）：每個與匯出檔不同的項目都改為匯出檔的內容。`nothing` 而本機與匯出檔不同時也可以取代，用來回到某份匯出檔的內容。
+- 合併（`merge`）：依上表逐項處理。沒有變更時不能合併。
+- 完全取代（`replace`）：文件、訂閱、刪除紀錄與移除紀錄都與匯出檔一致，本機有、匯出檔沒有的文件與訂閱移除，不另外留下紀錄。用來回到某份匯出檔的內容，例如匯入前備份。與匯出檔完全相同時不能取代。
 
-文件採用匯出檔時寫入文件，或改為刪除紀錄並移除文件，或兩者都移除；訂閱採用匯出檔時套用名稱、網址、暫停狀態與收集設定，既有訂閱保留本機的收集進度（加入時間、上次檢查時間、`outOfRange`），下一次檢查從匯入後起算；本機沒有的訂閱連同匯出檔的收集進度加入。自動收集總開關屬於目前的 Vault，合併與取代都不改變。設定檔中不認得的頂層欄位保留。來源 ID 只差大小寫的文件無法在不分大小寫的磁碟上並存，出現時拒絕匯入。
+文件採用匯出檔時寫入文件並解除本機的刪除紀錄，或改為匯出檔的刪除紀錄並移除文件，或兩者都移除；訂閱採用匯出檔時套用名稱、網址、暫停狀態與收集設定並解除本機的移除紀錄，或改為匯出檔的移除紀錄並移除訂閱。既有訂閱保留本機的收集進度（加入時間、上次檢查時間、`outOfRange`），下一次檢查從匯入後起算；本機沒有的訂閱連同匯出檔的收集進度加入。自動收集總開關屬於目前的 Vault，合併與取代都不改變。設定檔中不認得的頂層欄位保留。來源 ID 只差大小寫的文件無法在不分大小寫的磁碟上並存，出現時拒絕匯入。
 
-套用前重新比對：本機項目、共同同步點或匯出檔與比對時不同時，要求重新選擇匯出檔。訂閱的收集進度與檢查時間不是項目，比對後排程照常檢查不會讓比對失效。
+套用前重新比對：本機項目或匯出檔與比對時不同時，要求重新選擇匯出檔。訂閱的收集進度與檢查時間不是項目，比對後排程照常檢查不會讓比對失效。
 
-### 匯入前的自動匯出
+套用計畫同時列出會被覆蓋或移除的本機文件（`displaced`，附原因：被較新的版本取代或被刪除）；把檔案放到位是唯一讓這些版本離開 Vault 的步驟。
 
-套用寫入任何檔案前，先把目前的 Vault 匯出到預設匯出目錄的 `XR Collector 匯入前 YYYY-MM-DD HHmmss.zip`（同名時加上編號，目錄不存在時建立），完成訊息與 `result.preImportExportPath` 顯示它的位置。寫不出來時匯入中止，Vault 不變。這份匯出不記錄同步點，manifest 的 `sync.id` 為 null、`ancestors` 是匯入前的同步點；匯入選錯檔案時，匯入這份自動匯出會判定為「沒有需要匯入的內容」，選擇「改為完全以匯入內容取代…」即回到匯入前的內容。
+### 匯入前備份
+
+套用寫入任何檔案前，先把目前的 Vault 匯出到備份目錄的 `匯入前備份 YYYY-MM-DD HHmmss.zip`（同名時加上編號，目錄不存在時建立）。備份目錄與匯出目錄分開，匯出時選檔的位置不會混入備份。備份的位置記在活動記錄與 `result.backupPath`，完成畫面不顯示。寫不出來時匯入中止，Vault 不變。匯入選錯檔案時，匯入這份備份：本機的內容都比它新，合併沒有需要匯入的內容，選擇「完全取代…」即回到匯入前的內容。
 
 ### 原地套用與中斷恢復
 
-匯入在 Vault 內的工作資料夾 `.xr-collector-import-<UUID>/` 進行：確認磁碟放得下要寫入的檔案後，先把所有新檔案（文件、改寫的設定檔與新的同步點紀錄）放進 `files/`，再寫入 `journal.json`，列出每個路徑要放入的檔案或要移除；寫入 journal 是提交點。之後依序以同一磁碟內的改名把檔案放到位，同步點紀錄最後放入，完成後刪除工作資料夾。每個路徑在任一時刻都是舊檔或新檔。
+匯入在 Vault 內的工作資料夾 `.xr-collector-import-<UUID>/` 進行：確認磁碟放得下要寫入的檔案後，先把所有新檔案（文件與改寫的設定檔）放進 `files/`，再寫入 `journal.json`，列出每個路徑要放入的檔案或要移除；寫入 journal 是提交點。之後依序以同一磁碟內的改名把檔案放到位，完成後刪除工作資料夾。每個路徑在任一時刻都是舊檔或新檔。
 
-套用中途失敗時立即依 journal 完成剩下的步驟，完成後全量重建搜尋索引並回報匯入完成、更新最新同步點；程式中途停止時，下次開啟 Vault（啟動時開啟或「開啟其他知識庫」）前完成：有 journal 的工作資料夾逐項完成並重建搜尋索引，沒有 journal 的工作資料夾直接刪除，Vault 保持匯入前的內容。因此 Vault 只會是匯入前或匯入後的完整內容，同步點紀錄與內容一致。若完成剩下的步驟也失敗，寫入與排程保持停止，狀態回 `vault_busy`，重新啟動時完成匯入。套用期間文件與搜尋 API 回 409 `vault_busy`，狀態、工作與活動仍可查詢。
+套用中途失敗時立即依 journal 完成剩下的步驟，完成後全量重建搜尋索引並回報匯入完成；程式中途停止時，下次開啟 Vault（啟動時開啟或「開啟其他知識庫」）前完成：有 journal 的工作資料夾逐項完成並重建搜尋索引，沒有 journal 的工作資料夾直接刪除，Vault 保持匯入前的內容。因此 Vault 只會是匯入前或匯入後的完整內容。若完成剩下的步驟也失敗，寫入與排程保持停止，狀態回 `vault_busy`，重新啟動時完成匯入。套用期間文件與搜尋 API 回 409 `vault_busy`，狀態、工作與活動仍可查詢。
 
 ### 操作期間的收集
 
@@ -179,7 +185,7 @@ Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import
 
 ### 訂閱設定檔
 
-`youtube-channels.json` 是 `{ "version": 2, "channels": [...] }`，每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`lastCheckedAt`、`outOfRange`（可省略，超出收集範圍的影片與當時的範圍起點）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`。訂閱與檔案中不認得的欄位（例如已不使用的 `cursor`）照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
+`youtube-channels.json` 是 `{ "version": 2, "channels": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`lastCheckedAt`、`outOfRange`（可省略，超出收集範圍的影片與當時的範圍起點）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`。訂閱與檔案中不認得的欄位（例如已不使用的 `cursor`）照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
 
 ## 搜尋投影
 

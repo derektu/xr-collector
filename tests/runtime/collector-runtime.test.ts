@@ -36,7 +36,7 @@ async function options(capture: CollectorRuntimeOptions['workspace']['capture'],
           resolve: async () => ({ id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' }),
           listVideos: async () => [],
         },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'),
+        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: search ?? new UnavailableTranscriptSearch('test'), close: closeSearch }),
       },
       connectionFile: path.join(root, 'agent-connection.json'),
@@ -499,7 +499,7 @@ describe('CollectorRuntime Vault setup', () => {
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (SYNC-11)', async () => {
+  it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (X77-A15)', async () => {
     const setup = await selected();
     const source = path.join(setup.value.profilePath, 'source');
     await new MarkdownVault(source).add({
@@ -533,8 +533,7 @@ describe('CollectorRuntime Vault setup', () => {
     expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: empty }, documentCount: 1 });
     expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: empty });
     expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule.enabled).toBe(true);
-    expect((await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).lastSync).toMatchObject({ kind: 'import' });
-    expect(JSON.parse(await readFile(path.join(empty, 'xr-collector-sync.json'), 'utf8')).points).toHaveLength(1);
+    expect(await readdir(empty)).not.toContain('xr-collector-sync.json');
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -554,7 +553,7 @@ describe('CollectorRuntime Vault setup', () => {
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('takes back the imported Vault when its search cannot start or its location cannot be saved (SYNC-11)', async () => {
+  it('takes back the imported Vault when its search cannot start or its location cannot be saved (X77-A15)', async () => {
     const setup = await selected();
     const source = path.join(setup.value.profilePath, 'source');
     await mkdir(source);

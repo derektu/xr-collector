@@ -1,18 +1,10 @@
-import type { ImportConflict, ImportCounts, ImportSide, ImportSituation, SyncPointSummary, TransferStatus } from '../core/types.js';
-import { dateTimeLabel } from './document-presentation.js';
+import type { ChangeCounts, ItemCounts, TransferStatus } from '../core/types.js';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 const day = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
 const time = (date: Date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 const clock = (date: Date) => `${day(date)} ${time(date)}`;
-
-/** "上次匯出 10-19 14:03" or "上次匯入 10-19 14:03"; a Vault without a sync point says so. */
-export function lastSyncLabel(sync: SyncPointSummary | null): string {
-  if (!sync) return '尚未匯出或匯入';
-  const at = new Date(sync.at);
-  return `上次${sync.kind === 'export' ? '匯出' : '匯入'} ${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${time(at)}`;
-}
 
 export function fileName(filePath: string): string {
   return filePath.split(/[\\/]/u).pop() ?? filePath;
@@ -23,11 +15,6 @@ export function sizeLabel(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-}
-
-/** What an export left out: files in the Vault folder that belong to no record of the Vault. */
-export function unregisteredText(count: number): string {
-  return `${count} 個非知識庫檔案未包含。`;
 }
 
 /** The move target for a chosen parent folder: the parent with the Vault folder's own name. */
@@ -58,37 +45,36 @@ export function progressText(status: Pick<TransferStatus, 'state' | 'message' | 
     : status.message;
 }
 
-/** "新增 3、修改 1、刪除 2". */
-export function countsText(counts: ImportCounts): string {
-  return `新增 ${counts.added}、修改 ${counts.modified}、刪除 ${counts.removed}`;
+/** Whether an import changes anything a person sees. */
+export function hasChanges(counts: ChangeCounts): boolean {
+  return [counts.documents, counts.subscriptions].some((kind) => kind.added + kind.updated + kind.removed > 0);
+}
+
+const nouns = { documents: '份文件', subscriptions: '個訂閱' } as const;
+
+function verbText(verb: string, field: keyof ItemCounts, counts: ChangeCounts): string | null {
+  const parts = (['documents', 'subscriptions'] as const).filter((kind) => counts[kind][field] > 0)
+    .map((kind) => `${counts[kind][field]} ${nouns[kind]}`);
+  return parts.length ? `${verb} ${parts.join('、')}` : null;
+}
+
+/** "新增 5 份文件、1 個訂閱；更新 2 份文件；刪除 1 份文件"; "沒有變更" when nothing changes. */
+export function changeText(counts: ChangeCounts): string {
+  return [verbText('新增', 'added', counts), verbText('更新', 'updated', counts), verbText('刪除', 'removed', counts)]
+    .filter(Boolean).join('；') || '沒有變更';
+}
+
+/** "會移除 1 份文件、1 個訂閱" for a replace that removes local items; null when it removes none. */
+export function removalText(counts: ChangeCounts): string | null {
+  return verbText('會移除', 'removed', counts);
+}
+
+/** "本機有 6 項較新的修改或刪除". */
+export function localNewerText(count: number): string {
+  return `本機有 ${count} 項較新的修改或刪除`;
 }
 
 /** "2026-10-19 14:03 匯出", for the export file being imported; null when the file has no export time. */
 export function sourceText(source: { exportedAt: string | null }): string | null {
   return source.exportedAt ? `${clock(new Date(source.exportedAt))} 匯出` : null;
-}
-
-/** The sentence an import shows above its choices; a file whose changes simply apply needs none. */
-export function situationText(situation: ImportSituation): string | null {
-  return {
-    incoming: null,
-    both: null,
-    unrelated: '這個檔案來自另一個知識庫，合併只新增、不刪除。',
-    nothing: '沒有需要匯入的內容。',
-  }[situation];
-}
-
-/**
- * One side of a conflict: "本機・2026-10-19 14:03:07", "匯入檔・已刪除・時間不明", or
- * "本機・沒有這一項" for a side without the item, which has no time to show.
- */
-export function sideText(label: string, side: ImportSide): string {
-  if (side.state === 'absent') return `${label}・沒有這一項`;
-  const state = side.state === 'deleted' ? '・已刪除' : '';
-  return `${label}${state}・${side.time ? dateTimeLabel(side.time) : '時間不明'}`;
-}
-
-/** The kind of a conflict, named for people. */
-export function conflictKind(conflict: Pick<ImportConflict, 'kind'>): string {
-  return conflict.kind === 'channel' ? '訂閱' : '文件';
 }

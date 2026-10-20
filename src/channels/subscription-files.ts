@@ -4,8 +4,11 @@ import type { YouTubeChannel } from '../core/types.js';
 /**
  * Vault files of YouTube subscriptions, relative to the Vault root.
  *
- * `youtube-channels.json` is `{ version: 2, channels: [...] }`: every subscription carries its own
- * settings and check times. `youtube-schedule.json` is `{ version: 2, enabled }`, the automatic
+ * `youtube-channels.json` is `{ version: 2, channels: [...], removed: [...] }`: every subscription
+ * carries its own settings and check times, and every removed subscription leaves a record
+ * `{ id, title, url, removedAt }` that stays until the channel is subscribed again, so an import
+ * from another machine that still has the subscription does not bring it back. A file without
+ * `removed` has no records. `youtube-schedule.json` is `{ version: 2, enabled }`, the automatic
  * collection switch. Fields a subscription or file does not define are kept as they are, so a file
  * written by a newer program, or one with fields no longer in use, reads and saves without losing them.
  * Files of any other version are not read.
@@ -13,7 +16,10 @@ import type { YouTubeChannel } from '../core/types.js';
 export const CHANNELS_FILE = 'settings/youtube-channels.json';
 export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 
-export interface ChannelsFile { version: 2; channels: YouTubeChannel[] }
+export interface ChannelsFile { version: 2; channels: YouTubeChannel[]; removed?: ChannelRemoval[] }
+
+/** A removed subscription: when it was removed, and its name and address for people reading the record. */
+export interface ChannelRemoval { id: string; title: string; url: string; removedAt: string }
 export interface ScheduleFile { version: 2; enabled: boolean }
 
 export class InvalidSubscriptionFile extends Error {}
@@ -26,6 +32,22 @@ export function channelsFromJson(value: unknown): YouTubeChannel[] {
     throw new InvalidSubscriptionFile('Invalid YouTube channel settings');
   }
   return file.channels;
+}
+
+/** The removal records of a channel file; a Vault without one, or a file without `removed`, has none. */
+export function removalsFromJson(value: unknown): ChannelRemoval[] {
+  channelsFromJson(value);
+  const removed = (value as { removed?: unknown } | undefined)?.removed;
+  if (removed === undefined) return [];
+  if (!Array.isArray(removed) || !removed.every(isRemoval)) throw new InvalidSubscriptionFile('Invalid YouTube channel settings');
+  return removed;
+}
+
+function isRemoval(value: unknown): value is ChannelRemoval {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Partial<ChannelRemoval>;
+  return typeof record.id === 'string' && typeof record.title === 'string' && typeof record.url === 'string'
+    && typeof record.removedAt === 'string' && !Number.isNaN(Date.parse(record.removedAt));
 }
 
 /** The automatic collection switch of a schedule file; a Vault without one collects automatically. */

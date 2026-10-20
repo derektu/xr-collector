@@ -109,6 +109,18 @@ export function exportFolder(documents: string, paths: Pick<typeof path, 'join'>
   return configured ? path.resolve(configured) : paths.join(documents, EXPORT_FOLDER_NAME);
 }
 
+/** Name of the folder an import backs the Vault up to before it applies, inside the person's Documents folder. */
+export const BACKUP_FOLDER_NAME = 'XR Collector 備份';
+
+/**
+ * The backup folder: `XR_COLLECTOR_BACKUP_DIR` when set, otherwise `XR Collector 備份` in `documents`.
+ * `paths` joins with the separators of the platform the folder is on.
+ */
+export function backupFolder(documents: string, paths: Pick<typeof path, 'join'> = path): string {
+  const configured = process.env.XR_COLLECTOR_BACKUP_DIR?.trim();
+  return configured ? path.resolve(configured) : paths.join(documents, BACKUP_FOLDER_NAME);
+}
+
 const pad = (value: number) => String(value).padStart(2, '0');
 const localDay = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
@@ -117,9 +129,9 @@ export function exportFileName(now: Date): string {
   return `XR Collector 匯出 ${localDay(now)}.zip`;
 }
 
-/** "XR Collector 匯入前 2026-10-19 143005.zip", in local time: the export an import takes before it applies. */
-export function preImportFileName(now: Date): string {
-  return `XR Collector 匯入前 ${localDay(now)} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
+/** "匯入前備份 2026-10-19 143005.zip", in local time: the backup an import takes before it applies. */
+export function backupFileName(now: Date): string {
+  return `匯入前備份 ${localDay(now)} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
 }
 
 /** Writes a file through a temporary file beside it, so the named file is either whole or untouched. */

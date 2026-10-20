@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { YouTubeChannel } from '../core/types.js';
 import { readJsonFile, writeJsonFile } from './json-file.js';
-import { CHANNELS_FILE, channelsFromJson, subscriptionContent, type ChannelsFile } from './subscription-files.js';
+import { CHANNELS_FILE, channelsFromJson, removalsFromJson, subscriptionContent, type ChannelRemoval } from './subscription-files.js';
 
 export type ChannelPatch = Partial<Omit<YouTubeChannel, 'id' | 'addedAt'>>;
 
@@ -14,21 +14,34 @@ export interface ChannelStore {
    * write as every other change, so a concurrent change is never computed from an older row.
    */
   updateWith(change: (channels: readonly YouTubeChannel[]) => Map<string, ChannelPatch>): Promise<YouTubeChannel[]>;
+  /** Subscribes a channel, lifting its removal record; an existing subscription is returned as it is. */
   add(channel: YouTubeChannel): Promise<YouTubeChannel>;
+  /** Removes a subscription and records the removal with the store's clock; false when it does not exist. */
   remove(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null>;
   /** Changes one subscription; returns null when it no longer exists, so a removed channel is never recreated. */
   update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null>;
 }
 
+/**
+ * The subscriptions of one Vault in `settings/youtube-channels.json`. Each change reads and writes the
+ * whole file in one serialized step, so a subscription and its removal record change together.
+ */
 export class JsonChannelStore implements ChannelStore {
   private mutation: Promise<void> = Promise.resolve();
 
-  constructor(private readonly root: string) {}
+  /** `now` stamps `updatedAt` and `removedAt`. */
+  constructor(private readonly root: string, private readonly now: () => Date = () => new Date()) {}
 
   async list(): Promise<YouTubeChannel[]> {
     await this.mutation;
     return this.readChannels();
+  }
+
+  /** The removal records of the Vault. */
+  async removals(): Promise<ChannelRemoval[]> {
+    await this.mutation;
+    return removalsFromJson(await this.readFile());
   }
 
   add(channel: YouTubeChannel): Promise<YouTubeChannel> {
@@ -38,7 +51,8 @@ export class JsonChannelStore implements ChannelStore {
       if (existing) return existing;
       const added = { ...channel, updatedAt: channel.updatedAt ?? channel.addedAt };
       channels.push(added);
-      await this.writeChannels(channels);
+      const removed = removalsFromJson(await this.readFile()).filter((record) => record.id !== channel.id);
+      await this.writeChannels(channels, removed);
       return added;
     });
   }
@@ -46,9 +60,11 @@ export class JsonChannelStore implements ChannelStore {
   remove(id: string): Promise<boolean> {
     return this.mutate(async () => {
       const channels = await this.readChannels();
-      const remaining = channels.filter((channel) => channel.id !== id);
-      if (remaining.length === channels.length) return false;
-      await this.writeChannels(remaining);
+      const channel = channels.find((candidate) => candidate.id === id);
+      if (!channel) return false;
+      const removed = removalsFromJson(await this.readFile()).filter((record) => record.id !== id);
+      removed.push({ id, title: channel.title, url: channel.url, removedAt: this.now().toISOString() });
+      await this.writeChannels(channels.filter((candidate) => candidate.id !== id), removed);
       return true;
     });
   }
@@ -64,7 +80,7 @@ export class JsonChannelStore implements ChannelStore {
       if (index < 0) return null;
       const current = channels[index];
       if (!current) return null;
-      const updated = stamped(current, { ...current, ...patch });
+      const updated = this.stamped(current, { ...current, ...patch });
       channels[index] = updated;
       await this.writeChannels(channels);
       return updated;
@@ -83,7 +99,7 @@ export class JsonChannelStore implements ChannelStore {
       const next = channels.map((channel) => {
         const patch = patches.get(channel.id);
         if (!patch) return channel;
-        const changed = stamped(channel, { ...channel, ...patch });
+        const changed = this.stamped(channel, { ...channel, ...patch });
         updated.push(changed);
         return changed;
       });
@@ -98,18 +114,31 @@ export class JsonChannelStore implements ChannelStore {
     return result;
   }
 
+  private readFile(): Promise<unknown> {
+    return readJsonFile(path.join(this.root, CHANNELS_FILE));
+  }
+
   private async readChannels(): Promise<YouTubeChannel[]> {
-    const value = await readJsonFile(path.join(this.root, CHANNELS_FILE));
-    return channelsFromJson(value).sort((left, right) => left.addedAt.localeCompare(right.addedAt));
+    return channelsFromJson(await this.readFile()).sort((left, right) => left.addedAt.localeCompare(right.addedAt));
   }
 
-  private async writeChannels(channels: YouTubeChannel[]): Promise<void> {
-    const file: ChannelsFile = { version: 2, channels };
-    await writeJsonFile(path.join(this.root, CHANNELS_FILE), file);
+  /**
+   * Writes the subscriptions, and the removal records when given, keeping the other top-level fields
+   * of the file, so a file written by a newer program keeps what this one does not define.
+   */
+  private async writeChannels(channels: YouTubeChannel[], removed?: ChannelRemoval[]): Promise<void> {
+    const current = await this.readFile();
+    const top = current && typeof current === 'object' && !Array.isArray(current) ? current as Record<string, unknown> : {};
+    const next: Record<string, unknown> = { ...top, version: 2, channels };
+    if (removed !== undefined) {
+      if (removed.length) next.removed = removed;
+      else delete next.removed;
+    }
+    await writeJsonFile(path.join(this.root, CHANNELS_FILE), next);
   }
-}
 
-/** A changed subscription, with `updatedAt` set to now when what the person sets on it differs. */
-function stamped(before: YouTubeChannel, after: YouTubeChannel): YouTubeChannel {
-  return subscriptionContent(before) === subscriptionContent(after) ? after : { ...after, updatedAt: new Date().toISOString() };
+  /** A changed subscription, with `updatedAt` set to now when what the person sets on it differs. */
+  private stamped(before: YouTubeChannel, after: YouTubeChannel): YouTubeChannel {
+    return subscriptionContent(before) === subscriptionContent(after) ? after : { ...after, updatedAt: this.now().toISOString() };
+  }
 }
