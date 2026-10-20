@@ -24,7 +24,7 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
       const same = list.sources.filter((entry) => entry.type === source.type && entry.kind === source.kind && entry.id !== source.id);
       setOthers({ total: same.length, paused: same.filter((entry) => !entry.enabled).length });
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setFailure(error instanceof Error ? error.message : '無法讀取來源。');
+      if (!controller.signal.aborted) setFailure(error instanceof Error ? error.message : '無法讀取訂閱。');
     });
     return () => controller.abort();
   }, [source.id, source.type, source.kind]);
@@ -45,8 +45,7 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
   return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="confirm-apply-title" data-testid="confirm-apply-settings"
     onCancel={(event) => { event.preventDefault(); onCancel(); }}>
     <h2 id="confirm-apply-title">套用到所有 {source.kindLabel}？</h2>
-    <p>{count ? `把這組收集設定套用到${count}？` : '正在讀取來源…'}</p>
-    {others && others.paused > 0 ? <p className="hint">已暫停的來源會保持暫停，恢復後的檢查使用這組設定。</p> : null}
+    <p>{count ? `把這組收集設定套用到${count}？` : '正在讀取…'}</p>
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">
       <button type="button" className="button" onClick={onCancel}>取消</button>

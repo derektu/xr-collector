@@ -1,4 +1,5 @@
 import type { ChannelStore } from './json-channel-store.js';
+import type { ChannelRemoval } from './subscription-files.js';
 import { assertPolicyPatch, DEFAULT_POLICY } from './collection-policy.js';
 import type { JobManager } from '../jobs/job-manager.js';
 import type { ResolvedYouTubeChannel } from '../sources/youtube/adapter.js';
@@ -11,7 +12,9 @@ import {
   type CollectionPolicy,
   type DocumentMetadata,
   type JobSubmission,
+  type PendingSubscription,
   type Subscription,
+  type SubscriptionCheckStatus,
   type YouTubeChannel,
 } from '../core/types.js';
 
@@ -25,14 +28,53 @@ const DECIDING = new Set(['completed', 'failed']);
 /** A channel preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;
 
+/** How long removing a subscription with its documents waits for the captures already running. */
+export const REMOVAL_SETTLE_MS = 30_000;
+
+/** What happens to a removed subscription's documents. */
+export type RemovedDocuments = 'keep' | 'delete';
+
+export interface ChannelRemovalResult {
+  /** Documents of the channel left in the Vault. */
+  documentsKept: number;
+  /**
+   * Documents deleted with the subscription; each leaves a deletion record. A capture its deletion
+   * record stopped from saving never became a document and is not counted; one that saved first is.
+   */
+  documentsDeleted: number;
+  /** Documents the removal tried to delete and could not; they stay in the Vault. */
+  documentsFailed: number;
+}
+
+/** A deletion record for a video that has no document yet. */
+export interface PendingDeletion {
+  sourceType: 'youtube';
+  sourceId: string;
+  sourceUrl: string;
+  title: string;
+  publisherId: string;
+  publisherName: string;
+}
+
 export interface ChannelCollectorOptions {
   /** Whether automatic collection is on; previews report it. */
   autoCollection: () => Promise<boolean>;
   /** Resolves a channel for a preview; aborting `signal` drops a request that has not started. */
   resolveChannel: (url: string, signal: AbortSignal) => Promise<ResolvedYouTubeChannel>;
   documents: () => Promise<DocumentMetadata[]>;
+  /** Deletes one document as a user deletion does; required to remove a subscription with its documents. */
+  deleteDocument?: (id: string) => Promise<unknown>;
+  /** Records the deletion of a video still capturing, so it is not saved when the capture ends. */
+  recordDeletion?: (entry: PendingDeletion) => Promise<unknown>;
+  /**
+   * Whether the subscription's source needs the user to sign in again. YouTube needs no account,
+   * so its subscriptions never do.
+   */
+  loginRequired?: (channel: YouTubeChannel) => boolean;
   now?: () => Date;
   previewTimeoutMs?: number;
+  /** Overrides REMOVAL_SETTLE_MS. */
+  removalSettleMs?: number;
 }
 
 export interface StartRunRequest {
@@ -71,9 +113,9 @@ export class ChannelCollector {
     return this.store.list();
   }
 
-  /** Subscriptions with their current job, document count and newest collection time. */
+  /** Subscriptions with their current job, check status, document count and newest collection time. */
   async listSubscriptions(): Promise<Subscription[]> {
-    const [channels, documents] = await Promise.all([this.store.list(), this.options.documents()]);
+    const [channels, documents, autoCheck] = await Promise.all([this.store.list(), this.options.documents(), this.options.autoCollection()]);
     const counts = new Map<string, { count: number; latest: string | null }>();
     for (const document of documents) {
       if (document.sourceType !== 'youtube' || !document.publisher.id) continue;
@@ -83,6 +125,7 @@ export class ChannelCollector {
       counts.set(document.publisher.id, entry);
     }
     const history = this.jobs.channelJobs();
+    const now = this.now();
     return channels.map((channel) => {
       const job = this.jobs.activeChannelJob(channel.id);
       const totals = counts.get(channel.id);
@@ -94,12 +137,33 @@ export class ChannelCollector {
         nextCheckAt: channel.nextCheckAt ?? null,
         lastDispatchedAt: channel.lastDispatchedAt ?? null,
         status: !channel.enabled ? 'paused' : job ? 'collecting' : failed ? 'error' : 'tracking',
+        checkStatus: checkStatus(channel, job, { autoCheck, now, loginRequired: this.options.loginRequired?.(channel) ?? false }),
+        capturing: this.jobs.pendingCaptures(channel.id).channelVideos.length > 0,
         lastError: failed ? lastDeciding.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
         activeJob: job ? { id: job.id, done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,
       };
     });
+  }
+
+  /**
+   * Subscription requests still resolving their channel. A request that already subscribed its
+   * channel is left out, since the subscription itself is listed.
+   */
+  async pendingSubscriptions(): Promise<PendingSubscription[]> {
+    const subscribed = new Set((await this.store.list()).map((channel) => channel.id));
+    return this.jobs.activeChannelAdds()
+      .filter((entry) => !entry.channelId || !subscribed.has(entry.channelId))
+      .map(({ job, title }) => ({
+        jobId: job.id, url: job.source.url, title,
+        checkStatus: job.state === 'running' && !job.wait ? { state: 'updating', done: 0, total: 0 } : { state: 'queued' },
+      }));
+  }
+
+  /** The Vault's removal records: subscriptions removed and not added again. */
+  async listRemovals(): Promise<ChannelRemoval[]> {
+    return await this.store.removals?.() ?? [];
   }
 
   /** Channel jobs of one subscription, newest first, as far back as the job history keeps them. */
@@ -211,14 +275,85 @@ export class ChannelCollector {
     return { channel, submission };
   }
 
-  /** Stops collecting a channel. Its documents stay in the Vault; their count is returned. */
-  async removeChannel(id: string): Promise<{ documentsKept: number }> {
+  /**
+   * Stops collecting a channel. With `documents: 'keep'` its documents stay in the Vault. With
+   * `'delete'`, the videos of the channel still capturing (from any of its checks, a stopped one
+   * included) first get deletion records, so one that finishes at any later time is not saved.
+   * The removal then waits a bounded time for those captures and for single-video requests, whose
+   * channel is known only after capture, and deletes every document of the channel one by one as a
+   * user deletion does: each leaves a deletion record, leaves the search and records its own event.
+   * A single-video request still running after the bound deletes its document when it ends, if the
+   * document belongs to the channel. A document that cannot be deleted is counted and kept; the
+   * removal itself always completes and records its event.
+   */
+  async removeChannel(id: string, options: { documents?: RemovedDocuments } = {}): Promise<ChannelRemovalResult> {
+    const removing = options.documents ?? 'keep';
+    const deleteDocument = this.options.deleteDocument;
+    if (removing === 'delete' && !deleteDocument) throw new CollectorError('invalid_request', '這個知識庫不支援刪除文件。');
     const channel = (await this.store.list()).find((candidate) => candidate.id === id);
     if (!channel || !(await this.store.remove(id))) throw notFound();
     this.jobs.stopChannel(id, 'subscription_removed');
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.removed', message: `已移除「${channel.title}」，文件保留。`, ...subject(id, channel.title) });
-    const documents = await this.options.documents();
-    return { documentsKept: documents.filter((document) => document.publisher.id === id).length };
+    let deleted = 0;
+    let failed = 0;
+    let incomplete = false;
+    try {
+      if (removing === 'delete' && deleteDocument) {
+        const { channelVideos, singleVideos } = this.jobs.pendingCaptures(id);
+        for (const video of channelVideos) {
+          if (!video.source.id) continue;
+          try {
+            await this.options.recordDeletion?.({
+              sourceType: 'youtube', sourceId: video.source.id, sourceUrl: video.source.url, title: video.source.title ?? video.source.id,
+              publisherId: id, publisherName: channel.title,
+            });
+          } catch (error) {
+            console.error('Deletion record for a capturing video failed', error);
+          }
+        }
+        const unsettled = new Set(singleVideos.map((video) => video.id));
+        const settling = [
+          ...channelVideos.map((video) => this.jobs.whenSettled(video.id)),
+          ...singleVideos.map((video) => this.jobs.whenSettled(video.id).finally(() => unsettled.delete(video.id))),
+        ];
+        await settleWithin(Promise.allSettled(settling), this.options.removalSettleMs ?? REMOVAL_SETTLE_MS);
+        for (const jobId of unsettled) void this.deleteWhenSaved(jobId, id, deleteDocument);
+        for (const document of await this.channelDocuments(id)) {
+          const outcome = await deleteQuietly(deleteDocument, document.id);
+          if (outcome === 'deleted') deleted += 1;
+          else if (outcome === 'failed') failed += 1;
+        }
+      }
+    } catch (error) {
+      console.error('Deleting the documents of a removed subscription failed', error);
+      incomplete = true;
+    }
+    const kept = await this.channelDocuments(id).then((documents) => documents.length, () => failed);
+    if (incomplete) failed = Math.max(failed, kept);
+    const message = removing === 'keep' ? `已移除「${channel.title}」，文件保留。`
+      : failed > 0 ? `已移除「${channel.title}」，刪除 ${deleted} 份文件，${failed} 份無法刪除。`
+        : `已移除「${channel.title}」，並刪除 ${deleted} 份文件。`;
+    this.jobs.recordEvent({
+      severity: failed > 0 ? 'warning' : 'info', eventType: 'subscription.removed', message,
+      ...subject(id, channel.title),
+    });
+    return { documentsKept: kept, documentsDeleted: deleted, documentsFailed: failed };
+  }
+
+  /** Deletes the document a single-video request saves, once it ends, when it belongs to the removed channel. */
+  private async deleteWhenSaved(jobId: string, channelId: string, deleteDocument: (id: string) => Promise<unknown>): Promise<void> {
+    try {
+      const job = await this.jobs.whenSettled(jobId);
+      const documentId = job.result?.documentId;
+      if (!documentId) return;
+      const document = (await this.channelDocuments(channelId)).find((candidate) => candidate.id === documentId);
+      if (document) await deleteQuietly(deleteDocument, document.id);
+    } catch (error) {
+      console.error('Deleting a document of a removed subscription failed', error);
+    }
+  }
+
+  private async channelDocuments(id: string): Promise<DocumentMetadata[]> {
+    return (await this.options.documents()).filter((document) => document.sourceType === 'youtube' && document.publisher.id === id);
   }
 
   /**
@@ -291,6 +426,62 @@ function nextCheckAfterDispatch(channel: YouTubeChannel, trigger: StartRunReques
   const due = new Date(channel.nextCheckAt).getTime();
   const periods = Math.max(1, Math.floor((now.getTime() - due) / interval) + 1);
   return new Date(due + periods * interval);
+}
+
+/**
+ * What a subscription is doing now. Its own state comes first: paused, then a source that needs a
+ * new sign-in. An active check shows as updating unless it waits for its turn: the check has not
+ * started, none of the items it still has to collect is running because other work holds the
+ * capture slot, or every such item waits for a cooldown or a retry. Then it is queued. Without a check,
+ * automatic checks being off comes next; a check that came due and was not dispatched yet, or has
+ * no time yet, is queued; otherwise the next check time shows. A failed last check does not change the status.
+ */
+export function checkStatus(
+  channel: Pick<YouTubeChannel, 'enabled' | 'nextCheckAt'>,
+  job: CollectionJob | null,
+  context: { autoCheck: boolean; now: Date; loginRequired: boolean },
+): SubscriptionCheckStatus {
+  if (!channel.enabled) return { state: 'paused' };
+  if (context.loginRequired) return { state: 'login_required' };
+  if (job) {
+    if (job.state === 'queued' || waitsForTurn(job)) return { state: 'queued' };
+    return { state: 'updating', done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 };
+  }
+  if (!context.autoCheck) return { state: 'auto_check_off' };
+  const next = channel.nextCheckAt ?? null;
+  // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
+  if (!next || new Date(next).getTime() <= context.now.getTime()) return { state: 'queued' };
+  return { state: 'scheduled', nextCheckAt: next };
+}
+
+/**
+ * A running channel job that is not collecting anything itself: its own step waits for a cooldown
+ * or a retry, none of its unfinished items is running, or every unfinished item waits.
+ */
+function waitsForTurn(job: CollectionJob): boolean {
+  if (job.wait || job.retry?.nextAttemptAt) return true;
+  const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
+  if (unfinished.length === 0) return false;
+  return unfinished.every((item) => item.state === 'queued' || item.wait || item.retry?.nextAttemptAt);
+}
+
+/** Deletes one document; one deleted meanwhile, such as by an Agent, counts as gone, and any other failure is logged. */
+async function deleteQuietly(deleteDocument: (id: string) => Promise<unknown>, id: string): Promise<'deleted' | 'gone' | 'failed'> {
+  try {
+    await deleteDocument(id);
+    return 'deleted';
+  } catch (error) {
+    if (error instanceof CollectorError && (error.code === 'document_deleted' || error.code === 'document_not_found')) return 'gone';
+    console.error('Document deletion failed', error);
+    return 'failed';
+  }
+}
+
+/** Waits for `work` at most `timeoutMs`; only the end of the wait matters, not its result. */
+async function settleWithin(work: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
+  await Promise.race([work.then(() => undefined, () => undefined), timeout]).finally(() => clearTimeout(timer));
 }
 
 function addMinutes(date: Date, minutes: number): Date {

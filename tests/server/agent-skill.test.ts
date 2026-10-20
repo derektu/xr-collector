@@ -92,6 +92,14 @@ describe('Agent Skill', () => {
     }
   });
 
+  it('documents the subscription status, pending requests, removed channels and removal with documents (N75-T10)', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const term of ['`checkStatus`', '"updating"', '"queued"', '"scheduled"', '"paused"', '"auto_check_off"', '"login_required"',
+      '`pending`', '`removed: true`', '`documents=keep|delete`', '`documentsDeleted`']) {
+      expect(skill).toContain(term);
+    }
+  });
+
   it('documents resumption after a restart and automatic retries', async () => {
     const skill = await readFile(skillPath, 'utf8');
     for (const term of ['`recovery`', '`resumedCount`', '`uncleanStops`', '`interrupted_repeatedly`', '`retry`', '`nextAttemptAt`', '`maxAttempts`', '`superseded`']) {

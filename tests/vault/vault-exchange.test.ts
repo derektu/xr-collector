@@ -287,7 +287,7 @@ describe('subscriptions (X77-A08)', () => {
     const rows = await channels(a.vault);
     expect(rows.map((row) => row.id).sort()).toEqual(['UC123', 'UC789', 'UCAAA']);
     expect(rows.find((row) => row.id === 'UC123')).toMatchObject({
-      settings: { intervalMinutes: 360 }, lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: null,
+      settings: { intervalMinutes: 360 }, lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: expect.any(String),
     });
     expect((await store(a.vault).removals()).map((record) => [record.id, record.removedAt])).toEqual([['UC456', at(1)]]);
     expect(await scheduleOn(a.vault)).toBe(true);

@@ -70,11 +70,11 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
         api.getJob(jobId).then((job) => {
           if (job.state === 'queued' || job.state === 'running') poll(jobId);
           else if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' }, true);
-          else finish({ kind: 'failed', message: job.error?.message ?? '這支影片沒有收集回來，請到活動頁查看原因。' }, false);
+          else finish({ kind: 'failed', message: job.error?.message ?? '這支影片沒有收集回來，請到記錄頁查看原因。' }, false);
         }).catch(() => poll(jobId));
       }, RECOLLECT_POLL_MS);
     };
-    if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的來源網址。' }, false);
+    if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' }, false);
     else api.collectYouTube(url).then((submission) => poll(submission.job.id))
       .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }, false));
     return () => { active = false; if (timer) clearTimeout(timer); };
@@ -98,7 +98,6 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       </section> : null}
       {state.kind === 'deleted' ? <section className="reader-missing" data-testid="reader-deleted">
         <h1 className="reader-title">這份文件已刪除</h1>
-        <p>自動收集與頻道收集會略過這支影片。需要時可以重新收集，完成後會回到文件列表與搜尋結果。</p>
         {recollect.kind === 'failed' ? <p className="add-problem" role="alert">{recollect.message}</p> : null}
         <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
           data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button>

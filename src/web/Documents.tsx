@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
+import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import type { DocumentMetadata, DocumentSources } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
@@ -38,15 +40,17 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
+export function Documents({ state, revision, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
   state: DocumentListState;
+  /** Changes when a job ends or saves a document, so documents collected meanwhile show up. */
+  revision: number;
   /** The scrolling element whose position is saved before opening the Reader. */
   scroller: () => HTMLElement | null;
   onState: (state: DocumentListState) => void;
   onOpen: (id: string) => void;
   onNavigate: (page: 'settings') => void;
-  /** Opens the Add Content dialog. */
-  onAdd: () => void;
+  /** Opens the add dialog the menu item names. */
+  onAdd: (mode: AddMode) => void;
   /** Reports the result of a row action. */
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
@@ -57,7 +61,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   /** Bumped after a deletion, so the sources and the current page load again. */
-  const [revision, setRevision] = useState(0);
+  const [deletions, setDeletions] = useState(0);
   const requests = useMemo(createLatestRequest, []);
   const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
 
@@ -66,10 +70,10 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
   useEffect(() => {
     const controller = new AbortController();
     api.documentSources(controller.signal).then(setSources).catch((error: unknown) => {
-      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取來源清單。');
+      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取頻道清單。');
     });
     return () => controller.abort();
-  }, [revision]);
+  }, [revision, deletions]);
 
   // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
@@ -115,7 +119,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
       setLoading(false);
     });
     return () => { active = false; };
-  }, [state.query, state.source, state.page, requests, revision]);
+  }, [state.query, state.source, state.page, requests, revision, deletions]);
 
   useEffect(() => () => requests.cancel(), [requests]);
 
@@ -137,21 +141,23 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
 
   function deleted(message: string): void {
     onChanged(message);
-    setRevision((value) => value + 1);
+    setDeletions((value) => value + 1);
   }
 
   const options = sourceOptions(sources);
   const pages = totalPages(results?.total ?? 0);
   const emptyVault = sources?.total === 0;
 
-  const heading = <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>文件</h1></div>;
+  const heading = <div className="page-header">
+    <h1 className="page-title" tabIndex={-1} data-page-heading>文件</h1>
+    <div className="header-actions"><AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} testId="add-document" /></div>
+  </div>;
   if (emptyVault) {
     return <>
       {heading}
       <section className="empty-state" data-testid="documents-empty-vault">
         <h2>知識庫裡還沒有文件</h2>
-        <p>貼上 YouTube 影片或頻道網址，收集完成的字幕會出現在這裡。</p>
-        <button type="button" className="button primary" onClick={onAdd}>加入內容</button>
+        <AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} primary align="start" testId="add-document-empty" />
       </section>
     </>;
   }
@@ -174,7 +180,7 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
         {draft ? <button type="button" className="search-clear" aria-label="清除搜尋" onClick={() => { setDraft(''); onState({ ...state, query: '', page: 1 }); }}>×</button> : null}
       </label>
       <label className="source-select">
-        <span className="visually-hidden">來源</span>
+        <span className="visually-hidden">頻道</span>
         <Icon name="sources" size={15} />
         <select value={state.source} onChange={(event) => onState({ ...state, source: event.target.value, page: 1 })} data-testid="documents-source">
           <option value={options.all.value}>{options.all.label}</option>
@@ -199,8 +205,8 @@ export function Documents({ state, scroller, onState, onOpen, onNavigate, onAdd,
 
     {results && results.rows.length === 0 ? <section className="documents-none" data-testid="documents-no-results">
       {results.mode === 'search'
-        ? <><h3>沒有符合「{state.query}」的文件</h3><p>換個關鍵字，或把來源改回全部來源。</p></>
-        : <><h3>這個來源目前沒有文件</h3><p>把來源改回全部來源可以看到其他文件。</p></>}
+        ? <h3>沒有符合「{state.query}」的文件</h3>
+        : <h3>這個頻道目前沒有文件</h3>}
     </section> : null}
 
     {results && results.rows.length > 0 ? <ol className="document-list" data-testid="document-list">

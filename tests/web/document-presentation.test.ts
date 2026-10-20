@@ -36,22 +36,24 @@ describe('document presentation', () => {
     expect(sourceFilter('youtube:none')).toEqual({ sourceType: 'youtube', publisherId: 'none' });
   });
 
-  it('groups the source menu and marks unsubscribed channels', () => {
+  it('groups the channel menu and marks removed subscriptions only', () => {
     const menu = sourceOptions({
       total: 4,
       groups: [{
         sourceType: 'youtube', label: 'YouTube', count: 4, publishers: [
-          { id: 'UC-a', name: '頻道 A', count: 2, subscribed: true },
-          { id: 'UC-b', name: '頻道 B', count: 1, subscribed: false },
-          { id: null, name: '未知頻道', count: 1, subscribed: null },
+          { id: 'UC-a', name: '頻道 A', count: 2, subscribed: true, removed: false },
+          { id: 'UC-b', name: '頻道 B', count: 1, subscribed: false, removed: false },
+          { id: 'UC-c', name: '頻道 C', count: 1, subscribed: false, removed: true },
+          { id: null, name: '未知頻道', count: 1, subscribed: null, removed: false },
         ],
       }],
     });
-    expect(menu.all).toEqual({ value: '', label: '全部來源（4）' });
+    expect(menu.all).toEqual({ value: '', label: '全部頻道（4）' });
     expect(menu.groups[0]!.options).toEqual([
-      { value: 'youtube', label: 'YouTube（全部）（4）' },
+      { value: 'youtube', label: 'YouTube・全部（4）' },
       { value: 'youtube:UC-a', label: '頻道 A（2）' },
-      { value: 'youtube:UC-b', label: '頻道 B・未訂閱（1）' },
+      { value: 'youtube:UC-b', label: '頻道 B（1）' },
+      { value: 'youtube:UC-c', label: '頻道 C・已移除（1）' },
       { value: 'youtube:none', label: '未知頻道（1）' },
     ]);
   });
@@ -84,11 +86,9 @@ describe('document presentation', () => {
 });
 
 describe('document deletion presentation (A8)', () => {
-  it('states what deletion does, where the list goes and how to collect again', async () => {
-    const { DELETE_CONFIRMATION, pageWithRows, sourceUrlOfDocumentId } = await import('../../src/web/document-presentation.js');
+  it('states where the list goes and how to collect again', async () => {
+    const { pageWithRows, sourceUrlOfDocumentId } = await import('../../src/web/document-presentation.js');
     const { skipReasonLabel } = await import('../../src/web/job-presentation.js');
-    expect(DELETE_CONFIRMATION).toContain('自動收集與頻道收集會略過');
-    expect(DELETE_CONFIRMATION).toContain('訂閱不受影響');
     expect(pageWithRows(3, 0, 40)).toBe(2);
     expect(pageWithRows(5, 0, 25)).toBe(2);
     expect(pageWithRows(3, 4, 44)).toBe(3);

@@ -12,6 +12,8 @@ export interface CollectionStatus {
   schedule: ChannelSchedule | null;
   /** Increases whenever the active jobs change or a change is announced, so pages know to reload. */
   revision: number;
+  /** Increases when a job ends or a channel job finishes one of its videos: the moments documents can appear. */
+  documentsRevision: number;
 }
 
 /**
@@ -20,7 +22,7 @@ export interface CollectionStatus {
  * itself started or changed work.
  */
 export function useCollectionStatus(enabled: boolean): CollectionStatus & { announce: () => void } {
-  const [status, setStatus] = useState<CollectionStatus>({ active: null, schedule: null, revision: 0 });
+  const [status, setStatus] = useState<CollectionStatus>({ active: null, schedule: null, revision: 0, documentsRevision: 0 });
   const reload = useRef<() => void>(() => undefined);
 
   useEffect(() => {
@@ -29,6 +31,7 @@ export function useCollectionStatus(enabled: boolean): CollectionStatus & { anno
     let timer: ReturnType<typeof setTimeout> | undefined;
     let sequence = 0;
     let lastKey = '';
+    let lastDocumentsKey: string | null = null;
     const load = async () => {
       clearTimeout(timer);
       const current = ++sequence;
@@ -37,10 +40,24 @@ export function useCollectionStatus(enabled: boolean): CollectionStatus & { anno
         const [page, schedule] = await Promise.all([api.listJobs({ state: 'active', limit: 100 }), api.getChannelSchedule()]);
         if (!alive || current !== sequence) return;
         const active = activeJobs(page.jobs);
-        const key = JSON.stringify([active.map((job) => [job.id, job.state, job.progress?.done]), schedule.lastCheck?.at, schedule.enabled]);
+        // Waits, retries and videos starting change a subscription's status between queued and
+        // updating; the next check time changes its scheduled time.
+        const key = JSON.stringify([
+          active.map((job) => [job.id, job.state, job.progress?.done, job.wait?.until, job.retry?.nextAttemptAt,
+            job.items?.filter((item) => item.wait || item.retry?.nextAttemptAt).length,
+            job.items?.filter((item) => item.state === 'running').length]),
+          schedule.lastCheck?.at, schedule.nextCheck?.at, schedule.enabled,
+        ]);
         const changed = key !== lastKey;
         lastKey = key;
-        setStatus((previous) => ({ active, schedule, revision: changed ? previous.revision + 1 : previous.revision }));
+        const documentsKey = JSON.stringify(active.map((job) => [job.id, job.progress?.done]));
+        const documentsChanged = lastDocumentsKey !== null && documentsKey !== lastDocumentsKey;
+        lastDocumentsKey = documentsKey;
+        setStatus((previous) => ({
+          active, schedule,
+          revision: changed ? previous.revision + 1 : previous.revision,
+          documentsRevision: documentsChanged ? previous.documentsRevision + 1 : previous.documentsRevision,
+        }));
         if (active.length > 0) delay = ACTIVE_POLL_MS;
       } catch {
         // The pages report their own load errors; the shell keeps its last known state.

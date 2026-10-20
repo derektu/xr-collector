@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob, SourceEntry, SourceJobRecord, UrlRecognition } from '../../src/core/types.js';
 import {
   activeJobs,
-  backgroundStatus,
-  collectingSummary,
   currentRecognition,
   displayUrl,
   filterSources,
@@ -11,11 +9,9 @@ import {
   jobRecordLabel,
   parseSourceListState,
   shortTimeLabel,
-  showsSingleItems,
   sourceListSearch,
   sourcePath,
   sourceRouteForPath,
-  sourceStatusLabel,
   checkTimesLine,
   nextCheckLabel,
 } from '../../src/web/source-presentation.js';
@@ -27,7 +23,7 @@ afterEach(() => { process.env.TZ = originalZone; });
 function source(overrides: Partial<SourceEntry>): SourceEntry {
   return {
     id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, status: 'tracking', lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
+    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: null }, lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
     type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', ...overrides,
   };
 }
@@ -42,14 +38,6 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 }
 
 describe('source presentation (T-09)', () => {
-  it('labels each status, with item progress while collecting', () => {
-    expect(sourceStatusLabel(source({}))).toBe('追蹤中');
-    expect(sourceStatusLabel(source({ status: 'collecting', activeJob: { id: 'j', done: 4, total: 10 } }))).toBe('收集中 4／10');
-    expect(sourceStatusLabel(source({ status: 'collecting', activeJob: { id: 'j', done: 0, total: 0 } }))).toBe('收集中');
-    expect(sourceStatusLabel(source({ status: 'paused', enabled: false }))).toBe('已暫停');
-    expect(sourceStatusLabel(source({ status: 'error', lastError: { code: 'network_error', message: '連線失敗' } }))).toBe('錯誤');
-  });
-
   it('formats times relative to today in the device time zone', () => {
     const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
     expect(shortTimeLabel('2026-10-15T05:30:00.000Z', now)).toBe('今天 13:30');
@@ -59,15 +47,11 @@ describe('source presentation (T-09)', () => {
     expect(shortTimeLabel('2025-12-31T01:00:00.000Z', now)).toBe('2025-12-31');
   });
 
-  it('filters by type and by name, and shows the single-item row only unfiltered', () => {
+  it('filters by type and by name', () => {
     const sources = [source({ id: 'a', title: 'Alpha Talks' }), source({ id: 'b', title: '財經八百' })];
     expect(filterSources(sources, { type: '', query: 'alpha' }).map((entry) => entry.id)).toEqual(['a']);
     expect(filterSources(sources, { type: 'youtube', query: '八百' }).map((entry) => entry.id)).toEqual(['b']);
     expect(filterSources(sources, { type: 'rss', query: '' })).toEqual([]);
-    expect(showsSingleItems({ type: '', query: '' }, 3)).toBe(true);
-    expect(showsSingleItems({ type: '', query: '' }, 0)).toBe(false);
-    expect(showsSingleItems({ type: 'youtube', query: '' }, 3)).toBe(false);
-    expect(showsSingleItems({ type: '', query: 'a' }, 3)).toBe(false);
   });
 
   it('keeps list filters and source detail addresses in the URL', () => {
@@ -80,7 +64,7 @@ describe('source presentation (T-09)', () => {
     expect(sourceRouteForPath('/documents/x')).toBeNull();
   });
 
-  it('counts each active top-level job once and words the sidebar state', () => {
+  it('counts each active top-level job once', () => {
     const jobs = [
       job({ id: 'a', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }),
       job({ id: 'b', state: 'queued', source: { type: 'youtube', id: null, url: 'https://youtu.be/x', title: null } }),
@@ -89,10 +73,6 @@ describe('source presentation (T-09)', () => {
     ];
     const active = activeJobs(jobs);
     expect(active.map((entry) => entry.id)).toEqual(['a', 'b']);
-    expect(collectingSummary(active)).toBe('正在收集 2 項：頻道一（4／10）、https://youtu.be/x');
-    expect(backgroundStatus(2, { enabled: true })).toEqual({ tone: 'busy', text: '背景收集中' });
-    expect(backgroundStatus(0, { enabled: true })).toEqual({ tone: 'on', text: '自動收集開啟' });
-    expect(backgroundStatus(0, { enabled: false })).toEqual({ tone: 'off', text: '自動收集已暫停' });
   });
 
   it('describes collection records', () => {
@@ -114,17 +94,17 @@ describe('source presentation (T-09)', () => {
     expect(jobRecordLabel(record({ state: 'interrupted' }), now).detail).toBe('今天 13:30 · 已中斷，重新開啟時接續');
   });
 
-  it('names the sources of the last and next check under the list, as their detail pages show them (A6)', () => {
+  it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {
     const now = new Date('2026-10-15T06:00:00.000Z');
     const lastCheck = { channelId: 'UC1', title: '財經八百', at: '2026-10-15T06:00:00.000Z' };
     const nextCheck = { channelId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
-    expect(checkTimesLine({ enabled: true, lastCheck, nextCheck }, now)).toBe('上次檢查 今天 14:00（財經八百） · 下一個檢查 今天 14:30（3Blue1Brown）');
-    expect(checkTimesLine({ enabled: false, lastCheck, nextCheck: null }, now)).toBe('上次檢查 今天 14:00（財經八百） · 自動收集已暫停');
-    expect(checkTimesLine({ enabled: true, lastCheck: null, nextCheck: null }, now)).toBe('上次檢查 尚未檢查 · 下一個檢查 沒有追蹤中的來源');
+    expect(checkTimesLine({ enabled: true, lastCheck, nextCheck }, now)).toBe('上次檢查 今天 14:00（財經八百） · 下次檢查 今天 14:30（3Blue1Brown）');
+    expect(checkTimesLine({ enabled: false, lastCheck, nextCheck: null }, now)).toBe('上次檢查 今天 14:00（財經八百） · 自動檢查已關閉');
+    expect(checkTimesLine({ enabled: true, lastCheck: null, nextCheck: null }, now)).toBe('上次檢查 尚未檢查');
     expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, true, now)).toBe('今天 14:30');
-    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, false, now)).toBe('自動收集已暫停');
+    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, false, now)).toBe('自動檢查已關閉');
     expect(nextCheckLabel({ enabled: false, nextCheckAt: null }, true, now)).toBe('已暫停');
-    expect(nextCheckLabel({ enabled: true, nextCheckAt: null }, true, now)).toBe('尚未排定');
+    expect(nextCheckLabel({ enabled: true, nextCheckAt: null }, true, now)).toBe('排隊中');
   });
 
   it('shortens names and addresses for display', () => {

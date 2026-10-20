@@ -122,7 +122,7 @@ describe('ChannelCollector', () => {
       channel: { id: 'one', enabled: false },
       submission: null,
     });
-    expect(await channels.removeChannel('one')).toEqual({ documentsKept: 0 });
+    expect(await channels.removeChannel('one')).toEqual({ documentsKept: 0, documentsDeleted: 0, documentsFailed: 0 });
     expect(await channels.listChannels()).toEqual([]);
     await expect(channels.startRun({ trigger: 'manual' })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(await channels.startRun({ trigger: 'scheduled' })).toEqual([]);

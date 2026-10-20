@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { CollectionPolicy, RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../core/types.js';
+import { ADD_DIALOG_TITLES, addMismatch, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { Icon, SourceTypeBadge } from './icons.js';
@@ -14,26 +15,25 @@ type Recognition =
   | { state: 'done'; input: string; recognition: UrlRecognition }
   | { state: 'error'; message: string };
 
-/** What the dialog reports after an action succeeded. */
-export interface AddResult {
-  message: string;
-  /** The subscription the action created or resumed, when there is one to show. */
-  source?: { type: string; id: string };
-}
+const PLACEHOLDERS: Record<AddMode, string> = { url: '貼上 YouTube 影片網址', 'youtube-channel': '貼上 YouTube 頻道網址或 @handle' };
 
 /**
- * The Add Content dialog. Pasting an address asks the service what it is; the card and buttons
- * come from that answer, and a new subscription's settings fields from its source type's
- * declaration, so the dialog needs no knowledge of individual source types.
+ * The add dialog of one mode: 加入網址 adds one document, 訂閱 YouTube 頻道 adds a subscription.
+ * Pasting an address asks the service what it is; the card and the action come from that answer,
+ * and a new subscription's settings fields from its source type's declaration. An address of the
+ * other kind offers to switch dialogs, keeping the address.
  */
-export function AddContent({ sourceTypes, onClose, onDone, onOpenSource }: {
+export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, onOpenSource }: {
+  mode: AddMode;
   sourceTypes: SourceTypeInfo[];
   onClose: () => void;
-  onDone: (result: AddResult) => void;
+  /** The action was accepted with this response; the dialog's work is done. */
+  onDone: (response: unknown) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState(initialMode);
   const [url, setUrl] = useState('');
   const [recognition, setRecognition] = useState<Recognition>({ state: 'idle' });
   const [busy, setBusy] = useState(false);
@@ -48,6 +48,7 @@ export function AddContent({ sourceTypes, onClose, onDone, onOpenSource }: {
     input.current?.focus();
   }, []);
 
+  // A switch to the other dialog recognizes the kept address again.
   useEffect(() => {
     const trimmed = url.trim();
     setFailure(null);
@@ -66,60 +67,68 @@ export function AddContent({ sourceTypes, onClose, onDone, onOpenSource }: {
       });
     }, RECOGNIZE_DELAY_MS);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [url]);
+  }, [url, mode]);
 
   async function perform(action: RecognitionAction, found: UrlRecognition): Promise<void> {
     setBusy(true);
     setFailure(null);
     try {
       const settings = chosen?.recognition === found ? chosen.settings : found.settings;
-      await api.performAction(action.id === 'subscribe' && settings
+      onDone(await api.performAction(action.id === 'subscribe' && settings
         ? { ...action, request: { ...action.request, body: { ...action.request.body, settings } } }
-        : action);
-      const title = found.target?.title;
-      const message = action.id === 'collect' ? '已開始收集影片，完成後會出現在文件中。'
-        : action.id === 'subscribe' ? `已訂閱「${title}」，開始首次收集。`
-          : `已恢復「${title}」，開始檢查。`;
-      onDone({ message, ...(found.kind === 'channel' && found.target && found.sourceType ? { source: { type: found.sourceType, id: found.target.id } } : {}) });
+        : action));
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '操作失敗，請稍後再試。');
-    } finally {
       setBusy(false);
     }
   }
 
-  function submit(event: FormEvent): void {
-    event.preventDefault();
-    const answer = currentRecognition(recognition.state === 'done' ? recognition : null, input.current?.value ?? url);
-    if (answer?.primary && !busy) void perform(answer.primary, answer.recognition);
+  function switchMode(next: AddMode): void {
+    setMode(next);
+    setChosen(null);
+    input.current?.focus();
   }
 
   const answer = currentRecognition(recognition.state === 'done' ? recognition : null, url);
   const found = answer?.recognition ?? null;
-  const primary = answer?.primary ?? null;
+  const mismatch = found ? addMismatch(mode, found) : null;
+  const unsupported = found !== null && !mismatch && isUnsupportedUrl(found);
+  const primary = !mismatch && !unsupported ? answer?.primary ?? null : null;
   const fields = sourceTypes.find((type) => type.id === found?.sourceType)?.settings ?? [];
   const settings = found && chosen?.recognition === found ? chosen.settings : found?.settings ?? null;
-  return <dialog ref={dialog} className="add-dialog" aria-label="加入內容" data-testid="add-dialog"
+  const primaryLabel = mode === 'url' ? '加入' : primary?.id === 'resume' ? '恢復訂閱' : '訂閱';
+
+  function submit(event: FormEvent): void {
+    event.preventDefault();
+    if (primary && found && !busy) void perform(primary, found);
+  }
+
+  return <dialog ref={dialog} className="add-dialog" aria-labelledby="add-dialog-title" data-testid="add-dialog"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
     <form className="add-body" onSubmit={submit}>
-      <div className="add-tabs" role="tablist" aria-label="加入方式">
-        <button type="button" className="add-tab active" role="tab" aria-selected="true"><Icon name="link" size={15} />貼網址</button>
+      <div className="dialog-titlebar">
+        <h2 id="add-dialog-title" data-testid="add-dialog-title">{ADD_DIALOG_TITLES[mode]}</h2>
         <button type="button" className="icon-only close-button" aria-label="關閉" onClick={onClose}><Icon name="close" /></button>
       </div>
       <label className="field-label" htmlFor="add-url">網址</label>
       <input ref={input} id="add-url" className="url-input" type="text" inputMode="url" value={url} autoComplete="off" spellCheck={false}
-        placeholder="貼上 YouTube 影片或頻道網址" onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
+        placeholder={PLACEHOLDERS[mode]} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
 
       {recognition.state === 'recognizing' ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
       {recognition.state === 'error' ? <p className="add-problem" role="alert">{recognition.message}</p> : null}
-      {found ? <RecognitionCard recognition={found} fields={fields} settings={settings} disabled={busy}
+      {mismatch ? <div className="add-mismatch" role="alert" data-testid="add-mismatch">
+        <p>{mismatch.message}</p>
+        <button type="button" className="button small" onClick={() => switchMode(mismatch.switchTo)} data-testid="add-switch">{mismatch.action}</button>
+      </div> : null}
+      {unsupported ? <p className="add-problem" role="alert" data-testid="add-unsupported">{UNSUPPORTED_URL}</p> : null}
+      {found && !mismatch && !unsupported ? <RecognitionCard recognition={found} fields={fields} settings={settings} disabled={busy}
         onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } })} onOpenSource={onOpenSource} /> : null}
       {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
 
       <div className="dialog-actions">
         <button type="button" className="button" onClick={onClose}>取消</button>
-        {primary ? <button type="submit" className="button primary" disabled={busy} data-testid="add-confirm">{busy ? '處理中…' : primary.label}</button> : null}
+        <button type="submit" className="button primary" disabled={busy || !primary} data-testid="add-confirm">{busy ? '處理中…' : primaryLabel}</button>
       </div>
     </form>
   </dialog>;
@@ -136,7 +145,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
 }) {
   if (recognition.status === 'unsupported' || recognition.status === 'unavailable') {
     return <div className="recognition-card problem" role="alert" data-testid="recognition-card">
-      <p className="card-kind">{recognition.status === 'unsupported' ? '無法加入這個網址' : `無法讀取${recognition.kindLabel ?? '這個來源'}`}</p>
+      <p className="card-kind">{recognition.status === 'unsupported' ? '無法加入這個網址' : `無法讀取${recognition.kindLabel ?? '這個網址'}`}</p>
       <p>{recognition.message}</p>
     </div>;
   }
@@ -169,10 +178,9 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
         <div className="card-settings">
           <CollectionSettingsFields idPrefix="add-settings" fields={fields} value={settings} onChange={onSettings}
             disabled={disabled} />
-          <p className="hint">訂閱後可以在來源詳情頁修改。</p>
         </div>
       </> : null}
-      {subscription?.enabled ? <p>這個頻道已在來源中，會依它的收集設定持續檢查新影片。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看來源</button></p> : null}
+      {subscription?.enabled ? <p>已訂閱這個頻道。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看訂閱</button></p> : null}
       {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(subscription.settings)}</p> : null}
     </div>
   </div>;

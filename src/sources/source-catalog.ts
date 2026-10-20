@@ -2,6 +2,7 @@ import {
   CollectorError,
   type CollectionJob,
   type DocumentMetadata,
+  type PendingSubscription,
   type SourceDetail,
   type SourceEntry,
   type SourceJobRecord,
@@ -16,6 +17,7 @@ const RECENT_LIMIT = 5;
 export interface CatalogChannels {
   listSubscriptions(): Promise<Subscription[]>;
   channelJobs(id: string): CollectionJob[];
+  pendingSubscriptions?(): Promise<PendingSubscription[]>;
 }
 
 /**
@@ -31,7 +33,9 @@ export class SourceCatalog {
   ) {}
 
   async list(): Promise<SourceList> {
-    const [subscriptions, documents] = await Promise.all([this.channels.listSubscriptions(), this.documents()]);
+    const [subscriptions, documents, pending] = await Promise.all([
+      this.channels.listSubscriptions(), this.documents(), this.channels.pendingSubscriptions?.() ?? Promise.resolve([]),
+    ]);
     const subscribed = new Set(subscriptions.map((subscription) => subscription.id));
     let documentCount = 0;
     let lastCollectedAt: string | null = null;
@@ -43,6 +47,7 @@ export class SourceCatalog {
     const sources = subscriptions.map((subscription) => this.entry(subscription));
     return {
       sources,
+      pending,
       unsubscribed: { documentCount, lastCollectedAt },
       types: this.declarations.map((declaration) => ({
         type: declaration.id,
@@ -52,9 +57,9 @@ export class SourceCatalog {
   }
 
   async detail(type: string, id: string): Promise<SourceDetail> {
-    if (type !== 'youtube') throw new CollectorError('channel_not_found', '找不到這個來源。');
+    if (type !== 'youtube') throw new CollectorError('channel_not_found', '找不到這個訂閱。');
     const subscription = (await this.channels.listSubscriptions()).find((candidate) => candidate.id === id);
-    if (!subscription) throw new CollectorError('channel_not_found', '找不到這個來源。');
+    if (!subscription) throw new CollectorError('channel_not_found', '找不到這個訂閱。');
     const documents = (await this.documents())
       .filter((document) => document.sourceType === 'youtube' && document.publisher.id === id)
       .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));

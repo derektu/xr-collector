@@ -31,6 +31,7 @@ import {
   type VaultSetupStatus,
   type ChannelPreview,
   type CollectionPolicy,
+  type PendingSubscription,
   type Subscription,
   type YouTubeChannel,
 } from '../core/types.js';
@@ -43,7 +44,11 @@ export interface ChannelCollection {
   setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }>;
   updateSettings(id: string, patch: Partial<CollectionPolicy>): Promise<YouTubeChannel>;
   applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
-  removeChannel(id: string): Promise<{ documentsKept: number }>;
+  removeChannel(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
+  /** Subscription requests still resolving their channel. */
+  pendingSubscriptions?(): Promise<PendingSubscription[]>;
+  /** Subscriptions removed and not added again. */
+  listRemovals?(): Promise<Array<{ id: string; title: string }>>;
   startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
   channelJobs(id: string): CollectionJob[];
 }
@@ -329,7 +334,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   app.get('/api/documents/sources', async () => ({
-    sources: await options.collector!.sources({ youtube: await options.channels?.listChannels() ?? [] }),
+    sources: await options.collector!.sources({
+      youtube: await options.channels?.listChannels() ?? [],
+      removedYoutube: await options.channels?.listRemovals?.() ?? [],
+    }),
   }));
 
   app.get<{ Querystring: Record<string, unknown> }>('/api/search', async (request) => {
@@ -447,12 +455,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.put<{ Body: Record<string, unknown> | null }>('/api/youtube/schedule', async (request) => {
       const body = request.body;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new CollectorError('invalid_request', '自動收集設定必須是 JSON 物件。');
+        throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
       }
       const keys = Object.keys(body);
       const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
       if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動收集開關必須是 true 或 false。');
+      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
       return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
     });
   }
@@ -499,9 +507,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.post<{ Params: { id: string } }>('/api/youtube/channels/:id/apply-settings', async (request) =>
       channels.applySettingsToAll(request.params.id));
 
-    app.delete<{ Params: { id: string } }>('/api/youtube/channels/:id', async (request) => {
-      const { documentsKept } = await channels.removeChannel(request.params.id);
-      return { removed: true, documentsKept };
+    // `documents=keep` (the default) leaves the channel's documents; `documents=delete` deletes them.
+    app.delete<{ Params: { id: string }; Querystring: Record<string, unknown> }>('/api/youtube/channels/:id', async (request) => {
+      const { documents = 'keep' } = singleValues(request.query);
+      if (documents !== 'keep' && documents !== 'delete') throw new CollectorError('invalid_request', 'documents 只接受 keep 或 delete。');
+      const { documentsKept, documentsDeleted, documentsFailed } = await channels.removeChannel(request.params.id, { documents });
+      return { removed: true, documentsKept, documentsDeleted, documentsFailed };
     });
 
     app.post<{ Body?: { channelIds?: unknown } }>('/api/youtube/channel-runs', async (request, reply) => {

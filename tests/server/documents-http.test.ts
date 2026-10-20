@@ -156,11 +156,11 @@ describe('documents HTTP contract', () => {
         count: 5,
         publishers: [
           ...[
-            { id: 'UC-a', name: '同名頻道', count: 2, subscribed: true },
-            { id: 'UC-b', name: '同名頻道', count: 1, subscribed: true },
-            { id: 'UC-gone', name: '已移除頻道', count: 1, subscribed: false },
+            { id: 'UC-a', name: '同名頻道', count: 2, subscribed: true, removed: false },
+            { id: 'UC-b', name: '同名頻道', count: 1, subscribed: true, removed: false },
+            { id: 'UC-gone', name: '已移除頻道', count: 1, subscribed: false, removed: false },
           ].sort((left, right) => left.name.localeCompare(right.name, 'zh-Hant') || left.id.localeCompare(right.id)),
-          { id: null, name: '未知頻道', count: 1, subscribed: null },
+          { id: null, name: '未知頻道', count: 1, subscribed: null, removed: false },
         ],
       }],
     });

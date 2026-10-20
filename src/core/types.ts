@@ -82,6 +82,8 @@ export interface DocumentSourcePublisher {
    * documents carry no publisher ID to match.
    */
   subscribed: boolean | null;
+  /** The publisher's subscription was removed and not added again; its documents stay. */
+  removed: boolean;
 }
 
 export interface DocumentSourceGroup {
@@ -167,9 +169,29 @@ export interface OutOfRangeVideo {
  */
 export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
 
-/** A subscription as the Sources page and Agents read it. */
+/**
+ * What a subscription is doing now, as its status column shows it. `updating`: a check or its
+ * collection runs, `total` is 0 until the check knows how many items it collects. `queued`: a check
+ * is due but waits for its turn, a YouTube cooldown or a retry. `scheduled`: nothing runs and the
+ * next automatic check is at `nextCheckAt` (null until the scheduler plans it). `paused`: the user
+ * paused it. `auto_check_off`: automatic checks are off for every subscription. `login_required`:
+ * the source needs the user to sign in again.
+ */
+export type SubscriptionCheckStatus =
+  | { state: 'updating'; done: number; total: number }
+  | { state: 'queued' }
+  | { state: 'scheduled'; nextCheckAt: string }
+  | { state: 'paused' }
+  | { state: 'auto_check_off' }
+  | { state: 'login_required' };
+
+/** A subscription as the Subscriptions page and Agents read it. */
 export interface Subscription extends YouTubeChannel {
   status: SubscriptionStatus;
+  /** The status UI and Agents show; computed by the service. */
+  checkStatus: SubscriptionCheckStatus;
+  /** Whether a video of this subscription is still capturing, also after a pause; it may still save a document. */
+  capturing: boolean;
   /** Why the latest channel job failed; set only while `status` is `error`. */
   lastError: JobError | null;
   /** The channel collection job still queued or running, with its item progress. */
@@ -274,8 +296,19 @@ export interface SourceEntry extends Subscription {
   kindLabel: string;
 }
 
+/** A subscription request still resolving its channel; it becomes a source once subscribed, or disappears when it fails. */
+export interface PendingSubscription {
+  jobId: string;
+  url: string;
+  /** The channel title once resolved; null before. */
+  title: string | null;
+  checkStatus: SubscriptionCheckStatus;
+}
+
 export interface SourceList {
   sources: SourceEntry[];
+  /** Subscription requests accepted but not yet subscribed, oldest first. */
+  pending: PendingSubscription[];
   /** Documents that belong to no current subscription. */
   unsubscribed: { documentCount: number; lastCollectedAt: string | null };
   /** Number of subscriptions of each declared source type. */

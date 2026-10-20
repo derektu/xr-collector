@@ -13,14 +13,14 @@ import {
   jobRecordLabel,
   nextCheckLabel,
   shortTimeLabel,
-  sourceStatusLabel,
 } from './source-presentation.js';
+import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
 
 /**
- * One source: its state, counts, collection settings, recent documents and collection record, with
+ * One subscription: its state, counts, collection settings, recent documents and collection record, with
  * pause, resume and remove. A settings change saves at once.
  */
 export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onOpenDocuments, onOpenActivity, onChanged, onRemoved }: {
@@ -58,18 +58,17 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       if (error instanceof ApiError && error.code === 'channel_not_found') setState({ kind: 'missing' });
-      else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個來源。' });
+      else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
     });
     return () => controller.abort();
   }, [type, id, revision, reload]);
 
-  const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />來源</button>;
+  const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />訂閱</button>;
   if (state.kind === 'loading') return <>{back}<p className="loading" role="status">正在讀取…</p></>;
   if (state.kind === 'error') return <>{back}<p className="load-error" role="alert">{state.message}</p></>;
   if (state.kind === 'missing') {
     return <>{back}<section className="empty-state" data-testid="source-missing">
-      <h1 className="page-title" tabIndex={-1} data-page-heading>找不到這個來源</h1>
-      <p>這個來源可能已被移除。已收集的文件仍在文件頁。</p>
+      <h1 className="page-title" tabIndex={-1} data-page-heading>找不到這個訂閱</h1>
     </section></>;
   }
 
@@ -125,7 +124,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       <div className="detail-heading">
         <div className="detail-title-line">
           <h1 className="page-title" tabIndex={-1} data-page-heading>{source.title}</h1>
-          <span className={`status-chip ${source.status}`}>{sourceStatusLabel(source)}</span>
+          <span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="detail-status">{subscriptionStatusText(source.checkStatus)}</span>
         </div>
         <p className="detail-kind"><Icon name={typeInfo?.icon ?? 'file'} size={14} />{source.kindLabel} ·
           <a href={source.url} target="_blank" rel="noopener noreferrer">{displayUrl(source.url)}</a></p>
@@ -144,7 +143,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
       <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</dd></div>
       <div><dt>上次檢查</dt><dd>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
-      <div><dt>訂閱時間</dt><dd>{calendarDate(source.addedAt)}</dd></div>
+      <div><dt>新增時間</dt><dd>{calendarDate(source.addedAt)}</dd></div>
     </dl>
 
     <section className="panel settings-panel" data-testid="detail-settings">
@@ -159,7 +158,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
         <CollectionSettingsFields idPrefix="detail-settings" fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
           onChange={saveSettings} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
-        <p className="next-check" data-testid="detail-next-check">下一次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
+        <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
       </div>
     </section>
 
@@ -172,7 +171,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
           </li>)}</ul>}
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={() => onOpenActivity({ source: source.id })} data-testid="all-activity">全部活動</button></div>
+        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={() => onOpenActivity({ source: source.id })} data-testid="all-activity">全部記錄</button></div>
         {recentJobs.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
           : <ul className="plain-list records">{recentJobs.map((record) => {
             const label = jobRecordLabel(record);

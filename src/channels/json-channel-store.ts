@@ -21,6 +21,8 @@ export interface ChannelStore {
   setEnabled(id: string, enabled: boolean): Promise<YouTubeChannel | null>;
   /** Changes one subscription; returns null when it no longer exists, so a removed channel is never recreated. */
   update(id: string, patch: ChannelPatch): Promise<YouTubeChannel | null>;
+  /** The removal records; a store that keeps none leaves it out. */
+  removals?(): Promise<ChannelRemoval[]>;
 }
 
 /**

@@ -510,7 +510,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.release(ids[0]!);
     await vi.waitFor(() => expect(w.source.running()).toEqual([ids[1]]));
 
-    expect(await w.channels.removeChannel(id)).toEqual({ documentsKept: 1 });
+    expect(await w.channels.removeChannel(id)).toEqual({ documentsKept: 1, documentsDeleted: 0, documentsFailed: 0 });
     w.source.release(ids[1]!);
     const removed = await w.jobs.whenSettled(added.result!.followUpJobId!);
     expect(removed.items!.map((item) => item.skipReason ?? item.outcome)).toEqual(['created', 'created', 'subscription_removed']);

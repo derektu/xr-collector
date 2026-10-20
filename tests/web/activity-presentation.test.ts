@@ -74,9 +74,9 @@ describe('activity presentation', () => {
     expect(logWarning(null)).toBeNull();
     expect(logWarning({ state: 'ok', pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 3 })).toBeNull();
     expect(logWarning({ state: 'failing', pending: 4, dropped: 0, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))
-      .toBe('活動記錄暫時無法寫入，4 筆記錄等待補寫。');
+      .toBe('記錄暫時無法寫入，4 筆記錄等待補寫。');
     expect(logWarning({ state: 'ok', pending: 0, dropped: 2, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))
-      .toBe('有 2 筆活動記錄未能寫入而遺失。');
+      .toBe('有 2 筆記錄未能寫入而遺失。');
   });
 
   it('builds diagnostics in time order with error codes and masked detail', () => {

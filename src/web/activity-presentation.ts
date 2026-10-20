@@ -103,9 +103,9 @@ export function summaryLabel(summary: Pick<JobSummary, 'active' | 'completed' | 
 export function logWarning(health: ActivityLogHealth | null): string | null {
   if (!health) return null;
   if (health.state === 'failing') {
-    return `活動記錄暫時無法寫入，${health.pending} 筆記錄等待補寫${health.dropped > 0 ? `，${health.dropped} 筆已遺失` : ''}。`;
+    return `記錄暫時無法寫入，${health.pending} 筆記錄等待補寫${health.dropped > 0 ? `，${health.dropped} 筆已遺失` : ''}。`;
   }
-  if (health.dropped > 0) return `有 ${health.dropped} 筆活動記錄未能寫入而遺失。`;
+  if (health.dropped > 0) return `有 ${health.dropped} 筆記錄未能寫入而遺失。`;
   return null;
 }
 
@@ -137,7 +137,7 @@ export function diagnosticsText(job: CollectionJob, events: JobEvent[]): string 
     'XR Collector 工作診斷資訊',
     `工作：${job.id}`,
     `類型：${jobBadge(job)}（${job.kind}）`,
-    `來源：${jobTitle(job)}`,
+    `對象：${jobTitle(job)}`,
     `網址：${job.source.url}`,
     `狀態：${job.state}${job.phase ? `／${job.phase}` : ''}`,
     `建立：${job.createdAt}`,
