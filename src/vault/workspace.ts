@@ -470,6 +470,7 @@ export class VaultWorkspace {
     let placed = false;
     let candidate: Bundle | null = null;
     let previous: Bundle | null = null;
+    let failure: { error: unknown } | null = null;
     try {
       await this.settleCollection();
       this.record('info', 'vault.move_started', `開始把知識庫從 ${source} 搬移到 ${target}。`);
@@ -509,7 +510,7 @@ export class VaultWorkspace {
       candidate = null;
       placed = false;
     } catch (error) {
-      this.moveFailed(error, source);
+      failure = { error };
     }
     if (!previous) {
       try {
@@ -529,7 +530,9 @@ export class VaultWorkspace {
       } catch (error) {
         console.error('Move cleanup failed', error);
       }
+      // The failure is published after the lock is released, so a retry made on seeing it is not refused as busy.
       this.end();
+      if (failure) this.moveFailed(failure.error, source);
       return;
     }
     try {
@@ -632,6 +635,7 @@ export class VaultWorkspace {
   private async openOnce(root: string): Promise<void> {
     let candidate: Bundle | null = null;
     let previous: Bundle | null = null;
+    let failure: CollectorError | null = null;
     try {
       await this.settleCollection();
       this.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
@@ -645,8 +649,8 @@ export class VaultWorkspace {
       candidate = null;
     } catch (error) {
       if (!(error instanceof CollectorError)) console.error('Opening another Vault failed', error);
-      this.fail(error instanceof CollectorError ? error
-        : new CollectorError('vault_invalid', `無法開啟 ${root}，請確認資料夾與搜尋服務後重試。目前的知識庫不變。`), '開啟其他知識庫');
+      failure = error instanceof CollectorError ? error
+        : new CollectorError('vault_invalid', `無法開啟 ${root}，請確認資料夾與搜尋服務後重試。目前的知識庫不變。`);
     }
     try {
       if (candidate) {
@@ -668,7 +672,9 @@ export class VaultWorkspace {
       // Device-level, so both Vaults show the switch.
       this.record('info', 'vault.opened', message, null);
     } finally {
+      // A failure is published after the lock is released, so a retry made on seeing it is not refused as busy.
       this.end();
+      if (failure) this.fail(failure, '開啟其他知識庫');
     }
   }
 
