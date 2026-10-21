@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BACKFILL_LIMITS, BACKFILL_WINDOWS, DEFAULT_POLICY, INTERVAL_OPTIONS } from '../../src/channels/collection-policy.js';
-import { CollectorError, type ChannelPreview } from '../../src/core/types.js';
-import { createHttpApp, type ChannelCollection } from '../../src/server/app.js';
-import { recognizeUrl, SOURCE_TYPES, type SourceTypeDeclaration } from '../../src/sources/source-types.js';
+import { BACKFILL_LIMITS, BACKFILL_WINDOWS, DEFAULT_POLICY, INTERVAL_OPTIONS } from '../../src/plugins/youtube/settings.js';
+import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
+import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
+import { recognizeUrl, sourceTypeDeclarations, type SourceTypeDeclaration } from '../../src/sources/source-types.js';
 
 const own = { intervalMinutes: 60, backfillWindow: '2w' as const, backfillMaxItems: 5 };
 const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
 
 /** Channel previews keyed by the resolved address; anything else fails to resolve. */
 function channelsWith(previews: Record<string, { enabled: boolean } | null>, failure?: CollectorError) {
-  const preview = vi.fn(async (url: string): Promise<ChannelPreview> => {
+  const preview = vi.fn(async (url: string): Promise<SubscriptionPreview> => {
     if (failure) throw failure;
     if (!(url in previews)) throw new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。');
     return {
@@ -19,12 +19,12 @@ function channelsWith(previews: Record<string, { enabled: boolean } | null>, fai
       autoCollection: true,
     };
   });
-  const channels = { preview, listSubscriptions: async () => [], channelJobs: () => [] } as unknown as ChannelCollection;
+  const channels = { type: 'youtube', preview, listSubscriptions: async () => [], checkJobs: () => [] } as unknown as SubscriptionCollection;
   return { channels, preview };
 }
 
-async function recognize(url: unknown, channels: ChannelCollection, sourceTypes?: SourceTypeDeclaration[]) {
-  const app = await createHttpApp({ channels, ...(sourceTypes ? { sourceTypes } : {}) });
+async function recognize(url: unknown, channels: SubscriptionCollection, sourceTypes?: SourceTypeDeclaration[]) {
+  const app = await createHttpApp({ subscriptions: [channels], ...(sourceTypes ? { sourceTypes } : {}) });
   const response = await app.inject({ method: 'POST', url: '/api/url-recognitions', payload: url === undefined ? {} : { url } });
   await app.close();
   return response;
@@ -154,7 +154,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       recognize: recognizeFixture,
     } as unknown as SourceTypeDeclaration;
     const { channels, preview } = channelsWith({});
-    const recognition = (await recognize('https://login.example/page', channels, [...SOURCE_TYPES, fixture])).json().recognition;
+    const recognition = (await recognize('https://login.example/page', channels, [...sourceTypeDeclarations(), fixture])).json().recognition;
 
     expect(recognition).toEqual({
       status: 'login_required', sourceType: 'fixture', kind: null, kindLabel: null, url: 'https://login.example/page',
@@ -167,7 +167,7 @@ describe('URL recognition (T-02 to T-05)', () => {
 
   it('lets the first declaration that owns an address recognize it', async () => {
     const { channels } = channelsWith({});
-    const recognition = await recognizeUrl(' https://youtu.be/dQw4w9WgXcQ ', SOURCE_TYPES, { previewChannel: (url) => channels.preview(url) });
+    const recognition = await recognizeUrl(' https://youtu.be/dQw4w9WgXcQ ', sourceTypeDeclarations(), { previewSubscription: (_type, url) => channels.preview(url) });
     expect(recognition).toMatchObject({ status: 'ready', kind: 'video' });
   });
 });

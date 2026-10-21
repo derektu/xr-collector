@@ -3,9 +3,9 @@ import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
-import { writeVaultMarker } from './vault-directory.js';
+import { ensureVaultFormat, writeVaultMarker } from './vault-directory.js';
 import { formatBytes, moveMargin, nearestExisting, type StatFs } from './vault-move.js';
-import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
+import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, sourceTypesOf, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
 import type { FileChanges } from './vault-merge.js';
 
 /**
@@ -70,12 +70,18 @@ export async function applyInPlace(
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+  await ensureVaultFormat(root, placedTypes(entries));
   for (const [index, entry] of entries.entries()) {
     await placeEntry(root, work, entry);
     progress(index + 1, entries.length);
     await faults?.('renaming', index + 1);
   }
   await rm(work, { recursive: true, force: true });
+}
+
+/** The source types whose files a journal puts in place; the Vault format they need goes in first. */
+function placedTypes(entries: InPlaceJournal['entries']): Set<string> {
+  return sourceTypesOf(entries.filter((entry) => entry.staged !== null).map((entry) => entry.path));
 }
 
 async function placeEntry(root: string, work: string, entry: InPlaceJournal['entries'][number]): Promise<void> {
@@ -107,6 +113,7 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
       typeof entry?.path === 'string' && packagePath(entry.path)
       && (entry.staged === null || (typeof entry.staged === 'string' && STAGED.test(entry.staged))));
     if (journal && valid) {
+      await ensureVaultFormat(root, placedTypes(journal.entries));
       for (const entry of journal.entries) await placeEntry(root, work, entry);
       finished = true;
     }
@@ -137,6 +144,7 @@ export async function importNewVault(options: {
     await unpackPackage(reader, journal.staging, () => undefined);
     reader.close();
     await writeVaultMarker(journal.staging, options.createdBy);
+    await ensureVaultFormat(journal.staging, sourceTypesOf(reader.manifest.files.map((row) => row.path)));
     await checkImportFolder(target);
     journal = { ...journal, placed: true, marker: await markerDigest(journal.staging), emptyTarget: await isFolder(target) };
     await writeImportJournal(options.profilePath, journal);

@@ -1,5 +1,5 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
-import type { YouTubePacing } from '../capture/youtube-gate.js';
+import type { Pacing } from '../pacing/pacing-gate.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
@@ -7,11 +7,12 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
-import { parsePolicyPatch } from '../channels/collection-policy.js';
+import { sourceDeclaration, sourceDeclarations, sourceDefinitions, subscriptionKindLabel } from '../core/source-registry.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
-import { recognizeUrl, SOURCE_TYPES, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
+import { recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
   CollectorError,
+  type CoreErrorCode,
   type ActivityLogHealth,
   type ActivityPage,
   type ActivityQuery,
@@ -22,41 +23,42 @@ import {
   type JobSubmission,
   type ChannelSchedule,
   type DocumentFilter,
-  type DocumentSourceType,
   type SearchStatusReport,
   type TranscriptSearch,
   type VaultInspection,
   type VaultSetupAction,
   type VaultSetupResult,
   type VaultSetupStatus,
-  type ChannelPreview,
-  type CollectionPolicy,
   type PendingSubscription,
   type Subscription,
-  type YouTubeChannel,
+  type SubscriptionPreview,
+  type SubscriptionRecord,
+  type SubscriptionSettings,
 } from '../core/types.js';
 
-export interface ChannelCollection {
-  listChannels(): Promise<YouTubeChannel[]>;
+/** The subscriptions of one source type, as the HTTP API manages them. */
+export interface SubscriptionCollection {
+  readonly type: string;
+  list(): Promise<SubscriptionRecord[]>;
   listSubscriptions(): Promise<Subscription[]>;
-  preview(url: string): Promise<ChannelPreview>;
-  addChannel(url: string, settings?: Partial<CollectionPolicy>): Promise<JobSubmission>;
-  setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }>;
-  updateSettings(id: string, patch: Partial<CollectionPolicy>): Promise<YouTubeChannel>;
+  preview(url: string): Promise<SubscriptionPreview>;
+  add(url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission>;
+  setEnabled(id: string, enabled: boolean): Promise<{ channel: SubscriptionRecord; submission: JobSubmission | null }>;
+  updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord>;
   applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
-  removeChannel(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
-  /** Subscription requests still resolving their channel. */
+  remove(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
+  /** Subscription requests still resolving their address. */
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
   /** Subscriptions removed and not added again. */
   listRemovals?(): Promise<Array<{ id: string; title: string }>>;
   startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
-  channelJobs(id: string): CollectionJob[];
+  checkJobs(id: string): CollectionJob[];
 }
 
 /** Accepts collection work and answers job queries for the active Vault. */
 export interface CollectionJobs {
-  submit(url: string): Promise<JobSubmission>;
-  submitVideo(url: string): Promise<JobSubmission>;
+  submit(type: string, url: string): Promise<JobSubmission>;
+  submitItem(type: string, url: string): Promise<JobSubmission>;
   get(id: string): CollectionJob;
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
   summary(since: string): JobSummary;
@@ -85,21 +87,22 @@ export interface VaultSetup {
   setup(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult>;
 }
 
-/** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
-const NOT_READY_ROUTES = new Set([
-  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/youtube/pacing',
-]);
+/** Routes a not-ready runtime still serves so UI and Agents can finish setup; each pacing group's status joins them. */
+const BASE_NOT_READY_ROUTES = [
+  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity',
+];
 
 export interface HttpAppOptions {
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
   transfer?: VaultWorkspace;
-  channels?: ChannelCollection;
+  /** The subscriptions of each source type with subscriptions. */
+  subscriptions?: readonly SubscriptionCollection[];
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
-  /** The device's YouTube request channel; readable whatever state the Vault is in. */
-  pacing?: YouTubePacing;
+  /** The device's request channels, one per pacing group; readable whatever state the Vault is in. */
+  pacing?: readonly Pacing[];
   webRoot?: string;
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
@@ -116,15 +119,13 @@ export interface HttpAppOptions {
   allowedHosts?: string[];
 }
 
-const DOCUMENT_SOURCE_TYPES: DocumentSourceType[] = ['youtube'];
-
 const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
 
 export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
   return appDrains.get(app)?.() ?? Promise.resolve();
 }
 
-const ERROR_STATUS: Record<CollectorError['code'], number> = {
+const ERROR_STATUS: Record<CoreErrorCode, number> = {
   vault_busy: 409,
   vault_not_ready: 503,
   vault_invalid: 422,
@@ -146,15 +147,26 @@ const ERROR_STATUS: Record<CollectorError['code'], number> = {
   transfer_cancelled: 409,
   vault_location_fixed: 409,
   insufficient_space: 507,
-  no_subtitles: 422,
-  video_unavailable: 422,
   capture_failed: 502,
   network_error: 503,
   rate_limited: 503,
 };
 
+/** The HTTP status of an error code: the core's own, else the one a registered source type declares, else 500. */
+export function errorStatus(code: string): number {
+  const core = (ERROR_STATUS as Record<string, number>)[code];
+  if (core !== undefined) return core;
+  for (const definition of sourceDefinitions()) {
+    const declared = definition.errorStatus?.[code];
+    if (declared !== undefined) return declared;
+  }
+  return 500;
+}
+
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+  const NOT_READY_ROUTES = new Set([...BASE_NOT_READY_ROUTES, ...(options.pacing ?? []).map((gate) => `/api/${gate.group}/pacing`)]);
+  const subscriptions = options.subscriptions ?? [];
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -291,7 +303,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         const seconds = Math.max(1, Math.ceil((new Date(error.retryAt).getTime() - Date.now()) / 1000));
         void reply.header('Retry-After', String(seconds));
       }
-      void reply.status(ERROR_STATUS[error.code]).send({
+      void reply.status(errorStatus(error.code)).send({
         error: { code: error.code, message: error.message, ...(error.retryAt ? { retryAt: error.retryAt } : {}) },
       });
       return;
@@ -319,9 +331,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     };
   });
 
-  if (options.pacing) {
-    const pacing = options.pacing;
-    app.get('/api/youtube/pacing', async () => pacing.status());
+  for (const gate of options.pacing ?? []) {
+    app.get(`/api/${gate.group}/pacing`, async () => gate.status());
   }
 
   if (options.agentInfo && options.agentToken === undefined) {
@@ -333,12 +344,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return options.collector!.listDocuments(documentFilter(query), pagination(query));
   });
 
-  app.get('/api/documents/sources', async () => ({
-    sources: await options.collector!.sources({
-      youtube: await options.channels?.listChannels() ?? [],
-      removedYoutube: await options.channels?.listRemovals?.() ?? [],
-    }),
-  }));
+  app.get('/api/documents/sources', async () => {
+    const byType: Record<string, { subscriptions: SubscriptionRecord[]; removals: Array<{ id: string; title: string }> }> = {};
+    for (const collection of subscriptions) {
+      byType[collection.type] = { subscriptions: await collection.list(), removals: await collection.listRemovals?.() ?? [] };
+    }
+    return { sources: await options.collector!.sources(byType) };
+  });
 
   app.get<{ Querystring: Record<string, unknown> }>('/api/search', async (request) => {
     if (!options.search) {
@@ -399,19 +411,22 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.jobs) {
     const jobs = options.jobs;
-    app.post<{ Body: { url?: unknown } }>('/api/youtube/submissions', async (request, reply) => {
-      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址、頻道網址或 @handle。');
-      }
-      return reply.code(202).send(await jobs.submit(request.body.url));
-    });
+    for (const declaration of sourceDeclarations()) {
+      const type = declaration.id;
+      app.post<{ Body: { url?: unknown } }>(`/api/${type}/submissions`, async (request, reply) => {
+        if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+          throw new CollectorError('invalid_request', declaration.prompts.anyInput);
+        }
+        return reply.code(202).send(await jobs.submit(type, request.body.url));
+      });
 
-    app.post<{ Body: { url?: unknown } }>('/api/youtube/collect', async (request, reply) => {
-      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', '請輸入 YouTube 影片網址。');
-      }
-      return reply.code(202).send(await jobs.submitVideo(request.body.url));
-    });
+      app.post<{ Body: { url?: unknown } }>(`/api/${type}/collect`, async (request, reply) => {
+        if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
+          throw new CollectorError('invalid_request', declaration.prompts.itemInput);
+        }
+        return reply.code(202).send(await jobs.submitItem(type, request.body.url));
+      });
+    }
 
     app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', async (request) => {
       const { state, cursor } = request.query;
@@ -448,74 +463,82 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.schedule) {
     const schedule = options.schedule;
-    app.get('/api/youtube/schedule', async () => ({
-      schedule: await schedule.getSchedule(),
-    }));
+    // One switch covers every type's subscriptions; each type with subscriptions serves it under its own prefix.
+    for (const { id: type } of sourceDeclarations().filter((declaration) => declaration.subscription)) {
+      app.get(`/api/${type}/schedule`, async () => ({
+        schedule: await schedule.getSchedule(),
+      }));
 
-    app.put<{ Body: Record<string, unknown> | null }>('/api/youtube/schedule', async (request) => {
-      const body = request.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
-      }
-      const keys = Object.keys(body);
-      const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
-      if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
-      return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
-    });
+      app.put<{ Body: Record<string, unknown> | null }>(`/api/${type}/schedule`, async (request) => {
+        const body = request.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
+        }
+        const keys = Object.keys(body);
+        const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
+        if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
+        if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
+        return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
+      });
+    }
   }
 
-  if (options.channels) {
-    const channels = options.channels;
-    app.get('/api/youtube/channels', async () => ({
-      channels: await channels.listSubscriptions(),
+  for (const collection of subscriptions) {
+    const declaration = sourceDeclaration(collection.type);
+    const subscription = declaration?.subscription;
+    if (!declaration || !subscription) continue;
+    const base = `/api/${collection.type}`;
+    const prompt = declaration.prompts.subscriptionInput;
+    const { targetNoun } = subscription;
+    app.get(`${base}/channels`, async () => ({
+      channels: await collection.listSubscriptions(),
     }));
 
-    app.post<{ Body: { url?: unknown } }>('/api/youtube/channel-previews', async (request) => {
+    app.post<{ Body: { url?: unknown } }>(`${base}/channel-previews`, async (request) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
+        throw new CollectorError('invalid_request', prompt);
       }
-      return { preview: await channels.preview(request.body.url) };
+      return { preview: await collection.preview(request.body.url) };
     });
 
-    app.post<{ Body: { url?: unknown; settings?: unknown } }>('/api/youtube/channels', async (request, reply) => {
+    app.post<{ Body: { url?: unknown; settings?: unknown } }>(`${base}/channels`, async (request, reply) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', '請輸入 YouTube 頻道網址或 @handle。');
+        throw new CollectorError('invalid_request', prompt);
       }
-      const settings = request.body.settings === undefined ? {} : parsePolicyPatch(request.body.settings, { allowEmpty: true });
-      return reply.code(202).send(await channels.addChannel(request.body.url, settings));
+      const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
+      return reply.code(202).send(await collection.add(request.body.url, settings));
     });
 
     // Settings change first, so the check a resume in the same request starts uses the new range.
     app.patch<{
       Params: { id: string };
       Body: { enabled?: unknown; settings?: unknown } | null;
-    }>('/api/youtube/channels/:id', async (request) => {
+    }>(`${base}/channels/:id`, async (request) => {
       const body = request.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', '頻道設定必須是 JSON 物件。');
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', `${targetNoun}設定必須是 JSON 物件。`);
       const unknown = Object.keys(body).find((key) => key !== 'enabled' && key !== 'settings');
       if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
       if (body.enabled === undefined && body.settings === undefined) throw new CollectorError('invalid_request', '請提供 enabled 或 settings。');
-      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '頻道啟用設定無效。');
-      const settings = body.settings === undefined ? null : parsePolicyPatch(body.settings);
-      let channel = settings ? await channels.updateSettings(request.params.id, settings) : null;
+      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', `${targetNoun}啟用設定無效。`);
+      const settings = body.settings === undefined ? null : subscription.parseSettingsPatch(body.settings);
+      let channel = settings ? await collection.updateSettings(request.params.id, settings) : null;
       let submission: JobSubmission | null = null;
-      if (typeof body.enabled === 'boolean') ({ channel, submission } = await channels.setChannelEnabled(request.params.id, body.enabled));
+      if (typeof body.enabled === 'boolean') ({ channel, submission } = await collection.setEnabled(request.params.id, body.enabled));
       return { channel, submission };
     });
 
-    app.post<{ Params: { id: string } }>('/api/youtube/channels/:id/apply-settings', async (request) =>
-      channels.applySettingsToAll(request.params.id));
+    app.post<{ Params: { id: string } }>(`${base}/channels/:id/apply-settings`, async (request) =>
+      collection.applySettingsToAll(request.params.id));
 
-    // `documents=keep` (the default) leaves the channel's documents; `documents=delete` deletes them.
-    app.delete<{ Params: { id: string }; Querystring: Record<string, unknown> }>('/api/youtube/channels/:id', async (request) => {
+    // `documents=keep` (the default) leaves the subscription's documents; `documents=delete` deletes them.
+    app.delete<{ Params: { id: string }; Querystring: Record<string, unknown> }>(`${base}/channels/:id`, async (request) => {
       const { documents = 'keep' } = singleValues(request.query);
       if (documents !== 'keep' && documents !== 'delete') throw new CollectorError('invalid_request', 'documents 只接受 keep 或 delete。');
-      const { documentsKept, documentsDeleted, documentsFailed } = await channels.removeChannel(request.params.id, { documents });
+      const { documentsKept, documentsDeleted, documentsFailed } = await collection.remove(request.params.id, { documents });
       return { removed: true, documentsKept, documentsDeleted, documentsFailed };
     });
 
-    app.post<{ Body?: { channelIds?: unknown } }>('/api/youtube/channel-runs', async (request, reply) => {
+    app.post<{ Body?: { channelIds?: unknown } }>(`${base}/channel-runs`, async (request, reply) => {
       const channelIds = request.body?.channelIds;
       if (
         channelIds !== undefined
@@ -523,29 +546,33 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
           || channelIds.length === 0
           || !channelIds.every((id) => typeof id === 'string' && id.length > 0))
       ) {
-        throw new CollectorError('invalid_request', '頻道執行範圍無效。');
+        throw new CollectorError('invalid_request', `${targetNoun}執行範圍無效。`);
       }
       // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
       const submissions = channelIds === undefined && options.schedule
         ? await options.schedule.runNow()
-        : await channels.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });
+        : await collection.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });
       return reply.code(202).send({ submissions });
     });
   }
 
-  const sourceTypes = options.sourceTypes ?? SOURCE_TYPES;
+  const sourceTypes = options.sourceTypes ?? sourceTypeDeclarations();
   app.get('/api/source-types', async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
 
-  if (options.channels) {
-    const channels = options.channels;
-    const catalog = new SourceCatalog(sourceTypes, channels, async () => await options.collector?.list() ?? []);
+  if (subscriptions.length > 0) {
+    const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? []);
+    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => {
+      const collection = subscriptions.find((candidate) => candidate.type === type);
+      if (!collection) throw new CollectorError('channel_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
+      return collection.preview(url);
+    };
 
     // Every address answers 200 with a status; only a missing address is a malformed request.
     app.post<{ Body: { url?: unknown } }>('/api/url-recognitions', async (request) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請貼上要加入的網址。');
       }
-      return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewChannel: (url) => channels.preview(url) }) };
+      return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewSubscription }) };
     });
 
     app.get('/api/sources', async () => catalog.list());
@@ -642,14 +669,14 @@ function documentFilter(query: Record<string, string | undefined>): DocumentFilt
     throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');
   }
   const { sourceType, publisherId } = query;
-  if (sourceType !== undefined && !DOCUMENT_SOURCE_TYPES.includes(sourceType as DocumentSourceType)) {
+  if (sourceType !== undefined && !sourceDeclaration(sourceType)) {
     throw new CollectorError('invalid_request', '不支援的 sourceType。');
   }
   if (publisherId !== undefined && (sourceType === undefined || publisherId === '' || publisherId.length > 200)) {
     throw new CollectorError('invalid_request', 'publisherId 需要搭配 sourceType，且長度須在 1 到 200 之間。');
   }
   return {
-    ...(sourceType ? { sourceType: sourceType as DocumentSourceType } : {}),
+    ...(sourceType ? { sourceType } : {}),
     ...(publisherId ? { publisherId } : {}),
   };
 }

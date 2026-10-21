@@ -6,16 +6,17 @@ import {
   CollectorError, type ChangeCounts, type ExportSuggestion, type ImportMode, type ImportPreview, type JobStopKind,
   type MoveCheck, type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
 } from '../core/types.js';
-import { ChannelCollector } from '../channels/channel-collector.js';
-import { ChannelScheduler } from '../channels/channel-scheduler.js';
-import { JsonChannelStore } from '../channels/json-channel-store.js';
-import { JsonChannelScheduleStore } from '../channels/json-channel-schedule-store.js';
-import { canonicalJson } from '../channels/subscription-files.js';
+import { subscriptionDefinitions } from '../core/source-registry.js';
+import { SubscriptionService, SubscriptionServices } from '../subscriptions/subscription-service.js';
+import { CollectionScheduler } from '../subscriptions/scheduler.js';
+import { JsonSubscriptionStore, type SubscriptionStore } from '../subscriptions/subscription-store.js';
+import { JsonScheduleStore } from '../subscriptions/schedule-store.js';
+import { canonicalJson } from '../subscriptions/subscription-files.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
-import type { YouTubePacing } from '../capture/youtube-gate.js';
+import type { Pacing } from '../pacing/pacing-gate.js';
+import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
-import { youtubeSource, type YouTubeCapture, type YouTubeChannelSource } from '../sources/youtube/adapter.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
 import { changeTotal, chosenKeys, compareItems, itemStates, planChanges, type Comparison, type ImportPlan, type ItemStates } from './vault-merge.js';
@@ -39,9 +40,9 @@ interface Bundle {
   /** ID from the Vault's marker. */
   vaultId: string;
   collector: Collector;
-  channels: ChannelCollector;
+  subscriptions: SubscriptionServices;
   jobs: JobManager;
-  schedule: ChannelScheduler;
+  schedule: CollectionScheduler;
   runtime: SearchRuntime;
 }
 export interface WorkspaceOptions {
@@ -64,8 +65,8 @@ export interface WorkspaceOptions {
   holdTimeoutMs?: number;
   /** Application name and version written into markers of Vaults it creates. */
   createdBy: string;
-  capture: YouTubeCapture;
-  channelSource: YouTubeChannelSource;
+  /** The assembled source plugins every job of this workspace collects through. */
+  plugins: readonly SourcePlugin[];
   searchBinary: string;
   searchData: string;
   searchPort?: number;
@@ -73,8 +74,8 @@ export interface WorkspaceOptions {
   /** Device record of collection jobs; defaults to an in-memory store. */
   jobStore?: JobStore;
   jobLimits?: Partial<JobLimits>;
-  /** The device's YouTube request channel shared by the capture and channel source above. */
-  pacing?: YouTubePacing;
+  /** The device's request channels, one per pacing group, that the plugins above share. */
+  pacing?: readonly Pacing[];
   jobRetry?: Partial<RetryPolicy>;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
@@ -133,6 +134,23 @@ export function forwarding<T extends object>(target: () => T): T {
   });
 }
 
+/**
+ * One collection per source type with subscriptions, each forwarding to that type's service of
+ * whatever Vault `services` returns at call time. A collection names its type without reaching the
+ * Vault, so routes can be laid out before one is open.
+ */
+export function subscriptionCollections(services: () => SubscriptionServices): SubscriptionService[] {
+  return subscriptionDefinitions().map(({ id: type }) => new Proxy({} as SubscriptionService, {
+    get(_object, key) {
+      if (key === 'type') return type;
+      const service = services().of(type);
+      if (!service) throw new Error(`Source type ${type} has no subscription service`);
+      const value: unknown = Reflect.get(service, key);
+      return typeof value === 'function' ? value.bind(service) : value;
+    },
+  }));
+}
+
 export class VaultWorkspace {
   private current!: Bundle;
   private preview: Preview | null = null;
@@ -148,7 +166,7 @@ export class VaultWorkspace {
     state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
   };
   readonly collector = forwarding(() => this.current.collector);
-  readonly channels = forwarding(() => this.current.channels);
+  readonly subscriptions = forwarding(() => this.current.subscriptions);
   readonly jobs = forwarding(() => this.current.jobs);
   readonly schedule = forwarding(() => this.current.schedule);
   readonly search = forwarding<TranscriptSearch>(() => this.current.runtime.search);
@@ -191,7 +209,7 @@ export class VaultWorkspace {
       catch (error) { await workspace.current.runtime.close(); throw error; }
     }
     try {
-      // Interrupted jobs continue before the scheduler can submit a check of the same channel.
+      // Interrupted jobs continue before the scheduler can submit a check of the same subscription.
       await workspace.current.jobs.resume();
       await workspace.current.schedule.start();
     } catch (error) {
@@ -869,7 +887,7 @@ export class VaultWorkspace {
   /** Restarts the schedule after an import; imported subscriptions arrive without a next check time and get one first. */
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
-    await this.current.channels.planChecks({ reset: false });
+    for (const service of this.current.subscriptions.all()) await service.planChecks({ reset: false });
     this.current.schedule = makeScheduler(this.current);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
@@ -924,8 +942,9 @@ export class VaultWorkspace {
       ...(port ? { port } : {}),
     });
     const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry) });
-    const channelStore = new JsonChannelStore(root);
-    const source = youtubeSource(this.options.capture, this.options.channelSource);
+    const plugins = this.options.plugins;
+    const stores: Record<string, SubscriptionStore> = {};
+    for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(root, plugin.id);
     // The scheduler is replaced after a merge, so switch reads go through the bundle.
     const autoCollection = () => bundle.schedule.isEnabled();
     // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
@@ -933,19 +952,23 @@ export class VaultWorkspace {
       vaultPath: root,
       vaultId,
       store: this.jobStore,
-      source,
+      plugins,
       documents: collector,
-      channels: channelStore,
-      checkChannel: async (channelId) => (await bundle.channels.startRun({ trigger: 'manual', channelIds: [channelId] }))[0]!,
+      subscriptions: stores,
+      checkSubscription: async (type, id) => (await bundle.subscriptions.of(type)!.startRun({ trigger: 'manual', channelIds: [id] }))[0]!,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
     });
-    const channels = new ChannelCollector(channelStore, jobs, {
-      autoCollection, resolveChannel: (url, signal) => source.resolveChannel(url, { priority: 'interactive', signal }), documents: () => collector.list(),
-      deleteDocument: (id) => collector.delete(id),
-      recordDeletion: (entry) => collector.recordDeletion(entry),
-    });
+    const subscriptions = new SubscriptionServices(plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>
+      new SubscriptionService(plugin.id, stores[plugin.id]!, jobs, {
+        autoCollection,
+        resolveTarget: (url, signal) => plugin.resolveTarget!(url, { priority: 'interactive', signal }),
+        documents: () => collector.list(),
+        deleteDocument: (id) => collector.delete(id),
+        recordDeletion: (entry) => collector.recordDeletion(entry),
+        ...(plugin.login ? { loginRequired: () => plugin.login!.status() === 'required' } : {}),
+      })));
     for (const record of recovery.completed) {
       jobs.recordEvent({
         severity: 'info', eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
@@ -965,7 +988,7 @@ export class VaultWorkspace {
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
       });
     }
-    const partial = { root, vaultId, runtime, collector, channels, jobs };
+    const partial = { root, vaultId, runtime, collector, subscriptions, jobs };
     const bundle: Bundle = { ...partial, schedule: makeScheduler(partial) };
     return bundle;
   }
@@ -1001,8 +1024,8 @@ function changeSummary(counts: ChangeCounts): string {
 /** Free space that never runs out, for a check that has already reserved its space. */
 const unlimitedSpace: StatFs = async () => ({ bavail: Number.MAX_SAFE_INTEGER, bsize: 1 });
 
-function makeScheduler(bundle: Pick<Bundle, 'root' | 'channels' | 'jobs'>): ChannelScheduler {
-  return new ChannelScheduler(bundle.channels, new JsonChannelScheduleStore(bundle.root), {
+function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>): CollectionScheduler {
+  return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
   });
 }

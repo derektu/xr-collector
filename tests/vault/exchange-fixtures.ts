@@ -2,13 +2,16 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect } from 'vitest';
-import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
-import type { CapturedTranscript, ImportMode, SavedDocument, TranscriptSearch, YouTubeChannel } from '../../src/core/types.js';
+import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import type { ImportMode, SavedDocument, TranscriptSearch, SubscriptionRecord } from '../../src/core/types.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
 import { ensureMarker } from './package-fixtures.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 /** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */
 
@@ -40,7 +43,7 @@ export const video = (videoId: string, overrides: Partial<CapturedTranscript> = 
 
 export const settings = { intervalMinutes: 60, backfillWindow: '1m' as const, backfillMaxItems: 10 };
 
-export function channel(id: string, overrides: Partial<YouTubeChannel> = {}): YouTubeChannel {
+export function channel(id: string, overrides: Partial<SubscriptionRecord> = {}): SubscriptionRecord {
   return {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}`, enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null, ...overrides,
@@ -49,9 +52,9 @@ export function channel(id: string, overrides: Partial<YouTubeChannel> = {}): Yo
 
 /** A Vault with one document, one subscription and automatic collection on. */
 export async function seed(root: string): Promise<void> {
-  await new MarkdownVault(root).add(capture);
-  await new JsonChannelStore(root).add(channel('UC123', { title: '測試頻道' }));
-  await new JsonChannelScheduleStore(root).save({ enabled: true });
+  await new MarkdownVault(root).add(transcriptDocument(capture));
+  await new JsonSubscriptionStore(root, 'youtube').add(channel('UC123', { title: '測試頻道' }));
+  await new JsonScheduleStore(root).save({ enabled: true });
 }
 
 export function fakeSearch(root: string): TranscriptSearch {
@@ -82,18 +85,18 @@ export async function machine(name: string, root?: string): Promise<Machine> {
 }
 
 /** Opens the Vault the machine's selection names (its own Vault when none), as the runtime does at startup. */
-export async function open(at: Machine, overrides: Partial<WorkspaceOptions> = {}, track = true): Promise<VaultWorkspace> {
+export async function open(at: Machine, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
   const selection = new VaultSelection(path.join(at.profile, 'vault-selection.json'));
   const selected = await selection.read();
   if (!selected) await ensureMarker(at.vault);
-  const workspace = await VaultWorkspace.open({
+  const workspace = await VaultWorkspace.open(withYouTube({
     root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: path.join(at.profile, 'search'),
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     ...overrides,
-  });
+  }));
   if (track) workspaces.push(workspace);
   return workspace;
 }

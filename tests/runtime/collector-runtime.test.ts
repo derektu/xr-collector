@@ -3,23 +3,26 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CapturedTranscript, TranscriptSearch } from '../../src/core/types.js';
+import type { TranscriptSearch } from '../../src/core/types.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
-import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
+import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { packageBytes } from '../vault/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { readEventFiles } from '../activity/event-files.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function options(capture: CollectorRuntimeOptions['workspace']['capture'], search?: TranscriptSearch) {
+async function options(capture: NonNullable<YouTubeTestSources['capture']>, search?: TranscriptSearch) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-test-'));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const closeSearch = vi.fn(async () => undefined);
@@ -30,7 +33,7 @@ async function options(capture: CollectorRuntimeOptions['workspace']['capture'],
     value: {
       profilePath: root,
       explicitVaultPath: vaultPath,
-      workspace: {
+      workspace: withYouTube({
         capture,
         channelSource: {
           resolve: async () => ({ id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' }),
@@ -38,7 +41,7 @@ async function options(capture: CollectorRuntimeOptions['workspace']['capture'],
         },
         searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: search ?? new UnavailableTranscriptSearch('test'), close: closeSearch }),
-      },
+      }),
       connectionFile: path.join(root, 'agent-connection.json'),
       skillPath: path.resolve('skills/xr-collector-agent'),
       uiPort: 0,
@@ -502,11 +505,11 @@ describe('CollectorRuntime Vault setup', () => {
   it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (X77-A15)', async () => {
     const setup = await selected();
     const source = path.join(setup.value.profilePath, 'source');
-    await new MarkdownVault(source).add({
+    await new MarkdownVault(source).add(transcriptDocument({
       videoId: 'runtime0001', sourceUrl: 'https://www.youtube.com/watch?v=runtime0001', title: 'Runtime', channelId: 'UC-runtime', channelTitle: 'Runtime',
       publishedAt: null, languageCode: 'en', languageName: 'English', subtitleKind: 'manual', bodyMarkdown: 'Body.',
-    });
-    await new JsonChannelScheduleStore(source).save({ enabled: true });
+    }));
+    await new JsonScheduleStore(source).save({ enabled: true });
     const file = path.join(setup.value.profilePath, 'export.zip');
     await writeFile(file, await packageBytes(source));
     const runtime = await CollectorRuntime.start(setup.value);

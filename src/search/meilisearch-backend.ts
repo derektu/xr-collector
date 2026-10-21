@@ -7,6 +7,7 @@ import type {
   SearchResponse,
 } from '../core/types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
+import { sourceDeclarations } from '../core/source-registry.js';
 import type { SearchBackend } from './managed-transcript-search.js';
 
 /** The index UID carries the schema version; a schema change gets a new index and a full rebuild. */
@@ -17,10 +18,13 @@ const MAX_TOTAL_HITS = 10_000;
 const HIGHLIGHT_PRE = '<mark>';
 const HIGHLIGHT_POST = '</mark>';
 
-const RETRIEVED_ATTRIBUTES = [
-  'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
-  'publishedAt', 'collectedAt', 'youtube', 'bodyMarkdown',
-];
+/** Fields a search returns: the core's own and the details block of every registered source type. */
+function retrievedAttributes(): string[] {
+  return [
+    'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
+    'publishedAt', 'collectedAt', ...sourceDeclarations().map((declaration) => declaration.id), 'bodyMarkdown',
+  ];
+}
 
 interface MeilisearchBackendOptions {
   baseUrl: string;
@@ -38,7 +42,13 @@ interface TaskResult {
   error: { message?: string } | null;
 }
 
+/**
+ * One indexed document. Besides the core fields it carries one details block named after its source
+ * type, between `collectedAt` and `bodyMarkdown`; that block is null when the
+ * document has no details.
+ */
 interface IndexedDocument {
+  [sourceType: string]: unknown;
   key: string;
   id: string;
   type: SavedDocument['type'];
@@ -51,7 +61,6 @@ interface IndexedDocument {
   publishedAt: string | null;
   publishedAtEpoch: number | null;
   collectedAt: string;
-  youtube: SavedDocument['youtube'] | null;
   bodyMarkdown: string;
   /** Fingerprint of everything above, compared with the Vault to decide whether the index is current. */
   contentHash: string;
@@ -222,7 +231,7 @@ export class MeilisearchBackend implements SearchBackend {
           q: query.query,
           hitsPerPage: limit,
           page: Math.floor(offset / limit) + 1,
-          attributesToRetrieve: RETRIEVED_ATTRIBUTES,
+          attributesToRetrieve: retrievedAttributes(),
           attributesToCrop: ['bodyMarkdown:32'],
           attributesToHighlight: ['bodyMarkdown'],
           highlightPreTag: HIGHLIGHT_PRE,
@@ -277,8 +286,12 @@ export class MeilisearchBackend implements SearchBackend {
   }
 }
 
+/**
+ * The indexed form of a document. The content hash covers the fields in this order, the details
+ * block included, so it changes whenever anything the index shows changes.
+ */
 function toIndexedDocument(document: SavedDocument): IndexedDocument {
-  const fields: Omit<IndexedDocument, 'contentHash'> = {
+  const fields = {
     key: indexKey(document.id),
     id: document.id,
     type: document.type,
@@ -291,10 +304,10 @@ function toIndexedDocument(document: SavedDocument): IndexedDocument {
     publishedAt: document.publishedAt,
     publishedAtEpoch: document.publishedAt ? Date.parse(document.publishedAt) : null,
     collectedAt: document.collectedAt,
-    youtube: document.youtube ?? null,
+    [document.sourceType]: documentDetails(document) ?? null,
     bodyMarkdown: document.bodyMarkdown,
   };
-  return { ...fields, contentHash: createHash('sha256').update(JSON.stringify(fields)).digest('hex') };
+  return { ...fields, contentHash: createHash('sha256').update(JSON.stringify(fields)).digest('hex') } as IndexedDocument;
 }
 
 function toSearchHit(hit: SearchHitDocument): SearchHit {
@@ -308,9 +321,14 @@ function toSearchHit(hit: SearchHitDocument): SearchHit {
     publisher: { id: hit.publisherId, name: hit.publisherName },
     publishedAt: hit.publishedAt,
     collectedAt: hit.collectedAt,
-    ...(hit.youtube ? { youtube: hit.youtube } : {}),
+    ...(hit[hit.sourceType] ? { [hit.sourceType]: hit[hit.sourceType] } : {}),
   };
   return { ...metadata, snippet: hit._formatted?.bodyMarkdown ?? hit.bodyMarkdown };
+}
+
+/** The details block a document carries under the field named after its source type. */
+function documentDetails(document: SavedDocument): unknown {
+  return (document as unknown as Record<string, unknown>)[document.sourceType];
 }
 
 function dateBoundary(value: string, boundary: 'start' | 'end'): number {

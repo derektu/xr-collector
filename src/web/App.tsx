@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
+import { jobRole } from '../core/source-registry.js';
 import { Activity } from './Activity.js';
 import { activityStateSearch, type ActivityViewState } from './activity-presentation.js';
 import { AddContent } from './AddContent.js';
@@ -17,6 +18,7 @@ import { Settings } from './Settings.js';
 import { SourceDetail } from './SourceDetail.js';
 import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceRouteForPath, type SourceListState } from './source-presentation.js';
 import { Sources } from './Sources.js';
+import { targetNoun } from './subscription-presentation.js';
 import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
 
@@ -89,14 +91,14 @@ export default function App() {
   const subscribing = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!status.active) return;
-    const current = new Set(status.active.filter((job) => job.kind === 'youtube.channel-add').map((job) => job.id));
+    const current = new Set(status.active.filter((job) => jobRole(job.kind)?.role === 'add').map((job) => job.id));
     const missing = [...subscribing.current].filter((id) => !current.has(id));
     for (const id of missing) subscribing.current.delete(id);
     for (const id of missing) {
       void api.getJob(id).then((job) => {
         // A list read before the request was accepted does not show it yet.
         if (job.state === 'queued' || job.state === 'running') subscribing.current.add(id);
-        else if (job.state === 'failed') announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? '解析頻道失敗。'}`, 'error');
+        else if (job.state === 'failed') announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(job.source.type)}失敗。`}`, 'error');
       }).catch(() => undefined);
     }
   }, [status.active]);
@@ -154,7 +156,7 @@ export default function App() {
   function added(response: unknown): void {
     setAdding(null);
     const job = (response as { job?: { id?: unknown; kind?: unknown } } | null)?.job;
-    if (job?.kind === 'youtube.channel-add' && typeof job.id === 'string') subscribing.current.add(job.id);
+    if (typeof job?.kind === 'string' && jobRole(job.kind)?.role === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
     status.announce();
   }
   function persist(next: ThemePreference): void {

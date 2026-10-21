@@ -33,7 +33,7 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
     setBusy(true);
     setFailure(null);
     try {
-      const { updated } = await api.applyChannelSettings(source.id);
+      const { updated } = await api.applyChannelSettings(source.type, source.id);
       onApplied(`已套用到 ${updated} 個 ${source.kindLabel}。`);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '無法套用，請稍後再試。');

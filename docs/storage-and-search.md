@@ -7,9 +7,9 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | 資料 | 位置與交換方式 |
 | --- | --- |
 | Vault 標記檔 | Vault 根目錄的 `xr-collector-vault.json`；不納入匯出檔 |
-| YouTube Markdown | Vault 的 `documents/youtube/` |
-| 訂閱、各訂閱的收集設定、收集進度與檢查時間、訂閱的移除紀錄 | Vault 的 `settings/youtube-channels.json` |
-| 自動檢查總開關 | Vault 的 `settings/youtube-schedule.json` |
+| 文件 Markdown | Vault 的 `documents/<來源類型>/<來源 ID>.md`，YouTube 為 `documents/youtube/` |
+| 訂閱、各訂閱的收集設定、收集進度與檢查時間、訂閱的移除紀錄 | 每個來源類型一個訂閱檔，位置由 plugin 宣告；YouTube 為 Vault 的 `settings/youtube-channels.json` |
+| 自動檢查總開關 | Vault 的 `settings/youtube-schedule.json`，所有來源類型共用 |
 | 刪除紀錄 | Vault 的 `settings/deleted-documents.json` |
 | 使用者自己放在 Vault 資料夾的其他檔案 | 不屬於知識庫，程式不讀取，也不納入匯出檔 |
 | Meilisearch database | 裝置上的搜尋資料目錄；不納入匯出檔 |
@@ -26,7 +26,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 ## Vault 目錄與選址
 
-每個 Vault 是自成一體的目錄。根目錄的標記檔記錄 `format`（固定為 `xr-collector-vault`）、`formatVersion`、建立時間、建立程式與 `id`（UUID），不含路徑或其他裝置資訊，因此整個目錄複製到另一台電腦後仍是同一份有效 Vault。`id` 在建立與從匯出檔建立時寫入，搬移時保留；匯出檔不含標記檔，所以從匯出檔建立的 Vault 得到新的 `id`。程式只開啟現行格式的 Vault：標記檔有 `id`、`formatVersion` 不高於自身支援的版本，三個設定檔都是現行版本。標記檔沒有 `id`、設定檔是其他版本，或格式版本較新時，Vault 不開啟並說明原因，檔案保持原樣。
+每個 Vault 是自成一體的目錄。根目錄的標記檔記錄 `format`（固定為 `xr-collector-vault`）、`formatVersion`、建立時間、建立程式與 `id`（UUID），不含路徑或其他裝置資訊，因此整個目錄複製到另一台電腦後仍是同一份有效 Vault。`id` 在建立與從匯出檔建立時寫入，搬移時保留；匯出檔不含標記檔，所以從匯出檔建立的 Vault 得到新的 `id`。程式只開啟現行格式的 Vault：標記檔有 `id`、`formatVersion` 不高於已登錄來源類型宣告的最高 `vaultFormatVersion`（至少 1），設定檔（各已登錄來源類型的訂閱檔、自動檢查總開關與刪除紀錄）都是現行版本。標記檔沒有 `id`、設定檔是其他版本，或格式版本較新時，Vault 不開啟並說明原因，檔案保持原樣。某個來源類型的文件或訂閱檔第一次寫入 Vault 前（包括匯入帶入這些檔案時），標記檔的 `formatVersion` 提高到該類型宣告的 `vaultFormatVersion`；已經同版或更高時標記檔不變，所以只有 YouTube 的 Vault 維持 1，標記檔逐位元不動。
 
 開啟前先檢查目錄：有效標記檔與現行版本的設定檔構成可開啟的 Vault；不存在（上層目錄存在）或只含 `.DS_Store`、`Thumbs.db` 等系統檔的目錄可以建立新 Vault；其他內容一律視為無法辨識。檢查不改動目錄，建立 Vault 只寫入標記檔。
 
@@ -84,12 +84,12 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
   "files": [{ "path": "documents/youtube/<來源 ID>.md", "size": 0, "sha256": "<hex>" }] }
 ```
 
-`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
+`formatVersion` 是匯出檔內有文件或訂閱檔的來源類型所宣告的 `packageFormatVersion` 中最高者，至少為 1；只有 YouTube 的匯出檔是 1。讀取時接受 1 到已登錄來源類型宣告的最高版本，較新的版本拒絕匯入。`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
 
 匯出檔只放 Vault 登記的檔案，內容由 Vault 的紀錄決定，不掃描資料夾：
 
 - 文件：`MarkdownVault.list` 列得出、沒有被刪除紀錄隱藏的文件。只有檔名是 `documents/<來源類型>/<來源 ID>.md`（由 `src/vault/document-paths.ts` 依各來源的 ID 規則判斷）的檔案才是文件；這類檔案讀不出文件格式，或 frontmatter 的 ID 與檔名不符時，列表與匯出失敗並指出該檔案。
-- 設定：`settings/youtube-channels.json`、`settings/youtube-schedule.json`、`settings/deleted-documents.json`，存在時才放入。刪除紀錄套用與列表相同的可見性規則：文件較新的刪除紀錄不匯出，所以匯出檔不會同時有一份文件與隱藏它的刪除紀錄。
+- 設定：各已登錄來源類型的訂閱檔（YouTube 為 `settings/youtube-channels.json`）、`settings/youtube-schedule.json`、`settings/deleted-documents.json`，存在時才放入。刪除紀錄套用與列表相同的可見性規則：文件較新的刪除紀錄不匯出，所以匯出檔不會同時有一份文件與隱藏它的刪除紀錄。
 
 Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一律不讀取、不打包，也不會讓匯出失敗；匯出只列出檔名計算數量，結果的 `unregisteredFiles` 與記錄註明有多少這類檔案沒有包含，完成畫面不顯示。系統檔（`.DS_Store` 等）、標記檔與匯入的工作資料夾不計入，符號連結不跟隨，無法讀取的資料夾略過。
 
@@ -97,7 +97,7 @@ Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一�
 
 匯出檔只以本機的完整路徑指定，副檔名必須是 `.zip`。匯出寫到使用者選的位置，或不指定時寫到預設匯出目錄的 `XR Collector 匯出 YYYY-MM-DD.zip`（目錄不存在時建立）；先寫到同一資料夾的暫存檔，完成後改名，所以指定的檔案不是完整的匯出就是保持原樣。匯出只讀取 Vault，不寫入任何檔案。同名檔案存在時回 `file_exists`，經使用者確認才取代。匯出位置不能在目前 Vault 或程式資料目錄內。
 
-匯入讀取匯出檔時拒絕下列情況，不寫入任何資料：不是 `.zip` 或不是 zip、manifest 缺少或格式識別、版本不符；zip 項目與 manifest 列出的檔案不完全一致；路徑不是文件或三個設定檔、不安全（絕對路徑、`..`、反斜線）、重複或只差大小寫；檔案大小或 SHA-256 與 manifest 不符（包含解壓後超過宣告大小的項目）；文件不是其路徑代表的文件、設定檔不是現行版本、訂閱 ID 重複、刪除或移除紀錄格式錯誤，或同一份文件同時有內容與刪除紀錄、同一個頻道同時有訂閱與移除紀錄。SHA-256 用於偵測損壞，不是來源簽章。設定檔與文件 frontmatter 中不認得的欄位在匯入後保留。
+匯入讀取匯出檔時拒絕下列情況，不寫入任何資料：不是 `.zip` 或不是 zip、manifest 缺少或格式識別、版本不符；zip 項目與 manifest 列出的檔案不完全一致；路徑不是文件或上述設定檔、不安全（絕對路徑、`..`、反斜線）、重複或只差大小寫；檔案大小或 SHA-256 與 manifest 不符（包含解壓後超過宣告大小的項目）；文件不是其路徑代表的文件、設定檔不是現行版本、訂閱 ID 重複、刪除或移除紀錄格式錯誤，或同一份文件同時有內容與刪除紀錄、同一個訂閱同時存在與有移除紀錄。SHA-256 用於偵測損壞，不是來源簽章。設定檔與文件 frontmatter 中不認得的欄位在匯入後保留。
 
 ### 修改時間與刪除狀態
 
@@ -106,7 +106,7 @@ Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一�
 | 項目 | 存在時的時間 | 刪除時的狀態與時間 |
 | --- | --- | --- |
 | 文件 | frontmatter 的 `collector.updated_at`（程式修改文件內容時寫入），沒有時是 `collector.collected_at` | `deleted-documents.json` 的刪除紀錄，時間是 `deletedAt` |
-| 訂閱 | `updatedAt`（變更名稱、網址、暫停狀態或收集設定時更新；收集進度與檢查時間不算），沒有時是 `addedAt` | `youtube-channels.json` 的 `removed` 中的移除紀錄，時間是 `removedAt` |
+| 訂閱 | `updatedAt`（變更名稱、網址、暫停狀態或收集設定時更新；收集進度與檢查時間不算），沒有時是 `addedAt` | 該來源類型訂閱檔的 `removed` 中的移除紀錄，時間是 `removedAt` |
 
 刪除紀錄與移除紀錄永久保留，否則另一台還留著的文件或訂閱會在下次合併時回來。明確重新收集已刪除的影片時，文件的 `collected_at` 晚於 `deletedAt`，保存後解除刪除紀錄；同一個頻道再次訂閱時解除它的移除紀錄。這兩種情況的新狀態都比紀錄新，帶到另一台時也勝過那邊的紀錄。在程式以外修改文件不留下時間。
 
@@ -144,7 +144,7 @@ Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import
 
 匯入只接受本機的 `.zip` 匯出檔，先比對，再由使用者選擇方式套用到目前的 Vault。匯出檔留在原處。
 
-比對逐項進行，項目以 `document:<文件 ID>` 與 `channel:<頻道 ID>` 為鍵，每個項目在一邊是存在、已刪除或沒有。兩邊都存在時比較內容：文件比較 metadata 與正文，忽略 `collector.collected_at` 與 `collector.updated_at`，所以兩台各自收到同一支影片時內容相同；訂閱比較名稱、網址、暫停狀態與收集設定。合併的規則是較新的狀態為準：
+比對逐項進行，項目以 `document:<文件 ID>` 與 `subscription:<來源類型>:<訂閱 ID>` 為鍵，每個項目在一邊是存在、已刪除或沒有。兩邊都存在時比較內容：文件比較 metadata 與正文，忽略 `collector.collected_at` 與 `collector.updated_at`，所以兩台各自收到同一支影片時內容相同；訂閱比較名稱、網址、暫停狀態與收集設定。合併的規則是較新的狀態為準：
 
 | 本機 | 匯出檔 | 合併的結果 |
 | --- | --- | --- |
@@ -185,7 +185,9 @@ Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import
 
 ### 訂閱設定檔
 
-`youtube-channels.json` 是 `{ "version": 2, "channels": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶 `settings`（`intervalMinutes`、`backfillWindow`、`backfillMaxItems`）、`lastCheckedAt`、`outOfRange`（可省略，超出收集範圍的影片與當時的範圍起點）、`nextCheckAt` 與 `lastDispatchedAt`；`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`。訂閱與檔案中不認得的欄位（例如已不使用的 `cursor`）照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
+每個有訂閱的來源類型在 plugin 的 `storage` 宣告訂閱檔位置、版本與清單欄位名稱；檔案格式都是 `{ "version": <版本>, "<清單欄位>": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶 `settings`（該來源類型的收集設定）、`lastCheckedAt`、`outOfRange`（可省略，超出收集範圍的項目與當時的範圍起點）、`nextCheckAt` 與 `lastDispatchedAt`。訂閱與檔案中不認得的欄位照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
+
+YouTube 的訂閱檔是 `youtube-channels.json`，版本 2，清單欄位是 `channels`；`settings` 是 `intervalMinutes`、`backfillWindow`、`backfillMaxItems`，`outOfRange` 的項目以 `videoId` 記錄，已不使用的 `cursor` 照原樣保存。`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`，涵蓋所有來源類型的訂閱。
 
 ## 搜尋投影
 
@@ -193,7 +195,7 @@ Onboarding 的「從匯出檔匯入…」與 `POST /api/vault/setup` 的 `import
 
 索引名稱帶 schema 版本（`documents_v2`）；schema 改變時使用新名稱並從 Vault 全量重建，舊版本的索引在啟動時刪除。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。
 
-每筆索引文件帶有其 metadata 與正文的內容雜湊。啟動時逐筆比對索引與 Vault 的文件 ID 及雜湊，集合或任一雜湊不同就從 Vault 全量重建，因此篇數相同但內容或身分不同時也會重建；完全一致時沿用持久化索引。全量重建完成的時間記錄在裝置的搜尋資料旁（`<搜尋資料目錄>-state.json`），供設定頁與 `GET /api/search/status` 顯示。這項比對只在啟動時進行；執行期間的收集逐筆更新索引。
+來源專屬的欄位放在以來源類型為名的區塊，由 plugin 的 frontmatter codec 讀出，例如 YouTube 文件的 `youtube` 區塊含字幕語言與種類。每筆索引文件帶有其 metadata、來源專屬區塊與正文的內容雜湊，欄位順序固定，雜湊只隨內容改變；`tests/search/indexed-document.test.ts` 固定了一份 YouTube 文件的雜湊值。啟動時逐筆比對索引與 Vault 的文件 ID 及雜湊，集合或任一雜湊不同就從 Vault 全量重建，因此篇數相同但內容或身分不同時也會重建；完全一致時沿用持久化索引。全量重建完成的時間記錄在裝置的搜尋資料旁（`<搜尋資料目錄>-state.json`），供設定頁與 `GET /api/search/status` 顯示。這項比對只在啟動時進行；執行期間的收集逐筆更新索引。
 
 刪除文件時，文件 ID 先加入待移除清單，再在背景從索引刪除。搜尋時清單內的 ID 以引擎篩選條件排除，結果與總數都不含已刪除文件。索引刪除失敗時 ID 留在清單，下一次索引異動時再刪除；清單超過 100 筆時改為從 Vault 全量重建，篩選條件因此維持在固定長度內。清單只存在於執行中的程序；重新啟動後，啟動時的比對會發現索引多出已刪除的文件並全量重建，重建完成前搜尋不提供結果。
 

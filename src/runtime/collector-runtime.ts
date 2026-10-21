@@ -17,7 +17,7 @@ import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
 import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-directory.js';
 import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
-import { forwarding, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
+import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
 
 export type CollectorRuntimeState = 'starting' | 'ready' | 'not_ready' | 'stopping' | 'stopped' | 'unavailable';
 
@@ -114,7 +114,7 @@ export class CollectorRuntime {
       collector: forwarding(() => current().collector),
       jobs: forwarding(() => current().jobs),
       transfer: forwarding(() => current()),
-      channels: forwarding(() => current().channels),
+      subscriptions: subscriptionCollections(() => current().subscriptions),
       schedule: forwarding(() => current().schedule),
       search: forwarding<TranscriptSearch>(() => current().search),
       ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),

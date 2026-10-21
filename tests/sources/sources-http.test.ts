@@ -2,14 +2,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChannelCollector } from '../../src/channels/channel-collector.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
-import { MemoryDocuments, SyntheticYouTube } from '../channels/synthetic-youtube.js';
+import { MemoryDocuments, SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -24,23 +25,23 @@ async function world() {
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
-  const channelStore = new JsonChannelStore(root);
+  const channelStore = new JsonSubscriptionStore(root, 'youtube');
   const jobs = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), source, documents: collector, channels: channelStore, now,
+    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now,
     limits: { discovery: 1, capture: 4 },
     // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },
   });
-  const channels = new ChannelCollector(channelStore, jobs, {
-    autoCollection: async () => true, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
+  const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
-  const app = await createHttpApp({ collector, jobs, channels, agentToken: 'agent-token' });
+  const app = await createHttpApp({ collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
   const get = async (url: string) => {
     const response = await app.inject({ method: 'GET', url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };
   };
   const subscribe = async (name: string) => {
-    const added = await jobs.whenSettled((await channels.addChannel(`@${name}`)).job.id);
+    const added = await jobs.whenSettled((await channels.add(`@${name}`)).job.id);
     return jobs.whenSettled(added.result!.followUpJobId!);
   };
   const advance = (ms: number) => { clock.now = new Date(clock.now.getTime() + ms); };
@@ -60,12 +61,12 @@ describe('source list (T-06, T-08)', () => {
     await w.subscribe('gamma');
     w.advance(10 * MINUTE);
     // A single video of an unsubscribed channel, and one of a subscribed channel published later.
-    await w.jobs.whenSettled((await w.jobs.submitVideo(`https://youtu.be/${betaVideo}`)).job.id);
+    await w.jobs.whenSettled((await w.jobs.submitItem('youtube', `https://youtu.be/${betaVideo}`)).job.id);
     const [lateAlpha] = w.source.publish(subscribed, 'n', w.clock.now, [0]);
     w.advance(5 * MINUTE);
-    await w.jobs.whenSettled((await w.jobs.submitVideo(`https://youtu.be/${lateAlpha}`)).job.id);
+    await w.jobs.whenSettled((await w.jobs.submitItem('youtube', `https://youtu.be/${lateAlpha}`)).job.id);
     const unsubscribedAt = w.clock.now.toISOString();
-    await w.channels.removeChannel(leaving);
+    await w.channels.remove(leaving);
     const legacy: SavedDocument = {
       id: 'youtube:legacy00001', type: 'Transcript', title: '舊文件', sourceUrl: 'https://www.youtube.com/watch?v=legacy00001',
       sourceType: 'youtube', sourceId: 'legacy00001', publisher: { id: null, name: '未知頻道' },
@@ -115,9 +116,9 @@ describe('source list (T-06, T-08)', () => {
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
     const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual' }))[0]!.job.id);
     // A newer channel job that a shutdown interrupted, as the job history reports it after a restart.
-    const history = w.jobs.channelJobs.bind(w.jobs);
-    vi.spyOn(w.jobs, 'channelJobs').mockImplementation(() => {
-      const jobs = history();
+    const history = w.jobs.checkJobs.bind(w.jobs);
+    vi.spyOn(w.jobs, 'checkJobs').mockImplementation((type) => {
+      const jobs = history(type);
       const interrupted = { ...failed, id: 'interrupted-run', state: 'interrupted' as const, error: { code: 'interrupted', message: '服務停止時工作尚未完成。' } };
       jobs.set(id, [interrupted, ...(jobs.get(id) ?? [])]);
       return jobs;
@@ -133,7 +134,7 @@ describe('source list (T-06, T-08)', () => {
     await w.subscribe('alpha');
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
     await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual' }))[0]!.job.id);
-    await w.channels.setChannelEnabled(id, false);
+    await w.channels.setEnabled(id, false);
 
     expect((await w.get('/api/sources')).body.sources[0]).toMatchObject({ status: 'paused', lastError: null });
     await w.app.close();

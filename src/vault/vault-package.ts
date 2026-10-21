@@ -7,7 +7,8 @@ import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { CHANNELS_FILE, channelsFromJson, removalsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
+import { removalsFromJson, scheduleEnabledFromJson, subscriptionsFromJson } from '../subscriptions/subscription-files.js';
+import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
@@ -24,14 +25,15 @@ import type { FileSource } from './vault-merge.js';
  *   "exportedAt": "<ISO time>", "createdBy": "<program>",
  *   "source": { "vaultId": "<UUID>", "machine": "<name>" },
  *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
- *   "files": [{ "path": "documents/youtube/<ID>.md", "size": 0, "sha256": "<hex>" }] }
+ *   "files": [{ "path": "documents/<source type>/<ID>.md", "size": 0, "sha256": "<hex>" }] }
  * ```
  *
  * `source` names the Vault and the machine the export came from, for diagnosis; an import compares
  * the files themselves, whose documents, subscriptions and records carry their own times.
  *
- * The registered files are the documents `MarkdownVault.list` returns and the three settings
- * files. Nothing else in the Vault folder is read or packed, so files a person keeps there never
+ * The registered files are the documents `MarkdownVault.list` returns and the settings files:
+ * the subscriptions file each registered source type declares, the schedule file and the deletion
+ * file. Nothing else in the Vault folder is read or packed, so files a person keeps there never
  * fail an export. Packages are written and read as streams: memory holds the manifest and the file
  * in hand, never the whole package. A file read into memory to be checked (a document or a
  * settings file) is at most `FILE_LIMIT` bytes, and the manifest at most `MANIFEST_LIMIT`; a
@@ -44,18 +46,48 @@ export const FILE_LIMIT = 64 * 1024 * 1024;
 export const MANIFEST_LIMIT = 64 * 1024 * 1024;
 /** Every manifest row holds at least a 64-character digest, so a manifest within its limit lists no more files than this. */
 const ENTRY_LIMIT = MANIFEST_LIMIT / 64;
-const SETTINGS = [CHANNELS_FILE, SCHEDULE_FILE, DELETIONS_FILE] as const;
 /** Operating-system files that are never counted as a person's files in the Vault. */
 const SYSTEM_FILES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
 /** Working folder of an import being applied in place, inside the Vault: `.xr-collector-import-<UUID>`. */
 export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
+
+/** The settings files a package may hold, in the order an export packs them. */
+function settingsFiles(): string[] {
+  return [...subscriptionDefinitions().map((definition) => definition.storage!.subscriptionsFile), scheduleFile(), DELETIONS_FILE];
+}
+
+/** The registered source types whose documents or subscription files are among `paths`. */
+export function sourceTypesOf(paths: Iterable<string>): Set<string> {
+  const subscriptionFiles = new Map(subscriptionDefinitions().map((definition) => [definition.storage!.subscriptionsFile, definition.id]));
+  const types = new Set<string>();
+  for (const file of paths) {
+    const type = documentKeyFromPath(file)?.sourceType ?? subscriptionFiles.get(file);
+    if (type) types.add(type);
+  }
+  return types;
+}
+
+/**
+ * The format version a package of these files is written with: the highest `packageFormatVersion`
+ * among the source types whose documents or subscription files it holds, and at least
+ * `PACKAGE_FORMAT_VERSION`.
+ */
+export function packageFormatVersion(paths: readonly string[]): number {
+  const types = sourceTypesOf(paths);
+  return Math.max(PACKAGE_FORMAT_VERSION, ...sourceDefinitions().filter((definition) => types.has(definition.id)).map((definition) => definition.packageFormatVersion));
+}
+
+/** The highest package format version this program reads: its own, or a higher one a registered source type declares. */
+export function supportedPackageFormatVersion(): number {
+  return Math.max(PACKAGE_FORMAT_VERSION, ...sourceDefinitions().map((definition) => definition.packageFormatVersion));
+}
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
 export interface ManifestFile { path: string; size: number; sha256: string }
 export interface PackageSource { vaultId: string; machine: string }
 export interface PackageManifest {
   format: typeof PACKAGE_FORMAT;
-  formatVersion: typeof PACKAGE_FORMAT_VERSION;
+  formatVersion: number;
   exportedAt?: string;
   createdBy?: string;
   source?: PackageSource;
@@ -80,7 +112,7 @@ export function machineName(): string {
 
 /** Whether a path names a file a package may hold: a document file or one of the settings files. */
 export function packagePath(value: string): boolean {
-  return documentKeyFromPath(value) !== null || (SETTINGS as readonly string[]).includes(value);
+  return documentKeyFromPath(value) !== null || settingsFiles().includes(value);
 }
 
 /** A file of a Vault that a package holds: read from `absolute`, or `bytes` the export wrote itself. */
@@ -110,7 +142,8 @@ export async function registeredFiles(root: string): Promise<RegisteredFiles> {
     if (absolute) files.push({ path: file, absolute });
   }
   let subscriptions: number | null = null;
-  for (const file of SETTINGS) {
+  const subscriptionFiles = new Map(subscriptionDefinitions().map((definition) => [definition.storage!.subscriptionsFile, definition]));
+  for (const file of settingsFiles()) {
     const absolute = await regularFile(root, file);
     if (!absolute) continue;
     if (file === DELETIONS_FILE) {
@@ -118,7 +151,8 @@ export async function registeredFiles(root: string): Promise<RegisteredFiles> {
       files.push(stored.length === portable.records.length ? { path: file, absolute }
         : { path: file, bytes: Buffer.from(`${JSON.stringify(deletionsToJson(portable.records), null, 2)}\n`) });
     } else {
-      if (file === CHANNELS_FILE) subscriptions = channelsFromJson(JSON.parse(await readFile(absolute, 'utf8'))).length;
+      const definition = subscriptionFiles.get(file);
+      if (definition) subscriptions = (subscriptions ?? 0) + subscriptionsFromJson(definition, JSON.parse(await readFile(absolute, 'utf8'))).length;
       files.push({ path: file, absolute });
     }
   }
@@ -209,7 +243,7 @@ export async function writePackage(
   }
   zip.addReadStreamLazy(MANIFEST, { mtime }, (done) => {
     const manifest: PackageManifest = {
-      format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
+      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(rows.map((row) => row.path)),
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
       ...(info.source ? { source: info.source } : {}),
       summary: registered.summary, files: rows,
@@ -350,7 +384,8 @@ function parseManifest(bytes: Buffer): PackageManifest {
   let value: Partial<PackageManifest>;
   try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
   if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
-  if (value.formatVersion !== PACKAGE_FORMAT_VERSION) invalid('不支援這個匯出檔的格式版本。');
+  const formatVersion = value.formatVersion;
+  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > supportedPackageFormatVersion()) invalid('不支援這個匯出檔的格式版本。');
   if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
   const seen = new Set<string>();
   for (const row of value.files as unknown[]) {
@@ -368,7 +403,7 @@ function parseManifest(bytes: Buffer): PackageManifest {
   const source = value.source as Partial<PackageSource> | undefined;
   const sourceValid = !!source && typeof source === 'object' && typeof source.vaultId === 'string' && typeof source.machine === 'string';
   return {
-    format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION,
+    format: PACKAGE_FORMAT, formatVersion: formatVersion!,
     ...(typeof value.exportedAt === 'string' ? { exportedAt: value.exportedAt } : {}),
     ...(typeof value.createdBy === 'string' ? { createdBy: value.createdBy } : {}),
     ...(sourceValid ? { source: { vaultId: source.vaultId!, machine: source.machine! } } : {}),
@@ -397,26 +432,29 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
     invalid('匯出檔中的刪除紀錄格式無效。');
   }
   if (records.some((record) => reader.has(documentPath(record)))) invalid('匯出檔中同一份文件同時有內容與刪除紀錄。');
-  let channels;
-  let removals;
+  const types = [];
   try {
-    const channelsFile = await json(CHANNELS_FILE);
-    channels = channelsFromJson(channelsFile);
-    removals = removalsFromJson(channelsFile);
-    scheduleEnabledFromJson(await json(SCHEDULE_FILE));
+    for (const definition of subscriptionDefinitions()) {
+      const file = await json(definition.storage!.subscriptionsFile);
+      types.push({ subscriptions: subscriptionsFromJson(definition, file), removals: removalsFromJson(definition, file) });
+    }
+    scheduleEnabledFromJson(await json(scheduleFile()));
   } catch (error) {
     if (error instanceof CollectorError) throw error;
     invalid('匯出檔中的訂閱或排程設定格式無效。');
   }
-  const ids = new Set<string>();
-  for (const channel of channels) {
-    if (ids.has(channel.id)) invalid(`匯出檔中的訂閱 ID 重複：${channel.id}`);
-    ids.add(channel.id);
-  }
-  const removed = new Set<string>();
-  for (const record of removals) {
-    if (ids.has(record.id) || removed.has(record.id)) invalid(`匯出檔中的訂閱與移除紀錄重複：${record.id}`);
-    removed.add(record.id);
+  // A subscription ID is unique within its type.
+  for (const { subscriptions, removals } of types) {
+    const ids = new Set<string>();
+    for (const subscription of subscriptions) {
+      if (ids.has(subscription.id)) invalid(`匯出檔中的訂閱 ID 重複：${subscription.id}`);
+      ids.add(subscription.id);
+    }
+    const removed = new Set<string>();
+    for (const record of removals) {
+      if (ids.has(record.id) || removed.has(record.id)) invalid(`匯出檔中的訂閱與移除紀錄重複：${record.id}`);
+      removed.add(record.id);
+    }
   }
   for (const file of reader.paths()) {
     const key = documentKeyFromPath(file);

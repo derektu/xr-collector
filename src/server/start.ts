@@ -1,7 +1,7 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
-import type { YouTubePacing } from '../capture/youtube-gate.js';
+import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
-import type { ActivityAccess, ChannelCollection, ChannelScheduleManagement, CollectionJobs, VaultSetup } from './app.js';
+import type { ActivityAccess, ChannelScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -12,10 +12,10 @@ export interface StartServerOptions {
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
   transfer?: VaultWorkspace;
-  channels?: ChannelCollection;
+  subscriptions?: readonly SubscriptionCollection[];
   schedule?: ChannelScheduleManagement;
   search?: TranscriptSearch;
-  pacing?: YouTubePacing;
+  pacing?: readonly Pacing[];
   port: number;
   host?: string;
   webRoot?: string;
@@ -39,7 +39,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.activity ? { activity: options.activity } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
-    ...(options.channels ? { channels: options.channels } : {}),
+    ...(options.subscriptions ? { subscriptions: options.subscriptions } : {}),
     ...(options.pacing ? { pacing: options.pacing } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),

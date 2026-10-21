@@ -1,5 +1,4 @@
 import type {
-  CapturedTranscript,
   DocumentDeletion,
   DocumentFilter,
   DocumentMetadata,
@@ -7,22 +6,31 @@ import type {
   DocumentSourcePublisher,
   DocumentSources,
   SavedDocument,
+  SubscriptionRecord,
   TranscriptSearch,
-  YouTubeChannel,
 } from './types.js';
 import { CollectorError } from './types.js';
 import { documentExcerpt } from './document-text.js';
+import { sourceDeclaration } from './source-registry.js';
+import type { CapturedDocument } from '../plugins/types.js';
 import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
+import { documentId, type DocumentKey } from '../vault/document-paths.js';
 import type { NewJobEvent } from '../jobs/job-store.js';
 
 /** Filter value that selects documents saved without a publisher ID. */
 export const NO_PUBLISHER_ID = 'none';
-const SOURCE_LABELS: Record<DocumentMetadata['sourceType'], string> = { youtube: 'YouTube' };
 
-/** Documents of one Vault; `read`, `list` and `getBySourceId` return only visible documents. */
+/** The subscriptions of one source type, as the document source groups name publishers after them. */
+export interface TypeSubscriptions {
+  subscriptions: SubscriptionRecord[];
+  /** Removal records of subscriptions removed and not added again. */
+  removals?: Array<{ id: string; title: string }>;
+}
+
+/** Documents of one Vault; `read`, `list` and `getByKey` return only visible documents. */
 export interface DocumentVault {
-  getBySourceId(sourceId: string): Promise<SavedDocument | null>;
-  add(capture: CapturedTranscript, options?: { collectedAt?: Date }): Promise<SavedDocument>;
+  getByKey(key: DocumentKey): Promise<SavedDocument | null>;
+  add(document: CapturedDocument, options?: { collectedAt?: Date }): Promise<SavedDocument>;
   list(): Promise<DocumentMetadata[]>;
   read(id: string): Promise<SavedDocument | null>;
   /** Removes a document file. Vaults without deletion records cannot delete. */
@@ -41,7 +49,7 @@ export interface IndexOutcome {
 
 /**
  * Why a document is being saved. `explicitAt` is when the user asked for this one item; it is null
- * for automatic and channel collection. Only an explicit request made after a deletion collects a
+ * for automatic and subscription collection. Only an explicit request made after a deletion collects a
  * deleted item again.
  */
 export interface SaveIntent {
@@ -73,35 +81,36 @@ export class Collector {
     private readonly options: CollectorOptions = {},
   ) {}
 
-  findExisting(videoId: string): Promise<SavedDocument | null> {
-    return this.vault.getBySourceId(videoId);
+  findExisting(key: DocumentKey): Promise<SavedDocument | null> {
+    return this.vault.getByKey(key);
   }
 
-  /** Whether discovery should pass over this video: it is in the Vault or the user deleted it. */
-  async isKnown(videoId: string): Promise<boolean> {
-    if (await this.vault.getBySourceId(videoId)) return true;
-    return (await this.vault.deletions?.get(`youtube:${videoId}`)) != null;
+  /** Whether discovery should pass over this item: it is in the Vault or the user deleted it. */
+  async isKnown(key: DocumentKey): Promise<boolean> {
+    if (await this.vault.getByKey(key)) return true;
+    return (await this.vault.deletions?.get(documentId(key))) != null;
   }
 
-  /** Whether a deletion keeps this request from collecting the video: a record exists and the request does not postdate it. */
-  async isDeletedFor(videoId: string, intent: SaveIntent): Promise<boolean> {
-    const deletion = await this.vault.deletions?.get(`youtube:${videoId}`);
+  /** Whether a deletion keeps this request from collecting the item: a record exists and the request does not postdate it. */
+  async isDeletedFor(key: DocumentKey, intent: SaveIntent): Promise<boolean> {
+    const deletion = await this.vault.deletions?.get(documentId(key));
     return deletion != null && !explicitAfter(intent, deletion.deletedAt);
   }
 
   /**
-   * Saves a captured transcript. A deleted item is saved only for an explicit request made after the
+   * Saves a captured item. A deleted item is saved only for an explicit request made after the
    * deletion: the document is stamped after the deletion time, then the record is lifted, so a stop
    * in between still leaves the document visible. Any other save of a deleted item fails with
    * `document_deleted`.
    */
-  save(captured: CapturedTranscript, intent: SaveIntent = { explicitAt: null }): Promise<SaveResult> {
-    const id = `youtube:${captured.videoId}`;
+  save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<SaveResult> {
+    const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
       const deletion = await this.vault.deletions?.get(id);
       if (!deletion) return { document: await this.vault.add(captured), recollected: false };
       if (!explicitAfter(intent, deletion.deletedAt)) {
-        throw new CollectorError('document_deleted', '這份文件已刪除，自動與頻道收集會略過。');
+        const target = sourceDeclaration(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
+        throw new CollectorError('document_deleted', `這份文件已刪除，自動與${target}收集會略過。`);
       }
       const now = (this.vault.now ?? (() => new Date()))();
       const after = new Date(Date.parse(deletion.deletedAt) + 1);
@@ -189,7 +198,7 @@ export class Collector {
   }
 
   /**
-   * Records the deletion of an item that has no document yet, such as a video still capturing, so
+   * Records the deletion of an item that has no document yet, such as an item still capturing, so
    * a capture that finishes later is not saved (`document_deleted`) unless an explicit request
    * comes after the record. An item already in the Vault or already deleted is left alone.
    */
@@ -236,10 +245,10 @@ export class Collector {
   }
 
   /**
-   * Document counts per source type and publisher, named after the subscription list when present,
-   * otherwise after the removal record of a removed subscription.
+   * Document counts per source type and publisher, named after the type's subscription list when
+   * present, otherwise after the removal record of a removed subscription.
    */
-  async sources(subscriptions: { youtube: YouTubeChannel[]; removedYoutube?: Array<{ id: string; title: string }> }): Promise<DocumentSources> {
+  async sources(byType: Readonly<Record<string, TypeSubscriptions>>): Promise<DocumentSources> {
     const documents = await this.vault.list();
     const groups = new Map<DocumentMetadata['sourceType'], Map<string, DocumentSourcePublisher>>();
     for (const document of documents) {
@@ -251,21 +260,23 @@ export class Collector {
       if (entry) entry.count += 1;
       else publishers.set(key, { id: document.publisher.id, name: document.publisher.name, count: 1, subscribed: false, removed: false });
     }
-    const channels = new Map(subscriptions.youtube.map((channel) => [channel.id, channel]));
-    const removals = new Map((subscriptions.removedYoutube ?? []).map((record) => [record.id, record]));
     return {
       total: documents.length,
       groups: [...groups.entries()].map(([sourceType, publishers]) => {
+        const declaration = sourceDeclaration(sourceType);
+        const subscribed = new Map((byType[sourceType]?.subscriptions ?? []).map((record) => [record.id, record]));
+        const removals = new Map((byType[sourceType]?.removals ?? []).map((record) => [record.id, record]));
+        const unknown = `未知${declaration?.subscription?.targetNoun ?? '發布者'}`;
         const list = [...publishers.values()].map((publisher) => {
-          const channel = sourceType === 'youtube' && publisher.id ? channels.get(publisher.id) : undefined;
-          if (publisher.id === null) return { ...publisher, name: '未知頻道', subscribed: null };
-          if (channel) return { ...publisher, name: channel.title || publisher.name, subscribed: true };
-          const removal = sourceType === 'youtube' && publisher.id ? removals.get(publisher.id) : undefined;
+          const subscription = publisher.id ? subscribed.get(publisher.id) : undefined;
+          if (publisher.id === null) return { ...publisher, name: unknown, subscribed: null };
+          if (subscription) return { ...publisher, name: subscription.title || publisher.name, subscribed: true };
+          const removal = publisher.id ? removals.get(publisher.id) : undefined;
           return removal ? { ...publisher, name: removal.title || publisher.name, removed: true } : publisher;
         }).sort(comparePublishers);
         return {
           sourceType,
-          label: SOURCE_LABELS[sourceType],
+          label: declaration?.label ?? sourceType,
           count: list.reduce((sum, publisher) => sum + publisher.count, 0),
           publishers: list,
         };

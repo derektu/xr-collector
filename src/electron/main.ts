@@ -1,9 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
-import { YtDlpCapture } from '../capture/ytdlp-capture.js';
-import { YtDlpChannelSource } from '../capture/ytdlp-channel-source.js';
-import { YouTubeGate, youtubeGateOptionsFromEnv } from '../capture/youtube-gate.js';
+import { createSourcePlugins } from '../plugins/index.js';
 import { agentConnectionFile } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
@@ -171,25 +169,16 @@ app.whenReady().then(async () => {
     const exportPath = status?.operation === 'export' && status.state === 'completed' ? status.result?.exportPath : undefined;
     if (exportPath) shell.showItemInFolder(exportPath);
   });
-  // One request channel for every YouTube request this process makes.
-  const youtubeGate = await YouTubeGate.open({
-    statePath: path.join(app.getPath('userData'), 'youtube-pacing.json'),
-    ...youtubeGateOptionsFromEnv(process.env),
-  });
-  const capture = new YtDlpCapture({
-    binaryPath: runtimePath('yt-dlp'),
-    javaScriptRuntimePath: runtimePath('deno'),
-    gate: youtubeGate,
-  });
-  const channelSource = new YtDlpChannelSource({
-    binaryPath: runtimePath('yt-dlp'),
-    javaScriptRuntimePath: runtimePath('deno'),
-    gate: youtubeGate,
+  // One request channel per pacing group for every source request this process makes.
+  const sources = await createSourcePlugins({
+    profilePath: app.getPath('userData'),
+    env: process.env,
+    program: (name) => runtimePath(name as 'yt-dlp' | 'deno'),
   });
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
     workspace: {
-      capture, channelSource, pacing: youtubeGate,
+      plugins: sources.plugins, pacing: sources.pacing,
       searchBinary: runtimePath('meilisearch'),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,

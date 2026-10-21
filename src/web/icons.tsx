@@ -16,8 +16,12 @@ const PATHS: Record<string, ReactNode> = {
   link: <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
   file: <><path d="M6 3h9l5 5v13H6z" /><path d="M14 3v6h6" /><path d="M9 14h6M9 17h4" /></>,
   close: <path d="M6 6l12 12M18 6L6 18" />,
-  youtube: <><rect x="2.5" y="5" width="19" height="14" rx="4" /><path d="M10 9l5 3-5 3z" /></>,
 };
+
+/** Adds icons by name, such as the icon each source type is drawn with; the web assembly registers them. */
+export function registerIcons(icons: Record<string, ReactNode>): void {
+  Object.assign(PATHS, icons);
+}
 
 /** Line icons drawn with the current text color; they are decorative unless a label is given. */
 export function Icon({ name, size = 16, label }: { name: string; size?: number; label?: string }) {

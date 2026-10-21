@@ -4,8 +4,8 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
-import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import type { SavedDocument } from '../../src/core/types.js';
 import { createHttpApp } from '../../src/server/app.js';
@@ -19,7 +19,10 @@ import { registeredFiles, registeredSource } from '../../src/vault/vault-package
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
 import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, settled, temp, video, type Machine } from './exchange-fixtures.js';
+import type { YouTubeTestSources } from '../support/youtube-sources.js';
 import { manifestOf, packageOf, tampered } from './package-fixtures.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { youtubeKey } from '../support/youtube-documents.js';
 
 afterEach(cleanUp);
 
@@ -40,7 +43,7 @@ const deletions = async (root: string) => JSON.parse(await readFile(path.join(ro
   .map((record: { sourceId: string }) => record.sourceId).sort() as string[];
 
 async function add(root: string, id: string) {
-  await new MarkdownVault(root).add(video(id));
+  await new MarkdownVault(root).add(transcriptDocument(video(id)));
 }
 /** Changes a document as the app records a change: new text and `updated_at` set to `when`. */
 async function modify(root: string, id: string, text: string, when: string) {
@@ -53,15 +56,15 @@ async function modify(root: string, id: string, text: string, when: string) {
 async function remove(root: string, id: string, when: string) {
   await new Collector(new MarkdownVault(root, { now: () => new Date(when) })).delete(`youtube:${id}`);
 }
-const store = (root: string, when?: string) => new JsonChannelStore(root, when ? () => new Date(when) : undefined);
+const store = (root: string, when?: string) => new JsonSubscriptionStore(root, 'youtube', when ? () => new Date(when) : undefined);
 const channels = async (root: string) => store(root).list();
-const scheduleOn = async (root: string) => (await new JsonChannelScheduleStore(root).load()).enabled;
+const scheduleOn = async (root: string) => (await new JsonScheduleStore(root).load()).enabled;
 const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', number>>, subscriptions: Partial<Record<'added' | 'updated' | 'removed', number>> = {}) => ({
   documents: { added: 0, updated: 0, removed: 0, ...documents }, subscriptions: { added: 0, updated: 0, removed: 0, ...subscriptions },
 });
 
 /** Runs `use` on a workspace of the machine and closes it afterwards. */
-async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise<T>, overrides: Partial<WorkspaceOptions> = {}): Promise<T> {
+async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise<T>, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}): Promise<T> {
   const workspace = await open(at, overrides, false);
   try { return await use(workspace); } finally { await workspace.close(); }
 }
@@ -241,8 +244,8 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
 describe('the same video on both machines (X77-A06)', () => {
   it('is no change when only the collection time differs', async () => {
     const { a, b } = await pair();
-    await new MarkdownVault(a.vault, { now: () => new Date('2026-10-01T00:00:00.000Z') }).add(video('samevideo01'));
-    await new MarkdownVault(b.vault, { now: () => new Date('2026-10-05T00:00:00.000Z') }).add(video('samevideo01'));
+    await new MarkdownVault(a.vault, { now: () => new Date('2026-10-01T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
+    await new MarkdownVault(b.vault, { now: () => new Date('2026-10-05T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
     expect(await readFile(docPath(a.vault, 'samevideo01'))).not.toEqual(await readFile(docPath(b.vault, 'samevideo01')));
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
@@ -278,7 +281,7 @@ describe('subscriptions (X77-A08)', () => {
     await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
     await store(a.vault, at(1)).add(channel('UCAAA', { addedAt: at(1) }));
     // B pauses automatic collection; the switch belongs to each Vault and never travels with an import.
-    await new JsonChannelScheduleStore(b.vault).save({ enabled: false });
+    await new JsonScheduleStore(b.vault).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
       const { preview } = await importFile(workspace, file);
@@ -308,7 +311,7 @@ describe('subscriptions (X77-A08)', () => {
     const { a, b } = await pair();
     await changeB(b);
     await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
-    await new JsonChannelScheduleStore(b.vault).save({ enabled: false });
+    await new JsonScheduleStore(b.vault).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
     expect(await items(a.vault)).toEqual(await items(b.vault));
@@ -327,7 +330,7 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
       expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ removed: 1 }), localNewer: 0 });
     });
     expect(await deletions(a.vault)).toEqual([D2, 'bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(a.vault)).isKnown('bbbbbbbbbbX')).toBe(true);
+    expect(await new Collector(new MarkdownVault(a.vault)).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
   });
 
   it('are written by a merge even when they are all the file brings', async () => {
@@ -341,7 +344,7 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
       expect(workspace.status().state).toBe('completed');
     });
     expect(await deletions(a.vault)).toEqual(['bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(a.vault)).isKnown('bbbbbbbbbbX')).toBe(true);
+    expect(await new Collector(new MarkdownVault(a.vault)).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
     expect(await items(a.vault)).toEqual(await items(b.vault));
     await using(a, async (workspace) => {
       expect(await workspace.previewImport(file)).toMatchObject({ merge: counts({}), mergeRecords: false });
@@ -575,7 +578,7 @@ describe('collection during an import (X77-A12)', () => {
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
-      const job = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=bbbbbbbbbb1');
+      const job = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=bbbbbbbbbb1');
       await expect.poll(() => workspace.jobs.get(job.job.id)?.state).toBe('running');
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');
@@ -598,7 +601,7 @@ describe('collection during an import (X77-A12)', () => {
     const listed: string[] = [];
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
-      const runs = await workspace.channels.startRun({ trigger: 'manual', channelIds: ['UC123', 'UC456'] });
+      const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', channelIds: ['UC123', 'UC456'] });
       await expect.poll(() => listed).toEqual(['UC123']);
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');
@@ -608,7 +611,7 @@ describe('collection during an import (X77-A12)', () => {
       await Promise.all(runs.map((run) => workspace.jobs.whenSettled(run.job.id)));
       // The queued check of the subscription the import removed never ran.
       expect(listed).toEqual(['UC123']);
-      expect((await workspace.channels.listChannels()).map((row) => row.id).sort()).toEqual(['UC123', 'UC789']);
+      expect((await workspace.subscriptions.of('youtube')!.list()).map((row) => row.id).sort()).toEqual(['UC123', 'UC789']);
     }, {
       jobLimits: { discovery: 1 },
       channelSource: {
@@ -654,7 +657,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     expect(existsSync(path.join(b.profile, IMPORT_JOURNAL))).toBe(true);
 
     // A paused Vault's export creates a paused Vault.
-    await new JsonChannelScheduleStore(a.vault).save({ enabled: false });
+    await new JsonScheduleStore(a.vault).save({ enabled: false });
     const c = await machine('C', path.dirname(path.dirname(a.vault)));
     await importAsNew(c, await exportFrom(a, 'a-paused'));
     expect(await scheduleOn(c.vault)).toBe(false);
@@ -805,7 +808,7 @@ describe('export and import over HTTP (X77-A14)', () => {
 describe('subscription change and removal times', () => {
   it('stamps a subscription when a person changes its name, address, pause or settings, and not for collection progress', async () => {
     const root = await temp();
-    const store = new JsonChannelStore(root);
+    const store = new JsonSubscriptionStore(root, 'youtube');
     await store.add(channel('UC123'));
     expect((await store.list())[0]!.updatedAt).toBe('2026-09-18T00:00:00.000Z');
     const stamp = async () => (await store.list())[0]!.updatedAt;

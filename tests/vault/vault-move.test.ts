@@ -4,7 +4,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, syml
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CapturedTranscript, CollectionJob, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
+import type { CollectionJob, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -15,8 +15,11 @@ import { packageBytes, packageFiles } from './package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { checkImportFolder } from '../../src/vault/transfer-files.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
-import { VaultWorkspace, type MoveFault, type WorkspaceOptions } from '../../src/vault/workspace.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { subscriptionCollections, VaultWorkspace, type MoveFault, type WorkspaceOptions } from '../../src/vault/workspace.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -44,8 +47,8 @@ const IDS = ['move0000001', 'move0000002', 'move0000003', 'move0000004'];
 
 async function seed(root: string): Promise<void> {
   await createVaultDirectory(root, 'XR Collector test');
-  await new MarkdownVault(root).add(video('seed0000001'));
-  await new JsonChannelStore(root).add({
+  await new MarkdownVault(root).add(transcriptDocument(video('seed0000001')));
+  await new JsonSubscriptionStore(root, 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
@@ -122,10 +125,10 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
 }
 
 /** Opens the Vault the device selection names (the source when none), as the runtime does at startup. */
-async function open(context: Setup, overrides: Partial<WorkspaceOptions> = {}, track = true): Promise<VaultWorkspace> {
+async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
   const jobStore = overrides.jobStore ?? await JobStore.open(context.jobsDir);
   if (track && !overrides.jobStore) stores.push(jobStore);
-  const workspace = await VaultWorkspace.open({
+  const workspace = await VaultWorkspace.open(withYouTube({
     root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
@@ -133,7 +136,7 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> = {}, t
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     jobStore, jobLimits: { capture: 1 },
     ...overrides,
-  });
+  }));
   if (track) workspaces.push(workspace);
   return workspace;
 }
@@ -154,7 +157,7 @@ describe('move target checks (A-01)', () => {
     const { root, source } = context;
     const gated = gatedCapture(new Set([IDS[0]!]));
     const workspace = await open(context, { capture: gated.capture });
-    const running = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
+    const running = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await createVaultDirectory(path.join(root, 'Other'), 'XR Collector test');
     await mkdir(path.join(root, 'Full')); await writeFile(path.join(root, 'Full/note.txt'), '使用者的檔案');
@@ -246,7 +249,7 @@ describe('move target checks (A-01)', () => {
       expect(response.json().error.code).toBe('invalid_request');
     } finally { await app.close(); }
     failStatfs = false;
-    const job = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
+    const job = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await workspace.move(target);
     await expect(workspace.checkMove(path.join(context.root, 'Elsewhere'))).rejects.toMatchObject({ code: 'vault_busy' });
@@ -313,9 +316,9 @@ describe('moving a Vault', () => {
     const jobStore = stores[0]!;
     jobStore.event({ severity: 'info', eventType: 'test.legacy', message: '搬移前沒有 Vault ID 的記錄', vaultPath: source, jobId: null });
     const jobs = [];
-    for (const id of IDS) jobs.push((await workspace.jobs.submitVideo(urlOf(id))).job.id);
+    for (const id of IDS) jobs.push((await workspace.jobs.submitItem('youtube', urlOf(id))).job.id);
     await expect.poll(() => gated.started).toEqual([IDS[0]]);
-    const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, search: workspace.search, transfer: workspace, schedule: workspace.schedule, channels: workspace.channels });
+    const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, search: workspace.search, transfer: workspace, schedule: workspace.schedule, subscriptions: subscriptionCollections(() => workspace.subscriptions) });
     try {
       const response = await app.inject({ method: 'POST', url: '/api/vault/move', payload: { targetPath: target } });
       expect(response.statusCode).toBe(202);
@@ -360,7 +363,7 @@ describe('moving a Vault', () => {
     const target = path.join(context.root, 'Moved');
     const gated = gatedCapture(new Set([IDS[0]!]));
     const workspace = await open(context, { capture: gated.capture, holdTimeoutMs: 50 });
-    const job = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
+    const job = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await workspace.move(target);
     await settled(workspace);
@@ -373,7 +376,7 @@ describe('moving a Vault', () => {
     const other = await setup();
     const held = gatedCapture(new Set([IDS[1]!]));
     const waiting = await open(other, { capture: held.capture });
-    const pending = await waiting.jobs.submitVideo(urlOf(IDS[1]!));
+    const pending = await waiting.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => held.started.length).toBe(1);
     await waiting.move(path.join(other.root, 'Moved'));
     expect(waiting.status().state).toBe('waiting');
@@ -417,8 +420,8 @@ describe('a move that fails before the switch (A-05)', () => {
       createSearch: async (destination) => ({ search: fakeSearch(destination, Boolean(failIndex) && destination === target), close: async () => undefined }),
     });
     const before = await tree(source);
-    const first = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
-    const queued = await workspace.jobs.submitVideo(urlOf(IDS[1]!));
+    const first = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    const queued = await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await workspace.move(target);
     gated.open();
@@ -454,8 +457,8 @@ describe('a move interrupted by a stop (A-06)', () => {
       jobStore, capture: gated.capture,
       moveFaults: async (current) => { if (current === phase) { reached(); await new Promise(() => undefined); } },
     }, false);
-    const running = await first.jobs.submitVideo(urlOf(IDS[0]!));
-    const queued = await first.jobs.submitVideo(urlOf(IDS[1]!));
+    const running = await first.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    const queued = await first.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await first.move(target);
     gated.open();
@@ -555,7 +558,7 @@ describe('an original location that is in use again', () => {
     await settled(workspace);
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: source });
     expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
-    const added = await workspace.jobs.submitVideo(urlOf(IDS[2]!));
+    const added = await workspace.jobs.submitItem('youtube', urlOf(IDS[2]!));
     expect((await workspace.jobs.whenSettled(added.job.id)).state).toBe('completed');
     await workspace.openOther(target);
     await settled(workspace);
@@ -592,8 +595,8 @@ describe('an original location that is in use again', () => {
     stores.push(jobStore);
     const gated = gatedCapture(new Set([IDS[0]!]));
     const first = await open(context, { jobStore, capture: gated.capture }, false);
-    await first.jobs.submitVideo(urlOf(IDS[0]!));
-    const left = await first.jobs.submitVideo(urlOf(IDS[1]!));
+    await first.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    const left = await first.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => gated.started.length).toBe(1);
     gated.open();
     await first.close();
@@ -664,8 +667,8 @@ describe('Vault identity (A-08)', () => {
     const jobStore = await JobStore.open(context.jobsDir);
     stores.push(jobStore);
     const a = await open(context, { jobStore, capture: gated.capture }, false);
-    await a.jobs.submitVideo(urlOf(IDS[0]!));
-    const left = await a.jobs.submitVideo(urlOf(IDS[1]!));
+    await a.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    const left = await a.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => gated.started.length).toBe(1);
     gated.open();
     await a.close();
@@ -755,16 +758,16 @@ describe('opening another Vault (A-13)', () => {
     // B stops with a queued job.
     const bGate = gatedCapture(new Set([IDS[2]!]));
     const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore, capture: bGate.capture }, false);
-    await bFirst.jobs.submitVideo(urlOf(IDS[2]!));
-    const bLeft = await bFirst.jobs.submitVideo(urlOf(IDS[3]!));
+    await bFirst.jobs.submitItem('youtube', urlOf(IDS[2]!));
+    const bLeft = await bFirst.jobs.submitItem('youtube', urlOf(IDS[3]!));
     await expect.poll(() => bGate.started.length).toBe(1);
     bGate.open();
     await bFirst.close();
     // A has a queued job when B is opened.
     const aGate = gatedCapture(new Set([IDS[0]!]));
     const workspace = await open(context, { jobStore, capture: aGate.capture });
-    const aRunning = await workspace.jobs.submitVideo(urlOf(IDS[0]!));
-    const aLeft = await workspace.jobs.submitVideo(urlOf(IDS[1]!));
+    const aRunning = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    const aLeft = await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await expect.poll(() => aGate.started.length).toBe(1);
     for (const [value, code] of [[a, 'invalid_request'], [path.join(a, 'attachments'), 'invalid_request'], [path.join(root, 'Nothing'), 'vault_invalid'], [path.join(root, 'profile'), 'invalid_request']] as const) {
       await expect(workspace.openOther(value), value).rejects.toMatchObject({ code });

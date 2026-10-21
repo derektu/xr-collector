@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { UrlRecognition } from '../../src/core/types.js';
 import {
-  ADD_DIALOG_TITLES,
+  addDialogTitles,
   addMismatch,
   DOCUMENT_ADD_ITEMS,
   isUnsupportedUrl,
   menuIndexForKey,
-  SUBSCRIPTION_ADD_ITEMS,
+  subscriptionAddItems,
   UNSUPPORTED_URL,
   unsupportedText,
 } from '../../src/web/add-menu.js';
@@ -21,10 +21,10 @@ function recognition(overrides: Partial<UrlRecognition>): UrlRecognition {
 describe('add menus (N75-T2)', () => {
   it('lists every item of both menus and marks the ones not supported yet', () => {
     expect(DOCUMENT_ADD_ITEMS.map((item) => [item.label, item.mode])).toEqual([['網址', 'url'], ['檔案', null], ['寫筆記', null]]);
-    expect(SUBSCRIPTION_ADD_ITEMS.map((item) => [item.label, item.mode])).toEqual([
+    expect(subscriptionAddItems().map((item) => [item.label, item.mode])).toEqual([
       ['YouTube 頻道', 'youtube-channel'], ['X 帳號', null], ['Facebook 粉專', null], ['RSS', null],
     ]);
-    expect(ADD_DIALOG_TITLES).toEqual({ url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道' });
+    expect(addDialogTitles()).toEqual({ url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道' });
   });
 
   it('names the unsupported dialog after its item', () => {
@@ -32,9 +32,9 @@ describe('add menus (N75-T2)', () => {
       const item = items.find((candidate) => candidate.id === id)!;
       return [item.dialogTitle, unsupportedText(item)];
     };
-    expect(dialog(SUBSCRIPTION_ADD_ITEMS, 'facebook')).toEqual(['訂閱 Facebook 粉專', '目前還不支援 Facebook 粉專。']);
-    expect(dialog(SUBSCRIPTION_ADD_ITEMS, 'x')).toEqual(['訂閱 X 帳號', '目前還不支援 X 帳號。']);
-    expect(dialog(SUBSCRIPTION_ADD_ITEMS, 'rss')).toEqual(['訂閱 RSS', '目前還不支援 RSS。']);
+    expect(dialog(subscriptionAddItems(), 'facebook')).toEqual(['訂閱 Facebook 粉專', '目前還不支援 Facebook 粉專。']);
+    expect(dialog(subscriptionAddItems(), 'x')).toEqual(['訂閱 X 帳號', '目前還不支援 X 帳號。']);
+    expect(dialog(subscriptionAddItems(), 'rss')).toEqual(['訂閱 RSS', '目前還不支援 RSS。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'file')).toEqual(['加入檔案', '目前還不支援檔案。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'note')).toEqual(['寫筆記', '目前還不支援寫筆記。']);
   });

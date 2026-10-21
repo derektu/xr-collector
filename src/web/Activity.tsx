@@ -19,6 +19,7 @@ import {
   type ActivityViewState,
 } from './activity-presentation.js';
 import { api } from './api-client.js';
+import { sourceDeclarations } from '../core/source-registry.js';
 import { ACTIVE_POLL_MS } from './use-collection-status.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
@@ -92,7 +93,9 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
   useEffect(() => {
     const controller = new AbortController();
-    api.listChannels(controller.signal).then(setSubscriptions).catch(() => undefined);
+    const types = sourceDeclarations().filter((declaration) => declaration.subscription).map((declaration) => declaration.id);
+    Promise.all(types.map((type) => api.listChannels(type, controller.signal)))
+      .then((lists) => setSubscriptions(lists.flat())).catch(() => undefined);
     return () => controller.abort();
   }, [revision]);
 
@@ -238,13 +241,15 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
             const text = eventText(event);
             const documentId = event.documentId;
             const subscriptionId = event.subscriptionId;
+            // An entry written before events named their source type belongs to the first type with subscriptions.
+            const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id ?? '';
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row">
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span>
               {documentId
                 ? <a href={readerPath(documentId)} onClick={(click) => open(click, () => onOpenDocument(documentId))}>{text}</a>
                 : subscriptionId
-                  ? <a href={sourcePath('youtube', subscriptionId)} onClick={(click) => open(click, () => onOpenSource('youtube', subscriptionId))}>{text}</a>
+                  ? <a href={sourcePath(subscriptionType, subscriptionId)} onClick={(click) => open(click, () => onOpenSource(subscriptionType, subscriptionId))}>{text}</a>
                   : <span>{text}</span>}
             </li>;
           })}</ol>}

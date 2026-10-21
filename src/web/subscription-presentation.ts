@@ -1,23 +1,40 @@
-import type { ChannelJobTrigger, CollectionJob, CollectionPolicy, Subscription, SubscriptionCheckStatus } from '../core/types.js';
-import { intervalLabel, windowLabel } from '../channels/collection-policy.js';
+import type { ChannelJobTrigger, CollectionJob, Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/types.js';
+import { intervalLabel } from '../core/check-interval.js';
+import { sourceDeclaration } from '../core/source-registry.js';
+import type { SubscriptionDeclaration } from '../plugins/types.js';
 
-export { intervalLabel, windowLabel };
+export { intervalLabel };
 
-/** The range every check collects, in words, e.g. "最近 1 個月內最新的 10 支影片". */
-export function backfillPhrase(settings: Pick<CollectionPolicy, 'backfillWindow' | 'backfillMaxItems'>): string {
-  return `最近 ${windowLabel(settings.backfillWindow)}內最新的 ${settings.backfillMaxItems} 支影片`;
+/** The subscription declaration of a registered type; undefined without one. */
+function subscriptionOf(type: string | null | undefined): SubscriptionDeclaration | undefined {
+  return type ? sourceDeclaration(type)?.subscription : undefined;
+}
+
+/** What a subscription of the type follows, e.g. "頻道"; empty without a registered type. */
+export function targetNoun(type: string | null | undefined): string {
+  return subscriptionOf(type)?.targetNoun ?? '';
+}
+
+/** What one item of the type is called, e.g. "影片"; empty without a registered type. */
+export function itemNoun(type: string | null | undefined): string {
+  return (type ? sourceDeclaration(type)?.item.noun : undefined) ?? '';
+}
+
+/** The range every check collects, in words, as the source type describes its settings. */
+export function backfillPhrase(settings: Partial<SubscriptionSettings>, type: string | null | undefined): string {
+  return subscriptionOf(type)?.describeSettings(settings as SubscriptionSettings) ?? '';
 }
 
 /** What subscribing with `settings` does, as the confirmation card says it. */
-export function subscribeSummary(settings: CollectionPolicy, autoCollection: boolean): string {
+export function subscribeSummary(settings: SubscriptionSettings, autoCollection: boolean, type: string | null | undefined): string {
   return autoCollection
-    ? `訂閱後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings)}，已收集或刪除的不再收集。`
-    : `訂閱後立即檢查，收集${backfillPhrase(settings)}。自動檢查已關閉，開啟後才會定時檢查。`;
+    ? `訂閱後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings, type)}，已收集或刪除的不再收集。`
+    : `訂閱後立即檢查，收集${backfillPhrase(settings, type)}。自動檢查已關閉，開啟後才會定時檢查。`;
 }
 
 /** What resuming a paused subscription does with its own settings. */
-export function resumeSummary(settings: CollectionPolicy): string {
-  return `這個訂閱已暫停。恢復後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings)}，已收集或刪除的不再收集。`;
+export function resumeSummary(settings: SubscriptionSettings, type: string | null | undefined): string {
+  return `這個訂閱已暫停。恢復後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings, type)}，已收集或刪除的不再收集。`;
 }
 
 /** The two choices of removing a subscription for its documents; keeping them is the default. */
@@ -93,11 +110,11 @@ const TRIGGER_LABELS: Record<ChannelJobTrigger, string> = {
   subscribe: '首次收集', resume: '恢復後檢查', scheduled: '定時檢查', manual: '立即檢查',
 };
 
-/** The reason a channel job ran, for the job list. */
+/** The reason a check job ran, for the job list. */
 export function channelJobLabel(job: CollectionJob): string {
-  return triggerLabel(job.scope?.trigger ?? null);
+  return triggerLabel(job.scope?.trigger ?? null, job.source.type);
 }
 
-export function triggerLabel(trigger: ChannelJobTrigger | null): string {
-  return (trigger && TRIGGER_LABELS[trigger]) || '頻道收集';
+export function triggerLabel(trigger: ChannelJobTrigger | null, type?: string | null): string {
+  return (trigger && TRIGGER_LABELS[trigger]) || `${targetNoun(type)}收集`;
 }

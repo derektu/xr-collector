@@ -29,8 +29,8 @@ describe('Agent Skill', () => {
   it('lists only routes the server registers, including the document and search contract', async () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
-      collector: stub, jobs: stub, activity: stub, transfer: stub, channels: stub, schedule: stub, search: stub, vaultSetup: stub,
-      pacing: stub, agentToken: 'skill-test',
+      collector: stub, jobs: stub, activity: stub, transfer: stub, subscriptions: [{ type: 'youtube' } as never], schedule: stub, search: stub, vaultSetup: stub,
+      pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test',
     };
     const app = await createHttpApp(options);
     await app.ready();
@@ -73,7 +73,7 @@ describe('Agent Skill', () => {
 
   it('documents the subscription contract the server enforces', async () => {
     const skill = await readFile(skillPath, 'utf8');
-    const { INTERVAL_OPTIONS, BACKFILL_WINDOWS, BACKFILL_LIMITS } = await import('../../src/channels/collection-policy.js');
+    const { INTERVAL_OPTIONS, BACKFILL_WINDOWS, BACKFILL_LIMITS } = await import('../../src/plugins/youtube/settings.js');
     expect(skill).toContain(`只接受 ${INTERVAL_OPTIONS.join('、')}`);
     expect(skill).toContain(BACKFILL_WINDOWS.map((window) => `\`${window}\``).join('、'));
     expect(skill).toContain(`（${BACKFILL_LIMITS.join('、')}）`);

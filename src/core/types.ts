@@ -1,25 +1,7 @@
-export type SubtitleKind = 'manual' | 'automatic';
+import { jobRole } from './source-registry.js';
 
-export interface YouTubeVideoRef {
-  videoId: string;
-  canonicalUrl: string;
-}
-
-export interface CapturedTranscript {
-  videoId: string;
-  sourceUrl: string;
-  title: string;
-  channelId: string | null;
-  channelTitle: string;
-  publishedAt: string | null;
-  languageCode: string;
-  languageName: string | null;
-  subtitleKind: SubtitleKind;
-  bodyMarkdown: string;
-}
-
-/** Source types whose documents the Vault can hold; each adds its own metadata block. */
-export type DocumentSourceType = 'youtube';
+/** ID of a source type whose documents the Vault can hold: the ID of a registered source plugin. */
+export type DocumentSourceType = string;
 
 /** Who published a document; `id` is null for documents saved without a stable publisher ID. */
 export interface DocumentPublisher {
@@ -27,17 +9,17 @@ export interface DocumentPublisher {
   name: string;
 }
 
-/** Subtitle details that only YouTube transcripts carry. */
-export interface YouTubeDocumentMetadata {
-  languageCode: string;
-  languageName: string | null;
-  subtitleKind: SubtitleKind;
-}
+/**
+ * Type-specific document details, each under a field named after its source type. Every source
+ * plugin adds its own field to this interface; the core passes the field through untouched.
+ */
+export interface DocumentDetails {}
 
 /** Source-independent document fields shared by browse, search and read. */
-export interface DocumentMetadata {
+export interface DocumentMetadata extends DocumentDetails {
   id: string;
-  type: 'Transcript';
+  /** The frontmatter `type` its source type gives its documents. */
+  type: string;
   sourceType: DocumentSourceType;
   sourceId: string;
   sourceUrl: string;
@@ -45,7 +27,6 @@ export interface DocumentMetadata {
   publisher: DocumentPublisher;
   publishedAt: string | null;
   collectedAt: string;
-  youtube?: YouTubeDocumentMetadata;
 }
 
 export interface SavedDocument extends DocumentMetadata {
@@ -120,10 +101,10 @@ export interface SearchResponse {
 }
 
 /**
- * A subscribed YouTube channel. Its collection settings and check times are portable Vault data and
- * live with it.
+ * A subscription as its Vault file stores it: what it follows, its collection settings and its check
+ * times. All of it is portable Vault data.
  */
-export interface YouTubeChannel {
+export interface SubscriptionRecord {
   id: string;
   title: string;
   url: string;
@@ -137,7 +118,7 @@ export interface YouTubeChannel {
    */
   updatedAt?: string | null;
   /** Check interval and the range every check of this subscription collects. */
-  settings: CollectionPolicy;
+  settings: SubscriptionSettings;
   /**
    * When the scheduler checks this subscription next; null while it is paused or until the
    * scheduler first plans it. Automatic collection being off leaves the time in place.
@@ -145,26 +126,29 @@ export interface YouTubeChannel {
   nextCheckAt?: string | null;
   /** The last time a check of this subscription was submitted. */
   lastDispatchedAt?: string | null;
-  /** The last discovery that finished listing the channel. */
+  /** The last discovery that finished listing the subscription target. */
   lastCheckedAt?: string | null;
   /**
    * Candidates whose exact publish time a capture found earlier than that check's range start,
    * `before`. Publish times do not change, so a check whose range starts no earlier than `before`
-   * keeps such a video as a candidate it does not collect, without asking YouTube again. Only
-   * videos that are still candidates are kept.
+   * keeps such an item as a candidate it does not collect, without asking the source again. Only
+   * items that are still candidates are kept.
    */
-  outOfRange?: OutOfRangeVideo[];
-}
-
-/** A video a check found to be published before its range start. */
-export interface OutOfRangeVideo {
-  videoId: string;
-  /** The range start of the check that skipped it; the video was published before this time. */
-  before: string;
+  outOfRange?: OutOfRangeEntry[];
 }
 
 /**
- * `error` marks an enabled subscription whose latest finished channel job failed and that has no
+ * An item a check found to be published before its range start. The item key is stored under the
+ * field the source type's storage names, such as `videoId`.
+ */
+export interface OutOfRangeEntry {
+  /** The range start of the check that skipped it; the item was published before this time. */
+  before: string;
+  [keyField: string]: string;
+}
+
+/**
+ * `error` marks an enabled subscription whose latest finished check job failed and that has no
  * job running; the next successful job returns it to `tracking`.
  */
 export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
@@ -172,7 +156,7 @@ export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
 /**
  * What a subscription is doing now, as its status column shows it. `updating`: a check or its
  * collection runs, `total` is 0 until the check knows how many items it collects. `queued`: a check
- * is due but waits for its turn, a YouTube cooldown or a retry. `scheduled`: nothing runs and the
+ * is due but waits for its turn, a source cooldown or a retry. `scheduled`: nothing runs and the
  * next automatic check is at `nextCheckAt` (null until the scheduler plans it). `paused`: the user
  * paused it. `auto_check_off`: automatic checks are off for every subscription. `login_required`:
  * the source needs the user to sign in again.
@@ -186,40 +170,34 @@ export type SubscriptionCheckStatus =
   | { state: 'login_required' };
 
 /** A subscription as the Subscriptions page and Agents read it. */
-export interface Subscription extends YouTubeChannel {
+export interface Subscription extends SubscriptionRecord {
   status: SubscriptionStatus;
   /** The status UI and Agents show; computed by the service. */
   checkStatus: SubscriptionCheckStatus;
-  /** Whether a video of this subscription is still capturing, also after a pause; it may still save a document. */
+  /** Whether an item of this subscription is still capturing, also after a pause; it may still save a document. */
   capturing: boolean;
-  /** Why the latest channel job failed; set only while `status` is `error`. */
+  /** Why the latest check job failed; set only while `status` is `error`. */
   lastError: JobError | null;
-  /** The channel collection job still queued or running, with its item progress. */
+  /** The check job still queued or running, with its item progress. */
   activeJob: { id: string; done: number; total: number } | null;
   documentCount: number;
-  /** Collection time of the newest document from this channel. */
+  /** Collection time of the newest document from this subscription. */
   lastCollectedAt: string | null;
 }
 
-export type BackfillWindow = '1w' | '2w' | '1m' | '3m' | '6m';
-
 /**
- * Collection settings of one subscription. Every check collects the newest `backfillMaxItems`
- * videos published within `backfillWindow` before the check, leaving out the ones already
- * collected or deleted.
+ * Collection settings of one subscription: the check interval every type uses, and the fields its
+ * source type defines for the range a check collects.
  */
-export interface CollectionPolicy {
-  intervalMinutes: number;
-  backfillWindow: BackfillWindow;
-  backfillMaxItems: number;
-}
+export type SubscriptionSettings = { intervalMinutes: number; [key: string]: string | number };
 
-export interface ChannelPreview {
+/** A resolved subscription address with its subscription state; `channel` is the resolved target. */
+export interface SubscriptionPreview {
   channel: { id: string; title: string; url: string };
-  /** The existing subscription for this channel with its own settings, or null when it is not subscribed. */
-  subscription: { enabled: boolean; settings: CollectionPolicy } | null;
+  /** The existing subscription of this target with its own settings, or null when it is not subscribed. */
+  subscription: { enabled: boolean; settings: SubscriptionSettings } | null;
   /** The settings of the existing subscription, or the source type's defaults for a new one. */
-  settings: CollectionPolicy;
+  settings: SubscriptionSettings;
   /** Whether automatic collection is on. */
   autoCollection: boolean;
 }
@@ -229,7 +207,7 @@ export type SourceCapability = 'single' | 'subscription';
 
 export interface SourceKindInfo {
   id: string;
-  /** Shown as the kind of a source row and a confirmation card, e.g. "YouTube 頻道". */
+  /** Shown as the kind of a source row and a confirmation card. */
   label: string;
   capability: SourceCapability;
   /** What one collected item is called, e.g. "影片". */
@@ -237,7 +215,7 @@ export interface SourceKindInfo {
 }
 
 export interface SourceSettingField {
-  key: keyof CollectionPolicy;
+  key: string;
   label: string;
   options: Array<{ value: string | number; label: string }>;
   /** The value a new subscription starts with. */
@@ -275,12 +253,12 @@ export interface UrlRecognition {
   kindLabel: string | null;
   /** The address the actions use; the input as given when nothing recognized it. */
   url: string;
-  /** The video or channel; a video's title is null because recognition does not contact the source. */
+  /** The item or subscription target; an item's title is null because recognition does not contact the source. */
   target: { id: string; title: string | null; url: string } | null;
-  /** The existing subscription of a recognized channel, with its own settings. */
-  subscription: { id: string; enabled: boolean; settings: CollectionPolicy } | null;
+  /** The existing subscription of a recognized subscription address, with its own settings. */
+  subscription: { id: string; enabled: boolean; settings: SubscriptionSettings } | null;
   /** The settings a new subscription starts with: the source type's defaults. */
-  settings: CollectionPolicy | null;
+  settings: SubscriptionSettings | null;
   /** Whether automatic collection is on; null when the address is not a subscription. */
   autoCollection: boolean | null;
   actions: RecognitionAction[];
@@ -296,11 +274,11 @@ export interface SourceEntry extends Subscription {
   kindLabel: string;
 }
 
-/** A subscription request still resolving its channel; it becomes a source once subscribed, or disappears when it fails. */
+/** A subscription request still resolving its address; it becomes a source once subscribed, or disappears when it fails. */
 export interface PendingSubscription {
   jobId: string;
   url: string;
-  /** The channel title once resolved; null before. */
+  /** The target's title once resolved; null before. */
   title: string | null;
   checkStatus: SubscriptionCheckStatus;
 }
@@ -315,7 +293,7 @@ export interface SourceList {
   types: Array<{ type: DocumentSourceType; count: number }>;
 }
 
-/** One channel job as a source's collection record. */
+/** One check job as a source's collection record. */
 export interface SourceJobRecord {
   id: string;
   state: JobState;
@@ -340,26 +318,31 @@ export interface SourceDetail {
   recentJobs: SourceJobRecord[];
 }
 
-/** Why a channel job was started; it decides the job's labels. Every trigger discovers videos the same way. */
+/** Why a check job was started; it decides the job's labels. Every trigger discovers items the same way. */
 export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual';
 
 /**
- * What a channel job records about why it runs. The range it collects is not part of it: discovery
+ * What a check job records about why it runs. The range it collects is not part of it: discovery
  * reads the subscription's settings when it starts and measures the range back from that moment.
  */
 export interface ChannelJobScope {
   trigger: ChannelJobTrigger;
 }
 
-export type JobKind = 'youtube.video' | 'youtube.channel' | 'youtube.channel-add';
+/**
+ * `<source type>.<name>`, with the name the source type declares for its item, check or add jobs.
+ */
+export type JobKind = string;
+/** What a job does, whatever its source type: collect one item, check a subscription, or subscribe to an address. */
+export type JobRole = 'item' | 'check' | 'add';
 export type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted';
 export type JobPhase = 'resolve' | 'discover' | 'capture' | 'save' | 'index';
-/** What a finished job produced; `empty` is a channel whose discovery found nothing to collect. */
+/** What a finished job produced; `empty` is a check whose discovery found nothing to collect. */
 export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty' | 'skipped';
 
 /**
  * Why work was skipped instead of collected. `superseded` is an interrupted job that a later job
- * of the same video or channel took over; `deleted` is an item the user deleted, which only an
+ * of the same item or subscription took over; `deleted` is an item the user deleted, which only an
  * explicit single-item collection started after the deletion collects again.
  */
 export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'superseded' | 'deleted';
@@ -382,8 +365,8 @@ export interface JobRetry {
 }
 
 /**
- * Why a queued job waits without spending an attempt. `rate_limited`: YouTube limited requests and
- * every YouTube step waits until `until`, when the job continues by itself.
+ * Why a queued job waits without spending an attempt. `rate_limited`: the source limited requests
+ * and every step of its pacing group waits until `until`, when the job continues by itself.
  */
 export interface JobWait {
   reason: 'rate_limited';
@@ -412,29 +395,29 @@ export type JobStopKind = 'shutdown' | 'crash' | 'vault_move' | 'vault_switch';
 
 /** What a restart needs to continue a job without repeating finished steps. Internal to the service. */
 export interface JobCheckpoint {
-  /** A video job saved this document; a resume only updates the index. */
+  /** An item job saved this document; a resume only updates the index. */
   savedDocumentId?: string;
   /**
-   * The latest time the user submitted this video directly while this job was already queued: a
-   * repeated direct submission of a video job, or a direct submission of a video a channel job
-   * queued. That request is explicit, so it may collect the video again after a deletion made
+   * The latest time the user submitted this item directly while this job was already queued: a
+   * repeated direct submission of an item job, or a direct submission of an item a check job
+   * queued. That request is explicit, so it may collect the item again after a deletion made
    * before it.
    */
   claimedAt?: string;
-  /** A channel-add job: the settings the new subscription starts with, chosen when the job was accepted. */
-  settings?: CollectionPolicy;
-  /** A channel-add job resolved this channel and is subscribing to it. */
+  /** An add job: the settings the new subscription starts with, chosen when the job was accepted. */
+  settings?: SubscriptionSettings;
+  /** An add job resolved this target and is subscribing to it; `channelId` is the target's ID. */
   subscribing?: { channelId: string; title: string; url: string };
-  /** A channel job recorded its discovered videos at this time; the subscription's last check time follows it. */
+  /** A check job recorded its discovered items at this time; the subscription's last check time follows it. */
   discovered?: { at: string };
   /**
-   * A channel job retrying the failed videos of an earlier one collects exactly these videos: it
+   * A check job retrying the failed items of an earlier one collects exactly these items: it
    * runs no discovery, leaves the subscription's last check time alone and applies no range bound.
    */
   retryItems?: Array<{ sourceId: string; title: string; url: string }>;
 }
 
-/** One discovered video of a channel job and the video job that collects it. */
+/** One discovered item of a check job and the item job that collects it. */
 export interface JobItem {
   sourceId: string;
   title: string;
@@ -444,9 +427,9 @@ export interface JobItem {
   outcome: 'created' | 'existing' | 'skipped' | null;
   skipReason?: SkipReason;
   error: JobError | null;
-  /** Retry state of the video job that collects this item. */
+  /** Retry state of the item job that collects this item. */
   retry?: JobRetry;
-  /** Cooldown wait of the video job that collects this item. */
+  /** Cooldown wait of the item job that collects this item. */
   wait?: JobWait;
 }
 
@@ -469,8 +452,9 @@ export interface JobResult {
   /** The search projection includes the saved document. */
   indexed?: boolean;
   indexMessage?: string;
+  /** The subscription an add job subscribed to or found. */
   channelId?: string;
-  /** The channel collection job a channel-add job started. */
+  /** The check job an add job started. */
   followUpJobId?: string;
 }
 
@@ -489,8 +473,9 @@ export interface CollectionJob {
   vaultId?: string;
   parentId: string | null;
   source: {
-    type: 'youtube';
-    /** Video ID or channel ID; null until a channel URL has been resolved. */
+    /** The source type, whose plugin runs the job. */
+    type: DocumentSourceType;
+    /** Item key or subscription ID; null until a subscription address has been resolved. */
     id: string | null;
     url: string;
     title: string | null;
@@ -500,19 +485,19 @@ export interface CollectionJob {
   finishedAt: string | null;
   updatedAt: string;
   progress: JobProgress | null;
-  /** Why a channel job runs. */
+  /** Why a check job runs. */
   scope?: ChannelJobScope;
-  /** For a video a channel job found: the start of that check's range; a video published earlier is skipped. */
+  /** For an item a check job found: the start of that check's range; an item published earlier is skipped. */
   publishedNotBefore?: string;
   items: JobItem[] | null;
   result: JobResult | null;
   error: JobError | null;
   retry?: JobRetry;
-  /** Set while the job is queued behind a YouTube cooldown. */
+  /** Set while the job is queued behind its pacing group's cooldown. */
   wait?: JobWait;
   recovery?: JobRecovery;
   checkpoint?: JobCheckpoint;
-  /** A video a channel job queued that the user also submitted directly; stopping the subscription never skips it. */
+  /** An item a check job queued that the user also submitted directly; stopping the subscription never skips it. */
   claimedByUser?: boolean;
   /** The failed job this one retries at the user's request. */
   retryOf?: string;
@@ -537,7 +522,7 @@ export type EventSeverity = 'info' | 'warning' | 'error';
 
 /**
  * One entry of the device activity log. Severity says how serious the entry is; outcome says what a
- * finished job produced, so a skipped video is an `info` entry with outcome `skipped`. Optional fields
+ * finished job produced, so a skipped item is an `info` entry with outcome `skipped`. Optional fields
  * appear when the entry concerns them.
  */
 export interface JobEvent {
@@ -561,20 +546,22 @@ export interface JobEvent {
   attempt?: number;
   /** When a retried job starts its next attempt. */
   nextAttemptAt?: string;
-  /** `youtube.rate_limited` and `job.deferred`: when YouTube requests continue. */
+  /** `<pacing group>.rate_limited` and `job.deferred`: when the group's requests continue. */
   until?: string;
-  /** `youtube.rate_limited`: consecutive limits so far; the cooldown doubles with each one. */
+  /** `<pacing group>.rate_limited`: consecutive limits so far; the cooldown doubles with each one. */
   level?: number;
   /** Why a resumed job stopped: a normal shutdown, an abnormal end, or `unknown` for a stop recorded without it. */
   stopReason?: JobStopKind | 'unknown';
   documentId?: string;
-  /** Video ID or channel ID the event concerns. */
+  /** The source type of the job or subscription the event concerns. */
+  sourceType?: DocumentSourceType;
+  /** Item key or subscription ID the event concerns. */
   sourceId?: string;
-  /** Display title of the video or channel. */
+  /** Display title of the item or subscription target. */
   sourceTitle?: string;
-  /** The subscription (channel ID) the event belongs to, for channel jobs and the videos they queued. */
+  /** The subscription the event belongs to, for check jobs and the items they queued. */
   subscriptionId?: string;
-  /** The channel job that queued this video job. */
+  /** The check job that queued this item job. */
   parentJobId?: string;
   trigger?: ChannelJobTrigger;
   /** The failed job a manual retry follows. */
@@ -585,7 +572,7 @@ export interface JobEvent {
 export interface ActivityQuery {
   severity?: EventSeverity[];
   eventType?: string[];
-  /** A job's own events, the events of the videos it queued and of the job that retries it. */
+  /** A job's own events, the events of the items it queued and of the job that retries it. */
   jobId?: string;
   subscriptionId?: string;
   /** Inclusive lower bound, ISO time. */
@@ -627,23 +614,23 @@ export interface JobSummary {
   since: string;
 }
 
-/** `paused` while automatic collection is off; `scheduled` while it is on. */
 /**
- * The YouTube request channel of this device. `cooldown`: YouTube limited requests and none is sent
- * before `cooldownUntil`; `busy`: a request runs; `waiting`: requests wait for their turn; `idle`:
- * nothing is pending. `level` counts consecutive limits; `waitRangeMs` is the random gap between
- * two requests.
+ * The request channel of one pacing group on this device. `cooldown`: the source limited requests
+ * and none is sent before `cooldownUntil`; `busy`: a request runs; `waiting`: requests wait for their
+ * turn; `idle`: nothing is pending. `level` counts consecutive limits; `waitRangeMs` is the random
+ * gap between two requests.
  */
-export interface YouTubePacingStatus {
+export interface PacingStatus {
   state: 'idle' | 'busy' | 'waiting' | 'cooldown';
   cooldownUntil: string | null;
   level: number;
   waitRangeMs: { min: number; max: number };
 }
 
+/** `paused` while automatic collection is off; `scheduled` while it is on. */
 export type ChannelScheduleStatus = 'paused' | 'scheduled';
 
-/** One subscription's check time as the schedule summary reports it. */
+/** One subscription's check time as the schedule summary reports it; `channelId` is the subscription ID. */
 export interface ScheduledCheck {
   channelId: string;
   title: string;
@@ -698,15 +685,20 @@ export interface TranscriptSearch {
   rebuild(): Promise<void>;
 }
 
-export type CollectorErrorCode =
+/**
+ * The code of a `CollectorError`: one of the core's own codes, or a code a source type raises and
+ * declares with its HTTP status (`errorStatus` of its definition).
+ */
+export type CollectorErrorCode = CoreErrorCode | (string & {});
+
+/** The error codes the core raises, each with a fixed HTTP status. */
+export type CoreErrorCode =
   | 'vault_busy'
   | 'vault_not_ready'
   | 'vault_invalid'
   | 'vault_already_set'
   | 'invalid_url'
   | 'invalid_channel'
-  | 'no_subtitles'
-  | 'video_unavailable'
   | 'network_error'
   | 'rate_limited'
   | 'capture_failed'
@@ -750,9 +742,9 @@ export interface VaultSetupResult {
 
 export class CollectorError extends Error {
   readonly code: CollectorErrorCode;
-  /** Diagnostic output of an external tool, such as yt-dlp stderr; masked and shortened before it is recorded. */
+  /** Diagnostic output of an external tool, such as its stderr; masked and shortened before it is recorded. */
   readonly detail: string | undefined;
-  /** For `rate_limited`: when YouTube requests continue. */
+  /** For `rate_limited`: when the source's requests continue. */
   readonly retryAt: string | undefined;
 
   constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions & { detail?: string; retryAt?: string }) {
@@ -850,16 +842,16 @@ export interface ImportPreview {
   localNewer: number;
   /**
    * A merge still writes deletion records of documents the Vault never had, which `merge` does not
-   * count. Writing them keeps those videos from being collected again and coming back on later imports.
+   * count. Writing them keeps those items from being collected again and coming back on later imports.
    */
   mergeRecords: boolean;
 }
 
 /**
- * A top-level job the user can retry: a failed one, or a channel job that completed with some of its
- * videos failing.
+ * A top-level job the user can retry: a failed one, or a check job that completed with some of its
+ * items failing.
  */
 export function isRetryable(job: Pick<CollectionJob, 'state' | 'kind' | 'parentId' | 'result'>): boolean {
   if (job.parentId !== null) return false;
-  return job.state === 'failed' || (job.kind === 'youtube.channel' && job.state === 'completed' && job.result?.outcome === 'partial');
+  return job.state === 'failed' || (jobRole(job.kind)?.role === 'check' && job.state === 'completed' && job.result?.outcome === 'partial');
 }

@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
 import {
-  canonicalJson, CHANNELS_FILE, channelsFromJson, removalsFromJson, subscriptionContent, type ChannelRemoval,
-} from '../channels/subscription-files.js';
-import { CollectorError, type ChangeCounts, type ImportMode, type YouTubeChannel } from '../core/types.js';
+  canonicalJson, removalsFromJson, subscriptionContent, subscriptionsFromJson, subscriptionsToJson, type SubscriptionRemoval,
+} from '../subscriptions/subscription-files.js';
+import { subscriptionDefinitions } from '../core/source-registry.js';
+import { CollectorError, type ChangeCounts, type ImportMode, type SubscriptionRecord } from '../core/types.js';
+import type { SourceDefinition } from '../plugins/types.js';
 import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
 import { documentIdFromPath, documentPathFromId } from './document-paths.js';
 
@@ -41,9 +43,9 @@ export type FileChanges = Map<string, FileChange>;
 const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 
 /**
- * One item of a side, keyed `document:<document ID>` or `channel:<channel ID>`: present with the
- * digest of its content, or deleted (a document's deletion record, a subscription's removal record),
- * with the time of that state.
+ * One item of a side, keyed `document:<document ID>` or `subscription:<source type>:<subscription
+ * ID>`: present with the digest of its content, or deleted (a document's deletion record, a
+ * subscription's removal record), with the time of that state. The keys live in memory only.
  */
 export interface ItemState {
   state: 'present' | 'deleted';
@@ -57,7 +59,7 @@ export type ItemStates = Map<string, ItemState>;
 /**
  * A document file for comparison: its metadata and body without `collector.collected_at` and
  * `collector.updated_at`, which say when a copy was made or changed rather than what it holds, so
- * two machines that each collected the same video hold the same document. Its time is `updated_at`,
+ * two machines that each collected the same item hold the same document. Its time is `updated_at`,
  * the last change the app made, or `collected_at` for a document unchanged since its collection.
  */
 function documentState(bytes: Buffer, file: string): ItemState {
@@ -84,31 +86,49 @@ async function json(files: FileSource, file: string): Promise<unknown> {
   return files.has(file) ? JSON.parse((await files.read(file)).toString()) as unknown : undefined;
 }
 
+/** The subscriptions file of one source type on one side. */
+interface TypeSubscriptions {
+  definition: SourceDefinition;
+  rows: Map<string, SubscriptionRecord>;
+  removals: Map<string, SubscriptionRemoval>;
+  /** The top-level fields of the file, which a rewrite keeps. */
+  top: Record<string, unknown>;
+}
+
 interface Settings {
-  rows: Map<string, YouTubeChannel>;
-  removals: Map<string, ChannelRemoval>;
+  /** Keyed by source type, for every registered type with subscriptions. */
+  subscriptions: Map<string, TypeSubscriptions>;
   records: Map<string, DeletionRecord>;
-  /** The top-level fields of the channel and deletion files, which a rewrite keeps. */
-  channelsTop: Record<string, unknown>;
+  /** The top-level fields of the deletion file, which a rewrite keeps. */
   deletionsTop: Record<string, unknown>;
 }
 
+const top = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
+
 async function settingsOf(files: FileSource): Promise<Settings> {
-  const channels = await json(files, CHANNELS_FILE);
-  const rows = new Map<string, YouTubeChannel>();
-  for (const row of channelsFromJson(channels)) {
-    if (rows.has(row.id)) throw new CollectorError('invalid_request', `頻道 ID 重複：${row.id}`);
-    rows.set(row.id, row);
+  const subscriptions = new Map<string, TypeSubscriptions>();
+  for (const definition of subscriptionDefinitions()) {
+    const file = await json(files, definition.storage!.subscriptionsFile);
+    const rows = new Map<string, SubscriptionRecord>();
+    for (const row of subscriptionsFromJson(definition, file)) {
+      if (rows.has(row.id)) throw new CollectorError('invalid_request', `${definition.subscription!.targetNoun} ID 重複：${row.id}`);
+      rows.set(row.id, row);
+    }
+    subscriptions.set(definition.id, {
+      definition, rows, removals: new Map(removalsFromJson(definition, file).map((record) => [record.id, record])), top: top(file),
+    });
   }
   const deletions = await json(files, DELETIONS_FILE);
-  const top = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
   return {
-    rows,
-    removals: new Map(removalsFromJson(channels).map((record) => [record.id, record])),
+    subscriptions,
     records: new Map(deletionsFromJson(deletions).map((record) => [deletionId(record), record])),
-    channelsTop: top(channels),
     deletionsTop: top(deletions),
   };
+}
+
+/** The in-memory key of a subscription item. */
+function subscriptionKey(type: string, id: string): string {
+  return `subscription:${type}:${id}`;
 }
 
 /** The items of one side. */
@@ -123,12 +143,14 @@ export async function itemStates(files: FileSource): Promise<ItemStates> {
     const key = `document:${id}`;
     if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.deletedAt });
   }
-  for (const [id, row] of settings.rows) {
-    states.set(`channel:${id}`, { state: 'present', digest: digest(subscriptionContent(row)), at: row.updatedAt ?? row.addedAt });
-  }
-  for (const [id, record] of settings.removals) {
-    const key = `channel:${id}`;
-    if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.removedAt });
+  for (const [type, { rows, removals }] of settings.subscriptions) {
+    for (const [id, row] of rows) {
+      states.set(subscriptionKey(type, id), { state: 'present', digest: digest(subscriptionContent(row)), at: row.updatedAt ?? row.addedAt });
+    }
+    for (const [id, record] of removals) {
+      const key = subscriptionKey(type, id);
+      if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.removedAt });
+    }
   }
   // Source IDs that differ in letter case alone cannot sit side by side on a case-insensitive disk.
   const lower = new Map<string, string>();
@@ -172,7 +194,7 @@ const emptyCounts = (): ChangeCounts => ({
  * the Vault does not hold changes nothing a person sees and is not counted.
  */
 function count(counts: ChangeCounts, key: string, local: ItemState | undefined, incoming: ItemState | undefined): void {
-  const kind = key.startsWith('channel:') ? counts.subscriptions : counts.documents;
+  const kind = key.startsWith('subscription:') ? counts.subscriptions : counts.documents;
   const before = local?.state === 'present';
   const after = incoming?.state === 'present';
   if (before && after) kind.updated += 1;
@@ -250,7 +272,7 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
   const mine = await settingsOf(local);
   const theirs = await settingsOf(incoming);
   let recordsChanged = false;
-  let channelsChanged = false;
+  const subscriptionsChanged = new Set<string>();
   for (const key of keys) {
     if (key.startsWith('document:')) {
       const id = key.slice('document:'.length);
@@ -265,32 +287,38 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
       else mine.records.delete(id);
       recordsChanged = true;
     } else {
-      const id = key.slice('channel:'.length);
-      const row = theirs.rows.get(id);
-      const before = mine.rows.get(id);
-      if (row) mine.rows.set(id, { ...row, ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
-      else mine.rows.delete(id);
-      const removal = theirs.removals.get(id);
-      if (removal) mine.removals.set(id, removal);
-      else mine.removals.delete(id);
-      channelsChanged = true;
+      const rest = key.slice('subscription:'.length);
+      const type = rest.slice(0, rest.indexOf(':'));
+      const id = rest.slice(type.length + 1);
+      const ours = mine.subscriptions.get(type);
+      const other = theirs.subscriptions.get(type);
+      if (!ours || !other) throw new Error(`Not a subscription key: ${key}`);
+      const row = other.rows.get(id);
+      const before = ours.rows.get(id);
+      if (row) ours.rows.set(id, { ...row, ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
+      else ours.rows.delete(id);
+      const removal = other.removals.get(id);
+      if (removal) ours.removals.set(id, removal);
+      else ours.removals.delete(id);
+      subscriptionsChanged.add(type);
     }
   }
   const rewrite = async (file: string, value: Record<string, unknown>) => {
     const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
     if (!local.has(file) || !(await local.read(file)).equals(bytes)) changes.set(file, { bytes });
   };
-  if (channelsChanged) {
-    const { removed: _removed, ...top } = mine.channelsTop;
-    const removed = [...mine.removals.values()];
-    await rewrite(CHANNELS_FILE, { ...top, version: 2, channels: [...mine.rows.values()], ...(removed.length ? { removed } : {}) });
+  for (const type of subscriptionsChanged) {
+    const { definition, rows, removals, top: fileTop } = mine.subscriptions.get(type)!;
+    // The records go last, after the subscription list.
+    const { removed: _removed, ...kept } = fileTop;
+    await rewrite(definition.storage!.subscriptionsFile, subscriptionsToJson(definition, kept, [...rows.values()], [...removals.values()]));
   }
   if (recordsChanged) await rewrite(DELETIONS_FILE, { ...mine.deletionsTop, ...deletionsToJson([...mine.records.values()]) });
   return { changes, displaced };
 }
 
 /** The collection progress of a subscription, which an import never replaces. */
-function collectionProgress(row: YouTubeChannel): Partial<YouTubeChannel> {
+function collectionProgress(row: SubscriptionRecord): Partial<SubscriptionRecord> {
   const { addedAt, lastCheckedAt, outOfRange } = row;
   return { addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}) };
 }

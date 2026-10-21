@@ -2,21 +2,26 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
+import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
-  type CapturedTranscript,
   type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
-  type YouTubeChannel,
-  type YouTubeVideoRef,
+  type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource } from '../../src/sources/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
+import type {
+  YouTubeVideoRef,
+} from '../../src/plugins/youtube/url.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { transcriptOf } from '../support/youtube-documents.js';
 
 const VAULT = '/vaults/a';
 
@@ -37,8 +42,9 @@ function captured(id: string): CapturedTranscript {
 
 class MemoryVault implements DocumentVault {
   readonly documents = new Map<string, SavedDocument>();
-  async getBySourceId(sourceId: string) { return this.documents.get(sourceId) ?? null; }
-  async add(capture: CapturedTranscript) {
+  async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
+  async add(item: CapturedDocument) {
+    const capture = transcriptOf(item);
     const document: SavedDocument = {
       id: `youtube:${capture.videoId}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
       sourceType: 'youtube', sourceId: capture.videoId, publisher: { id: capture.channelId, name: capture.channelTitle },
@@ -52,13 +58,13 @@ class MemoryVault implements DocumentVault {
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
 }
 
-class MemoryChannels implements ChannelStore {
-  readonly channels: YouTubeChannel[] = [];
+class MemoryChannels implements SubscriptionStore {
+  readonly channels: SubscriptionRecord[] = [];
   async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: YouTubeChannel) { this.channels.push(channel); return channel; }
+  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
   async remove() { return false; }
   async setEnabled() { return null; }
-  async update(id: string, patch: ChannelPatch) {
+  async update(id: string, patch: SubscriptionPatch) {
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
     Object.assign(channel, patch);
@@ -80,7 +86,7 @@ class ControlledSource implements YouTubeSource {
     return { id, title: `頻道 ${handle}`, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 
-  async discover(channel: YouTubeChannel, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     return (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit);
   }
 
@@ -112,19 +118,19 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
   const store = options.store ?? JobStore.memory();
   let sequence = 0;
   const manager = new JobManager({
-    vaultPath: VAULT, store, source, documents: new Collector(vault, search), channels,
+    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: { youtube: channels },
     ...(options.limits ? { limits: options.limits } : {}),
     createId: () => `job-${++sequence}`,
   });
   /** Subscribes to the channel and checks it once. */
-  const collect = (subscribed: YouTubeChannel) => {
+  const collect = (subscribed: SubscriptionRecord) => {
     if (!channels.channels.some((candidate) => candidate.id === subscribed.id)) channels.channels.push(subscribed);
-    return manager.submitChannel(subscribed, 'manual');
+    return manager.submitCheck('youtube', subscribed, 'manual');
   };
   return { manager, vault, channels, source, search, store, collect };
 }
 
-function channel(id: string, title = id): YouTubeChannel {
+function channel(id: string, title = id): SubscriptionRecord {
   // Listed videos carry no publish time, so they are all in range; the limit is the largest offered.
   return {
     id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
@@ -143,7 +149,7 @@ describe('JobManager', () => {
   it('accepts a video before capture finishes and reports saving and indexing separately', async () => {
     const { manager, source } = setup();
     const id = videoId(1);
-    const submission = await manager.submitVideo(`https://youtu.be/${id}?t=3`);
+    const submission = await manager.submitItem('youtube', `https://youtu.be/${id}?t=3`);
     expect(submission).toMatchObject({ deduplicated: false, job: { kind: 'youtube.video', state: 'queued', source: { id } } });
 
     await vi.waitFor(() => expect(manager.get(submission.job.id)).toMatchObject({ state: 'running', phase: 'capture' }));
@@ -160,7 +166,7 @@ describe('JobManager', () => {
     const { manager, source, vault } = setup({ failIndex: true });
     source.holdCaptures = false;
     const id = videoId(2);
-    const job = await manager.whenSettled((await manager.submitVideo(watchUrl(id))).job.id);
+    const job = await manager.whenSettled((await manager.submitItem('youtube', watchUrl(id))).job.id);
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created', saved: true, indexed: false } });
     expect(job.result?.indexMessage).toBeTruthy();
     expect(vault.documents.has(id)).toBe(true);
@@ -169,15 +175,15 @@ describe('JobManager', () => {
   it('returns the active job for a repeated video and captures it once', async () => {
     const { manager, source } = setup();
     const id = videoId(3);
-    const first = await manager.submitVideo(watchUrl(id));
-    const repeated = await manager.submit(`https://youtu.be/${id}`);
+    const first = await manager.submitItem('youtube', watchUrl(id));
+    const repeated = await manager.submit('youtube', `https://youtu.be/${id}`);
     expect(repeated).toMatchObject({ deduplicated: true, job: { id: first.job.id } });
 
     await vi.waitFor(() => expect(source.running()).toEqual([id]));
     source.release(id);
     await manager.whenSettled(first.job.id);
 
-    const again = await manager.submitVideo(watchUrl(id));
+    const again = await manager.submitItem('youtube', watchUrl(id));
     expect(again.deduplicated).toBe(false);
     expect(await manager.whenSettled(again.job.id)).toMatchObject({ result: { outcome: 'existing' } });
     expect(source.captures).toEqual([id]);
@@ -187,7 +193,7 @@ describe('JobManager', () => {
     const { manager, source, collect } = setup({ limits: { capture: 1 } });
     source.channelVideos.set('UC-A', videos(3, 'a'));
     source.channelVideos.set('UC-B', videos(2, 'b'));
-    const manual = await manager.submitVideo(watchUrl(videoId(1, 'a')));
+    const manual = await manager.submitItem('youtube', watchUrl(videoId(1, 'a')));
     const a = await collect(channel('UC-A'));
     const b = await collect(channel('UC-B'));
     expect(b.job.id).not.toBe(a.job.id);
@@ -211,7 +217,7 @@ describe('JobManager', () => {
     source.channelVideos.set('UC-OTHER', videos(2, 'o'));
     const big = await collect(channel('UC-BIG'));
     await vi.waitFor(() => expect(source.running()).toHaveLength(2));
-    const manual = await manager.submitVideo(watchUrl(videoId(1, 'm')));
+    const manual = await manager.submitItem('youtube', watchUrl(videoId(1, 'm')));
     const other = await collect(channel('UC-OTHER'));
     await vi.waitFor(() => expect(manager.get(other.job.id).items).toHaveLength(2));
 
@@ -235,11 +241,11 @@ describe('JobManager', () => {
 
   it('refuses new jobs once the waiting queue is full', async () => {
     const { manager, source } = setup({ limits: { capture: 1, maxQueued: 2 } });
-    await manager.submitVideo(watchUrl(videoId(1)));
+    await manager.submitItem('youtube', watchUrl(videoId(1)));
     await vi.waitFor(() => expect(source.running()).toHaveLength(1));
-    await manager.submitVideo(watchUrl(videoId(2)));
-    await manager.submitVideo(watchUrl(videoId(3)));
-    await expect(manager.submitVideo(watchUrl(videoId(4)))).rejects.toMatchObject({ code: 'queue_full' });
+    await manager.submitItem('youtube', watchUrl(videoId(2)));
+    await manager.submitItem('youtube', watchUrl(videoId(3)));
+    await expect(manager.submitItem('youtube', watchUrl(videoId(4)))).rejects.toMatchObject({ code: 'queue_full' });
   });
 
   it('fails a channel job whose videos all fail and keeps partial results otherwise', async () => {
@@ -259,7 +265,7 @@ describe('JobManager', () => {
   it('adds a resolved channel and starts its collection as a follow-up job', async () => {
     const { manager, source, channels } = setup();
     source.holdCaptures = false;
-    const added = await manager.submit('@sample');
+    const added = await manager.submit('youtube', '@sample');
     expect(added.job).toMatchObject({ kind: 'youtube.channel-add', source: { id: null, url: 'https://www.youtube.com/@sample' } });
     const job = await manager.whenSettled(added.job.id);
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
@@ -270,8 +276,8 @@ describe('JobManager', () => {
 
   it('rejects playlists and unknown addresses before accepting a job', async () => {
     const { manager } = setup();
-    await expect(manager.submit('https://www.youtube.com/playlist?list=PL123')).rejects.toMatchObject({ code: 'unsupported_url' });
-    await expect(manager.submit('https://example.com/watch?v=abcdefghijk')).rejects.toMatchObject({ code: 'invalid_url' });
+    await expect(manager.submit('youtube', 'https://www.youtube.com/playlist?list=PL123')).rejects.toMatchObject({ code: 'unsupported_url' });
+    await expect(manager.submit('youtube', 'https://example.com/watch?v=abcdefghijk')).rejects.toMatchObject({ code: 'invalid_url' });
     expect(manager.list().jobs).toEqual([]);
   });
 
@@ -279,13 +285,13 @@ describe('JobManager', () => {
     const store = JobStore.memory();
     const { manager, source } = setup({ store });
     source.holdCaptures = false;
-    for (let index = 0; index < 3; index += 1) await manager.whenSettled((await manager.submitVideo(watchUrl(videoId(index)))).job.id);
+    for (let index = 0; index < 3; index += 1) await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(index)))).job.id);
     const first = manager.list({ limit: 2 });
     expect(first.jobs.map((job) => job.source.id)).toEqual([videoId(2), videoId(1)]);
     expect(manager.list({ limit: 2, cursor: first.nextCursor! })).toMatchObject({ jobs: [{ source: { id: videoId(0) } }], nextCursor: null });
 
     const other = new JobManager({
-      vaultPath: '/vaults/b', store, source, documents: new Collector(new MemoryVault()), channels: new MemoryChannels(),
+      vaultPath: '/vaults/b', store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: { youtube: new MemoryChannels() },
     });
     expect(other.list().jobs).toEqual([]);
     expect(() => other.get(first.jobs[0]!.id)).toThrowError(expect.objectContaining({ code: 'job_not_found' }));
@@ -293,13 +299,13 @@ describe('JobManager', () => {
 
   it('waits for running work on close and records queued work as interrupted', async () => {
     const { manager, source } = setup({ limits: { capture: 1 } });
-    const running = await manager.submitVideo(watchUrl(videoId(1)));
-    const queued = await manager.submitVideo(watchUrl(videoId(2)));
+    const running = await manager.submitItem('youtube', watchUrl(videoId(1)));
+    const queued = await manager.submitItem('youtube', watchUrl(videoId(2)));
     await vi.waitFor(() => expect(source.running()).toEqual([videoId(1)]));
     expect(manager.isBusy()).toBe(true);
 
     const closing = manager.close();
-    await expect(manager.submitVideo(watchUrl(videoId(3)))).rejects.toMatchObject({ code: 'vault_busy' });
+    await expect(manager.submitItem('youtube', watchUrl(videoId(3)))).rejects.toMatchObject({ code: 'vault_busy' });
     source.release(videoId(1));
     await closing;
     expect(manager.isBusy()).toBe(false);
@@ -331,7 +337,7 @@ describe('JobManager', () => {
 
     const second = setup({ limits: { discovery: 1 } });
     second.source.resolveChannel = source.resolveChannel;
-    const adding = await second.manager.submit('@late');
+    const adding = await second.manager.submit('youtube', '@late');
     await vi.waitFor(() => expect(second.manager.get(adding.job.id).phase).toBe('resolve'));
     const closingSecond = second.manager.close();
     releaseResolve();
@@ -410,7 +416,7 @@ describe('JobStore', () => {
 
         const { manager, source } = setup({ store });
         source.holdCaptures = false;
-        await manager.whenSettled((await manager.submitVideo(watchUrl(videoId(9)))).job.id);
+        await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(9)))).job.id);
         await store.flush();
         expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs).toHaveLength(1);
       } finally {
