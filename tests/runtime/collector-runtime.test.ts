@@ -22,7 +22,13 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function options(capture: NonNullable<YouTubeTestSources['capture']>, search?: TranscriptSearch) {
+const runtimeChannel = { id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' };
+
+async function options(
+  capture: NonNullable<YouTubeTestSources['capture']>,
+  search?: TranscriptSearch,
+  resolve: (url: string) => Promise<typeof runtimeChannel> = async () => runtimeChannel,
+) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-test-'));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const closeSearch = vi.fn(async () => undefined);
@@ -36,7 +42,7 @@ async function options(capture: NonNullable<YouTubeTestSources['capture']>, sear
       workspace: withYouTube({
         capture,
         channelSource: {
-          resolve: async () => ({ id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' }),
+          resolve,
           listVideos: async () => [],
         },
         searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
@@ -278,6 +284,30 @@ describe('CollectorRuntime', () => {
     expect((await fetch(`${secondConnection.url}/api/health`, {
       headers: { authorization: `Bearer ${firstConnection.token}` },
     })).status).toBe(401);
+  });
+
+  it('adds a previewed channel with the target its preview resolved, and resolves an address nobody previewed', async () => {
+    const resolve = vi.fn(async () => runtimeChannel);
+    const setup = await options({ capture: vi.fn() }, undefined, resolve);
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => runtime.close());
+    const post = (route: string, body: unknown) => fetch(`${runtime.server.url}${route}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const addAndWait = async (url: string) => {
+      const job = (await (await post('/api/subscriptions', { url })).json()).job.id as string;
+      await vi.waitFor(async () => {
+        expect((await (await fetch(`${runtime.server.url}/api/jobs/${job}`)).json()).job.state).toBe('completed');
+      });
+    };
+
+    // The UI and the Agent subscribe with the address the preview returned.
+    const preview = (await (await post('/api/subscription-previews', { url: '@runtime' })).json()).preview;
+    await addAndWait(preview.target.url);
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    await addAndWait('https://www.youtube.com/@another');
+    expect(resolve).toHaveBeenCalledTimes(2);
   });
 
   it('wires Agent channel and schedule operations to the UI workspace', async () => {

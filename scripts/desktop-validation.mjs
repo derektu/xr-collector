@@ -83,7 +83,7 @@ try {
   save(path.join(evidence, 'manifest.json'), manifest);
   const env = { ...process.env, XR_COLLECTOR_PROFILE: profile, XR_COLLECTOR_VAULT: vault, XR_COLLECTOR_VALIDATION_WINDOW_SIZE: '880x620' };
   delete env.ELECTRON_RUN_AS_NODE;
-  for (const [key, name] of [['YTDLP', 'yt-dlp'], ['DENO', 'deno'], ['MEILISEARCH', 'meilisearch']]) {
+  for (const [key, name] of [['YTDLP', 'yt-dlp/yt-dlp'], ['DENO', 'deno'], ['MEILISEARCH', 'meilisearch']]) {
     env[`XR_COLLECTOR_${key}`] = path.join(root, 'resources', 'bin', target, name + (target === 'win' ? '.exe' : ''));
   }
   const executable = path.join(root, 'node_modules', 'electron', 'dist', target === 'win' ? 'electron.exe' : 'Electron.app/Contents/MacOS/Electron');

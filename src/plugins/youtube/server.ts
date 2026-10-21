@@ -142,7 +142,8 @@ export function youtubePlugin(source: YouTubeSource): SourcePlugin<CollectionPol
 /** The YouTube plugin of the product: yt-dlp, with Deno for YouTube's scripts, behind the `youtube` request channel. */
 export function createYouTubePlugin(runtime: PluginRuntime): SourcePlugin<CollectionPolicy> {
   const ytdlp = {
-    binaryPath: runtime.program('yt-dlp', 'XR_COLLECTOR_YTDLP'),
+    // The official folder build: the executable beside its `_internal` libraries.
+    binaryPath: runtime.program('yt-dlp/yt-dlp', 'XR_COLLECTOR_YTDLP'),
     javaScriptRuntimePath: runtime.program('deno', 'XR_COLLECTOR_DENO'),
     gate: runtime.gate(YOUTUBE_PACING.group),
   };

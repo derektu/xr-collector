@@ -12,6 +12,7 @@ import { CollectionScheduler } from '../subscriptions/scheduler.js';
 import { JsonSubscriptionStore, type SubscriptionStore } from '../subscriptions/subscription-store.js';
 import { JsonScheduleStore } from '../subscriptions/schedule-store.js';
 import { canonicalJson } from '../subscriptions/subscription-files.js';
+import { RecentTargets } from '../subscriptions/recent-targets.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { SourcePlugin } from '../plugins/types.js';
@@ -945,6 +946,7 @@ export class VaultWorkspace {
     });
     const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry) });
     const plugins = this.options.plugins;
+    const recentTargets = new RecentTargets();
     const stores: Record<string, SubscriptionStore> = {};
     for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(root, plugin.id);
     // The scheduler is replaced after a merge, so switch reads go through the bundle.
@@ -961,11 +963,22 @@ export class VaultWorkspace {
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
+      recentTarget: (type, url) => recentTargets.get(type, url),
     });
     const subscriptions = new SubscriptionServices(plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>
       new SubscriptionService(plugin.id, stores[plugin.id]!, jobs, {
         autoCollection,
-        resolveTarget: (url, signal) => plugin.resolveTarget!(url, { priority: 'interactive', signal }),
+        resolveTarget: async (url, signal) => {
+          const target = await plugin.resolveTarget!(url, { priority: 'interactive', signal });
+          // The UI and the Agent subscribe with the preview's target address, so the target stands
+          // for that address as well as the one previewed.
+          recentTargets.remember(plugin.id, url, target);
+          try {
+            const targetInput = plugin.classify(target.url);
+            if (targetInput.kind === 'subscription') recentTargets.remember(plugin.id, targetInput.url, target);
+          } catch { /* an address the source type does not accept is resolved again when added */ }
+          return target;
+        },
         documents: () => collector.list(),
         deleteDocument: (id) => collector.delete(id),
         recordDeletion: (entry) => collector.recordDeletion(entry),

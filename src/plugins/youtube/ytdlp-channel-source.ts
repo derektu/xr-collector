@@ -175,6 +175,12 @@ function normalizeChannelUrl(input: string): string {
   if (url.protocol !== 'https:' || hostname !== 'youtube.com' || !acceptedPath) {
     throw new CollectorError('invalid_subscription', '請輸入 YouTube 頻道網址或 @handle。');
   }
+  // A channel address without a tab makes yt-dlp read the videos, live and shorts tabs, one page
+  // each. Resolving reads the videos tab alone, the tab subscriptions list from; a channel without
+  // one fails here instead of after it is subscribed.
+  if (parts.length === (first.startsWith('@') ? 1 : 2)) {
+    url.pathname = `/${[...parts, 'videos'].join('/')}`;
+  }
   return url.toString();
 }
 

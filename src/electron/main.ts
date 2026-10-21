@@ -26,18 +26,12 @@ if (validationHidden) app.dock?.hide();
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
-function runtimePath(name: 'yt-dlp' | 'deno' | 'meilisearch'): string {
+/** An external program's path, by its path under the runtime folder without extension; outside a package an environment variable may name it instead. */
+function runtimePath(name: string, environmentName: string): string {
   const executable = process.platform === 'win32' ? `${name}.exe` : name;
   if (app.isPackaged) return path.join(process.resourcesPath, 'bin', executable);
-  const environmentName = name === 'yt-dlp'
-    ? 'XR_COLLECTOR_YTDLP'
-    : name === 'deno'
-      ? 'XR_COLLECTOR_DENO'
-      : 'XR_COLLECTOR_MEILISEARCH';
   return process.env[environmentName]
-    ?? (name === 'meilisearch'
-      ? path.join(app.getAppPath(), 'resources', 'bin', process.platform === 'win32' ? 'win' : 'mac', executable)
-      : executable);
+    ?? path.join(app.getAppPath(), 'resources', 'bin', process.platform === 'win32' ? 'win' : 'mac', executable);
 }
 
 /**
@@ -173,13 +167,13 @@ app.whenReady().then(async () => {
   const sources = await createSourcePlugins({
     profilePath: app.getPath('userData'),
     env: process.env,
-    program: (name) => runtimePath(name as 'yt-dlp' | 'deno'),
+    program: runtimePath,
   });
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
     workspace: {
       plugins: sources.plugins, pacing: sources.pacing,
-      searchBinary: runtimePath('meilisearch'),
+      searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
       backupFolder: backupFolder(app.getPath('documents')),

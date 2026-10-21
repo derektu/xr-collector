@@ -35,7 +35,7 @@ Scheduler 涵蓋所有來源類型的訂閱，到期時提交檢查工作即返�
 
 ## Runtime 與資料
 
-搜尋採完整 Meilisearch binary，由程式管理獨立子程序，監聽 loopback 上隨機分配的 port 並使用隨機 key。啟動前會結束同一 database 上一次執行被強制結束時留下的引擎程序，以 database 旁的 pid 檔辨識，並核對命令列中的執行檔與 database 路徑。yt-dlp、Deno 與 Meilisearch 由下載腳本固定版本；安裝包內附所需工具。沒有嵌入 milli library 或要求安裝完整 Agent-Reach／summarize。
+搜尋採完整 Meilisearch binary，由程式管理獨立子程序，監聽 loopback 上隨機分配的 port 並使用隨機 key。啟動前會結束同一 database 上一次執行被強制結束時留下的引擎程序，以 database 旁的 pid 檔辨識，並核對命令列中的執行檔與 database 路徑。yt-dlp、Deno 與 Meilisearch 由下載腳本固定版本；安裝包內附所需工具。yt-dlp 採官方資料夾版（執行檔與 `_internal`），放在 runtime 目錄的 `yt-dlp/` 下：單一執行檔版每次執行都要先解壓到新的暫存目錄，系統又會檢查這些新檔案，每次呼叫因此多花數秒。沒有嵌入 milli library 或要求安裝完整 Agent-Reach／summarize。
 
 文件、搜尋與 UI 使用來源無關的文件欄位（文件 ID、來源類型與來源內 ID、publisher、日期），來源專屬資訊放在各自的欄位區塊，例如 YouTube 的字幕語言；篩選以來源類型與 publisher ID 進行，不依賴顯示名稱。
 
