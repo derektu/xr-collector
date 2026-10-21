@@ -4,6 +4,7 @@ import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
+import { useFloatingMenu } from './floating-menu.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import {
   checkTimesLine,
@@ -156,6 +157,9 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
   const [menuOpen, setMenuOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const menuList = useRef<HTMLDivElement>(null);
+  useFloatingMenu(menuOpen, moreButton, menuList);
   const paused = source.status === 'paused';
 
   useEffect(() => {
@@ -203,8 +207,8 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
         ? <button type="button" className="button small" disabled={busy} onClick={toggle}>恢復</button>
         : <button type="button" className="icon-only" disabled={busy} aria-label={`暫停 ${source.title}`} title="暫停" onClick={toggle}><Icon name="pause" size={15} /></button>}
       <div className="menu-anchor" ref={menu}>
-        <button type="button" className="icon-only" aria-label={`${source.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><Icon name="more" size={15} /></button>
-        {menuOpen ? <div className="menu" role="menu">
+        <button ref={moreButton} type="button" className="icon-only" aria-label={`${source.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><Icon name="more" size={15} /></button>
+        {menuOpen ? <div ref={menuList} className="menu" role="menu">
           <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onOpen(); }}>查看詳情</button>
           <button type="button" role="menuitem" disabled={paused} onClick={() => void run(async () => {
             await api.checkChannels(source.type, [source.id]);

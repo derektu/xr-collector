@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useFloatingMenu } from './floating-menu.js';
 import { menuIndexForKey, unsupportedText, type AddMenuItem, type AddMode } from './add-menu.js';
 import { Icon } from './icons.js';
 
@@ -22,6 +23,8 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', testId
   const anchor = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const entries = useRef<Array<HTMLButtonElement | null>>([]);
+  const list = useRef<HTMLDivElement>(null);
+  useFloatingMenu(open, button, list, align);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -46,7 +49,7 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', testId
     <button ref={button} type="button" className={primary ? 'button primary' : 'button'} aria-haspopup="menu" aria-expanded={open}
       onClick={() => setOpen((value) => !value)}
       onKeyDown={(event) => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }} data-testid={testId}><Icon name="plus" size={15} />{label}</button>
-    {open ? <div className="menu" role="menu" aria-label={label} data-testid={`${testId}-menu`} onKeyDown={(event) => {
+    {open ? <div ref={list} className="menu" role="menu" aria-label={label} data-testid={`${testId}-menu`} onKeyDown={(event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
       if (event.key === 'Tab') { event.preventDefault(); close(); return; }
       const current = entries.current.findIndex((entry) => entry === document.activeElement);

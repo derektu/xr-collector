@@ -143,7 +143,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
       <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</dd></div>
       <div><dt>上次檢查</dt><dd>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
-      <div><dt>新增時間</dt><dd>{calendarDate(source.addedAt)}</dd></div>
+      <div><dt>新增時間</dt><dd>{shortTimeLabel(source.addedAt)}</dd></div>
     </dl>
 
     <section className="panel settings-panel" data-testid="detail-settings">

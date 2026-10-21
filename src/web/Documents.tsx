@@ -21,6 +21,7 @@ import {
   type DocumentListState,
 } from './document-presentation.js';
 import { createLatestRequest } from './latest-request.js';
+import { useFloatingMenu } from './floating-menu.js';
 import { Icon } from './icons.js';
 
 interface Row {
@@ -243,6 +244,9 @@ function DocumentActions({ document: item, onDeleted }: { document: DocumentMeta
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const menuList = useRef<HTMLDivElement>(null);
+  useFloatingMenu(menuOpen, moreButton, menuList);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -255,9 +259,9 @@ function DocumentActions({ document: item, onDeleted }: { document: DocumentMeta
 
   return <div className="document-actions">
     <div className="menu-anchor" ref={menu}>
-      <button type="button" className="icon-only" aria-label={`${item.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen}
+      <button ref={moreButton} type="button" className="icon-only" aria-label={`${item.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen}
         onClick={() => setMenuOpen((open) => !open)} data-testid="document-more"><Icon name="more" size={15} /></button>
-      {menuOpen ? <div className="menu" role="menu">
+      {menuOpen ? <div ref={menuList} className="menu" role="menu">
         <button type="button" role="menuitem" className="danger" onClick={() => { setMenuOpen(false); setDeleting(true); }}>刪除</button>
       </div> : null}
     </div>
