@@ -863,13 +863,13 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('moves wit
   const searchData = path.join(context.profile, 'search');
   const workspace = await open(context, { createSearch: undefined, searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData });
   await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
-  const before = (await readdir(context.profile)).filter((name) => name.startsWith('search-'));
+  const before = (await readdir(context.profile)).filter((name) => name.startsWith('search-') && !name.endsWith('.pid'));
   expect(before).toHaveLength(2);
   await workspace.move(target);
   await expect.poll(() => workspace.status().state, { timeout: 30_000 }).toMatch(/^(completed|error)$/u);
   expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target });
   expect((await workspace.search.search({ query: '森林觀測' })).hits[0]?.id).toBe('youtube:seed0000001');
-  const after = (await readdir(context.profile)).filter((name) => name.startsWith('search-'));
+  const after = (await readdir(context.profile)).filter((name) => name.startsWith('search-') && !name.endsWith('.pid'));
   expect(after).toHaveLength(2);
   expect(after).not.toEqual(before);
 }, 60_000);

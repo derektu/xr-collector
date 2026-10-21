@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
@@ -221,4 +222,35 @@ describe('Agent authenticated HTTP access', () => {
     expect((await fetch(`${nextConfig.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(401);
     expect((await get('/api/documents')).total).toBe(3);
   }, 30_000);
+
+  it('listens on the preferred port, or the next free one when it is taken, and records the port it uses', async () => {
+    const { root, collector } = await fixture();
+    const connectionFile = path.join(root, 'agent-connection.json');
+    const options = { collector, connectionFile, instanceId: 'agent-port-test-runtime', skillPath: path.resolve('skills/xr-collector-agent') };
+    const blocker = await listenOnFreePort();
+    cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
+    const taken = (blocker.address() as { port: number }).port;
+
+    const moved = await startAgentAccess({ ...options, preferredPort: taken });
+    const movedPort = Number(new URL(JSON.parse(await readFile(connectionFile, 'utf8')).url).port);
+    expect(movedPort).toBeGreaterThan(taken);
+    expect(movedPort).toBeLessThan(taken + 10);
+    expect(new URL(moved.info.url).port).toBe(String(movedPort));
+    await moved.close();
+
+    await new Promise((resolve) => blocker.close(resolve));
+    const preferred = await startAgentAccess({ ...options, preferredPort: taken });
+    cleanup.push(() => preferred.close());
+    const config = JSON.parse(await readFile(connectionFile, 'utf8'));
+    expect(new URL(config.url).port).toBe(String(taken));
+    expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(200);
+  });
 });
+
+function listenOnFreePort(): Promise<Server> {
+  const server = createServer();
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port: 0 }, () => resolve(server));
+  });
+}

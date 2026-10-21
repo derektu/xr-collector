@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { AGENT_PORT_RANGE } from '../runtime/agent-discovery.js';
 import { startServer, type StartServerOptions } from './start.js';
 
 export const AGENT_CONNECTION_SCHEMA_VERSION = 1;
@@ -18,6 +19,8 @@ export async function startAgentAccess(options: {
   search?: StartServerOptions['search'];
   pacing?: StartServerOptions['pacing'];
   instanceId: string;
+  /** Tried first, then the following ports up to AGENT_PORT_RANGE, then any free port; any free port when omitted. */
+  preferredPort?: number;
   connectionFile: string;
   skillPath: string;
   runtimeStatus?: StartServerOptions['runtimeStatus'];
@@ -27,7 +30,10 @@ export async function startAgentAccess(options: {
   if (!options.instanceId) throw new Error('Agent discovery instance ID must not be empty');
   const token = randomBytes(32).toString('hex');
   options.protectSecret?.(token);
-  const server = await startServer({
+  const candidates = options.preferredPort
+    ? [...Array.from({ length: AGENT_PORT_RANGE }, (_, offset) => options.preferredPort! + offset), 0]
+    : [0];
+  const server = await firstFreePort(candidates, (port) => startServer({
     ...(options.collector ? { collector: options.collector } : {}),
     ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.activity ? { activity: options.activity } : {}),
@@ -40,8 +46,8 @@ export async function startAgentAccess(options: {
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
     agentToken: token,
-    port: 0,
-  });
+    port,
+  }));
   const temporary = `${options.connectionFile}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await mkdir(path.dirname(options.connectionFile), { recursive: true });
@@ -62,6 +68,19 @@ export async function startAgentAccess(options: {
     // Keep the last connection file so clients can distinguish a stopped app from missing setup.
     close: () => server.close(),
   };
+}
+
+async function firstFreePort<T>(ports: number[], listen: (port: number) => Promise<T>): Promise<T> {
+  for (const [index, port] of ports.entries()) {
+    try {
+      return await listen(port);
+    } catch (error) {
+      // Windows reports a port inside a range reserved by Hyper-V, WSL or Docker as EACCES.
+      const taken = ['EADDRINUSE', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '');
+      if (!taken || index === ports.length - 1) throw error;
+    }
+  }
+  throw new Error('No port to listen on');
 }
 
 export type AgentAccess = Awaited<ReturnType<typeof startAgentAccess>>;

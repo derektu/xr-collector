@@ -3,6 +3,12 @@ import path from 'node:path';
 export const AGENT_CONNECTION_FILE = 'agent-connection.json';
 export const DEVELOPMENT_AGENT_CONNECTION_FILE = 'agent-connection.development.json';
 export const XR_COLLECTOR_PRODUCT_DIRECTORY = 'XR Collector';
+/** The Agent API listens on a fixed port so an Agent keeps one address; a busy port moves it to the next free one. */
+export const DESKTOP_AGENT_PORT = 7222;
+/** The development server's own Agent API port, outside the Desktop range so both can run at once. */
+export const DEVELOPMENT_AGENT_PORT = 7232;
+/** How many ports from the preferred one the Agent API tries before taking any free port. */
+export const AGENT_PORT_RANGE = 10;
 
 export interface AgentDiscoveryPathOptions {
   platform: NodeJS.Platform;

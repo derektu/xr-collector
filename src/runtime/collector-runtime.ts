@@ -44,6 +44,8 @@ export interface CollectorRuntimeOptions {
   createdBy?: string;
   connectionFile: string;
   skillPath: string;
+  /** Preferred Agent API port; the Agent API takes any free port when omitted. */
+  agentPort?: number;
   uiPort: number;
   uiHost?: string;
   webRoot?: string;
@@ -134,6 +136,7 @@ export class CollectorRuntime {
       agentAccess = await startAgentAccess({
         ...services, instanceId,
         ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
+        ...(options.agentPort ? { preferredPort: options.agentPort } : {}),
         connectionFile: options.connectionFile,
         skillPath: options.skillPath,
         runtimeStatus, notReady, vaultSetup,
