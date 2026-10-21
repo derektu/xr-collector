@@ -85,6 +85,27 @@ describe('JsonSubscriptionStore', () => {
     expect(saved.channels[0]).toMatchObject({ enabled: false, cursor: rowWithCursor('UCa').cursor, backlog: false });
   });
 
+  it('reads and writes failed items with a subscription, as collection progress that is not a change of it (N69-T1)', async () => {
+    const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+    const failure = { videoId: 'aaaaaaaaaaa', title: '影片', attempts: 2, errorCode: 'no_subtitles', failedAt: '2026-10-15T03:30:00.000Z', skipped: false };
+    // A file written before failures were recorded reads as a subscription without failures.
+    const root = await vault({ channels: { version: 2, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
+    const store = new JsonSubscriptionStore(root, 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));
+    expect((await store.list())[0]!.failures).toBeUndefined();
+    await store.update('UCa', { failures: [failure] });
+    const saved = await read(root, 'youtube-channels.json') as { version: number; channels: Array<Record<string, unknown>> };
+    expect(saved.version).toBe(2);
+    expect(saved.channels[0]).toMatchObject({ failures: [failure], updatedAt: '2026-09-01T00:00:00.000Z' });
+    expect((await new JsonSubscriptionStore(root, 'youtube').list())[0]!.failures).toEqual([failure]);
+    await store.update('UCa', { failures: undefined });
+    expect((await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> }).channels[0]).not.toHaveProperty('failures');
+
+    for (const broken of [{ ...failure, attempts: 0 }, { ...failure, skipped: 'no' }, { title: '影片', attempts: 1, errorCode: 'x', failedAt: 'y', skipped: false }]) {
+      const invalid = await vault({ channels: { version: 2, channels: [{ ...row('UCa'), settings, failures: [broken] }] } });
+      await expect(new JsonSubscriptionStore(invalid, 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
+    }
+  });
+
   it('keeps other fields of the schedule file when saving the switch', async () => {
     const root = await vault({ schedule: { version: 2, enabled: true, note: 'kept' } });
     await new JsonScheduleStore(root).save({ enabled: false });

@@ -70,6 +70,15 @@ class MemoryChannels implements SubscriptionStore {
     Object.assign(channel, patch);
     return { ...channel };
   }
+  async updateMany(patches: Map<string, SubscriptionPatch>) { return this.updateWith(() => patches); }
+  async updateWith(change: (channels: readonly SubscriptionRecord[]) => Map<string, SubscriptionPatch>) {
+    const updated: SubscriptionRecord[] = [];
+    for (const [id, patch] of change(this.channels)) {
+      const channel = await this.update(id, patch);
+      if (channel) updated.push(channel);
+    }
+    return updated;
+  }
 }
 
 /** A YouTube source whose captures wait until the test releases them. */
@@ -248,7 +257,7 @@ describe('JobManager', () => {
     await expect(manager.submitItem('youtube', watchUrl(videoId(4)))).rejects.toMatchObject({ code: 'queue_full' });
   });
 
-  it('fails a channel job whose videos all fail and keeps partial results otherwise', async () => {
+  it('completes a channel job with failed videos as partial and an empty listing as empty', async () => {
     const { manager, source, collect } = setup();
     source.holdCaptures = false;
     source.channelVideos.set('UC-PART', videos(2, 'p'));

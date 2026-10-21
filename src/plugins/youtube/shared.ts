@@ -82,6 +82,9 @@ export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
   },
   jobKindNames: { item: 'video', check: 'channel', add: 'channel-add' },
   phaseLabels: { capture: '擷取字幕' },
+  failureLabels: {
+    no_subtitles: '沒有字幕', video_unavailable: '影片不存在', network_error: '網路錯誤', capture_failed: '收集失敗', rate_limited: 'YouTube 限制連線',
+  },
   documentDetailLine: (document) => subtitleLine(document.youtube),
   prompts: {
     anyInput: '請輸入 YouTube 影片網址、頻道網址或 @handle。',

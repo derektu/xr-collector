@@ -6,7 +6,7 @@ import {
   resolveTheme,
   routeForPath,
   settingsNavigation,
-  sidebarStatus,
+  jobsBadge,
   themePreferenceFromValue,
 } from '../../src/web/app-shell.js';
 
@@ -16,18 +16,19 @@ describe('App Shell routes', () => {
     expect(routeForPath('/documents')).toBe('documents');
     expect(routeForPath('/settings/')).toBe('settings');
     expect(routeForPath('/activity')).toBe('activity');
+    expect(routeForPath('/jobs')).toBe('jobs');
     expect(routeForPath('/documents/youtube%3Aabc')).toBe('documents');
     expect(routeForPath('/sources/youtube/UC123')).toBe('sources');
     expect(routeForPath('/not-a-page')).toBe('sources');
   });
 });
 
-describe('sidebar (N75-T1)', () => {
-  it('lists Subscriptions, Documents and Log in order with Settings apart, and shows 更新中 only while jobs run', () => {
-    expect(navigation.map((item) => [item.page, item.label])).toEqual([['sources', '訂閱'], ['documents', '文件'], ['activity', '記錄']]);
+describe('sidebar (N75-T1, N69-T11)', () => {
+  it('lists Subscriptions, Documents, Jobs and Log in order with Settings apart, and counts unfinished work next to Jobs', () => {
+    expect(navigation.map((item) => [item.page, item.label])).toEqual([['sources', '訂閱'], ['documents', '文件'], ['jobs', '工作'], ['activity', '記錄']]);
     expect(settingsNavigation).toMatchObject({ page: 'settings', label: '設定' });
-    expect(sidebarStatus(0)).toBeNull();
-    expect(sidebarStatus(2)).toBe('更新中');
+    expect(jobsBadge(0)).toBeNull();
+    expect(jobsBadge(9)).toBe('9');
   });
 });
 

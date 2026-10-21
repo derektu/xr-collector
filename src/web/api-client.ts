@@ -1,6 +1,7 @@
 import type {
   ActivityPage,
   ActivityQuery,
+  JobOverview,
   JobSummary,
   DocumentFilter,
   DocumentDeletion,
@@ -172,6 +173,14 @@ export const api = {
 
   retryJob(id: string): Promise<JobSubmissionView> {
     return request<JobSubmissionView>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  },
+
+  async jobOverview(signal?: AbortSignal): Promise<JobOverview> {
+    return (await request<{ overview: JobOverview }>('/api/jobs/overview', signal ? { signal } : undefined)).overview;
+  },
+
+  async dismissJob(id: string): Promise<JobView> {
+    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}/dismiss`, { method: 'POST' })).job;
   },
 
   activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {

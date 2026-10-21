@@ -295,7 +295,7 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
       if (!ours || !other) throw new Error(`Not a subscription key: ${key}`);
       const row = other.rows.get(id);
       const before = ours.rows.get(id);
-      if (row) ours.rows.set(id, { ...row, ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
+      if (row) ours.rows.set(id, { ...(before ? withoutProgress(row) : row), ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
       else ours.rows.delete(id);
       const removal = other.removals.get(id);
       if (removal) ours.removals.set(id, removal);
@@ -317,8 +317,17 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
   return { changes, displaced };
 }
 
+/** A subscription without the item progress an import never takes over for a subscription this Vault has. */
+function withoutProgress(row: SubscriptionRecord): SubscriptionRecord {
+  const { outOfRange: _outOfRange, failures: _failures, ...rest } = row;
+  return rest;
+}
+
 /** The collection progress of a subscription, which an import never replaces. */
 function collectionProgress(row: SubscriptionRecord): Partial<SubscriptionRecord> {
-  const { addedAt, lastCheckedAt, outOfRange } = row;
-  return { addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}) };
+  const { addedAt, lastCheckedAt, outOfRange, failures } = row;
+  return {
+    addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}),
+    ...(failures !== undefined ? { failures } : {}),
+  };
 }

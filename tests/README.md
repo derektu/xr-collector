@@ -7,18 +7,18 @@
 | 目錄 | 責任 |
 | --- | --- |
 | `core` | 文件保存與索引、刪除紀錄與重新收集的互斥及競態 |
-| `plugins` | 核心與來源類型無關（`core-agnostic.test.ts`：以 `tests/support/fake-source-plugin.ts` 的兩個假來源類型 `fake`、`fake2` 走過單一項目、去重、訂閱預覽與檢查、範圍內最新 N 則、重試分類、各請求群組各自冷卻、暫停與移除、刪除後略過與明確重新收集、重啟接續、未登錄類型的工作保持中斷且不執行、訂閱狀態（含 workspace 由 plugin 的登入狀態判斷），以及與 YouTube 並存的匯出、合併與完全取代）；來源類型宣告的 Vault 與匯出檔格式版本（`format-versions.test.ts`） |
-| `plugins/youtube` | YouTube plugin：網址、語言、字幕整理、收集設定、yt-dlp 輸出解析、字幕軌道選擇與頻道列出 |
+| `plugins` | 核心與來源類型無關（`core-agnostic.test.ts`：以 `tests/support/fake-source-plugin.ts` 的兩個假來源類型 `fake`、`fake2` 走過單一項目、去重、訂閱預覽與檢查、範圍內最新 N 則、重試分類、各請求群組各自冷卻、暫停與移除、刪除後略過與明確重新收集、重啟接續、未登錄類型的工作保持中斷且不執行、訂閱狀態（含 workspace 由 plugin 的登入狀態判斷），以及與 YouTube 並存的匯出、合併與完全取代，以及檢查中失敗項目的次數、略過、重試與收集紀錄、工作頁的排隊順序與失敗區）；來源類型宣告的 Vault 與匯出檔格式版本（`format-versions.test.ts`） |
+| `plugins/youtube` | YouTube plugin：網址、語言、字幕整理、收集設定、yt-dlp 輸出解析、字幕軌道選擇、頻道列出，以及失敗原因的分類與用字（`failures.test.ts`） |
 | `pacing` | 請求通道：單一連線、隨機等待、冷卻與狀態檔 |
 | `sources` | 網址辨識；訂閱清單、新增中的訂閱、文件頻道篩選的「已移除」、移除訂閱並刪除文件（擷取中的影片、單支影片加入、超過等待時間、部分刪除失敗）與 UI／Agent 讀到相同欄位的 HTTP 契約（`subscription-http.test.ts`） |
 | `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試，以及 YouTube 冷卻期間的等待與接續 |
 | `activity` | 記錄的日檔與舊檔相容、30 天保留與跨時區日界、cursor 分頁、篩選、遮蔽、寫入失敗、手動重試、工作摘要，以及 Vault 鎖與 Not Ready 時的查詢 |
-| `subscriptions` | 訂閱、各訂閱的收集設定與設定檔版本檢查、時間邊界、每次檢查的收集規則（範圍內最新 N 則、不往前補足）、暫停／移除收斂、頻道工作提交與排程、服務計算的訂閱狀態（`subscription-status.test.ts`：更新中、排在其他訂閱後、冷卻、等待重試、到期未派出、自動檢查關閉）；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
+| `subscriptions` | 訂閱、各訂閱的收集設定、失敗項目欄位與設定檔版本檢查、時間邊界、每次檢查的收集規則（範圍內最新 N 則、不往前補足）、暫停／移除收斂、頻道工作提交與排程、服務計算的訂閱狀態（`subscription-status.test.ts`：更新中、排在其他訂閱後、冷卻、等待重試、到期未派出、自動檢查關閉）；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
 | `vault` | 文件格式與文件路徑、zip 匯出檔（manifest、路徑與內容檢查、只打包登記的檔案、刪除紀錄與未知欄位）、匯出到檔案與預設匯出目錄、以較新為準的合併（刪除帶回另一台、刪除與新增同時發生、兩邊修改、刪除與修改、兩邊都刪除時採用較新的紀錄、時間相同保留本機、同一支影片、從未交換的知識庫、訂閱的新增修改移除與移除紀錄、沒有需要匯入、完全取代）、匯入前備份與備份目錄、原地套用的中斷恢復（journal 寫入前、改名進行一半）、從匯出檔建立知識庫、資料交換期間的收集暫停、知識庫搬移（目標檢查、逐檔驗證、失敗注入、中斷恢復、清理失敗）、同庫識別與開啟其他知識庫 |
 | `search` | 搜尋狀態、索引（含 YouTube 文件內容雜湊的固定值）與真實引擎 |
 | `server` | HTTP 契約與 Agent 授權；不分類型的收集、訂閱、排程與請求通道路由，以 YouTube 與假來源 plugin 各跑一次，含類型專屬路由回 404 與 UI／Agent 讀到相同結果（`subscription-routes.test.ts`）；核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
-| `web` | 畫面使用的狀態／呈現邏輯、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
+| `web` | 畫面使用的狀態／呈現邏輯（含工作頁列的標題、副標與等待文字，`jobs-presentation.test.ts`）、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
 | `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`） |
 | `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）與假來源 plugin（`fake-source-plugin.ts`） |
 

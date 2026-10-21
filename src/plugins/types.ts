@@ -167,6 +167,11 @@ export interface SourcePluginDeclaration<S extends SubscriptionSettings = Subscr
   jobKindNames: JobKindNames;
   /** Labels of job phases that differ from the core's own, such as the source's word for `capture`. */
   phaseLabels?: Partial<Record<JobPhase, string>>;
+  /**
+   * Short words for the type's failure error codes, such as "沒有字幕", shown with a failed or skipped
+   * item; a code without one shows as "收集失敗".
+   */
+  failureLabels?: Readonly<Record<string, string>>;
   /** A line of type-specific details the reader shows under a document's title; null shows nothing. */
   documentDetailLine?(document: DocumentMetadata): string | null;
   prompts: InputPrompts;

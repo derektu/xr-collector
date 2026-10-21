@@ -6,12 +6,10 @@ import {
   diagnosticsText,
   eventLevel,
   eventText,
-  jobStatusText,
   localDayStart,
   logWarning,
   mergeNewest,
   parseActivityState,
-  summaryLabel,
 } from '../../src/web/activity-presentation.js';
 
 // Activity page wording and filters (A-T11).
@@ -62,15 +60,7 @@ describe('activity presentation', () => {
     expect(localDayStart(now).getDate()).toBe(15);
   });
 
-  it('words the summary, job rows and log warnings', () => {
-    expect(summaryLabel({ active: 2, completed: 14, failed: 1 })).toBe('進行中 2 · 今天完成 14 · 失敗 1');
-    expect(jobStatusText(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toBe('已加入');
-    expect(jobStatusText(job({
-      kind: 'youtube.channel', state: 'running', phase: 'capture', scope: { trigger: 'scheduled' },
-      progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 },
-    }))).toBe('收集影片 4／10');
-    expect(jobStatusText(job({ state: 'failed', error: { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。（已嘗試 3 次）' } })))
-      .toBe('無法連線到 YouTube，請稍後再試。（已嘗試 3 次）');
+  it('words the log warnings', () => {
     expect(logWarning(null)).toBeNull();
     expect(logWarning({ state: 'ok', pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 3 })).toBeNull();
     expect(logWarning({ state: 'failing', pending: 4, dropped: 0, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))

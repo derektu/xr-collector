@@ -14,7 +14,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/core` | 共用型別、來源類型登錄（`source-registry.ts`）、文件保存與索引 |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
-| `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工與裝置端持久紀錄 |
+| `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單 |
 | `src/subscriptions` | 各來源類型的訂閱與設定檔讀寫、每次檢查的收集規則（範圍內最新 N 則）、檢查工作提交及依各訂閱頻率的週期檢查 |
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
 | `src/vault` | Markdown 保存、active Vault、匯出檔、以較新為準的匯入合併、搬移與中斷恢復 |
@@ -24,6 +24,8 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token，可操作所有現有業務 routes；跨程序服務依下述固定裝置入口發現 active runtime。
 
 收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
+
+檢查中收集失敗的項目記在訂閱的 `failures`，不讓檢查失敗；之後的檢查重試它，失敗滿 3 次或屬 plugin 分類為不重試的錯誤時略過。檢查只有列出訂閱失敗時才算失敗。單一項目與新增訂閱的失敗留在工作頁的失敗區，可重試或移除。
 
 核心（工作、訂閱、排程、Vault、搜尋、活動紀錄、資料交換、HTTP 與共用畫面）不認得任何來源類型，只經由 `src/plugins/types.ts` 的介面與來源類型登錄操作來源。每個 plugin 宣告它接受的網址、項目擷取、訂閱列出項目的方式、失敗的重試分類、請求節奏、訂閱設定、文件的來源專屬 frontmatter、畫面用字、需要的 Vault 與匯出檔格式版本，以及核心之外的錯誤碼與其 HTTP 狀態；工作種類在線上寫為 `<類型>.<名稱>`，去重以來源類型區分。HTTP 的收集與訂閱路由不分類型：`POST /api/submissions`、`POST /api/items` 與 `POST /api/subscriptions` 由網址找到所屬的來源類型，訂閱以 `/api/subscriptions/:type/:id` 識別，排程（`/api/schedule`）涵蓋所有類型，請求通道狀態（`/api/pacing`）每個請求群組一筆；回應以訂閱為名詞（`subscription`、`subscriptions`、`subscriptionId`），新增來源類型不需要新路由。Server 程序與 Electron 由 `src/plugins/index.ts` 的來源清單組裝 plugin，清單每一項是一個來源類型的定義與 plugin factory，factory 從組裝端取得外部程式路徑與所屬請求群組的通道；Web 畫面由 `src/web/plugins.tsx` 登錄宣告。新增訂閱選單中尚未支援的類型（X、Facebook、RSS）是 `src/web/add-menu.ts` 的資料，以相同 ID 登錄的 plugin 會取代它的位置。登錄外的來源類型留下的文件、工作與訂閱照原樣保存，核心不對它們動作。
 

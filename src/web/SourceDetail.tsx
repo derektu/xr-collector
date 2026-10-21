@@ -7,10 +7,9 @@ import { ConfirmRemove } from './ConfirmRemove.js';
 import { readerPath } from './document-presentation.js';
 import { Icon } from './icons.js';
 import {
-  calendarDate,
+  collectionEntryLabel,
   displayUrl,
   initials,
-  jobRecordLabel,
   nextCheckLabel,
   shortTimeLabel,
 } from './source-presentation.js';
@@ -20,10 +19,11 @@ type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: '
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
 
 /**
- * One subscription: its state, counts, collection settings, recent documents and collection record, with
- * pause, resume and remove. A settings change saves at once.
+ * One subscription: its state, counts, collection settings and collection record (collected,
+ * failed and skipped items and check summaries), with pause, resume and remove. A settings change
+ * saves at once.
  */
-export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onOpenDocuments, onOpenActivity, onChanged, onRemoved }: {
+export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onChanged, onRemoved }: {
   type: string;
   id: string;
   sourceTypes: SourceTypeInfo[];
@@ -31,8 +31,6 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   revision: number;
   onBack: () => void;
   onOpenDocument: (documentId: string) => void;
-  onOpenDocuments: (source: string) => void;
-  onOpenActivity: (filter: { job?: string; source?: string }) => void;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
   onRemoved: (message: string) => void;
 }) {
@@ -72,7 +70,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     </section></>;
   }
 
-  const { subscription: source, recentDocuments, recentJobs } = state.detail;
+  const { subscription: source, collection } = state.detail;
   const paused = source.status === 'paused';
   const typeInfo = sourceTypes.find((candidate) => candidate.id === source.type);
 
@@ -162,28 +160,28 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       </div>
     </section>
 
-    <div className="detail-columns">
-      <section className="panel">
-        <div className="panel-heading"><h2>最近收集</h2><button type="button" className="inline-link" onClick={() => onOpenDocuments(`${source.type}:${source.id}`)}>在文件中查看全部</button></div>
-        {recentDocuments.length === 0 ? <p className="panel-text muted">還沒有收集到文件。</p>
-          : <ul className="plain-list">{recentDocuments.map((document) => <li key={document.id}>
-            <a href={readerPath(document.id)} onClick={(event) => openDocument(event, document.id)}><span className="title">{document.title}</span><span className="muted">{calendarDate(document.collectedAt).slice(5)}</span></a>
-          </li>)}</ul>}
-      </section>
-      <section className="panel">
-        <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={() => onOpenActivity({ source: source.id })} data-testid="all-activity">全部記錄</button></div>
-        {recentJobs.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
-          : <ul className="plain-list records">{recentJobs.map((record) => {
-            const label = jobRecordLabel(record, undefined, source.type);
-            return <li key={record.id} className={record.state}>
-              <button type="button" className="record-link" onClick={() => onOpenActivity({ job: record.id })} title="查看此次工作" data-testid={`record-${record.id}`}>
-                <span className="title">{label.title}</span><span className="muted">{label.detail}</span>
-              </button>
-              {label.active && record.progress && record.progress.total > 0 ? <progress value={record.progress.done} max={record.progress.total} aria-label={`${label.title}進度`} /> : null}
+    <section className="panel collection-panel" data-testid="detail-collection">
+      <div className="panel-heading"><h2>收集紀錄</h2></div>
+      {collection.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
+        : <ul className="collection-rows">{collection.map((entry) => {
+          const label = collectionEntryLabel(entry, source.type);
+          const when = <span className="collection-when">{shortTimeLabel(entry.at)}</span>;
+          if (entry.kind === 'collected') {
+            return <li key={`document:${entry.documentId}`} className="collection-row collected" data-testid="collection-collected">
+              <a href={readerPath(entry.documentId)} onClick={(event) => openDocument(event, entry.documentId)}>
+                <Icon name="check" size={16} /><span className="collection-title">{label.title}</span><span />{when}
+              </a>
             </li>;
-          })}</ul>}
-      </section>
-    </div>
+          }
+          const key = entry.kind === 'check' ? `check:${entry.jobId}` : `${entry.kind}:${entry.key}`;
+          return <li key={key} className={`collection-row ${entry.kind}`} data-testid={`collection-${entry.kind}`}>
+            <Icon name={entry.kind === 'check' ? 'jobs' : entry.kind} size={16} />
+            <span className="collection-title">{label.title}</span>
+            <span className="collection-detail">{label.detail}</span>
+            {when}
+          </li>;
+        })}</ul>}
+    </section>
 
     {applying ? <ConfirmApplySettings source={source} onCancel={() => setApplying(false)}
       onApplied={(message) => { setApplying(false); onChanged(message); }} /> : null}

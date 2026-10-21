@@ -1,6 +1,7 @@
 import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
 import type { JobManager } from '../jobs/job-manager.js';
+import { waitsForTurn } from '../jobs/job-board.js';
 import { requireDefinition, subscriptionKindLabel } from '../core/source-registry.js';
 import type { SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../plugins/types.js';
 import {
@@ -470,17 +471,6 @@ export function checkStatus(
   // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
   if (!next || new Date(next).getTime() <= context.now.getTime()) return { state: 'queued' };
   return { state: 'scheduled', nextCheckAt: next };
-}
-
-/**
- * A running check job that is not collecting anything itself: its own step waits for a cooldown
- * or a retry, none of its unfinished items is running, or every unfinished item waits.
- */
-function waitsForTurn(job: CollectionJob): boolean {
-  if (job.wait || job.retry?.nextAttemptAt) return true;
-  const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
-  if (unfinished.length === 0) return false;
-  return unfinished.every((item) => item.state === 'queued' || item.wait || item.retry?.nextAttemptAt);
 }
 
 /** Deletes one document; one deleted meanwhile, such as by an Agent, counts as gone, and any other failure is logged. */

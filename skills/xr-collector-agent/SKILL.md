@@ -69,7 +69,14 @@ Authorization: Bearer <token>
 - 這台電腦對 YouTube 的所有請求（頻道解析、清單探索、影片資訊、字幕下載）共用一條通道：同一時間只有一個請求，相鄰請求之間隨機等待 4–12 秒，一支影片的資訊與字幕是兩次請求。工作數多時收集會慢，這是預期的節奏，不需要重新提交。`GET /api/pacing` 回傳 `groups`，每個請求通道一筆：`group`（YouTube 為 `youtube`）、`label`、`state`（`idle`、`busy`、`waiting`、`cooldown`）、`cooldownUntil`（冷卻結束時間，不在冷卻時為 null）、`level`（連續被限制的次數）與 `waitRangeMs`（`min`、`max`）。
 - YouTube 限制連線（`rate_limited`）時整條通道冷卻：從 5 分鐘開始，連續被限制時加倍，最長 60 分鐘；成功一次請求後歸零，距上次限制超過 2 小時也從 5 分鐘起算。冷卻狀態在服務重啟後延續。冷卻期間受影響的工作 `state` 為 `queued` 並帶 `wait`：`reason`（`rate_limited`）與 `until`（預計繼續時間）；頻道工作的 `items[].wait` 同步顯示各影片的等待。冷卻不算失敗嘗試，`retry` 不變，冷卻結束後自動繼續，不需要重試。冷卻期間的訂閱預覽回 503 `rate_limited`，`error.retryAt` 與 `Retry-After` header 說明何時可再試；網址辨識的頻道結果為 `unavailable`，`message` 附預計繼續時間。
 - 暫時性錯誤（`network_error`）會自動重試，每個工作最多嘗試 3 次，失敗後先等 30 秒，再等 2 分鐘。等待期間 `state` 為 `queued`，`retry` 含 `attempts`（已失敗次數）、`maxAttempts`、`nextAttemptAt`（下次嘗試時間，執行中或用完時為 null）與 `lastError`；頻道工作的 `items[].retry` 同步顯示各影片的重試狀態。次數在服務重啟後延續。用完次數後工作結束為 `failed`，`error.message` 附上已嘗試次數。
-- `GET /api/jobs` 列出目前 Vault 的上層工作，新到舊，query：`state`（`active` 或 `all`）、`limit`（1–100，預設 20）、`cursor`（上一頁的 `nextCursor`）。頻道工作派出的影片工作出現在該頻道工作的 `items`，不另列在上層。工作查詢在匯入套用期間仍可讀。`GET /api/jobs/summary?since=<ISO 時間>` 回傳 `summary`：`active`（排隊或執行中）、`completed`（`since` 之後完成）、`failed`（`since` 之後失敗且尚未重試）；`since` 須帶時區，例如使用者本地當天零點。
+- `GET /api/jobs` 列出目前 Vault 的上層工作，新到舊，query：`state`（`active` 或 `all`）、`limit`（1–100，預設 20）、`cursor`（上一頁的 `nextCursor`）。頻道工作派出的影片工作出現在該頻道工作的 `items`，不另列在上層。工作查詢在匯入套用期間仍可讀。`GET /api/jobs/summary?since=<ISO 時間>` 回傳 `summary`：`active`（排隊或執行中）、`completed`（`since` 之後完成）、`failed`（`since` 之後失敗且尚未重試、尚未移除）；`since` 須帶時區，例如使用者本地當天零點。
+- `GET /api/jobs/overview` 回傳 `overview`，是 UI 工作頁的同一份資料，含 UI 與 Agent 送出的所有工作：
+  - `running`：正在進行；
+  - `queued`：依輪到的順序，等待重試或冷卻的排在最後，依預計繼續的時間；
+  - `failed`：失敗的單支影片與新增訂閱。重試成功、使用者移除、同一支影片已有文件（例如之後由訂閱收進來）或失敗滿 7 天後離開；頻道內失敗的影片不在這裡，見訂閱的 `failures`。
+
+  每筆含 `jobId`、`type`、`role`（`item`、`check`、`add`）、`title`（未知時為 null，改顯示 `url`）、`url`、`publisher`（影片的發布者，未知時為 null）、`progress`（檢查的 `done`、`total`）、`wait`（冷卻的 `reason`、`until`）、`retry`（等待重試時的 `nextAttemptAt`、`lastError`）、`error` 與 `failedAt`。`running` 加 `queued` 的筆數是 UI 側欄「工作」的數字。
+- `POST /api/jobs/:id/dismiss` 依使用者要求把 `failed` 的一筆移出失敗清單，回傳 `{"job":{...}}`，工作紀錄與記錄保留；不在失敗清單的工作回 409 `job_not_dismissable`。
 - `POST /api/jobs/:id/retry` 依使用者要求重試上層工作，回傳 202 `{"job":{...},"deduplicated":...}`。可重試的是 `state` 為 `failed` 的上層工作，以及 `result.outcome` 為 `partial`（完成但有影片失敗）的頻道工作。重試建立新工作，嘗試次數重新計算：
   - 影片：重新收集。
   - 新增訂閱：以原本接受的設定重新解析與訂閱。
@@ -91,7 +98,7 @@ Authorization: Bearer <token>
 - 開啟其他 Vault：`POST /api/vault/open` `{"path":"<既有 Vault 的絕對路徑>"}`，先以 `POST /api/vault/inspect` 確認是 `existing`，並經使用者同意。回 202 後追蹤 status 到 `completed`：`result.previousVaultPath`、`result.interruptedJobs`（原 Vault 暫停、回到原 Vault 時接續的工作）、`result.resumedJobs`（新 Vault 接續的工作）。目前的 Vault、其中的資料夾、程式資料目錄內的資料夾，以及名稱為 `.moving-<UUID>`／`.moved-<UUID>`／`.importing-<UUID>` 的暫存資料夾回 400，空或無法辨識的資料夾回 422 `vault_invalid`。
 - Vault status 的 `relocationUnavailable` 不為 null 時，搬移與開啟其他 Vault 都不可用，`code` 與 `message` 說明原因：`vault_location_fixed` 表示服務以固定的 Vault 位置啟動。
 - GET 無法連線、逾時或 401 `unauthorized`：依連線流程重新讀取及驗證一次。寫入送出後斷線或逾時時先依第 5 步查狀態，避免重複操作。這些是本機工具錯誤，不是 API 回傳碼。
-- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `document_deleted`：使用者刪除了這份文件；讀取或再次刪除都會得到這個結果，要重新取得須由使用者確認後以單支影片網址收集。404 `subscription_not_found`／`job_not_found`：重新取得目前訂閱或工作列表。409 `job_not_retryable`：工作不可重試，查看它的 `retriedBy`；頻道底下的影片改為重試它的 `parentId` 頻道工作。409 `subscription_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_subscription`：依參數或網址格式修正請求，`invalid_subscription` 表示網址不是可訂閱的目標或無法解析成訂閱目標；400 `unsupported_url`：沒有任何類型接受這個網址（其他網站，或 YouTube 純播放清單）；播放清單請改用單支影片網址。409 `vault_busy`：等待目前收集步驟或資料交換完成後重試；Vault 匯出與匯入比對等待執行中的收集步驟超過 2 分鐘時也回 409（匯入套用見 status 的 `errorCode`）。409 `file_exists`：匯出位置已有檔案，經使用者同意後帶 `overwrite: true`。409 `transfer_cancelled`：資料交換在等待收集步驟時被取消，資料未變更。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。503 `rate_limited`：YouTube 暫時限制連線，在 `error.retryAt` 之後再試；不要在冷卻期間反覆呼叫。409 `vault_location_fixed`：不能搬移或開啟其他 Vault，原因見 status 的 `relocationUnavailable`。507 `insufficient_space`：搬移、匯入或從匯出檔建立知識庫的可用空間不足，請使用者改選位置或釋出空間。
+- 404 `document_not_found`：文件已不存在，重新 browse/search。404 `document_deleted`：使用者刪除了這份文件；讀取或再次刪除都會得到這個結果，要重新取得須由使用者確認後以單支影片網址收集。404 `subscription_not_found`／`job_not_found`：重新取得目前訂閱或工作列表。409 `job_not_retryable`：工作不可重試，查看它的 `retriedBy`；409 `job_not_dismissable`：工作不在失敗清單，重新讀取 `GET /api/jobs/overview`；頻道底下的影片改為重試它的 `parentId` 頻道工作。409 `subscription_paused`：先恢復該訂閱，或改為檢查全部訂閱。400 `invalid_request`／`invalid_url`／`invalid_subscription`：依參數或網址格式修正請求，`invalid_subscription` 表示網址不是可訂閱的目標或無法解析成訂閱目標；400 `unsupported_url`：沒有任何類型接受這個網址（其他網站，或 YouTube 純播放清單）；播放清單請改用單支影片網址。409 `vault_busy`：等待目前收集步驟或資料交換完成後重試；Vault 匯出與匯入比對等待執行中的收集步驟超過 2 分鐘時也回 409（匯入套用見 status 的 `errorCode`）。409 `file_exists`：匯出位置已有檔案，經使用者同意後帶 `overwrite: true`。409 `transfer_cancelled`：資料交換在等待收集步驟時被取消，資料未變更。503 `queue_full`：等待中的工作已達上限，等現有工作完成後再提交。503 `rate_limited`：YouTube 暫時限制連線，在 `error.retryAt` 之後再試；不要在冷卻期間反覆呼叫。409 `vault_location_fixed`：不能搬移或開啟其他 Vault，原因見 status 的 `relocationUnavailable`。507 `insufficient_space`：搬移、匯入或從匯出檔建立知識庫的可用空間不足，請使用者改選位置或釋出空間。
 - 工作的 `error.code` 沿用擷取錯誤：`no_subtitles`、`video_unavailable` 為影片本身的結果，重試通常不會改變；`network_error` 表示自動重試已用完，`capture_failed` 不自動重試，兩者都可稍後以 `POST /api/jobs/:id/retry` 重試。
 - 503 `vault_not_ready`：尚未設定 Vault，或先前選擇的 Vault 無法使用。依「Vault 設定」處理，不要自行建立替代路徑或重試寫入。
 - 422 `vault_invalid`：目錄不能建立或開啟為知識庫，`message` 說明原因。請使用者改選目錄，不要修改目錄內容。文件列表、搜尋狀態或匯出遇到讀不出來的文件檔時也回這個錯誤，`message` 帶該檔案路徑；告知使用者修正或移除該檔案，不要自行修改。409 `vault_already_set`：已經有使用中的知識庫，不需再設定。
@@ -106,8 +113,8 @@ Authorization: Bearer <token>
 - **排程**：每個訂閱依自己的頻率檢查，`nextCheckAt` 是下一次檢查時間，`lastDispatchedAt` 是上次派工時間。定時檢查派工後，下一次檢查是原本的下一次檢查時間之後、第一個晚於現在的整數倍頻率時間；立即檢查、首次訂閱與恢復後是派工時間加上該訂閱的頻率；同時到期的訂閱一起派工，每個訂閱一個工作。暫停中的訂閱 `nextCheckAt` 為 null。
 - **每次檢查的收集規則**：首次訂閱、定時檢查、立即檢查、恢復訂閱、長時間未檢查、服務重啟後的接續，以及上次檢查失敗之後，都用同一條規則。頻道工作開始探索時，以當下時間往前算 `backfillWindow`，讀取該訂閱當時的設定；頻道清單中這段範圍內最新的 `backfillMaxItems` 支影片（直播預告不算）是候選，候選中已收集或已刪除的影片不收，其餘收集。不會往更早的影片找替代，所以一次檢查期間新影片超過上限時，較早的那些不會收集。月份依這台電腦的時區以日曆月計算。
 - 頻道清單的發布時間是約略值，沒有時間的影片視為在範圍內；擷取時以影片本身的發布時間確認，早於範圍起點的影片以 `skipReason: out_of_range` 略過，仍佔候選名額；訂閱的 `outOfRange`（`videoId`、`before`）記下這些影片與當時的範圍起點，之後範圍起點不早於 `before` 的檢查不再為它派工，影片不再是候選時移除該筆。範圍外或超出上限的影片可用單支影片網址收集。
-- 候選中收集失敗的影片，下一次檢查仍是候選時會再試。同一頻道已有排隊或執行中的工作時，新的檢查併入該工作（`deduplicated: true`），不重複收集。頻道工作的 `scope.trigger` 是 `subscribe`、`resume`、`scheduled` 或 `manual`。
-- `GET /api/subscriptions` 的 `subscriptions` 每筆含 `type`、`kind`、`kindLabel`、`settings`、`nextCheckAt`、`lastDispatchedAt`、`status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`、`outOfRange`（可省略）、`checkStatus` 與 `capturing`（還有這個頻道的影片在擷取，包括已暫停的檢查）。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次完成或失敗（`completed`／`failed`）的頻道工作是失敗，原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`；`interrupted` 與接續中的工作不改變錯誤狀態。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
+- 候選中收集失敗的影片記在訂閱的 `failures`（每筆 `videoId`、`title`、`attempts`（已失敗的檢查次數）、`errorCode`、`failedAt`、`skipped`）。之後的檢查若影片仍是候選就再試一次，跨檢查最多 3 次。錯誤分類：`network_error` 先在同一次檢查內自動重試，用完算 1 次；`no_subtitles`、`capture_failed` 每次檢查算 1 次；`rate_limited` 等冷卻不計次；`video_unavailable` 與其他錯誤碼直接略過。達 3 次或直接略過的影片 `skipped: true`，之後的檢查不再嘗試，它仍佔候選名額，不會改收更舊的影片補足。影片收集成功、已有文件或不再是候選時移除該筆。使用者仍想取得已略過的影片時，可經使用者確認後以單支影片網址收集。這些紀錄屬於 Vault 的收集進度，隨匯出、還原、合併與搬移帶走；合併時既有訂閱保留本機的紀錄。影片失敗不改變訂閱狀態，頻道工作以 `partial` 完成，事件為 `subscription.item_failed`（warning）與 `subscription.item_skipped`（info，`outcome: skipped`）。同一頻道已有排隊或執行中的工作時，新的檢查併入該工作（`deduplicated: true`），不重複收集。頻道工作的 `scope.trigger` 是 `subscribe`、`resume`、`scheduled` 或 `manual`。
+- `GET /api/subscriptions` 的 `subscriptions` 每筆含 `type`、`kind`、`kindLabel`、`settings`、`nextCheckAt`、`lastDispatchedAt`、`status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`、`outOfRange`（可省略）、`failures`（可省略）、`checkStatus` 與 `capturing`（還有這個頻道的影片在擷取，包括已暫停的檢查）。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次完成或失敗（`completed`／`failed`）的頻道工作是失敗（列出頻道本身失敗；影片失敗不算），原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`；`interrupted` 與接續中的工作不改變錯誤狀態。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
 - `checkStatus` 是 UI 狀態欄顯示的同一個狀態，由服務計算，依序判斷：`{"state":"paused"}`（使用者暫停）、`{"state":"login_required"}`（需要使用者重新登入；YouTube 不會出現）、有進行中的頻道工作時為 `{"state":"updating","done":N,"total":M}`（正在檢查或收集，`total` 為 0 表示還不知道要收幾支）或 `{"state":"queued"}`（工作還在排隊、剩下的影片排在其他工作之後，或都在等 YouTube 冷卻或重試）、`{"state":"auto_check_off"}`（自動檢查總開關關閉）、`{"state":"queued"}`（已到檢查時間或還沒排定時間、尚未派工），其餘為 `{"state":"scheduled","nextCheckAt":"..."}`（下次檢查時間，一定有值）。上次檢查失敗時仍為 `scheduled`，原因看 `status: error` 與 `lastError`；單支影片收集失敗不改變它。
 - `PATCH /api/subscriptions/:type/:id` `{"enabled":false}` 暫停：排隊中的頻道工作與尚未開始的影片結束為 `skipped`，正在擷取的影片會完成保存。`{"enabled":true}` 恢復並立即檢查，回傳 `{"subscription":...,"submission":...}`。`DELETE` 移除訂閱，query `documents` 為 `keep`（預設，文件保留）或 `delete`（先替該訂閱正在擷取的影片寫入刪除紀錄，之後擷取完成也不保存；再等這些擷取與單支影片加入完成，最多約 30 秒，逐份刪除該訂閱的文件，與 `DELETE /api/documents/:id` 相同，每份都留下刪除紀錄與 `document.deleted` 事件；超過時間才完成的單支影片加入若屬於該訂閱，完成時刪除），其他值回 400 `invalid_request`；回傳 `{"removed":true,"documentsKept":N,"documentsDeleted":M,"documentsFailed":K}`，`documentsDeleted` 是實際刪掉的文件數：擷取中的影片若在刪除紀錄寫入前已保存，會被刪除並計入；被刪除紀錄擋下、沒有保存的不計入。`documentsFailed` 是刪不掉而保留的文件數，移除本身仍完成並記錄 `subscription.removed`。一併刪除前先向使用者確認文件數；訂閱的 `capturing: true` 表示還有影片在擷取，即使文件數為 0 也可能留下文件。暫停與移除在服務重啟後維持原狀。
 - `POST /api/subscription-checks` 不帶 body 時立即檢查所有類型中啟用中的訂閱，並從此刻重算下次自動檢查；帶 `{"subscriptions":[{"type":"...","id":"..."}]}` 只檢查指定訂閱，任一訂閱不存在回 404 `subscription_not_found`、暫停中回 409 `subscription_paused`，此時不開始任何檢查。兩者都回傳 202 `{"submissions":[{"job":...,"deduplicated":...}]}`，並把被檢查訂閱的下一次檢查移到此刻加上各自的頻率。
@@ -122,7 +129,13 @@ Authorization: Bearer <token>
   - `unavailable`：頻道無法解析或連線逾時，`message` 說明原因，可稍後重試。
 - `recognition.actions` 列出可做的動作：`collect`（收集單篇，`POST /api/items`）、`subscribe`（訂閱，`POST /api/subscriptions`）、`resume`（恢復已暫停的訂閱，`PATCH /api/subscriptions/:type/:id`）。每個動作附 `request`（`method`、`path`、`body`），向使用者確認後照原樣送出即可。已訂閱且啟用中的目標沒有動作。
 - `GET /api/subscriptions` 回傳 `subscriptions`（每個訂閱一筆，欄位見「訂閱與自動檢查」）、`pending`（已接受、還在解析的訂閱請求，舊到新：`type`、`jobId`、`url`、`title`（解析前為 null）與 `checkStatus`；訂閱完成後改列在 `subscriptions`，解析失敗時消失，原因見該工作的 `error` 與記錄）、`unsubscribed`（不屬於任何目前訂閱的文件：單篇收集、已移除訂閱留下的文件、沒有發布者 ID 的文件；`documentCount`、`lastCollectedAt`）與 `types`（各類型的訂閱數）。query `type` 只列該類型，`pending`、`unsubscribed` 與 `types` 也只計該類型；不支援的類型回 400 `invalid_request`。單篇收集的項目若屬於已訂閱的發布者，計入該訂閱。文件數依發布者 ID 計算，`lastCollectedAt` 是收集時間，不是發布時間。
-- `GET /api/subscriptions/:type/:id` 回傳 `subscription`（同上一筆）、`recentDocuments`（最近收集的 5 份文件 metadata）與 `recentJobs`（該訂閱最近 5 個檢查工作：`id`、`state`、`trigger`、`createdAt`、`startedAt`、`finishedAt`、`progress`、`outcome`、`error`、`retry`（同工作的 `retry`，沒有重試時為 null）、`resumedCount`）。不存在的類型或訂閱回 404 `subscription_not_found`。
+- `GET /api/subscriptions/:type/:id` 回傳 `subscription`（同上一筆）與 `collection`：UI「收集紀錄」的同一份列表，新到舊，最多 30 筆。每支影片一筆，取目前狀態，以 `kind` 區分：
+  - `collected`：`at`（收集時間）、`key`、`title`、`documentId`；
+  - `failed`：`at`（上次失敗時間）、`key`、`title`、`url`、`errorCode`、`reason`（錯誤的短字，例如「沒有字幕」）、`attempts`、`maxAttempts`；
+  - `skipped`：同 `failed` 但沒有 `maxAttempts`，另有 `skippedBy`（`limit` 為試滿次數，`failure` 為直接略過）；
+  - `check`：每次結束的檢查一筆，`at`（結束時間）、`jobId`、`trigger`、`created`、`failed`（收集與失敗的影片數）、`error`（列出頻道失敗時的原因，否則 null）。進行中、中斷，或因暫停、移除、被取代而略過的檢查不列。
+
+  不存在的類型或訂閱回 404 `subscription_not_found`。
 
 ## Vault 設定
 
@@ -151,13 +164,15 @@ Authorization: Bearer <token>
 | `POST /api/items` | `{"url":"..."}`，只接受單篇網址；202 回傳 `job`、`deduplicated` |
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
 | `GET /api/jobs/summary` | query `since`（帶時區的 ISO 時間）；回傳 `summary` |
+| `GET /api/jobs/overview` | 工作頁：`overview` 的 `running`、`queued`、`failed` |
 | `GET /api/jobs/:id` | 回傳 `job`，查到 `completed` 或 `failed` |
+| `POST /api/jobs/:id/dismiss` | 把失敗清單的一筆移除；回傳 `job` |
 | `POST /api/jobs/:id/retry` | 重試失敗的上層工作或有影片失敗的頻道工作；202 回傳 `job`、`deduplicated` |
 | `GET /api/activity` | query `severity`、`eventType`、`jobId`、`subscriptionId`、`since`、`until`、`limit`、`cursor`；回傳 `events`、`nextCursor`、`retentionDays`、`log` |
 | `POST /api/subscription-previews` | `{"url":"..."}`；同步解析，回傳 `preview`：`type`、`target`、`subscription`、`settings`、`autoCollection` |
 | `GET /api/pacing` | 各請求通道的狀態：`groups`，每筆 `group`、`label`、`state`、`cooldownUntil`、`level`、`waitRangeMs` |
 | `GET`／`POST /api/subscriptions` | GET 訂閱清單：`subscriptions`、`pending`、`unsubscribed`、`types`，query `type` 只列一種類型；POST body `{"url":"...","settings":{...}}`（`settings` 可省略或為 `{}`），202 回傳新增訂閱的工作 |
-| `GET`／`PATCH`／`DELETE /api/subscriptions/:type/:id` | GET 訂閱詳情：`subscription`、`recentDocuments`、`recentJobs`；PATCH body `{"enabled":true}` 及／或 `{"settings":{...}}`，回傳 `subscription`、`submission`；DELETE query `documents=keep|delete`（預設 keep），回傳 `documentsKept`、`documentsDeleted`、`documentsFailed`；ID URL encode |
+| `GET`／`PATCH`／`DELETE /api/subscriptions/:type/:id` | GET 訂閱詳情：`subscription`、`collection`；PATCH body `{"enabled":true}` 及／或 `{"settings":{...}}`，回傳 `subscription`、`submission`；DELETE query `documents=keep|delete`（預設 keep），回傳 `documentsKept`、`documentsDeleted`、`documentsFailed`；ID URL encode |
 | `POST /api/subscriptions/:type/:id/apply-settings` | 把這個訂閱的設定套用到同類型的其他訂閱；回傳 `updated`、`paused` |
 | `POST /api/subscription-checks` | 無 body 檢查全部訂閱；或 `{"subscriptions":[{"type":"...","id":"..."}]}`；202 回傳 `submissions` |
 | `GET`／`PUT /api/schedule` | GET 回傳總開關、`lastCheck`、`nextCheck`；PUT 只接受 `{"enabled":true|false}` |

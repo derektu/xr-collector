@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionJob, SubscriptionEntry, SubscriptionJobRecord, UrlRecognition } from '../../src/core/types.js';
+import type { CollectionJob, SubscriptionEntry, UrlRecognition } from '../../src/core/types.js';
 import {
   activeJobs,
   currentRecognition,
   displayUrl,
   filterSources,
   initials,
-  jobRecordLabel,
+  collectionEntryLabel,
   parseSourceListState,
   shortTimeLabel,
   sourceListSearch,
@@ -75,23 +75,20 @@ describe('source presentation (T-09)', () => {
     expect(active.map((entry) => entry.id)).toEqual(['a', 'b']);
   });
 
-  it('describes collection records', () => {
-    const now = new Date('2026-10-15T06:00:00.000Z');
-    const record = (overrides: Partial<SubscriptionJobRecord>): SubscriptionJobRecord => ({
-      id: 'r', state: 'completed', trigger: 'scheduled', createdAt: '2026-10-15T05:00:00.000Z', startedAt: null,
-      finishedAt: '2026-10-15T05:30:00.000Z', progress: { total: 1, done: 1, created: 1, existing: 0, failed: 0 }, outcome: 'created', error: null,
-      retry: null, resumedCount: 0, ...overrides,
-    });
-    expect(jobRecordLabel(record({}), now, 'youtube')).toEqual({ title: '定時檢查', detail: '今天 13:30 · 新增 1', active: false });
-    expect(jobRecordLabel(record({ trigger: 'subscribe', progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0 }, outcome: 'empty' }), now, 'youtube').detail).toBe('今天 13:30 · 沒有新影片');
-    expect(jobRecordLabel(record({ state: 'running', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now, 'youtube')).toEqual({ title: '定時檢查', detail: '4／10', active: true });
-    expect(jobRecordLabel(record({ state: 'failed', trigger: 'manual', error: { code: 'network_error', message: '無法連線' } }), now, 'youtube').detail).toBe('今天 13:30 · 無法連線');
-    // Work that continued after a restart, waits for a retry, or waits for its Vault to open again.
-    const waiting = { attempts: 1, maxAttempts: 3, nextAttemptAt: '2026-10-15T06:02:00.000Z', lastError: { code: 'network_error', message: '無法連線' } };
-    expect(jobRecordLabel(record({ state: 'running', resumedCount: 1, retry: waiting, progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now, 'youtube').detail)
-      .toBe('4／10 · 等待重試 · 已接續');
-    expect(jobRecordLabel(record({ resumedCount: 1 }), now, 'youtube').detail).toBe('今天 13:30 · 新增 1・曾中斷後接續');
-    expect(jobRecordLabel(record({ state: 'interrupted' }), now, 'youtube').detail).toBe('今天 13:30 · 已中斷，重新開啟時接續');
+  it('describes the rows of a collection record (N69-T11)', () => {
+    const at = '2026-10-15T05:30:00.000Z';
+    const item = { at, key: 'v1', title: '影片一', url: 'https://www.youtube.com/watch?v=v1', errorCode: 'no_subtitles', reason: '沒有字幕', attempts: 2 };
+    expect(collectionEntryLabel({ kind: 'collected', at, key: 'v1', title: '影片一', documentId: 'youtube:v1' }, 'youtube')).toEqual({ title: '影片一', detail: '' });
+    expect(collectionEntryLabel({ kind: 'failed', ...item, maxAttempts: 3 }, 'youtube').detail).toBe('沒有字幕・已試 2/3 次');
+    expect(collectionEntryLabel({ kind: 'skipped', ...item, attempts: 3, skippedBy: 'limit' }, 'youtube').detail).toBe('已略過・已試 3 次');
+    expect(collectionEntryLabel({ kind: 'skipped', ...item, reason: '影片不存在', attempts: 1, skippedBy: 'failure' }, 'youtube').detail).toBe('已略過・影片不存在');
+    expect(collectionEntryLabel({ kind: 'failed', ...item, title: '', maxAttempts: 3 }, 'youtube').title).toBe('youtube.com/watch?v=v1');
+    const check = { kind: 'check' as const, at, jobId: 'j', trigger: 'scheduled' as const, created: 0, failed: 0, error: null };
+    expect(collectionEntryLabel(check, 'youtube').title).toBe('定時檢查・沒有新影片');
+    expect(collectionEntryLabel({ ...check, created: 2 }, 'youtube').title).toBe('定時檢查・收集 2 支');
+    expect(collectionEntryLabel({ ...check, trigger: 'manual', created: 1, failed: 1 }, 'youtube').title).toBe('立即檢查・收集 1 支・失敗 1 支');
+    expect(collectionEntryLabel({ ...check, trigger: 'subscribe', error: { code: 'network_error', message: '無法連線到 YouTube。' } }, 'youtube').title)
+      .toBe('首次收集・檢查失敗・網路錯誤');
   });
 
   it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {

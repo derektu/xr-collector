@@ -1,5 +1,5 @@
 import { scheduleFileDescription } from '../core/source-registry.js';
-import type { SubscriptionRecord } from '../core/types.js';
+import type { ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
 import type { SourceDefinition } from '../plugins/types.js';
 
 /**
@@ -10,6 +10,9 @@ import type { SourceDefinition } from '../plugins/types.js';
  * `{ id, title, url, removedAt }` that stays until the target is subscribed again, so an import
  * from another machine that still has the subscription does not bring it back. A file without
  * `removed` has no records.
+ *
+ * A subscription's collection progress, `outOfRange` and `failures`, lives in its record next to its
+ * settings; both key items by the field the storage declaration names.
  *
  * The schedule file the assembly names is `{ version: 2, enabled }`, the automatic collection
  * switch of every type. Fields a subscription or file does not define are kept as they are, so a
@@ -98,7 +101,16 @@ function isRecord(value: unknown, keyField: string, isValidSettings: (value: unk
     && isOptionalTime(record.lastCheckedAt)
     && isValidSettings(record.settings) && isOptionalTime(record.nextCheckAt) && isOptionalTime(record.lastDispatchedAt)
     && (record.outOfRange === undefined || (Array.isArray(record.outOfRange)
-      && record.outOfRange.every((entry) => typeof entry?.[keyField] === 'string' && typeof entry.before === 'string')));
+      && record.outOfRange.every((entry) => typeof entry?.[keyField] === 'string' && typeof entry.before === 'string')))
+    && (record.failures === undefined || (Array.isArray(record.failures) && record.failures.every((entry) => isFailure(entry, keyField))));
+}
+
+function isFailure(value: unknown, keyField: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Partial<ItemFailureEntry>;
+  return typeof entry[keyField] === 'string' && typeof entry.title === 'string'
+    && typeof entry.attempts === 'number' && Number.isInteger(entry.attempts) && entry.attempts >= 1
+    && typeof entry.errorCode === 'string' && typeof entry.failedAt === 'string' && typeof entry.skipped === 'boolean';
 }
 
 function isOptionalTime(value: unknown): boolean {

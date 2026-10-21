@@ -2,3 +2,4 @@
 [data-theme="duskblue"] { --badge-youtube-bg:#2a1e2a; --badge-youtube-fg:#ff7a7a; }
 [data-theme="silverblue"] { --badge-youtube-bg:#fbe5e5; --badge-youtube-fg:#c62828; }
 .type-badge.type-youtube { color:var(--badge-youtube-fg); background:var(--badge-youtube-bg); }
+.log-type.type-youtube { color:var(--badge-youtube-fg); }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { isRetryable, type ActivityLogHealth, type ActivityQuery, type JobView, type JobEvent, type JobSummary, type Subscription } from '../core/types.js';
+import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent, Subscription } from '../core/types.js';
 import {
   activityQuery,
   activityStateSearch,
@@ -7,25 +7,22 @@ import {
   eventLevel,
   eventText,
   jobBadge,
-  jobStatusText,
   LEVEL_OPTIONS,
-  localDayStart,
   logTime,
   logWarning,
   mergeNewest,
   parseActivityState,
   RANGE_OPTIONS,
-  summaryLabel,
   type ActivityViewState,
 } from './activity-presentation.js';
 import { api } from './api-client.js';
-import { sourceDeclarations } from '../core/source-registry.js';
+import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
+import { Icon } from './icons.js';
 import { ACTIVE_POLL_MS } from './use-collection-status.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
-import { shortTimeLabel, sourcePath } from './source-presentation.js';
+import { sourcePath } from './source-presentation.js';
 
-const RECENT_STEP = 8;
 const LOG_PAGE = 50;
 
 interface LogState {
@@ -36,12 +33,13 @@ interface LogState {
 }
 
 /**
- * Jobs on top (running ones with progress, recent finished ones with retry for failures) and the
- * persistent log below, filtered by level, source, time and job. Filters live in the address so
+ * The persistent log, filtered by level, source, time and job. Filters live in the address so
  * other pages can open the log already filtered.
  */
-export function Activity({ revision, search, onState, onOpenDocument, onOpenSource, onChanged }: {
+export function Activity({ revision, busy, search, onState, onOpenDocument, onOpenSource, onChanged }: {
   revision: number;
+  /** Whether work is queued or running; the log then refreshes itself. */
+  busy: boolean;
   search: string;
   onState: (next: ActivityViewState) => void;
   onOpenDocument: (id: string) => void;
@@ -50,46 +48,20 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 }) {
   const state = parseActivityState(search);
   const filter = activityStateSearch(state);
-  const [active, setActive] = useState<JobView[] | null>(null);
-  const [recent, setRecent] = useState<{ jobs: JobView[]; more: boolean } | null>(null);
-  const [recentLimit, setRecentLimit] = useState(RECENT_STEP);
-  const [summary, setSummary] = useState<JobSummary | null>(null);
-  const [jobsError, setJobsError] = useState<string | null>(null);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [log, setLog] = useState<LogState | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const logSection = useRef<HTMLElement>(null);
   // The shell's status poll can miss a job that starts and ends between two polls, such as one an
   // Agent submitted; while this page shows work in progress, it refreshes itself as well.
   const [tick, setTick] = useState(0);
   const refresh = `${revision}:${tick}`;
   useEffect(() => {
-    if (!active || active.length === 0) return undefined;
+    if (!busy) return undefined;
     const timer = setTimeout(() => setTick((value) => value + 1), ACTIVE_POLL_MS);
     return () => clearTimeout(timer);
-  }, [active]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const { signal } = controller;
-    Promise.all([
-      api.listJobs({ state: 'active', limit: 100 }, signal),
-      api.listJobs({ limit: Math.min(100, recentLimit + 20) }, signal),
-      api.jobSummary(localDayStart(new Date()).toISOString(), signal),
-    ]).then(([activePage, recentPage, counts]) => {
-      const finished = recentPage.jobs.filter((job) => job.state !== 'queued' && job.state !== 'running');
-      setActive(activePage.jobs);
-      setRecent({ jobs: finished.slice(0, recentLimit), more: finished.length > recentLimit || recentPage.nextCursor !== null });
-      setSummary(counts);
-      setJobsError(null);
-    }).catch((error: unknown) => {
-      if (!signal.aborted) setJobsError(error instanceof Error ? error.message : '無法讀取收集工作。');
-    });
-    return () => controller.abort();
-  }, [refresh, recentLimit]);
+  }, [busy, tick]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -135,11 +107,6 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
     onState({ ...state, ...patch });
   }
 
-  function showJob(id: string): void {
-    change({ job: id });
-    requestAnimationFrame(() => logSection.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
-  }
-
   async function loadOlder(): Promise<void> {
     if (!log?.nextCursor) return;
     setLoadingOlder(true);
@@ -153,18 +120,6 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
       setLogError(error instanceof Error ? error.message : '無法讀取更早的記錄。');
     } finally {
       setLoadingOlder(false);
-    }
-  }
-
-  async function retry(job: JobView): Promise<void> {
-    setRetrying(job.id);
-    try {
-      const submission = await api.retryJob(job.id);
-      onChanged(submission.deduplicated ? `「${jobTitle(job)}」已有進行中的工作。` : `已重新排入「${jobTitle(job)}」。`);
-    } catch (error) {
-      onChanged(error instanceof Error ? error.message : '無法重試這個工作。', 'error');
-    } finally {
-      setRetrying(null);
     }
   }
 
@@ -187,25 +142,11 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
   const warning = logWarning(log?.health ?? null);
   const sourceKnown = !state.source || subscriptions.some((subscription) => subscription.id === state.source);
-  const jobs = [...(active ?? []), ...(recent?.jobs ?? [])];
 
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>記錄</h1></div>
 
-    <section className="activity-card" aria-labelledby="activity-jobs" data-testid="activity-jobs">
-      <div className="activity-card-heading">
-        <h2 id="activity-jobs">工作</h2>
-        {summary ? <span className="muted" data-testid="job-summary">{summaryLabel(summary)}</span> : null}
-      </div>
-      {jobsError ? <p className="load-error activity-pad" role="alert">{jobsError}</p> : null}
-      {active === null || recent === null ? <p className="job-empty activity-pad">正在讀取…</p>
-        : jobs.length === 0 ? <p className="job-empty activity-pad">還沒有收集工作。</p>
-          : <ul className="activity-jobs">{jobs.map((job) => <JobRow key={job.id} job={job} retrying={retrying === job.id}
-            onShow={() => showJob(job.id)} onRetry={() => void retry(job)} />)}</ul>}
-      {recent?.more ? <div className="activity-more"><button type="button" className="button small" onClick={() => setRecentLimit((limit) => limit + RECENT_STEP)}>載入更多工作</button></div> : null}
-    </section>
-
-    <section className="activity-card log-card" aria-labelledby="activity-log" ref={logSection} data-testid="activity-log">
+    <section className="activity-card log-card" aria-labelledby="activity-log" data-testid="activity-log">
       <div className="log-toolbar">
         <h2 id="activity-log">記錄</h2>
         <div className="chips" role="group" aria-label="等級">
@@ -242,9 +183,13 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
             const subscriptionId = event.subscriptionId;
             // An entry written before events named their source type belongs to the first type with subscriptions.
             const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id ?? '';
+            const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row">
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span>
+              <span className={type ? `log-type type-${type.icon}` : 'log-type'}>
+                {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}
+              </span>
               {documentId
                 ? <a href={readerPath(documentId)} onClick={(click) => open(click, () => onOpenDocument(documentId))}>{text}</a>
                 : subscriptionId
@@ -256,26 +201,4 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
         {loadingOlder ? '正在讀取…' : '載入更早的記錄'}</button></div> : null}
     </section>
   </>;
-}
-
-function JobRow({ job, retrying, onShow, onRetry }: { job: JobView; retrying: boolean; onShow: () => void; onRetry: () => void }) {
-  const running = job.state === 'queued' || job.state === 'running';
-  const retryable = isRetryable(job);
-  const progress = job.progress;
-  return <li className={`activity-job ${job.state}`} data-testid={`job-${job.id}`}>
-    <div className="activity-job-main">
-      <span className="job-kind">{jobBadge(job)}</span>
-      <span className="job-title" title={job.source.url}>{jobTitle(job)}</span>
-      <span className={`activity-job-status ${job.state}`}>{jobStatusText(job)}</span>
-      <span className="activity-job-actions">
-        {running ? null : <span className="muted">{shortTimeLabel(job.finishedAt ?? job.updatedAt)}</span>}
-        {retryable && job.retriedBy ? <span className="muted">已重試</span> : null}
-        <button type="button" className="button small" onClick={onShow} data-testid="show-log">查看記錄</button>
-        {retryable && !job.retriedBy ? <button type="button" className="button small" disabled={retrying} onClick={onRetry} data-testid="retry-job">重試</button> : null}
-      </span>
-    </div>
-    {running && progress && progress.total > 0
-      ? <progress value={progress.done} max={progress.total} aria-label={`${jobTitle(job)}進度`} /> : null}
-    {job.activityIncomplete ? <p className="job-detail job-problem">部分記錄未能寫入。</p> : null}
-  </li>;
 }

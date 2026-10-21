@@ -249,7 +249,8 @@ describe('manual retry (A-T9)', () => {
     source.captureFailures.set('nnnnnnnnnnn', [noSubtitles()]);
     const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC3'] });
     const failed = await manager.whenSettled(first!.job.id);
-    expect(failed).toMatchObject({ state: 'failed', error: { code: 'all_items_failed' } });
+    // Failed videos are left to later checks; the check itself completes.
+    expect(failed).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { failed: 2 } });
     const checked = { ...channels.channels[0]! };
 
     // The videos left the listing: a new check would find nothing.
