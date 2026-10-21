@@ -74,11 +74,11 @@ describe('source list (T-06, T-08)', () => {
     };
     w.documents.documents.set('legacy00001', legacy);
 
-    const { status, body } = await w.get('/api/sources');
+    const { status, body } = await w.get('/api/subscriptions');
 
     expect(status).toBe(200);
-    expect(body.sources).toHaveLength(1);
-    expect(body.sources[0]).toMatchObject({
+    expect(body.subscriptions).toHaveLength(1);
+    expect(body.subscriptions[0]).toMatchObject({
       type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', id: subscribed, title: '合成頻道 alpha',
       status: 'tracking', lastError: null, documentCount: 3, lastCollectedAt: unsubscribedAt,
     });
@@ -97,12 +97,12 @@ describe('source list (T-06, T-08)', () => {
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
     const [failed] = await w.channels.startRun({ trigger: 'manual' });
     await w.jobs.whenSettled(failed!.job.id);
-    const broken = (await w.get('/api/sources')).body.sources[0];
+    const broken = (await w.get('/api/subscriptions')).body.subscriptions[0];
 
     w.source.discoveryFailure = null;
     const [retried] = await w.channels.startRun({ trigger: 'manual' });
     await w.jobs.whenSettled(retried!.job.id);
-    const recovered = (await w.get('/api/sources')).body.sources[0];
+    const recovered = (await w.get('/api/subscriptions')).body.subscriptions[0];
 
     expect(broken).toMatchObject({ status: 'error', lastError: { code: 'network_error', message: '無法連線到 YouTube。' } });
     expect(recovered).toMatchObject({ status: 'tracking', lastError: null });
@@ -124,7 +124,7 @@ describe('source list (T-06, T-08)', () => {
       return jobs;
     });
 
-    expect((await w.get('/api/sources')).body.sources[0]).toMatchObject({ status: 'error', lastError: { code: 'network_error' } });
+    expect((await w.get('/api/subscriptions')).body.subscriptions[0]).toMatchObject({ status: 'error', lastError: { code: 'network_error' } });
     await w.app.close();
   });
 
@@ -136,7 +136,7 @@ describe('source list (T-06, T-08)', () => {
     await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual' }))[0]!.job.id);
     await w.channels.setEnabled(id, false);
 
-    expect((await w.get('/api/sources')).body.sources[0]).toMatchObject({ status: 'paused', lastError: null });
+    expect((await w.get('/api/subscriptions')).body.subscriptions[0]).toMatchObject({ status: 'paused', lastError: null });
     await w.app.close();
   });
 
@@ -146,7 +146,7 @@ describe('source list (T-06, T-08)', () => {
     w.source.publish(id, 'a', w.clock.now, [1]);
     await w.subscribe('alpha');
 
-    expect((await w.get('/api/sources')).body.unsubscribed).toEqual({ documentCount: 0, lastCollectedAt: null });
+    expect((await w.get('/api/subscriptions')).body.unsubscribed).toEqual({ documentCount: 0, lastCollectedAt: null });
     await w.app.close();
   });
 });
@@ -162,12 +162,12 @@ describe('source detail (T-07, T-08)', () => {
     await w.subscribe('beta');
     w.advance(5 * MINUTE);
     const [fresh] = w.source.publish(id, 'n', w.clock.now, [0]);
-    await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual', channelIds: [id] }))[0]!.job.id);
+    await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!.job.id);
 
-    const { status, body } = await w.get(`/api/sources/youtube/${encodeURIComponent(id)}`);
+    const { status, body } = await w.get(`/api/subscriptions/youtube/${encodeURIComponent(id)}`);
 
     expect(status).toBe(200);
-    expect(body.source).toMatchObject({ id, type: 'youtube', kindLabel: 'YouTube 頻道', documentCount: 7, status: 'tracking' });
+    expect(body.subscription).toMatchObject({ id, type: 'youtube', kindLabel: 'YouTube 頻道', documentCount: 7, status: 'tracking' });
     expect(body.recentDocuments).toHaveLength(5);
     expect(body.recentDocuments[0]).toMatchObject({ sourceId: fresh, collectedAt: w.clock.now.toISOString() });
     expect(body.recentDocuments.every((document: { publisher: { id: string } }) => document.publisher.id === id)).toBe(true);
@@ -179,15 +179,15 @@ describe('source detail (T-07, T-08)', () => {
 
   it('answers 404 for an unknown source or source type', async () => {
     const w = await world();
-    expect((await w.get('/api/sources/youtube/UCmissing')).status).toBe(404);
-    expect((await w.get('/api/sources/rss/anything')).status).toBe(404);
+    expect((await w.get('/api/subscriptions/youtube/UCmissing')).status).toBe(404);
+    expect((await w.get('/api/subscriptions/rss/anything')).status).toBe(404);
     await w.app.close();
   });
 
   it('requires the Agent token like every business route', async () => {
     const w = await world();
     for (const request of [
-      { method: 'GET' as const, url: '/api/sources' },
+      { method: 'GET' as const, url: '/api/subscriptions' },
       { method: 'GET' as const, url: '/api/source-types' },
       { method: 'POST' as const, url: '/api/url-recognitions', payload: { url: '@alpha' } },
     ]) {
@@ -216,61 +216,61 @@ describe('per-subscription settings over HTTP (A5)', () => {
     const gamma = w.source.addChannel('gamma');
     for (const id of [alpha, beta, gamma]) w.source.publish(id, id.slice(-1), w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
 
-    const added = await send('POST', '/api/youtube/channels', { url: '@alpha', settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 } });
+    const added = await send('POST', '/api/subscriptions', { url: '@alpha', settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 } });
     expect(added.status).toBe(202);
     const first = await w.jobs.whenSettled((await w.jobs.whenSettled(added.body.job.id)).result!.followUpJobId!);
     expect(first.progress).toMatchObject({ total: 5 });
-    await send('POST', '/api/youtube/channels', { url: '@beta' });
-    await send('POST', '/api/youtube/channels', { url: '@gamma', settings: { backfillMaxItems: 20 } });
+    await send('POST', '/api/subscriptions', { url: '@beta' });
+    await send('POST', '/api/subscriptions', { url: '@gamma', settings: { backfillMaxItems: 20 } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
 
     for (const settings of [{ intervalMinutes: 45 }, { backfillWindow: '2m' }, { backfillMaxItems: 7 }, { cadence: 30 }, 'often']) {
-      const rejected = await send('POST', '/api/youtube/channels', { url: '@beta', settings });
+      const rejected = await send('POST', '/api/subscriptions', { url: '@beta', settings });
       expect(rejected.status).toBe(400);
       expect(rejected.body.error.code).toBe('invalid_request');
-      expect((await send('PATCH', `/api/youtube/channels/${beta}`, { settings })).status).toBe(400);
+      expect((await send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings })).status).toBe(400);
     }
-    expect((await send('PATCH', `/api/youtube/channels/${beta}`, { settings: {} })).status).toBe(400);
-    expect((await send('PATCH', `/api/youtube/channels/${beta}`, { color: 'red' })).status).toBe(400);
-    expect((await send('PATCH', `/api/youtube/channels/${beta}`, {})).status).toBe(400);
+    expect((await send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: {} })).status).toBe(400);
+    expect((await send('PATCH', `/api/subscriptions/youtube/${beta}`, { color: 'red' })).status).toBe(400);
+    expect((await send('PATCH', `/api/subscriptions/youtube/${beta}`, {})).status).toBe(400);
 
-    const changed = await send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillWindow: '3m' } });
-    expect(changed).toMatchObject({ status: 200, body: { channel: { id: beta, settings: { intervalMinutes: 30, backfillWindow: '3m', backfillMaxItems: 10 } }, submission: null } });
-    expect((await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: false })).status).toBe(200);
+    const changed = await send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillWindow: '3m' } });
+    expect(changed).toMatchObject({ status: 200, body: { subscription: { id: beta, settings: { intervalMinutes: 30, backfillWindow: '3m', backfillMaxItems: 10 } }, submission: null } });
+    expect((await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: false })).status).toBe(200);
 
     const jobsBefore = w.jobs.list({ limit: 100 }).jobs.length;
-    expect(await send('POST', `/api/youtube/channels/${alpha}/apply-settings`)).toEqual({ status: 200, body: { updated: 2, paused: 1 } });
+    expect(await send('POST', `/api/subscriptions/youtube/${alpha}/apply-settings`)).toEqual({ status: 200, body: { updated: 2, paused: 1 } });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);
-    expect((await send('POST', '/api/youtube/channels/UCmissing/apply-settings')).status).toBe(404);
+    expect((await send('POST', '/api/subscriptions/youtube/UCmissing/apply-settings')).status).toBe(404);
 
     const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 };
-    const listed = (await w.get('/api/youtube/channels')).body.channels;
+    const listed = (await w.get('/api/subscriptions?type=youtube')).body.subscriptions;
     expect(listed.map((channel: { id: string; enabled: boolean; settings: unknown }) => [channel.id, channel.enabled, channel.settings])).toEqual([
       [alpha, true, settings], [beta, true, settings], [gamma, false, settings],
     ]);
-    const detail = (await w.get(`/api/sources/youtube/${beta}`)).body.source;
+    const detail = (await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription;
     expect(detail).toMatchObject({ settings, nextCheckAt: expect.any(String), lastCheckedAt: expect.any(String) });
 
     // Concurrent changes to different settings of one subscription all persist.
     const concurrent = await Promise.all([
-      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { intervalMinutes: 180 } }),
-      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillWindow: '6m' } }),
-      send('PATCH', `/api/youtube/channels/${beta}`, { settings: { backfillMaxItems: 50 } }),
+      send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { intervalMinutes: 180 } }),
+      send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillWindow: '6m' } }),
+      send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillMaxItems: 50 } }),
     ]);
     expect(concurrent.map((answer) => answer.status)).toEqual([200, 200, 200]);
-    expect((await w.get(`/api/sources/youtube/${beta}`)).body.source.settings).toEqual({ intervalMinutes: 180, backfillWindow: '6m', backfillMaxItems: 50 });
+    expect((await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription.settings).toEqual({ intervalMinutes: 180, backfillWindow: '6m', backfillMaxItems: 50 });
 
     // An empty settings object subscribes with the type's defaults.
     const delta = w.source.addChannel('delta');
     w.source.publish(delta, 'd', w.clock.now, [1]);
-    const defaults = await send('POST', '/api/youtube/channels', { url: '@delta', settings: {} });
+    const defaults = await send('POST', '/api/subscriptions', { url: '@delta', settings: {} });
     expect(defaults.status).toBe(202);
     await w.jobs.whenSettled((await w.jobs.whenSettled(defaults.body.job.id)).result!.followUpJobId!);
-    expect((await w.get(`/api/sources/youtube/${delta}`)).body.source.settings).toEqual({ intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 });
+    expect((await w.get(`/api/subscriptions/youtube/${delta}`)).body.subscription.settings).toEqual({ intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 });
 
     // A resume and a settings change in one request check with the new range.
-    const resumed = await send('PATCH', `/api/youtube/channels/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
-    expect(resumed.body).toMatchObject({ channel: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });
+    const resumed = await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
+    expect(resumed.body).toMatchObject({ subscription: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });
     await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
     await w.app.close();
   });

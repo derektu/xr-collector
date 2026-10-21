@@ -1,4 +1,4 @@
-import type { ActivityLogHealth, ActivityQuery, CollectionJob, JobEvent, JobSummary } from '../core/types.js';
+import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent, JobSummary } from '../core/types.js';
 import { jobRole } from '../core/source-registry.js';
 import { jobKindLabel, jobPhaseLabel, jobResultLabel, jobStateLabel, jobTitle, retryLabel, waitLabel } from './job-presentation.js';
 import { triggerLabel } from './subscription-presentation.js';
@@ -111,12 +111,12 @@ export function logWarning(health: ActivityLogHealth | null): string | null {
 }
 
 /** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
-export function jobBadge(job: CollectionJob): string {
+export function jobBadge(job: JobView): string {
   return jobRole(job.kind)?.role === 'item' ? '單篇' : jobKindLabel(job);
 }
 
 /** What a job row says on its right: progress while it runs, the reason when it failed, the result when it finished. */
-export function jobStatusText(job: CollectionJob): string {
+export function jobStatusText(job: JobView): string {
   if (job.state === 'queued' || job.state === 'running') {
     const wait = job.state === 'queued' ? waitLabel(job.wait, job.source.type) : null;
     if (wait) return `${jobStateLabel(job)}・${wait}`;
@@ -133,7 +133,7 @@ export function jobStatusText(job: CollectionJob): string {
 }
 
 /** Plain-text diagnostics of a job for a bug report; event text is already masked by the service. */
-export function diagnosticsText(job: CollectionJob, events: JobEvent[]): string {
+export function diagnosticsText(job: JobView, events: JobEvent[]): string {
   const lines = [
     'XR Collector 工作診斷資訊',
     `工作：${job.id}`,

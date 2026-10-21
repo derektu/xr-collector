@@ -44,16 +44,24 @@ describe('Agent Skill', () => {
       { method: 'DELETE', url: '/api/documents/:id' },
       { method: 'GET', url: '/api/search' },
       { method: 'GET', url: '/api/search/status' },
-      { method: 'POST', url: '/api/youtube/channel-previews' },
-      { method: 'PUT', url: '/api/youtube/schedule' },
+      { method: 'POST', url: '/api/subscription-previews' },
+      { method: 'PUT', url: '/api/schedule' },
       { method: 'GET', url: '/api/source-types' },
       { method: 'POST', url: '/api/url-recognitions' },
-      { method: 'GET', url: '/api/sources' },
-      { method: 'GET', url: '/api/sources/:type/:id' },
+      { method: 'GET', url: '/api/subscriptions' },
+      { method: 'GET', url: '/api/subscriptions/:type/:id' },
       { method: 'GET', url: '/api/activity' },
       { method: 'GET', url: '/api/jobs/summary' },
       { method: 'POST', url: '/api/jobs/:id/retry' },
-      { method: 'GET', url: '/api/youtube/pacing' },
+      { method: 'GET', url: '/api/pacing' },
+      { method: 'POST', url: '/api/submissions' },
+      { method: 'POST', url: '/api/items' },
+      { method: 'POST', url: '/api/subscriptions' },
+      { method: 'PATCH', url: '/api/subscriptions/:type/:id' },
+      { method: 'DELETE', url: '/api/subscriptions/:type/:id' },
+      { method: 'POST', url: '/api/subscriptions/:type/:id/apply-settings' },
+      { method: 'POST', url: '/api/subscription-checks' },
+      { method: 'GET', url: '/api/schedule' },
     ]));
     for (const route of routes) {
       expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);
@@ -77,7 +85,7 @@ describe('Agent Skill', () => {
     expect(skill).toContain(`只接受 ${INTERVAL_OPTIONS.join('、')}`);
     expect(skill).toContain(BACKFILL_WINDOWS.map((window) => `\`${window}\``).join('、'));
     expect(skill).toContain(`（${BACKFILL_LIMITS.join('、')}）`);
-    for (const term of ['backfillWindow', 'backfillMaxItems', 'channel_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_paused', '每次檢查']) {
+    for (const term of ['backfillWindow', 'backfillMaxItems', 'subscription_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_not_found', '每次檢查']) {
       expect(skill).toContain(term);
     }
     expect(skill).not.toContain('1–10080');

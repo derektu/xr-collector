@@ -1,29 +1,27 @@
 import type {
   ActivityPage,
   ActivityQuery,
-  CollectionJob,
   JobSummary,
   DocumentFilter,
   DocumentDeletion,
   DocumentPage,
   DocumentSources,
-  JobPage,
-  JobSubmission,
+  JobPageView,
+  JobSubmissionView,
+  JobView,
   MoveCheck,
   TransferStatus,
   SavedDocument,
   SearchQuery,
   SearchResponse,
   SearchStatusReport,
-  ChannelSchedule,
-  SubscriptionPreview,
+  CollectionSchedule,
   SubscriptionRecord,
   SubscriptionSettings,
   RecognitionAction,
-  SourceDetail,
-  SourceList,
+  SubscriptionDetail,
+  SubscriptionList,
   SourceTypeInfo,
-  Subscription,
   UrlRecognition,
   VaultInspection,
   VaultSetupAction,
@@ -33,7 +31,6 @@ import type {
   VaultSetupResult,
   VaultSetupStatus,
 } from '../core/types.js';
-import { sourceDeclarations } from '../core/source-registry.js';
 
 interface ErrorResponse {
   error?: {
@@ -42,20 +39,9 @@ interface ErrorResponse {
   };
 }
 
-/** The route prefix of a source type's own API. */
-function typeBase(type: string): string {
-  return `/api/${encodeURIComponent(type)}`;
-}
-
-/**
- * The type prefix the automatic collection switch and the check of every subscription are reached
- * under. Both cover every type, and the HTTP API serves them under each type with subscriptions,
- * so any such type reaches the same switch; the first one is used.
- */
-function scheduleType(): string {
-  const declaration = sourceDeclarations().find((candidate) => candidate.subscription);
-  if (!declaration) throw new Error('No source type has subscriptions');
-  return declaration.id;
+/** The route of one subscription, named by its source type and its ID within the type. */
+function subscriptionPath(type: string, id: string): string {
+  return `/api/subscriptions/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
 }
 
 export class ApiError extends Error {
@@ -109,15 +95,15 @@ export const api = {
   agentConnection(): Promise<{ url: string; connectionFile: string; skillPath: string }> {
     return request('/api/agent/connection');
   },
-  /** The automatic collection switch; one switch covers every type, served under each subscription type's prefix. */
-  async getChannelSchedule(): Promise<ChannelSchedule> {
-    const result = await request<{ schedule: ChannelSchedule }>(`${typeBase(scheduleType())}/schedule`);
+  /** The automatic collection switch; one switch covers the subscriptions of every type. */
+  async getSchedule(): Promise<CollectionSchedule> {
+    const result = await request<{ schedule: CollectionSchedule }>('/api/schedule');
     return result.schedule;
   },
 
   /** Turns automatic collection on or off. */
-  async setAutoCollection(enabled: boolean): Promise<ChannelSchedule> {
-    const result = await request<{ schedule: ChannelSchedule }>(`${typeBase(scheduleType())}/schedule`, {
+  async setAutoCollection(enabled: boolean): Promise<CollectionSchedule> {
+    const result = await request<{ schedule: CollectionSchedule }>('/api/schedule', {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     });
@@ -125,88 +111,67 @@ export const api = {
   },
 
   /** Saves some of one subscription's settings; fields left out keep their value. */
-  async updateChannelSettings(type: string, id: string, settings: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
-    const result = await request<{ channel: SubscriptionRecord }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}`, {
+  async updateSubscriptionSettings(type: string, id: string, settings: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
+    const result = await request<{ subscription: SubscriptionRecord }>(subscriptionPath(type, id), {
       method: 'PATCH',
       body: JSON.stringify({ settings }),
     });
-    return result.channel;
+    return result.subscription;
   },
 
   /** Gives every other subscription of the same type this subscription's settings. */
-  applyChannelSettings(type: string, id: string): Promise<{ updated: number; paused: number }> {
-    return request<{ updated: number; paused: number }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}/apply-settings`, { method: 'POST' });
+  applySubscriptionSettings(type: string, id: string): Promise<{ updated: number; paused: number }> {
+    return request<{ updated: number; paused: number }>(`${subscriptionPath(type, id)}/apply-settings`, { method: 'POST' });
   },
 
-  async listChannels(type: string, signal?: AbortSignal): Promise<Subscription[]> {
-    const result = await request<{ channels: Subscription[] }>(`${typeBase(type)}/channels`, signal ? { signal } : undefined);
-    return result.channels;
-  },
-
-  async previewChannel(type: string, url: string): Promise<SubscriptionPreview> {
-    return (await request<{ preview: SubscriptionPreview }>(`${typeBase(type)}/channel-previews`, {
-      method: 'POST',
-      body: JSON.stringify({ url }),
-    })).preview;
-  },
-
-  addChannel(type: string, url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission> {
-    return request<JobSubmission>(`${typeBase(type)}/channels`, {
-      method: 'POST',
-      body: JSON.stringify(settings ? { url, settings } : { url }),
+  async setSubscriptionEnabled(type: string, id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmissionView | null }> {
+    return request<{ subscription: SubscriptionRecord; submission: JobSubmissionView | null }>(subscriptionPath(type, id), {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
     });
   },
 
-  async setChannelEnabled(type: string, id: string, enabled: boolean): Promise<{ channel: SubscriptionRecord; submission: JobSubmission | null }> {
-    return request<{ channel: SubscriptionRecord; submission: JobSubmission | null }>(
-      `${typeBase(type)}/channels/${encodeURIComponent(id)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled }),
-      },
-    );
-  },
-
   /** Removes a subscription, keeping or deleting its documents. */
-  async removeChannel(type: string, id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
-    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}?documents=${documents}`, {
+  async removeSubscription(type: string, id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
+    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`${subscriptionPath(type, id)}?documents=${documents}`, {
       method: 'DELETE',
     });
   },
 
   /** Checks every enabled subscription of every type now. */
-  async checkAllChannels(): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>(`${typeBase(scheduleType())}/channel-runs`, { method: 'POST' });
+  async checkAllSubscriptions(): Promise<JobSubmissionView[]> {
+    const result = await request<{ submissions: JobSubmissionView[] }>('/api/subscription-checks', { method: 'POST' });
     return result.submissions;
   },
 
-  /** Accepts an item or subscription address of a type; the service decides which by its syntax. */
-  submit(type: string, url: string): Promise<JobSubmission> {
-    return request<JobSubmission>(`${typeBase(type)}/submissions`, {
+  /** Checks the listed subscriptions now. */
+  async checkSubscriptions(subscriptions: Array<{ type: string; id: string }>): Promise<JobSubmissionView[]> {
+    const result = await request<{ submissions: JobSubmissionView[] }>('/api/subscription-checks', {
       method: 'POST',
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ subscriptions }),
     });
+    return result.submissions;
   },
 
-  listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPage> {
+  listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPageView> {
     const parameters = new URLSearchParams();
     if (query.state) parameters.set('state', query.state);
     if (query.limit) parameters.set('limit', String(query.limit));
     if (query.cursor) parameters.set('cursor', query.cursor);
     const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
-    return request<JobPage>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
+    return request<JobPageView>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
   },
 
-  async getJob(id: string): Promise<CollectionJob> {
-    return (await request<{ job: CollectionJob }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
+  async getJob(id: string): Promise<JobView> {
+    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
   },
 
   async jobSummary(since: string, signal?: AbortSignal): Promise<JobSummary> {
     return (await request<{ summary: JobSummary }>(`/api/jobs/summary?${new URLSearchParams({ since }).toString()}`, signal ? { signal } : undefined)).summary;
   },
 
-  retryJob(id: string): Promise<JobSubmission> {
-    return request<JobSubmission>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  retryJob(id: string): Promise<JobSubmissionView> {
+    return request<JobSubmissionView>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
   },
 
   activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {
@@ -246,9 +211,9 @@ export const api = {
     return request<DocumentDeletion>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
-  /** Collects one item of a type by its address. */
-  collect(type: string, url: string): Promise<JobSubmission> {
-    return request<JobSubmission>(`${typeBase(type)}/collect`, {
+  /** Collects one item by its address; the service finds the source type the address belongs to. */
+  collect(url: string): Promise<JobSubmissionView> {
+    return request<JobSubmissionView>('/api/items', {
       method: 'POST',
       body: JSON.stringify({ url }),
     });
@@ -281,21 +246,13 @@ export const api = {
     return request(action.request.path, { method: action.request.method, body: JSON.stringify(action.request.body) });
   },
 
-  listSources(signal?: AbortSignal): Promise<SourceList> {
-    return request<SourceList>('/api/sources', signal ? { signal } : undefined);
+  /** Every subscription across source types, with pending subscription requests and unsubscribed documents. */
+  listSubscriptions(signal?: AbortSignal): Promise<SubscriptionList> {
+    return request<SubscriptionList>('/api/subscriptions', signal ? { signal } : undefined);
   },
 
-  sourceDetail(type: string, id: string, signal?: AbortSignal): Promise<SourceDetail> {
-    return request<SourceDetail>(`/api/sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, signal ? { signal } : undefined);
-  },
-
-  /** Checks the listed subscriptions of one type now. */
-  async checkChannels(type: string, channelIds: string[]): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>(`${typeBase(type)}/channel-runs`, {
-      method: 'POST',
-      body: JSON.stringify({ channelIds }),
-    });
-    return result.submissions;
+  subscriptionDetail(type: string, id: string, signal?: AbortSignal): Promise<SubscriptionDetail> {
+    return request<SubscriptionDetail>(subscriptionPath(type, id), signal ? { signal } : undefined);
   },
 
   async getSearchStatus(): Promise<SearchStatusReport> {

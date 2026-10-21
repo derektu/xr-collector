@@ -11,9 +11,9 @@ const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
 function channelsWith(previews: Record<string, { enabled: boolean } | null>, failure?: CollectorError) {
   const preview = vi.fn(async (url: string): Promise<SubscriptionPreview> => {
     if (failure) throw failure;
-    if (!(url in previews)) throw new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。');
+    if (!(url in previews)) throw new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。');
     return {
-      channel: { id: CHANNEL_ID, title: '頻道一', url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` },
+      type: 'youtube', target: { id: CHANNEL_ID, title: '頻道一', url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` },
       subscription: previews[url] ? { ...previews[url]!, settings: own } : null,
       settings: previews[url] ? own : DEFAULT_POLICY,
       autoCollection: true,
@@ -78,7 +78,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       subscription: null, settings: null, autoCollection: null, login: null, message: null,
       actions: [{
         id: 'collect', label: '收集影片', primary: true,
-        request: { method: 'POST', path: '/api/youtube/collect', body: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } },
+        request: { method: 'POST', path: '/api/items', body: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } },
       }],
     });
     expect(preview).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       target: { id: CHANNEL_ID, title: '頻道一' }, subscription: null, settings: DEFAULT_POLICY, autoCollection: true,
       actions: [{
         id: 'subscribe', label: '訂閱頻道', primary: true,
-        request: { method: 'POST', path: '/api/youtube/channels', body: { url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` } },
+        request: { method: 'POST', path: '/api/subscriptions', body: { url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` } },
       }],
     });
   });
@@ -111,7 +111,7 @@ describe('URL recognition (T-02 to T-05)', () => {
 
     expect(paused).toMatchObject({
       status: 'ready', subscription: { id: CHANNEL_ID, enabled: false, settings: own },
-      actions: [{ id: 'resume', label: '恢復訂閱', request: { method: 'PATCH', path: `/api/youtube/channels/${CHANNEL_ID}`, body: { enabled: true } } }],
+      actions: [{ id: 'resume', label: '恢復訂閱', request: { method: 'PATCH', path: `/api/subscriptions/youtube/${CHANNEL_ID}`, body: { enabled: true } } }],
     });
     expect(active).toMatchObject({ status: 'ready', subscription: { id: CHANNEL_ID, enabled: true }, actions: [] });
   });

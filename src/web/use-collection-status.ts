@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChannelSchedule, CollectionJob } from '../core/types.js';
+import type { CollectionSchedule, JobView } from '../core/types.js';
 import { api } from './api-client.js';
 import { activeJobs } from './source-presentation.js';
 
@@ -8,8 +8,8 @@ export const IDLE_POLL_MS = 10_000;
 
 export interface CollectionStatus {
   /** Top-level jobs still queued or running; null until the first load. */
-  active: CollectionJob[] | null;
-  schedule: ChannelSchedule | null;
+  active: JobView[] | null;
+  schedule: CollectionSchedule | null;
   /** Increases whenever the active jobs change or a change is announced, so pages know to reload. */
   revision: number;
   /** Increases when a job ends or a channel job finishes one of its videos: the moments documents can appear. */
@@ -37,7 +37,7 @@ export function useCollectionStatus(enabled: boolean): CollectionStatus & { anno
       const current = ++sequence;
       let delay = IDLE_POLL_MS;
       try {
-        const [page, schedule] = await Promise.all([api.listJobs({ state: 'active', limit: 100 }), api.getChannelSchedule()]);
+        const [page, schedule] = await Promise.all([api.listJobs({ state: 'active', limit: 100 }), api.getSchedule()]);
         if (!alive || current !== sequence) return;
         const active = activeJobs(page.jobs);
         // Waits, retries and videos starting change a subscription's status between queued and

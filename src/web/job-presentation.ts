@@ -1,4 +1,4 @@
-import type { CollectionJob, JobItem, JobPhase, JobRetry, JobState, JobWait, SkipReason } from '../core/types.js';
+import type { JobView, JobItem, JobPhase, JobRetry, JobState, JobWait, SkipReason } from '../core/types.js';
 import { jobRole, sourceDeclaration } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { channelJobLabel } from './subscription-presentation.js';
@@ -8,20 +8,20 @@ const STATE_LABELS: Record<JobState, string> = {
 };
 
 /** The declaration of a job's source type. */
-function declarationOf(job: Pick<CollectionJob, 'source'>): SourcePluginDeclaration | undefined {
+function declarationOf(job: Pick<JobView, 'source'>): SourcePluginDeclaration | undefined {
   return sourceDeclaration(job.source.type);
 }
 
-function nounOf(job: Pick<CollectionJob, 'source'>): string {
+function nounOf(job: Pick<JobView, 'source'>): string {
   return declarationOf(job)?.item.noun ?? '';
 }
 
-function targetOf(job: Pick<CollectionJob, 'source'>): string {
+function targetOf(job: Pick<JobView, 'source'>): string {
   return declarationOf(job)?.subscription?.targetNoun ?? '';
 }
 
 /** The label of a step; the source type names the steps that depend on its items and targets. */
-function phaseLabel(job: CollectionJob, phase: JobPhase): string {
+function phaseLabel(job: JobView, phase: JobPhase): string {
   const own = declarationOf(job)?.phaseLabels?.[phase];
   if (own) return own;
   switch (phase) {
@@ -33,14 +33,14 @@ function phaseLabel(job: CollectionJob, phase: JobPhase): string {
   }
 }
 
-export function jobKindLabel(job: CollectionJob): string {
+export function jobKindLabel(job: JobView): string {
   const role = jobRole(job.kind)?.role;
   if (role === 'item') return nounOf(job);
   if (role === 'check') return channelJobLabel(job);
   return `訂閱${targetOf(job)}`;
 }
 
-export function jobStateLabel(job: Pick<CollectionJob, 'state' | 'retry' | 'wait'>): string {
+export function jobStateLabel(job: Pick<JobView, 'state' | 'retry' | 'wait'>): string {
   if (job.state === 'queued' && job.wait) return '等待中';
   if (job.state === 'queued' && job.retry?.nextAttemptAt) return '等待重試';
   return STATE_LABELS[job.state];
@@ -73,23 +73,23 @@ export function waitLabel(wait: JobWait | null | undefined, type: string): strin
 }
 
 /** Whether the job continued after the service restarted. */
-export function recoveryLabel(job: Pick<CollectionJob, 'state' | 'recovery'>): string | null {
+export function recoveryLabel(job: Pick<JobView, 'state' | 'recovery'>): string | null {
   if (!job.recovery || job.recovery.resumedCount === 0) return null;
   return job.state === 'queued' || job.state === 'running' ? '服務重新啟動後已接續' : '曾中斷後接續';
 }
 
 /** The step a running job is in; check jobs past discovery are waiting for their items. */
-export function jobPhaseLabel(job: CollectionJob): string | null {
+export function jobPhaseLabel(job: JobView): string | null {
   if (job.state !== 'running' || !job.phase) return null;
   if (jobRole(job.kind)?.role === 'check' && job.phase === 'capture') return `收集${nounOf(job)}`;
   return phaseLabel(job, job.phase);
 }
 
-export function jobTitle(job: CollectionJob): string {
+export function jobTitle(job: JobView): string {
   return job.source.title ?? job.source.url;
 }
 
-export function jobProgressLabel(job: CollectionJob): string | null {
+export function jobProgressLabel(job: JobView): string | null {
   const progress = job.progress;
   if (!progress) return null;
   const skipped = progress.skipped ? `・略過 ${progress.skipped}` : '';
@@ -106,7 +106,7 @@ export function skipReasonLabel(reason: SkipReason | undefined): string {
 }
 
 /** What the finished job left behind, with saving and indexing stated separately. */
-export function jobResultLabel(job: CollectionJob): string | null {
+export function jobResultLabel(job: JobView): string | null {
   if (job.state === 'interrupted') return '已中斷，重新開啟時接續';
   if (job.state === 'failed') return job.error?.message ?? null;
   if (job.state !== 'completed' || !job.result) return null;

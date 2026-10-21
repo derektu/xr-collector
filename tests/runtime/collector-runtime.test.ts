@@ -68,6 +68,10 @@ describe('CollectorRuntime', () => {
     expect(await uiHealth.json()).toMatchObject({ status: 'unavailable', runtime: { state: 'not_ready', vaultPath: null } });
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(503);
     expect((await fetch(`${runtime.server.url}/api/agent/connection`)).status).toBe(200);
+    // Pacing reads without a Vault; no source type has loaded yet, so there is no request channel.
+    const pacing = await fetch(`${runtime.server.url}/api/pacing`);
+    expect(pacing.status).toBe(200);
+    expect(await pacing.json()).toEqual({ groups: [] });
 
     const connection = JSON.parse(await readFile(connectionFile, 'utf8')) as {
       schemaVersion: number; instanceId: string; url: string; token: string;
@@ -81,7 +85,7 @@ describe('CollectorRuntime', () => {
     expect(await agentHealth.json()).toMatchObject({
       status: 'unavailable', runtime: { instanceId: connection.instanceId },
     });
-    const blocked = await fetch(`${connection.url}/api/youtube/collect`, {
+    const blocked = await fetch(`${connection.url}/api/items`, {
       method: 'POST', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=runtime0001' }),
     });
@@ -118,7 +122,7 @@ describe('CollectorRuntime', () => {
 
     const connection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as { url: string; token: string };
     const client = spawn(process.execPath, ['-e', `
-      const target = new URL(${JSON.stringify(`${connection.url}/api/youtube/collect`)});
+      const target = new URL(${JSON.stringify(`${connection.url}/api/items`)});
       const body = JSON.stringify({url:'https://www.youtube.com/watch?v=runtime0001'});
       const request = require('node:http').request(target, {method:'POST', headers:{authorization:${JSON.stringify(`Bearer ${connection.token}`)},'content-type':'application/json','content-length':Buffer.byteLength(body)}});
       request.on('finish', () => setTimeout(() => process.exit(0), 10));
@@ -138,7 +142,7 @@ describe('CollectorRuntime', () => {
       await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
       await clientExited;
       // The UI submission of the same video joins the Agent's job instead of capturing again.
-      const ui = await fetch(`${runtime.server.url}/api/youtube/collect`, {
+      const ui = await fetch(`${runtime.server.url}/api/items`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: captured.sourceUrl }),
       });
@@ -175,7 +179,7 @@ describe('CollectorRuntime', () => {
     });
     const setup = await options({ capture });
     const first = await CollectorRuntime.start(setup.value);
-    const submit = async (id: string) => (await (await fetch(`${first.server.url}/api/youtube/submissions`, {
+    const submit = async (id: string) => (await (await fetch(`${first.server.url}/api/submissions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${id}` }),
     })).json()).job.id as string;
@@ -289,46 +293,46 @@ describe('CollectorRuntime', () => {
         ...init?.headers,
       },
     });
-    const added = await agent('/api/youtube/channels', {
+    const added = await agent('/api/subscriptions', {
       method: 'POST', body: JSON.stringify({ url: 'https://www.youtube.com/@runtime' }),
     });
     expect(added.status).toBe(202);
     const addJob = (await added.json()).job.id as string;
     await vi.waitFor(async () => {
-      expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { channelId: 'UC-runtime' } });
+      expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { subscriptionId: 'UC-runtime' } });
     });
     // Adding a channel starts its first collection job; the channel reads 'tracking' once that job settles.
     const uiChannels = await vi.waitFor(async () => {
-      const channels = (await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels;
+      const channels = (await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions;
       expect(channels).toMatchObject([{ id: 'UC-runtime', enabled: true, status: 'tracking', documentCount: 0 }]);
       return channels;
     });
     // The Agent reads the same subscriptions and previews through the same service.
-    expect((await (await agent('/api/youtube/channels')).json()).channels).toEqual(uiChannels);
-    const preview = await agent('/api/youtube/channel-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
+    expect((await (await agent('/api/subscriptions?type=youtube')).json()).subscriptions).toEqual(uiChannels);
+    const preview = await agent('/api/subscription-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
     expect((await preview.json()).preview).toMatchObject({
-      channel: { id: 'UC-runtime' }, subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } },
+      type: 'youtube', target: { id: 'UC-runtime' }, subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } },
       settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, autoCollection: true,
     });
-    expect((await agent('/api/youtube/channels/UC-runtime', {
+    expect((await agent('/api/subscriptions/youtube/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ settings: { intervalMinutes: 60 } }),
     })).status).toBe(200);
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels[0].settings).toEqual({
+    expect((await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions[0].settings).toEqual({
       intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10,
     });
-    expect((await agent('/api/youtube/channels/UC-runtime', {
+    expect((await agent('/api/subscriptions/youtube/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ enabled: false }),
     })).status).toBe(200);
-    expect((await agent('/api/youtube/schedule', {
+    expect((await agent('/api/schedule', {
       method: 'PUT', body: JSON.stringify({ enabled: false }),
     })).status).toBe(200);
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule).toMatchObject({ enabled: false, nextCheck: null });
-    const pausedRun = await agent('/api/youtube/channel-runs', {
-      method: 'POST', body: JSON.stringify({ channelIds: ['UC-runtime'] }),
+    expect((await (await fetch(`${runtime.server.url}/api/schedule`)).json()).schedule).toMatchObject({ enabled: false, nextCheck: null });
+    const pausedRun = await agent('/api/subscription-checks', {
+      method: 'POST', body: JSON.stringify({ subscriptions: [{ type: 'youtube', id: 'UC-runtime' }] }),
     });
     expect(pausedRun.status).toBe(409);
-    expect((await pausedRun.json()).error.code).toBe('channel_paused');
-    const resumed = await agent('/api/youtube/channels/UC-runtime', {
+    expect((await pausedRun.json()).error.code).toBe('subscription_paused');
+    const resumed = await agent('/api/subscriptions/youtube/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ enabled: true }),
     });
     expect(resumed.status).toBe(200);
@@ -337,8 +341,8 @@ describe('CollectorRuntime', () => {
       const current = await agent(`/api/jobs/${encodeURIComponent(runId)}`);
       expect((await current.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
     });
-    expect((await agent('/api/youtube/channels/UC-runtime', { method: 'DELETE' })).status).toBe(200);
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/channels`)).json()).channels).toEqual([]);
+    expect((await agent('/api/subscriptions/youtube/UC-runtime', { method: 'DELETE' })).status).toBe(200);
+    expect((await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions).toEqual([]);
   });
 
   it('closes search when workspace schedule startup fails', async () => {
@@ -437,7 +441,7 @@ describe('CollectorRuntime Vault setup', () => {
     expect((await again.json()).error.code).toBe('vault_already_set');
     expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: setup.vaultPath });
 
-    const added = await fetch(`${runtime.server.url}/api/youtube/channels`, {
+    const added = await fetch(`${runtime.server.url}/api/subscriptions`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://www.youtube.com/@runtime' }),
     });
     expect(added.status).toBe(202);
@@ -450,7 +454,7 @@ describe('CollectorRuntime Vault setup', () => {
     const restarted = await CollectorRuntime.start(setup.value);
     cleanups.push(() => restarted.close());
     expect(restarted.status()).toMatchObject({ state: 'ready', vaultPath: setup.vaultPath });
-    expect((await (await fetch(`${restarted.server.url}/api/youtube/channels`)).json()).channels).toMatchObject([{ id: 'UC-runtime' }]);
+    expect((await (await fetch(`${restarted.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions).toMatchObject([{ id: 'UC-runtime' }]);
   });
 
   it('opens only valid Vaults and leaves rejected directories untouched', async () => {
@@ -535,7 +539,7 @@ describe('CollectorRuntime Vault setup', () => {
     expect(imported.status).toBe(200);
     expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: empty }, documentCount: 1 });
     expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: empty });
-    expect((await (await fetch(`${runtime.server.url}/api/youtube/schedule`)).json()).schedule.enabled).toBe(true);
+    expect((await (await fetch(`${runtime.server.url}/api/schedule`)).json()).schedule.enabled).toBe(true);
     expect(await readdir(empty)).not.toContain('xr-collector-sync.json');
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });

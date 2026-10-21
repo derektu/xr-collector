@@ -259,7 +259,7 @@ describe('every check follows the same rule (R-05)', () => {
   const scheduled: Check = async (w) => (await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' })))[0]!;
   const checks: Array<[string, Check]> = [
     ['a scheduled check', scheduled],
-    ['an immediate check', async (w, id) => (await settleAll(w, await w.channels.startRun({ trigger: 'manual', channelIds: [id] })))[0]!],
+    ['an immediate check', async (w, id) => (await settleAll(w, await w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] })))[0]!],
     ['a resume', async (w, id) => {
       await w.channels.setEnabled(id, false);
       return w.jobs.whenSettled((await w.channels.setEnabled(id, true)).submission!.job.id);
@@ -315,9 +315,9 @@ describe('settings when discovery starts (S-T7, A3)', () => {
     const ids = w.source.publish(id, 's', w.clock.now, Array.from({ length: 20 }, (_, index) => 1 + index));
     let release!: () => void;
     w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
-    const [held] = await w.channels.startRun({ trigger: 'manual', channelIds: [blocker] });
+    const [held] = await w.channels.startRun({ trigger: 'manual', subscriptionIds: [blocker] });
     await vi.waitFor(() => expect(w.jobs.get(held!.job.id).phase).toBe('discover'));
-    const [queued] = await w.channels.startRun({ trigger: 'manual', channelIds: [id] });
+    const [queued] = await w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] });
     expect(queued!.job.state).toBe('queued');
 
     await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
@@ -393,7 +393,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = false;
     await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
     const resumed = await w.channels.setEnabled(id, true);
-    expect(resumed.channel).toMatchObject({ enabled: true, settings: { backfillWindow: '1w', backfillMaxItems: 5 } });
+    expect(resumed.subscription).toMatchObject({ enabled: true, settings: { backfillWindow: '1w', backfillMaxItems: 5 } });
     const check = await w.jobs.whenSettled(resumed.submission!.job.id);
     expect(check).toMatchObject({ scope: { trigger: 'resume' } });
     expect(check.items!.map((item) => item.sourceId)).toEqual([ids[1], ids[2]]);
@@ -518,13 +518,13 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect(removed.items!.map((item) => item.skipReason ?? item.outcome)).toEqual(['created', 'created', 'subscription_removed']);
     expect(collectedIds(w)).toEqual([ids[0], ids[1]].sort());
     expect(await w.channelStore.list()).toEqual([]);
-    await expect(w.channels.remove(id)).rejects.toMatchObject({ code: 'channel_not_found' });
+    await expect(w.channels.remove(id)).rejects.toMatchObject({ code: 'subscription_not_found' });
 
     const other = w.source.addChannel('paused');
     w.source.holdCaptures = false;
     await subscribe(w, 'paused');
     await w.channels.setEnabled(other, false);
-    await expect(w.channels.startRun({ trigger: 'manual', channelIds: [other] })).rejects.toMatchObject({ code: 'channel_paused' });
+    await expect(w.channels.startRun({ trigger: 'manual', subscriptionIds: [other] })).rejects.toMatchObject({ code: 'subscription_paused' });
   });
 
   it('keeps paused and removed subscriptions as they are after a restart', async () => {

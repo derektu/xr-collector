@@ -191,9 +191,11 @@ export interface Subscription extends SubscriptionRecord {
  */
 export type SubscriptionSettings = { intervalMinutes: number; [key: string]: string | number };
 
-/** A resolved subscription address with its subscription state; `channel` is the resolved target. */
+/** A resolved subscription address of a source type with its subscription state. */
 export interface SubscriptionPreview {
-  channel: { id: string; title: string; url: string };
+  type: DocumentSourceType;
+  /** The resolved subscription target; its ID is the subscription ID. */
+  target: { id: string; title: string; url: string };
   /** The existing subscription of this target with its own settings, or null when it is not subscribed. */
   subscription: { enabled: boolean; settings: SubscriptionSettings } | null;
   /** The settings of the existing subscription, or the source type's defaults for a new one. */
@@ -267,15 +269,16 @@ export interface UrlRecognition {
   message: string | null;
 }
 
-/** A subscription as one row of the source list. */
-export interface SourceEntry extends Subscription {
+/** A subscription with its source type and kind, as the subscription list and detail return it. */
+export interface SubscriptionEntry extends Subscription {
   type: DocumentSourceType;
   kind: string;
   kindLabel: string;
 }
 
-/** A subscription request still resolving its address; it becomes a source once subscribed, or disappears when it fails. */
+/** A subscription request still resolving its address; it joins the subscriptions once subscribed, or disappears when it fails. */
 export interface PendingSubscription {
+  type: DocumentSourceType;
   jobId: string;
   url: string;
   /** The target's title once resolved; null before. */
@@ -283,8 +286,8 @@ export interface PendingSubscription {
   checkStatus: SubscriptionCheckStatus;
 }
 
-export interface SourceList {
-  sources: SourceEntry[];
+export interface SubscriptionList {
+  subscriptions: SubscriptionEntry[];
   /** Subscription requests accepted but not yet subscribed, oldest first. */
   pending: PendingSubscription[];
   /** Documents that belong to no current subscription. */
@@ -293,8 +296,8 @@ export interface SourceList {
   types: Array<{ type: DocumentSourceType; count: number }>;
 }
 
-/** One check job as a source's collection record. */
-export interface SourceJobRecord {
+/** One check job as a subscription's collection record. */
+export interface SubscriptionJobRecord {
   id: string;
   state: JobState;
   trigger: ChannelJobTrigger | null;
@@ -310,12 +313,12 @@ export interface SourceJobRecord {
   resumedCount: number;
 }
 
-export interface SourceDetail {
-  source: SourceEntry;
+export interface SubscriptionDetail {
+  subscription: SubscriptionEntry;
   /** Newest collected first, at most five. */
   recentDocuments: DocumentMetadata[];
   /** Newest first, at most five. */
-  recentJobs: SourceJobRecord[];
+  recentJobs: SubscriptionJobRecord[];
 }
 
 /** Why a check job was started; it decides the job's labels. Every trigger discovers items the same way. */
@@ -452,7 +455,7 @@ export interface JobResult {
   /** The search projection includes the saved document. */
   indexed?: boolean;
   indexMessage?: string;
-  /** The subscription an add job subscribed to or found. */
+  /** The subscription an add job subscribed to or found, under the job record's stored name; the HTTP API returns it as `subscriptionId`. */
   channelId?: string;
   /** The check job an add job started. */
   followUpJobId?: string;
@@ -515,6 +518,23 @@ export interface JobSubmission {
 
 export interface JobPage {
   jobs: CollectionJob[];
+  nextCursor: string | null;
+}
+
+/** A job result as the HTTP API returns it; `subscriptionId` is the subscription an add job subscribed to or found. */
+export type JobResultView = Omit<JobResult, 'channelId'> & { subscriptionId?: string };
+
+/** A job as the HTTP API returns it, without the data that only serves restarts. */
+export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser' | 'result'> & { result: JobResultView | null };
+
+export interface JobSubmissionView {
+  job: JobView;
+  /** True when an active job for the same item already existed and was returned instead. */
+  deduplicated: boolean;
+}
+
+export interface JobPageView {
+  jobs: JobView[];
   nextCursor: string | null;
 }
 
@@ -628,20 +648,21 @@ export interface PacingStatus {
 }
 
 /** `paused` while automatic collection is off; `scheduled` while it is on. */
-export type ChannelScheduleStatus = 'paused' | 'scheduled';
+export type CollectionScheduleStatus = 'paused' | 'scheduled';
 
-/** One subscription's check time as the schedule summary reports it; `channelId` is the subscription ID. */
+/** One subscription's check time as the schedule summary reports it. */
 export interface ScheduledCheck {
-  channelId: string;
+  type: DocumentSourceType;
+  subscriptionId: string;
   title: string;
   at: string;
 }
 
 /** Automatic collection across subscriptions; each subscription keeps its own interval. */
-export interface ChannelSchedule {
+export interface CollectionSchedule {
   /** The automatic collection switch. */
   enabled: boolean;
-  status: ChannelScheduleStatus;
+  status: CollectionScheduleStatus;
   /** The subscription whose `lastCheckedAt` is the newest. */
   lastCheck: ScheduledCheck | null;
   /** The enabled subscription due first; null while automatic collection is off. */
@@ -698,15 +719,15 @@ export type CoreErrorCode =
   | 'vault_invalid'
   | 'vault_already_set'
   | 'invalid_url'
-  | 'invalid_channel'
+  | 'invalid_subscription'
   | 'network_error'
   | 'rate_limited'
   | 'capture_failed'
   | 'document_not_found'
   | 'document_deleted'
   | 'search_unavailable'
-  | 'channel_not_found'
-  | 'channel_paused'
+  | 'subscription_not_found'
+  | 'subscription_paused'
   | 'out_of_range'
   | 'job_not_found'
   | 'job_not_retryable'

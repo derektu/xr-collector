@@ -22,8 +22,8 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([api.documentSources(controller.signal), api.listSources(controller.signal)])
-      .then(([documents, sources]) => setCounts({ documents: documents.total, sources: sources.sources.length }))
+    Promise.all([api.documentSources(controller.signal), api.listSubscriptions(controller.signal)])
+      .then(([documents, sources]) => setCounts({ documents: documents.total, sources: sources.subscriptions.length }))
       .catch(() => undefined);
     return () => controller.abort();
   }, []);

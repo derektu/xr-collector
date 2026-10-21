@@ -22,22 +22,34 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
 
     const ui = await createHttpApp({ pacing: [gate], subscriptions: [channels] });
     const agent = await createHttpApp({ pacing: [gate], subscriptions: [channels], agentToken: 'pacing-token' });
-    const expected = { state: 'cooldown', cooldownUntil: until, level: 1, waitRangeMs: { min: 4_000, max: 12_000 } };
-    expect((await ui.inject({ method: 'GET', url: '/api/youtube/pacing' })).json()).toEqual(expected);
-    const authorized = await agent.inject({ method: 'GET', url: '/api/youtube/pacing', headers: { authorization: 'Bearer pacing-token' } });
+    const expected = { groups: [{ group: 'youtube', label: 'YouTube', state: 'cooldown', cooldownUntil: until, level: 1, waitRangeMs: { min: 4_000, max: 12_000 } }] };
+    expect((await ui.inject({ method: 'GET', url: '/api/pacing' })).json()).toEqual(expected);
+    const authorized = await agent.inject({ method: 'GET', url: '/api/pacing', headers: { authorization: 'Bearer pacing-token' } });
     expect(authorized.json()).toEqual(expected);
-    expect((await agent.inject({ method: 'GET', url: '/api/youtube/pacing' })).statusCode).toBe(401);
+    expect((await agent.inject({ method: 'GET', url: '/api/pacing' })).statusCode).toBe(401);
 
     const preview = await ui.inject({
-      method: 'POST', url: '/api/youtube/channel-previews', payload: { url: 'https://www.youtube.com/@LennysPodcast' },
+      method: 'POST', url: '/api/subscription-previews', payload: { url: 'https://www.youtube.com/@LennysPodcast' },
     });
     expect(preview.statusCode).toBe(503);
     expect(preview.json()).toMatchObject({ error: { code: 'rate_limited', retryAt: until, message: expect.stringContaining('後自動繼續') } });
     expect(Number(preview.headers['retry-after'])).toBeGreaterThan(0);
 
     now = T0 + 5 * 60_000 + 1;
-    expect((await ui.inject({ method: 'GET', url: '/api/youtube/pacing' })).json()).toMatchObject({ state: 'idle', cooldownUntil: null });
+    expect((await ui.inject({ method: 'GET', url: '/api/pacing' })).json()).toMatchObject({ groups: [{ group: 'youtube', state: 'idle', cooldownUntil: null }] });
     await ui.close();
     await agent.close();
+  });
+
+  it('reads the request channels while the Vault is not ready', async () => {
+    const gate = await PacingGate.open(YOUTUBE_PACING, { now: () => new Date(T0), setTimer: () => () => undefined });
+    const app = await createHttpApp({ pacing: [gate], notReady: () => '尚未設定知識庫。' });
+    const pacing = await app.inject({ method: 'GET', url: '/api/pacing' });
+    expect(pacing.statusCode).toBe(200);
+    expect(pacing.json()).toMatchObject({ groups: [{ group: 'youtube', label: 'YouTube', state: 'idle' }] });
+    const documents = await app.inject({ method: 'GET', url: '/api/documents' });
+    expect(documents.statusCode).toBe(503);
+    expect(documents.json()).toMatchObject({ error: { code: 'vault_not_ready' } });
+    await app.close();
   });
 });

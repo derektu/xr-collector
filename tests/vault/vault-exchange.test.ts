@@ -601,7 +601,7 @@ describe('collection during an import (X77-A12)', () => {
     const listed: string[] = [];
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
-      const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', channelIds: ['UC123', 'UC456'] });
+      const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', subscriptionIds: ['UC123', 'UC456'] });
       await expect.poll(() => listed).toEqual(['UC123']);
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');

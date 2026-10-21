@@ -8,8 +8,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions, subscriptionKindLabel } from '../core/source-registry.js';
+import type { SubscriptionDeclaration } from '../plugins/types.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
-import { recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
+import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
   CollectorError,
   type CoreErrorCode,
@@ -21,7 +22,9 @@ import {
   type CollectionJob,
   type JobPage,
   type JobSubmission,
-  type ChannelSchedule,
+  type JobSubmissionView,
+  type JobView,
+  type CollectionSchedule,
   type DocumentFilter,
   type SearchStatusReport,
   type TranscriptSearch,
@@ -43,7 +46,7 @@ export interface SubscriptionCollection {
   listSubscriptions(): Promise<Subscription[]>;
   preview(url: string): Promise<SubscriptionPreview>;
   add(url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission>;
-  setEnabled(id: string, enabled: boolean): Promise<{ channel: SubscriptionRecord; submission: JobSubmission | null }>;
+  setEnabled(id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmission | null }>;
   updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord>;
   applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
   remove(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
@@ -51,7 +54,7 @@ export interface SubscriptionCollection {
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
   /** Subscriptions removed and not added again. */
   listRemovals?(): Promise<Array<{ id: string; title: string }>>;
-  startRun(request: { trigger: 'manual'; channelIds?: string[] }): Promise<JobSubmission[]>;
+  startRun(request: { trigger: 'manual'; subscriptionIds?: string[] }): Promise<JobSubmission[]>;
   checkJobs(id: string): CollectionJob[];
 }
 
@@ -71,9 +74,9 @@ export interface ActivityAccess {
   health(): ActivityLogHealth;
 }
 
-export interface ChannelScheduleManagement {
-  getSchedule(): Promise<ChannelSchedule>;
-  updateSchedule(input: { enabled: boolean }): Promise<ChannelSchedule>;
+export interface ScheduleManagement {
+  getSchedule(): Promise<CollectionSchedule>;
+  updateSchedule(input: { enabled: boolean }): Promise<CollectionSchedule>;
   /** Checks every enabled subscription now. */
   runNow(): Promise<JobSubmission[]>;
 }
@@ -87,10 +90,10 @@ export interface VaultSetup {
   setup(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult>;
 }
 
-/** Routes a not-ready runtime still serves so UI and Agents can finish setup; each pacing group's status joins them. */
-const BASE_NOT_READY_ROUTES = [
-  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity',
-];
+/** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
+const NOT_READY_ROUTES = new Set([
+  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+]);
 
 export interface HttpAppOptions {
   collector?: Collector;
@@ -99,7 +102,7 @@ export interface HttpAppOptions {
   transfer?: VaultWorkspace;
   /** The subscriptions of each source type with subscriptions. */
   subscriptions?: readonly SubscriptionCollection[];
-  schedule?: ChannelScheduleManagement;
+  schedule?: ScheduleManagement;
   search?: TranscriptSearch;
   /** The device's request channels, one per pacing group; readable whatever state the Vault is in. */
   pacing?: readonly Pacing[];
@@ -131,13 +134,13 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   vault_invalid: 422,
   vault_already_set: 409,
   invalid_url: 400,
-  invalid_channel: 400,
+  invalid_subscription: 400,
   invalid_request: 400,
   document_not_found: 404,
   document_deleted: 404,
   search_unavailable: 503,
-  channel_not_found: 404,
-  channel_paused: 409,
+  subscription_not_found: 404,
+  subscription_paused: 409,
   out_of_range: 422,
   job_not_found: 404,
   job_not_retryable: 409,
@@ -165,7 +168,6 @@ export function errorStatus(code: string): number {
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
-  const NOT_READY_ROUTES = new Set([...BASE_NOT_READY_ROUTES, ...(options.pacing ?? []).map((gate) => `/api/${gate.group}/pacing`)]);
   const subscriptions = options.subscriptions ?? [];
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
@@ -331,9 +333,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     };
   });
 
-  for (const gate of options.pacing ?? []) {
-    app.get(`/api/${gate.group}/pacing`, async () => gate.status());
-  }
+  // Each pacing group is labelled with the name its source type declares for it.
+  app.get('/api/pacing', async () => ({
+    groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(gate.group), ...gate.status() })),
+  }));
 
   if (options.agentInfo && options.agentToken === undefined) {
     app.get('/api/agent/connection', async () => options.agentInfo);
@@ -411,22 +414,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.jobs) {
     const jobs = options.jobs;
-    for (const declaration of sourceDeclarations()) {
-      const type = declaration.id;
-      app.post<{ Body: { url?: unknown } }>(`/api/${type}/submissions`, async (request, reply) => {
-        if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-          throw new CollectorError('invalid_request', declaration.prompts.anyInput);
-        }
-        return reply.code(202).send(await jobs.submit(type, request.body.url));
-      });
+    app.post<{ Body: { url?: unknown } }>('/api/submissions', async (request, reply) => {
+      const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要加入的網址。'));
+      return reply.code(202).send(submissionView(await jobs.submit(type, input)));
+    });
 
-      app.post<{ Body: { url?: unknown } }>(`/api/${type}/collect`, async (request, reply) => {
-        if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-          throw new CollectorError('invalid_request', declaration.prompts.itemInput);
-        }
-        return reply.code(202).send(await jobs.submitItem(type, request.body.url));
-      });
-    }
+    app.post<{ Body: { url?: unknown } }>('/api/items', async (request, reply) => {
+      const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要收集的網址。'));
+      return reply.code(202).send(submissionView(await jobs.submitItem(type, input)));
+    });
 
     app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', async (request) => {
       const { state, cursor } = request.query;
@@ -437,7 +433,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         throw new CollectorError('invalid_request', '分頁位置無效。');
       }
       const { limit } = pagination({ limit: request.query.limit ?? '20' });
-      return jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
+      const page = jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
+      return { jobs: page.jobs.map(jobView), nextCursor: page.nextCursor };
     });
 
     app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', async (request) => {
@@ -447,11 +444,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
 
     app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request) => ({
-      job: jobs.get(request.params.id),
+      job: jobView(jobs.get(request.params.id)),
     }));
 
     app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) =>
-      reply.code(202).send(await jobs.retry(request.params.id)));
+      reply.code(202).send(submissionView(await jobs.retry(request.params.id))));
   }
 
   if (options.activity) {
@@ -463,57 +460,59 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.schedule) {
     const schedule = options.schedule;
-    // One switch covers every type's subscriptions; each type with subscriptions serves it under its own prefix.
-    for (const { id: type } of sourceDeclarations().filter((declaration) => declaration.subscription)) {
-      app.get(`/api/${type}/schedule`, async () => ({
-        schedule: await schedule.getSchedule(),
-      }));
-
-      app.put<{ Body: Record<string, unknown> | null }>(`/api/${type}/schedule`, async (request) => {
-        const body = request.body;
-        if (!body || typeof body !== 'object' || Array.isArray(body)) {
-          throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
-        }
-        const keys = Object.keys(body);
-        const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
-        if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-        if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
-        return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
-      });
-    }
-  }
-
-  for (const collection of subscriptions) {
-    const declaration = sourceDeclaration(collection.type);
-    const subscription = declaration?.subscription;
-    if (!declaration || !subscription) continue;
-    const base = `/api/${collection.type}`;
-    const prompt = declaration.prompts.subscriptionInput;
-    const { targetNoun } = subscription;
-    app.get(`${base}/channels`, async () => ({
-      channels: await collection.listSubscriptions(),
+    // One switch covers the subscriptions of every source type.
+    app.get('/api/schedule', async () => ({
+      schedule: await schedule.getSchedule(),
     }));
 
-    app.post<{ Body: { url?: unknown } }>(`${base}/channel-previews`, async (request) => {
-      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', prompt);
+    app.put<{ Body: Record<string, unknown> | null }>('/api/schedule', async (request) => {
+      const body = request.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
       }
-      return { preview: await collection.preview(request.body.url) };
+      const keys = Object.keys(body);
+      const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
+      if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
+      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
+      return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
+    });
+  }
+
+  /** The subscriptions of a type, or `subscription_not_found` for a type without subscriptions. */
+  const collectionOf = (type: string): { collection: SubscriptionCollection; subscription: SubscriptionDeclaration; targetNoun: string } => {
+    const collection = subscriptions.find((candidate) => candidate.type === type);
+    const subscription = sourceDeclaration(type)?.subscription;
+    if (!collection || !subscription) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
+    return { collection, subscription, targetNoun: subscription.targetNoun };
+  };
+
+  /** The type of a subscription address; an address of a type without subscriptions is not one. */
+  const subscriptionAddress = (url: unknown): { type: string; input: string } & ReturnType<typeof collectionOf> => {
+    const { type, input } = ownedAddress(requiredUrl(url, '請貼上要訂閱的網址。'));
+    if (!subscriptions.some((candidate) => candidate.type === type)) {
+      throw new CollectorError('invalid_subscription', '這個網址不能訂閱。');
+    }
+    return { type, input, ...collectionOf(type) };
+  };
+
+  if (subscriptions.length > 0) {
+    app.post<{ Body: { url?: unknown } }>('/api/subscription-previews', async (request) => {
+      const { collection, input } = subscriptionAddress(request.body?.url);
+      return { preview: await collection.preview(input) };
     });
 
-    app.post<{ Body: { url?: unknown; settings?: unknown } }>(`${base}/channels`, async (request, reply) => {
-      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', prompt);
-      }
+    app.post<{ Body: { url?: unknown; settings?: unknown } }>('/api/subscriptions', async (request, reply) => {
+      const { collection, subscription, input } = subscriptionAddress(request.body?.url);
       const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
-      return reply.code(202).send(await collection.add(request.body.url, settings));
+      return reply.code(202).send(submissionView(await collection.add(input, settings)));
     });
 
     // Settings change first, so the check a resume in the same request starts uses the new range.
     app.patch<{
-      Params: { id: string };
+      Params: { type: string; id: string };
       Body: { enabled?: unknown; settings?: unknown } | null;
-    }>(`${base}/channels/:id`, async (request) => {
+    }>('/api/subscriptions/:type/:id', async (request) => {
+      const { collection, subscription, targetNoun } = collectionOf(request.params.type);
       const body = request.body;
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', `${targetNoun}設定必須是 JSON 物件。`);
       const unknown = Object.keys(body).find((key) => key !== 'enabled' && key !== 'settings');
@@ -521,38 +520,54 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (body.enabled === undefined && body.settings === undefined) throw new CollectorError('invalid_request', '請提供 enabled 或 settings。');
       if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', `${targetNoun}啟用設定無效。`);
       const settings = body.settings === undefined ? null : subscription.parseSettingsPatch(body.settings);
-      let channel = settings ? await collection.updateSettings(request.params.id, settings) : null;
+      let record = settings ? await collection.updateSettings(request.params.id, settings) : null;
       let submission: JobSubmission | null = null;
-      if (typeof body.enabled === 'boolean') ({ channel, submission } = await collection.setEnabled(request.params.id, body.enabled));
-      return { channel, submission };
+      if (typeof body.enabled === 'boolean') ({ subscription: record, submission } = await collection.setEnabled(request.params.id, body.enabled));
+      return { subscription: record, submission: submission ? submissionView(submission) : null };
     });
 
-    app.post<{ Params: { id: string } }>(`${base}/channels/:id/apply-settings`, async (request) =>
-      collection.applySettingsToAll(request.params.id));
+    app.post<{ Params: { type: string; id: string } }>('/api/subscriptions/:type/:id/apply-settings', async (request) =>
+      collectionOf(request.params.type).collection.applySettingsToAll(request.params.id));
 
     // `documents=keep` (the default) leaves the subscription's documents; `documents=delete` deletes them.
-    app.delete<{ Params: { id: string }; Querystring: Record<string, unknown> }>(`${base}/channels/:id`, async (request) => {
+    app.delete<{ Params: { type: string; id: string }; Querystring: Record<string, unknown> }>('/api/subscriptions/:type/:id', async (request) => {
+      const { collection } = collectionOf(request.params.type);
       const { documents = 'keep' } = singleValues(request.query);
       if (documents !== 'keep' && documents !== 'delete') throw new CollectorError('invalid_request', 'documents 只接受 keep 或 delete。');
       const { documentsKept, documentsDeleted, documentsFailed } = await collection.remove(request.params.id, { documents });
       return { removed: true, documentsKept, documentsDeleted, documentsFailed };
     });
 
-    app.post<{ Body?: { channelIds?: unknown } }>(`${base}/channel-runs`, async (request, reply) => {
-      const channelIds = request.body?.channelIds;
-      if (
-        channelIds !== undefined
-        && (!Array.isArray(channelIds)
-          || channelIds.length === 0
-          || !channelIds.every((id) => typeof id === 'string' && id.length > 0))
-      ) {
-        throw new CollectorError('invalid_request', `${targetNoun}執行範圍無效。`);
+    app.post<{ Body?: { subscriptions?: unknown } | null }>('/api/subscription-checks', async (request, reply) => {
+      const body = request.body ?? {};
+      if (typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', '檢查範圍必須是 JSON 物件。');
+      const unknown = Object.keys(body).find((key) => key !== 'subscriptions');
+      if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
+      const listed = body.subscriptions;
+      if (listed === undefined) {
+        // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
+        const submissions = options.schedule ? await options.schedule.runNow() : await checkEveryEnabled(subscriptions);
+        return reply.code(202).send({ submissions: submissions.map(submissionView) });
       }
-      // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
-      const submissions = channelIds === undefined && options.schedule
-        ? await options.schedule.runNow()
-        : await collection.startRun({ trigger: 'manual', ...(channelIds ? { channelIds: channelIds as string[] } : {}) });
-      return reply.code(202).send({ submissions });
+      if (!Array.isArray(listed) || listed.length === 0 || !listed.every(isSubscriptionKey)) {
+        throw new CollectorError('invalid_request', 'subscriptions 必須是非空的 {type, id} 清單。');
+      }
+      const byType = new Map<string, string[]>();
+      for (const { type, id } of listed) byType.set(type, [...byType.get(type) ?? [], id]);
+      // Every listed subscription is checked before any job starts, so a refused request starts nothing.
+      const runs = await Promise.all([...byType].map(async ([type, ids]) => {
+        const { collection } = collectionOf(type);
+        const records = await collection.list();
+        for (const id of ids) {
+          const record = records.find((candidate) => candidate.id === id);
+          if (!record) throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
+          if (!record.enabled) throw new CollectorError('subscription_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
+        }
+        return { collection, ids };
+      }));
+      const submissions: JobSubmission[] = [];
+      for (const { collection, ids } of runs) submissions.push(...await collection.startRun({ trigger: 'manual', subscriptionIds: ids }));
+      return reply.code(202).send({ submissions: submissions.map(submissionView) });
     });
   }
 
@@ -561,11 +576,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (subscriptions.length > 0) {
     const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? []);
-    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => {
-      const collection = subscriptions.find((candidate) => candidate.type === type);
-      if (!collection) throw new CollectorError('channel_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
-      return collection.preview(url);
-    };
+    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => collectionOf(type).collection.preview(url);
 
     // Every address answers 200 with a status; only a missing address is a malformed request.
     app.post<{ Body: { url?: unknown } }>('/api/url-recognitions', async (request) => {
@@ -575,30 +586,92 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewSubscription }) };
     });
 
-    app.get('/api/sources', async () => catalog.list());
+    app.get<{ Querystring: Record<string, unknown> }>('/api/subscriptions', async (request) => {
+      const query = singleValues(request.query);
+      const unknown = Object.keys(query).find((key) => key !== 'type');
+      if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
+      if (query.type !== undefined && !subscriptions.some((collection) => collection.type === query.type)) {
+        throw new CollectorError('invalid_request', '不支援的 type。');
+      }
+      return catalog.list(query.type);
+    });
 
-    app.get<{ Params: { type: string; id: string } }>('/api/sources/:type/:id', async (request) =>
+    app.get<{ Params: { type: string; id: string } }>('/api/subscriptions/:type/:id', async (request) =>
       catalog.detail(request.params.type, request.params.id));
   }
 
-  if (options.webRoot && existsSync(options.webRoot)) {
+  const webRoot = options.webRoot && existsSync(options.webRoot) ? options.webRoot : null;
+  if (webRoot) {
     await app.register(fastifyStatic, {
-      root: path.resolve(options.webRoot),
+      root: path.resolve(webRoot),
       prefix: '/',
       wildcard: false,
     });
-    app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/api/')) {
-        void reply.status(404).send({
-          error: { code: 'not_found', message: '找不到這個 API。' },
-        });
-        return;
-      }
-      void reply.type('text/html').sendFile('index.html');
-    });
   }
+  app.setNotFoundHandler((request, reply) => {
+    if (webRoot && !request.url.startsWith('/api/')) {
+      void reply.type('text/html').sendFile('index.html');
+      return;
+    }
+    void reply.status(404).send({
+      error: { code: 'not_found', message: '找不到這個 API。' },
+    });
+  });
 
   return app;
+}
+
+/** A job as the HTTP API returns it: restart data left out, and an add job's subscription named `subscriptionId`. */
+function jobView(job: CollectionJob): JobView {
+  const { checkpoint: _checkpoint, claimedByUser: _claimed, result, ...rest } = job;
+  if (!result) return { ...rest, result: null };
+  const { channelId, ...outcome } = result;
+  return { ...rest, result: channelId === undefined ? outcome : { ...outcome, subscriptionId: channelId } };
+}
+
+function submissionView(submission: JobSubmission): JobSubmissionView {
+  return { job: jobView(submission.job), deduplicated: submission.deduplicated };
+}
+
+function requiredUrl(value: unknown, prompt: string): string {
+  if (typeof value !== 'string' || value.trim() === '') throw new CollectorError('invalid_request', prompt);
+  return value;
+}
+
+/**
+ * The registered source type that owns an address, with the address as that type reads it. An
+ * address no type owns is `unsupported_url`, or `invalid_url` when it is not an address at all.
+ */
+function ownedAddress(value: string): { type: string; input: string } {
+  const { input, url, owner } = addressOwner(value, sourceDeclarations());
+  if (!owner) {
+    throw url
+      ? new CollectorError('unsupported_url', '目前還不支援這個網站的網址。')
+      : new CollectorError('invalid_url', '請貼上完整網址，例如 https:// 開頭的網址。');
+  }
+  return { type: owner.id, input };
+}
+
+function isSubscriptionKey(value: unknown): value is { type: string; id: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { type, id } = value as Record<string, unknown>;
+  return Object.keys(value).every((key) => key === 'type' || key === 'id')
+    && typeof type === 'string' && type.length > 0 && typeof id === 'string' && id.length > 0;
+}
+
+/** Checks the enabled subscriptions of every type; used when no scheduler serves the request. */
+async function checkEveryEnabled(collections: readonly SubscriptionCollection[]): Promise<JobSubmission[]> {
+  const submissions: JobSubmission[] = [];
+  for (const collection of collections) {
+    if ((await collection.list()).some((record) => record.enabled)) submissions.push(...await collection.startRun({ trigger: 'manual' }));
+  }
+  if (submissions.length === 0) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
+  return submissions;
+}
+
+/** The label a source type gives its pacing group; the group ID when no registered type declares it. */
+function pacingLabel(group: string): string {
+  return sourceDefinitions().find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
 }
 
 const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['info', 'warning', 'error']);

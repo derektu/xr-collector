@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { isRetryable, type ActivityLogHealth, type ActivityQuery, type CollectionJob, type JobEvent, type JobSummary, type Subscription } from '../core/types.js';
+import { isRetryable, type ActivityLogHealth, type ActivityQuery, type JobView, type JobEvent, type JobSummary, type Subscription } from '../core/types.js';
 import {
   activityQuery,
   activityStateSearch,
@@ -50,8 +50,8 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 }) {
   const state = parseActivityState(search);
   const filter = activityStateSearch(state);
-  const [active, setActive] = useState<CollectionJob[] | null>(null);
-  const [recent, setRecent] = useState<{ jobs: CollectionJob[]; more: boolean } | null>(null);
+  const [active, setActive] = useState<JobView[] | null>(null);
+  const [recent, setRecent] = useState<{ jobs: JobView[]; more: boolean } | null>(null);
   const [recentLimit, setRecentLimit] = useState(RECENT_STEP);
   const [summary, setSummary] = useState<JobSummary | null>(null);
   const [jobsError, setJobsError] = useState<string | null>(null);
@@ -59,7 +59,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
   const [log, setLog] = useState<LogState | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [filteredJob, setFilteredJob] = useState<CollectionJob | null>(null);
+  const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
   const logSection = useRef<HTMLElement>(null);
   // The shell's status poll can miss a job that starts and ends between two polls, such as one an
@@ -93,9 +93,8 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
 
   useEffect(() => {
     const controller = new AbortController();
-    const types = sourceDeclarations().filter((declaration) => declaration.subscription).map((declaration) => declaration.id);
-    Promise.all(types.map((type) => api.listChannels(type, controller.signal)))
-      .then((lists) => setSubscriptions(lists.flat())).catch(() => undefined);
+    api.listSubscriptions(controller.signal)
+      .then((list) => setSubscriptions(list.subscriptions)).catch(() => undefined);
     return () => controller.abort();
   }, [revision]);
 
@@ -157,7 +156,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
     }
   }
 
-  async function retry(job: CollectionJob): Promise<void> {
+  async function retry(job: JobView): Promise<void> {
     setRetrying(job.id);
     try {
       const submission = await api.retryJob(job.id);
@@ -169,7 +168,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
     }
   }
 
-  async function copyDiagnostics(job: CollectionJob): Promise<void> {
+  async function copyDiagnostics(job: JobView): Promise<void> {
     try {
       const page = await api.activity({ jobId: job.id, limit: 100 });
       await navigator.clipboard.writeText(diagnosticsText(job, page.events));
@@ -259,7 +258,7 @@ export function Activity({ revision, search, onState, onOpenDocument, onOpenSour
   </>;
 }
 
-function JobRow({ job, retrying, onShow, onRetry }: { job: CollectionJob; retrying: boolean; onShow: () => void; onRetry: () => void }) {
+function JobRow({ job, retrying, onShow, onRetry }: { job: JobView; retrying: boolean; onShow: () => void; onRetry: () => void }) {
   const running = job.state === 'queued' || job.state === 'running';
   const retryable = isRetryable(job);
   const progress = job.progress;

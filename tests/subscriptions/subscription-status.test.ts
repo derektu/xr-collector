@@ -154,7 +154,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const alpha = w.source.addChannel('alpha');
     await w.subscribe('alpha');
     w.pacing.limit(new Date(w.clock.now.getTime() + 10 * MINUTE).toISOString());
-    await w.channels.startRun({ trigger: 'manual', channelIds: [alpha] });
+    await w.channels.startRun({ trigger: 'manual', subscriptionIds: [alpha] });
 
     expect(await w.status(alpha)).toEqual({ state: 'queued' });
   });
@@ -188,7 +188,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const alpha = w.source.addChannel('alpha');
     await w.subscribe('alpha');
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
-    const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual', channelIds: [alpha] }))[0]!.job.id);
+    const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual', subscriptionIds: [alpha] }))[0]!.job.id);
     expect(failed.state).toBe('failed');
     const subscription = (await w.channels.listSubscriptions())[0]!;
     expect(subscription).toMatchObject({ status: 'error', checkStatus: { state: 'scheduled', nextCheckAt: subscription.nextCheckAt } });

@@ -326,10 +326,10 @@ describe('moving a Vault', () => {
       gated.open();
       await copied;
       // While the copy is checked, reads go on and every write waits for the move.
-      const refused = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: urlOf('late0000001') } });
+      const refused = await app.inject({ method: 'POST', url: '/api/items', payload: { url: urlOf('late0000001') } });
       expect(refused.statusCode).toBe(409);
       expect(refused.json().error.message).toContain('正在搬移知識庫');
-      expect((await app.inject({ method: 'POST', url: '/api/youtube/channels/run', payload: {} })).statusCode).toBe(409);
+      expect((await app.inject({ method: 'POST', url: '/api/subscription-checks', payload: {} })).statusCode).toBe(409);
       expect((await app.inject('/api/documents')).statusCode).toBe(200);
       expect((await app.inject('/api/search?q=森林')).statusCode).toBe(200);
       expect((await app.inject('/api/jobs')).statusCode).toBe(200);
@@ -346,7 +346,7 @@ describe('moving a Vault', () => {
       expect((await workspace.collector.list()).map((doc) => doc.id).sort()).toEqual(
         ['youtube:seed0000001', ...IDS.map((id) => `youtube:${id}`)].sort());
       expect(existsSync(source)).toBe(false);
-      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: urlOf('late0000001') } })).statusCode).toBe(202);
+      expect((await app.inject({ method: 'POST', url: '/api/items', payload: { url: urlOf('late0000001') } })).statusCode).toBe(202);
       // Activity of the moved Vault, including what was recorded at the previous location.
       await jobStore.flush();
       const events = (await jobStore.activity.query({ limit: 200 }, workspace.activityScope())).events;

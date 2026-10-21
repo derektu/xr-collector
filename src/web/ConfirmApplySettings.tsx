@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SourceEntry } from '../core/types.js';
+import type { SubscriptionEntry } from '../core/types.js';
 import { api } from './api-client.js';
 
 /**
@@ -7,7 +7,7 @@ import { api } from './api-client.js';
  * count includes paused sources, which take the settings and stay paused.
  */
 export function ConfirmApplySettings({ source, onCancel, onApplied }: {
-  source: Pick<SourceEntry, 'id' | 'type' | 'kind' | 'kindLabel'>;
+  source: Pick<SubscriptionEntry, 'id' | 'type' | 'kind' | 'kindLabel'>;
   onCancel: () => void;
   onApplied: (message: string) => void;
 }) {
@@ -20,8 +20,8 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
     const element = dialog.current;
     if (element && !element.open) element.showModal();
     const controller = new AbortController();
-    api.listSources(controller.signal).then((list) => {
-      const same = list.sources.filter((entry) => entry.type === source.type && entry.kind === source.kind && entry.id !== source.id);
+    api.listSubscriptions(controller.signal).then((list) => {
+      const same = list.subscriptions.filter((entry) => entry.type === source.type && entry.kind === source.kind && entry.id !== source.id);
       setOthers({ total: same.length, paused: same.filter((entry) => !entry.enabled).length });
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setFailure(error instanceof Error ? error.message : '無法讀取訂閱。');
@@ -33,7 +33,7 @@ export function ConfirmApplySettings({ source, onCancel, onApplied }: {
     setBusy(true);
     setFailure(null);
     try {
-      const { updated } = await api.applyChannelSettings(source.type, source.id);
+      const { updated } = await api.applySubscriptionSettings(source.type, source.id);
       onApplied(`已套用到 ${updated} 個 ${source.kindLabel}。`);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '無法套用，請稍後再試。');

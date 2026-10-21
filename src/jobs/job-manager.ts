@@ -322,7 +322,7 @@ export class JobManager {
     const input = plugin.classify(url);
     const kind = jobKind(type, 'add');
     if (input.kind !== 'subscription' || !kind || !plugin.subscription) {
-      throw new CollectorError('invalid_channel', plugin.prompts.subscriptionInput);
+      throw new CollectorError('invalid_subscription', plugin.prompts.subscriptionInput);
     }
     const accepted = settings ?? plugin.subscription.defaults;
     const submission = this.enqueue(kind, type, `${type}:add:${input.url.toLowerCase()}`, {
@@ -508,8 +508,8 @@ export class JobManager {
         .map((item) => ({ sourceId: item.sourceId, title: item.title, url: item.url }));
       if (retryItems.length === 0) throw new CollectorError('job_not_retryable', `這個工作沒有失敗的${noun}。`);
       const stopped = await this.subscriptionStopped(type, job.source.id!);
-      if (stopped === 'subscription_removed') throw new CollectorError('channel_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
-      if (stopped) throw new CollectorError('channel_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
+      if (stopped === 'subscription_removed') throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
+      if (stopped) throw new CollectorError('subscription_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
       submission = this.enqueue(job.kind, type, jobKey(job), {
         id: job.source.id, url: job.source.url, title: job.source.title,
       }, null, { scope: { trigger: 'manual' }, checkpoint: { retryItems }, retryOf: job.id });

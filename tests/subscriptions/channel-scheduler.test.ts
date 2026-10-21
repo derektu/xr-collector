@@ -105,7 +105,7 @@ describe('per-subscription scheduling (A2)', () => {
     w.runs.mockClear();
     w.advance(60 * MINUTE);
     await poll(w);
-    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', channelIds: [quarter, hourly] }]]);
+    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
     expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
     expect(await w.channel(quarter)).toMatchObject({ lastDispatchedAt: '2026-10-15T05:00:00.000Z', nextCheckAt: '2026-10-15T05:15:00.000Z' });
     expect(await w.channel(hourly)).toMatchObject({ lastDispatchedAt: '2026-10-15T05:00:00.000Z', nextCheckAt: '2026-10-15T06:00:00.000Z' });
@@ -223,13 +223,13 @@ describe('per-subscription scheduling (A2)', () => {
     expect(await w.scheduler.getSchedule()).toEqual({
       enabled: true,
       status: 'scheduled',
-      lastCheck: { channelId: second, title: '合成頻道 second', at: '2026-10-15T04:05:00.000Z' },
-      nextCheck: { channelId: second, title: '合成頻道 second', at: '2026-10-15T04:20:00.000Z' },
+      lastCheck: { type: 'youtube', subscriptionId: second, title: '合成頻道 second', at: '2026-10-15T04:05:00.000Z' },
+      nextCheck: { type: 'youtube', subscriptionId: second, title: '合成頻道 second', at: '2026-10-15T04:20:00.000Z' },
     });
     await w.channels.setEnabled(second, false);
-    expect((await w.scheduler.getSchedule()).nextCheck).toEqual({ channelId: first, title: '合成頻道 first', at: '2026-10-15T05:00:00.000Z' });
+    expect((await w.scheduler.getSchedule()).nextCheck).toEqual({ type: 'youtube', subscriptionId: first, title: '合成頻道 first', at: '2026-10-15T05:00:00.000Z' });
     await w.scheduler.updateSchedule({ enabled: false });
-    expect(await w.scheduler.getSchedule()).toMatchObject({ status: 'paused', nextCheck: null, lastCheck: { channelId: second } });
+    expect(await w.scheduler.getSchedule()).toMatchObject({ status: 'paused', nextCheck: null, lastCheck: { type: 'youtube', subscriptionId: second } });
   });
 });
 
@@ -252,7 +252,7 @@ describe('concurrent changes of one subscription (A5)', () => {
 
     // A check dispatched while the interval changes moves the next check by the new interval.
     w.advance(10 * MINUTE);
-    await Promise.all([w.channels.startRun({ trigger: 'manual', channelIds: [id] }), w.channels.updateSettings(id, { intervalMinutes: 1440 })]);
+    await Promise.all([w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] }), w.channels.updateSettings(id, { intervalMinutes: 1440 })]);
     expect(await w.channel(id)).toMatchObject({
       settings: { ...settings, intervalMinutes: 1440 }, lastDispatchedAt: '2026-10-15T04:20:00.000Z', nextCheckAt: '2026-10-16T04:20:00.000Z',
     });
@@ -276,6 +276,6 @@ describe('apply settings to the same type (A5)', () => {
     expect(await w.channel(paused)).toMatchObject({ settings, enabled: false, nextCheckAt: null });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);
     expect(w.jobEvents()).toContain('subscription.settings_applied');
-    await expect(w.channels.applySettingsToAll('UCmissing')).rejects.toMatchObject({ code: 'channel_not_found' });
+    await expect(w.channels.applySettingsToAll('UCmissing')).rejects.toMatchObject({ code: 'subscription_not_found' });
   });
 });

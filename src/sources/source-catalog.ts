@@ -3,11 +3,11 @@ import {
   type CollectionJob,
   type DocumentMetadata,
   type PendingSubscription,
-  type SourceDetail,
-  type SourceEntry,
-  type SourceJobRecord,
-  type SourceList,
+  type SubscriptionEntry,
+  type SubscriptionJobRecord,
+  type SubscriptionList,
   type Subscription,
+  type SubscriptionDetail,
 } from '../core/types.js';
 import type { SourceTypeDeclaration } from './source-types.js';
 
@@ -22,9 +22,10 @@ export interface CatalogSubscriptions {
 }
 
 /**
- * Sources as one list across source types. A document belongs to the subscription of its type
- * whose target published it, including items collected one by one from a subscribed target;
- * documents of no current subscription form the separate single-item summary.
+ * Subscriptions as one list across source types, or the subscriptions of one type. A document
+ * belongs to the subscription of its type whose target published it, including items collected one
+ * by one from a subscribed target; documents of no current subscription form the separate
+ * single-item summary.
  */
 export class SourceCatalog {
   constructor(
@@ -33,57 +34,61 @@ export class SourceCatalog {
     private readonly documents: () => Promise<DocumentMetadata[]>,
   ) {}
 
-  async list(): Promise<SourceList> {
+  /** Every type's subscriptions, or with `type` only that type's, with the documents and counts of the same scope. */
+  async list(type?: string): Promise<SubscriptionList> {
+    const collections = type === undefined ? this.subscriptions : this.subscriptions.filter((collection) => collection.type === type);
+    const declarations = type === undefined ? this.declarations : this.declarations.filter((declaration) => declaration.id === type);
     const [lists, documents, pendingLists] = await Promise.all([
-      Promise.all(this.subscriptions.map((collection) => collection.listSubscriptions())),
+      Promise.all(collections.map((collection) => collection.listSubscriptions())),
       this.documents(),
-      Promise.all(this.subscriptions.map((collection) => collection.pendingSubscriptions?.() ?? Promise.resolve([]))),
+      Promise.all(collections.map((collection) => collection.pendingSubscriptions?.() ?? Promise.resolve([]))),
     ]);
-    const subscribed = new Map(this.subscriptions.map((collection, index) =>
+    const subscribed = new Map(collections.map((collection, index) =>
       [collection.type, new Set(lists[index]!.map((subscription) => subscription.id))]));
     let documentCount = 0;
     let lastCollectedAt: string | null = null;
     for (const document of documents) {
+      if (type !== undefined && document.sourceType !== type) continue;
       if (document.publisher.id && subscribed.get(document.sourceType)?.has(document.publisher.id)) continue;
       documentCount += 1;
       if (!lastCollectedAt || document.collectedAt > lastCollectedAt) lastCollectedAt = document.collectedAt;
     }
-    const sources = this.subscriptions.flatMap((collection, index) =>
+    const subscriptions = collections.flatMap((collection, index) =>
       lists[index]!.map((subscription) => this.entry(collection.type, subscription)));
     return {
-      sources,
+      subscriptions,
       pending: pendingLists.flat(),
       unsubscribed: { documentCount, lastCollectedAt },
-      types: this.declarations.map((declaration) => ({
+      types: declarations.map((declaration) => ({
         type: declaration.id,
-        count: sources.filter((source) => source.type === declaration.id).length,
+        count: subscriptions.filter((subscription) => subscription.type === declaration.id).length,
       })),
     };
   }
 
-  async detail(type: string, id: string): Promise<SourceDetail> {
+  async detail(type: string, id: string): Promise<SubscriptionDetail> {
     const collection = this.subscriptions.find((candidate) => candidate.type === type);
-    if (!collection) throw new CollectorError('channel_not_found', '找不到這個訂閱。');
+    if (!collection) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
     const subscription = (await collection.listSubscriptions()).find((candidate) => candidate.id === id);
-    if (!subscription) throw new CollectorError('channel_not_found', '找不到這個訂閱。');
+    if (!subscription) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
     const documents = (await this.documents())
       .filter((document) => document.sourceType === type && document.publisher.id === id)
       .sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
     return {
-      source: this.entry(type, subscription),
+      subscription: this.entry(type, subscription),
       recentDocuments: documents.slice(0, RECENT_LIMIT),
       recentJobs: collection.checkJobs(id).slice(0, RECENT_LIMIT).map(jobRecord),
     };
   }
 
-  private entry(type: string, subscription: Subscription): SourceEntry {
+  private entry(type: string, subscription: Subscription): SubscriptionEntry {
     const declaration = this.declarations.find((candidate) => candidate.id === type);
     const kind = declaration?.kinds.find((candidate) => candidate.capability === 'subscription');
     return { ...subscription, type, kind: kind?.id ?? type, kindLabel: kind?.label ?? declaration?.label ?? type };
   }
 }
 
-function jobRecord(job: CollectionJob): SourceJobRecord {
+function jobRecord(job: CollectionJob): SubscriptionJobRecord {
   return {
     id: job.id,
     state: job.state,

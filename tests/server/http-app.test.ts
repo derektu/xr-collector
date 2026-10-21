@@ -84,8 +84,8 @@ describe('HTTP app', () => {
     const scheduleValue = {
       enabled: true,
       status: 'scheduled' as const,
-      lastCheck: { channelId: 'UC1', title: '頻道一', at: '2026-09-17T00:00:00.000Z' },
-      nextCheck: { channelId: 'UC2', title: '頻道二', at: '2026-09-17T00:15:00.000Z' },
+      lastCheck: { type: 'youtube', subscriptionId: 'UC1', title: '頻道一', at: '2026-09-17T00:00:00.000Z' },
+      nextCheck: { type: 'youtube', subscriptionId: 'UC2', title: '頻道二', at: '2026-09-17T00:15:00.000Z' },
     };
     const schedule = {
       getSchedule: async () => scheduleValue,
@@ -97,11 +97,11 @@ describe('HTTP app', () => {
     };
     const app = await createHttpApp({ collector: makeCollector(), schedule });
 
-    const read = await app.inject({ method: 'GET', url: '/api/youtube/schedule' });
-    const updated = await app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload: { enabled: false } });
+    const read = await app.inject({ method: 'GET', url: '/api/schedule' });
+    const updated = await app.inject({ method: 'PUT', url: '/api/schedule', payload: { enabled: false } });
     const rejected = await Promise.all([
       { enabled: false, intervalMinutes: 60 }, { backfillWindow: '1w' }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
-    ].map((payload) => app.inject({ method: 'PUT', url: '/api/youtube/schedule', payload })));
+    ].map((payload) => app.inject({ method: 'PUT', url: '/api/schedule', payload })));
 
     expect(read.json()).toEqual({ schedule: scheduleValue });
     expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null } });
@@ -150,9 +150,10 @@ describe('HTTP app', () => {
       listSubscriptions: async () => [subscription],
       preview: async (url: string) => {
         calls.push(['preview', url]);
-        if (url.includes('watch')) throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
+        if (url.includes('watch')) throw new CollectorError('invalid_subscription', '請輸入 YouTube 頻道網址或 @handle。');
         return {
-          channel: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
+          type: 'youtube',
+          target: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
           subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 } },
           settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
           autoCollection: true,
@@ -164,13 +165,13 @@ describe('HTTP app', () => {
       },
       setEnabled: async (id: string, enabled: boolean) => {
         calls.push(['enabled', id, enabled]);
-        return { channel: { ...savedChannel, enabled }, submission: null };
+        return { subscription: { ...savedChannel, enabled }, submission: null };
       },
       remove: async (id: string) => {
         calls.push(['remove', id]);
         return { documentsKept: 3 };
       },
-      startRun: async (request: { trigger: string; channelIds?: string[] }) => {
+      startRun: async (request: { trigger: string; subscriptionIds?: string[] }) => {
         calls.push(['run', request]);
         return [{ job: job('run-1'), deduplicated: false }];
       },
@@ -186,45 +187,48 @@ describe('HTTP app', () => {
     const app = await createHttpApp({ collector: makeCollector(), subscriptions: [channels], schedule });
 
     const previewed = await app.inject({
-      method: 'POST', url: '/api/youtube/channel-previews', payload: { url: '@channel-one' },
+      method: 'POST', url: '/api/subscription-previews', payload: { url: '@channel-one' },
     });
     const previewVideo = await app.inject({
-      method: 'POST', url: '/api/youtube/channel-previews', payload: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+      method: 'POST', url: '/api/subscription-previews', payload: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
     });
-    const checkedAll = await app.inject({ method: 'POST', url: '/api/youtube/channel-runs' });
+    const checkedAll = await app.inject({ method: 'POST', url: '/api/subscription-checks' });
 
     const added = await app.inject({
       method: 'POST',
-      url: '/api/youtube/channels',
+      url: '/api/subscriptions',
       payload: { url: 'https://www.youtube.com/@channel-one' },
     });
     const listed = await app.inject({
       method: 'GET',
-      url: '/api/youtube/channels',
+      url: '/api/subscriptions?type=youtube',
     });
     const disabled = await app.inject({
       method: 'PATCH',
-      url: `/api/youtube/channels/${savedChannel.id}`,
+      url: `/api/subscriptions/youtube/${savedChannel.id}`,
       payload: { enabled: false },
     });
     const started = await app.inject({
       method: 'POST',
-      url: '/api/youtube/channel-runs',
-      payload: { channelIds: [savedChannel.id] },
+      url: '/api/subscription-checks',
+      payload: { subscriptions: [{ type: 'youtube', id: savedChannel.id }] },
     });
     const removed = await app.inject({
       method: 'DELETE',
-      url: `/api/youtube/channels/${savedChannel.id}`,
+      url: `/api/subscriptions/youtube/${savedChannel.id}`,
     });
 
     expect(added.statusCode).toBe(202);
     expect(added.json()).toMatchObject({ deduplicated: false, job: { id: 'add-1', kind: 'youtube.channel-add' } });
-    expect(previewed.json()).toMatchObject({ preview: { channel: { title: '頻道一' }, subscription: { enabled: true } } });
+    expect(previewed.json()).toMatchObject({ preview: { type: 'youtube', target: { title: '頻道一' }, subscription: { enabled: true } } });
     expect(previewVideo.statusCode).toBe(400);
     expect(checkedAll.statusCode).toBe(202);
     expect(checkedAll.json()).toMatchObject({ submissions: [{ job: { id: 'run-2' } }] });
-    expect(listed.json()).toEqual({ channels: [subscription] });
-    expect(disabled.json()).toMatchObject({ channel: { id: savedChannel.id, enabled: false }, submission: null });
+    expect(listed.json()).toEqual({
+      subscriptions: [{ ...subscription, type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道' }],
+      pending: [], unsubscribed: { documentCount: 0, lastCollectedAt: null }, types: [{ type: 'youtube', count: 1 }],
+    });
+    expect(disabled.json()).toMatchObject({ subscription: { id: savedChannel.id, enabled: false }, submission: null });
     expect(started.statusCode).toBe(202);
     expect(started.json()).toMatchObject({ submissions: [{ deduplicated: false, job: { id: 'run-1', state: 'queued' } }] });
     expect(removed.json()).toEqual({ removed: true, documentsKept: 3 });
@@ -234,7 +238,7 @@ describe('HTTP app', () => {
       ['check-all'],
       ['add', 'https://www.youtube.com/@channel-one'],
       ['enabled', savedChannel.id, false],
-      ['run', { trigger: 'manual', channelIds: [savedChannel.id] }],
+      ['run', { trigger: 'manual', subscriptionIds: [savedChannel.id] }],
       ['remove', savedChannel.id],
     ]);
     await app.close();
@@ -328,7 +332,7 @@ describe('HTTP app', () => {
     const app = await createHttpApp({ collector, jobs });
     const response = await app.inject({
       method: 'POST',
-      url: '/api/youtube/collect',
+      url: '/api/items',
       payload: { url: captured.sourceUrl },
     });
 
@@ -350,7 +354,7 @@ describe('HTTP app', () => {
     let release!: () => void;
     const { collector, jobs } = makeServices(undefined, new Promise<void>((resolve) => { release = resolve; }));
     const app = await createHttpApp({ collector, jobs });
-    const submit = (url: string) => app.inject({ method: 'POST', url: '/api/youtube/submissions', payload: { url } });
+    const submit = (url: string) => app.inject({ method: 'POST', url: '/api/submissions', payload: { url } });
 
     const video = await submit('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123');
     const repeated = await submit('https://youtu.be/dQw4w9WgXcQ');
@@ -375,7 +379,7 @@ describe('HTTP app', () => {
     const app = await createHttpApp({ collector, jobs });
     const response = await app.inject({
       method: 'POST',
-      url: '/api/youtube/collect',
+      url: '/api/items',
       payload: { url: captured.sourceUrl },
     });
 
@@ -391,8 +395,8 @@ describe('HTTP app', () => {
   it('rejects malformed requests without accepting a job', async () => {
     const { collector, jobs } = makeServices();
     const app = await createHttpApp({ collector, jobs });
-    const empty = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: {} });
-    const channelAsVideo = await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: '@channel' } });
+    const empty = await app.inject({ method: 'POST', url: '/api/items', payload: {} });
+    const channelAsVideo = await app.inject({ method: 'POST', url: '/api/items', payload: { url: '@channel' } });
     const badState = await app.inject({ method: 'GET', url: '/api/jobs?state=done' });
     const missing = await app.inject({ method: 'GET', url: '/api/jobs/unknown' });
 

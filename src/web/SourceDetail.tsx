@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ChannelSchedule, SourceDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
+import type { CollectionSchedule, SubscriptionDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { ConfirmApplySettings } from './ConfirmApplySettings.js';
@@ -27,7 +27,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   type: string;
   id: string;
   sourceTypes: SourceTypeInfo[];
-  schedule: ChannelSchedule | null;
+  schedule: CollectionSchedule | null;
   revision: number;
   onBack: () => void;
   onOpenDocument: (documentId: string) => void;
@@ -51,13 +51,13 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
 
   useEffect(() => {
     const controller = new AbortController();
-    api.sourceDetail(type, id, controller.signal).then((detail) => {
+    api.subscriptionDetail(type, id, controller.signal).then((detail) => {
       setState({ kind: 'ready', detail });
       // A reload that answers before the save finished still holds the previous settings.
       if (!saveInFlight.current) setPending(null);
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
-      if (error instanceof ApiError && error.code === 'channel_not_found') setState({ kind: 'missing' });
+      if (error instanceof ApiError && error.code === 'subscription_not_found') setState({ kind: 'missing' });
       else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
     });
     return () => controller.abort();
@@ -72,14 +72,14 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     </section></>;
   }
 
-  const { source, recentDocuments, recentJobs } = state.detail;
+  const { subscription: source, recentDocuments, recentJobs } = state.detail;
   const paused = source.status === 'paused';
   const typeInfo = sourceTypes.find((candidate) => candidate.id === source.type);
 
   async function toggle(): Promise<void> {
     setBusy(true);
     try {
-      await api.setChannelEnabled(source.type, source.id, paused);
+      await api.setSubscriptionEnabled(source.type, source.id, paused);
       onChanged(paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`);
     } catch (error) {
       onChanged(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
@@ -95,7 +95,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     saveInFlight.current = true;
     const send = async () => {
       try {
-        await api.updateChannelSettings(source.type, source.id, patch);
+        await api.updateSubscriptionSettings(source.type, source.id, patch);
         if (sequence !== saveSequence.current) return;
         saveInFlight.current = false;
         setSaving({ kind: 'saved' });

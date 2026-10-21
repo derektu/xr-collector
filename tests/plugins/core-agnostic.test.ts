@@ -90,7 +90,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
       pacing: [gates.fake, gates.fake2],
       limits: { discovery: 1, capture: options.capture ?? 2 },
       retry: options.retry ?? { maxAttempts: 1, delaysMs: [MINUTE] },
-      checkSubscription: async (type, id) => (await services[type as 'fake' | 'fake2'].startRun({ trigger: 'manual', channelIds: [id] }))[0]!,
+      checkSubscription: async (type, id) => (await services[type as 'fake' | 'fake2'].startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
     });
     let scheduler!: CollectionScheduler;
     const service = (type: 'fake' | 'fake2') => new SubscriptionService(type, stores[type], jobs, {
@@ -196,7 +196,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const keys = w.sources.fake.addFeed('news', w.clock.now, [1, 2, 3, 4, 5, 60]);
     const preview = await w.service('fake').preview(feedUrl('fake', 'news'));
     expect(preview).toEqual({
-      channel: { id: 'news', title: 'fake 動態 news', url: feedUrl('fake', 'news') },
+      type: 'fake', target: { id: 'news', title: 'fake 動態 news', url: feedUrl('fake', 'news') },
       subscription: null, settings: FAKE_DEFAULTS, autoCollection: true,
     });
 
@@ -226,7 +226,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
 
     // An immediate check takes the same candidates and does not ask for the remembered item again.
     w.advance(MINUTE);
-    const [immediate] = await w.service('fake').startRun({ trigger: 'manual', channelIds: ['daily'] });
+    const [immediate] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['daily'] });
     const checked = await w.jobs.whenSettled(immediate!.job.id);
     expect(checked.scope).toEqual({ trigger: 'manual' });
     expect(itemsOf(checked)).toEqual([]);
@@ -293,8 +293,8 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     w.sources.fake.addFeed('rest', w.clock.now, [1]);
     await w.subscribe('fake', 'rest');
     const paused = await w.service('fake').setEnabled('rest', false);
-    expect(paused).toMatchObject({ channel: { id: 'rest', enabled: false }, submission: null });
-    await expect(w.service('fake').startRun({ trigger: 'manual', channelIds: ['rest'] })).rejects.toMatchObject({ code: 'channel_paused' });
+    expect(paused).toMatchObject({ subscription: { id: 'rest', enabled: false }, submission: null });
+    await expect(w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['rest'] })).rejects.toMatchObject({ code: 'subscription_paused' });
     w.sources.fake.feed('rest').items.unshift({ key: 'rest-back', title: '回來', publishedAt: w.clock.now.toISOString() });
     const resumed = await w.service('fake').setEnabled('rest', true);
     const check = await w.jobs.whenSettled(resumed.submission!.job.id);
@@ -310,7 +310,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     w.sources.fake.feed('leaving').items.unshift({ key: 'leaving-late', title: '晚到', publishedAt: w.clock.now.toISOString() });
     w.sources.fake.held.add('leaving-late');
     w.advance(MINUTE);
-    const [check] = await w.service('fake').startRun({ trigger: 'manual', channelIds: ['leaving'] });
+    const [check] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['leaving'] });
     await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['leaving-late']));
 
     const removal = w.service('fake').remove('leaving', { documents: 'delete' });
@@ -331,7 +331,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     await w.subscribe('fake', 'kept');
     await w.collector.delete(`fake:${key}`);
     w.advance(MINUTE);
-    const check = await w.jobs.whenSettled((await w.service('fake').startRun({ trigger: 'manual', channelIds: ['kept'] }))[0]!.job.id);
+    const check = await w.jobs.whenSettled((await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['kept'] }))[0]!.job.id);
     expect(itemsOf(check)).toEqual([]);
     expect(w.sources.fake.captures).toEqual([key]);
 
@@ -403,14 +403,14 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
     w.sources.fake.feed('status').items.unshift({ key: 'status-new', title: '新', publishedAt: w.clock.now.toISOString() });
     w.sources.fake.held.add('status-new');
     w.advance(MINUTE);
-    await w.service('fake').startRun({ trigger: 'manual', channelIds: ['status'] });
+    await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['status'] });
     await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['status-new']));
     expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'updating', done: 0, total: 1 });
     w.sources.fake.release('status-new');
     await w.idle();
 
     w.sources.fake.listFailures.push(new CollectorError('rate_limited', '來源暫時限制連線。'));
-    const [limited] = await w.service('fake').startRun({ trigger: 'manual', channelIds: ['other'] });
+    const [limited] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['other'] });
     await vi.waitFor(() => expect(w.jobs.get(limited!.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
     expect(await w.checkStatus('fake', 'other')).toEqual({ state: 'queued' });
     w.advance(10 * MINUTE);

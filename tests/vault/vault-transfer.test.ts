@@ -42,7 +42,7 @@ describe('workspace transfer through HTTP', () => {
       expect(workspace.status().vaultPath).toBe(target);
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
       expect((await app.inject(`/api/documents/youtube:${capture.videoId}`)).json().document.bodyMarkdown).toBe(capture.bodyMarkdown);
-      expect((await app.inject('/api/youtube/schedule')).json().schedule.enabled).toBe(true);
+      expect((await app.inject('/api/schedule')).json().schedule.enabled).toBe(true);
       expect(JSON.parse(await readFile(path.join(target, VAULT_MARKER), 'utf8'))).toMatchObject({ format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector test' });
     } finally { await app.close(); }
     await workspace.close();
@@ -90,7 +90,7 @@ describe('workspace transfer through HTTP', () => {
       // The export takes the Vault at once and waits for the capture already running.
       const pending = workspace.exportTo();
       await expect.poll(() => workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' });
-      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
+      expect((await app.inject({ method: 'POST', url: '/api/items', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
       await expect(workspace.previewImport(await fileOf(b.root, 'empty.zip', await packageOf([])))).rejects.toMatchObject({ code: 'vault_busy' });
       release();
       const exported = await pending;
@@ -101,7 +101,7 @@ describe('workspace transfer through HTTP', () => {
       await workspace.jobs.whenSettled(first.job.id);
       expect((await workspace.jobs.whenSettled(second.job.id)).state).toBe('completed');
       expect(started).toEqual([capture.videoId, 'abcdefghijk']);
-      expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', payload: { url: capture.sourceUrl } })).statusCode).toBe(202);
+      expect((await app.inject({ method: 'POST', url: '/api/items', payload: { url: capture.sourceUrl } })).statusCode).toBe(202);
     } finally { await app.close(); }
   });
 

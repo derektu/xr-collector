@@ -1,4 +1,4 @@
-import type { ChannelSchedule, CollectionJob, PendingSubscription, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
+import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, SubscriptionEntry, SubscriptionJobRecord, Subscription, UrlRecognition } from '../core/types.js';
 import { sourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { itemNoun, triggerLabel } from './subscription-presentation.js';
@@ -43,7 +43,7 @@ export function sourceListSearch(state: SourceListState): string {
 }
 
 /** Sources of the chosen type whose name contains the query, ignoring case. */
-export function filterSources(sources: SourceEntry[], state: SourceListState): SourceEntry[] {
+export function filterSources(sources: SubscriptionEntry[], state: SourceListState): SubscriptionEntry[] {
   const query = state.query.trim().toLocaleLowerCase();
   return sources.filter((source) => (!state.type || source.type === state.type)
     && (!query || source.title.toLocaleLowerCase().includes(query)));
@@ -64,7 +64,7 @@ export function sourceRouteForPath(pathname: string): { type: string; id: string
 }
 
 /** Top-level jobs still queued or running; a channel job counts once however many videos it holds. */
-export function activeJobs(jobs: CollectionJob[]): CollectionJob[] {
+export function activeJobs(jobs: JobView[]): JobView[] {
   return jobs.filter((job) => job.parentId === null && (job.state === 'queued' || job.state === 'running'));
 }
 
@@ -93,7 +93,7 @@ export function displayUrl(url: string): string {
 }
 
 /** One line of a source's collection record. */
-export function jobRecordLabel(record: SourceJobRecord, at: Date | undefined, type: string): { title: string; detail: string; active: boolean } {
+export function jobRecordLabel(record: SubscriptionJobRecord, at: Date | undefined, type: string): { title: string; detail: string; active: boolean } {
   const now = at ?? new Date();
   const title = triggerLabel(record.trigger, type);
   const progress = record.progress;
@@ -121,7 +121,7 @@ export function jobRecordLabel(record: SourceJobRecord, at: Date | undefined, ty
  * The check times under the subscription list: the newest finished check and the subscription due
  * next, each with its name, so both match that subscription's detail page.
  */
-export function checkTimesLine(schedule: Pick<ChannelSchedule, 'enabled' | 'lastCheck' | 'nextCheck'>, now: Date = new Date()): string {
+export function checkTimesLine(schedule: Pick<CollectionSchedule, 'enabled' | 'lastCheck' | 'nextCheck'>, now: Date = new Date()): string {
   const last = schedule.lastCheck ? `${shortTimeLabel(schedule.lastCheck.at, now)}（${schedule.lastCheck.title}）` : '尚未檢查';
   if (!schedule.enabled) return `上次檢查 ${last} · 自動檢查已關閉`;
   if (!schedule.nextCheck) return `上次檢查 ${last}`;
