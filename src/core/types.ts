@@ -135,6 +135,33 @@ export interface SubscriptionRecord {
    * items that are still candidates are kept.
    */
   outOfRange?: OutOfRangeEntry[];
+  /**
+   * Candidates whose collection failed in earlier checks, with the attempts so far. A later check
+   * tries such an item again while it is a candidate and not `skipped`; a skipped item stays a
+   * candidate that is not collected. Only items that are still candidates without a document are
+   * kept.
+   */
+  failures?: ItemFailureEntry[] | undefined;
+}
+
+/** Checks that may each try a failed item of a subscription before it is skipped. */
+export const MAX_CHECK_ATTEMPTS = 3;
+
+/**
+ * An item of a subscription that failed to be collected. The item key is stored under the field
+ * the source type's storage names, such as `videoId`.
+ */
+export interface ItemFailureEntry {
+  /** The item's title as the listing reported it; empty when unknown. */
+  title: string;
+  /** Checks that tried the item and failed. */
+  attempts: number;
+  /** Error code of the latest failure; the source type's declaration names it in words. */
+  errorCode: string;
+  failedAt: string;
+  /** True once the item reached the attempt limit or failed in a way no retry changes; checks no longer try it. */
+  skipped: boolean;
+  [keyField: string]: string | number | boolean;
 }
 
 /**
@@ -296,29 +323,28 @@ export interface SubscriptionList {
   types: Array<{ type: DocumentSourceType; count: number }>;
 }
 
-/** One check job as a subscription's collection record. */
-export interface SubscriptionJobRecord {
-  id: string;
-  state: JobState;
-  trigger: ChannelJobTrigger | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  progress: JobProgress | null;
-  outcome: JobOutcome | null;
-  error: JobError | null;
-  /** Transient failures so far; `nextAttemptAt` is set while the job waits for its next attempt. */
-  retry: JobRetry | null;
-  /** Times the job continued after the service restarted. */
-  resumedCount: number;
-}
+/**
+ * One row of a subscription's collection record. Each item appears once, in its current state:
+ * `collected` with its document, `failed` with the attempts so far, or `skipped` once checks no
+ * longer try it (`skippedBy`: `limit` after the last attempt, `failure` for a failure no retry
+ * changes). `check` sums up one finished check. `reason` names the error code in words.
+ */
+export type SubscriptionCollectionEntry =
+  | { kind: 'collected'; at: string; key: string; title: string; documentId: string }
+  | { kind: 'failed'; at: string; key: string; title: string; url: string; errorCode: string; reason: string; attempts: number; maxAttempts: number }
+  | { kind: 'skipped'; at: string; key: string; title: string; url: string; errorCode: string; reason: string; attempts: number; skippedBy: 'limit' | 'failure' }
+  | {
+    kind: 'check'; at: string; jobId: string; trigger: ChannelJobTrigger | null;
+    /** Items collected and failed by the check; both 0 when it found nothing new. */
+    created: number; failed: number;
+    /** Why the check could not list its subscription; null when it listed it. */
+    error: JobError | null;
+  };
 
 export interface SubscriptionDetail {
   subscription: SubscriptionEntry;
-  /** Newest collected first, at most five. */
-  recentDocuments: DocumentMetadata[];
-  /** Newest first, at most five. */
-  recentJobs: SubscriptionJobRecord[];
+  /** Newest first, at most 30 rows. */
+  collection: SubscriptionCollectionEntry[];
 }
 
 /** Why a check job was started; it decides the job's labels. Every trigger discovers items the same way. */
@@ -482,6 +508,8 @@ export interface CollectionJob {
     id: string | null;
     url: string;
     title: string | null;
+    /** Who published an item, once a capture reported it. */
+    publisher?: string;
   };
   createdAt: string;
   startedAt: string | null;
@@ -504,6 +532,8 @@ export interface CollectionJob {
   claimedByUser?: boolean;
   /** The failed job this one retries at the user's request. */
   retryOf?: string;
+  /** When the user removed this failed single item from the jobs page's failed section. */
+  dismissedAt?: string;
   /** The job that retries this failed one; a job is retried once. */
   retriedBy?: string;
   /** Some of this job's activity events could not be written to the device log. */
@@ -531,6 +561,42 @@ export interface JobSubmissionView {
   job: JobView;
   /** True when an active job for the same item already existed and was returned instead. */
   deduplicated: boolean;
+}
+
+/**
+ * One unfinished or failed piece of work on the jobs page. `role` tells an item from a check of a
+ * subscription or a subscription request; `title` is null until the item or target is known, and
+ * the page shows `url` instead.
+ */
+export interface JobOverviewEntry {
+  jobId: string;
+  type: DocumentSourceType;
+  role: JobRole;
+  title: string | null;
+  url: string;
+  /** Who published an item, once known; null for subscription work. */
+  publisher: string | null;
+  /** A check's items so far; null for other work and before the check knows its items. */
+  progress: { done: number; total: number } | null;
+  /** The cooldown the work waits for. */
+  wait: JobWait | null;
+  /** When waiting work tries again after a transient failure, and why it failed. */
+  retry: { nextAttemptAt: string; lastError: JobError } | null;
+  /** Why a failed entry failed. */
+  error: JobError | null;
+  failedAt: string | null;
+}
+
+/**
+ * Everything the app is doing now, from the UI or an Agent. `running`: work collecting now.
+ * `queued`: work waiting for its turn, in the order it starts; work waiting for a cooldown or a
+ * retry comes last, by when it continues. `failed`: single items and subscription requests that
+ * failed, until a retry succeeds, the user removes them, the item has a document or 7 days pass.
+ */
+export interface JobOverview {
+  running: JobOverviewEntry[];
+  queued: JobOverviewEntry[];
+  failed: JobOverviewEntry[];
 }
 
 export interface JobPageView {
@@ -731,6 +797,7 @@ export type CoreErrorCode =
   | 'out_of_range'
   | 'job_not_found'
   | 'job_not_retryable'
+  | 'job_not_dismissable'
   | 'unsupported_url'
   | 'queue_full'
   | 'file_exists'

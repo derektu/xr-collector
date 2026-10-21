@@ -10,6 +10,7 @@ import {
   isRetryable,
   type JobError,
   type JobItem,
+  type JobOverview,
   type JobPage,
   type JobPhase,
   type JobProgress,
@@ -20,6 +21,8 @@ import {
   type JobStopKind,
   type JobSubmission,
   type JobSummary,
+  type ItemFailureEntry,
+  MAX_CHECK_ATTEMPTS,
   type OutOfRangeEntry,
   type SkipReason,
   type SubscriptionRecord,
@@ -28,6 +31,7 @@ import {
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, SourcePlugin } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
+import { failedJobs, jobOverview } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 
 export interface JobLimits {
@@ -121,6 +125,10 @@ export class JobManager {
   private readonly activeByKey = new Map<string, string>();
   private readonly discoveryQueue: string[] = [];
   private readonly captureLanes = new Map<string, string[]>();
+  /** When each job last joined its queue; a job put back at the head gets a number before all others. */
+  private readonly queueOrder = new Map<string, number>();
+  private queueBack = 0;
+  private queueFront = 0;
   private laneOrder: string[] = [];
   private runningDiscovery = 0;
   private runningCapture = 0;
@@ -533,6 +541,48 @@ export class JobManager {
     return submission;
   }
 
+  /** The jobs page: what runs now, what waits in the order it starts, and the failed section. */
+  async overview(): Promise<JobOverview> {
+    const jobs = this.options.store.list(this.options.vaultPath, this.vaultId)
+      .map((job) => this.withLiveItems(publicJob(this.jobs.get(job.id) ?? job)));
+    return jobOverview(jobs, {
+      now: this.now(),
+      queuePosition: (job) => {
+        // A check past discovery waits as early as the first of its items in line.
+        const positions = (job.items ?? []).flatMap((item) => {
+          const position = item.jobId ? this.queueOrder.get(item.jobId) : undefined;
+          return position === undefined ? [] : [position];
+        });
+        return positions.length > 0 ? Math.min(...positions) : this.queueOrder.get(job.id);
+      },
+      hasDocument: (type, key) => this.hasDocument(type, key),
+    });
+  }
+
+  /**
+   * Removes a failed single item or subscription request from the failed section; its record and
+   * activity stay. Any other job is not in that section and cannot be removed.
+   */
+  async dismiss(id: string): Promise<CollectionJob> {
+    const job = this.options.store.get(id);
+    if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
+    const listed = await failedJobs(this.options.store.list(this.options.vaultPath, this.vaultId), {
+      now: this.now(), hasDocument: (type, key) => this.hasDocument(type, key),
+    });
+    if (!listed.some((candidate) => candidate.id === id)) {
+      throw new CollectorError('job_not_dismissable', '只有失敗清單中的工作可以移除。');
+    }
+    const timestamp = this.now().toISOString();
+    this.updateStored(job, { dismissedAt: timestamp, updatedAt: timestamp });
+    this.event(job, { severity: 'info', eventType: 'job.dismissed', message: '已從失敗清單移除。' });
+    await this.options.store.flush();
+    return publicJob(this.options.store.get(id)!);
+  }
+
+  private async hasDocument(type: string, key: string): Promise<boolean> {
+    return (await this.options.documents.findExisting({ sourceType: type, sourceId: key })) !== null;
+  }
+
   /** Top-level job counts: queued or running now, and completed or failed (and not retried) since `since`. */
   summary(since: string): JobSummary {
     const bound = new Date(since).toISOString();
@@ -542,7 +592,7 @@ export class JobManager {
       if (ACTIVE.has(job.state)) summary.active += 1;
       else if (!job.finishedAt || job.finishedAt < bound) continue;
       else if (job.state === 'completed') summary.completed += 1;
-      else if (job.state === 'failed' && !job.retriedBy) summary.failed += 1;
+      else if (job.state === 'failed' && !job.retriedBy && !job.dismissedAt) summary.failed += 1;
     }
     return summary;
   }
@@ -913,6 +963,7 @@ export class JobManager {
    * `front` returns a step that was stopped before it reached its source to the head of the line.
    */
   private requeue(job: CollectionJob, front = false): void {
+    this.queueOrder.set(job.id, front ? --this.queueFront : ++this.queueBack);
     if (roleOf(job) !== 'item') {
       if (front) this.discoveryQueue.unshift(job.id);
       else this.discoveryQueue.push(job.id);
@@ -1054,7 +1105,7 @@ export class JobManager {
         const captured = await plugin.captureItem(
           ref, { ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}), signal },
         );
-        this.update(job, { phase: 'save', source: { ...job.source, title: captured.title } });
+        this.update(job, { phase: 'save', source: { ...job.source, title: captured.title, publisher: captured.publisher.name } });
         // The save phase is on disk before the document is, so a restart knows who saved it.
         await this.options.store.flush();
         const saved = await documents.save({ sourceType: plugin.id, ...captured }, { explicitAt: explicitRequestTime(job) });
@@ -1077,6 +1128,8 @@ export class JobManager {
           phase: 'index', documentId: document.id,
         });
       }
+      await this.clearFailure(job);
+      if (this.jobs.get(job.id) !== job) return;
       this.finish(job, 'completed', {
         outcome, documentId: document.id, saved: true, indexed: index.indexed,
         ...(index.message ? { indexMessage: index.message } : {}),
@@ -1088,7 +1141,7 @@ export class JobManager {
         return;
       }
       if (this.handledInterruption(job, error, signal)) return;
-      this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
+      await this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
 
@@ -1103,17 +1156,21 @@ export class JobManager {
       // A step cut short by shutdown is left for close() to record as interrupted.
       if (this.closed) return;
       if (this.handledInterruption(job, error, signal)) return;
-      this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
+      await this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
 
   /**
    * Schedules another attempt after a transient failure while attempts remain; otherwise the job
-   * fails, and a job that was retried says how many attempts it made.
+   * fails, and a job that was retried says how many attempts it made. A failed item of a check
+   * counts one attempt of its subscription's failure record first.
    */
-  private failOrRetry(job: CollectionJob, error: JobError, detail?: string): void {
+  private async failOrRetry(job: CollectionJob, error: JobError, detail?: string): Promise<void> {
     const attempts = (job.retry?.attempts ?? 0) + 1;
-    if (this.classify(job, error) !== 'retry_now') {
+    const failureClass = this.classify(job, error);
+    if (failureClass !== 'retry_now') {
+      await this.recordFailure(job, error, failureClass);
+      if (this.jobs.get(job.id) !== job) return;
       this.finish(job, 'failed', { outcome: 'failed' }, error, detail);
       return;
     }
@@ -1121,6 +1178,9 @@ export class JobManager {
     if (attempts >= maxAttempts) {
       this.update(job, { retry: { attempts, maxAttempts, nextAttemptAt: null, lastError: error } });
       this.notifyItemRetry(job);
+      // Transient failures that outlast the attempts of one check leave the item to the next check.
+      await this.recordFailure(job, error, 'retry_next_check');
+      if (this.jobs.get(job.id) !== job) return;
       const message = attempts > 1 ? `${error.message}（已嘗試 ${attempts} 次）` : error.message;
       this.finish(job, 'failed', { outcome: 'failed' }, { code: error.code, message }, detail);
       return;
@@ -1239,6 +1299,8 @@ export class JobManager {
     // A range that starts no earlier than the one that skipped an item still leaves it out.
     const outside = new Set((subscription.outOfRange ?? [])
       .filter((entry) => entry.before <= range.since.toISOString()).map((entry) => entry[keyField]));
+    // Skipped items stay candidates that are not collected, so no older item takes their place.
+    for (const entry of subscription.failures ?? []) if (entry.skipped) outside.add(entry[keyField] as string);
     const discovery = retryItems
       ? {
         candidates: null,
@@ -1247,7 +1309,7 @@ export class JobManager {
       }
       : await selectCandidates(
         plugin.listSubscriptionItems!(target, { signal }), range,
-        // Collected, deleted and out-of-range items stay candidates that are not collected, so they still fill the item limit.
+        // Collected, deleted, out-of-range and skipped items stay candidates that are not collected, so they still fill the item limit.
         async (key) => outside.has(key) || this.options.documents.isKnown({ sourceType: type, sourceId: key }),
       );
     // The service stopped while discovering; close() records the job as interrupted.
@@ -1290,7 +1352,8 @@ export class JobManager {
       this.completeCheckIfDone(job);
       return;
     }
-    const saved = await this.recordCheck(type, subscription.id, discovered.at, new Set(discovery.candidates ?? []));
+    const saved = await this.recordCheck(type, subscription.id, discovered.at, new Set(discovery.candidates ?? []),
+      new Set(discovery.items.map((item) => item.key)));
     if (!saved) this.stopSubscription(type, subscription.id, 'subscription_removed');
     else if (!saved.enabled) this.stopSubscription(type, subscription.id, 'subscription_paused');
     if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
@@ -1300,14 +1363,24 @@ export class JobManager {
    * Records a check of the subscription at `at`, keeping a later check time already recorded, and
    * returns the subscription, or null once it is removed. Recording the same check again changes
    * nothing. With the check's `candidates`, out-of-range items that are no longer candidates are
-   * forgotten.
+   * forgotten, and so are failed items that are no longer candidates or already have a document:
+   * a failure stays only while the item is skipped or among the items the check collects.
    */
-  private async recordCheck(type: string, id: string, at: string, candidates?: ReadonlySet<string>): Promise<SubscriptionRecord | null> {
+  private async recordCheck(
+    type: string, id: string, at: string, candidates?: ReadonlySet<string>, collecting?: ReadonlySet<string>,
+  ): Promise<SubscriptionRecord | null> {
     const store = this.subscriptionStore(type);
     const keyField = this.requirePlugin(type).storage!.outOfRangeKeyField;
     const current = (await store.list()).find((candidate) => candidate.id === id);
     if (candidates && current?.outOfRange?.some((entry) => !candidates.has(entry[keyField]!))) {
       await this.updateOutOfRange(type, id, (entries) => entries.filter((entry) => candidates.has(entry[keyField]!)));
+    }
+    if (candidates && collecting) {
+      const kept = (entry: ItemFailureEntry) => {
+        const key = entry[keyField] as string;
+        return candidates.has(key) && (entry.skipped || collecting.has(key));
+      };
+      if (current?.failures?.some((entry) => !kept(entry))) await this.updateFailures(type, id, (entries) => entries.filter(kept));
     }
     if (!current || (current.lastCheckedAt && current.lastCheckedAt >= at)) return current ?? null;
     return store.update(id, { lastCheckedAt: at });
@@ -1331,6 +1404,79 @@ export class JobManager {
     await this.subscriptionStore(type).updateWith((records) => {
       const current = records.find((candidate) => candidate.id === id);
       return current ? new Map([[id, { outOfRange: change(current.outOfRange ?? []) }]]) : new Map();
+    });
+  }
+
+  /** The subscription a check job's item collects for, with the key field its failures use; null for any other job. */
+  private failureTarget(item: CollectionJob): { type: string; subscriptionId: string; key: string; keyField: string } | null {
+    if (roleOf(item) !== 'item' || !item.parentId || !item.source.id) return null;
+    const parent = this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId);
+    const keyField = this.plugin(item.source.type)?.storage?.outOfRangeKeyField;
+    if (!parent || roleOf(parent) !== 'check' || !parent.source.id || !keyField) return null;
+    return { type: item.source.type, subscriptionId: parent.source.id, key: item.source.id, keyField };
+  }
+
+  /**
+   * Counts one failed attempt of a check's item in its subscription's failure record. `skip`, and
+   * reaching the attempt limit, mark the item skipped; a source that needs a new sign-in counts nothing.
+   */
+  private async recordFailure(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
+    if (failureClass === 'login_required' || failureClass === 'rate_limited') return;
+    const target = this.failureTarget(item);
+    if (!target) return;
+    let recorded: ItemFailureEntry | null = null;
+    // A failure record that cannot be written leaves the item to be tried as if it had not failed.
+    await this.quietly(() => this.updateFailures(target.type, target.subscriptionId, (entries) => {
+      const previous = entries.find((entry) => entry[target.keyField] === target.key);
+      const attempts = (previous?.attempts ?? 0) + 1;
+      recorded = {
+        [target.keyField]: target.key, title: item.source.title ?? previous?.title ?? '', attempts, errorCode: error.code,
+        failedAt: this.now().toISOString(), skipped: failureClass === 'skip' || attempts >= MAX_CHECK_ATTEMPTS,
+      };
+      return [...entries.filter((entry) => entry !== previous), recorded];
+    }));
+    const entry = recorded as ItemFailureEntry | null;
+    if (!entry) return;
+    const label = this.plugin(item.source.type)?.failureLabels?.[error.code] ?? '收集失敗';
+    const name = item.source.title ? `「${item.source.title}」` : item.source.url;
+    this.event(item, entry.skipped
+      ? {
+        severity: 'info', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: entry.attempts,
+        message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${entry.attempts} 次`}`,
+      }
+      : {
+        severity: 'warning', eventType: 'subscription.item_failed', errorCode: error.code, attempt: entry.attempts,
+        message: `${name}${label}・已試 ${entry.attempts}/${MAX_CHECK_ATTEMPTS} 次`,
+      });
+  }
+
+  /** Forgets a check item's failure once it is collected. */
+  private async clearFailure(item: CollectionJob): Promise<void> {
+    const target = this.failureTarget(item);
+    if (!target) return;
+    await this.quietly(async () => {
+      const current = (await this.subscriptionStore(target.type).list()).find((candidate) => candidate.id === target.subscriptionId);
+      if (!current?.failures?.some((entry) => entry[target.keyField] === target.key)) return;
+      await this.updateFailures(target.type, target.subscriptionId,
+        (entries) => entries.filter((entry) => entry[target.keyField] !== target.key));
+    });
+  }
+
+  private async quietly(write: () => Promise<void>): Promise<void> {
+    try {
+      await write();
+    } catch (error) {
+      console.error('Subscription failure record update failed', error);
+    }
+  }
+
+  /** Changes a subscription's failure record in one serialized store update. */
+  private async updateFailures(type: string, id: string, change: (entries: ItemFailureEntry[]) => ItemFailureEntry[]): Promise<void> {
+    await this.subscriptionStore(type).updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current) return new Map();
+      const next = change(current.failures ?? []);
+      return new Map([[id, { failures: next.length > 0 ? next : undefined }]]);
     });
   }
 
@@ -1361,11 +1507,8 @@ export class JobManager {
     this.stoppedJobs.delete(job.id);
     if (items.length === 0) {
       this.finish(job, 'completed', { outcome: 'empty' }, null);
-    } else if (progress.failed === items.length) {
-      const plugin = this.plugin(job.source.type);
-      const message = `這個${plugin?.subscription?.targetNoun ?? '訂閱'}的${plugin?.item.noun ?? '項目'}都收集失敗。`;
-      this.finish(job, 'failed', { outcome: 'failed' }, { code: 'all_items_failed', message });
     } else {
+      // Failed items are left to later checks of the subscription; they never fail the check itself.
       const outcome = progress.failed > 0 ? 'partial' : progress.created > 0 ? 'created'
         : progress.existing > 0 ? 'existing' : 'skipped';
       const skipReason = outcome === 'skipped' ? items.find((item) => item.skipReason)?.skipReason : undefined;
@@ -1410,6 +1553,7 @@ export class JobManager {
     this.jobs.delete(job.id);
     this.stoppedJobs.delete(job.id);
     this.manualClaims.delete(job.id);
+    this.queueOrder.delete(job.id);
     const key = this.keys.get(job.id);
     this.keys.delete(job.id);
     if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);

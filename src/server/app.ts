@@ -19,6 +19,7 @@ import {
   type ActivityQuery,
   type EventSeverity,
   type JobSummary,
+  type JobOverview,
   type CollectionJob,
   type JobPage,
   type JobSubmission,
@@ -66,6 +67,10 @@ export interface CollectionJobs {
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
   summary(since: string): JobSummary;
   retry(id: string): Promise<JobSubmission>;
+  /** The jobs page: running, queued and failed work. */
+  overview(): Promise<JobOverview>;
+  /** Removes a failed single item or subscription request from the failed section. */
+  dismiss(id: string): Promise<CollectionJob>;
 }
 
 /** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
@@ -144,6 +149,7 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   out_of_range: 422,
   job_not_found: 404,
   job_not_retryable: 409,
+  job_not_dismissable: 409,
   unsupported_url: 400,
   queue_full: 503,
   file_exists: 409,
@@ -443,12 +449,18 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
     });
 
+    app.get('/api/jobs/overview', async () => ({ overview: await jobs.overview() }));
+
     app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request) => ({
       job: jobView(jobs.get(request.params.id)),
     }));
 
     app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) =>
       reply.code(202).send(submissionView(await jobs.retry(request.params.id))));
+
+    app.post<{ Params: { id: string } }>('/api/jobs/:id/dismiss', async (request) => ({
+      job: jobView(await jobs.dismiss(request.params.id)),
+    }));
   }
 
   if (options.activity) {

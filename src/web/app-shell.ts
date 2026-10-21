@@ -4,9 +4,9 @@ export type ThemePreference = 'system' | 'dark' | 'light';
 export type Theme = 'dark' | 'light';
 export const themePreferences: readonly ThemePreference[] = ['system', 'dark', 'light'];
 export const defaultThemePreference: ThemePreference = 'system';
-export type ShellPage = 'sources' | 'documents' | 'settings' | 'activity';
+export type ShellPage = 'sources' | 'documents' | 'jobs' | 'settings' | 'activity';
 
-const pagePaths: Record<ShellPage, string> = { sources: '/', documents: '/documents', settings: '/settings', activity: '/activity' };
+const pagePaths: Record<ShellPage, string> = { sources: '/', documents: '/documents', jobs: '/jobs', settings: '/settings', activity: '/activity' };
 
 /** One sidebar entry. */
 export interface NavigationItem { page: ShellPage; label: string; icon: string }
@@ -15,13 +15,14 @@ export interface NavigationItem { page: ShellPage; label: string; icon: string }
 export const navigation: readonly NavigationItem[] = [
   { page: 'sources', label: '訂閱', icon: 'sources' },
   { page: 'documents', label: '文件', icon: 'documents' },
+  { page: 'jobs', label: '工作', icon: 'jobs' },
   { page: 'activity', label: '記錄', icon: 'activity' },
 ];
 export const settingsNavigation: NavigationItem = { page: 'settings', label: '設定', icon: 'settings' };
 
-/** The sidebar status line: shown only while jobs run. */
-export function sidebarStatus(activeJobs: number): string | null {
-  return activeJobs > 0 ? '更新中' : null;
+/** The count next to 工作 in the sidebar: work running or queued, shown only when there is some. */
+export function jobsBadge(unfinished: number): string | null {
+  return unfinished > 0 ? String(unfinished) : null;
 }
 
 export function routeForPath(pathname: string): ShellPage {

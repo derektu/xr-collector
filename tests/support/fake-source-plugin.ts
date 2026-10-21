@@ -57,6 +57,7 @@ const FAILURES: Readonly<Record<string, FailureClass>> = {
   no_subtitles: 'retry_next_check',
   capture_failed: 'retry_next_check',
   video_unavailable: 'skip',
+  login_needed: 'login_required',
 };
 
 function isFakeSettings(value: unknown): value is FakeSettings {
@@ -107,6 +108,7 @@ export function fakeDefinition(type: string, group: string, formats: { vault?: n
       checkRange: (settings, now) => ({ since: new Date(now.getTime() - settings.windowDays * DAY), maxItems: settings.maxItems }),
     },
     jobKindNames: { item: 'item', check: 'feed', add: 'feed-add' },
+    failureLabels: { no_subtitles: '沒有內文', video_unavailable: '文章不存在' },
     prompts: {
       anyInput: `請輸入 ${type} 網址。`, itemInput: `請輸入 ${type} 文章網址。`, subscriptionInput: `請輸入 ${type} 動態網址。`,
       itemPlaceholder: `貼上 ${type} 文章網址`, subscriptionPlaceholder: `貼上 ${type} 動態網址`, itemCard: '收集這篇文章。',

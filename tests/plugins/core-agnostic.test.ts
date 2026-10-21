@@ -502,6 +502,40 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     expect(await items(replacing.vault)).toEqual(await items(b.vault));
   });
 
+  it('carries failed items of a subscription through export, merge, replace and a Vault made from a package (N69-T8)', async () => {
+    const root = await temp();
+    const a = await machine('A', root);
+    const b = await machine('B', root);
+    await seed(a.vault);
+    const failed = (key: string, attempts: number) => ({ itemKey: key, title: key, attempts, errorCode: 'no_subtitles', failedAt: at(1), skipped: attempts >= 3 });
+    await new JsonSubscriptionStore(a.vault, 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
+    const first = await exportFrom(a, 'a-1');
+    const created = await importNewVault({ packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
+    const failuresIn = async (vault: string, type: string, id: string) =>
+      (await new JsonSubscriptionStore(vault, type).list()).find((row) => row.id === id)?.failures;
+    expect(await failuresIn(b.vault, 'fake', 'news')).toEqual([failed('news-a', 1)]);
+
+    // B renames the feed and records its own failures; it also subscribes to a feed A does not have.
+    const later = new JsonSubscriptionStore(b.vault, 'fake', () => new Date(at(2)));
+    await later.update('news', { title: '新名稱', failures: [failed('news-b', 3)] });
+    await new JsonSubscriptionStore(b.vault, 'fake2', () => new Date(at(2))).add({ ...feed('fake2', 'b-feed'), failures: [failed('b-1', 2)] });
+    const file = await exportFrom(b, 'b-1');
+    const replacing = await machine('A-replace', root);
+    await cp(a.vault, replacing.vault, { recursive: true });
+
+    await using(a, async (workspace) => { await importFile(workspace, file); });
+    const merged = (await new JsonSubscriptionStore(a.vault, 'fake').list()).find((row) => row.id === 'news')!;
+    expect(merged).toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
+    expect(await failuresIn(a.vault, 'fake2', 'b-feed')).toEqual([failed('b-1', 2)]);
+
+    // Replacing takes the package's subscriptions too, and like a merge keeps this Vault's collection progress of one it has.
+    await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
+    expect((await new JsonSubscriptionStore(replacing.vault, 'fake').list()).find((row) => row.id === 'news'))
+      .toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
+    expect(await failuresIn(replacing.vault, 'fake2', 'b-feed')).toEqual([failed('b-1', 2)]);
+  });
+
   it('derives a subscription\'s sign-in status from its plugin when the workspace assembles it', async () => {
     const root = await temp();
     const a = await machine('A', root);
@@ -520,5 +554,208 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     } finally {
       await workspace.close();
     }
+  });
+});
+
+describe('failed items of a type the core does not name (N69-T2–T7)', () => {
+  const failure = (code: string) => new CollectorError(code, `${code}（測試）`);
+  const check = async (w: Awaited<ReturnType<typeof world>>, id: string) => {
+    w.advance(MINUTE);
+    const [submission] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: [id] });
+    return w.jobs.whenSettled(submission!.job.id);
+  };
+  const failuresOf = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
+    [...(await w.subscription('fake', id))?.failures ?? []].sort((left, right) => String(left.itemKey).localeCompare(String(right.itemKey)));
+
+  it('counts one attempt per check, skips an item after the third or on a failure no retry changes, and forgets it once collected (N69-T2)', async () => {
+    const w = await world();
+    const [later, gone, flaky] = w.sources.fake.addFeed('f', w.clock.now, [1, 2, 3]);
+    w.sources.fake.fail(later!, failure('no_subtitles'), failure('no_subtitles'), failure('no_subtitles'));
+    w.sources.fake.fail(gone!, failure('video_unavailable'));
+    // The retry policy here allows one attempt, so a transient failure outlasts the check at once.
+    w.sources.fake.fail(flaky!, failure('network_error'));
+
+    const first = await w.subscribe('fake', 'f');
+    expect(first).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { created: 0, failed: 3 } });
+    expect(await failuresOf(w, 'f')).toEqual([
+      { itemKey: later, title: 'f 第 0 篇', attempts: 1, errorCode: 'no_subtitles', failedAt: w.clock.now.toISOString(), skipped: false },
+      { itemKey: gone, title: 'f 第 1 篇', attempts: 1, errorCode: 'video_unavailable', failedAt: w.clock.now.toISOString(), skipped: true },
+      { itemKey: flaky, title: 'f 第 2 篇', attempts: 1, errorCode: 'network_error', failedAt: w.clock.now.toISOString(), skipped: false },
+    ]);
+    // Failed items leave the subscription's status alone.
+    const listed = (await w.service('fake').listSubscriptions()).find((entry) => entry.id === 'f')!;
+    expect(listed).toMatchObject({ status: 'tracking', lastError: null });
+
+    const second = await check(w, 'f');
+    expect(itemsOf(second)).toEqual([[later, null], [flaky, 'created']]);
+    expect((await failuresOf(w, 'f')).map((entry) => [entry.itemKey, entry.attempts, entry.skipped])).toEqual([[later, 2, false], [gone, 1, true]]);
+
+    await check(w, 'f');
+    expect((await failuresOf(w, 'f')).map((entry) => [entry.itemKey, entry.attempts, entry.skipped])).toEqual([[later, 3, true], [gone, 1, true]]);
+    const captures = w.sources.fake.captures.length;
+    expect(itemsOf(await check(w, 'f'))).toEqual([]);
+    expect(w.sources.fake.captures).toHaveLength(captures);
+    await w.close();
+  });
+
+  it('counts nothing for a cooldown or a source that needs a new sign-in, and forgets items that are no longer candidates (N69-T2)', async () => {
+    const w = await world();
+    const [limited, signIn] = w.sources.fake.addFeed('g', w.clock.now, [1, 2]);
+    w.sources.fake.fail(limited!, failure('rate_limited'));
+    w.sources.fake.fail(signIn!, failure('login_needed'));
+    const added = await w.service('fake').add(feedUrl('fake', 'g'), { maxItems: 2 });
+    const subscribed = await w.jobs.whenSettled(added.job.id);
+    await vi.waitFor(() => expect(w.gates.fake.status()).toMatchObject({ state: 'cooldown' }));
+    w.advance(10 * MINUTE);
+    w.fire();
+    const first = await w.jobs.whenSettled(subscribed.result!.followUpJobId!);
+    expect(itemsOf(first)).toEqual([[limited, 'created'], [signIn, null]]);
+    expect(await failuresOf(w, 'g')).toEqual([]);
+
+    // A failure of an item that later drops out of the newest N is forgotten at the next check.
+    w.sources.fake.fail(signIn!, failure('no_subtitles'));
+    await check(w, 'g');
+    expect((await failuresOf(w, 'g')).map((entry) => entry.itemKey)).toEqual([signIn]);
+    w.sources.fake.feed('g').items.unshift(
+      { key: 'g-new-1', title: '新一', publishedAt: w.clock.now.toISOString() },
+      { key: 'g-new-2', title: '新二', publishedAt: w.clock.now.toISOString() },
+    );
+    await check(w, 'g');
+    expect(await failuresOf(w, 'g')).toEqual([]);
+    await w.close();
+  });
+
+  it('keeps a skipped item in the newest N without taking an older one, and keeps the records of two types apart (N69-T3)', async () => {
+    const w = await world();
+    const keys = w.sources.fake.addFeed('n', w.clock.now, [1, 2, 3]);
+    w.sources.fake2.addFeed('n', w.clock.now, [1, 2]);
+    w.sources.fake.fail(keys[0]!, failure('video_unavailable'));
+    const first = await w.subscribe('fake', 'n', { maxItems: 2 });
+    expect(itemsOf(first)).toEqual([[keys[0], null], [keys[1], 'created']]);
+    expect(itemsOf(await check(w, 'n'))).toEqual([]);
+    expect(w.sources.fake.captures).not.toContain(keys[2]);
+
+    const other = await w.subscribe('fake2', 'n', { maxItems: 2 });
+    expect(other.progress).toMatchObject({ created: 2, failed: 0 });
+    expect((await w.subscription('fake2', 'n'))?.failures).toBeUndefined();
+    expect((await failuresOf(w, 'n')).map((entry) => entry.itemKey)).toEqual([keys[0]]);
+    await w.close();
+  });
+
+  it('completes a check whose items all fail without an error status, and still fails a check whose listing fails (N69-T4)', async () => {
+    const w = await world();
+    const [only] = w.sources.fake.addFeed('a', w.clock.now, [1]);
+    w.sources.fake.fail(only!, failure('no_subtitles'));
+    const first = await w.subscribe('fake', 'a');
+    expect(first).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, error: null });
+    let entry = (await w.service('fake').listSubscriptions()).find((candidate) => candidate.id === 'a')!;
+    expect(entry).toMatchObject({ status: 'tracking', lastError: null, checkStatus: { state: 'scheduled' } });
+
+    w.sources.fake.listFailures.push(failure('capture_failed'));
+    const broken = await check(w, 'a');
+    expect(broken).toMatchObject({ state: 'failed', error: { code: 'capture_failed' } });
+    entry = (await w.service('fake').listSubscriptions()).find((candidate) => candidate.id === 'a')!;
+    expect(entry).toMatchObject({ status: 'error', lastError: { code: 'capture_failed' } });
+    await w.close();
+  });
+
+  it('lists running, queued and failed work for the jobs page, in the order it starts (N69-T5)', async () => {
+    const w = await world({ capture: 1, retry: { maxAttempts: 3, delaysMs: [MINUTE] } });
+    w.sources.fake2.fail('retry-1', failure('network_error'));
+    const retrying = await w.jobs.submitItem('fake2', itemUrl('fake2', 'retry-1'));
+    await vi.waitFor(() => expect(w.jobs.get(retrying.job.id)).toMatchObject({ retry: { attempts: 1 } }));
+    w.sources.fake.addFeed('busy', w.clock.now, [1, 2, 3]);
+    w.sources.fake.held.add('busy-00');
+    const subscribed = await w.service('fake').add(feedUrl('fake', 'busy'));
+    const check = (await w.jobs.whenSettled(subscribed.job.id)).result!.followUpJobId!;
+    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['busy-00']));
+    const named = await w.jobs.submitItem('fake', itemUrl('fake', 'single-1'));
+    w.sources.fake.fail('gone-1', failure('video_unavailable'));
+    const failedOne = await w.jobs.submitItem('fake', itemUrl('fake', 'gone-1'));
+
+    let overview = await w.jobs.overview();
+    expect(overview.running).toEqual([expect.objectContaining({ jobId: check, role: 'check', title: 'fake 動態 busy', progress: { done: 0, total: 3 } })]);
+    expect(overview.queued.map((entry) => [entry.jobId, entry.role, entry.title, Boolean(entry.retry)])).toEqual([
+      [named.job.id, 'item', null, false], [failedOne.job.id, 'item', null, false], [retrying.job.id, 'item', null, true],
+    ]);
+    expect(overview.queued[2]).toMatchObject({ url: itemUrl('fake2', 'retry-1'), retry: { lastError: { code: 'network_error' } }, error: null });
+    expect(overview.failed).toEqual([]);
+
+    w.sources.fake.release('busy-00');
+    await vi.waitFor(async () => expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).toEqual([failedOne.job.id]));
+    w.fire();
+    await w.idle();
+    overview = await w.jobs.overview();
+    expect(overview).toMatchObject({ running: [], queued: [] });
+    expect(overview.failed).toEqual([expect.objectContaining({
+      jobId: failedOne.job.id, role: 'item', type: 'fake', error: { code: 'video_unavailable', message: expect.any(String) }, failedAt: expect.any(String),
+    })]);
+    // The finished single item carries the publisher its capture reported.
+    expect(w.jobs.get(named.job.id).source).toMatchObject({ title: '單篇 single-1', publisher: 'fake 作者' });
+    expect(w.jobs.summary(new Date(0).toISOString())).toMatchObject({ active: 0, failed: 1 });
+    await w.close();
+  });
+
+  it('keeps a failed single item until a retry succeeds, the user removes it, the item has a document or 7 days pass (N69-T6)', async () => {
+    const w = await world();
+    const failed = async (key: string, code = 'no_subtitles') => {
+      w.sources.fake.fail(key, failure(code));
+      return w.jobs.whenSettled((await w.jobs.submitItem('fake', itemUrl('fake', key))).job.id);
+    };
+    const listed = async () => (await w.jobs.overview()).failed.map((entry) => entry.url);
+
+    const retried = await failed('retry-1');
+    w.sources.fake.fail('retry-1', failure('no_subtitles'));
+    const again = await w.jobs.whenSettled((await w.jobs.retry(retried.id)).job.id);
+    expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).toEqual([again.id]);
+    expect(await w.jobs.whenSettled((await w.jobs.retry(again.id)).job.id)).toMatchObject({ state: 'completed' });
+    expect(await listed()).toEqual([]);
+
+    const removed = await failed('remove-1');
+    await expect(w.jobs.dismiss(again.id)).rejects.toMatchObject({ code: 'job_not_dismissable' });
+    expect((await w.jobs.dismiss(removed.id)).dismissedAt).toBe(w.clock.now.toISOString());
+    expect(await listed()).toEqual([]);
+    await expect(w.jobs.dismiss(removed.id)).rejects.toMatchObject({ code: 'job_not_dismissable' });
+
+    // A check of the feed that publishes the item collects it, and the failed entry leaves.
+    w.sources.fake.addFeed('later', w.clock.now, [1]);
+    const [inFeed] = w.sources.fake.feed('later').items.map((item) => item.key);
+    await failed(inFeed!);
+    expect((await w.jobs.overview()).failed).toHaveLength(1);
+    await w.subscribe('fake', 'later');
+    expect(await listed()).toEqual([]);
+
+    const old = await failed('old-1');
+    w.advance(7 * DAY - MINUTE);
+    expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).toEqual([old.id]);
+    w.advance(2 * MINUTE);
+    expect(await listed()).toEqual([]);
+    await w.restart();
+    expect(await listed()).toEqual([]);
+    await w.close();
+  });
+
+  it('builds the collection record from documents, failures and finished checks, newest first (N69-T7)', async () => {
+    const { collectionRecord, COLLECTION_LIMIT } = await import('../../src/sources/source-catalog.js');
+    const w = await world();
+    const [failing, gone, ok] = w.sources.fake.addFeed('r', w.clock.now, [1, 2, 3]);
+    w.sources.fake.fail(failing!, failure('no_subtitles'), failure('no_subtitles'));
+    w.sources.fake.fail(gone!, failure('video_unavailable'));
+    await w.subscribe('fake', 'r');
+    const empty = await check(w, 'r');
+    await w.service('fake').setEnabled('r', false);
+    const subscription = (await w.service('fake').listSubscriptions()).find((entry) => entry.id === 'r')!;
+    const documents = (await w.collector.list()).filter((document) => document.publisher.id === 'r');
+    const record = collectionRecord('fake', subscription, documents, w.service('fake').checkJobs('r'));
+    // The second check, a minute later, tried the failing item again; a check comes before the items of the same instant.
+    expect(record.map((entry) => entry.kind === 'check' ? `check:${entry.created}/${entry.failed}` : `${entry.kind}:${entry.key}`)).toEqual([
+      'check:0/1', `failed:${failing}`, 'check:1/2', `collected:${ok}`, `skipped:${gone}`,
+    ]);
+    // Pausing skips nothing that ran, so no extra check row appears.
+    expect(record.find((entry) => entry.kind === 'failed')).toMatchObject({ reason: '沒有內文', attempts: 2, maxAttempts: 3, url: itemUrl('fake', failing!) });
+    expect(record.find((entry) => entry.kind === 'skipped')).toMatchObject({ reason: '文章不存在', skippedBy: 'failure' });
+    expect(empty.result?.outcome).toBe('partial');
+    expect(COLLECTION_LIMIT).toBe(30);
+    await w.close();
   });
 });

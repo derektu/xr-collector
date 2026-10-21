@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { CollectorError } from '../../src/core/types.js';
 import { Collector } from '../../src/core/collector.js';
 import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
@@ -124,7 +125,7 @@ async function world() {
     await agent.close();
     await jobs.close();
   };
-  return { root, clock, ui, agent, send, settled, subscribe, cases, close };
+  return { root, clock, ui, agent, send, settled, subscribe, cases, close, fake };
 }
 
 const caseOf = (type: 'youtube' | 'fake') => (w: Awaited<ReturnType<typeof world>>) => w.cases.find((entry) => entry.type === type)!;
@@ -195,9 +196,10 @@ describe.each(['youtube', 'fake'] as const)('subscription and collection routes 
 
     const detail = await w.send('GET', `/api/subscriptions/${type}/${encodeURIComponent(target.id)}`);
     expect(detail.status).toBe(200);
-    expect(Object.keys(detail.body).sort()).toEqual(['recentDocuments', 'recentJobs', 'subscription']);
+    expect(Object.keys(detail.body).sort()).toEqual(['collection', 'subscription']);
     expect(detail.body.subscription).toMatchObject({ id: target.id, type, documentCount: 1 });
-    expect(detail.body.recentJobs[0]).toMatchObject({ state: 'completed', trigger: 'subscribe' });
+    expect(detail.body.collection.map((entry: { kind: string }) => entry.kind)).toEqual(['check', 'collected']);
+    expect(detail.body.collection[0]).toMatchObject({ trigger: 'subscribe', created: 1, failed: 0, error: null });
     expect(await w.send('GET', `/api/subscriptions/${type}/missing`)).toMatchObject({ status: 404, body: { error: { code: 'subscription_not_found' } } });
     expect(await w.send('GET', `/api/subscriptions/rss/${encodeURIComponent(target.id)}`)).toMatchObject({ status: 404, body: { error: { code: 'subscription_not_found' } } });
     await w.close();
@@ -330,6 +332,34 @@ describe('routes of the type-specific API (B-T2)', () => {
   });
 });
 
+describe('the jobs page routes (N69-T9)', () => {
+  it('answers the overview and removes a failed item from it, the same for UI and Agents', async () => {
+    const w = await world();
+    w.fake.fail('broken-1', new CollectorError('video_unavailable', '文章不存在。'));
+    const failed = await w.settled((await w.send('POST', '/api/items', { url: 'https://fake.example/item/broken-1' })).body.job.id);
+    expect(failed.state).toBe('failed');
+    const [fromUi, fromAgent] = [await w.send('GET', '/api/jobs/overview', undefined, w.ui), await w.send('GET', '/api/jobs/overview')];
+    expect(fromAgent).toEqual(fromUi);
+    expect(fromAgent).toMatchObject({ status: 200, body: { overview: { running: [], queued: [], failed: [{
+      jobId: failed.id, type: 'fake', role: 'item', title: null, url: 'https://fake.example/item/broken-1', publisher: null, progress: null,
+      wait: null, retry: null, error: { code: 'video_unavailable' }, failedAt: failed.finishedAt,
+    }] } } });
+    expect(Object.keys(fromAgent.body.overview.failed[0]).sort()).toEqual(
+      ['error', 'failedAt', 'jobId', 'progress', 'publisher', 'retry', 'role', 'title', 'type', 'url', 'wait'],
+    );
+    const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
+    for (const field of Object.keys(fromAgent.body.overview.failed[0])) expect(skill, field).toContain(`\`${field}\``);
+
+    const dismissed = await w.send('POST', `/api/jobs/${failed.id}/dismiss`);
+    expect(dismissed).toMatchObject({ status: 200, body: { job: { id: failed.id, dismissedAt: expect.any(String) } } });
+    expect((await w.send('GET', '/api/jobs/overview', undefined, w.ui)).body.overview.failed).toEqual([]);
+    expect(await w.send('POST', `/api/jobs/${failed.id}/dismiss`)).toMatchObject({ status: 409, body: { error: { code: 'job_not_dismissable' } } });
+    expect(await w.send('POST', '/api/jobs/missing/dismiss')).toMatchObject({ status: 404, body: { error: { code: 'job_not_found' } } });
+    expect((await w.agent.inject({ method: 'GET', url: '/api/jobs/overview' })).statusCode).toBe(401);
+    await w.close();
+  });
+});
+
 describe('the shared routes for UI and Agents (B-T3)', () => {
   it('answers the Agent token with what the UI reads, and the Skill names the fields the routes return', async () => {
     const w = await world();
@@ -364,7 +394,7 @@ describe('the shared routes for UI and Agents (B-T3)', () => {
     const patched = (await w.send('PATCH', '/api/subscriptions/fake/shared', { enabled: false })).body;
     const checks = (await w.send('POST', '/api/subscription-checks', { subscriptions: [{ type: 'youtube', id: list.subscriptions[0].id }] })).body;
     const fields = new Set([
-      ...Object.keys(list), ...Object.keys(list.subscriptions[0]), ...Object.keys(detail), ...Object.keys(detail.recentJobs[0]),
+      ...Object.keys(list), ...Object.keys(list.subscriptions[0]), ...Object.keys(detail), ...detail.collection.flatMap((entry: object) => Object.keys(entry)),
       ...Object.keys(preview), ...Object.keys(preview.target), ...Object.keys(schedule), ...Object.keys(schedule.lastCheck),
       ...Object.keys(pacing), ...Object.keys(pacing.groups[0]), ...Object.keys(patched), ...Object.keys(checks),
     ]);

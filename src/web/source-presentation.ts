@@ -1,5 +1,5 @@
-import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, SubscriptionEntry, SubscriptionJobRecord, Subscription, UrlRecognition } from '../core/types.js';
-import { sourceDeclarations } from '../core/source-registry.js';
+import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
+import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { itemNoun, triggerLabel } from './subscription-presentation.js';
 
@@ -92,29 +92,31 @@ export function displayUrl(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/u, '').replace(/\/videos\/?$/u, '');
 }
 
-/** One line of a source's collection record. */
-export function jobRecordLabel(record: SubscriptionJobRecord, at: Date | undefined, type: string): { title: string; detail: string; active: boolean } {
-  const now = at ?? new Date();
-  const title = triggerLabel(record.trigger, type);
-  const progress = record.progress;
-  const resumed = record.resumedCount > 0;
-  if (record.state === 'queued' || record.state === 'running') {
-    const notes = [
-      progress && progress.total > 0 ? `${progress.done}／${progress.total}` : '準備中',
-      ...(record.retry?.nextAttemptAt ? ['等待重試'] : []),
-      ...(resumed ? ['已接續'] : []),
-    ];
-    return { title, detail: notes.join(' · '), active: true };
+/** A failure in the source type's own short words, or its message when the type has none for its code. */
+export function failureLabel(type: string, error: { code: string; message: string }): string {
+  return sourceDeclaration(type)?.failureLabels?.[error.code] ?? error.message;
+}
+
+/**
+ * One row of a subscription's collection record: an item with its state ("沒有字幕・已試 2/3 次",
+ * "已略過・影片不存在") or a check's summary ("定時檢查・收集 2 支", "定時檢查・沒有新影片").
+ */
+export function collectionEntryLabel(entry: SubscriptionCollectionEntry, type: string): { title: string; detail: string } {
+  switch (entry.kind) {
+    case 'collected': return { title: entry.title, detail: '' };
+    case 'failed': return { title: entry.title || displayUrl(entry.url), detail: `${entry.reason}・已試 ${entry.attempts}/${entry.maxAttempts} 次` };
+    case 'skipped': return {
+      title: entry.title || displayUrl(entry.url),
+      detail: entry.skippedBy === 'failure' ? `已略過・${entry.reason}` : `已略過・已試 ${entry.attempts} 次`,
+    };
+    case 'check': {
+      const measure = sourceDeclaration(type)?.item.measure ?? '';
+      const parts = entry.error ? [`檢查失敗・${failureLabel(type, entry.error)}`]
+        : entry.created === 0 && entry.failed === 0 ? [`沒有新${itemNoun(type)}`]
+          : [...(entry.created > 0 ? [`收集 ${entry.created} ${measure}`] : []), ...(entry.failed > 0 ? [`失敗 ${entry.failed} ${measure}`] : [])];
+      return { title: [triggerLabel(entry.trigger, type), ...parts].join('・'), detail: '' };
+    }
   }
-  const when = shortTimeLabel(record.finishedAt ?? record.createdAt, now);
-  if (record.state === 'interrupted') return { title, detail: `${when} · 已中斷，重新開啟時接續`, active: false };
-  if (record.state === 'failed') {
-    return { title, detail: `${when} · ${record.error?.message ?? '收集失敗'}`, active: false };
-  }
-  const suffix = resumed ? '・曾中斷後接續' : '';
-  if (record.outcome === 'skipped') return { title, detail: `${when} · 已略過${suffix}`, active: false };
-  const created = progress?.created ?? 0;
-  return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : `沒有新${itemNoun(type)}`}${suffix}`, active: false };
 }
 
 /**

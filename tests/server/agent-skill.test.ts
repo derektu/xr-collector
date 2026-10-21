@@ -95,7 +95,7 @@ describe('Agent Skill', () => {
 
   it('documents the source list and URL recognition contract', async () => {
     const skill = await readFile(skillPath, 'utf8');
-    for (const term of ['`ready`', '`login_required`', '`unsupported`', '`unavailable`', '`collect`', '`subscribe`', '`resume`', 'unsubscribed', 'recentJobs', 'lastError', '`error`']) {
+    for (const term of ['`ready`', '`login_required`', '`unsupported`', '`unavailable`', '`collect`', '`subscribe`', '`resume`', 'unsubscribed', '`collection`', '`failures`', '/api/jobs/overview', '/api/jobs/:id/dismiss', 'lastError', '`error`']) {
       expect(skill).toContain(term);
     }
   });

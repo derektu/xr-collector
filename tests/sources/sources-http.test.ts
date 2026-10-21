@@ -152,7 +152,7 @@ describe('source list (T-06, T-08)', () => {
 });
 
 describe('source detail (T-07, T-08)', () => {
-  it('returns the newest five documents and this channel’s jobs, newest first', async () => {
+  it('returns this channel’s documents and check summaries as one record, newest first (N69-T7)', async () => {
     const w = await world();
     const id = w.source.addChannel('alpha');
     const other = w.source.addChannel('beta');
@@ -168,12 +168,13 @@ describe('source detail (T-07, T-08)', () => {
 
     expect(status).toBe(200);
     expect(body.subscription).toMatchObject({ id, type: 'youtube', kindLabel: 'YouTube 頻道', documentCount: 7, status: 'tracking' });
-    expect(body.recentDocuments).toHaveLength(5);
-    expect(body.recentDocuments[0]).toMatchObject({ sourceId: fresh, collectedAt: w.clock.now.toISOString() });
-    expect(body.recentDocuments.every((document: { publisher: { id: string } }) => document.publisher.id === id)).toBe(true);
-    expect(body.recentJobs.map((job: { trigger: string }) => job.trigger)).toEqual(['manual', 'subscribe']);
-    expect(body.recentJobs[0]).toMatchObject({ state: 'completed', outcome: 'created', progress: { created: 1 }, retry: null, resumedCount: 0 });
-    expect(body.recentJobs[1]).toMatchObject({ state: 'completed', outcome: 'created', progress: { created: 6 } });
+    const collection = body.collection as Array<{ kind: string; trigger?: string; created?: number; key?: string; at: string }>;
+    // 7 documents of this channel and its 2 checks; the other channel's document is not part of it.
+    expect(collection).toHaveLength(9);
+    expect(collection.filter((entry) => entry.kind === 'check').map((entry) => [entry.trigger, entry.created])).toEqual([['manual', 1], ['subscribe', 6]]);
+    expect(collection[0]).toMatchObject({ kind: 'check', trigger: 'manual' });
+    expect(collection[1]).toMatchObject({ kind: 'collected', key: fresh, at: w.clock.now.toISOString() });
+    expect([...collection].sort((left, right) => right.at.localeCompare(left.at)).map((entry) => entry.at)).toEqual(collection.map((entry) => entry.at));
     await w.app.close();
   });
 

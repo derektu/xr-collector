@@ -1,6 +1,6 @@
-import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent, JobSummary } from '../core/types.js';
+import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent } from '../core/types.js';
 import { jobRole } from '../core/source-registry.js';
-import { jobKindLabel, jobPhaseLabel, jobResultLabel, jobStateLabel, jobTitle, retryLabel, waitLabel } from './job-presentation.js';
+import { jobKindLabel, jobTitle } from './job-presentation.js';
 import { triggerLabel } from './subscription-presentation.js';
 
 export type ActivityLevel = 'all' | 'errors' | 'added';
@@ -96,10 +96,6 @@ export function logTime(value: string): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-export function summaryLabel(summary: Pick<JobSummary, 'active' | 'completed' | 'failed'>): string {
-  return `進行中 ${summary.active} · 今天完成 ${summary.completed} · 失敗 ${summary.failed}`;
-}
-
 /** The warning above the log while events cannot be written, or after some were lost. */
 export function logWarning(health: ActivityLogHealth | null): string | null {
   if (!health) return null;
@@ -113,23 +109,6 @@ export function logWarning(health: ActivityLogHealth | null): string | null {
 /** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
 export function jobBadge(job: JobView): string {
   return jobRole(job.kind)?.role === 'item' ? '單篇' : jobKindLabel(job);
-}
-
-/** What a job row says on its right: progress while it runs, the reason when it failed, the result when it finished. */
-export function jobStatusText(job: JobView): string {
-  if (job.state === 'queued' || job.state === 'running') {
-    const wait = job.state === 'queued' ? waitLabel(job.wait, job.source.type) : null;
-    if (wait) return `${jobStateLabel(job)}・${wait}`;
-    const retry = retryLabel(job.retry);
-    if (retry) return retry;
-    const phase = jobPhaseLabel(job) ?? jobStateLabel(job);
-    const progress = job.progress && job.progress.total > 0 ? ` ${job.progress.done}／${job.progress.total}` : '';
-    return `${phase}${progress}`;
-  }
-  if (job.state === 'completed' && jobRole(job.kind)?.role === 'item' && job.result?.outcome === 'created') {
-    return job.result.indexed === false ? '已加入，搜尋更新失敗' : '已加入';
-  }
-  return jobResultLabel(job) ?? jobStateLabel(job);
 }
 
 /** Plain-text diagnostics of a job for a bug report; event text is already masked by the service. */
