@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, open as openFile, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -151,6 +151,28 @@ async function leftovers(folder: string): Promise<string[]> {
 
 const jobOf = (workspace: VaultWorkspace, id: string): CollectionJob => workspace.jobs.get(id);
 
+/** A folder link: a junction on Windows, which needs no symbolic-link privilege and reads as a symbolic link. */
+const linkFolder = (target: string, link: string) => symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+/**
+ * Makes renaming the Vault at `source` fail until the returned function runs: Windows refuses to
+ * rename a folder holding an open file, and elsewhere a read-only parent refuses it.
+ */
+async function blockRename(source: string): Promise<() => Promise<void>> {
+  if (process.platform === 'win32') {
+    const handle = await openFile(path.join(source, 'attachments/sample.bin'), 'r');
+    let closed = false;
+    const unblock = async () => { if (!closed) { closed = true; await handle.close(); } };
+    restore.push(unblock);
+    return unblock;
+  }
+  const parent = path.dirname(source);
+  await chmod(parent, 0o555);
+  const unblock = () => chmod(parent, 0o755);
+  restore.push(unblock);
+  return unblock;
+}
+
 describe('move target checks (A-01)', () => {
   it('refuses unsafe locations before anything stops, and accepts free ones', async () => {
     const context = await setup();
@@ -162,8 +184,8 @@ describe('move target checks (A-01)', () => {
     await createVaultDirectory(path.join(root, 'Other'), 'XR Collector test');
     await mkdir(path.join(root, 'Full')); await writeFile(path.join(root, 'Full/note.txt'), '使用者的檔案');
     await mkdir(path.join(root, 'Empty'));
-    await symlink(source, path.join(root, 'Alias'));
-    await symlink(path.join(root, 'Empty'), path.join(root, 'EmptyLink'));
+    await linkFolder(source, path.join(root, 'Alias'));
+    await linkFolder(path.join(root, 'Empty'), path.join(root, 'EmptyLink'));
     await mkdir(path.join(root, 'Locked'), { mode: 0o555 });
     restore.push(() => chmod(path.join(root, 'Locked'), 0o755));
     const before = await readdir(root);
@@ -180,7 +202,8 @@ describe('move target checks (A-01)', () => {
       [path.join(context.profile, 'moved'), 'invalid_request', '程式資料目錄'],
       [path.join(root, 'missing', 'deeper'), 'invalid_request', '上層目錄也不存在'],
     ];
-    if (process.getuid?.() !== 0) cases.push([path.join(root, 'Locked', 'Vault'), 'invalid_request', '沒有權限']);
+    // Windows grants folder writes by ACL, which neither a mode nor `access` reflects.
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) cases.push([path.join(root, 'Locked', 'Vault'), 'invalid_request', '沒有權限']);
     for (const [target, code, message] of cases) {
       await expect(workspace.move(target), target).rejects.toMatchObject({ code, message: expect.stringContaining(message) });
     }
@@ -216,7 +239,7 @@ describe('move target checks (A-01)', () => {
     const { root } = context;
     await createVaultDirectory(path.join(root, 'Other'), 'XR Collector test');
     await mkdir(path.join(root, 'Other', 'sub'));
-    await symlink(path.join(root, 'Other', 'sub'), path.join(root, 'LinkSub'));
+    await linkFolder(path.join(root, 'Other', 'sub'), path.join(root, 'LinkSub'));
     const workspace = await open(context);
     await expect(workspace.checkMove(path.join(root, 'LinkSub', 'New'))).rejects.toMatchObject({ message: expect.stringContaining('另一個知識庫裡') });
     const working = path.join(root, 'Vault.moved-00000000-0000-4000-8000-000000000000');
@@ -260,7 +283,7 @@ describe('move target checks (A-01)', () => {
 
   it('refuses a Vault holding a symbolic link', async () => {
     const context = await setup();
-    await symlink(path.join(context.root, 'outside'), path.join(context.source, 'attachments', 'link'));
+    await linkFolder(path.join(context.root, 'outside'), path.join(context.source, 'attachments', 'link'));
     const workspace = await open(context);
     await expect(workspace.move(path.join(context.root, 'Moved'))).rejects.toMatchObject({ message: expect.stringContaining('attachments/link') });
     expect(workspace.status().state).toBe('idle');
@@ -502,8 +525,7 @@ describe('cleaning the original location after the switch (A-07)', () => {
     const parent = path.dirname(context.source);
     const target = path.join(context.root, 'Moved');
     const workspace = await open(context);
-    await chmod(parent, 0o555);
-    restore.push(() => chmod(parent, 0o755));
+    const unblock = await blockRename(context.source);
     await workspace.move(target);
     await settled(workspace);
     expect(workspace.status()).toMatchObject({
@@ -514,7 +536,7 @@ describe('cleaning the original location after the switch (A-07)', () => {
     const events = (await stores[0]!.activity.query({}, workspace.activityScope())).events;
     expect(events.find((event) => event.eventType === 'vault.move_cleanup_failed')).toMatchObject({ severity: 'warning' });
     await workspace.close(); workspaces.splice(workspaces.indexOf(workspace), 1);
-    await chmod(parent, 0o755);
+    await unblock();
     const reopened = await open(context, { jobStore: stores[0]! });
     expect(reopened.status().vaultPath).toBe(target);
     expect(existsSync(context.source)).toBe(false);
@@ -542,17 +564,15 @@ describe('an original location that is in use again', () => {
   it('keeps a leftover original opened again, with its new documents and jobs, through switches and restarts', async () => {
     const context = await setup(path.join('Parent', 'Vault'));
     const { source } = context;
-    const parent = path.dirname(source);
     const target = path.join(context.root, 'Moved');
     const jobStore = await JobStore.open(context.jobsDir);
     stores.push(jobStore);
     let workspace = await open(context, { jobStore }, false);
-    await chmod(parent, 0o555);
-    restore.push(() => chmod(parent, 0o755));
+    const unblock = await blockRename(source);
     await workspace.move(target);
     await settled(workspace);
     expect(workspace.status().result?.leftoverPath).toBe(source);
-    await chmod(parent, 0o755);
+    await unblock();
     // The person opens the leftover original again and keeps collecting there.
     await workspace.openOther(source);
     await settled(workspace);
@@ -624,10 +644,7 @@ describe('an original location that is in use again', () => {
         version: 1, vaultId: await readVaultId(source), source, target, staging: `${target}.moving-00000000-0000-4000-8000-000000000000`,
         phase: 'cleaning', marker: null, emptyTarget: false, removal: `${source}.moved-00000000-0000-4000-8000-000000000001`,
       }));
-      if (locked) {
-        await chmod(path.dirname(source), 0o555);
-        restore.push(() => chmod(path.dirname(source), 0o755));
-      }
+      if (locked) await blockRename(source);
       const workspace = await open(context);
       expect(workspace.status().vaultPath).toBe(target);
       if (!locked) {
