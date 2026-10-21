@@ -1,4 +1,5 @@
 import type { ActivityLogHealth, ActivityQuery, CollectionJob, JobEvent, JobSummary } from '../core/types.js';
+import { jobRole } from '../core/source-registry.js';
 import { jobKindLabel, jobPhaseLabel, jobResultLabel, jobStateLabel, jobTitle, retryLabel, waitLabel } from './job-presentation.js';
 import { triggerLabel } from './subscription-presentation.js';
 
@@ -111,13 +112,13 @@ export function logWarning(health: ActivityLogHealth | null): string | null {
 
 /** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
 export function jobBadge(job: CollectionJob): string {
-  return job.kind === 'youtube.video' ? '單篇' : jobKindLabel(job);
+  return jobRole(job.kind)?.role === 'item' ? '單篇' : jobKindLabel(job);
 }
 
 /** What a job row says on its right: progress while it runs, the reason when it failed, the result when it finished. */
 export function jobStatusText(job: CollectionJob): string {
   if (job.state === 'queued' || job.state === 'running') {
-    const wait = job.state === 'queued' ? waitLabel(job.wait) : null;
+    const wait = job.state === 'queued' ? waitLabel(job.wait, job.source.type) : null;
     if (wait) return `${jobStateLabel(job)}・${wait}`;
     const retry = retryLabel(job.retry);
     if (retry) return retry;
@@ -125,7 +126,7 @@ export function jobStatusText(job: CollectionJob): string {
     const progress = job.progress && job.progress.total > 0 ? ` ${job.progress.done}／${job.progress.total}` : '';
     return `${phase}${progress}`;
   }
-  if (job.state === 'completed' && job.kind === 'youtube.video' && job.result?.outcome === 'created') {
+  if (job.state === 'completed' && jobRole(job.kind)?.role === 'item' && job.result?.outcome === 'created') {
     return job.result.indexed === false ? '已加入，搜尋更新失敗' : '已加入';
   }
   return jobResultLabel(job) ?? jobStateLabel(job);

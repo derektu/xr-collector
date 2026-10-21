@@ -1,4 +1,5 @@
 import { markdownToPlainText } from '../core/document-text.js';
+import { sourceDeclaration } from '../core/source-registry.js';
 import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/types.js';
 
 export const DOCUMENTS_PAGE_SIZE = 20;
@@ -76,10 +77,8 @@ export function sourceOptions(sources: DocumentSources | null): { all: SourceOpt
   return { all, groups };
 }
 
-const SOURCE_LABELS: Record<DocumentMetadata['sourceType'], string> = { youtube: 'YouTube' };
-
 export function sourceTag(document: DocumentMetadata): string {
-  return `${SOURCE_LABELS[document.sourceType]} · ${document.publisher.name}`;
+  return `${sourceDeclaration(document.sourceType)?.label ?? document.sourceType} · ${document.publisher.name}`;
 }
 
 /** Date-only values are shown as recorded; timestamps use the viewer's local date. */
@@ -109,10 +108,9 @@ export function dateTimeLabel(value: string): string {
   return `${localDate(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+/** The line of type-specific details the source type shows under a document's title; null when it has none. */
 export function subtitleLabel(document: DocumentMetadata): string | null {
-  if (!document.youtube) return null;
-  const language = document.youtube.languageName ?? document.youtube.languageCode;
-  return `字幕：${language}・${document.youtube.subtitleKind === 'manual' ? '人工字幕' : '自動字幕'}`;
+  return sourceDeclaration(document.sourceType)?.documentDetailLine?.(document) ?? null;
 }
 
 export interface SnippetPart {
@@ -188,6 +186,9 @@ export function pageWithRows(page: number, rowsOnPage: number, total: number): n
 
 /** The source address of a document ID, for collecting a deleted document again; null for an unknown ID. */
 export function sourceUrlOfDocumentId(id: string): string | null {
-  const videoId = /^youtube:([A-Za-z0-9_-]{11})$/u.exec(id)?.[1];
-  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : null;
+  const separator = id.indexOf(':');
+  if (separator < 0) return null;
+  const item = sourceDeclaration(id.slice(0, separator))?.item;
+  const key = id.slice(separator + 1);
+  return item && item.keyPattern.test(key) ? item.urlForKey(key) : null;
 }

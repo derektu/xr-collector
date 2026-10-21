@@ -15,10 +15,10 @@ import type {
   SearchQuery,
   SearchResponse,
   SearchStatusReport,
-  YouTubeChannel,
-  ChannelPreview,
   ChannelSchedule,
-  CollectionPolicy,
+  SubscriptionPreview,
+  SubscriptionRecord,
+  SubscriptionSettings,
   RecognitionAction,
   SourceDetail,
   SourceList,
@@ -33,12 +33,29 @@ import type {
   VaultSetupResult,
   VaultSetupStatus,
 } from '../core/types.js';
+import { sourceDeclarations } from '../core/source-registry.js';
 
 interface ErrorResponse {
   error?: {
     code?: string;
     message?: string;
   };
+}
+
+/** The route prefix of a source type's own API. */
+function typeBase(type: string): string {
+  return `/api/${encodeURIComponent(type)}`;
+}
+
+/**
+ * The type prefix the automatic collection switch and the check of every subscription are reached
+ * under. Both cover every type, and the HTTP API serves them under each type with subscriptions,
+ * so any such type reaches the same switch; the first one is used.
+ */
+function scheduleType(): string {
+  const declaration = sourceDeclarations().find((candidate) => candidate.subscription);
+  if (!declaration) throw new Error('No source type has subscriptions');
+  return declaration.id;
 }
 
 export class ApiError extends Error {
@@ -92,14 +109,15 @@ export const api = {
   agentConnection(): Promise<{ url: string; connectionFile: string; skillPath: string }> {
     return request('/api/agent/connection');
   },
+  /** The automatic collection switch; one switch covers every type, served under each subscription type's prefix. */
   async getChannelSchedule(): Promise<ChannelSchedule> {
-    const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule');
+    const result = await request<{ schedule: ChannelSchedule }>(`${typeBase(scheduleType())}/schedule`);
     return result.schedule;
   },
 
   /** Turns automatic collection on or off. */
   async setAutoCollection(enabled: boolean): Promise<ChannelSchedule> {
-    const result = await request<{ schedule: ChannelSchedule }>('/api/youtube/schedule', {
+    const result = await request<{ schedule: ChannelSchedule }>(`${typeBase(scheduleType())}/schedule`, {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     });
@@ -107,8 +125,8 @@ export const api = {
   },
 
   /** Saves some of one subscription's settings; fields left out keep their value. */
-  async updateChannelSettings(id: string, settings: Partial<CollectionPolicy>): Promise<YouTubeChannel> {
-    const result = await request<{ channel: YouTubeChannel }>(`/api/youtube/channels/${encodeURIComponent(id)}`, {
+  async updateChannelSettings(type: string, id: string, settings: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
+    const result = await request<{ channel: SubscriptionRecord }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ settings }),
     });
@@ -116,32 +134,32 @@ export const api = {
   },
 
   /** Gives every other subscription of the same type this subscription's settings. */
-  applyChannelSettings(id: string): Promise<{ updated: number; paused: number }> {
-    return request<{ updated: number; paused: number }>(`/api/youtube/channels/${encodeURIComponent(id)}/apply-settings`, { method: 'POST' });
+  applyChannelSettings(type: string, id: string): Promise<{ updated: number; paused: number }> {
+    return request<{ updated: number; paused: number }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}/apply-settings`, { method: 'POST' });
   },
 
-  async listChannels(signal?: AbortSignal): Promise<Subscription[]> {
-    const result = await request<{ channels: Subscription[] }>('/api/youtube/channels', signal ? { signal } : undefined);
+  async listChannels(type: string, signal?: AbortSignal): Promise<Subscription[]> {
+    const result = await request<{ channels: Subscription[] }>(`${typeBase(type)}/channels`, signal ? { signal } : undefined);
     return result.channels;
   },
 
-  async previewChannel(url: string): Promise<ChannelPreview> {
-    return (await request<{ preview: ChannelPreview }>('/api/youtube/channel-previews', {
+  async previewChannel(type: string, url: string): Promise<SubscriptionPreview> {
+    return (await request<{ preview: SubscriptionPreview }>(`${typeBase(type)}/channel-previews`, {
       method: 'POST',
       body: JSON.stringify({ url }),
     })).preview;
   },
 
-  addChannel(url: string, settings?: Partial<CollectionPolicy>): Promise<JobSubmission> {
-    return request<JobSubmission>('/api/youtube/channels', {
+  addChannel(type: string, url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission> {
+    return request<JobSubmission>(`${typeBase(type)}/channels`, {
       method: 'POST',
       body: JSON.stringify(settings ? { url, settings } : { url }),
     });
   },
 
-  async setChannelEnabled(id: string, enabled: boolean): Promise<{ channel: YouTubeChannel; submission: JobSubmission | null }> {
-    return request<{ channel: YouTubeChannel; submission: JobSubmission | null }>(
-      `/api/youtube/channels/${encodeURIComponent(id)}`,
+  async setChannelEnabled(type: string, id: string, enabled: boolean): Promise<{ channel: SubscriptionRecord; submission: JobSubmission | null }> {
+    return request<{ channel: SubscriptionRecord; submission: JobSubmission | null }>(
+      `${typeBase(type)}/channels/${encodeURIComponent(id)}`,
       {
         method: 'PATCH',
         body: JSON.stringify({ enabled }),
@@ -150,21 +168,21 @@ export const api = {
   },
 
   /** Removes a subscription, keeping or deleting its documents. */
-  async removeChannel(id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
-    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`/api/youtube/channels/${encodeURIComponent(id)}?documents=${documents}`, {
+  async removeChannel(type: string, id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
+    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`${typeBase(type)}/channels/${encodeURIComponent(id)}?documents=${documents}`, {
       method: 'DELETE',
     });
   },
 
-  /** Checks every enabled subscription now. */
+  /** Checks every enabled subscription of every type now. */
   async checkAllChannels(): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', { method: 'POST' });
+    const result = await request<{ submissions: JobSubmission[] }>(`${typeBase(scheduleType())}/channel-runs`, { method: 'POST' });
     return result.submissions;
   },
 
-  /** Accepts a video or channel address; the service decides which by its syntax. */
-  submitYouTube(url: string): Promise<JobSubmission> {
-    return request<JobSubmission>('/api/youtube/submissions', {
+  /** Accepts an item or subscription address of a type; the service decides which by its syntax. */
+  submit(type: string, url: string): Promise<JobSubmission> {
+    return request<JobSubmission>(`${typeBase(type)}/submissions`, {
       method: 'POST',
       body: JSON.stringify({ url }),
     });
@@ -223,13 +241,14 @@ export const api = {
     return result.document;
   },
 
-  /** Deletes a document; automatic and channel collection skip it until the user collects it again by its address. */
+  /** Deletes a document; automatic and subscription collection skip it until the user collects it again by its address. */
   deleteDocument(id: string): Promise<DocumentDeletion> {
     return request<DocumentDeletion>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
-  collectYouTube(url: string): Promise<JobSubmission> {
-    return request<JobSubmission>('/api/youtube/collect', {
+  /** Collects one item of a type by its address. */
+  collect(type: string, url: string): Promise<JobSubmission> {
+    return request<JobSubmission>(`${typeBase(type)}/collect`, {
       method: 'POST',
       body: JSON.stringify({ url }),
     });
@@ -270,9 +289,9 @@ export const api = {
     return request<SourceDetail>(`/api/sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, signal ? { signal } : undefined);
   },
 
-  /** Checks the listed subscriptions now. */
-  async checkChannels(channelIds: string[]): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>('/api/youtube/channel-runs', {
+  /** Checks the listed subscriptions of one type now. */
+  async checkChannels(type: string, channelIds: string[]): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>(`${typeBase(type)}/channel-runs`, {
       method: 'POST',
       body: JSON.stringify({ channelIds }),
     });

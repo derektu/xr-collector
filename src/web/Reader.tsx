@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { SavedDocument } from '../core/types.js';
+import { sourceDeclaration } from '../core/source-registry.js';
 import { ApiError, api } from './api-client.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } from './document-presentation.js';
@@ -60,6 +61,8 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const url = sourceUrlOfDocumentId(id);
+    const type = id.slice(0, Math.max(0, id.indexOf(':')));
+    const item = sourceDeclaration(type)?.item;
     const finish = (next: Recollect, reload: boolean) => {
       if (!active) return;
       setRecollect(next);
@@ -70,12 +73,12 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
         api.getJob(jobId).then((job) => {
           if (job.state === 'queued' || job.state === 'running') poll(jobId);
           else if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' }, true);
-          else finish({ kind: 'failed', message: job.error?.message ?? '這支影片沒有收集回來，請到記錄頁查看原因。' }, false);
+          else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` }, false);
         }).catch(() => poll(jobId));
       }, RECOLLECT_POLL_MS);
     };
     if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' }, false);
-    else api.collectYouTube(url).then((submission) => poll(submission.job.id))
+    else api.collect(type, url).then((submission) => poll(submission.job.id))
       .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }, false));
     return () => { active = false; if (timer) clearTimeout(timer); };
   }, [recollect.kind, id]);
@@ -85,7 +88,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       <button type="button" className="button" onClick={onBack}><Icon name="back" size={15} />{backLabel}</button>
       <span className="spacer" />
       {state.kind === 'ready' ? <a className="button" href={state.document.sourceUrl} target="_blank" rel="noopener noreferrer" data-testid="reader-source-link">
-        <Icon name="external" size={15} />{state.document.sourceType === 'youtube' ? '開啟原始影片' : '開啟原始內容'}
+        <Icon name="external" size={15} />{sourceDeclaration(state.document.sourceType)?.item.openOriginalLabel ?? '開啟原始內容'}
       </a> : null}
       <button type="button" className="button icon" aria-label="刪除文件" title="刪除文件" disabled={state.kind !== 'ready'}
         onClick={() => setDeleting(true)} data-testid="reader-delete"><Icon name="trash" size={15} /></button>

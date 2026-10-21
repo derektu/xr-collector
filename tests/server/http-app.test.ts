@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import { CollectorError, type CapturedTranscript, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
+import { CollectorError, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { transcriptOf } from '../support/youtube-documents.js';
 
 const captured: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -27,8 +30,9 @@ function makeCollector(): Collector {
 function makeServices(captureFailure?: CollectorError, captureGate?: Promise<void>): { collector: Collector; jobs: JobManager } {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
-    getBySourceId: async () => saved,
-    add: async (input) => {
+    getByKey: async () => saved,
+    add: async (document) => {
+      const input = transcriptOf(document);
       saved = {
         id: `youtube:${input.videoId}`,
         type: 'Transcript',
@@ -51,7 +55,7 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
   const jobs = new JobManager({
     vaultPath: '/vault',
     store: JobStore.memory(),
-    source: {
+    plugins: [youtubePlugin({
       resolveChannel: async () => ({ id: 'UC-http', title: 'HTTP 頻道', url: 'https://www.youtube.com/channel/UC-http/videos' }),
       discover: async () => [],
       capture: async () => {
@@ -59,9 +63,9 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
         if (captureFailure) throw captureFailure;
         return captured;
       },
-    },
+    })],
     documents: collector,
-    channels: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null },
+    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null } },
   });
   return { collector, jobs };
 }
@@ -141,7 +145,8 @@ describe('HTTP app', () => {
     const calls: unknown[] = [];
     const subscription = { ...savedChannel, status: 'tracking' as const, activeJob: null, documentCount: 3, lastCollectedAt: null };
     const channels = {
-      listChannels: async () => [savedChannel],
+      type: 'youtube',
+      list: async () => [savedChannel],
       listSubscriptions: async () => [subscription],
       preview: async (url: string) => {
         calls.push(['preview', url]);
@@ -153,15 +158,15 @@ describe('HTTP app', () => {
           autoCollection: true,
         };
       },
-      addChannel: async (url: string) => {
+      add: async (url: string) => {
         calls.push(['add', url]);
         return { job: { ...job('add-1'), kind: 'youtube.channel-add' as const }, deduplicated: false };
       },
-      setChannelEnabled: async (id: string, enabled: boolean) => {
+      setEnabled: async (id: string, enabled: boolean) => {
         calls.push(['enabled', id, enabled]);
         return { channel: { ...savedChannel, enabled }, submission: null };
       },
-      removeChannel: async (id: string) => {
+      remove: async (id: string) => {
         calls.push(['remove', id]);
         return { documentsKept: 3 };
       },
@@ -178,7 +183,7 @@ describe('HTTP app', () => {
         return [{ job: job('run-2'), deduplicated: false }];
       },
     };
-    const app = await createHttpApp({ collector: makeCollector(), channels, schedule });
+    const app = await createHttpApp({ collector: makeCollector(), subscriptions: [channels], schedule });
 
     const previewed = await app.inject({
       method: 'POST', url: '/api/youtube/channel-previews', payload: { url: '@channel-one' },

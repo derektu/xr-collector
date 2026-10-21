@@ -1,43 +1,41 @@
 import { randomUUID } from 'node:crypto';
-import { discoverChannelVideos } from '../channels/channel-discovery.js';
-import { backfillWindowStart, DEFAULT_POLICY } from '../channels/collection-policy.js';
-import type { ChannelStore } from '../channels/json-channel-store.js';
+import { selectCandidates } from '../subscriptions/candidates.js';
+import type { SubscriptionStore } from '../subscriptions/subscription-store.js';
 import type { Collector } from '../core/collector.js';
+import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
   type ChannelJobTrigger,
   type CollectionJob,
-  type CollectionPolicy,
   isRetryable,
   type JobError,
   type JobItem,
-  type JobKind,
   type JobPage,
   type JobPhase,
   type JobProgress,
   type JobResult,
   type JobRetry,
+  type JobRole,
   type JobState,
   type JobStopKind,
   type JobSubmission,
   type JobSummary,
-  type OutOfRangeVideo,
+  type OutOfRangeEntry,
   type SkipReason,
-  type YouTubeChannel,
+  type SubscriptionRecord,
+  type SubscriptionSettings,
 } from '../core/types.js';
-import { parseYouTubeVideoUrl } from '../core/video-url.js';
-import type { YouTubeSource } from '../sources/youtube/adapter.js';
-import type { PacingEvent, YouTubePacing } from '../capture/youtube-gate.js';
-import { classifyYouTubeInput } from '../sources/youtube/url.js';
+import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
+import type { FailureClass, SourcePlugin } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 
 export interface JobLimits {
-  /** Channel resolution and discovery running at once. */
+  /** Subscription resolution and discovery running at once. */
   discovery: number;
   /**
-   * Single-video captures running at once. Every YouTube request also passes the device's one
-   * request channel, so a higher number only lets a capture wait there for its turn.
+   * Single-item captures running at once. Every request of a source also passes its pacing group's
+   * one request channel, so a higher number only lets a capture wait there for its turn.
    */
   capture: number;
   /** Jobs waiting in both queues together; further submissions are refused. */
@@ -47,8 +45,8 @@ export interface JobLimits {
 export const DEFAULT_JOB_LIMITS: JobLimits = { discovery: 1, capture: 1, maxQueued: 500 };
 
 /**
- * Automatic retries after a transient failure (`network_error`). A YouTube limit (`rate_limited`)
- * is not a failed attempt: the job waits for the cooldown and continues.
+ * Automatic retries after a failure its source classifies as `retry_now`. A source's limit
+ * (`rate_limited`) is not a failed attempt: the job waits for the cooldown and continues.
  */
 export interface RetryPolicy {
   /** Attempts in total, the first one included. */
@@ -68,27 +66,27 @@ export const MAX_UNCLEAN_STOPS = 3;
 /** A limit reported without a cooldown end (no request channel) waits this long. */
 const FALLBACK_COOLDOWN_MS = 5 * 60_000;
 
-const RETRYABLE: ReadonlySet<string> = new Set(['network_error']);
-
 export interface JobManagerOptions {
   /** The Vault every job of this manager writes to. */
   vaultPath: string;
   /** ID of that Vault; null for a Vault without an ID, whose jobs are then known by path alone. */
   vaultId?: string | null;
   store: JobStore;
-  source: YouTubeSource;
+  /** The assembled source plugins; a job of any other type is kept as it is and not run. */
+  plugins: readonly SourcePlugin[];
   documents: Collector;
-  channels: ChannelStore;
+  /** The subscriptions of each type with subscriptions, keyed by type. */
+  subscriptions: Readonly<Record<string, SubscriptionStore>>;
   limits?: Partial<JobLimits>;
   retry?: Partial<RetryPolicy>;
   now?: () => Date;
   createId?: () => string;
   /** Starts a timer and returns its cancel function; retries wait through it. */
   setTimer?: (callback: () => void, ms: number) => () => void;
-  /** Checks one subscription now, as a manual check does; a failed channel job is retried through it. */
-  checkChannel?: (channelId: string) => Promise<JobSubmission>;
-  /** The device's YouTube request channel; its cooldowns pause every YouTube step of this manager. */
-  pacing?: YouTubePacing;
+  /** Checks one subscription now, as a manual check does; a failed check job is retried through it. */
+  checkSubscription?: (type: string, id: string) => Promise<JobSubmission>;
+  /** The device's request channels, one per pacing group; a group's cooldown pauses the steps of that group only. */
+  pacing?: readonly Pacing[];
 }
 
 export interface JobListQuery {
@@ -103,8 +101,11 @@ export const HOLD_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * Accepts collection work for one Vault, runs it in bounded queues and records every state change.
- * Discovery (channel resolution and video listing) and single-video capture use separate queues;
- * captures rotate between the jobs that queued them so one large channel cannot hold every slot.
+ * A job's kind names its source type and role: `item` collects one item, `check` lists a
+ * subscription and queues one item job per item found, `add` resolves an address and subscribes.
+ * Discovery (resolution and listing) and single-item capture use separate queues; captures rotate
+ * between the jobs that queued them so one large subscription cannot hold every slot. A source's
+ * cooldown holds back only the jobs of its pacing group.
  */
 export class JobManager {
   private readonly limits: JobLimits;
@@ -114,7 +115,7 @@ export class JobManager {
   private readonly retryTimers = new Map<string, () => void>();
   private readonly now: () => Date;
   private readonly createId: () => string;
-  /** Unfinished jobs, including channel jobs waiting for their videos. */
+  /** Unfinished jobs, including check jobs waiting for their items. */
   private readonly jobs = new Map<string, CollectionJob>();
   private readonly keys = new Map<string, string>();
   private readonly activeByKey = new Map<string, string>();
@@ -124,28 +125,29 @@ export class JobManager {
   private runningDiscovery = 0;
   private runningCapture = 0;
   private readonly running = new Set<Promise<void>>();
-  /** Channel jobs that wait for a video job, keyed by the video job. */
+  /** Check jobs that wait for an item job, keyed by the item job. */
   private readonly watchers = new Map<string, Set<string>>();
   private readonly settleWaiters = new Map<string, Array<(job: CollectionJob) => void>>();
   /**
-   * Running channel jobs of a paused or removed subscription, with the reason. They no longer hold
-   * the channel's dedupe key, so a resume or new subscription starts its own job at once.
+   * Running check jobs of a paused or removed subscription, with the reason. They no longer hold
+   * the subscription's dedupe key, so a resume or new subscription starts its own job at once.
    */
   private readonly stoppedJobs = new Map<string, SkipReason>();
-  /** Videos a channel job queued that the user then submitted directly; pausing never skips them. */
+  /** Items a check job queued that the user then submitted directly; pausing never skips them. */
   private readonly manualClaims = new Set<string>();
   private closed = false;
   /** Number of holds in force; while any is, no queued step starts. */
   private holds = 0;
   /**
-   * Aborted by a hold or close: steps still waiting for their YouTube turn give it up and return
-   * to the queue (or are left for close() to record), so neither waits on the request channel.
+   * Aborted by a hold or close: steps still waiting for their turn at a source give it up and return
+   * to the queue (or are left for close() to record), so neither waits on a request channel.
    */
   private stepAbort = new AbortController();
-  /** End of the YouTube cooldown in force; no step starts before it. */
-  private cooldownUntil: string | null = null;
-  private cancelCooldownTimer: (() => void) | null = null;
-  private readonly unsubscribePacing: () => void;
+  private readonly plugins = new Map<string, SourcePlugin>();
+  private readonly gates = new Map<string, Pacing>();
+  /** The cooldown in force per pacing group; no step of the group starts before it ends. */
+  private readonly cooldowns = new Map<string, { until: string; cancel: () => void }>();
+  private readonly unsubscribePacing: Array<() => void> = [];
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
@@ -156,66 +158,109 @@ export class JobManager {
     });
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? (() => randomUUID());
-    this.unsubscribePacing = options.pacing?.subscribe((event) => this.onPacing(event)) ?? (() => undefined);
-    const until = options.pacing?.status().cooldownUntil;
-    if (until) this.enterCooldown(until);
+    for (const plugin of options.plugins) this.plugins.set(plugin.id, plugin);
+    for (const gate of options.pacing ?? []) {
+      this.gates.set(gate.group, gate);
+      this.unsubscribePacing.push(gate.subscribe((event) => this.onPacing(gate.group, event)));
+      const until = gate.status().cooldownUntil;
+      if (until) this.enterCooldown(gate.group, until);
+    }
   }
 
-  /** Records the device's YouTube cooldowns in this Vault's activity and follows them. */
-  private onPacing(event: PacingEvent): void {
+  /** Records a pacing group's cooldowns in this Vault's activity and follows them. */
+  private onPacing(group: string, event: PacingEvent): void {
     if (this.closed) return;
+    const label = this.pacingLabel(group);
     if (event.type === 'rate_limited') {
       this.recordEvent({
-        severity: 'warning', eventType: 'youtube.rate_limited',
-        message: `YouTube 暫時限制連線，${clockTime(event.until)} 前暫停所有 YouTube 請求。`,
+        severity: 'warning', eventType: `${group}.rate_limited`,
+        message: `${label} 暫時限制連線，${clockTime(event.until)} 前暫停所有 ${label} 請求。`,
         until: event.until, level: event.level, ...(event.detail ? { detail: event.detail } : {}),
       });
-      this.enterCooldown(event.until);
+      this.enterCooldown(group, event.until);
       return;
     }
-    this.recordEvent({ severity: 'info', eventType: 'youtube.cooldown_ended', message: 'YouTube 限制已解除，繼續收集。' });
-    this.endCooldown();
+    this.recordEvent({ severity: 'info', eventType: `${group}.cooldown_ended`, message: `${label} 限制已解除，繼續收集。` });
+    this.endCooldown(group);
   }
 
-  /** Starts or extends the cooldown; every queued job then waits for it, as the job that hit the limit does. */
-  private enterCooldown(until: string): void {
-    if (this.cooldownUntil && this.cooldownUntil >= until) return;
-    this.cooldownUntil = until;
-    this.cancelCooldownTimer?.();
-    this.cancelCooldownTimer = this.setTimer(() => {
-      this.cancelCooldownTimer = null;
-      this.endCooldown();
+  /** How cooldown messages name the source of a pacing group. */
+  private pacingLabel(group: string): string {
+    for (const plugin of this.plugins.values()) if (plugin.pacing?.group === group) return plugin.pacing.label;
+    return group;
+  }
+
+  /** The plugin of a registered, assembled source type. */
+  private plugin(type: string): SourcePlugin | undefined {
+    return this.plugins.get(type);
+  }
+
+  private requirePlugin(type: string): SourcePlugin {
+    const plugin = this.plugins.get(type);
+    if (!plugin) throw new Error(`Source type ${type} is not assembled`);
+    return plugin;
+  }
+
+  /** The pacing group a job's requests go through; null for a type without pacing. */
+  private groupOf(job: CollectionJob): string | null {
+    return this.plugins.get(job.source.type)?.pacing?.group ?? null;
+  }
+
+  private subscriptionStore(type: string): SubscriptionStore {
+    const store = this.options.subscriptions[type];
+    if (!store) throw new Error(`Source type ${type} has no subscription store`);
+    return store;
+  }
+
+  /**
+   * Starts or extends a group's cooldown; every queued job of the group then waits for it, as the
+   * job that hit the limit does.
+   */
+  private enterCooldown(group: string, until: string): void {
+    const current = this.cooldowns.get(group);
+    if (current && current.until >= until) return;
+    current?.cancel();
+    const cancel = this.setTimer(() => {
+      if (this.cooldowns.get(group)?.until === until) this.cooldowns.delete(group);
+      this.endCooldown(group);
     }, Math.max(0, new Date(until).getTime() - this.now().getTime()));
+    this.cooldowns.set(group, { until, cancel });
     for (const job of this.jobs.values()) {
-      if (job.state === 'queued') this.markWaiting(job);
+      if (job.state === 'queued' && this.groupOf(job) === group) this.markWaiting(job);
     }
   }
 
-  /** Gives a queued job the wait of the cooldown in force; outside a cooldown it does nothing. */
+  /** Gives a queued job the wait of its group's cooldown in force; outside a cooldown it does nothing. */
   private markWaiting(job: CollectionJob): void {
-    const until = this.cooldownUntil && new Date(this.cooldownUntil).getTime() > this.now().getTime()
-      ? this.cooldownUntil : this.options.pacing?.status().cooldownUntil ?? null;
+    const group = this.groupOf(job);
+    if (!group) return;
+    const cooldown = this.cooldowns.get(group)?.until ?? null;
+    const until = cooldown && new Date(cooldown).getTime() > this.now().getTime()
+      ? cooldown : this.gates.get(group)?.status().cooldownUntil ?? null;
     if (!until || job.wait?.until === until) return;
     this.update(job, { wait: { reason: 'rate_limited', until } });
     this.syncItemWait(job);
   }
 
-  /** Ends the cooldown: waiting jobs drop their wait and queued steps start again. */
-  private endCooldown(): void {
-    this.cancelCooldownTimer?.();
-    this.cancelCooldownTimer = null;
-    this.cooldownUntil = null;
+  /** Ends a group's cooldown: its waiting jobs drop their wait and queued steps start again. */
+  private endCooldown(group: string): void {
+    this.cooldowns.get(group)?.cancel();
+    this.cooldowns.delete(group);
     if (this.closed) return;
     for (const job of this.jobs.values()) {
-      if (!job.wait) continue;
+      if (!job.wait || this.groupOf(job) !== group) continue;
       this.clearWait(job);
     }
     this.pump();
   }
 
-  private coolingDown(): boolean {
-    if (this.options.pacing?.status().state === 'cooldown') return true;
-    return this.cooldownUntil !== null && new Date(this.cooldownUntil).getTime() > this.now().getTime();
+  /** Whether the job's pacing group is cooling down, so its next step waits. */
+  private coolingDown(job: CollectionJob): boolean {
+    const group = this.groupOf(job);
+    if (!group) return false;
+    if (this.gates.get(group)?.status().state === 'cooldown') return true;
+    const until = this.cooldowns.get(group)?.until;
+    return until !== undefined && new Date(until).getTime() > this.now().getTime();
   }
 
   private clearWait(job: CollectionJob): void {
@@ -225,17 +270,17 @@ export class JobManager {
     this.syncItemWait(job);
   }
 
-  /** Channel jobs show the cooldown wait of each of their videos. */
-  private syncItemWait(video: CollectionJob): void {
-    for (const channelId of this.watchers.get(video.id) ?? []) {
-      const channel = this.jobs.get(channelId);
-      if (!channel?.items) continue;
-      this.update(channel, {
-        items: channel.items.map((item) => {
-          if (item.jobId !== video.id) return item;
+  /** Check jobs show the cooldown wait of each of their items. */
+  private syncItemWait(child: CollectionJob): void {
+    for (const checkId of this.watchers.get(child.id) ?? []) {
+      const check = this.jobs.get(checkId);
+      if (!check?.items) continue;
+      this.update(check, {
+        items: check.items.map((item) => {
+          if (item.jobId !== child.id) return item;
           const next = { ...item };
           delete next.wait;
-          return video.wait ? { ...next, wait: video.wait } : next;
+          return child.wait ? { ...next, wait: child.wait } : next;
         }),
       });
     }
@@ -254,41 +299,46 @@ export class JobManager {
     return job.vaultPath === this.options.vaultPath && (job.vaultId ?? null) === this.vaultId;
   }
 
-  /** Accepts a pasted video or channel address according to its syntax. */
-  async submit(url: string): Promise<JobSubmission> {
-    const input = classifyYouTubeInput(url);
-    return input.kind === 'video' ? this.submitVideo(input.video.canonicalUrl) : this.submitChannelAdd(input.url);
+  /** Accepts a pasted address of a source type according to its syntax: one item, or a subscription. */
+  async submit(type: string, url: string): Promise<JobSubmission> {
+    const input = this.requirePlugin(type).classify(url);
+    return input.kind === 'item' ? this.submitItem(type, input.ref.url) : this.submitSubscriptionAdd(type, input.url);
   }
 
-  async submitVideo(url: string): Promise<JobSubmission> {
-    const submission = this.enqueueVideo(parseYouTubeVideoUrl(url).canonicalUrl, null);
+  async submitItem(type: string, url: string): Promise<JobSubmission> {
+    const submission = this.enqueueItem(type, url, null);
     await this.options.store.flush();
     this.pump();
     return submission;
   }
 
   /**
-   * Resolves a channel address and subscribes to it. A new subscription starts with `settings` (the
-   * source type's defaults when omitted) and its first check follows them; an existing subscription
-   * keeps its own state and settings.
+   * Resolves a subscription address and subscribes to it. A new subscription starts with
+   * `settings` (the source type's defaults when omitted) and its first check follows them; an
+   * existing subscription keeps its own state and settings.
    */
-  async submitChannelAdd(url: string, settings: CollectionPolicy = DEFAULT_POLICY): Promise<JobSubmission> {
-    const input = classifyYouTubeInput(url);
-    if (input.kind !== 'channel') throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
-    const submission = this.enqueue('youtube.channel-add', `channel-add:${input.url.toLowerCase()}`, {
+  async submitSubscriptionAdd(type: string, url: string, settings?: SubscriptionSettings): Promise<JobSubmission> {
+    const plugin = this.requirePlugin(type);
+    const input = plugin.classify(url);
+    const kind = jobKind(type, 'add');
+    if (input.kind !== 'subscription' || !kind || !plugin.subscription) {
+      throw new CollectorError('invalid_channel', plugin.prompts.subscriptionInput);
+    }
+    const accepted = settings ?? plugin.subscription.defaults;
+    const submission = this.enqueue(kind, type, `${type}:add:${input.url.toLowerCase()}`, {
       id: null, url: input.url, title: null,
-    }, null, { scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...settings } } });
+    }, null, { scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...accepted } } });
     await this.options.store.flush();
     this.pump();
     return submission;
   }
 
   /**
-   * Starts one check of a subscription; an active job of the same channel is returned instead, so
-   * the check joins it.
+   * Starts one check of a subscription; an active job of the same subscription is returned
+   * instead, so the check joins it.
    */
-  async submitChannel(channel: YouTubeChannel, trigger: ChannelJobTrigger): Promise<JobSubmission> {
-    const submission = this.enqueueChannel(channel, trigger);
+  async submitCheck(type: string, subscription: SubscriptionRecord, trigger: ChannelJobTrigger): Promise<JobSubmission> {
+    const submission = this.enqueueCheck(type, subscription, trigger);
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -303,8 +353,8 @@ export class JobManager {
   }
 
   /**
-   * Top-level jobs, newest first. Videos a channel job started appear as that job's items, shown
-   * `running` while their video job runs.
+   * Top-level jobs, newest first. Items a check job started appear as that job's items, shown
+   * `running` while their item job runs.
    */
   list(query: JobListQuery = {}): JobPage {
     const limit = query.limit ?? 20;
@@ -320,34 +370,34 @@ export class JobManager {
   }
 
   /**
-   * Channel collection jobs of the active Vault grouped by channel, newest first. Finished jobs are
-   * kept up to the job store's limit, so older records drop out.
+   * Check jobs of one source type in the active Vault, grouped by subscription, newest first.
+   * Finished jobs are kept up to the job store's limit, so older records drop out.
    */
-  channelJobs(): Map<string, CollectionJob[]> {
-    const byChannel = new Map<string, CollectionJob[]>();
+  checkJobs(type: string): Map<string, CollectionJob[]> {
+    const bySubscription = new Map<string, CollectionJob[]>();
     for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
-      if (job.kind !== 'youtube.channel' || !job.source.id) continue;
-      const jobs = byChannel.get(job.source.id) ?? [];
+      if (!isRole(job, type, 'check') || !job.source.id) continue;
+      const jobs = bySubscription.get(job.source.id) ?? [];
       jobs.push(job);
-      byChannel.set(job.source.id, jobs);
+      bySubscription.set(job.source.id, jobs);
     }
-    return byChannel;
+    return bySubscription;
   }
 
   /**
-   * The channel collection job of this subscription that is still queued or running. Its items
-   * show `running` while their video job runs, so a caller can tell a check that collects from one
-   * whose videos wait behind other work.
+   * The check job of this subscription that is still queued or running. Its items show `running`
+   * while their item job runs, so a caller can tell a check that collects from one whose items
+   * wait behind other work.
    */
-  activeChannelJob(channelId: string): CollectionJob | null {
+  activeCheck(type: string, id: string): CollectionJob | null {
     for (const job of this.jobs.values()) {
-      if (job.kind !== 'youtube.channel' || job.source.id !== channelId || this.stoppedJobs.has(job.id)) continue;
+      if (!isRole(job, type, 'check') || job.source.id !== id || this.stoppedJobs.has(job.id)) continue;
       return this.withLiveItems(structuredClone(job));
     }
     return null;
   }
 
-  /** Items record their video's outcome when it ends; meanwhile a running video shows as `running`. */
+  /** Items record their item job's outcome when it ends; meanwhile a running item shows as `running`. */
   private withLiveItems(job: CollectionJob): CollectionJob {
     if (!job.items) return job;
     return {
@@ -358,52 +408,52 @@ export class JobManager {
   }
 
   /**
-   * Subscription requests still queued or running, oldest first, with the channel each one has
-   * resolved to so far (null before resolution).
+   * Subscription requests of one source type still queued or running, oldest first, with the
+   * target each one has resolved to so far (null before resolution).
    */
-  activeChannelAdds(): Array<{ job: CollectionJob; channelId: string | null; title: string | null }> {
+  activeSubscriptionAdds(type: string): Array<{ job: CollectionJob; targetId: string | null; title: string | null }> {
     return [...this.jobs.values()]
-      .filter((job) => job.kind === 'youtube.channel-add')
+      .filter((job) => isRole(job, type, 'add'))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((job) => {
         const subscribing = job.checkpoint?.subscribing;
         return {
           job: publicJob(structuredClone(job)),
-          channelId: job.result?.channelId ?? subscribing?.channelId ?? null,
+          targetId: job.result?.channelId ?? subscribing?.channelId ?? null,
           title: job.source.title ?? subscribing?.title ?? null,
         };
       });
   }
 
   /**
-   * Video captures still queued or running that may save a document of this channel: the videos a
-   * job of the channel requested, stopped jobs included, and every single-video request, whose
-   * channel is known only once it is captured.
+   * Item captures still queued or running that may save a document of this subscription: the
+   * items a check of the subscription requested, stopped jobs included, and every single-item
+   * request of the type, whose publisher is known only once it is captured.
    */
-  pendingCaptures(channelId: string): { channelVideos: CollectionJob[]; singleVideos: CollectionJob[] } {
-    const channelVideoIds = new Set<string>();
+  pendingCaptures(type: string, id: string): { checkItems: CollectionJob[]; singleItems: CollectionJob[] } {
+    const checkItemIds = new Set<string>();
     for (const job of this.jobs.values()) {
-      if (job.kind !== 'youtube.channel' || job.source.id !== channelId) continue;
-      for (const item of job.items ?? []) if (item.jobId) channelVideoIds.add(item.jobId);
+      if (!isRole(job, type, 'check') || job.source.id !== id) continue;
+      for (const item of job.items ?? []) if (item.jobId) checkItemIds.add(item.jobId);
     }
-    const channelVideos: CollectionJob[] = [];
-    const singleVideos: CollectionJob[] = [];
+    const checkItems: CollectionJob[] = [];
+    const singleItems: CollectionJob[] = [];
     for (const job of this.jobs.values()) {
-      if (job.kind !== 'youtube.video' || !ACTIVE.has(job.state)) continue;
-      if (channelVideoIds.has(job.id)) channelVideos.push(structuredClone(job));
-      else if (job.parentId === null) singleVideos.push(structuredClone(job));
+      if (!isRole(job, type, 'item') || !ACTIVE.has(job.state)) continue;
+      if (checkItemIds.has(job.id)) checkItems.push(structuredClone(job));
+      else if (job.parentId === null) singleItems.push(structuredClone(job));
     }
-    return { channelVideos, singleVideos };
+    return { checkItems, singleItems };
   }
 
   /**
-   * Converges a paused or removed subscription: its queued channel job and the videos it queued that
-   * have not started end as skipped. A video already capturing finishes and is saved; a discovery in
-   * progress sees the change before accepting any video.
+   * Converges a paused or removed subscription: its queued check job and the items it queued that
+   * have not started end as skipped. An item already capturing finishes and is saved; a discovery
+   * in progress sees the change before accepting any item.
    */
-  stopChannel(channelId: string, reason: SkipReason): void {
+  stopSubscription(type: string, id: string, reason: SkipReason): void {
     for (const job of [...this.jobs.values()]) {
-      if (job.kind !== 'youtube.channel' || job.source.id !== channelId) continue;
+      if (!isRole(job, type, 'check') || job.source.id !== id) continue;
       if (job.state === 'queued') {
         const index = this.discoveryQueue.indexOf(job.id);
         if (index >= 0) this.discoveryQueue.splice(index, 1);
@@ -414,10 +464,10 @@ export class JobManager {
       const key = this.keys.get(job.id);
       if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
       for (const item of job.items ?? []) {
-        const video = item.jobId ? this.jobs.get(item.jobId) : undefined;
-        if (!video || video.parentId !== job.id || video.state !== 'queued' || this.manualClaims.has(video.id)) continue;
-        this.removeFromLane(video);
-        this.finish(video, 'completed', { outcome: 'skipped', skipReason: reason }, null);
+        const child = item.jobId ? this.jobs.get(item.jobId) : undefined;
+        if (!child || child.parentId !== job.id || child.state !== 'queued' || this.manualClaims.has(child.id)) continue;
+        this.removeFromLane(child);
+        this.finish(child, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       }
     }
     void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
@@ -425,41 +475,47 @@ export class JobManager {
 
   /**
    * Retries a failed top-level job at the user's request with a new job and a fresh attempt budget.
-   * A video is collected again and a subscription request subscribes with the settings it was
-   * accepted with. A channel job whose discovery failed checks its subscription now; one that
-   * recorded videos, failed or completed with some of them failing, collects those failed videos
+   * An item is collected again and a subscription request subscribes with the settings it was
+   * accepted with. A check job whose discovery failed checks its subscription now; one that
+   * recorded items, failed or completed with some of them failing, collects those failed items
    * again. The new job records `retryOf`, the earlier one `retriedBy`; an active job of the same
    * target is returned as a duplicate instead.
    */
   async retry(id: string): Promise<JobSubmission> {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
+    const type = job.source.type;
+    const role = jobRole(job.kind)?.role;
+    const plugin = this.plugin(type);
+    if (!role || !plugin) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
+    const { noun } = plugin.item;
+    const target = plugin.subscription?.targetNoun ?? '訂閱';
     if (job.parentId !== null) {
-      throw new CollectorError('job_not_retryable', '頻道收集中的影片隨頻道工作處理，請重試頻道工作。');
+      throw new CollectorError('job_not_retryable', `${target}收集中的${noun}隨${target}工作處理，請重試${target}工作。`);
     }
-    if (!isRetryable(job)) throw new CollectorError('job_not_retryable', '只有失敗或有影片失敗的工作可以重試。');
+    if (!isRetryable(job)) throw new CollectorError('job_not_retryable', `只有失敗或有${noun}失敗的工作可以重試。`);
     if (job.retriedBy) throw new CollectorError('job_not_retryable', '這個工作已經重試過，請查看重試的工作。');
     let submission: JobSubmission;
-    if (job.kind === 'youtube.video') {
-      submission = this.enqueueVideo(job.source.url, null, null, { retryOf: job.id }, job.source.title);
-    } else if (job.kind === 'youtube.channel-add') {
-      const settings = await this.acceptedSettings(job);
-      submission = this.enqueue('youtube.channel-add', jobKey(job), { id: null, url: job.source.url, title: null }, null, {
+    if (role === 'item') {
+      submission = this.enqueueItem(type, job.source.url, null, null, { retryOf: job.id }, job.source.title);
+    } else if (role === 'add') {
+      const settings = this.acceptedSettings(job);
+      submission = this.enqueue(job.kind, type, jobKey(job), { id: null, url: job.source.url, title: null }, null, {
         scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...settings } }, retryOf: job.id,
       });
     } else if (job.items && job.items.length > 0) {
       const retryItems = job.items.filter((item) => item.state === 'failed')
         .map((item) => ({ sourceId: item.sourceId, title: item.title, url: item.url }));
-      if (retryItems.length === 0) throw new CollectorError('job_not_retryable', '這個工作沒有失敗的影片。');
-      const stopped = await this.subscriptionStopped(job.source.id!);
-      if (stopped === 'subscription_removed') throw new CollectorError('channel_not_found', '找不到這個 YouTube 頻道訂閱。');
+      if (retryItems.length === 0) throw new CollectorError('job_not_retryable', `這個工作沒有失敗的${noun}。`);
+      const stopped = await this.subscriptionStopped(type, job.source.id!);
+      if (stopped === 'subscription_removed') throw new CollectorError('channel_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
       if (stopped) throw new CollectorError('channel_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
-      submission = this.enqueue('youtube.channel', `channel:${job.source.id}`, {
+      submission = this.enqueue(job.kind, type, jobKey(job), {
         id: job.source.id, url: job.source.url, title: job.source.title,
       }, null, { scope: { trigger: 'manual' }, checkpoint: { retryItems }, retryOf: job.id });
     } else {
-      if (!this.options.checkChannel || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
-      submission = await this.options.checkChannel(job.source.id);
+      if (!this.options.checkSubscription || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
+      submission = await this.options.checkSubscription(type, job.source.id);
       const started = this.jobs.get(submission.job.id);
       if (started && !submission.deduplicated) {
         this.update(started, { retryOf: job.id });
@@ -505,7 +561,7 @@ export class JobManager {
    */
   async hold(timeoutMs = HOLD_TIMEOUT_MS, signal?: AbortSignal): Promise<() => void> {
     this.holds += 1;
-    // Steps waiting for their YouTube turn go back to the queue instead of holding this up.
+    // Steps waiting for their turn at a source go back to the queue instead of holding this up.
     this.stepAbort.abort(new CollectorError('vault_busy', '收集步驟已暫停。'));
     let released = false;
     const release = () => {
@@ -543,14 +599,14 @@ export class JobManager {
     return release;
   }
 
-  /** Number of top-level jobs that are queued, running or waiting for their videos. */
+  /** Number of top-level jobs that are queued, running or waiting for their items. */
   unfinishedCount(): number {
     let count = 0;
     for (const job of this.jobs.values()) if (job.parentId === null) count += 1;
     return count;
   }
 
-  /** True while any job of this Vault is queued, running or waiting for its videos. */
+  /** True while any job of this Vault is queued, running or waiting for its items. */
   isBusy(): boolean {
     return this.jobs.size > 0;
   }
@@ -568,9 +624,10 @@ export class JobManager {
   /**
    * Continues the Vault's interrupted jobs; called once when the Vault opens, before the scheduler
    * starts. Each job keeps its trigger, finished items, saved documents and failed attempts; a
-   * channel job that had not recorded its videos discovers them as any check starting now would.
-   * A job that a later job of the same video or channel took over, a channel job whose subscription
-   * was paused or removed, and a job that kept stopping the service in mid-step end instead.
+   * check job that had not recorded its items discovers them as any check starting now would.
+   * A job that a later job of the same item or subscription took over, a check job whose
+   * subscription was paused or removed, and a job that kept stopping the service in mid-step end
+   * instead. A job of a source type this process does not run stays interrupted, untouched.
    */
   async resume(): Promise<void> {
     if (this.closed) return;
@@ -578,13 +635,19 @@ export class JobManager {
     const superseded: CollectionJob[] = [];
     const pending: CollectionJob[] = [];
     const seen = new Set<string>();
+    const unknownTypes = new Set<string>();
     // The list is newest first, so a job whose key was already seen has a later job of the same target.
     for (const job of store.list(this.options.vaultPath, this.vaultId)) {
+      if (job.state === 'interrupted' && (!jobRole(job.kind) || !this.plugin(job.source.type))) {
+        unknownTypes.add(job.kind);
+        continue;
+      }
       const key = jobKey(job);
       const later = seen.has(key);
       seen.add(key);
       if (job.state === 'interrupted') (later ? superseded : pending).push(job);
     }
+    for (const kind of unknownTypes) console.warn(`Interrupted ${kind} jobs are kept and not resumed: their source type is not available`);
     pending.reverse();
     const settled = new Set<string>();
     const settle = (job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null) => {
@@ -592,8 +655,8 @@ export class JobManager {
       this.jobs.set(job.id, job);
       this.finish(job, state, result, error);
     };
-    /** Ends a channel job and the videos it queued, except videos the user also submitted. */
-    const skipChannel = (job: CollectionJob, reason: SkipReason) => {
+    /** Ends a check job and the items it queued, except items the user also submitted. */
+    const skipCheck = (job: CollectionJob, reason: SkipReason) => {
       for (const child of pending) {
         if (child.parentId === job.id && !child.claimedByUser && !settled.has(child.id)) {
           settle(child, 'completed', { outcome: 'skipped', skipReason: reason }, null);
@@ -601,12 +664,12 @@ export class JobManager {
       }
       if (job.items) {
         const items = job.items.map((item) => {
-          const video = item.jobId ? store.get(item.jobId) : undefined;
-          // A video the user also submitted continues as the user's own job.
-          if (video?.claimedByUser && video.state === 'interrupted') {
+          const child = item.jobId ? store.get(item.jobId) : undefined;
+          // An item the user also submitted continues as the user's own job.
+          if (child?.claimedByUser && child.state === 'interrupted') {
             return { ...item, state: 'completed' as const, outcome: 'skipped' as const, skipReason: reason, error: null };
           }
-          return this.storedItem(item);
+          return this.storedItem(job, item);
         });
         this.updateStored(job, { items, progress: progressOf(items) });
       }
@@ -616,61 +679,66 @@ export class JobManager {
     const repeated: JobError = { code: 'interrupted_repeatedly', message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
 
     for (const job of superseded) {
-      if (job.kind === 'youtube.channel') skipChannel(job, 'superseded');
+      if (roleOf(job) === 'check') skipCheck(job, 'superseded');
       else if (!settled.has(job.id)) settle(job, 'completed', { outcome: 'skipped', skipReason: 'superseded' }, null);
     }
-    const subscriptions = await this.options.channels.list();
-    const channelJobs: CollectionJob[] = [];
-    // Channel work first, so its videos follow the subscription's state.
+    const subscriptions = new Map<string, SubscriptionRecord[]>();
+    for (const [type, subscriptionStore] of Object.entries(this.options.subscriptions)) {
+      subscriptions.set(type, await subscriptionStore.list());
+    }
+    const checkJobs: CollectionJob[] = [];
+    // Subscription work first, so its items follow the subscription's state.
     for (const job of pending) {
-      if (job.kind === 'youtube.video' || settled.has(job.id)) continue;
+      const role = roleOf(job);
+      if (role === 'item' || settled.has(job.id)) continue;
       if (tooManyStops(job)) {
         settle(job, 'failed', { outcome: 'failed' }, repeated);
         continue;
       }
-      if (job.kind === 'youtube.channel') {
-        const subscription = subscriptions.find((candidate) => candidate.id === job.source.id);
+      const records = subscriptions.get(job.source.type) ?? [];
+      if (role === 'check') {
+        const subscription = records.find((candidate) => candidate.id === job.source.id);
         const reason: SkipReason | null = !subscription ? 'subscription_removed' : !subscription.enabled ? 'subscription_paused' : null;
         if (reason) {
-          skipChannel(job, reason);
+          skipCheck(job, reason);
           continue;
         }
-        channelJobs.push(job);
+        checkJobs.push(job);
       }
-      const subscribing = job.kind === 'youtube.channel-add' ? job.checkpoint?.subscribing : undefined;
-      const subscribed = subscribing ? subscriptions.find((candidate) => candidate.id === subscribing.channelId) : undefined;
+      const subscribing = role === 'add' ? job.checkpoint?.subscribing : undefined;
+      const subscribed = subscribing ? records.find((candidate) => candidate.id === subscribing.channelId) : undefined;
       if (subscribed) {
         // The subscription was written before the stop; its first collection is queued now, before the
-        // scheduler can start a check of the same channel, so that check joins it.
+        // scheduler can start a check of the same subscription, so that check joins it.
         const restored = this.restore(job, { queue: false });
         this.update(restored, { source: { ...restored.source, id: subscribed.id, title: subscribed.title } });
-        const followUp = this.enqueueChannel(subscribed, 'subscribe');
+        const followUp = this.enqueueCheck(job.source.type, subscribed, 'subscribe');
         this.finish(restored, 'completed', { outcome: 'created', channelId: subscribed.id, followUpJobId: followUp.job.id }, null);
         continue;
       }
       this.restore(job);
     }
     for (const job of pending) {
-      if (job.kind !== 'youtube.video' || settled.has(job.id)) continue;
+      if (roleOf(job) !== 'item' || settled.has(job.id)) continue;
       if (tooManyStops(job)) settle(job, 'failed', { outcome: 'failed' }, repeated);
       else this.restore(job);
     }
-    // Channel jobs past discovery wait for their videos again and record their check time.
-    for (const stored of channelJobs) {
+    // Check jobs past discovery wait for their items again and record their check time.
+    for (const stored of checkJobs) {
       const job = this.jobs.get(stored.id);
       if (!job?.items) continue;
       const items = job.items.map((item) => {
-        const video = item.jobId ? this.jobs.get(item.jobId) : undefined;
-        if (!video) return this.storedItem(item);
-        const watching = this.watchers.get(video.id) ?? new Set<string>();
+        const child = item.jobId ? this.jobs.get(item.jobId) : undefined;
+        if (!child) return this.storedItem(job, item);
+        const watching = this.watchers.get(child.id) ?? new Set<string>();
         watching.add(job.id);
-        this.watchers.set(video.id, watching);
-        return { ...item, state: video.state, ...(video.retry ? { retry: video.retry } : {}) };
+        this.watchers.set(child.id, watching);
+        return { ...item, state: child.state, ...(child.retry ? { retry: child.retry } : {}) };
       });
       this.update(job, { items, progress: progressOf(items) });
       const discovered = job.checkpoint?.discovered;
-      if (discovered && !job.checkpoint?.retryItems) await this.recordCheck(job.source.id!, discovered.at);
-      if (this.jobs.has(job.id)) this.completeChannelIfDone(job);
+      if (discovered && !job.checkpoint?.retryItems) await this.recordCheck(job.source.type, job.source.id!, discovered.at);
+      if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
     }
     await store.flush();
     this.pump();
@@ -682,10 +750,10 @@ export class JobManager {
    */
   private restore(stored: CollectionJob, options: { queue: boolean } = { queue: true }): CollectionJob {
     const timestamp = this.now().toISOString();
-    const waitsForVideos = stored.kind === 'youtube.channel' && stored.items !== null;
+    const waitsForItems = roleOf(stored) === 'check' && stored.items !== null;
     const job: CollectionJob = {
       ...stored,
-      state: waitsForVideos ? 'running' : 'queued',
+      state: waitsForItems ? 'running' : 'queued',
       finishedAt: null,
       error: null,
       recovery: {
@@ -704,7 +772,8 @@ export class JobManager {
     if (job.claimedByUser) this.manualClaims.add(job.id);
     if (job.wait) {
       // A cooldown still in force keeps the job waiting; one that ended while stopped is over.
-      if (new Date(job.wait.until).getTime() > this.now().getTime()) this.enterCooldown(job.wait.until);
+      const group = this.groupOf(job);
+      if (group && new Date(job.wait.until).getTime() > this.now().getTime()) this.enterCooldown(group, job.wait.until);
       else delete job.wait;
     }
     this.options.store.put(job);
@@ -716,7 +785,7 @@ export class JobManager {
           : stopReason === 'vault_move' ? '知識庫搬移完成，接續收集工作。'
             : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。',
     });
-    if (waitsForVideos || !options.queue) return job;
+    if (waitsForItems || !options.queue) return job;
     this.markWaiting(job);
     const waitMs = job.retry?.nextAttemptAt ? new Date(job.retry.nextAttemptAt).getTime() - this.now().getTime() : 0;
     if (waitMs > 0) this.waitForAttempt(job, waitMs);
@@ -724,12 +793,14 @@ export class JobManager {
     return job;
   }
 
-  /** An item whose video job is not running here, as that job's record says it ended. */
-  private storedItem(item: JobItem): JobItem {
-    const video = item.jobId ? this.options.store.get(item.jobId) : undefined;
-    if (video && video.state !== 'interrupted' && !ACTIVE.has(video.state)) return settledItem(item, video);
+  /** An item of a check job whose item job is not running here, as that job's record says it ended. */
+  private storedItem(check: CollectionJob, item: JobItem): JobItem {
+    const child = item.jobId ? this.options.store.get(item.jobId) : undefined;
+    if (child && child.state !== 'interrupted' && !ACTIVE.has(child.state)) return settledItem(item, child);
     if (!ACTIVE.has(item.state) && item.state !== 'interrupted') return item;
-    return { ...item, state: 'failed', error: { code: 'interrupted', message: '找不到這支影片的收集紀錄。' } };
+    const declaration = this.plugin(check.source.type)?.item;
+    const subject = declaration ? `這${declaration.measure}${declaration.noun}` : '這個項目';
+    return { ...item, state: 'failed', error: { code: 'interrupted', message: `找不到${subject}的收集紀錄。` } };
   }
 
   /** Changes a job that is not running in this manager. */
@@ -745,9 +816,9 @@ export class JobManager {
   async close(reason = '服務停止時工作尚未完成；已保存的內容保留。', stop: JobStopKind = 'shutdown'): Promise<void> {
     this.closed = true;
     this.stepAbort.abort(new CollectorError('vault_busy', '服務正在停止。'));
-    this.unsubscribePacing();
-    this.cancelCooldownTimer?.();
-    this.cancelCooldownTimer = null;
+    for (const unsubscribe of this.unsubscribePacing) unsubscribe();
+    for (const cooldown of this.cooldowns.values()) cooldown.cancel();
+    this.cooldowns.clear();
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
       this.options.store.interrupt(job, reason, { stop });
@@ -760,24 +831,28 @@ export class JobManager {
     await this.options.store.flush();
   }
 
-  private enqueueVideo(
-    url: string, parentId: string | null, publishedNotBefore: string | null = null, extra: Pick<CollectionJob, 'retryOf'> = {},
-    title: string | null = null,
+  private enqueueItem(
+    type: string, url: string, parentId: string | null, publishedNotBefore: string | null = null,
+    extra: Pick<CollectionJob, 'retryOf'> = {}, title: string | null = null,
   ): JobSubmission {
-    const video = parseYouTubeVideoUrl(url);
-    return this.enqueue('youtube.video', `video:${video.videoId}`, {
-      id: video.videoId, url: video.canonicalUrl, title,
+    const plugin = this.requirePlugin(type);
+    const ref = plugin.parseItem(url);
+    return this.enqueue(jobKind(type, 'item')!, type, `${type}:item:${ref.key}`, {
+      id: ref.key, url: ref.url, title,
     }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
   }
 
-  private enqueueChannel(channel: YouTubeChannel, trigger: ChannelJobTrigger): JobSubmission {
-    return this.enqueue('youtube.channel', `channel:${channel.id}`, {
-      id: channel.id, url: channel.url, title: channel.title,
+  private enqueueCheck(type: string, subscription: SubscriptionRecord, trigger: ChannelJobTrigger): JobSubmission {
+    const kind = jobKind(type, 'check');
+    if (!kind) throw new Error(`Source type ${type} has no check jobs`);
+    return this.enqueue(kind, type, `${type}:check:${subscription.id}`, {
+      id: subscription.id, url: subscription.url, title: subscription.title,
     }, null, { scope: { trigger } });
   }
 
   private enqueue(
-    kind: JobKind,
+    kind: string,
+    type: string,
     key: string,
     source: Omit<CollectionJob['source'], 'type'>,
     parentId: string | null,
@@ -787,7 +862,7 @@ export class JobManager {
     const activeId = this.activeByKey.get(key);
     if (activeId) {
       const active = this.jobs.get(activeId);
-      if (active && parentId === null && kind === 'youtube.video') {
+      if (active && parentId === null && roleOf(active) === 'item') {
         const checkpoint = { ...active.checkpoint, claimedAt: this.now().toISOString() };
         if (active.parentId !== null) {
           // A direct submission is the user's own request: no range bound and no subscription stop applies.
@@ -812,7 +887,7 @@ export class JobManager {
       vaultPath: this.options.vaultPath,
       ...this.vaultTag(),
       parentId,
-      source: { type: 'youtube', ...source },
+      source: { type, ...source },
       createdAt: timestamp,
       startedAt: null,
       finishedAt: null,
@@ -834,11 +909,11 @@ export class JobManager {
   }
 
   /**
-   * Puts a job back in line: videos in their lane, channel work in the discovery queue. `front`
-   * returns a step that was stopped before it reached YouTube to the head of the line.
+   * Puts a job back in line: items in their lane, subscription work in the discovery queue.
+   * `front` returns a step that was stopped before it reached its source to the head of the line.
    */
   private requeue(job: CollectionJob, front = false): void {
-    if (job.kind !== 'youtube.video') {
+    if (roleOf(job) !== 'item') {
       if (front) this.discoveryQueue.unshift(job.id);
       else this.discoveryQueue.push(job.id);
       return;
@@ -855,7 +930,7 @@ export class JobManager {
     }
   }
 
-  /** A step stopped by a hold before its YouTube request returns to the queue without spending an attempt. */
+  /** A step stopped by a hold before its source request returns to the queue without spending an attempt. */
   private returnToQueue(job: CollectionJob): void {
     this.update(job, { state: 'queued' });
     this.syncItemWait(job);
@@ -863,16 +938,18 @@ export class JobManager {
   }
 
   /**
-   * YouTube limited requests: the job waits in the queue for the cooldown and continues by itself.
-   * Its attempts are unchanged.
+   * The source limited requests: the job waits in the queue for its group's cooldown and continues
+   * by itself. Its attempts are unchanged.
    */
   private deferForCooldown(job: CollectionJob, retryAt: string | undefined): void {
-    const until = retryAt ?? this.cooldownUntil
+    const group = this.groupOf(job);
+    const until = retryAt ?? (group ? this.cooldowns.get(group)?.until : undefined)
       ?? new Date(this.now().getTime() + FALLBACK_COOLDOWN_MS).toISOString();
-    this.enterCooldown(until);
+    if (group) this.enterCooldown(group, until);
     this.update(job, { state: 'queued', wait: { reason: 'rate_limited', until } });
     this.event(job, {
-      severity: 'info', eventType: 'job.deferred', message: `YouTube 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
+      severity: 'info', eventType: 'job.deferred',
+      message: `${group ? this.pacingLabel(group) : this.plugin(job.source.type)?.label ?? job.source.type} 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
       until, ...(job.phase ? { phase: job.phase } : {}),
     });
     this.syncItemWait(job);
@@ -886,7 +963,7 @@ export class JobManager {
       if (!this.closed) this.returnToQueue(job);
       return true;
     }
-    if (error instanceof CollectorError && error.code === 'rate_limited') {
+    if (error instanceof CollectorError && this.classify(job, error) === 'rate_limited') {
       if (!this.closed) this.deferForCooldown(job, error.retryAt);
       return true;
     }
@@ -900,18 +977,23 @@ export class JobManager {
   }
 
   private pump(): void {
-    // Every step reads from YouTube, so none starts during a cooldown.
-    if (this.closed || this.holds > 0 || this.coolingDown()) return;
-    while (this.runningDiscovery < this.limits.discovery && this.discoveryQueue.length > 0) {
-      const id = this.discoveryQueue.shift()!;
+    if (this.closed || this.holds > 0) return;
+    // Every step reads from its source, so no step of a cooling pacing group starts; other groups go on.
+    while (this.runningDiscovery < this.limits.discovery) {
+      const index = this.discoveryQueue.findIndex((id) => {
+        const job = this.jobs.get(id);
+        return !job || !this.coolingDown(job);
+      });
+      if (index < 0) break;
+      const [id] = this.discoveryQueue.splice(index, 1);
       this.runningDiscovery += 1;
-      this.track(this.runDiscovery(id).finally(() => { this.runningDiscovery -= 1; this.pump(); }));
+      this.track(this.runDiscovery(id!).finally(() => { this.runningDiscovery -= 1; this.pump(); }));
     }
     while (this.runningCapture < this.limits.capture) {
       const id = this.nextCapture();
       if (!id) break;
       this.runningCapture += 1;
-      this.track(this.runVideo(id).finally(() => { this.runningCapture -= 1; this.pump(); }));
+      this.track(this.runItem(id).finally(() => { this.runningCapture -= 1; this.pump(); }));
     }
   }
 
@@ -927,14 +1009,20 @@ export class JobManager {
     }
   }
 
+  /** The head of the first lane, in rotation order, whose head job's pacing group is not cooling down. */
   private nextCapture(): string | undefined {
-    const lane = this.laneOrder.shift();
-    if (lane === undefined) return undefined;
-    const queue = this.captureLanes.get(lane)!;
-    const id = queue.shift();
-    if (queue.length > 0) this.laneOrder.push(lane);
-    else this.captureLanes.delete(lane);
-    return id;
+    for (let position = 0; position < this.laneOrder.length; position += 1) {
+      const lane = this.laneOrder[position]!;
+      const queue = this.captureLanes.get(lane)!;
+      const head = this.jobs.get(queue[0]!);
+      if (head && this.coolingDown(head)) continue;
+      this.laneOrder.splice(position, 1);
+      const id = queue.shift();
+      if (queue.length > 0) this.laneOrder.push(lane);
+      else this.captureLanes.delete(lane);
+      return id;
+    }
+    return undefined;
   }
 
   private track(work: Promise<void>): void {
@@ -942,32 +1030,34 @@ export class JobManager {
     void work.finally(() => this.running.delete(work)).catch(() => undefined);
   }
 
-  private async runVideo(id: string): Promise<void> {
+  private async runItem(id: string): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
     // A job that reached the save phase, or recorded the saved document, before it stopped created
-    // whatever document findExisting now returns for this video; that document is its own result.
+    // whatever document findExisting now returns for this item; that document is its own result.
     const savedEarlier = job.checkpoint?.savedDocumentId !== undefined || job.phase === 'save';
     const { signal } = this.stepAbort;
     this.start(job, 'capture');
     try {
-      const video = parseYouTubeVideoUrl(job.source.url);
-      const { documents, source } = this.options;
-      let document = await documents.findExisting(video.videoId);
+      const plugin = this.requirePlugin(job.source.type);
+      const ref = plugin.parseItem(job.source.url);
+      const key = { sourceType: plugin.id, sourceId: ref.key };
+      const { documents } = this.options;
+      let document = await documents.findExisting(key);
       let outcome: 'created' | 'existing' = document && savedEarlier ? 'created' : 'existing';
-      if (!document && await documents.isDeletedFor(video.videoId, { explicitAt: explicitRequestTime(job) })) {
-        // A deleted video is skipped before capture, so YouTube is not asked for a transcript the save would refuse.
+      if (!document && await documents.isDeletedFor(key, { explicitAt: explicitRequestTime(job) })) {
+        // A deleted item is skipped before capture, so the source is not asked for content the save would refuse.
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'deleted' }, null);
         return;
       }
       if (!document) {
-        const captured = await source.capture(
-          video, { ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}), signal },
+        const captured = await plugin.captureItem(
+          ref, { ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}), signal },
         );
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title } });
         // The save phase is on disk before the document is, so a restart knows who saved it.
         await this.options.store.flush();
-        const saved = await documents.save(captured, { explicitAt: explicitRequestTime(job) });
+        const saved = await documents.save({ sourceType: plugin.id, ...captured }, { explicitAt: explicitRequestTime(job) });
         document = saved.document;
         outcome = 'created';
         this.update(job, { checkpoint: { ...job.checkpoint, savedDocumentId: document.id } });
@@ -1007,8 +1097,8 @@ export class JobManager {
     if (!job) return;
     const { signal } = this.stepAbort;
     try {
-      if (job.kind === 'youtube.channel-add') await this.addChannel(job, signal);
-      else await this.discoverChannel(job, signal);
+      if (roleOf(job) === 'add') await this.addSubscription(job, signal);
+      else await this.discover(job, signal);
     } catch (error) {
       // A step cut short by shutdown is left for close() to record as interrupted.
       if (this.closed) return;
@@ -1023,7 +1113,7 @@ export class JobManager {
    */
   private failOrRetry(job: CollectionJob, error: JobError, detail?: string): void {
     const attempts = (job.retry?.attempts ?? 0) + 1;
-    if (!RETRYABLE.has(error.code)) {
+    if (this.classify(job, error) !== 'retry_now') {
       this.finish(job, 'failed', { outcome: 'failed' }, error, detail);
       return;
     }
@@ -1062,31 +1152,34 @@ export class JobManager {
     this.retryTimers.set(job.id, cancel);
   }
 
-  /** Channel jobs show the retry state of each of their videos. */
-  private notifyItemRetry(video: CollectionJob): void {
-    if (!video.retry) return;
-    for (const channelId of this.watchers.get(video.id) ?? []) {
-      const channel = this.jobs.get(channelId);
-      if (!channel?.items) continue;
-      this.update(channel, {
-        items: channel.items.map((item) => item.jobId === video.id ? { ...item, retry: video.retry! } : item),
+  /** Check jobs show the retry state of each of their items. */
+  private notifyItemRetry(child: CollectionJob): void {
+    if (!child.retry) return;
+    for (const checkId of this.watchers.get(child.id) ?? []) {
+      const check = this.jobs.get(checkId);
+      if (!check?.items) continue;
+      this.update(check, {
+        items: check.items.map((item) => item.jobId === child.id ? { ...item, retry: child.retry! } : item),
       });
     }
   }
 
-  private async addChannel(job: CollectionJob, signal: AbortSignal): Promise<void> {
+  private async addSubscription(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'resolve');
-    // A job interrupted while subscribing already knows its channel and may have added it.
+    const type = job.source.type;
+    const plugin = this.requirePlugin(type);
+    const store = this.subscriptionStore(type);
+    // A job interrupted while subscribing already knows its target and may have added it.
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
       ? { id: subscribing.channelId, title: subscribing.title, url: subscribing.url }
-      : await this.options.source.resolveChannel(job.source.url, { signal });
-    const existing = (await this.options.channels.list()).find((channel) => channel.id === resolved.id);
+      : await plugin.resolveTarget!(job.source.url, { signal });
+    const existing = (await store.list()).find((record) => record.id === resolved.id);
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
     if (existing && subscribing) {
       this.update(job, { source: { ...job.source, id: existing.id, title: existing.title } });
-      const followUp = this.enqueueChannel(existing, 'subscribe');
+      const followUp = this.enqueueCheck(type, existing, 'subscribe');
       this.finish(job, 'completed', { outcome: 'created', channelId: existing.id, followUpJobId: followUp.job.id }, null);
       return;
     }
@@ -1102,72 +1195,75 @@ export class JobManager {
     });
     await this.options.store.flush();
     // The first collection below is this subscription's first check; the next one is an interval later.
-    const settings = await this.acceptedSettings(job);
+    const settings = this.acceptedSettings(job);
     const now = this.now();
-    const channel = await this.options.channels.add({
+    const subscription = await store.add({
       ...resolved, enabled: true, addedAt: now.toISOString(), lastCheckedAt: null,
       settings: { ...settings }, lastDispatchedAt: now.toISOString(),
       nextCheckAt: new Date(now.getTime() + settings.intervalMinutes * 60_000).toISOString(),
     });
     this.recordEvent({
-      severity: 'info', eventType: 'subscription.added', message: `已訂閱「${channel.title}」。`,
-      sourceId: channel.id, sourceTitle: channel.title, subscriptionId: channel.id,
+      severity: 'info', eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`,
+      sourceType: type, sourceId: subscription.id, sourceTitle: subscription.title, subscriptionId: subscription.id,
     });
-    this.update(job, { source: { ...job.source, id: channel.id, title: channel.title } });
-    const followUp = this.enqueueChannel(channel, 'subscribe');
+    this.update(job, { source: { ...job.source, id: subscription.id, title: subscription.title } });
+    const followUp = this.enqueueCheck(type, subscription, 'subscribe');
     this.finish(job, 'completed', {
-      outcome: 'created', channelId: channel.id, followUpJobId: followUp.job.id,
+      outcome: 'created', channelId: subscription.id, followUpJobId: followUp.job.id,
     }, null);
   }
 
   /** The settings a subscription job subscribes with: the ones accepted with it, else the source type's defaults. */
-  private async acceptedSettings(job: CollectionJob): Promise<CollectionPolicy> {
-    return job.checkpoint?.settings ?? { ...DEFAULT_POLICY };
+  private acceptedSettings(job: CollectionJob): SubscriptionSettings {
+    return job.checkpoint?.settings ?? { ...this.requirePlugin(job.source.type).subscription!.defaults };
   }
 
   /**
-   * Lists the channel and queues one video job per discovered video. The range comes from the
+   * Lists the subscription and queues one item job per item found. The range comes from the
    * subscription's settings at this moment and is measured back from now, so a job that waited in
    * the queue or across a restart checks the range a check started now would.
    */
-  private async discoverChannel(job: CollectionJob, signal: AbortSignal): Promise<void> {
+  private async discover(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'discover');
+    const type = job.source.type;
+    const plugin = this.requirePlugin(type);
+    const keyField = plugin.storage!.outOfRangeKeyField;
     const retryItems = job.checkpoint?.retryItems;
-    const subscription = (await this.options.channels.list()).find((candidate) => candidate.id === job.source.id);
+    const subscription = (await this.subscriptionStore(type).list()).find((candidate) => candidate.id === job.source.id);
     if (!subscription?.enabled) {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: subscription ? 'subscription_paused' : 'subscription_removed' }, null);
       return;
     }
-    const channel: YouTubeChannel = { ...subscription, title: job.source.title ?? subscription.title, url: job.source.url };
-    const windowStart = backfillWindowStart(this.now(), subscription.settings.backfillWindow);
-    // A range that starts no earlier than the one that skipped a video still leaves it out.
+    const target = { ...subscription, title: job.source.title ?? subscription.title, url: job.source.url };
+    const range = plugin.subscription!.checkRange(subscription.settings, this.now());
+    // A range that starts no earlier than the one that skipped an item still leaves it out.
     const outside = new Set((subscription.outOfRange ?? [])
-      .filter((entry) => entry.before <= windowStart.toISOString()).map((entry) => entry.videoId));
+      .filter((entry) => entry.before <= range.since.toISOString()).map((entry) => entry[keyField]));
     const discovery = retryItems
       ? {
         candidates: null,
-        videos: retryItems.map((item) => ({ id: item.sourceId, title: item.title, url: item.url })),
+        items: retryItems.map((item) => ({ key: item.sourceId, title: item.title, url: item.url })),
         publishedNotBefore: null,
       }
-      : await discoverChannelVideos(
-        this.options.source, channel, { windowStart, maxItems: subscription.settings.backfillMaxItems },
-        // Collected, deleted and out-of-range videos stay candidates that are not collected, so they still fill the item limit.
-        async (videoId) => outside.has(videoId) || this.options.documents.isKnown(videoId),
-        { signal },
+      : await selectCandidates(
+        plugin.listSubscriptionItems!(target, { signal }), range,
+        // Collected, deleted and out-of-range items stay candidates that are not collected, so they still fill the item limit.
+        async (key) => outside.has(key) || this.options.documents.isKnown({ sourceType: type, sourceId: key }),
       );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
-    const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptionStopped(channel.id);
+    const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptionStopped(type, subscription.id);
     if (reason) {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       return;
     }
-    const items: JobItem[] = discovery.videos.map((video) => {
+    const items: JobItem[] = discovery.items.map((found) => {
+      const title = found.title ?? '';
       const item: JobItem = {
-        sourceId: video.id, title: video.title, url: video.url, jobId: null, state: 'queued', outcome: null, error: null,
+        sourceId: found.key, title, url: found.url, jobId: null, state: 'queued', outcome: null, error: null,
       };
       try {
-        const submission = this.enqueueVideo(video.url, job.id, discovery.publishedNotBefore, {}, video.title || null);
+        const submission = this.enqueueItem(type, found.url, job.id, discovery.publishedNotBefore, {}, title || null);
         item.jobId = submission.job.id;
         item.state = submission.job.state;
         if (submission.job.wait) item.wait = submission.job.wait;
@@ -1175,7 +1271,7 @@ export class JobManager {
         watching.add(job.id);
         this.watchers.set(submission.job.id, watching);
       } catch (error) {
-        // A video that could not be queued (for example, a full queue) fails here; the next check finds it again while it is a candidate.
+        // An item that could not be queued (for example, a full queue) fails here; the next check finds it again while it is a candidate.
         item.state = 'failed';
         item.error = errorDetails(error);
       }
@@ -1184,75 +1280,81 @@ export class JobManager {
     const discovered = { at: this.now().toISOString() };
     this.update(job, { phase: 'capture', items, progress: progressOf(items), checkpoint: { ...job.checkpoint, discovered } });
     this.event(job, {
-      severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} 支影片。`, phase: 'discover',
+      severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
     });
-    // The check time is saved only after the accepted videos are recorded, so a stop in between finds them again.
+    // The check time is saved only after the accepted items are recorded, so a stop in between finds them again.
     await this.options.store.flush();
     if (this.stoppedJobs.has(job.id) || retryItems) {
-      // A job stopped while its videos were being recorded leaves the subscription to the later job;
-      // a retry of earlier videos is not a check.
-      this.completeChannelIfDone(job);
+      // A job stopped while its items were being recorded leaves the subscription to the later job;
+      // a retry of earlier items is not a check.
+      this.completeCheckIfDone(job);
       return;
     }
-    const saved = await this.recordCheck(channel.id, discovered.at, new Set(discovery.candidates ?? []));
-    if (!saved) this.stopChannel(channel.id, 'subscription_removed');
-    else if (!saved.enabled) this.stopChannel(channel.id, 'subscription_paused');
-    if (this.jobs.has(job.id)) this.completeChannelIfDone(job);
+    const saved = await this.recordCheck(type, subscription.id, discovered.at, new Set(discovery.candidates ?? []));
+    if (!saved) this.stopSubscription(type, subscription.id, 'subscription_removed');
+    else if (!saved.enabled) this.stopSubscription(type, subscription.id, 'subscription_paused');
+    if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
   }
 
   /**
    * Records a check of the subscription at `at`, keeping a later check time already recorded, and
    * returns the subscription, or null once it is removed. Recording the same check again changes
-   * nothing. With the check's `candidates`, out-of-range videos that are no longer candidates are
+   * nothing. With the check's `candidates`, out-of-range items that are no longer candidates are
    * forgotten.
    */
-  private async recordCheck(channelId: string, at: string, candidates?: ReadonlySet<string>): Promise<YouTubeChannel | null> {
-    const current = (await this.options.channels.list()).find((candidate) => candidate.id === channelId);
-    if (candidates && current?.outOfRange?.some((entry) => !candidates.has(entry.videoId))) {
-      await this.updateOutOfRange(channelId, (entries) => entries.filter((entry) => candidates.has(entry.videoId)));
+  private async recordCheck(type: string, id: string, at: string, candidates?: ReadonlySet<string>): Promise<SubscriptionRecord | null> {
+    const store = this.subscriptionStore(type);
+    const keyField = this.requirePlugin(type).storage!.outOfRangeKeyField;
+    const current = (await store.list()).find((candidate) => candidate.id === id);
+    if (candidates && current?.outOfRange?.some((entry) => !candidates.has(entry[keyField]!))) {
+      await this.updateOutOfRange(type, id, (entries) => entries.filter((entry) => candidates.has(entry[keyField]!)));
     }
     if (!current || (current.lastCheckedAt && current.lastCheckedAt >= at)) return current ?? null;
-    return this.options.channels.update(channelId, { lastCheckedAt: at });
+    return store.update(id, { lastCheckedAt: at });
   }
 
-  /** Remembers that a channel job's video was published before the range start it was checked against. */
-  private async recordOutOfRange(video: CollectionJob): Promise<void> {
-    const channelId = video.parentId ? this.jobs.get(video.parentId)?.source.id : null;
-    const before = video.publishedNotBefore;
-    const videoId = video.source.id;
-    if (!channelId || !before || !videoId) return;
-    await this.updateOutOfRange(channelId, (entries) => [...entries.filter((entry) => entry.videoId !== videoId), { videoId, before }]);
+  /** Remembers that a check job's item was published before the range start it was checked against. */
+  private async recordOutOfRange(item: CollectionJob): Promise<void> {
+    const subscriptionId = item.parentId ? this.jobs.get(item.parentId)?.source.id : null;
+    const before = item.publishedNotBefore;
+    const key = item.source.id;
+    const type = item.source.type;
+    const keyField = this.plugin(type)?.storage?.outOfRangeKeyField;
+    if (!subscriptionId || !before || !key || !keyField) return;
+    await this.updateOutOfRange(type, subscriptionId, (entries) => [
+      ...entries.filter((entry) => entry[keyField] !== key), { [keyField]: key, before } as OutOfRangeEntry,
+    ]);
   }
 
-  /** Changes a subscription's out-of-range videos in one serialized store update. */
-  private async updateOutOfRange(channelId: string, change: (entries: OutOfRangeVideo[]) => OutOfRangeVideo[]): Promise<void> {
-    await this.options.channels.updateWith((channels) => {
-      const current = channels.find((candidate) => candidate.id === channelId);
-      return current ? new Map([[channelId, { outOfRange: change(current.outOfRange ?? []) }]]) : new Map();
+  /** Changes a subscription's out-of-range items in one serialized store update. */
+  private async updateOutOfRange(type: string, id: string, change: (entries: OutOfRangeEntry[]) => OutOfRangeEntry[]): Promise<void> {
+    await this.subscriptionStore(type).updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      return current ? new Map([[id, { outOfRange: change(current.outOfRange ?? []) }]]) : new Map();
     });
   }
 
   /** Null while the subscription exists and is enabled; otherwise why its work stops. */
-  private async subscriptionStopped(channelId: string): Promise<SkipReason | null> {
-    const channel = (await this.options.channels.list()).find((candidate) => candidate.id === channelId);
-    if (!channel) return 'subscription_removed';
-    return channel.enabled ? null : 'subscription_paused';
+  private async subscriptionStopped(type: string, id: string): Promise<SkipReason | null> {
+    const subscription = (await this.subscriptionStore(type).list()).find((candidate) => candidate.id === id);
+    if (!subscription) return 'subscription_removed';
+    return subscription.enabled ? null : 'subscription_paused';
   }
 
-  private onVideoSettled(video: CollectionJob): void {
-    const watching = this.watchers.get(video.id);
+  private onItemSettled(child: CollectionJob): void {
+    const watching = this.watchers.get(child.id);
     if (!watching) return;
-    this.watchers.delete(video.id);
-    for (const channelId of watching) {
-      const channel = this.jobs.get(channelId);
-      if (!channel?.items) continue;
-      const items = channel.items.map((item) => item.jobId === video.id ? settledItem(item, video) : item);
-      this.update(channel, { items, progress: progressOf(items) });
-      this.completeChannelIfDone(channel);
+    this.watchers.delete(child.id);
+    for (const checkId of watching) {
+      const check = this.jobs.get(checkId);
+      if (!check?.items) continue;
+      const items = check.items.map((item) => item.jobId === child.id ? settledItem(item, child) : item);
+      this.update(check, { items, progress: progressOf(items) });
+      this.completeCheckIfDone(check);
     }
   }
 
-  private completeChannelIfDone(job: CollectionJob): void {
+  private completeCheckIfDone(job: CollectionJob): void {
     const items = job.items ?? [];
     if (items.some((item) => ACTIVE.has(item.state))) return;
     const progress = progressOf(items);
@@ -1260,7 +1362,9 @@ export class JobManager {
     if (items.length === 0) {
       this.finish(job, 'completed', { outcome: 'empty' }, null);
     } else if (progress.failed === items.length) {
-      this.finish(job, 'failed', { outcome: 'failed' }, { code: 'all_items_failed', message: '這個頻道的影片都收集失敗。' });
+      const plugin = this.plugin(job.source.type);
+      const message = `這個${plugin?.subscription?.targetNoun ?? '訂閱'}的${plugin?.item.noun ?? '項目'}都收集失敗。`;
+      this.finish(job, 'failed', { outcome: 'failed' }, { code: 'all_items_failed', message });
     } else {
       const outcome = progress.failed > 0 ? 'partial' : progress.created > 0 ? 'created'
         : progress.existing > 0 ? 'existing' : 'skipped';
@@ -1276,7 +1380,7 @@ export class JobManager {
       state: 'running', phase, startedAt: job.startedAt ?? timestamp,
       ...(job.retry ? { retry: { ...job.retry, nextAttemptAt: null } } : {}),
     });
-    // Channel items stop showing the wait once the next attempt starts.
+    // Check items stop showing the wait once the next attempt starts.
     this.notifyItemRetry(job);
     this.syncItemWait(job);
     this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
@@ -1286,7 +1390,7 @@ export class JobManager {
     this.update(job, { state, result, error, finishedAt: this.now().toISOString() });
     this.event(job, state === 'completed'
       ? {
-        severity: 'info', eventType: 'job.completed', message: completionMessage(job, result), outcome: result.outcome,
+        severity: 'info', eventType: 'job.completed', message: this.completionMessage(job, result), outcome: result.outcome,
         ...(result.skipReason ? { skipReason: result.skipReason } : {}),
         ...(result.documentId ? { documentId: result.documentId } : {}),
       }
@@ -1296,7 +1400,7 @@ export class JobManager {
       });
     this.release(job);
     const settled = this.options.store.get(job.id)!;
-    this.onVideoSettled(settled);
+    this.onItemSettled(settled);
     this.notifySettled(settled);
   }
 
@@ -1322,11 +1426,15 @@ export class JobManager {
     this.options.store.put(job);
   }
 
-  /** Records an event of `job` with what the activity view shows and filters by: title, subscription, parent and trigger. */
+  /**
+   * Records an event of `job` with what the activity view shows and filters by: source type, title,
+   * subscription, parent and trigger.
+   */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     const subscriptionId = this.subscriptionOf(job);
     this.options.store.event({
       ...entry, vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
+      sourceType: job.source.type,
       ...(job.source.id ? { sourceId: job.source.id } : {}),
       ...(job.source.title ? { sourceTitle: job.source.title } : {}),
       ...(subscriptionId ? { subscriptionId } : {}),
@@ -1335,13 +1443,40 @@ export class JobManager {
     });
   }
 
-  /** The channel a job collects for: its own channel, its parent channel job's, or the one a subscription request added. */
+  /** The subscription a job collects for: its own, its parent check job's, or the one a subscription request added. */
   private subscriptionOf(job: CollectionJob): string | null {
-    if (job.kind === 'youtube.channel') return job.source.id;
-    if (job.kind === 'youtube.channel-add') return job.result?.channelId ?? job.checkpoint?.subscribing?.channelId ?? null;
+    const role = roleOf(job);
+    if (role === 'check') return job.source.id;
+    if (role === 'add') return job.result?.channelId ?? job.checkpoint?.subscribing?.channelId ?? null;
     if (!job.parentId) return null;
     const parent = this.jobs.get(job.parentId) ?? this.options.store.get(job.parentId);
-    return parent?.kind === 'youtube.channel' ? parent.source.id : null;
+    return parent && roleOf(parent) === 'check' ? parent.source.id : null;
+  }
+
+  /** How the job's source type treats a failure; an unregistered type's failures are not retried. */
+  private classify(job: CollectionJob, error: { code: string }): FailureClass {
+    return this.plugin(job.source.type)?.classifyFailure(error) ?? 'skip';
+  }
+
+  /** What a finished job's activity entry says; skip reasons and counts make the log readable on its own. */
+  private completionMessage(job: CollectionJob, result: JobResult): string {
+    if (result.outcome === 'skipped') return `略過：${SKIP_MESSAGES[result.skipReason ?? 'out_of_range']}。`;
+    const role = roleOf(job);
+    const plugin = this.plugin(job.source.type);
+    if (role === 'item') {
+      const stored = result.outcome === 'created' ? '收集完成，文件已保存' : '文件已存在';
+      return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
+    }
+    if (role === 'add') {
+      return result.outcome === 'created' ? '已訂閱，開始首次收集。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
+    }
+    if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
+    const progress = job.progress;
+    if (!progress) return '收集完成。';
+    const parts = [`新增 ${progress.created}`, `已存在 ${progress.existing}`];
+    if (progress.skipped) parts.push(`略過 ${progress.skipped}`);
+    if (progress.failed) parts.push(`失敗 ${progress.failed}`);
+    return `收集完成：${parts.join('・')}。`;
   }
 }
 
@@ -1350,17 +1485,17 @@ function clockTime(value: string): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-/** A channel job's item once the video job that collects it has finished. */
-function settledItem(item: JobItem, video: CollectionJob): JobItem {
+/** A check job's item once the item job that collects it has finished. */
+function settledItem(item: JobItem, child: CollectionJob): JobItem {
   const { wait: _wait, ...rest } = item;
   return {
     ...rest,
-    state: video.state,
-    outcome: video.result?.outcome === 'created' || video.result?.outcome === 'existing' || video.result?.outcome === 'skipped'
-      ? video.result.outcome : null,
-    ...(video.result?.skipReason ? { skipReason: video.result.skipReason } : {}),
-    error: video.error,
-    ...(video.retry ? { retry: video.retry } : {}),
+    state: child.state,
+    outcome: child.result?.outcome === 'created' || child.result?.outcome === 'existing' || child.result?.outcome === 'skipped'
+      ? child.result.outcome : null,
+    ...(child.result?.skipReason ? { skipReason: child.result.skipReason } : {}),
+    error: child.error,
+    ...(child.retry ? { retry: child.retry } : {}),
   };
 }
 
@@ -1372,11 +1507,26 @@ function publicJob(job: CollectionJob): CollectionJob {
   return copy;
 }
 
-/** The dedupe key an accepted job holds while it is unfinished. */
+/** The role of a job's kind; undefined for a kind of an unregistered type. */
+function roleOf(job: CollectionJob): JobRole | undefined {
+  return jobRole(job.kind)?.role;
+}
+
+function isRole(job: CollectionJob, type: string, role: JobRole): boolean {
+  return job.source.type === type && roleOf(job) === role;
+}
+
+/**
+ * The dedupe key an accepted job holds while it is unfinished: `<type>:item:<key>`,
+ * `<type>:check:<subscription ID>` or `<type>:add:<address>`. The keys live in memory only.
+ */
 function jobKey(job: CollectionJob): string {
-  if (job.kind === 'youtube.video') return `video:${job.source.id}`;
-  if (job.kind === 'youtube.channel') return `channel:${job.source.id}`;
-  return `channel-add:${job.source.url.toLowerCase()}`;
+  const type = job.source.type;
+  const role = roleOf(job);
+  if (role === 'item') return `${type}:item:${job.source.id}`;
+  if (role === 'check') return `${type}:check:${job.source.id}`;
+  if (role === 'add') return `${type}:add:${job.source.url.toLowerCase()}`;
+  return `${job.kind}:${job.source.id ?? job.source.url}`;
 }
 
 function progressOf(items: JobItem[]): JobProgress {
@@ -1390,35 +1540,18 @@ function progressOf(items: JobItem[]): JobProgress {
   return progress;
 }
 
-/** What a finished job's activity entry says; skip reasons and counts make the log readable on its own. */
-function completionMessage(job: CollectionJob, result: JobResult): string {
-  if (result.outcome === 'skipped') return `略過：${SKIP_MESSAGES[result.skipReason ?? 'out_of_range']}。`;
-  if (job.kind === 'youtube.video') {
-    const stored = result.outcome === 'created' ? '收集完成，文件已保存' : '文件已存在';
-    return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
-  }
-  if (job.kind === 'youtube.channel-add') return result.outcome === 'created' ? '已訂閱，開始首次收集。' : '這個頻道已在訂閱清單中。';
-  if (result.outcome === 'empty') return '收集完成，沒有新影片。';
-  const progress = job.progress;
-  if (!progress) return '收集完成。';
-  const parts = [`新增 ${progress.created}`, `已存在 ${progress.existing}`];
-  if (progress.skipped) parts.push(`略過 ${progress.skipped}`);
-  if (progress.failed) parts.push(`失敗 ${progress.failed}`);
-  return `收集完成：${parts.join('・')}。`;
-}
-
 const SKIP_MESSAGES: Record<SkipReason, string> = {
   out_of_range: '超出收集範圍', subscription_paused: '訂閱已暫停', subscription_removed: '訂閱已移除',
   superseded: '已由較新的工作接續', deleted: '文件已刪除',
 };
 
 /**
- * The latest time the user asked for this video by itself: a direct submission or a retry of one,
- * including a later direct submission merged into the same job, or a video a channel job queued
- * when the user also submitted it. Null for channel work.
+ * The latest time the user asked for this item by itself: a direct submission or a retry of one,
+ * including a later direct submission merged into the same job, or an item a check job queued
+ * when the user also submitted it. Null for subscription work.
  */
 function explicitRequestTime(job: CollectionJob): string | null {
-  if (job.kind !== 'youtube.video') return null;
+  if (roleOf(job) !== 'item') return null;
   if (job.parentId === null) return job.checkpoint?.claimedAt ?? job.createdAt;
   return job.claimedByUser ? job.checkpoint?.claimedAt ?? null : null;
 }

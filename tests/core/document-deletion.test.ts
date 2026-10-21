@@ -2,21 +2,26 @@ import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
+import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type CollectorOptions } from '../../src/core/collector.js';
 import {
   CollectorError,
-  type CapturedTranscript,
   type SavedDocument,
-  type YouTubeChannel,
-  type YouTubeVideoRef,
+  type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource } from '../../src/sources/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { inspectVaultDirectory, writeVaultMarker } from '../../src/vault/vault-directory.js';
+import type {
+  YouTubeVideoRef,
+} from '../../src/plugins/youtube/url.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import type { CapturedDocument } from '../../src/plugins/types.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { youtubeKey } from '../support/youtube-documents.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
 const CHANNEL = 'UCdeletiontestchannel000';
@@ -40,16 +45,16 @@ function captured(id: string): CapturedTranscript {
   };
 }
 
-class MemoryChannels implements ChannelStore {
-  readonly channels: YouTubeChannel[] = [{
+class MemoryChannels implements SubscriptionStore {
+  readonly channels: SubscriptionRecord[] = [{
     id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
     settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
   }];
   async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: YouTubeChannel) { this.channels.push(channel); return channel; }
+  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
   async remove() { return false; }
   async setEnabled() { return null; }
-  async update(id: string, patch: ChannelPatch) {
+  async update(id: string, patch: SubscriptionPatch) {
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
     Object.assign(channel, patch);
@@ -66,7 +71,7 @@ class Source implements YouTubeSource {
   private readonly waiting = new Map<string, () => void>();
 
   async resolveChannel(): Promise<ResolvedYouTubeChannel> { throw new Error('unused'); }
-  async discover(_channel: YouTubeChannel, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(_channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     return this.listing.slice(page.offset, page.offset + page.limit)
       .map((id) => ({ id, title: `影片 ${id}`, url: watchUrl(id), publishedAt: null, upcoming: false }));
   }
@@ -97,7 +102,7 @@ async function world(options: { holdAdds?: boolean } = {}) {
   let addGate: Promise<void> | null = null;
   let openGate: (() => void) | null = null;
   class GatedVault extends MarkdownVault {
-    override async add(capture: CapturedTranscript, addOptions?: { collectedAt?: Date }): Promise<SavedDocument> {
+    override async add(capture: CapturedDocument, addOptions?: { collectedAt?: Date }): Promise<SavedDocument> {
       const saved = await super.add(capture, addOptions);
       if (addGate) await addGate;
       return saved;
@@ -127,7 +132,7 @@ async function world(options: { holdAdds?: boolean } = {}) {
     const store = await JobStore.open(jobsDirectory, () => clock.now);
     stores.push(store);
     const manager = new JobManager({
-      vaultPath: root, store, source, documents: collector, channels,
+      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channels },
       limits: { discovery: 1, capture: 1 }, now: () => clock.now, createId: () => `job-${++sequence}`,
     });
     return { store, manager };
@@ -141,11 +146,11 @@ async function world(options: { holdAdds?: boolean } = {}) {
     holdAdd() { addGate = new Promise((resolve) => { openGate = resolve; }); },
     releaseAdd() { addGate = null; openGate?.(); },
     async collect(manager: JobManager, id: string) {
-      const submission = await manager.submitVideo(watchUrl(id));
+      const submission = await manager.submitItem('youtube', watchUrl(id));
       return manager.whenSettled(submission.job.id);
     },
     async checkChannel(manager: JobManager) {
-      const submission = await manager.submitChannel(channels.channels[0]!, 'manual');
+      const submission = await manager.submitCheck('youtube', channels.channels[0]!, 'manual');
       return manager.whenSettled(submission.job.id);
     },
   };
@@ -180,8 +185,8 @@ describe('deleting a document (A1)', () => {
       }],
     });
     expect((await w.collector.list()).map((document) => document.id)).toEqual([`youtube:${b}`]);
-    expect((await w.collector.sources({ youtube: w.channels.channels })).total).toBe(1);
-    expect(await w.collector.findExisting(a)).toBeNull();
+    expect((await w.collector.sources({ youtube: { subscriptions: w.channels.channels } })).total).toBe(1);
+    expect(await w.collector.findExisting(youtubeKey(a))).toBeNull();
     expect([...w.indexed.keys()]).toEqual([`youtube:${b}`]);
     await expect(w.collector.read(`youtube:${a}`)).rejects.toMatchObject({ code: 'document_deleted' });
     await expect(w.collector.delete(`youtube:${a}`)).rejects.toMatchObject({ code: 'document_deleted' });
@@ -226,7 +231,7 @@ describe('deleting a document (A1)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-deletion-nosearch-'));
     directories.push(root);
     const vault = new MarkdownVault(root);
-    await vault.add(captured(vid('alpha')));
+    await vault.add(transcriptDocument(captured(vid('alpha'))));
     const result = await new Collector(vault).delete(`youtube:${vid('alpha')}`);
     expect(result).toMatchObject({ indexed: false, indexMessage: expect.stringContaining('搜尋服務尚未啟用') });
   });
@@ -236,7 +241,7 @@ describe('deletion transaction and recovery (A2)', () => {
   it('hides a document as soon as its record exists and finishes the deletion when the Vault opens', async () => {
     const w = await world();
     const a = vid('alpha');
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     w.tick();
     // A stop right after the record was written leaves the file behind.
     await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
@@ -256,7 +261,7 @@ describe('deletion transaction and recovery (A2)', () => {
     const w = await world();
     const a = vid('alpha');
     // The clock does not move: collection and deletion carry the same time.
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     const record = await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
     expect(record.deletedAt).toBe(T0.toISOString());
 
@@ -269,7 +274,7 @@ describe('deletion transaction and recovery (A2)', () => {
     const a = vid('alpha');
     await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
     w.tick(1);
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
 
     expect(await w.vault.read(`youtube:${a}`)).not.toBeNull();
     const recovery = await w.vault.recoverDeletions();
@@ -281,15 +286,15 @@ describe('deletion transaction and recovery (A2)', () => {
   it('refuses an explicit request made at the deletion time and stamps a later one after the deletion', async () => {
     const w = await world();
     const a = vid('alpha');
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     await w.collector.delete(`youtube:${a}`);
 
-    await expect(w.collector.save(captured(a), { explicitAt: T0.toISOString() })).rejects.toMatchObject({ code: 'document_deleted' });
-    await expect(w.collector.save(captured(a))).rejects.toMatchObject({ code: 'document_deleted' });
+    await expect(w.collector.save(transcriptDocument(captured(a)), { explicitAt: T0.toISOString() })).rejects.toMatchObject({ code: 'document_deleted' });
+    await expect(w.collector.save(transcriptDocument(captured(a)))).rejects.toMatchObject({ code: 'document_deleted' });
 
     // The clock still reads the deletion time; the document is stamped one millisecond later.
     const later = new Date(T0.getTime() + 1).toISOString();
-    const result = await w.collector.save(captured(a), { explicitAt: later });
+    const result = await w.collector.save(transcriptDocument(captured(a)), { explicitAt: later });
     expect(result.recollected).toBe(true);
     expect(result.document.collectedAt).toBe(later);
     expect(await w.vault.deletions.list()).toEqual([]);
@@ -302,7 +307,7 @@ describe('deletion transaction and recovery (A2)', () => {
   ])('keeps the file and the record, hidden, when collected_at is %s', async (_name, damage) => {
     const w = await world();
     const a = vid('alpha');
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     w.tick();
     await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
     const file = path.join(w.root, 'documents/youtube', `${a}.md`);
@@ -417,7 +422,7 @@ describe('deletion races (A5)', () => {
     const { manager } = await w.boot();
     const a = vid('alpha');
     w.holdAdd();
-    const submission = await manager.submitVideo(watchUrl(a));
+    const submission = await manager.submitItem('youtube', watchUrl(a));
     await expect.poll(async () => exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true);
     w.tick();
     const deletion = w.collector.delete(`youtube:${a}`);
@@ -435,19 +440,19 @@ describe('deletion races (A5)', () => {
     const { manager } = await w.boot();
     const [hold, a] = [vid('hold'), vid('alpha')];
     w.source.held.add(hold);
-    const blocker = await manager.submitVideo(watchUrl(hold));
+    const blocker = await manager.submitItem('youtube', watchUrl(hold));
     await w.source.capturing(hold);
-    const early = await manager.submitVideo(watchUrl(a));
+    const early = await manager.submitItem('youtube', watchUrl(a));
     // The document arrives another way, such as an import, and is deleted while the job waits.
     w.tick();
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     w.tick();
     await w.collector.delete(`youtube:${a}`);
     w.source.release(hold);
     await manager.whenSettled(blocker.job.id);
 
     expect((await manager.whenSettled(early.job.id)).result).toMatchObject({ outcome: 'skipped', skipReason: 'deleted' });
-    expect(await w.collector.findExisting(a)).toBeNull();
+    expect(await w.collector.findExisting(youtubeKey(a))).toBeNull();
 
     w.tick();
     expect((await w.collect(manager, a)).result).toMatchObject({ outcome: 'created' });
@@ -458,23 +463,23 @@ describe('deletion races (A5)', () => {
     const { manager } = await w.boot();
     const [hold, a] = [vid('hold'), vid('alpha')];
     w.source.held.add(hold);
-    const blocker = await manager.submitVideo(watchUrl(hold));
+    const blocker = await manager.submitItem('youtube', watchUrl(hold));
     await w.source.capturing(hold);
-    const early = await manager.submitVideo(watchUrl(a));
+    const early = await manager.submitItem('youtube', watchUrl(a));
     w.tick();
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     w.tick();
     await w.collector.delete(`youtube:${a}`);
     w.tick();
 
-    const again = await manager.submitVideo(watchUrl(a));
+    const again = await manager.submitItem('youtube', watchUrl(a));
     expect(again).toMatchObject({ deduplicated: true, job: { id: early.job.id } });
     w.source.release(hold);
     await manager.whenSettled(blocker.job.id);
 
     expect((await manager.whenSettled(early.job.id)).result).toMatchObject({ outcome: 'created', documentId: `youtube:${a}` });
     expect(await w.vault.deletions.list()).toEqual([]);
-    expect(await w.collector.findExisting(a)).not.toBeNull();
+    expect(await w.collector.findExisting(youtubeKey(a))).not.toBeNull();
   });
 
   it('takes the latest direct submission of a video a channel job queued', async () => {
@@ -483,16 +488,16 @@ describe('deletion races (A5)', () => {
     const [hold, a] = [vid('hold'), vid('alpha')];
     w.source.listing = [hold, a];
     w.source.held.add(hold);
-    const channel = await manager.submitChannel(w.channels.channels[0]!, 'manual');
+    const channel = await manager.submitCheck('youtube', w.channels.channels[0]!, 'manual');
     await w.source.capturing(hold);
     // The user claims the queued video, the document arrives and is deleted, then the user asks again.
-    expect(await manager.submitVideo(watchUrl(a))).toMatchObject({ deduplicated: true });
+    expect(await manager.submitItem('youtube', watchUrl(a))).toMatchObject({ deduplicated: true });
     w.tick();
-    await w.vault.add(captured(a));
+    await w.vault.add(transcriptDocument(captured(a)));
     w.tick();
     await w.collector.delete(`youtube:${a}`);
     w.tick();
-    expect(await manager.submitVideo(watchUrl(a))).toMatchObject({ deduplicated: true });
+    expect(await manager.submitItem('youtube', watchUrl(a))).toMatchObject({ deduplicated: true });
     w.source.release(hold);
 
     const job = await manager.whenSettled(channel.job.id);
@@ -506,13 +511,13 @@ describe('deletion races (A5)', () => {
     const [a, b] = [vid('alpha'), vid('bravo')];
     w.source.listing = [a, b];
     w.source.held.add(a);
-    await first.manager.submitChannel(w.channels.channels[0]!, 'manual');
+    await first.manager.submitCheck('youtube', w.channels.channels[0]!, 'manual');
     await w.source.capturing(a);
-    const explicit = await first.manager.submitVideo(watchUrl(b));
+    const explicit = await first.manager.submitItem('youtube', watchUrl(b));
     // Both videos exist and are deleted while the jobs wait; then the service stops abruptly.
     w.tick();
-    await w.vault.add(captured(a));
-    await w.vault.add(captured(b));
+    await w.vault.add(transcriptDocument(captured(a)));
+    await w.vault.add(transcriptDocument(captured(b)));
     w.tick();
     await w.collector.delete(`youtube:${a}`);
     await w.collector.delete(`youtube:${b}`);
@@ -530,7 +535,7 @@ describe('deletion races (A5)', () => {
   it('removes the index entry of a document deleted while its index update runs', async () => {
     const w = await world();
     const a = vid('alpha');
-    const document = await w.vault.add(captured(a));
+    const document = await w.vault.add(transcriptDocument(captured(a)));
     const indexing = w.collector.index(document);
     w.tick();
     const deletion = w.collector.delete(`youtube:${a}`);

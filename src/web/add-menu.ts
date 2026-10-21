@@ -1,7 +1,31 @@
-import type { UrlRecognition } from '../core/types.js';
+import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
+import type { SourceKindInfo, UrlRecognition } from '../core/types.js';
+import type { SourcePluginDeclaration } from '../plugins/types.js';
 
-/** The add dialogs that exist: one item from a URL, and a YouTube channel subscription. */
-export type AddMode = 'url' | 'youtube-channel';
+/**
+ * The add dialogs that exist: `url` adds one item from a URL, and `<type>-<kind>` subscribes with a
+ * source type's subscription kind, e.g. a channel.
+ */
+export type AddMode = string;
+
+/** A source type's subscription kind, with the add dialog that subscribes with it. */
+interface SubscriptionKind {
+  declaration: SourcePluginDeclaration;
+  kind: SourceKindInfo;
+  mode: AddMode;
+}
+
+/** Every registered subscription kind, in registration order. */
+function subscriptionKinds(): SubscriptionKind[] {
+  return sourceDeclarations().flatMap((declaration) => declaration.kinds
+    .filter((kind) => kind.capability === 'subscription')
+    .map((kind) => ({ declaration, kind, mode: `${declaration.id}-${kind.id}` })));
+}
+
+/** The subscription kind an add dialog subscribes with; undefined for the URL dialog. */
+export function subscriptionKindOf(mode: AddMode): SubscriptionKind | undefined {
+  return subscriptionKinds().find((candidate) => candidate.mode === mode);
+}
 
 /** One entry of an add menu. */
 export interface AddMenuItem {
@@ -20,15 +44,53 @@ export const DOCUMENT_ADD_ITEMS: readonly AddMenuItem[] = [
   { id: 'note', label: '寫筆記', dialogTitle: '寫筆記', mode: null },
 ];
 
-/** The Subscriptions page's 新增訂閱 menu: each item adds a subscription that is checked for new items. */
-export const SUBSCRIPTION_ADD_ITEMS: readonly AddMenuItem[] = [
-  { id: 'youtube-channel', label: 'YouTube 頻道', dialogTitle: '訂閱 YouTube 頻道', mode: 'youtube-channel' },
-  { id: 'x', label: 'X 帳號', dialogTitle: '訂閱 X 帳號', mode: null },
-  { id: 'facebook', label: 'Facebook 粉專', dialogTitle: '訂閱 Facebook 粉專', mode: null },
-  { id: 'rss', label: 'RSS', dialogTitle: '訂閱 RSS', mode: null },
+/**
+ * Subscription types the menu shows before any plugin offers them, by the source type ID a plugin
+ * for them would register, in menu order. A registered type with the same ID takes its place.
+ */
+export const PLANNED_SUBSCRIPTION_TYPES: readonly { type: string; label: string }[] = [
+  { type: 'x', label: 'X 帳號' },
+  { type: 'facebook', label: 'Facebook 粉專' },
+  { type: 'rss', label: 'RSS' },
 ];
 
-export const ADD_DIALOG_TITLES: Record<AddMode, string> = { url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道' };
+/** The menu item of a registered subscription kind. */
+function kindItem({ kind, mode }: SubscriptionKind): AddMenuItem {
+  return { id: mode, label: kind.label, dialogTitle: `訂閱 ${kind.label}`, mode };
+}
+
+/**
+ * The Subscriptions page's 新增訂閱 menu: each item adds a subscription that is checked for new
+ * items. Registered kinds come first, except those of a planned type, which stand where the planned
+ * type does; a planned type no plugin registers opens the dialog saying it is not supported yet.
+ */
+export function subscriptionAddItems(): AddMenuItem[] {
+  const kinds = subscriptionKinds();
+  const planned = new Set(PLANNED_SUBSCRIPTION_TYPES.map((entry) => entry.type));
+  return [
+    ...kinds.filter(({ declaration }) => !planned.has(declaration.id)).map(kindItem),
+    ...PLANNED_SUBSCRIPTION_TYPES.flatMap(({ type, label }) => {
+      const offered = kinds.filter(({ declaration }) => declaration.id === type);
+      return offered.length > 0 ? offered.map(kindItem) : [{ id: type, label, dialogTitle: `訂閱 ${label}`, mode: null }];
+    }),
+  ];
+}
+
+/** The title of each add dialog. */
+export function addDialogTitles(): Record<AddMode, string> {
+  return { url: '加入網址', ...Object.fromEntries(subscriptionKinds().map(({ kind, mode }) => [mode, `訂閱 ${kind.label}`])) };
+}
+
+/**
+ * The hint an add dialog's address field shows: for a subscription, its kind's own; for the URL
+ * dialog, that of the one type that adds single items, or a general one when several do.
+ */
+export function addPlaceholder(mode: AddMode): string {
+  const subscription = subscriptionKindOf(mode);
+  if (subscription) return subscription.declaration.prompts.subscriptionPlaceholder;
+  const single = sourceDeclarations().filter((declaration) => declaration.kinds.some((kind) => kind.capability === 'single'));
+  return single.length === 1 ? single[0]!.prompts.itemPlaceholder : '貼上網址';
+}
 
 /** The body of the dialog an unsupported item opens. */
 export function unsupportedText(item: Pick<AddMenuItem, 'label'>): string {
@@ -45,14 +107,22 @@ export interface AddMismatch {
 
 /**
  * Whether the recognized address belongs in the other add dialog. Only the kind decides, so a
- * channel whose preview is unavailable, such as during a YouTube cooldown, still offers the switch.
+ * subscription address whose preview is unavailable, such as during a source's cooldown, still
+ * offers the switch.
  */
-export function addMismatch(mode: AddMode, recognition: Pick<UrlRecognition, 'kind'>): AddMismatch | null {
-  if (mode === 'url' && recognition.kind === 'channel') {
-    return { message: '這是 YouTube 頻道，要改為訂閱嗎？', action: '改為訂閱', switchTo: 'youtube-channel' };
+export function addMismatch(mode: AddMode, recognition: Pick<UrlRecognition, 'kind'> & Partial<Pick<UrlRecognition, 'sourceType'>>): AddMismatch | null {
+  if (!recognition.kind) return null;
+  const owner = recognition.sourceType ? sourceDeclaration(recognition.sourceType) : undefined;
+  const declarations = owner ? [owner] : sourceDeclarations();
+  const found = declarations.flatMap((declaration) => declaration.kinds
+    .filter((kind) => kind.id === recognition.kind).map((kind) => ({ declaration, kind })))[0];
+  if (!found) return null;
+  const { declaration, kind } = found;
+  if (mode === 'url' && kind.capability === 'subscription') {
+    return { message: `這是 ${kind.label}，要改為訂閱嗎？`, action: '改為訂閱', switchTo: `${declaration.id}-${kind.id}` };
   }
-  if (mode === 'youtube-channel' && recognition.kind === 'video') {
-    return { message: '這是單支影片，要改為加入一次嗎？', action: '改為加入一次', switchTo: 'url' };
+  if (mode !== 'url' && kind.capability === 'single') {
+    return { message: `這是單${declaration.item.measure}${declaration.item.noun}，要改為加入一次嗎？`, action: '改為加入一次', switchTo: 'url' };
   }
   return null;
 }

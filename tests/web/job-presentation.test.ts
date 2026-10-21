@@ -31,9 +31,9 @@ describe('job presentation', () => {
     const wait = { reason: 'rate_limited' as const, until: '2026-10-15T06:05:00.000Z' };
     const waiting = job({ state: 'queued', phase: 'capture', wait, retry: { attempts: 1, maxAttempts: 3, nextAttemptAt: null, lastError: { code: 'network_error', message: 'x' } } });
     expect(jobStateLabel(waiting)).toBe('等待中');
-    expect(waitLabel(wait)).toBe('YouTube 限制連線，約 14:05 繼續');
+    expect(waitLabel(wait, 'youtube')).toBe('YouTube 限制連線，約 14:05 繼續');
     expect(jobStatusText(waiting)).toBe('等待中・YouTube 限制連線，約 14:05 繼續');
-    expect(waitLabel(undefined)).toBeNull();
+    expect(waitLabel(undefined, 'youtube')).toBeNull();
     expect(jobStatusText(job({ state: 'running', phase: 'capture' }))).toBe('擷取字幕');
   });
 

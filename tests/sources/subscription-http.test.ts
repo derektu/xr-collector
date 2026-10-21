@@ -2,15 +2,17 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChannelCollector } from '../../src/channels/channel-collector.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { SyntheticYouTube } from '../channels/synthetic-youtube.js';
+import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { youtubeKey } from '../support/youtube-documents.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -29,32 +31,32 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const removedFromSearch: string[] = [];
   const search = { index: async () => undefined, remove: async (id: string) => { removedFromSearch.push(id); } };
   const collector: Collector = new Collector(new MarkdownVault(root, { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
-  const channelStore = new JsonChannelStore(root, now);
+  const channelStore = new JsonSubscriptionStore(root, 'youtube', now);
   const jobs = new JobManager({
-    vaultPath: root, store, source, documents: collector, channels: channelStore, now,
+    vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
   });
-  const channels = new ChannelCollector(channelStore, jobs, {
-    autoCollection: async () => true, resolveChannel: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
+  const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     deleteDocument: async (id) => {
       if (options.failDeleting?.(id)) throw new Error('disk error');
       return collector.delete(id);
     },
     recordDeletion: (entry) => collector.recordDeletion(entry), removalSettleMs: options.removalSettleMs ?? 5_000,
   });
-  const ui = await createHttpApp({ collector, jobs, channels });
-  const agent = await createHttpApp({ collector, jobs, channels, agentToken: 'agent-token' });
+  const ui = await createHttpApp({ collector, jobs, subscriptions: [channels] });
+  const agent = await createHttpApp({ collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
   const send = async (method: 'GET' | 'DELETE', url: string, app = agent) => {
     const response = await app.inject({ method, url, ...(app === agent ? { headers: { authorization: 'Bearer agent-token' } } : {}) });
     return { status: response.statusCode, body: response.json() };
   };
   const subscribe = async (name: string) => {
-    const added = await jobs.whenSettled((await channels.addChannel(`@${name}`)).job.id);
+    const added = await jobs.whenSettled((await channels.add(`@${name}`)).job.id);
     return jobs.whenSettled(added.result!.followUpJobId!);
   };
   const events = async () => (await store.activity.query({ limit: 200 }, { vaultPath: root })).events;
   /** Resolves once a removal has written the deletion record of a video that is still capturing. */
-  const deletionRecorded = (videoId: string) => vi.waitFor(async () => expect(await collector.isDeletedFor(videoId, { explicitAt: null })).toBe(true));
+  const deletionRecorded = (videoId: string) => vi.waitFor(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
   const close = async () => { await vi.waitFor(() => expect(jobs.isBusy()).toBe(false)); await ui.close(); await agent.close(); };
   return { root, clock, source, collector, jobs, channels, ui, agent, send, subscribe, events, removedFromSearch, deletionRecorded, close };
 }
@@ -69,7 +71,7 @@ describe('subscription requests in the list (N75-T6)', () => {
     const resolve = w.source.resolveChannel.bind(w.source);
     vi.spyOn(w.source, 'resolveChannel').mockImplementation(async (url) => { await resolving; return resolve(url); });
 
-    const accepted = await w.channels.addChannel('@alpha');
+    const accepted = await w.channels.add('@alpha');
     const pending = (await w.send('GET', '/api/sources')).body;
     expect(pending.sources).toEqual([]);
     expect(pending.pending).toEqual([{ jobId: accepted.job.id, url: accepted.job.source.url, title: null, checkStatus: expect.objectContaining({ state: expect.stringMatching(/^(queued|updating)$/u) }) }]);
@@ -85,7 +87,7 @@ describe('subscription requests in the list (N75-T6)', () => {
 
   it('drops a subscription request whose channel cannot be resolved; the job keeps the reason', async () => {
     const w = await world();
-    const accepted = await w.channels.addChannel('@missing');
+    const accepted = await w.channels.add('@missing');
     const failed = await w.jobs.whenSettled(accepted.job.id);
 
     expect(failed).toMatchObject({ state: 'failed', error: { code: 'invalid_channel' } });
@@ -106,8 +108,8 @@ describe('removed subscriptions in the document channel filter (N75-T7)', () => 
     const [video] = w.source.publish(single, 's', w.clock.now, [1]);
     await w.subscribe('kept');
     await w.subscribe('leaving');
-    await w.jobs.whenSettled((await w.jobs.submitVideo(`https://youtu.be/${video}`)).job.id);
-    await w.channels.removeChannel(leaving);
+    await w.jobs.whenSettled((await w.jobs.submitItem('youtube', `https://youtu.be/${video}`)).job.id);
+    await w.channels.remove(leaving);
 
     const publishers = (await w.send('GET', '/api/documents/sources')).body.sources.groups[0].publishers;
     expect(publishers).toEqual(expect.arrayContaining([
@@ -173,7 +175,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     w.source.holdCaptures = true;
     await w.channels.startRun({ trigger: 'manual', channelIds: [leaving] });
     await vi.waitFor(() => expect(w.source.running()).toEqual([late]));
-    await w.channels.setChannelEnabled(leaving, false);
+    await w.channels.setEnabled(leaving, false);
     expect((await w.send('GET', '/api/youtube/channels')).body.channels[0]).toMatchObject({ capturing: true, checkStatus: { state: 'paused' } });
 
     const removal = w.send('DELETE', `/api/youtube/channels/${leaving}?documents=delete`);
@@ -194,7 +196,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     await w.subscribe('leaving');
     const [single] = w.source.publish(leaving, 's', w.clock.now, [0]);
     w.source.holdCaptures = true;
-    const request = await w.jobs.submitVideo(`https://youtu.be/${single}`);
+    const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
     await vi.waitFor(() => expect(w.source.running()).toEqual([single]));
 
     // Whether the capture ends before or while the removal waits, its document is saved and then deleted.
@@ -216,7 +218,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     w.source.holdCaptures = true;
     const check = (await w.channels.startRun({ trigger: 'manual', channelIds: [leaving] }))[0]!;
     await vi.waitFor(() => expect(w.source.running()).toContain(late));
-    const request = await w.jobs.submitVideo(`https://youtu.be/${single}`);
+    const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
     await vi.waitFor(() => expect(w.source.running()).toContain(single));
 
     // The removal answers after its bounded wait while both captures still run.
@@ -267,7 +269,7 @@ describe('subscription status and removal over HTTP (N75-T9, N75-T10)', () => {
     const w = await world();
     const alpha = w.source.addChannel('alpha', '【合成】頻道 A');
     await w.subscribe('alpha');
-    const nextCheckAt = (await w.channels.listChannels())[0]!.nextCheckAt;
+    const nextCheckAt = (await w.channels.list())[0]!.nextCheckAt;
     const expected = { state: 'scheduled', nextCheckAt };
 
     expect((await w.send('GET', '/api/youtube/channels')).body.channels[0].checkStatus).toEqual(expected);
@@ -278,7 +280,7 @@ describe('subscription status and removal over HTTP (N75-T9, N75-T10)', () => {
       const rejected = await w.send('DELETE', `/api/youtube/channels/${alpha}?${query}`);
       expect([rejected.status, rejected.body.error.code]).toEqual([400, 'invalid_request']);
     }
-    expect((await w.channels.listChannels()).map((channel) => channel.id)).toEqual([alpha]);
+    expect((await w.channels.list()).map((channel) => channel.id)).toEqual([alpha]);
     expect((await w.send('DELETE', `/api/youtube/channels/${alpha}?documents=keep`)).body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 0, documentsFailed: 0 });
     expect((await w.send('DELETE', `/api/youtube/channels/${alpha}?documents=delete`)).status).toBe(404);
     await w.close();
@@ -291,8 +293,8 @@ describe('subscription status and removal over HTTP (N75-T9, N75-T10)', () => {
     w.source.publish(alpha, 'a', w.clock.now, [1]);
     await w.subscribe('alpha');
     await w.subscribe('beta');
-    await w.channels.setChannelEnabled(beta, false);
-    await w.channels.removeChannel(beta);
+    await w.channels.setEnabled(beta, false);
+    await w.channels.remove(beta);
     await w.subscribe('beta');
 
     for (const route of ['/api/sources', '/api/youtube/channels', `/api/sources/youtube/${alpha}`, '/api/documents/sources']) {

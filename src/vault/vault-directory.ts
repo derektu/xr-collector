@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CHANNELS_FILE, removalsFromJson, SCHEDULE_FILE, scheduleEnabledFromJson } from '../channels/subscription-files.js';
+import { removalsFromJson, scheduleEnabledFromJson } from '../subscriptions/subscription-files.js';
+import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 
@@ -28,15 +29,20 @@ const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 /** Operating-system files that do not make a directory non-empty. */
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
 /**
- * Settings files and what each must read as. An unreadable deletion file would let deleted
- * documents return, and a subscription or schedule file of another version would be misread, so
- * any of them failing makes the directory no Vault this program opens.
+ * Settings files and what each must read as: the subscriptions file of every registered type with
+ * subscriptions, the schedule file and the deletion file. An unreadable deletion file would let
+ * deleted documents return, and a subscription or schedule file of another version would be
+ * misread, so any of them failing makes the directory no Vault this program opens.
  */
-const SETTINGS_FILES: readonly { file: string; check: (value: unknown) => unknown }[] = [
-  { file: CHANNELS_FILE, check: removalsFromJson },
-  { file: SCHEDULE_FILE, check: scheduleEnabledFromJson },
-  { file: DELETIONS_FILE, check: deletionsFromJson },
-];
+function settingsFiles(): Array<{ file: string; check: (value: unknown) => unknown }> {
+  return [
+    ...subscriptionDefinitions().map((definition) => ({
+      file: definition.storage!.subscriptionsFile, check: (value: unknown) => removalsFromJson(definition, value),
+    })),
+    { file: scheduleFile(), check: scheduleEnabledFromJson },
+    { file: DELETIONS_FILE, check: deletionsFromJson },
+  ];
+}
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -65,7 +71,7 @@ function markerProblem(value: unknown): string | null {
   if (marker.format !== VAULT_FORMAT || !Number.isInteger(marker.formatVersion) || (marker.formatVersion ?? 0) < 1) {
     return '知識庫標記檔格式錯誤。';
   }
-  if ((marker.formatVersion ?? 0) > VAULT_FORMAT_VERSION) {
+  if ((marker.formatVersion ?? 0) > supportedVaultFormatVersion()) {
     return `此知識庫由較新版本的 XR Collector 建立（格式版本 ${marker.formatVersion}），請更新程式後再開啟。`;
   }
   if (typeof marker.id !== 'string' || !VAULT_ID.test(marker.id)) {
@@ -74,14 +80,19 @@ function markerProblem(value: unknown): string | null {
   return null;
 }
 
+/** The `.md` files in the document folder of every registered source type. */
 async function countDocuments(root: string): Promise<number> {
-  try {
-    const entries = await readdir(path.join(root, 'documents', 'youtube'));
-    return entries.filter((name) => name.endsWith('.md')).length;
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return 0;
-    throw error;
+  let count = 0;
+  for (const definition of sourceDefinitions()) {
+    try {
+      const entries = await readdir(path.join(root, 'documents', definition.id));
+      count += entries.filter((name) => name.endsWith('.md')).length;
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') continue;
+      throw error;
+    }
   }
+  return count;
 }
 
 /** Reads a directory and classifies it without changing anything inside it. */
@@ -124,7 +135,7 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   const problem = markerProblem(marker);
   if (problem) return { kind: 'invalid', path: root, reason: problem };
 
-  for (const { file, check } of SETTINGS_FILES) {
+  for (const { file, check } of settingsFiles()) {
     let value: unknown;
     try {
       value = JSON.parse(await readFile(path.join(root, file), 'utf8'));
@@ -150,6 +161,33 @@ export async function writeVaultMarker(root: string, createdBy: string, now = ne
     format: VAULT_FORMAT, formatVersion: VAULT_FORMAT_VERSION, createdAt: localTimestamp(now), createdBy, id: randomUUID(),
   };
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
+}
+
+/** The highest Vault format version this program opens: its own, or a higher one a registered source type declares. */
+export function supportedVaultFormatVersion(): number {
+  return Math.max(VAULT_FORMAT_VERSION, ...sourceDefinitions().map((definition) => definition.vaultFormatVersion));
+}
+
+/**
+ * Raises the marker of the Vault at `root` to the format version the given source types declare,
+ * before their documents or subscription files are written. A Vault already at that version or
+ * higher is left as it is, so a Vault holding only types of the base format keeps its marker byte
+ * for byte. A directory without a readable marker is not a Vault this hook changes.
+ */
+export async function ensureVaultFormat(root: string, types: Iterable<string>): Promise<void> {
+  const required = Math.max(0, ...[...types].map((type) => sourceDefinitions().find((definition) => definition.id === type)?.vaultFormatVersion ?? 0));
+  if (required <= VAULT_FORMAT_VERSION) return;
+  const file = path.join(root, VAULT_MARKER);
+  let marker: VaultMarker;
+  try {
+    marker = JSON.parse(await readFile(file, 'utf8')) as VaultMarker;
+  } catch {
+    return;
+  }
+  if (markerProblem(marker) || marker.formatVersion >= required) return;
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: required }, null, 2)}\n`, { flag: 'wx' });
+  await rename(temporary, file);
 }
 
 /** Creates a Vault only in a missing or empty directory. */

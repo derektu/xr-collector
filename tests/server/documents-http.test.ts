@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { Collector } from '../../src/core/collector.js';
-import type { SavedDocument, YouTubeChannel } from '../../src/core/types.js';
+import type { SavedDocument, SubscriptionRecord } from '../../src/core/types.js';
 import { ManagedTranscriptSearch, type SearchBackend } from '../../src/search/managed-transcript-search.js';
 import { fileSearchStateStore } from '../../src/search/runtime.js';
 import { createHttpApp } from '../../src/server/app.js';
@@ -59,16 +59,17 @@ async function vaultRoot(): Promise<string> {
   return root;
 }
 
-function channel(id: string, title: string): YouTubeChannel {
+function channel(id: string, title: string): SubscriptionRecord {
   return { id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z' };
 }
 
-function channels(list: YouTubeChannel[]) {
+function channels(list: SubscriptionRecord[]) {
   return {
-    listChannels: async () => list,
-    addChannel: async () => { throw new Error('unused'); },
-    setChannelEnabled: async () => { throw new Error('unused'); },
-    removeChannel: async () => undefined,
+    type: 'youtube',
+    list: async () => list,
+    add: async () => { throw new Error('unused'); },
+    setEnabled: async () => { throw new Error('unused'); },
+    remove: async () => undefined,
     startRun: async () => [],
   };
 }
@@ -139,7 +140,7 @@ describe('documents HTTP contract', () => {
     await writeDocument(root, { videoId: 'legacy00001', publisher: '舊頻道', collectedAt: '2026-10-05T00:00:00.000Z' });
     const app = await createHttpApp({
       collector: new Collector(new MarkdownVault(root)),
-      channels: channels([channel('UC-a', '同名頻道'), channel('UC-b', '同名頻道'), channel('UC-empty', '沒有文件的頻道')]),
+      subscriptions: [channels([channel('UC-a', '同名頻道'), channel('UC-b', '同名頻道'), channel('UC-empty', '沒有文件的頻道')])],
     });
 
     const ids = async (query: string) => (await app.inject(`/api/documents?${query}`)).json().documents.map((document: SavedDocument) => document.id);

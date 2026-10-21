@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ChannelSchedule, CollectionPolicy, SourceDetail as Detail, SourceTypeInfo } from '../core/types.js';
+import type { ChannelSchedule, SourceDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { ConfirmApplySettings } from './ConfirmApplySettings.js';
@@ -42,7 +42,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState<Saving>({ kind: 'idle' });
   /** Settings shown while a save is in flight; the saved detail replaces them. */
-  const [pending, setPending] = useState<CollectionPolicy | null>(null);
+  const [pending, setPending] = useState<SubscriptionSettings | null>(null);
   const [reload, setReload] = useState(0);
   const saveSequence = useRef(0);
   const saveInFlight = useRef(false);
@@ -79,7 +79,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   async function toggle(): Promise<void> {
     setBusy(true);
     try {
-      await api.setChannelEnabled(source.id, paused);
+      await api.setChannelEnabled(source.type, source.id, paused);
       onChanged(paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`);
     } catch (error) {
       onChanged(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
@@ -88,14 +88,14 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     }
   }
 
-  function saveSettings(patch: Partial<CollectionPolicy>): void {
+  function saveSettings(patch: Partial<SubscriptionSettings>): void {
     const sequence = ++saveSequence.current;
-    setPending({ ...(pending ?? source.settings), ...patch });
+    setPending({ ...(pending ?? source.settings), ...patch } as SubscriptionSettings);
     setSaving({ kind: 'saving' });
     saveInFlight.current = true;
     const send = async () => {
       try {
-        await api.updateChannelSettings(source.id, patch);
+        await api.updateChannelSettings(source.type, source.id, patch);
         if (sequence !== saveSequence.current) return;
         saveInFlight.current = false;
         setSaving({ kind: 'saved' });
@@ -155,7 +155,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
         <button type="button" className="button small" onClick={() => setApplying(true)} data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
       </div>
       <div className="panel-body">
-        <CollectionSettingsFields idPrefix="detail-settings" fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
+        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
           onChange={saveSettings} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
@@ -174,7 +174,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
         <div className="panel-heading"><h2>收集紀錄</h2><button type="button" className="inline-link" onClick={() => onOpenActivity({ source: source.id })} data-testid="all-activity">全部記錄</button></div>
         {recentJobs.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
           : <ul className="plain-list records">{recentJobs.map((record) => {
-            const label = jobRecordLabel(record);
+            const label = jobRecordLabel(record, undefined, source.type);
             return <li key={record.id} className={record.state}>
               <button type="button" className="record-link" onClick={() => onOpenActivity({ job: record.id })} title="查看此次工作" data-testid={`record-${record.id}`}>
                 <span className="title">{label.title}</span><span className="muted">{label.detail}</span>

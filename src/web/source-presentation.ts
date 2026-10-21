@@ -1,5 +1,7 @@
-import type { ChannelSchedule, CollectionJob, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
-import { triggerLabel } from './subscription-presentation.js';
+import type { ChannelSchedule, CollectionJob, PendingSubscription, RecognitionAction, SourceEntry, SourceJobRecord, Subscription, UrlRecognition } from '../core/types.js';
+import { sourceDeclarations } from '../core/source-registry.js';
+import type { SourcePluginDeclaration } from '../plugins/types.js';
+import { itemNoun, triggerLabel } from './subscription-presentation.js';
 
 /** A compact local time: "今天 13:30", "昨天 21:05", "10-14 08:00" this year, "2025-12-31" before. */
 export function shortTimeLabel(value: string, now: Date = new Date()): string {
@@ -72,14 +74,28 @@ export function initials(title: string): string {
   return letters.slice(0, 2).join('').toUpperCase() || '?';
 }
 
-/** A channel address as shown under a source name, without the scheme and the listing suffix. */
+/**
+ * The source type of a subscription request, told by which type owns its address, with the label of
+ * that type's subscription kind; undefined when no registered type owns it.
+ */
+export function pendingOwner(entry: Pick<PendingSubscription, 'url'>): { declaration: SourcePluginDeclaration; kindLabel: string } | undefined {
+  let url: URL | null = null;
+  try { url = new URL(entry.url); } catch { url = null; }
+  const declaration = sourceDeclarations().find((candidate) => candidate.subscription && candidate.owns(entry.url, url));
+  if (!declaration) return undefined;
+  const kind = declaration.kinds.find((candidate) => candidate.capability === 'subscription');
+  return { declaration, kindLabel: kind?.label ?? declaration.label };
+}
+
+/** A subscription address as shown under a source name, without the scheme and the listing suffix. */
 export function displayUrl(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/u, '').replace(/\/videos\/?$/u, '');
 }
 
 /** One line of a source's collection record. */
-export function jobRecordLabel(record: SourceJobRecord, now: Date = new Date()): { title: string; detail: string; active: boolean } {
-  const title = triggerLabel(record.trigger);
+export function jobRecordLabel(record: SourceJobRecord, at: Date | undefined, type: string): { title: string; detail: string; active: boolean } {
+  const now = at ?? new Date();
+  const title = triggerLabel(record.trigger, type);
   const progress = record.progress;
   const resumed = record.resumedCount > 0;
   if (record.state === 'queued' || record.state === 'running') {
@@ -98,7 +114,7 @@ export function jobRecordLabel(record: SourceJobRecord, now: Date = new Date()):
   const suffix = resumed ? '・曾中斷後接續' : '';
   if (record.outcome === 'skipped') return { title, detail: `${when} · 已略過${suffix}`, active: false };
   const created = progress?.created ?? 0;
-  return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : '沒有新影片'}${suffix}`, active: false };
+  return { title, detail: `${when} · ${created > 0 ? `新增 ${created}` : `沒有新${itemNoun(type)}`}${suffix}`, active: false };
 }
 
 /**

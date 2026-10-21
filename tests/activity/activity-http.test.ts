@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import { CollectorError, type CapturedTranscript, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
+import { CollectorError, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { createHttpApp, type ActivityAccess, type HttpAppOptions } from '../../src/server/app.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { transcriptOf } from '../support/youtube-documents.js';
+import { withYouTube } from '../support/youtube-sources.js';
 
 // The activity and job query routes: device data readable while an import holds the Vault and before
 // one is chosen, the same contract for the UI and Agents, and parameter validation.
@@ -22,8 +26,9 @@ afterEach(async () => {
 function services(failures: CollectorError[] = []) {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
-    getBySourceId: async () => saved,
-    add: async (input: CapturedTranscript) => {
+    getByKey: async () => saved,
+    add: async (document) => {
+      const input = transcriptOf(document);
       saved = {
         id: `youtube:${input.videoId}`, type: 'Transcript', sourceType: 'youtube', title: input.title, sourceUrl: input.sourceUrl,
         sourceId: input.videoId, publisher: { id: null, name: null }, publishedAt: null, collectedAt: '2026-10-15T00:00:00.000Z',
@@ -38,7 +43,7 @@ function services(failures: CollectorError[] = []) {
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
     vaultPath: VAULT, store, documents: collector,
-    source: {
+    plugins: [youtubePlugin({
       resolveChannel: async () => { throw new CollectorError('invalid_channel', '無法辨認'); },
       discover: async () => [],
       capture: async (video) => {
@@ -49,8 +54,8 @@ function services(failures: CollectorError[] = []) {
           publishedAt: null, languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual', bodyMarkdown: '正文',
         };
       },
-    },
-    channels: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null, update: async () => null } as never,
+    })],
+    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null, update: async () => null } as never },
   });
   const activity: ActivityAccess = {
     query: (query) => store.activity.query(query, { vaultPath: VAULT }),
@@ -132,12 +137,12 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const runtime = await CollectorRuntime.start({
       profilePath: root,
-      workspace: {
+      workspace: withYouTube({
         capture: { capture: async () => { throw new Error('unused'); } } as never,
         channelSource: { resolve: async () => { throw new Error('unused'); }, listVideos: async () => [] },
         searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
-      },
+      }),
       connectionFile: path.join(root, 'agent-connection.json'),
       skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });

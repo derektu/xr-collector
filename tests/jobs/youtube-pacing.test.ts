@@ -2,27 +2,39 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { YouTubeGate } from '../../src/capture/youtube-gate.js';
-import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
+import { PacingGate } from '../../src/pacing/pacing-gate.js';
+import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
+import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
-  type CapturedTranscript,
   type DocumentSummary,
   type SavedDocument,
-  type YouTubeChannel,
-  type YouTubeVideoRef,
+  type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type {
-  CaptureOptions, DiscoveredYouTubeVideo, ListingPage, RequestOptions, ResolvedYouTubeChannel, YouTubeSource,
-} from '../../src/sources/youtube/adapter.js';
-import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
+  CaptureOptions,
+  DiscoveredYouTubeVideo,
+  ListingPage,
+  RequestOptions,
+  ResolvedYouTubeChannel,
+  YouTubeSource,
+  CapturedTranscript,
+} from '../../src/plugins/youtube/adapter.js';
+import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { readEventFiles } from '../activity/event-files.js';
+import type {
+  YouTubeVideoRef,
+} from '../../src/plugins/youtube/url.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { transcriptOf } from '../support/youtube-documents.js';
 
 // Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
-// through a real YouTubeGate, so cooldowns, waits and restarts follow the same rules as the app.
+// through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
 
 const VAULT = '/vaults/pacing';
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
@@ -33,8 +45,9 @@ const network = () => new CollectorError('network_error', '無法連線到 YouTu
 
 class MemoryVault implements DocumentVault {
   readonly documents = new Map<string, SavedDocument>();
-  async getBySourceId(sourceId: string) { return this.documents.get(sourceId) ?? null; }
-  async add(capture: CapturedTranscript) {
+  async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
+  async add(item: CapturedDocument) {
+    const capture = transcriptOf(item);
     const document: SavedDocument = {
       id: `youtube:${capture.videoId}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
       sourceType: 'youtube', sourceId: capture.videoId, publisher: { id: capture.channelId, name: capture.channelTitle },
@@ -48,13 +61,13 @@ class MemoryVault implements DocumentVault {
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
 }
 
-class MemoryChannels implements ChannelStore {
-  readonly channels: YouTubeChannel[] = [];
+class MemoryChannels implements SubscriptionStore {
+  readonly channels: SubscriptionRecord[] = [];
   async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: YouTubeChannel) { this.channels.push(channel); return channel; }
+  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
   async remove() { return false; }
   async setEnabled() { return null; }
-  async update(id: string, patch: ChannelPatch) {
+  async update(id: string, patch: SubscriptionPatch) {
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
     Object.assign(channel, patch);
@@ -76,7 +89,7 @@ class GatedSource implements YouTubeSource {
   holdNext = false;
   private readonly held: Array<() => void> = [];
 
-  constructor(private readonly gate: YouTubeGate) {}
+  constructor(private readonly gate: PacingGate) {}
 
   releaseHeld(): void { for (const release of this.held.splice(0)) release(); }
   get heldCount(): number { return this.held.length; }
@@ -98,7 +111,7 @@ class GatedSource implements YouTubeSource {
     return this.request(`resolve:${url}`, () => ({ id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url }), options);
   }
 
-  discover(channel: YouTubeChannel, page: ListingPage, options?: RequestOptions): Promise<DiscoveredYouTubeVideo[]> {
+  discover(channel: SubscriptionRecord, page: ListingPage, options?: RequestOptions): Promise<DiscoveredYouTubeVideo[]> {
     return this.request(`list:${channel.id}`, () => (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit), options);
   }
 
@@ -114,7 +127,7 @@ class GatedSource implements YouTubeSource {
 }
 
 const directories: string[] = [];
-const processes: Array<{ gate: YouTubeGate; manager: JobManager; store: JobStore }> = [];
+const processes: Array<{ gate: PacingGate; manager: JobManager; store: JobStore }> = [];
 afterEach(async () => {
   for (const running of processes.splice(0)) {
     await running.manager.close().catch(() => undefined);
@@ -157,12 +170,12 @@ async function world(options: { waitMs?: number } = {}) {
 
   /** One process: a gate read from its state file, a job store on disk and a manager. */
   const boot = async () => {
-    const gate = await YouTubeGate.open({ statePath, now: clock, random: () => 0, setTimer, waitRangeMs: { min: wait, max: wait } });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, setTimer, waitRangeMs: { min: wait, max: wait } });
     const store = await JobStore.open(jobsPath, clock);
     const source = new GatedSource(gate);
     const manager = new JobManager({
-      vaultPath: VAULT, store, source, documents: new Collector(vault, { index: async () => undefined }), channels,
-      now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: gate,
+      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: { youtube: channels },
+      now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
     });
     processes.push({ gate, store, manager });
     return { gate, store, source, manager };
@@ -176,7 +189,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const w = await world();
     const p = await w.boot();
     p.source.failures.set('info:aaaaaaaaaaa', [limited()]);
-    const first = await p.manager.submitVideo(watchUrl('aaaaaaaaaaa'));
+    const first = await p.manager.submitItem('youtube', watchUrl('aaaaaaaaaaa'));
     await w.advance(0);
     const until = new Date(T0 + 5 * MINUTE).toISOString();
     await vi.waitFor(() => expect(p.manager.get(first.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
@@ -184,7 +197,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     expect(p.gate.status()).toMatchObject({ state: 'cooldown', cooldownUntil: until, level: 1 });
 
     // Nothing reaches YouTube during the cooldown, including work accepted meanwhile.
-    const second = await p.manager.submitVideo(watchUrl('bbbbbbbbbbb'));
+    const second = await p.manager.submitItem('youtube', watchUrl('bbbbbbbbbbb'));
     await w.advance(5 * MINUTE - 1);
     expect(p.source.requests).toEqual(['info:aaaaaaaaaaa']);
     expect(p.manager.get(second.job.id).state).toBe('queued');
@@ -214,13 +227,13 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const w = await world();
     const p = await w.boot();
     p.source.failures.set('info:jjjjjjjjjjj', [limited()]);
-    const limitedJob = await p.manager.submitVideo(watchUrl('jjjjjjjjjjj'));
-    const queuedJob = await p.manager.submitVideo(watchUrl('kkkkkkkkkkk'));
+    const limitedJob = await p.manager.submitItem('youtube', watchUrl('jjjjjjjjjjj'));
+    const queuedJob = await p.manager.submitItem('youtube', watchUrl('kkkkkkkkkkk'));
     const until = new Date(T0 + 5 * MINUTE).toISOString();
     await vi.waitFor(() => expect(p.manager.get(limitedJob.job.id).wait).toBeDefined());
     // The job that was only waiting in line shows the same cooldown, so the UI and Agents see why.
     expect(p.manager.get(queuedJob.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } });
-    const lateJob = await p.manager.submitVideo(watchUrl('lllllllllll'));
+    const lateJob = await p.manager.submitItem('youtube', watchUrl('lllllllllll'));
     expect(p.manager.get(lateJob.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } });
     expect(p.source.requests).toEqual(['info:jjjjjjjjjjj']);
 
@@ -232,7 +245,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     }
     // Outside a cooldown a new job carries no wait.
     p.source.holdNext = true;
-    const after = await p.manager.submitVideo(watchUrl('mmmmmmmmmmm'));
+    const after = await p.manager.submitItem('youtube', watchUrl('mmmmmmmmmmm'));
     expect(p.manager.get(after.job.id).wait).toBeUndefined();
     await vi.waitFor(() => expect(p.source.heldCount).toBe(1));
     p.source.releaseHeld();
@@ -241,14 +254,14 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
   it('shows the wait on the channel item and resumes a channel check after the cooldown', async () => {
     const w = await world();
     const p = await w.boot();
-    const channel: YouTubeChannel = {
+    const channel: SubscriptionRecord = {
       id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url: 'https://www.youtube.com/channel/UCpacingpacingpacingpaci/videos',
       enabled: true, addedAt: new Date(T0).toISOString(), settings: { ...DEFAULT_POLICY },
     };
     w.channels.channels.push(channel);
     p.source.channelVideos.set(channel.id, [{ id: 'ccccccccccc', title: '影片', url: watchUrl('ccccccccccc'), publishedAt: null, upcoming: false }]);
     p.source.failures.set('subtitles:ccccccccccc', [limited()]);
-    const accepted = await p.manager.submitChannel(channel, 'manual');
+    const accepted = await p.manager.submitCheck('youtube', channel, 'manual');
     await w.advance(0);
     const until = new Date(T0 + 5 * MINUTE).toISOString();
     await vi.waitFor(() => expect(p.manager.get(accepted.job.id).items![0]).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
@@ -261,20 +274,20 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
   it('defers a channel check limited while listing, and keeps network errors at three attempts', async () => {
     const w = await world();
     const p = await w.boot();
-    const channel: YouTubeChannel = {
+    const channel: SubscriptionRecord = {
       id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url: 'https://www.youtube.com/channel/UCpacingpacingpacingpaci/videos',
       enabled: true, addedAt: new Date(T0).toISOString(), settings: { ...DEFAULT_POLICY },
     };
     w.channels.channels.push(channel);
     p.source.failures.set(`list:${channel.id}`, [limited()]);
-    const check = await p.manager.submitChannel(channel, 'manual');
+    const check = await p.manager.submitCheck('youtube', channel, 'manual');
     await w.advance(0);
     await vi.waitFor(() => expect(p.manager.get(check.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
     await w.advance(5 * MINUTE);
     expect(await p.manager.whenSettled(check.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
 
     p.source.failures.set('info:ddddddddddd', [network(), network(), network()]);
-    const failing = await p.manager.submitVideo(watchUrl('ddddddddddd'));
+    const failing = await p.manager.submitItem('youtube', watchUrl('ddddddddddd'));
     await w.advance(10 * MINUTE);
     expect(await p.manager.whenSettled(failing.job.id)).toMatchObject({
       state: 'failed', error: { code: 'network_error' }, retry: { attempts: 3, maxAttempts: 3 },
@@ -285,7 +298,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const w = await world();
     const p = await w.boot();
     p.source.failures.set('info:eeeeeeeeeee', [new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。')]);
-    const job = await p.manager.submitVideo(watchUrl('eeeeeeeeeee'));
+    const job = await p.manager.submitItem('youtube', watchUrl('eeeeeeeeeee'));
     expect(await p.manager.whenSettled(job.job.id)).toMatchObject({ state: 'failed', error: { code: 'no_subtitles' } });
     expect(p.source.requests).toEqual(['info:eeeeeeeeeee']);
   });
@@ -294,7 +307,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const w = await world();
     const p = await w.boot();
     p.source.failures.set('info:fffffffffff', [limited()]);
-    const job = await p.manager.submitVideo(watchUrl('fffffffffff'));
+    const job = await p.manager.submitItem('youtube', watchUrl('fffffffffff'));
     await w.advance(0);
     await vi.waitFor(() => expect(p.manager.get(job.job.id).wait).toBeDefined());
     const release = await p.manager.hold(1_000);
@@ -308,7 +321,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const w = await world({ waitMs: 8_000 });
     const p = await w.boot();
     p.source.holdNext = true;
-    const first = await p.manager.submitVideo(watchUrl('ggggggggggg'));
+    const first = await p.manager.submitItem('youtube', watchUrl('ggggggggggg'));
     await w.advance(0);
     await vi.waitFor(() => expect(p.source.heldCount).toBe(1));
     p.source.releaseHeld();
@@ -330,7 +343,7 @@ describe('cooldown across restarts (P-T6)', () => {
     const w = await world();
     const first = await w.boot();
     first.source.failures.set('info:hhhhhhhhhhh', [limited()]);
-    const job = await first.manager.submitVideo(watchUrl('hhhhhhhhhhh'));
+    const job = await first.manager.submitItem('youtube', watchUrl('hhhhhhhhhhh'));
     await w.advance(0);
     await vi.waitFor(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();
@@ -354,7 +367,7 @@ describe('cooldown across restarts (P-T6)', () => {
     const w = await world();
     const first = await w.boot();
     first.source.failures.set('info:iiiiiiiiiii', [limited()]);
-    const job = await first.manager.submitVideo(watchUrl('iiiiiiiiiii'));
+    const job = await first.manager.submitItem('youtube', watchUrl('iiiiiiiiiii'));
     await w.advance(0);
     await vi.waitFor(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();

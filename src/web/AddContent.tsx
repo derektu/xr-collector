@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { CollectionPolicy, RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../core/types.js';
-import { ADD_DIALOG_TITLES, addMismatch, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
+import { sourceDeclaration } from '../core/source-registry.js';
+import type { RecognitionAction, SourceSettingField, SourceTypeInfo, SubscriptionSettings, UrlRecognition } from '../core/types.js';
+import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { currentRecognition, initials } from './source-presentation.js';
-import { resumeSummary, subscribeSummary } from './subscription-presentation.js';
+import { resumeSummary, subscribeSummary, targetNoun } from './subscription-presentation.js';
 
 const RECOGNIZE_DELAY_MS = 500;
 
@@ -15,10 +16,8 @@ type Recognition =
   | { state: 'done'; input: string; recognition: UrlRecognition }
   | { state: 'error'; message: string };
 
-const PLACEHOLDERS: Record<AddMode, string> = { url: '貼上 YouTube 影片網址', 'youtube-channel': '貼上 YouTube 頻道網址或 @handle' };
-
 /**
- * The add dialog of one mode: 加入網址 adds one document, 訂閱 YouTube 頻道 adds a subscription.
+ * The add dialog of one mode: 加入網址 adds one document, a subscription kind's dialog adds a subscription.
  * Pasting an address asks the service what it is; the card and the action come from that answer,
  * and a new subscription's settings fields from its source type's declaration. An address of the
  * other kind offers to switch dialogs, keeping the address.
@@ -39,7 +38,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   /** The settings chosen on the card; they belong to the recognition they were chosen for. */
-  const [chosen, setChosen] = useState<{ recognition: UrlRecognition; settings: CollectionPolicy } | null>(null);
+  const [chosen, setChosen] = useState<{ recognition: UrlRecognition; settings: SubscriptionSettings } | null>(null);
   const sequence = useRef(0);
 
   useEffect(() => {
@@ -108,12 +107,12 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
     <form className="add-body" onSubmit={submit}>
       <div className="dialog-titlebar">
-        <h2 id="add-dialog-title" data-testid="add-dialog-title">{ADD_DIALOG_TITLES[mode]}</h2>
+        <h2 id="add-dialog-title" data-testid="add-dialog-title">{addDialogTitles()[mode]}</h2>
         <button type="button" className="icon-only close-button" aria-label="關閉" onClick={onClose}><Icon name="close" /></button>
       </div>
       <label className="field-label" htmlFor="add-url">網址</label>
       <input ref={input} id="add-url" className="url-input" type="text" inputMode="url" value={url} autoComplete="off" spellCheck={false}
-        placeholder={PLACEHOLDERS[mode]} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
+        placeholder={addPlaceholder(mode)} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
 
       {recognition.state === 'recognizing' ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
       {recognition.state === 'error' ? <p className="add-problem" role="alert">{recognition.message}</p> : null}
@@ -123,7 +122,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
       </div> : null}
       {unsupported ? <p className="add-problem" role="alert" data-testid="add-unsupported">{UNSUPPORTED_URL}</p> : null}
       {found && !mismatch && !unsupported ? <RecognitionCard recognition={found} fields={fields} settings={settings} disabled={busy}
-        onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } })} onOpenSource={onOpenSource} /> : null}
+        onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } as SubscriptionSettings })} onOpenSource={onOpenSource} /> : null}
       {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
 
       <div className="dialog-actions">
@@ -138,9 +137,9 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   recognition: UrlRecognition;
   fields: SourceSettingField[];
   /** The settings a new subscription will start with. */
-  settings: CollectionPolicy | null;
+  settings: SubscriptionSettings | null;
   disabled: boolean;
-  onSettings: (patch: Partial<CollectionPolicy>) => void;
+  onSettings: (patch: Partial<SubscriptionSettings>) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
   if (recognition.status === 'unsupported' || recognition.status === 'unavailable') {
@@ -157,13 +156,15 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   }
   const target = recognition.target;
   if (!target) return null;
-  if (recognition.kind === 'video') {
+  const declaration = recognition.sourceType ? sourceDeclaration(recognition.sourceType) : undefined;
+  const kind = declaration?.kinds.find((candidate) => candidate.id === recognition.kind);
+  if (kind?.capability === 'single') {
     return <div className="recognition-card" data-testid="recognition-card">
-      <SourceTypeBadge icon={recognition.sourceType ?? 'file'} />
+      <SourceTypeBadge icon={declaration?.icon ?? 'file'} />
       <div className="card-main">
         <p className="card-kind">{recognition.kindLabel}</p>
         <p className="card-title">{target.url.replace(/^https:\/\/(www\.)?/u, '')}</p>
-        <p>收集這支影片的字幕，加入知識庫。</p>
+        <p>{declaration?.prompts.itemCard}</p>
       </div>
     </div>;
   }
@@ -171,17 +172,17 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   return <div className="recognition-card" data-testid="recognition-card">
     <span className="avatar" aria-hidden="true">{initials(target.title ?? '')}</span>
     <div className="card-main">
-      <p className="card-kind"><Icon name={recognition.sourceType ?? 'file'} size={14} />{recognition.kindLabel}</p>
+      <p className="card-kind"><Icon name={declaration?.icon ?? 'file'} size={14} />{recognition.kindLabel}</p>
       <p className="card-title">{target.title}{subscription ? <span className={`status-chip ${subscription.enabled ? 'tracking' : 'paused'}`}>{subscription.enabled ? '已訂閱' : '已暫停'}</span> : null}</p>
       {!subscription && settings ? <>
-        <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false)}</p>
+        <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false, recognition.sourceType)}</p>
         <div className="card-settings">
-          <CollectionSettingsFields idPrefix="add-settings" fields={fields} value={settings} onChange={onSettings}
+          <CollectionSettingsFields idPrefix="add-settings" type={recognition.sourceType} fields={fields} value={settings} onChange={onSettings}
             disabled={disabled} />
         </div>
       </> : null}
-      {subscription?.enabled ? <p>已訂閱這個頻道。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看訂閱</button></p> : null}
-      {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(subscription.settings)}</p> : null}
+      {subscription?.enabled ? <p>已訂閱這個{targetNoun(recognition.sourceType)}。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看訂閱</button></p> : null}
+      {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(subscription.settings, recognition.sourceType)}</p> : null}
     </div>
   </div>;
 }

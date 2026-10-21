@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Subscription } from '../core/types.js';
+import type { SourceEntry } from '../core/types.js';
 import { api } from './api-client.js';
 import { asksAboutDocuments, removeChoices, removedMessage } from './subscription-presentation.js';
 
 /** Confirms removing a subscription and asks whether its documents stay (the default) or go with it. */
 export function ConfirmRemove({ source, onCancel, onRemoved }: {
-  source: Pick<Subscription, 'id' | 'title' | 'documentCount' | 'checkStatus' | 'capturing'>;
+  source: Pick<SourceEntry, 'type' | 'id' | 'title' | 'documentCount' | 'checkStatus' | 'capturing'>;
   onCancel: () => void;
   onRemoved: (message: string) => void;
 }) {
@@ -23,7 +23,7 @@ export function ConfirmRemove({ source, onCancel, onRemoved }: {
     setBusy(true);
     setFailure(null);
     try {
-      const result = await api.removeChannel(source.id, documents);
+      const result = await api.removeChannel(source.type, source.id, documents);
       onRemoved(removedMessage(source.title, documents === 'delete' ? result : null));
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '無法移除，請稍後再試。');

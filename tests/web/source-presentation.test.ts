@@ -82,16 +82,16 @@ describe('source presentation (T-09)', () => {
       finishedAt: '2026-10-15T05:30:00.000Z', progress: { total: 1, done: 1, created: 1, existing: 0, failed: 0 }, outcome: 'created', error: null,
       retry: null, resumedCount: 0, ...overrides,
     });
-    expect(jobRecordLabel(record({}), now)).toEqual({ title: '定時檢查', detail: '今天 13:30 · 新增 1', active: false });
-    expect(jobRecordLabel(record({ trigger: 'subscribe', progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0 }, outcome: 'empty' }), now).detail).toBe('今天 13:30 · 沒有新影片');
-    expect(jobRecordLabel(record({ state: 'running', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now)).toEqual({ title: '定時檢查', detail: '4／10', active: true });
-    expect(jobRecordLabel(record({ state: 'failed', trigger: 'manual', error: { code: 'network_error', message: '無法連線' } }), now).detail).toBe('今天 13:30 · 無法連線');
+    expect(jobRecordLabel(record({}), now, 'youtube')).toEqual({ title: '定時檢查', detail: '今天 13:30 · 新增 1', active: false });
+    expect(jobRecordLabel(record({ trigger: 'subscribe', progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0 }, outcome: 'empty' }), now, 'youtube').detail).toBe('今天 13:30 · 沒有新影片');
+    expect(jobRecordLabel(record({ state: 'running', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now, 'youtube')).toEqual({ title: '定時檢查', detail: '4／10', active: true });
+    expect(jobRecordLabel(record({ state: 'failed', trigger: 'manual', error: { code: 'network_error', message: '無法連線' } }), now, 'youtube').detail).toBe('今天 13:30 · 無法連線');
     // Work that continued after a restart, waits for a retry, or waits for its Vault to open again.
     const waiting = { attempts: 1, maxAttempts: 3, nextAttemptAt: '2026-10-15T06:02:00.000Z', lastError: { code: 'network_error', message: '無法連線' } };
-    expect(jobRecordLabel(record({ state: 'running', resumedCount: 1, retry: waiting, progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now).detail)
+    expect(jobRecordLabel(record({ state: 'running', resumedCount: 1, retry: waiting, progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }), now, 'youtube').detail)
       .toBe('4／10 · 等待重試 · 已接續');
-    expect(jobRecordLabel(record({ resumedCount: 1 }), now).detail).toBe('今天 13:30 · 新增 1・曾中斷後接續');
-    expect(jobRecordLabel(record({ state: 'interrupted' }), now).detail).toBe('今天 13:30 · 已中斷，重新開啟時接續');
+    expect(jobRecordLabel(record({ resumedCount: 1 }), now, 'youtube').detail).toBe('今天 13:30 · 新增 1・曾中斷後接續');
+    expect(jobRecordLabel(record({ state: 'interrupted' }), now, 'youtube').detail).toBe('今天 13:30 · 已中斷，重新開啟時接續');
   });
 
   it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {

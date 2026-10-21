@@ -17,10 +17,11 @@
   "include": [
     "src/activity/**/*.ts",
     "src/core/**/*.ts",
-    "src/channels/**/*.ts",
+    "src/subscriptions/**/*.ts",
+    "src/pacing/**/*.ts",
+    "src/plugins/**/*.ts",
     "src/jobs/**/*.ts",
     "src/sources/**/*.ts",
-    "src/capture/**/*.ts",
     "src/vault/**/*.ts",
     "src/server/**/*.ts",
     "src/runtime/**/*.ts",

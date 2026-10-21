@@ -6,13 +6,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
-import type { CapturedTranscript } from '../../src/core/types.js';
 import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { startMeilisearchProcess } from '../../src/search/meilisearch-process.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -30,14 +32,14 @@ async function fixture() {
       publishedAt: '2026-09-18T00:00:00.000Z', languageCode: 'en', languageName: 'English',
       subtitleKind: 'manual', bodyMarkdown: 'Orchard observatory has a unique telescope.\n\nPreserve the complete source text.',
     };
-    await vault.add(capture);
+    await vault.add(transcriptDocument(capture));
   }
   const capture = vi.fn();
   const collector = new Collector(vault);
   const jobs = new JobManager({
     vaultPath: path.join(root, 'vault'), store: JobStore.memory(), documents: collector,
-    source: { capture, resolveChannel: vi.fn(), discover: vi.fn() },
-    channels: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null },
+    plugins: [youtubePlugin({ capture, resolveChannel: vi.fn(), discover: vi.fn() })],
+    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null } },
   });
   return { root, vault, collector, capture, jobs };
 }
@@ -57,10 +59,10 @@ describe('Agent authenticated HTTP access', () => {
       updateSchedule: vi.fn(async (value) => value),
     };
     const channels = {
-      listChannels: vi.fn(async () => []), addChannel: vi.fn(), setChannelEnabled: vi.fn(),
-      removeChannel: vi.fn(), startRun: vi.fn(),
+      type: 'youtube', list: vi.fn(async () => []), add: vi.fn(), setEnabled: vi.fn(),
+      remove: vi.fn(), startRun: vi.fn(),
     };
-    const app = await createHttpApp({ collector, jobs, search, schedule, channels, agentToken: 'test-secret' });
+    const app = await createHttpApp({ collector, jobs, search, schedule, subscriptions: [channels], agentToken: 'test-secret' });
     cleanup.push(() => app.close());
     for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/api/jobs', '/']) {
       for (const authorization of ['', 'Bearer wrong', 'Bearer test-secreX']) {

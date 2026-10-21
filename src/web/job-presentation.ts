@@ -1,17 +1,43 @@
 import type { CollectionJob, JobItem, JobPhase, JobRetry, JobState, JobWait, SkipReason } from '../core/types.js';
+import { jobRole, sourceDeclaration } from '../core/source-registry.js';
+import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { channelJobLabel } from './subscription-presentation.js';
 
 const STATE_LABELS: Record<JobState, string> = {
   queued: '排隊中', running: '執行中', completed: '完成', failed: '失敗', interrupted: '已中斷',
 };
-const PHASE_LABELS: Record<JobPhase, string> = {
-  resolve: '解析頻道', discover: '尋找影片', capture: '擷取字幕', save: '保存文件', index: '更新搜尋',
-};
+
+/** The declaration of a job's source type. */
+function declarationOf(job: Pick<CollectionJob, 'source'>): SourcePluginDeclaration | undefined {
+  return sourceDeclaration(job.source.type);
+}
+
+function nounOf(job: Pick<CollectionJob, 'source'>): string {
+  return declarationOf(job)?.item.noun ?? '';
+}
+
+function targetOf(job: Pick<CollectionJob, 'source'>): string {
+  return declarationOf(job)?.subscription?.targetNoun ?? '';
+}
+
+/** The label of a step; the source type names the steps that depend on its items and targets. */
+function phaseLabel(job: CollectionJob, phase: JobPhase): string {
+  const own = declarationOf(job)?.phaseLabels?.[phase];
+  if (own) return own;
+  switch (phase) {
+    case 'resolve': return `解析${targetOf(job)}`;
+    case 'discover': return `尋找${nounOf(job)}`;
+    case 'capture': return `擷取${nounOf(job)}`;
+    case 'save': return '保存文件';
+    case 'index': return '更新搜尋';
+  }
+}
 
 export function jobKindLabel(job: CollectionJob): string {
-  if (job.kind === 'youtube.video') return '影片';
-  if (job.kind === 'youtube.channel') return channelJobLabel(job);
-  return '訂閱頻道';
+  const role = jobRole(job.kind)?.role;
+  if (role === 'item') return nounOf(job);
+  if (role === 'check') return channelJobLabel(job);
+  return `訂閱${targetOf(job)}`;
 }
 
 export function jobStateLabel(job: Pick<CollectionJob, 'state' | 'retry' | 'wait'>): string {
@@ -20,7 +46,7 @@ export function jobStateLabel(job: Pick<CollectionJob, 'state' | 'retry' | 'wait
   return STATE_LABELS[job.state];
 }
 
-/** The state of one video in a channel job. */
+/** The state of one item in a check job. */
 export function jobItemLabel(item: JobItem): string {
   if (item.outcome === 'created') return '新增';
   if (item.outcome === 'existing') return '已存在';
@@ -39,10 +65,11 @@ export function retryLabel(retry: JobRetry | null | undefined): string | null {
   return `${retry.lastError.message}・${clockTime(retry.nextAttemptAt)} 自動重試（第 ${retry.attempts + 1}／${retry.maxAttempts} 次）`;
 }
 
-/** Why a queued job waits for YouTube: "YouTube 限制連線，約 14:05 繼續". */
-export function waitLabel(wait: JobWait | null | undefined): string | null {
+/** Why a queued job of the type waits for its source, e.g. "<source> 限制連線，約 14:05 繼續". */
+export function waitLabel(wait: JobWait | null | undefined, type: string): string | null {
   if (!wait) return null;
-  return `YouTube 限制連線，約 ${clockTime(wait.until)} 繼續`;
+  const label = sourceDeclaration(type)?.label ?? type;
+  return `${label} 限制連線，約 ${clockTime(wait.until)} 繼續`;
 }
 
 /** Whether the job continued after the service restarted. */
@@ -51,11 +78,11 @@ export function recoveryLabel(job: Pick<CollectionJob, 'state' | 'recovery'>): s
   return job.state === 'queued' || job.state === 'running' ? '服務重新啟動後已接續' : '曾中斷後接續';
 }
 
-/** The step a running job is in; channel jobs past discovery are waiting for their videos. */
+/** The step a running job is in; check jobs past discovery are waiting for their items. */
 export function jobPhaseLabel(job: CollectionJob): string | null {
   if (job.state !== 'running' || !job.phase) return null;
-  if (job.kind === 'youtube.channel' && job.phase === 'capture') return '收集影片';
-  return PHASE_LABELS[job.phase];
+  if (jobRole(job.kind)?.role === 'check' && job.phase === 'capture') return `收集${nounOf(job)}`;
+  return phaseLabel(job, job.phase);
 }
 
 export function jobTitle(job: CollectionJob): string {
@@ -84,16 +111,17 @@ export function jobResultLabel(job: CollectionJob): string | null {
   if (job.state === 'failed') return job.error?.message ?? null;
   if (job.state !== 'completed' || !job.result) return null;
   const { result } = job;
-  if (job.kind === 'youtube.video') {
+  const role = jobRole(job.kind)?.role;
+  if (role === 'item') {
     if (result.outcome === 'skipped') return `略過：${skipReasonLabel(result.skipReason)}`;
     const stored = result.outcome === 'created' ? '文件已保存' : '文件已存在';
     return result.indexed ? `${stored}・已更新搜尋` : `${stored}，搜尋更新失敗`;
   }
-  if (job.kind === 'youtube.channel-add') {
-    return result.outcome === 'created' ? '已訂閱，開始首次收集' : '這個頻道已在訂閱清單中';
+  if (role === 'add') {
+    return result.outcome === 'created' ? '已訂閱，開始首次收集' : `這個${targetOf(job)}已在訂閱清單中`;
   }
   if (result.outcome === 'skipped') return `略過：${skipReasonLabel(result.skipReason)}`;
-  if (result.outcome === 'empty') return '沒有新影片';
-  if (result.outcome === 'partial') return '部分影片收集失敗';
-  return result.outcome === 'created' ? '收集完成' : '沒有新影片';
+  if (result.outcome === 'empty') return `沒有新${nounOf(job)}`;
+  if (result.outcome === 'partial') return `部分${nounOf(job)}收集失敗`;
+  return result.outcome === 'created' ? '收集完成' : `沒有新${nounOf(job)}`;
 }

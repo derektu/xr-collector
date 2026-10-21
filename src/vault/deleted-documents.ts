@@ -1,15 +1,15 @@
 import path from 'node:path';
-import { readJsonFile, writeJsonFile } from '../channels/json-file.js';
+import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import type { DocumentSourceType } from '../core/types.js';
 import { documentId, isSourceId, isSourceType } from './document-paths.js';
 
 /**
  * Vault file of deleted documents, relative to the Vault root. Each record keeps a source item from
- * coming back through automatic or channel collection; only an explicit single-item collection
+ * coming back through automatic or subscription collection; only an explicit single-item collection
  * started after the deletion lifts it.
  *
  * `{ "version": 1, "deleted": [record, ...] }`. A record is keyed by `sourceType` and `sourceId`,
- * which together form the document ID (`youtube:<video ID>`), and keeps the title and publisher so
+ * which together form the document ID (`<source type>:<source ID>`), and keeps the title and publisher so
  * an import or a deleted-document page can still name the item.
  */
 export const DELETIONS_FILE = 'settings/deleted-documents.json';

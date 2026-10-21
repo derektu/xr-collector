@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import yauzl from 'yauzl';
-import { JsonChannelScheduleStore } from '../../src/channels/json-channel-schedule-store.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
-import type { CapturedTranscript, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
+import type { SavedDocument, TranscriptSearch } from '../../src/core/types.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -21,6 +21,9 @@ import { VaultWorkspace } from '../../src/vault/workspace.js';
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
 } from './package-fixtures.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -42,15 +45,15 @@ const settings = { intervalMinutes: 60, backfillWindow: '1m' as const, backfillM
 const deletedId = 'gone0000001';
 async function seed(root: string) {
   const vault = new MarkdownVault(root);
-  await vault.add(capture);
-  await vault.add({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', title: '第二份' });
-  await vault.add({ ...capture, videoId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除' });
+  await vault.add(transcriptDocument(capture));
+  await vault.add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', title: '第二份' }));
+  await vault.add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除' }));
   await new Collector(vault).delete(`youtube:${deletedId}`);
-  await new JsonChannelStore(root).add({
+  await new JsonSubscriptionStore(root, 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings, nextCheckAt: null, lastDispatchedAt: null, outOfRange: [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }],
   });
-  await new JsonChannelScheduleStore(root).save({ enabled: true });
+  await new JsonScheduleStore(root).save({ enabled: true });
 }
 const REGISTERED = [
   'documents/youtube/abcdefghijk.md', 'documents/youtube/dQw4w9WgXcQ.md',
@@ -85,16 +88,16 @@ function fakeSearch(root: string): TranscriptSearch {
     async search() { return { hits: [], total: 0, offset: 0, limit: 50 }; },
   };
 }
-async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> = {}) {
+async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> & YouTubeTestSources = {}) {
   await ensureMarker(root);
-  const workspace = await VaultWorkspace.open({
+  const workspace = await VaultWorkspace.open(withYouTube({
     root, selection: new VaultSelection(`${root}.selection.json`), profilePath: `${root}.profile`, createdBy: 'XR Collector test',
     capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: `${root}-search`, exportFolder: `${root}.exports`, backupFolder: `${root}.backups`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     ...overrides,
-  });
+  }));
   workspaces.push(workspace);
   return workspace;
 }
@@ -237,7 +240,7 @@ describe('large Vaults (PKG-04)', () => {
   it('exports, compares and imports a Vault of more than 128 MiB', async () => {
     const at = await temp(); const root = path.join(at, 'Vault');
     const vault = new MarkdownVault(root);
-    await vault.add(capture);
+    await vault.add(transcriptDocument(capture));
     const template = await readFile(path.join(root, 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8');
     // Documents of 3 MiB each, written straight to disk: 45 of them hold 135 MiB.
     const body = 'x'.repeat(3 * 1024 * 1024);
@@ -296,8 +299,8 @@ describe('files that fail while an export reads them', () => {
     const at = await temp(); const root = path.join(at, 'Vault');
     // The vanishing document is the oldest, so the export reads it last, after the large one.
     await new MarkdownVault(root, { now: () => new Date('2020-01-01T00:00:00.000Z') })
-      .add({ ...capture, videoId: 'vanish00001', sourceUrl: 'https://www.youtube.com/watch?v=vanish00001' });
-    await new MarkdownVault(root).add(capture);
+      .add(transcriptDocument({ ...capture, videoId: 'vanish00001', sourceUrl: 'https://www.youtube.com/watch?v=vanish00001' }));
+    await new MarkdownVault(root).add(transcriptDocument(capture));
     await documentFile(root, capture.videoId, createHash('sha256').update('seed').digest('hex').repeat(600_000));
     const workspace = await open(root);
     const exported = workspace.exportTo(path.join(at, 'out.zip'));
@@ -369,7 +372,7 @@ describe('Vaults of an earlier format (CMP-01)', () => {
   it('writes the export taken before an import as a package of the same format, naming the Vault and machine it came from', async () => {
     const at = await temp(); const local = path.join(at, 'Local'); const incoming = path.join(at, 'Incoming');
     await seed(local); await seed(incoming);
-    await new MarkdownVault(incoming).add({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' });
+    await new MarkdownVault(incoming).add(transcriptDocument({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' }));
     const workspace = await open(local);
     const file = path.join(at, 'incoming.zip');
     await writeFile(file, await packageBytes(incoming));

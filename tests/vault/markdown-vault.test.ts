@@ -2,8 +2,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CapturedTranscript } from '../../src/core/types.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const temporaryRoots: string[] = [];
 
@@ -33,7 +34,7 @@ const capture: CapturedTranscript = {
 describe('MarkdownVault', () => {
   it('writes portable frontmatter and a clean transcript body', async () => {
     const { root, vault } = await makeVault();
-    const saved = await vault.add(capture);
+    const saved = await vault.add(transcriptDocument(capture));
     const markdown = await readFile(
       path.join(root, 'documents', 'youtube', 'dQw4w9WgXcQ.md'),
       'utf8',
@@ -47,8 +48,8 @@ describe('MarkdownVault', () => {
 
   it('does not create another document for the same source ID', async () => {
     const { vault } = await makeVault();
-    const first = await vault.add(capture);
-    const second = await vault.add({ ...capture, title: '不應覆寫' });
+    const first = await vault.add(transcriptDocument(capture));
+    const second = await vault.add(transcriptDocument({ ...capture, title: '不應覆寫' }));
 
     expect(second.title).toBe(first.title);
     expect(await vault.list()).toHaveLength(1);

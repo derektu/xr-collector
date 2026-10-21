@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import type {
-  CapturedTranscript,
-  DocumentMetadata,
-  SavedDocument,
-} from '../../src/core/types.js';
+import type { DocumentMetadata, SavedDocument } from '../../src/core/types.js';
+import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { transcriptOf } from '../support/youtube-documents.js';
 
 const captureResult: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -22,11 +22,12 @@ const captureResult: CapturedTranscript = {
 class MemoryVault implements DocumentVault {
   document: SavedDocument | null = null;
 
-  async getBySourceId(): Promise<SavedDocument | null> {
+  async getByKey(): Promise<SavedDocument | null> {
     return this.document;
   }
 
-  async add(capture: CapturedTranscript): Promise<SavedDocument> {
+  async add(document: CapturedDocument): Promise<SavedDocument> {
+    const capture = transcriptOf(document);
     this.document = {
       id: `youtube:${capture.videoId}`,
       type: 'Transcript',
@@ -63,7 +64,7 @@ describe('Collector', () => {
       },
     });
 
-    const { document } = await collector.save(captureResult);
+    const { document } = await collector.save(transcriptDocument(captureResult));
     const outcome = await collector.index(document);
 
     expect(indexAttempted).toBe(true);
@@ -74,9 +75,9 @@ describe('Collector', () => {
   it('finds an existing document by its YouTube ID', async () => {
     const vault = new MemoryVault();
     const collector = new Collector(vault, { index: async () => undefined });
-    expect(await collector.findExisting('dQw4w9WgXcQ')).toBeNull();
-    const { document } = await collector.save(captureResult);
-    expect(await collector.findExisting('dQw4w9WgXcQ')).toEqual(document);
+    expect(await collector.findExisting({ sourceType: 'youtube', sourceId: 'dQw4w9WgXcQ' })).toBeNull();
+    const { document } = await collector.save(transcriptDocument(captureResult));
+    expect(await collector.findExisting({ sourceType: 'youtube', sourceId: 'dQw4w9WgXcQ' })).toEqual(document);
     expect(await collector.index(document)).toEqual({ indexed: true });
   });
 });

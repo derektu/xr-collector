@@ -6,14 +6,16 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { manifestOf, packageBytes, packageFiles, packageOf, unpackBytes } from './package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VAULT_MARKER } from '../../src/vault/vault-directory.js';
-import { VaultWorkspace } from '../../src/vault/workspace.js';
-import { JsonChannelStore } from '../../src/channels/json-channel-store.js';
+import { subscriptionCollections, VaultWorkspace } from '../../src/vault/workspace.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { Collector } from '../../src/core/collector.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import type { SavedDocument } from '../../src/core/types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, settled, temp, type Machine } from './exchange-fixtures.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { youtubeKey } from '../support/youtube-documents.js';
 
 afterEach(cleanUp);
 
@@ -35,7 +37,7 @@ describe('workspace transfer through HTTP', () => {
     await rm(a.vault, { recursive: true }); // A is unavailable for the import, browse and search alike.
     const target = await importAsNew(b, file);
     const workspace = await open(b);
-    const app = await createHttpApp({ collector: workspace.collector, search: workspace.search, channels: workspace.channels, schedule: workspace.schedule, transfer: workspace });
+    const app = await createHttpApp({ collector: workspace.collector, search: workspace.search, subscriptions: subscriptionCollections(() => workspace.subscriptions), schedule: workspace.schedule, transfer: workspace });
     try {
       expect(workspace.status().vaultPath).toBe(target);
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
@@ -48,7 +50,7 @@ describe('workspace transfer through HTTP', () => {
     expect(restarted.status().vaultPath).toBe(target);
     expect(await restarted.collector.list()).toHaveLength(1);
     expect((await restarted.schedule.getSchedule()).enabled).toBe(true);
-    const [submission] = await restarted.channels.startRun({ trigger: 'manual' });
+    const [submission] = await restarted.subscriptions.of('youtube')!.startRun({ trigger: 'manual' });
     expect(submission!.job.source.id).toBe('UC123');
     await restarted.jobs.whenSettled(submission!.job.id);
   });
@@ -80,8 +82,8 @@ describe('workspace transfer through HTTP', () => {
       if (started.length === 1) await waiting;
       return { ...capture, videoId: video.videoId, sourceUrl: video.canonicalUrl };
     } } });
-    const first = await workspace.jobs.submitVideo(capture.sourceUrl);
-    const second = await workspace.jobs.submitVideo('https://www.youtube.com/watch?v=abcdefghijk');
+    const first = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
+    const second = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=abcdefghijk');
     await expect.poll(() => started.length).toBe(1);
     const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
     try {
@@ -108,7 +110,7 @@ describe('workspace transfer through HTTP', () => {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const workspace = await open(b, { holdTimeoutMs: 50, capture: { capture: async () => { await waiting; return capture; } } });
-    const job = await workspace.jobs.submitVideo(capture.sourceUrl);
+    const job = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
     await expect(workspace.exportTo()).rejects.toMatchObject({ code: 'vault_busy', message: expect.stringContaining('收集步驟') });
     expect(workspace.status()).toMatchObject({ state: 'error', operation: 'export' });
     // The lock is gone: writes and another transfer are accepted again.
@@ -147,7 +149,7 @@ it('waits for a running channel discovery before exporting', async () => {
     resolve: async () => ({ id: 'UC123', title: 'channel', url: 'https://www.youtube.com/channel/UC123' }),
     listVideos: async () => { await pending; return []; },
   } });
-  await workspace.channels.startRun({ trigger: 'manual' });
+  await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual' });
   const exported = workspace.exportTo();
   await expect.poll(() => workspace.status().state).toBe('waiting');
   release();
@@ -167,13 +169,13 @@ describe('portable subscription settings (S-T10, A4)', () => {
     await seed(a.vault);
     const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
     const outOfRange = [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }];
-    await new JsonChannelStore(a.vault).update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
+    await new JsonSubscriptionStore(a.vault, 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
     const exported = await packageBytes(a.vault);
     expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()))
       .toMatchObject({ version: 2, channels: [{ id: 'UC123', settings, outOfRange }] });
     await importAsNew(b, await fileOf(a.exports, 'a.zip', exported));
     const workspace = await open(b);
-    expect(await workspace.channels.listChannels())
+    expect(await workspace.subscriptions.of('youtube')!.list())
       .toEqual([expect.objectContaining({ id: 'UC123', lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange })]);
     expect(await workspace.schedule.getSchedule()).toMatchObject({ enabled: true });
   });
@@ -185,7 +187,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     stored.channels[0] = { ...stored.channels[0], cursor: { videoId: 'cursor00001', publishedAt: null, recentIds: ['cursor00001'] }, backlog: false };
     await writeFile(file, JSON.stringify(stored));
     const workspace = await open(a);
-    expect(await workspace.channels.listChannels()).toEqual([expect.objectContaining({ id: 'UC123', backlog: false })]);
+    expect(await workspace.subscriptions.of('youtube')!.list()).toEqual([expect.objectContaining({ id: 'UC123', backlog: false })]);
     const { result } = await workspace.exportTo();
     expect(JSON.parse((await packageFiles(await readFile(result!.exportPath!))).get('settings/youtube-channels.json')!.toString()).channels[0])
       .toMatchObject({ id: 'UC123', cursor: { videoId: 'cursor00001' }, backlog: false });
@@ -215,7 +217,7 @@ describe('deletion records in export files (A6)', () => {
   it('exports deletions and a Vault imported from the export keeps them in force', async () => {
     const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
     await seed(a.vault);
-    await new MarkdownVault(a.vault).add({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title });
+    await new MarkdownVault(a.vault).add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title }));
     await new Collector(new MarkdownVault(a.vault)).delete(`youtube:${deletedId}`);
     const exported = await packageBytes(a.vault);
     const paths = (await manifestOf(exported)).files.map((file) => file.path);
@@ -225,7 +227,7 @@ describe('deletion records in export files (A6)', () => {
     await importAsNew(b, await fileOf(a.exports, 'a.zip', exported));
     const workspace = await open(b);
     await expect(workspace.collector.read(`youtube:${deletedId}`)).rejects.toMatchObject({ code: 'document_deleted' });
-    expect(await workspace.collector.isKnown(deletedId)).toBe(true);
+    expect(await workspace.collector.isKnown(youtubeKey(deletedId))).toBe(true);
     expect((await workspace.collector.list()).map((document) => document.sourceId)).toEqual([capture.videoId]);
   });
 
@@ -251,7 +253,7 @@ describe('deletion records in export files (A6)', () => {
 it('refuses a document deletion while an import holds the Vault (A7)', async () => {
   const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
   await seed(a.vault); await seed(b.vault);
-  await new MarkdownVault(a.vault).add({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' });
+  await new MarkdownVault(a.vault).add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }));
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   // The import stops once its files are staged, so it keeps the Vault locked.

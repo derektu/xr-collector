@@ -2,24 +2,31 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { classifyYtDlpError } from '../../src/capture/ytdlp-capture.js';
-import { DEFAULT_POLICY } from '../../src/channels/collection-policy.js';
-import type { ChannelPatch, ChannelStore } from '../../src/channels/json-channel-store.js';
+import { classifyYtDlpError } from '../../src/plugins/youtube/ytdlp-capture.js';
+import {
+  type CollectionPolicy,
+  DEFAULT_POLICY,
+} from '../../src/plugins/youtube/settings.js';
+import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
-  type CapturedTranscript,
   type CollectionJob,
-  type CollectionPolicy,
   type DocumentSummary,
   type SavedDocument,
-  type YouTubeChannel,
-  type YouTubeVideoRef,
+  type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource } from '../../src/sources/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
+import type {
+  YouTubeVideoRef,
+} from '../../src/plugins/youtube/url.js';
+import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { transcriptOf } from '../support/youtube-documents.js';
 
 // Interrupted work continues after a restart. A "crash" flushes the job store and opens the same
 // directory again without closing the manager: the atomic snapshot on disk is what a killed process
@@ -44,8 +51,9 @@ function captured(id: string): CapturedTranscript {
 class MemoryVault implements DocumentVault {
   readonly documents = new Map<string, SavedDocument>();
   saves = 0;
-  async getBySourceId(sourceId: string) { return this.documents.get(sourceId) ?? null; }
-  async add(capture: CapturedTranscript) {
+  async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
+  async add(item: CapturedDocument) {
+    const capture = transcriptOf(item);
     this.saves += 1;
     const document: SavedDocument = {
       id: `youtube:${capture.videoId}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
@@ -60,13 +68,13 @@ class MemoryVault implements DocumentVault {
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
 }
 
-class MemoryChannels implements ChannelStore {
-  readonly channels: YouTubeChannel[] = [];
+class MemoryChannels implements SubscriptionStore {
+  readonly channels: SubscriptionRecord[] = [];
   /** Set to make the next add or update store its change and then never return, as a process killed right after. */
   hangAfterAdd = false;
   hangAfterUpdate = false;
   async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: YouTubeChannel) {
+  async add(channel: SubscriptionRecord) {
     this.channels.push(channel);
     if (this.hangAfterAdd) { this.hangAfterAdd = false; await never(); }
     return channel;
@@ -77,7 +85,7 @@ class MemoryChannels implements ChannelStore {
     return index >= 0;
   }
   async setEnabled() { return null; }
-  async update(id: string, patch: ChannelPatch) {
+  async update(id: string, patch: SubscriptionPatch) {
     if (this.hangAfterUpdate) { this.hangAfterUpdate = false; await never(); }
     const channel = this.channels.find((candidate) => candidate.id === id);
     if (!channel) return null;
@@ -121,7 +129,7 @@ class ScriptedSource implements YouTubeSource {
     return { id, title: `頻道 ${handle}`, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 
-  async discover(channel: YouTubeChannel, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     this.script.discoveries += 1;
     if (this.holdDiscovery) await never();
     const failure = this.script.discoverFailures.shift();
@@ -188,7 +196,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     const search = { index: async () => { if (hangIndex) await never(); } };
     const timers: Timer[] = [];
     const manager = new JobManager({
-      vaultPath: VAULT, store, source, documents: new Collector(vault, search), channels,
+      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: { youtube: channels },
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
       now: () => clock.now,
@@ -233,7 +241,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   };
 }
 
-function channel(id: string): YouTubeChannel {
+function channel(id: string): SubscriptionRecord {
   return {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(),
     settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
@@ -296,8 +304,8 @@ describe('video jobs across restarts (R-T2)', () => {
   it('captures again only the video whose capture was cut short, and keeps queue order', async () => {
     const w = await world();
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const first = await g1.manager.submitVideo(watchUrl(videoId(1)));
-    const second = await g1.manager.submitVideo(watchUrl(videoId(2)));
+    const first = await g1.manager.submitItem('youtube', watchUrl(videoId(1)));
+    const second = await g1.manager.submitItem('youtube', watchUrl(videoId(2)));
     await vi.waitFor(() => expect(g1.source.held.has(videoId(1))).toBe(true));
 
     const g2 = await w.crash(g1);
@@ -318,7 +326,7 @@ describe('video jobs across restarts (R-T2)', () => {
     const w = await world();
     w.setIndexHangs(true);
     const g1 = await w.boot();
-    const accepted = await g1.manager.submitVideo(watchUrl(videoId(3)));
+    const accepted = await g1.manager.submitItem('youtube', watchUrl(videoId(3)));
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('index'));
 
     w.setIndexHangs(false);
@@ -335,7 +343,7 @@ describe('channel-add jobs across restarts (R-T3)', () => {
   it('resolves again when stopped while resolving', async () => {
     const w = await world();
     const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submit('https://www.youtube.com/@resume');
+    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@resume');
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
 
     const g2 = await w.crash(g1);
@@ -349,7 +357,7 @@ describe('channel-add jobs across restarts (R-T3)', () => {
     const w = await world();
     w.channels.hangAfterAdd = true;
     const g1 = await w.boot();
-    const adding = await g1.manager.submit('https://www.youtube.com/@halfway');
+    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@halfway');
     await vi.waitFor(() => expect(w.channels.channels).toHaveLength(1));
     w.script.channelVideos.set(w.channels.channels[0]!.id, listed(2, 'h'));
 
@@ -369,7 +377,7 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
     const w = await world();
     const chosen = { intervalMinutes: 180, backfillWindow: '2w' as const, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@chosen', chosen);
+    const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@chosen', chosen);
     // Its activity events are labelled as a first collection.
     expect(adding.job.scope).toEqual({ trigger: 'subscribe' });
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
@@ -389,7 +397,7 @@ describe('channel-add jobs whose record carries no settings (A3)', () => {
   it('subscribes with the default settings', async () => {
     const w = await world();
     const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submitChannelAdd('https://www.youtube.com/@nosettings', { intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20 });
+    const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@nosettings', { intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20 });
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
     await g1.store.flush();
     const file = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
@@ -408,7 +416,7 @@ describe('channel-add jobs and the first scheduled check (R-T3)', () => {
     const w = await world();
     w.channels.hangAfterAdd = true;
     const g1 = await w.boot();
-    const adding = await g1.manager.submit('https://www.youtube.com/@duenow');
+    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@duenow');
     await vi.waitFor(() => expect(w.channels.channels).toHaveLength(1));
     const subscribed = w.channels.channels[0]!;
     w.script.channelVideos.set(subscribed.id, listed(3, 'q'));
@@ -417,7 +425,7 @@ describe('channel-add jobs and the first scheduled check (R-T3)', () => {
     const g2 = await w.boot((source) => { source.holdDiscovery = true; });
     await g2.manager.resume();
     // The scheduler starts right after resume; its first check is due at once.
-    const scheduled = await g2.manager.submitChannel(subscribed, 'scheduled');
+    const scheduled = await g2.manager.submitCheck('youtube', subscribed, 'scheduled');
     const added = g2.manager.get(adding.job.id);
 
     expect(added).toMatchObject({ state: 'completed', result: { outcome: 'created', followUpJobId: scheduled.job.id } });
@@ -433,7 +441,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(6, 'c'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'c'))).toBe(true));
     g1.source.release(videoId(0, 'c'));
     await vi.waitFor(() => expect(g1.source.held.has(videoId(1, 'c'))).toBe(true));
@@ -444,7 +452,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     const g2 = await w.crash(g1);
     // The scheduler's first check after a restart joins the resumed job, even after the limit was lowered.
     w.channels.channels[0]!.settings = { ...subscribed.settings, backfillMaxItems: 5 };
-    const scheduled = await g2.manager.submitChannel(subscribed, 'scheduled');
+    const scheduled = await g2.manager.submitCheck('youtube', subscribed, 'scheduled');
     const done = await g2.manager.whenSettled(accepted.job.id);
 
     expect(scheduled).toMatchObject({ deduplicated: true, job: { id: accepted.job.id } });
@@ -463,7 +471,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     w.script.channelVideos.set(subscribed.id, listed(2, 'o'));
     w.channels.hangAfterUpdate = true;
     const g1 = await w.boot();
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
     expect(w.channels.channels[0]!.lastCheckedAt).toBeUndefined();
 
@@ -482,7 +490,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     w.script.channelVideos.set(subscribed.id, listed(1, 'l'));
     w.channels.hangAfterUpdate = true;
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
     w.channels.channels[0]!.lastCheckedAt = '2026-10-15T07:00:00.000Z';
 
@@ -499,7 +507,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     const videos = listed(3, 'd').map((video, index) => ({ ...video, publishedAt: new Date(T0.getTime() + index * 60_000).toISOString() }));
     w.script.channelVideos.set(subscribed.id, videos.reverse());
     const g1 = await w.boot((source) => { source.holdDiscovery = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('discover'));
 
     // While the service is down the limit is lowered and time moves on.
@@ -523,10 +531,10 @@ describe('subscriptions that stopped (R-T5)', () => {
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(3, 'p'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'p'))).toBe(true));
     w.channels.channels[0]!.enabled = false;
-    g1.manager.stopChannel(subscribed.id, 'subscription_paused');
+    g1.manager.stopSubscription('youtube', subscribed.id, 'subscription_paused');
 
     const g2 = await w.crash(g1);
     const done = g2.manager.get(accepted.job.id);
@@ -544,9 +552,9 @@ describe('subscriptions that stopped (R-T5)', () => {
     w.channels.channels.push(subscribed);
     w.script.channelVideos.set(subscribed.id, listed(3, 'x'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.source.held.has(videoId(0, 'x'))).toBe(true));
-    const claimed = await g1.manager.submitVideo(watchUrl(videoId(2, 'x')));
+    const claimed = await g1.manager.submitItem('youtube', watchUrl(videoId(2, 'x')));
     expect(claimed.deduplicated).toBe(true);
     await w.channels.remove(subscribed.id);
 
@@ -566,7 +574,7 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const w = await world();
     w.script.captureFailures.set(videoId(4), [network()]);
     const g = await w.boot();
-    const accepted = await g.manager.submitVideo(watchUrl(videoId(4)));
+    const accepted = await g.manager.submitItem('youtube', watchUrl(videoId(4)));
     await vi.waitFor(() => expect(g.manager.get(accepted.job.id).retry?.nextAttemptAt).toBeTruthy());
 
     expect(g.manager.get(accepted.job.id)).toMatchObject({
@@ -590,7 +598,7 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const id = videoId(0, 'i');
     w.script.captureFailures.set(id, [network()]);
     const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
-    const accepted = await g.manager.submitChannel(subscribed, 'manual');
+    const accepted = await g.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
     g.source.release(id);
     await vi.waitFor(() => expect(g.manager.get(accepted.job.id).items![0]!.retry?.nextAttemptAt).toBe('2026-10-15T06:00:30.000Z'));
@@ -610,7 +618,7 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const w = await world();
     w.script.captureFailures.set(videoId(5), [new CollectorError(code as 'no_subtitles', message)]);
     const g = await w.boot();
-    const done = await g.manager.whenSettled((await g.manager.submitVideo(watchUrl(videoId(5)))).job.id);
+    const done = await g.manager.whenSettled((await g.manager.submitItem('youtube', watchUrl(videoId(5)))).job.id);
 
     expect(done).toMatchObject({ state: 'failed', error: { code, message } });
     expect(done.retry).toBeUndefined();
@@ -630,12 +638,12 @@ describe('automatic retries (R-T6, R-T7)', () => {
     w.script.discoverFailures.push(network());
     w.script.resolveFailures.push(network());
     const g = await w.boot();
-    const discovering = await g.manager.submitChannel(subscribed, 'manual');
+    const discovering = await g.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g.manager.get(discovering.job.id).retry?.nextAttemptAt).toBeTruthy());
     g.fireTimers();
     expect(await g.manager.whenSettled(discovering.job.id)).toMatchObject({ state: 'completed', retry: { attempts: 1 } });
 
-    const adding = await g.manager.submit('https://www.youtube.com/@flakyadd');
+    const adding = await g.manager.submit('youtube', 'https://www.youtube.com/@flakyadd');
     await vi.waitFor(() => expect(g.manager.get(adding.job.id).retry?.nextAttemptAt).toBeTruthy());
     g.fireTimers();
     expect(await g.manager.whenSettled(adding.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' }, retry: { attempts: 1 } });
@@ -645,10 +653,10 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const w = await world();
     w.script.captureFailures.set(videoId(6), [network(), network(), network(), network()]);
     const g1 = await w.boot();
-    const failing = await g1.manager.submitVideo(watchUrl(videoId(6)));
+    const failing = await g1.manager.submitItem('youtube', watchUrl(videoId(6)));
     await vi.waitFor(() => expect(g1.manager.get(failing.job.id).retry?.attempts).toBe(1));
     // The only capture slot is free while the job waits.
-    const other = await g1.manager.submitVideo(watchUrl(videoId(7)));
+    const other = await g1.manager.submitItem('youtube', watchUrl(videoId(7)));
     expect(await g1.manager.whenSettled(other.job.id)).toMatchObject({ state: 'completed' });
     g1.fireTimers();
     await vi.waitFor(() => expect(g1.manager.get(failing.job.id).retry?.attempts).toBe(2));
@@ -677,8 +685,8 @@ describe('repeated unclean stops (R-T8)', () => {
     const w = await world();
     const hold = (source: ScriptedSource) => { source.holdCaptures = new Set([videoId(8)]); };
     let g = await w.boot(hold);
-    const stuck = await g.manager.submitVideo(watchUrl(videoId(8)));
-    const queued = await g.manager.submitVideo(watchUrl(videoId(9)));
+    const stuck = await g.manager.submitItem('youtube', watchUrl(videoId(8)));
+    const queued = await g.manager.submitItem('youtube', watchUrl(videoId(9)));
     for (let stop = 1; stop <= 2; stop += 1) {
       const current = g;
       await vi.waitFor(() => expect(current.source.held.has(videoId(8))).toBe(true));
@@ -699,7 +707,7 @@ describe('repeated unclean stops (R-T8)', () => {
     const w = await world();
     w.script.captureFailures.set(videoId(10), [network()]);
     let g = await w.boot();
-    const accepted = await g.manager.submitVideo(watchUrl(videoId(10)));
+    const accepted = await g.manager.submitItem('youtube', watchUrl(videoId(10)));
     await vi.waitFor(() => expect(g.manager.get(accepted.job.id).retry?.attempts).toBe(1));
     for (let restart = 0; restart < 3; restart += 1) g = await w.restart(g);
     w.clock.now = new Date('2026-10-15T06:05:00.000Z');

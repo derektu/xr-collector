@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { jobRole } from '../core/source-registry.js';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -368,7 +369,7 @@ export class ActivityLog {
     return result;
   }
 
-  /** Fills in the title, parent and subscription that entries written before they were recorded lack. */
+  /** Fills in the title, parent, source type and subscription that entries written before they were recorded lack. */
   private enrich(stored: JobEvent, lookup: (id: string) => CollectionJob | undefined): JobEvent {
     const event = this.sanitize(stored);
     if (!event.subscriptionId && event.sourceId && event.eventType.startsWith('subscription.')) {
@@ -379,10 +380,12 @@ export class ActivityLog {
     if (!job) return event;
     if (!event.sourceTitle && job.source.title) event.sourceTitle = job.source.title;
     if (!event.parentJobId && job.parentId) event.parentJobId = job.parentId;
+    if (!event.sourceType) event.sourceType = job.source.type;
     if (!event.subscriptionId) {
       const owner = job.parentId ? lookup(job.parentId) : job;
-      if (owner?.kind === 'youtube.channel' && owner.source.id) event.subscriptionId = owner.source.id;
-      else if (owner?.kind === 'youtube.channel-add' && owner.result?.channelId) event.subscriptionId = owner.result.channelId;
+      const role = owner ? jobRole(owner.kind)?.role : undefined;
+      if (role === 'check' && owner!.source.id) event.subscriptionId = owner!.source.id;
+      else if (role === 'add' && owner!.result?.channelId) event.subscriptionId = owner!.result.channelId;
     }
     return event;
   }

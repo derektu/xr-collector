@@ -1,22 +1,21 @@
-import { BACKFILL_LIMITS, BACKFILL_WINDOWS, DEFAULT_POLICY, INTERVAL_OPTIONS, intervalLabel, windowLabel } from '../channels/collection-policy.js';
+import { sourceDeclarations } from '../core/source-registry.js';
 import {
   CollectorError,
-  type ChannelPreview,
   type SourceTypeInfo,
+  type SubscriptionPreview,
   type UrlRecognition,
 } from '../core/types.js';
-import { classifyYouTubeInput } from './youtube/url.js';
+import type { SourcePluginDeclaration } from '../plugins/types.js';
 
 /** Services a source type may call while recognizing an address. */
 export interface RecognitionContext {
-  /** Resolves a channel address and reports its subscription state and the settings it uses or would start with. */
-  previewChannel(url: string): Promise<ChannelPreview>;
+  /** Resolves a subscription address of a type and reports its subscription state and the settings it uses or would start with. */
+  previewSubscription(type: string, url: string): Promise<SubscriptionPreview>;
 }
 
 /**
- * A source type: the addresses it owns, what it can collect and the settings its subscriptions use.
- * The Sources page, its filters and the Add dialog are built from these declarations, so a new type
- * needs only a new declaration and the APIs its actions call.
+ * A source type as the Sources page, its filters and the Add dialog see it: the addresses it owns
+ * and what can be done with one.
  */
 export interface SourceTypeDeclaration extends SourceTypeInfo {
   /** Whether the input belongs to this type; decided by syntax alone. */
@@ -25,89 +24,76 @@ export interface SourceTypeDeclaration extends SourceTypeInfo {
   recognize(input: string, context: RecognitionContext): Promise<UrlRecognition>;
 }
 
-const YOUTUBE_HOST = /(^|\.)youtube\.com$/u;
-
-export const youtubeSourceType: SourceTypeDeclaration = {
-  id: 'youtube',
-  label: 'YouTube',
-  icon: 'youtube',
-  kinds: [
-    { id: 'video', label: 'YouTube 影片', capability: 'single', itemNoun: '影片' },
-    { id: 'channel', label: 'YouTube 頻道', capability: 'subscription', itemNoun: '影片' },
-  ],
-  requiresLogin: false,
-  settings: [
-    {
-      key: 'intervalMinutes', label: '檢查頻率', default: DEFAULT_POLICY.intervalMinutes,
-      options: INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) })),
-    },
-    {
-      key: 'backfillWindow', label: '時間範圍', default: DEFAULT_POLICY.backfillWindow,
-      options: BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) })),
-    },
-    {
-      key: 'backfillMaxItems', label: '數量上限', default: DEFAULT_POLICY.backfillMaxItems,
-      options: BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 支影片` })),
-    },
-  ],
-  owns(input, url) {
-    if (input.startsWith('@')) return true;
-    if (!url) return false;
-    const host = url.hostname.toLowerCase();
-    return YOUTUBE_HOST.test(host) || host === 'youtu.be';
-  },
-  async recognize(input, context) {
-    let classified;
-    try {
-      classified = classifyYouTubeInput(input);
-    } catch (error) {
-      if (error instanceof CollectorError) return unsupported(input, error.message, 'youtube');
-      throw error;
-    }
-    if (classified.kind === 'video') {
-      const { video } = classified;
-      return {
-        ...base('ready', classified.video.canonicalUrl),
-        sourceType: 'youtube', kind: 'video', kindLabel: 'YouTube 影片',
-        target: { id: video.videoId, title: null, url: video.canonicalUrl },
-        actions: [{
-          id: 'collect', label: '收集影片', primary: true,
-          request: { method: 'POST', path: '/api/youtube/collect', body: { url: video.canonicalUrl } },
-        }],
-      };
-    }
-    let preview: ChannelPreview;
-    try {
-      preview = await context.previewChannel(classified.url);
-    } catch (error) {
-      if (error instanceof CollectorError) {
-        return { ...base('unavailable', classified.url), sourceType: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', message: error.message };
+/**
+ * The recognition of a source plugin's addresses: a single item offers to collect it, and a
+ * subscription address is resolved now to offer subscribing, or resuming a paused subscription.
+ * The actions call the type's own routes under `/api/<type>/`.
+ */
+export function recognizingSourceType(declaration: SourcePluginDeclaration): SourceTypeDeclaration {
+  const type = declaration.id;
+  const single = declaration.kinds.find((kind) => kind.capability === 'single');
+  const subscribing = declaration.kinds.find((kind) => kind.capability === 'subscription');
+  return {
+    ...sourceTypeInfo(declaration),
+    owns: (input, url) => declaration.owns(input, url),
+    async recognize(input, context) {
+      let classified;
+      try {
+        classified = declaration.classify(input);
+      } catch (error) {
+        if (error instanceof CollectorError) return unsupported(input, error.message, type);
+        throw error;
       }
-      throw error;
-    }
-    const { channel, subscription } = preview;
-    const actions: UrlRecognition['actions'] = !subscription
-      ? [{ id: 'subscribe', label: '訂閱頻道', primary: true, request: { method: 'POST', path: '/api/youtube/channels', body: { url: channel.url } } }]
-      : !subscription.enabled
-        ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: 'PATCH', path: `/api/youtube/channels/${encodeURIComponent(channel.id)}`, body: { enabled: true } } }]
-        : [];
-    return {
-      ...base('ready', channel.url),
-      sourceType: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道',
-      target: { id: channel.id, title: channel.title, url: channel.url },
-      subscription: subscription ? { id: channel.id, enabled: subscription.enabled, settings: subscription.settings } : null,
-      settings: DEFAULT_POLICY,
-      autoCollection: preview.autoCollection,
-      actions,
-    };
-  },
-};
+      if (classified.kind === 'item') {
+        const { ref } = classified;
+        return {
+          ...base('ready', ref.url),
+          sourceType: type, kind: single?.id ?? null, kindLabel: single?.label ?? null,
+          target: { id: ref.key, title: null, url: ref.url },
+          actions: [{
+            id: 'collect', label: `收集${declaration.item.noun}`, primary: true,
+            request: { method: 'POST', path: `/api/${type}/collect`, body: { url: ref.url } },
+          }],
+        };
+      }
+      const kind = subscribing?.id ?? null;
+      const kindLabel = subscribing?.label ?? null;
+      let preview: SubscriptionPreview;
+      try {
+        preview = await context.previewSubscription(type, classified.url);
+      } catch (error) {
+        if (error instanceof CollectorError) {
+          return { ...base('unavailable', classified.url), sourceType: type, kind, kindLabel, message: error.message };
+        }
+        throw error;
+      }
+      const { channel: target, subscription } = preview;
+      const targetNoun = declaration.subscription?.targetNoun ?? '';
+      const actions: UrlRecognition['actions'] = !subscription
+        ? [{ id: 'subscribe', label: `訂閱${targetNoun}`, primary: true, request: { method: 'POST', path: `/api/${type}/channels`, body: { url: target.url } } }]
+        : !subscription.enabled
+          ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: 'PATCH', path: `/api/${type}/channels/${encodeURIComponent(target.id)}`, body: { enabled: true } } }]
+          : [];
+      return {
+        ...base('ready', target.url),
+        sourceType: type, kind, kindLabel,
+        target: { id: target.id, title: target.title, url: target.url },
+        subscription: subscription ? { id: target.id, enabled: subscription.enabled, settings: subscription.settings } : null,
+        settings: declaration.subscription?.defaults ?? null,
+        autoCollection: preview.autoCollection,
+        actions,
+      };
+    },
+  };
+}
 
-/** Every source type the product offers, in display order. */
-export const SOURCE_TYPES: SourceTypeDeclaration[] = [youtubeSourceType];
+/** Every registered source type, in display order, as address recognition uses it. */
+export function sourceTypeDeclarations(): SourceTypeDeclaration[] {
+  return sourceDeclarations().map(recognizingSourceType);
+}
 
 /** The serializable part of a declaration that `GET /api/source-types` returns. */
-export function sourceTypeInfo(declaration: SourceTypeDeclaration): SourceTypeInfo {
+export function sourceTypeInfo(declaration: SourceTypeInfo): SourceTypeInfo {
   const { id, label, icon, kinds, requiresLogin, settings } = declaration;
   return { id, label, icon, kinds, requiresLogin, settings };
 }
@@ -121,8 +107,8 @@ export async function recognizeUrl(input: string, declarations: SourceTypeDeclar
   let url = absoluteUrl(trimmed);
   let owner = declarations.find((declaration) => declaration.owns(trimmed, url));
   if (!owner && !url) {
-    // Addresses are often copied without their scheme (youtube.com/watch?v=…). Such an input is
-    // read as https:// only when a type owns the result; any other bare string stays unsupported.
+    // Addresses are often copied without their scheme (example.com/page). Such an input is read
+    // as https:// only when a type owns the result; any other bare string stays unsupported.
     const withScheme = `https://${trimmed}`;
     const candidate = /^[^\s/@:]+\.[^\s/]+(\/\S*)?$/u.test(trimmed) ? absoluteUrl(withScheme) : null;
     const candidateOwner = candidate ? declarations.find((declaration) => declaration.owns(withScheme, candidate)) : undefined;
@@ -145,7 +131,7 @@ function absoluteUrl(input: string): URL | null {
   try {
     return new URL(input);
   } catch {
-    // Not an absolute URL; a type may still own it, such as a YouTube @handle.
+    // Not an absolute URL; a type may still own it, such as a handle.
     return null;
   }
 }

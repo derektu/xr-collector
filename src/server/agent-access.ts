@@ -13,7 +13,7 @@ export async function startAgentAccess(options: {
   /** Receives the Agent token so the activity log can mask it wherever it appears. */
   protectSecret?: (secret: string) => void;
   transfer?: StartServerOptions['transfer'];
-  channels?: StartServerOptions['channels'];
+  subscriptions?: StartServerOptions['subscriptions'];
   schedule?: StartServerOptions['schedule'];
   search?: StartServerOptions['search'];
   pacing?: StartServerOptions['pacing'];
@@ -32,7 +32,7 @@ export async function startAgentAccess(options: {
     ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.activity ? { activity: options.activity } : {}),
     ...(options.transfer ? { transfer: options.transfer } : {}),
-    ...(options.channels ? { channels: options.channels } : {}),
+    ...(options.subscriptions ? { subscriptions: options.subscriptions } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.pacing ? { pacing: options.pacing } : {}),

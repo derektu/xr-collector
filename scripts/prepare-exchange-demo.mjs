@@ -1,9 +1,11 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { registerSources } from '../dist/node/plugins/index.js';
+import { transcriptDocument } from '../dist/node/plugins/youtube/server.js';
+import { JsonScheduleStore } from '../dist/node/subscriptions/schedule-store.js';
+import { JsonSubscriptionStore } from '../dist/node/subscriptions/subscription-store.js';
 import { MarkdownVault } from '../dist/node/vault/markdown-vault.js';
-import { JsonChannelStore } from '../dist/node/channels/json-channel-store.js';
-import { JsonChannelScheduleStore } from '../dist/node/channels/json-channel-schedule-store.js';
 import { writeVaultMarker } from '../dist/node/vault/vault-directory.js';
 
 /**
@@ -11,6 +13,7 @@ import { writeVaultMarker } from '../dist/node/vault/vault-directory.js';
  * first machine starts with (five documents, two subscriptions), and `other/vault`, a Vault created
  * on its own that has never exchanged with it. Export files come from the app itself.
  */
+registerSources();
 const { values } = parseArgs({ options: { output: { type: 'string' } } });
 const root = values.output ? path.resolve(values.output) : path.resolve('.data', 'exchange-demo', new Date().toISOString().replace(/[:.]/g, '-'));
 await mkdir(path.dirname(root), { recursive: true });
@@ -23,7 +26,7 @@ const fixture = {
   languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual',
 };
 async function add(vault, videoId, title, bodyMarkdown, channel = {}) {
-  await new MarkdownVault(vault).add({ ...fixture, ...channel, videoId, sourceUrl: `https://www.youtube.com/watch?v=${videoId}`, title, bodyMarkdown });
+  await new MarkdownVault(vault).add(transcriptDocument({ ...fixture, ...channel, videoId, sourceUrl: `https://www.youtube.com/watch?v=${videoId}`, title, bodyMarkdown }));
 }
 const settings = { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 };
 const subscription = (id, title) => ({
@@ -39,13 +42,13 @@ await add(home, 'demoocean01', '海洋調查筆記', '海洋調查的合成字�
 await add(home, 'demodesert1', '沙漠研究摘要', '沙漠研究的合成字幕。');
 await add(home, 'demomount01', '山岳考察', '山岳考察的合成字幕。');
 await add(home, 'demoriver01', '河川生態', '河川生態的合成字幕。');
-await new JsonChannelStore(home).add(subscription('UC-demo-home', '合成測試頻道'));
-await new JsonChannelStore(home).add(subscription('UC-demo-news', '合成新聞頻道'));
-await new JsonChannelScheduleStore(home).save({ enabled: true });
+await new JsonSubscriptionStore(home, 'youtube').add(subscription('UC-demo-home', '合成測試頻道'));
+await new JsonSubscriptionStore(home, 'youtube').add(subscription('UC-demo-news', '合成新聞頻道'));
+await new JsonScheduleStore(home).save({ enabled: true });
 
 await add(other, 'demoforest1', '森林觀測紀錄', '另一份知識庫自己整理的森林觀測內容。');
 await add(other, 'demoorchid1', '蘭花研究', 'Orchid research from the other Vault.');
-await new JsonChannelStore(other).add({ ...subscription('UC-demo-home', '合成測試頻道'), settings: { ...settings, intervalMinutes: 180 } });
-await new JsonChannelScheduleStore(other).save({ enabled: true });
+await new JsonSubscriptionStore(other, 'youtube').add({ ...subscription('UC-demo-home', '合成測試頻道'), settings: { ...settings, intervalMinutes: 180 } });
+await new JsonScheduleStore(other).save({ enabled: true });
 
 console.log(`合成資料：${root}\nhome/vault 是第一台電腦的知識庫；other/vault 是另外建立、從未與它交換過的知識庫。`);

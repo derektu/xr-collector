@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { ChannelSchedule, PendingSubscription, SourceEntry, SourceList, SourceTypeInfo } from '../core/types.js';
-import { SUBSCRIPTION_ADD_ITEMS, type AddMode } from './add-menu.js';
+import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
@@ -9,6 +9,7 @@ import {
   checkTimesLine,
   displayUrl,
   filterSources,
+  pendingOwner,
   shortTimeLabel,
   sourcePath,
   type SourceListState,
@@ -95,7 +96,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
         <button type="button" className="button" disabled={checking || enabledCount === 0} onClick={() => void checkAll()} data-testid="check-all">
           <Icon name="refresh" size={15} />{checking ? '檢查中…' : '立即檢查'}
         </button>
-        <AddMenu label="新增訂閱" items={SUBSCRIPTION_ADD_ITEMS} onChoose={onAdd} testId="add-subscription" />
+        <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} testId="add-subscription" />
       </div>
     </div>
 
@@ -104,7 +105,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
 
     {empty ? <section className="empty-state" data-testid="sources-empty">
       <h2>還沒有訂閱</h2>
-      <AddMenu label="新增訂閱" items={SUBSCRIPTION_ADD_ITEMS} onChoose={onAdd} primary align="start" testId="add-subscription-empty" />
+      <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} primary align="start" testId="add-subscription-empty" />
     </section> : null}
 
     {list && !empty ? <>
@@ -127,14 +128,14 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
         </div>
         {visible.map((source) => <SourceRow key={`${source.type}:${source.id}`} source={source} icon={typeLabel(source.type)?.icon ?? 'file'} now={now}
           onOpen={() => onOpenSource(source.type, source.id)} onChanged={onChanged} />)}
-        {pending.map((entry) => <div key={entry.jobId} className="source-row pending" role="row" data-testid={`pending-row-${entry.jobId}`}>
-          <span role="cell" className="source-name"><SourceTypeBadge icon="youtube" />
-            <span><span className="name">{entry.title ?? displayUrl(entry.url)}</span><span className="kind">YouTube 頻道</span></span></span>
+        {pending.map((entry) => { const owner = pendingOwner(entry); return <div key={entry.jobId} className="source-row pending" role="row" data-testid={`pending-row-${entry.jobId}`}>
+          <span role="cell" className="source-name"><SourceTypeBadge icon={owner?.declaration.icon ?? 'file'} />
+            <span><span className="name">{entry.title ?? displayUrl(entry.url)}</span><span className="kind">{owner?.kindLabel}</span></span></span>
           <span role="cell" className="numeric">—</span>
           <span role="cell" className="muted">—</span>
           <span role="cell"><span className={`status-chip ${subscriptionStatusTone(entry.checkStatus)}`}>{subscriptionStatusText(entry.checkStatus, now)}</span></span>
           <span role="cell" />
-        </div>)}
+        </div>; })}
         {visible.length === 0 && pending.length === 0 ? <p className="table-empty" data-testid="sources-no-match">沒有符合的訂閱。</p> : null}
       </div>
     </> : null}
@@ -143,10 +144,10 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
   </>;
 }
 
-/** A subscription request matches the filters by its address or resolved title. YouTube is the only type with subscription requests. */
+/** A subscription request matches the filters by the type that owns its address and by its address or resolved title. */
 function matchesPending(entry: PendingSubscription, state: SourceListState): boolean {
   const query = state.query.trim().toLocaleLowerCase();
-  return (!state.type || state.type === 'youtube')
+  return (!state.type || state.type === pendingOwner(entry)?.declaration.id)
     && (!query || (entry.title ?? entry.url).toLocaleLowerCase().includes(query));
 }
 
@@ -185,7 +186,7 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
   }
 
   const toggle = () => void run(async () => {
-    await api.setChannelEnabled(source.id, paused);
+    await api.setChannelEnabled(source.type, source.id, paused);
     return paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`;
   });
 
@@ -206,7 +207,7 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
         {menuOpen ? <div className="menu" role="menu">
           <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onOpen(); }}>查看詳情</button>
           <button type="button" role="menuitem" disabled={paused} onClick={() => void run(async () => {
-            await api.checkChannels([source.id]);
+            await api.checkChannels(source.type, [source.id]);
             return `已開始檢查「${source.title}」。`;
           })}>立即檢查</button>
           <button type="button" role="menuitem" className="danger" onClick={() => { setMenuOpen(false); setRemoving(true); }}>移除</button>

@@ -7,6 +7,7 @@ import {
 } from '../../src/vault/document-paths.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { packagePath } from '../../src/vault/vault-package.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -37,10 +38,10 @@ describe('document paths', () => {
 
   it('names the same file the Vault writes a document to', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-paths-')); roots.push(root);
-    const saved = await new MarkdownVault(root).add({
+    const saved = await new MarkdownVault(root).add(transcriptDocument({
       videoId: 'dQw4w9WgXcQ', sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: '路徑', channelId: 'UC1',
       channelTitle: '頻道', publishedAt: null, languageCode: 'zh-Hant', languageName: '中文', subtitleKind: 'manual', bodyMarkdown: '內容',
-    });
+    }));
     const file = documentPathFromId(saved.id)!;
     expect((await stat(path.join(root, file))).isFile()).toBe(true);
     expect(documentIdFromPath(file)).toBe(saved.id);

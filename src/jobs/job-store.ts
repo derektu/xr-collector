@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
+import { jobRole } from '../core/source-registry.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
 const JOBS_FILE = 'jobs.json';
@@ -226,14 +227,17 @@ function belongsTo(job: CollectionJob, vaultPath: string, vaultId: string | null
 }
 
 /**
- * True for a job that was doing its own work: capturing, saving or indexing a video, discovering a
- * channel's videos or resolving a channel. A channel job past discovery only waits for its videos.
+ * True for a job that was doing its own work: capturing, saving or indexing an item, discovering a
+ * subscription's items or resolving a subscription address. A check job past discovery only waits
+ * for its items. A job of an unregistered source type counts as doing its own work in any phase.
  */
 function inStep(job: CollectionJob): boolean {
   if (job.state !== 'running') return false;
-  if (job.kind === 'youtube.video') return job.phase === 'capture' || job.phase === 'save' || job.phase === 'index';
-  if (job.kind === 'youtube.channel') return job.phase === 'discover';
-  return job.phase === 'resolve';
+  const role = jobRole(job.kind)?.role;
+  if (role === 'item') return job.phase === 'capture' || job.phase === 'save' || job.phase === 'index';
+  if (role === 'check') return job.phase === 'discover';
+  if (role === 'add') return job.phase === 'resolve';
+  return job.phase !== null;
 }
 
 function parseJobs(contents: string): CollectionJob[] | null {
