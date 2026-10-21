@@ -2,7 +2,7 @@ import type { StartRunRequest } from './subscription-service.js';
 import type { NewJobEvent } from '../jobs/job-store.js';
 import {
   CollectorError,
-  type ChannelSchedule,
+  type CollectionSchedule,
   type JobSubmission,
   type ScheduledCheck,
   type SubscriptionRecord,
@@ -20,6 +20,7 @@ export interface ScheduleStore {
 
 /** The subscription service of one source type, as the scheduler checks through it. */
 export interface ScheduledRunner {
+  readonly type: string;
   list(): Promise<SubscriptionRecord[]>;
   startRun(request: StartRunRequest): Promise<JobSubmission[]>;
   planChecks(options: { reset: boolean }): Promise<void>;
@@ -79,17 +80,17 @@ export class CollectionScheduler {
   }
 
   /** The switch, the newest finished check and, while collection is on, the subscription due first. */
-  async getSchedule(): Promise<ChannelSchedule> {
+  async getSchedule(): Promise<CollectionSchedule> {
     const { enabled } = await this.ensureLoaded();
     let lastCheck: ScheduledCheck | null = null;
     let nextCheck: ScheduledCheck | null = null;
     for (const runner of this.runners) {
       for (const subscription of await runner.list()) {
         if (subscription.lastCheckedAt && (!lastCheck || subscription.lastCheckedAt > lastCheck.at)) {
-          lastCheck = { channelId: subscription.id, title: subscription.title, at: subscription.lastCheckedAt };
+          lastCheck = { type: runner.type, subscriptionId: subscription.id, title: subscription.title, at: subscription.lastCheckedAt };
         }
         if (enabled && subscription.enabled && subscription.nextCheckAt && (!nextCheck || subscription.nextCheckAt < nextCheck.at)) {
-          nextCheck = { channelId: subscription.id, title: subscription.title, at: subscription.nextCheckAt };
+          nextCheck = { type: runner.type, subscriptionId: subscription.id, title: subscription.title, at: subscription.nextCheckAt };
         }
       }
     }
@@ -100,7 +101,7 @@ export class CollectionScheduler {
    * Turns automatic collection on or off. Turning it on counts every enabled subscription's next
    * check from now, so a long pause never makes them all due at once.
    */
-  async updateSchedule(input: UpdateSchedule): Promise<ChannelSchedule> {
+  async updateSchedule(input: UpdateSchedule): Promise<CollectionSchedule> {
     if (typeof input?.enabled !== 'boolean') {
       throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
     }
@@ -177,7 +178,7 @@ export class CollectionScheduler {
       severity: 'info', eventType: 'schedule.dispatched', message: `定時檢查開始：${count} 個訂閱到了檢查時間。`,
     });
     for (const { runner, ids } of due) {
-      await runner.startRun({ trigger: 'scheduled', channelIds: ids }).catch((error: unknown) => {
+      await runner.startRun({ trigger: 'scheduled', subscriptionIds: ids }).catch((error: unknown) => {
         reportScheduleError(error);
         this.options.recordEvent?.({
           severity: 'error', eventType: 'schedule.failed',

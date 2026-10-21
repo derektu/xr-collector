@@ -44,7 +44,7 @@ function services(failures: CollectorError[] = []) {
   const jobs = new JobManager({
     vaultPath: VAULT, store, documents: collector,
     plugins: [youtubePlugin({
-      resolveChannel: async () => { throw new CollectorError('invalid_channel', '無法辨認'); },
+      resolveChannel: async () => { throw new CollectorError('invalid_subscription', '無法辨認'); },
       discover: async () => [],
       capture: async (video) => {
         const failure = failures.shift();
@@ -101,7 +101,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     const headers = { authorization: 'Bearer agent-token-for-tests' };
     expect((await app.inject({ method: 'GET', url: '/api/activity' })).statusCode).toBe(401);
 
-    const submitted = (await app.inject({ method: 'POST', url: '/api/youtube/collect', headers, payload: { url: 'https://youtu.be/kkkkkkkkkkk' } })).json();
+    const submitted = (await app.inject({ method: 'POST', url: '/api/items', headers, payload: { url: 'https://youtu.be/kkkkkkkkkkk' } })).json();
     const failed = await settled(app, submitted.job.id, headers);
     expect(failed.state).toBe('failed');
     const retry = await app.inject({ method: 'POST', url: `/api/jobs/${failed.id}/retry`, headers });

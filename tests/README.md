@@ -16,10 +16,10 @@
 | `subscriptions` | 訂閱、各訂閱的收集設定與設定檔版本檢查、時間邊界、每次檢查的收集規則（範圍內最新 N 則、不往前補足）、暫停／移除收斂、頻道工作提交與排程、服務計算的訂閱狀態（`subscription-status.test.ts`：更新中、排在其他訂閱後、冷卻、等待重試、到期未派出、自動檢查關閉）；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
 | `vault` | 文件格式與文件路徑、zip 匯出檔（manifest、路徑與內容檢查、只打包登記的檔案、刪除紀錄與未知欄位）、匯出到檔案與預設匯出目錄、以較新為準的合併（刪除帶回另一台、刪除與新增同時發生、兩邊修改、刪除與修改、兩邊都刪除時採用較新的紀錄、時間相同保留本機、同一支影片、從未交換的知識庫、訂閱的新增修改移除與移除紀錄、沒有需要匯入、完全取代）、匯入前備份與備份目錄、原地套用的中斷恢復（journal 寫入前、改名進行一半）、從匯出檔建立知識庫、資料交換期間的收集暫停、知識庫搬移（目標檢查、逐檔驗證、失敗注入、中斷恢復、清理失敗）、同庫識別與開啟其他知識庫 |
 | `search` | 搜尋狀態、索引（含 YouTube 文件內容雜湊的固定值）與真實引擎 |
-| `server` | HTTP 契約與 Agent 授權，以及核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
+| `server` | HTTP 契約與 Agent 授權；不分類型的收集、訂閱、排程與請求通道路由，以 YouTube 與假來源 plugin 各跑一次，含類型專屬路由回 404 與 UI／Agent 讀到相同結果（`subscription-routes.test.ts`）；核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
 | `web` | 畫面使用的狀態／呈現邏輯、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
-| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`） |
+| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`） |
 | `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）與假來源 plugin（`fake-source-plugin.ts`） |
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。

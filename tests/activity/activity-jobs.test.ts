@@ -130,7 +130,7 @@ function setup(store: JobStore = JobStore.memory(clock), limits: { capture?: num
     vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: { youtube: channels },
     now: clock, createId: () => `job-${++sequence}`, limits,
     setTimer: (callback) => { timers.push(callback); return () => undefined; },
-    checkSubscription: async (_type, id) => (await collector!.startRun({ trigger: 'manual', channelIds: [id] }))[0]!,
+    checkSubscription: async (_type, id) => (await collector!.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
   });
   collector = new SubscriptionService('youtube', channels, manager, {
     autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: async () => [], now: clock,
@@ -207,7 +207,7 @@ describe('manual retry (A-T9)', () => {
 
   it('subscribes again with the settings a failed subscription request was accepted with', async () => {
     const { manager, source, channels } = setup();
-    source.resolveFailures.push(new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。'));
+    source.resolveFailures.push(new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。'));
     const settings = { intervalMinutes: 120, backfillWindow: '1w' as const, backfillMaxItems: 5 };
     const failed = await manager.whenSettled((await manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@retry', settings)).job.id);
     expect(failed.state).toBe('failed');
@@ -222,7 +222,7 @@ describe('manual retry (A-T9)', () => {
     channels.channels.push(subscription('UC1'), subscription('UC2'));
     source.channelVideos.set('UC1', [{ id: 'ddddddddddd', title: '新影片', url: watchUrl('ddddddddddd'), publishedAt: T0.toISOString(), upcoming: false }]);
     source.discoverFailures.push(new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。'));
-    const [first] = await collector.startRun({ trigger: 'scheduled', channelIds: ['UC1'] });
+    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC1'] });
     const failed = await manager.whenSettled(first!.job.id);
     expect(failed.state).toBe('failed');
 
@@ -231,12 +231,12 @@ describe('manual retry (A-T9)', () => {
     expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', progress: { created: 1 } });
 
     source.discoverFailures.push(new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。'));
-    const [second] = await collector.startRun({ trigger: 'manual', channelIds: ['UC2'] });
+    const [second] = await collector.startRun({ trigger: 'manual', subscriptionIds: ['UC2'] });
     const failedAgain = await manager.whenSettled(second!.job.id);
     channels.channels[1]!.enabled = false;
-    await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'channel_paused' });
+    await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'subscription_paused' });
     channels.channels.splice(1, 1);
-    await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'channel_not_found' });
+    await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'subscription_not_found' });
     expect(manager.get(failedAgain.id).retriedBy).toBeUndefined();
   });
 
@@ -247,7 +247,7 @@ describe('manual retry (A-T9)', () => {
     source.channelVideos.set('UC3', [video('mmmmmmmmmmm'), video('nnnnnnnnnnn')]);
     source.captureFailures.set('mmmmmmmmmmm', [noSubtitles()]);
     source.captureFailures.set('nnnnnnnnnnn', [noSubtitles()]);
-    const [first] = await collector.startRun({ trigger: 'scheduled', channelIds: ['UC3'] });
+    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC3'] });
     const failed = await manager.whenSettled(first!.job.id);
     expect(failed).toMatchObject({ state: 'failed', error: { code: 'all_items_failed' } });
     const checked = { ...channels.channels[0]! };
@@ -274,7 +274,7 @@ describe('manual retry (A-T9)', () => {
     const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
     source.channelVideos.set('UC4', [video('ooooooooooo'), video('ppppppppppp')]);
     source.captureFailures.set('ppppppppppp', [noSubtitles()]);
-    const [first] = await collector.startRun({ trigger: 'scheduled', channelIds: ['UC4'] });
+    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC4'] });
     const partial = await manager.whenSettled(first!.job.id);
     expect(partial).toMatchObject({ state: 'completed', result: { outcome: 'partial' } });
 
@@ -284,7 +284,7 @@ describe('manual retry (A-T9)', () => {
     expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(manager.get(partial.id).retriedBy).toBe(retried.job.id);
 
-    const [clean] = await collector.startRun({ trigger: 'manual', channelIds: ['UC4'] });
+    const [clean] = await collector.startRun({ trigger: 'manual', subscriptionIds: ['UC4'] });
     const finished = await manager.whenSettled(clean!.job.id);
     expect(finished.state).toBe('completed');
     await expect(manager.retry(finished.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
@@ -324,7 +324,7 @@ describe('job summary and event fields', () => {
     const { manager, source, channels, collector, events } = setup();
     channels.channels.push(subscription('UC9'));
     source.channelVideos.set('UC9', [{ id: 'iiiiiiiiiii', title: '頻道影片', url: watchUrl('iiiiiiiiiii'), publishedAt: T0.toISOString(), upcoming: false }]);
-    const [submission] = await collector.startRun({ trigger: 'scheduled', channelIds: ['UC9'] });
+    const [submission] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC9'] });
     await manager.whenSettled(submission!.job.id);
     const saved = (await events({ eventType: ['document.saved'] }))[0]!;
     expect(saved).toMatchObject({ subscriptionId: 'UC9', parentJobId: submission!.job.id, sourceTitle: '影片 iiiiiiiiiii', documentId: 'youtube:iiiiiiiiiii' });

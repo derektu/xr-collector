@@ -62,7 +62,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
     const id = channelIdFromInfo(info);
     const title = info.channel?.trim() || info.uploader?.trim() || info.title?.trim();
     if (!id || !title) {
-      throw new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。');
+      throw new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。');
     }
     return {
       id,
@@ -114,7 +114,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
       if (options.signal?.aborted && error === options.signal.reason) throw error;
       // Temporary failures keep their own code; anything else means the address names no readable channel.
       if (resolvingChannel && error instanceof CollectorError && error.code !== 'network_error' && error.code !== 'rate_limited') {
-        throw new CollectorError('invalid_channel', '無法讀取這個 YouTube 頻道。', {
+        throw new CollectorError('invalid_subscription', '無法讀取這個 YouTube 頻道。', {
           cause: error,
         });
       }
@@ -124,7 +124,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
       return JSON.parse(output) as YtDlpChannelInfo;
     } catch (error) {
       throw new CollectorError(
-        resolvingChannel ? 'invalid_channel' : 'capture_failed',
+        resolvingChannel ? 'invalid_subscription' : 'capture_failed',
         resolvingChannel ? '無法解析 YouTube 頻道資訊。' : '無法解析頻道影片清單。',
         { cause: error },
       );
@@ -163,7 +163,7 @@ function normalizeChannelUrl(input: string): string {
   try {
     url = new URL(candidate);
   } catch (error) {
-    throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。', {
+    throw new CollectorError('invalid_subscription', '請輸入 YouTube 頻道網址或 @handle。', {
       cause: error,
     });
   }
@@ -173,7 +173,7 @@ function normalizeChannelUrl(input: string): string {
   const acceptedPath = first.startsWith('@')
     || (['channel', 'c', 'user'].includes(first) && Boolean(parts[1]));
   if (url.protocol !== 'https:' || hostname !== 'youtube.com' || !acceptedPath) {
-    throw new CollectorError('invalid_channel', '請輸入 YouTube 頻道網址或 @handle。');
+    throw new CollectorError('invalid_subscription', '請輸入 YouTube 頻道網址或 @handle。');
   }
   return url.toString();
 }

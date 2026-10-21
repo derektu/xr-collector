@@ -1,4 +1,4 @@
-import type { ChannelJobTrigger, CollectionJob, Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/types.js';
+import type { ChannelJobTrigger, JobView, Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/types.js';
 import { intervalLabel } from '../core/check-interval.js';
 import { sourceDeclaration } from '../core/source-registry.js';
 import type { SubscriptionDeclaration } from '../plugins/types.js';
@@ -111,7 +111,7 @@ const TRIGGER_LABELS: Record<ChannelJobTrigger, string> = {
 };
 
 /** The reason a check job ran, for the job list. */
-export function channelJobLabel(job: CollectionJob): string {
+export function channelJobLabel(job: JobView): string {
   return triggerLabel(job.scope?.trigger ?? null, job.source.type);
 }
 

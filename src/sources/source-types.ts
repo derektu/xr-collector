@@ -27,7 +27,7 @@ export interface SourceTypeDeclaration extends SourceTypeInfo {
 /**
  * The recognition of a source plugin's addresses: a single item offers to collect it, and a
  * subscription address is resolved now to offer subscribing, or resuming a paused subscription.
- * The actions call the type's own routes under `/api/<type>/`.
+ * The actions call the routes every source type shares.
  */
 export function recognizingSourceType(declaration: SourcePluginDeclaration): SourceTypeDeclaration {
   const type = declaration.id;
@@ -52,7 +52,7 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
           target: { id: ref.key, title: null, url: ref.url },
           actions: [{
             id: 'collect', label: `收集${declaration.item.noun}`, primary: true,
-            request: { method: 'POST', path: `/api/${type}/collect`, body: { url: ref.url } },
+            request: { method: 'POST', path: '/api/items', body: { url: ref.url } },
           }],
         };
       }
@@ -67,12 +67,12 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
         }
         throw error;
       }
-      const { channel: target, subscription } = preview;
+      const { target, subscription } = preview;
       const targetNoun = declaration.subscription?.targetNoun ?? '';
       const actions: UrlRecognition['actions'] = !subscription
-        ? [{ id: 'subscribe', label: `訂閱${targetNoun}`, primary: true, request: { method: 'POST', path: `/api/${type}/channels`, body: { url: target.url } } }]
+        ? [{ id: 'subscribe', label: `訂閱${targetNoun}`, primary: true, request: { method: 'POST', path: '/api/subscriptions', body: { url: target.url } } }]
         : !subscription.enabled
-          ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: 'PATCH', path: `/api/${type}/channels/${encodeURIComponent(target.id)}`, body: { enabled: true } } }]
+          ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: 'PATCH', path: `/api/subscriptions/${encodeURIComponent(type)}/${encodeURIComponent(target.id)}`, body: { enabled: true } } }]
           : [];
       return {
         ...base('ready', target.url),
@@ -103,17 +103,7 @@ export function sourceTypeInfo(declaration: SourceTypeInfo): SourceTypeInfo {
  * `unsupported`; a type that requires login answers `login_required` without contacting the source.
  */
 export async function recognizeUrl(input: string, declarations: SourceTypeDeclaration[], context: RecognitionContext): Promise<UrlRecognition> {
-  let trimmed = input.trim();
-  let url = absoluteUrl(trimmed);
-  let owner = declarations.find((declaration) => declaration.owns(trimmed, url));
-  if (!owner && !url) {
-    // Addresses are often copied without their scheme (example.com/page). Such an input is read
-    // as https:// only when a type owns the result; any other bare string stays unsupported.
-    const withScheme = `https://${trimmed}`;
-    const candidate = /^[^\s/@:]+\.[^\s/]+(\/\S*)?$/u.test(trimmed) ? absoluteUrl(withScheme) : null;
-    const candidateOwner = candidate ? declarations.find((declaration) => declaration.owns(withScheme, candidate)) : undefined;
-    if (candidate && candidateOwner) { trimmed = withScheme; url = candidate; owner = candidateOwner; }
-  }
+  const { input: trimmed, url, owner } = addressOwner(input, declarations);
   if (!owner) {
     return unsupported(trimmed, url ? '目前還不支援這個網站的網址。' : '請貼上完整網址，例如 https:// 開頭的網址。', null);
   }
@@ -125,6 +115,24 @@ export async function recognizeUrl(input: string, declarations: SourceTypeDeclar
     };
   }
   return owner.recognize(trimmed, context);
+}
+
+/**
+ * The declaration that owns an address, with the address as that type reads it. Addresses are often
+ * copied without their scheme (example.com/page); such an input is read as https:// only when a type
+ * owns the result, and any other bare string has no owner.
+ */
+export function addressOwner<T extends Pick<SourceTypeDeclaration, 'owns'>>(input: string, declarations: readonly T[]): { input: string; url: URL | null; owner: T | undefined } {
+  const trimmed = input.trim();
+  const url = absoluteUrl(trimmed);
+  const owner = declarations.find((declaration) => declaration.owns(trimmed, url));
+  if (!owner && !url) {
+    const withScheme = `https://${trimmed}`;
+    const candidate = /^[^\s/@:]+\.[^\s/]+(\/\S*)?$/u.test(trimmed) ? absoluteUrl(withScheme) : null;
+    const candidateOwner = candidate ? declarations.find((declaration) => declaration.owns(withScheme, candidate)) : undefined;
+    if (candidate && candidateOwner) return { input: withScheme, url: candidate, owner: candidateOwner };
+  }
+  return { input: trimmed, url, owner };
 }
 
 function absoluteUrl(input: string): URL | null {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionJob, SourceEntry, SourceJobRecord, UrlRecognition } from '../../src/core/types.js';
+import type { CollectionJob, SubscriptionEntry, SubscriptionJobRecord, UrlRecognition } from '../../src/core/types.js';
 import {
   activeJobs,
   currentRecognition,
@@ -20,7 +20,7 @@ const originalZone = process.env.TZ;
 beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
 afterEach(() => { process.env.TZ = originalZone; });
 
-function source(overrides: Partial<SourceEntry>): SourceEntry {
+function source(overrides: Partial<SubscriptionEntry>): SubscriptionEntry {
   return {
     id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
     settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: null }, lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
@@ -77,7 +77,7 @@ describe('source presentation (T-09)', () => {
 
   it('describes collection records', () => {
     const now = new Date('2026-10-15T06:00:00.000Z');
-    const record = (overrides: Partial<SourceJobRecord>): SourceJobRecord => ({
+    const record = (overrides: Partial<SubscriptionJobRecord>): SubscriptionJobRecord => ({
       id: 'r', state: 'completed', trigger: 'scheduled', createdAt: '2026-10-15T05:00:00.000Z', startedAt: null,
       finishedAt: '2026-10-15T05:30:00.000Z', progress: { total: 1, done: 1, created: 1, existing: 0, failed: 0 }, outcome: 'created', error: null,
       retry: null, resumedCount: 0, ...overrides,
@@ -114,7 +114,7 @@ describe('source presentation (T-09)', () => {
   });
 
   it('applies a recognition answer only to the address it was given for', () => {
-    const collect = { id: 'collect' as const, label: '收集影片', primary: true, request: { method: 'POST' as const, path: '/api/youtube/collect', body: { url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' } } };
+    const collect = { id: 'collect' as const, label: '收集影片', primary: true, request: { method: 'POST' as const, path: '/api/items', body: { url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' } } };
     const recognition: UrlRecognition = {
       status: 'ready', sourceType: 'youtube', kind: 'video', kindLabel: 'YouTube 影片', url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
       target: { id: 'aaaaaaaaaaa', title: null, url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' },

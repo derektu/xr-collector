@@ -76,13 +76,13 @@ describe('Agent authenticated HTTP access', () => {
     expect(rebuildResponse.statusCode).toBe(200);
     expect(rebuild).toHaveBeenCalledOnce();
     const scheduleResponse = await app.inject({
-      method: 'PUT', url: '/api/youtube/schedule', headers,
+      method: 'PUT', url: '/api/schedule', headers,
       payload: { enabled: true },
     });
     expect(scheduleResponse.statusCode).toBe(200);
     expect(schedule.updateSchedule).toHaveBeenCalledWith({ enabled: true });
-    expect((await app.inject({ method: 'POST', url: '/api/youtube/collect', headers, payload: {} })).statusCode).toBe(400);
-    expect((await app.inject({ method: 'POST', url: '/api/youtube/submissions', payload: { url: '@agent' } })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: '/api/items', headers, payload: {} })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/submissions', payload: { url: '@agent' } })).statusCode).toBe(401);
     expect(capture).not.toHaveBeenCalled();
     expect((await app.inject({ url: '/api/jobs', headers })).json()).toEqual({ jobs: [], nextCursor: null });
     expect((await app.inject({ url: '/api/agent/connection', headers })).statusCode).toBe(404);

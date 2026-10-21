@@ -9,7 +9,7 @@ A source type is declared on the server, so the UI and Agents read the same desc
 1. Add a `SourceTypeDeclaration` to `SOURCE_TYPES` in `src/sources/source-types.ts`. Its public part (`id`, `label`, `icon`, `kinds`, `requiresLogin`, `settings`) is served by `GET /api/source-types`; the UI builds the type chips, row icons, type labels and recognition card titles from it.
 2. Implement `owns(input, url)` and `recognize(input, context)`. `recognize` returns a `UrlRecognition` whose `actions` carry the HTTP `request` to perform. The add dialogs and Agents replay that request as given, so a new type needs no UI branch for its URL kinds.
 3. A type with `requiresLogin: true` is answered with `status: 'login_required'` before `recognize` runs.
-4. Put the actual collection behind the shared HTTP API. `SourceCatalog` (`src/sources/source-catalog.ts`) serves `GET /api/sources` and `GET /api/sources/:type/:id` from the YouTube channel subscriptions; a type with subscriptions of its own adds them there. The Shell is deliberately not an Electron IPC business boundary.
+4. Put the actual collection behind the shared HTTP API. Collection and subscription routes are the same for every type: `POST /api/submissions` and `POST /api/items` find the type that owns an address, and a subscription is addressed as `/api/subscriptions/:type/:id`. `SourceCatalog` (`src/sources/source-catalog.ts`) serves `GET /api/subscriptions` and `GET /api/subscriptions/:type/:id` from the subscriptions of every type, so a new type needs no route of its own. The Shell is deliberately not an Electron IPC business boundary.
 5. Give the type an icon in `src/web/icons.tsx` under the declared `icon` key.
 
 ## Add an add-menu item

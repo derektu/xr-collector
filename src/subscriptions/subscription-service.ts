@@ -73,11 +73,11 @@ export interface SubscriptionServiceOptions {
   removalSettleMs?: number;
 }
 
-/** `channelIds` names subscriptions of the service's type, as the HTTP API names them. */
+/** Which subscriptions of the service's type a check covers, and why it runs. */
 export interface StartRunRequest {
   trigger: Extract<ChannelJobTrigger, 'scheduled' | 'manual'>;
   /** Only these subscriptions; by default every enabled one. */
-  channelIds?: string[];
+  subscriptionIds?: string[];
 }
 
 /** What applying one subscription's settings to the others of its type changed. */
@@ -89,8 +89,7 @@ export interface ApplySettingsResult {
 }
 
 export interface EnabledResult {
-  /** The subscription; the HTTP API returns it as `channel`. */
-  channel: SubscriptionRecord;
+  subscription: SubscriptionRecord;
   /** The check a resume started. */
   submission: JobSubmission | null;
 }
@@ -163,7 +162,7 @@ export class SubscriptionService {
     return this.jobs.activeSubscriptionAdds(this.type)
       .filter((entry) => !entry.targetId || !subscribed.has(entry.targetId))
       .map(({ job, title }) => ({
-        jobId: job.id, url: job.source.url, title,
+        type: this.type, jobId: job.id, url: job.source.url, title,
         checkStatus: job.state === 'running' && !job.wait ? { state: 'updating', done: 0, total: 0 } : { state: 'queued' },
       }));
   }
@@ -181,7 +180,7 @@ export class SubscriptionService {
   /** Resolves a subscription address now and reports its subscription state and the settings it uses or would start with. */
   async preview(url: string): Promise<SubscriptionPreview> {
     const input = this.definition.classify(url);
-    if (input.kind !== 'subscription') throw new CollectorError('invalid_channel', this.definition.prompts.subscriptionInput);
+    if (input.kind !== 'subscription') throw new CollectorError('invalid_subscription', this.definition.prompts.subscriptionInput);
     const target = await withTimeout(
       (signal) => this.options.resolveTarget(input.url, signal),
       this.options.previewTimeoutMs ?? PREVIEW_TIMEOUT_MS,
@@ -189,7 +188,8 @@ export class SubscriptionService {
     );
     const existing = (await this.store.list()).find((candidate) => candidate.id === target.id);
     return {
-      channel: { id: target.id, title: existing?.title ?? target.title, url: target.url },
+      type: this.type,
+      target: { id: target.id, title: existing?.title ?? target.title, url: target.url },
       subscription: existing ? { enabled: existing.enabled, settings: existing.settings } : null,
       settings: existing?.settings ?? this.subscription.defaults,
       autoCollection: await this.options.autoCollection(),
@@ -264,13 +264,13 @@ export class SubscriptionService {
   async setEnabled(id: string, enabled: boolean): Promise<EnabledResult> {
     const current = (await this.store.list()).find((record) => record.id === id);
     if (!current) throw this.notFound();
-    if (current.enabled === enabled) return { channel: current, submission: null };
+    if (current.enabled === enabled) return { subscription: current, submission: null };
     if (!enabled) {
       const record = await this.store.update(id, { enabled: false, nextCheckAt: null });
       if (!record) throw this.notFound();
       this.jobs.stopSubscription(this.type, id, 'subscription_paused');
       this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${record.title}」。`, ...this.subject(id, record.title) });
-      return { channel: record, submission: null };
+      return { subscription: record, submission: null };
     }
     const now = this.now();
     const record = await this.store.update(id, {
@@ -280,7 +280,7 @@ export class SubscriptionService {
     if (!record) throw this.notFound();
     this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.resumed', message: `已恢復「${record.title}」。`, ...this.subject(id, record.title) });
     const submission = await this.jobs.submitCheck(this.type, record, 'resume');
-    return { channel: record, submission };
+    return { subscription: record, submission };
   }
 
   /**
@@ -374,15 +374,15 @@ export class SubscriptionService {
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
     const all = await this.store.list();
     let selected: SubscriptionRecord[];
-    if (request.channelIds && request.trigger === 'scheduled') {
+    if (request.subscriptionIds && request.trigger === 'scheduled') {
       // Due subscriptions were read a moment ago; one paused or removed since then is left out.
-      const ids = new Set(request.channelIds);
+      const ids = new Set(request.subscriptionIds);
       selected = all.filter((record) => ids.has(record.id) && record.enabled);
-    } else if (request.channelIds) {
-      selected = [...new Set(request.channelIds)].map((id) => {
+    } else if (request.subscriptionIds) {
+      selected = [...new Set(request.subscriptionIds)].map((id) => {
         const record = all.find((candidate) => candidate.id === id);
         if (!record) throw this.notFound();
-        if (!record.enabled) throw new CollectorError('channel_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
+        if (!record.enabled) throw new CollectorError('subscription_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
         return record;
       });
     } else {
@@ -411,7 +411,7 @@ export class SubscriptionService {
   }
 
   private notFound(): CollectorError {
-    return new CollectorError('channel_not_found', `找不到這個 ${subscriptionKindLabel(this.type)}訂閱。`);
+    return new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(this.type)}訂閱。`);
   }
 
   /** The fields that tie a subscription event to its subscription, so the activity view can show and filter it by source. */

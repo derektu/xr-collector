@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ChannelSchedule, PendingSubscription, SourceEntry, SourceList, SourceTypeInfo } from '../core/types.js';
+import type { CollectionSchedule, PendingSubscription, SubscriptionEntry, SubscriptionList, SourceTypeInfo } from '../core/types.js';
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
@@ -21,7 +21,7 @@ export interface SourcesProps {
   state: SourceListState;
   onState: (state: SourceListState) => void;
   sourceTypes: SourceTypeInfo[];
-  schedule: ChannelSchedule | null;
+  schedule: CollectionSchedule | null;
   /** Changes whenever background work changes, so the list reloads. */
   revision: number;
   /** Opens the add dialog the menu item names. */
@@ -36,7 +36,7 @@ export interface SourcesProps {
  * actions. A subscription request appears at once and becomes its subscription row when resolved.
  */
 export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd, onOpenSource, onChanged }: SourcesProps) {
-  const [list, setList] = useState<SourceList | null>(null);
+  const [list, setList] = useState<SubscriptionList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -44,7 +44,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
 
   useEffect(() => {
     const controller = new AbortController();
-    api.listSources(controller.signal).then((next) => { setList(next); setLoadError(null); }).catch((error: unknown) => {
+    api.listSubscriptions(controller.signal).then((next) => { setList(next); setLoadError(null); }).catch((error: unknown) => {
       if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取訂閱。');
     });
     return () => controller.abort();
@@ -55,7 +55,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
   async function checkAll(): Promise<void> {
     setChecking(true);
     try {
-      const submissions = await api.checkAllChannels();
+      const submissions = await api.checkAllSubscriptions();
       onChanged(`已開始檢查 ${submissions.length} 個訂閱。`);
     } catch (error) {
       onChanged(error instanceof Error ? error.message : '無法開始檢查。', 'error');
@@ -76,7 +76,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
     }
   }
 
-  const sources = list?.sources ?? [];
+  const sources = list?.subscriptions ?? [];
   const pending = (list?.pending ?? []).filter((entry) => matchesPending(entry, state));
   const visible = filterSources(sources, state);
   const enabledCount = sources.filter((source) => source.enabled).length;
@@ -152,7 +152,7 @@ function matchesPending(entry: PendingSubscription, state: SourceListState): boo
     && (!query || (entry.title ?? entry.url).toLocaleLowerCase().includes(query));
 }
 
-function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEntry; icon: string; now: Date; onOpen: () => void; onChanged: SourcesProps['onChanged'] }) {
+function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SubscriptionEntry; icon: string; now: Date; onOpen: () => void; onChanged: SourcesProps['onChanged'] }) {
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -190,7 +190,7 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
   }
 
   const toggle = () => void run(async () => {
-    await api.setChannelEnabled(source.type, source.id, paused);
+    await api.setSubscriptionEnabled(source.type, source.id, paused);
     return paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`;
   });
 
@@ -211,7 +211,7 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: SourceEnt
         {menuOpen ? <div ref={menuList} className="menu" role="menu">
           <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onOpen(); }}>查看詳情</button>
           <button type="button" role="menuitem" disabled={paused} onClick={() => void run(async () => {
-            await api.checkChannels(source.type, [source.id]);
+            await api.checkSubscriptions([{ type: source.type, id: source.id }]);
             return `已開始檢查「${source.title}」。`;
           })}>立即檢查</button>
           <button type="button" role="menuitem" className="danger" onClick={() => { setMenuOpen(false); setRemoving(true); }}>移除</button>

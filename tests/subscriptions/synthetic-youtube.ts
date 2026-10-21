@@ -74,10 +74,11 @@ export class SyntheticYouTube implements YouTubeSource {
   }
 
   async resolveChannel(url: string): Promise<ResolvedYouTubeChannel> {
-    const name = url.split('/').pop()!.replace('@', '');
-    const id = syntheticChannelId(name);
+    // A resolved channel address (/channel/<id>/videos) names the channel by its ID; any other by its handle.
+    const byId = /\/channel\/([^/]+)/u.exec(url)?.[1];
+    const id = byId ?? syntheticChannelId(url.split('/').pop()!.replace('@', ''));
     const channel = this.channels.get(id);
-    if (!channel) throw new CollectorError('invalid_channel', '無法辨認這個 YouTube 頻道。');
+    if (!channel) throw new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。');
     return { id, title: channel.title, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 

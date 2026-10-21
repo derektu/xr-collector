@@ -955,7 +955,7 @@ export class VaultWorkspace {
       plugins,
       documents: collector,
       subscriptions: stores,
-      checkSubscription: async (type, id) => (await bundle.subscriptions.of(type)!.startRun({ trigger: 'manual', channelIds: [id] }))[0]!,
+      checkSubscription: async (type, id) => (await bundle.subscriptions.of(type)!.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),

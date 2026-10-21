@@ -209,7 +209,7 @@ export class FakeSource {
   async resolve(url: string): Promise<SubscriptionTarget> {
     const id = new URL(url).pathname.split('/').filter(Boolean)[1] ?? '';
     const feed = this.feeds.get(id);
-    if (!feed) throw new CollectorError('invalid_channel', `找不到這個 ${this.type} 動態。`);
+    if (!feed) throw new CollectorError('invalid_subscription', `找不到這個 ${this.type} 動態。`);
     return { id: feed.id, title: feed.title, url: feed.url };
   }
 

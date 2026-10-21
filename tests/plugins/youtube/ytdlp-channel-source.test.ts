@@ -66,7 +66,7 @@ describe('YtDlpChannelSource', () => {
     });
 
     await expect(source.resolve('https://www.youtube.com/watch?v=dQw4w9WgXcQ'))
-      .rejects.toEqual(expect.objectContaining<Partial<CollectorError>>({ code: 'invalid_channel' }));
+      .rejects.toEqual(expect.objectContaining<Partial<CollectorError>>({ code: 'invalid_subscription' }));
     expect(invoked).toBe(false);
   });
 

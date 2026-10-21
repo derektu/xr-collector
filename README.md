@@ -199,7 +199,7 @@ npm run prepare:exchange-demo -- --output <新的資料目錄>
 <profile>/jobs/events.jsonl               較早版本的單一記錄檔；照常讀取，同樣依 30 天清除
 ```
 
-profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/youtube/submissions`、`GET /api/jobs`、`GET /api/jobs/summary`、`GET /api/jobs/:id`、`POST /api/jobs/:id/retry`、`GET /api/activity`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
+profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/submissions`、`POST /api/items`、`GET /api/jobs`、`GET /api/jobs/summary`、`GET /api/jobs/:id`、`POST /api/jobs/:id/retry`、`GET /api/activity`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
 
 ### 中斷接續與自動重試
 
@@ -227,7 +227,7 @@ profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版�
 
 ## 頻道訂閱
 
-在「訂閱 YouTube 頻道」貼上頻道網址或 `@handle`，輸入框下方顯示確認卡：先以 `POST /api/youtube/channel-previews` 同步解析頻道（逾時 60 秒），再顯示頻道名稱、這個訂閱的收集設定與摘要，例如「訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 1 個月內最新的 10 支影片，已收集或刪除的不再收集」。設定以 YouTube 類型的預設值開始，可在訂閱前調整，摘要隨之更新；確認後才建立訂閱並開始首次收集。已訂閱的頻道顯示「已訂閱」，暫停中的頻道提供「恢復訂閱」並說明恢復後用它自己的收集設定檢查。
+在「訂閱 YouTube 頻道」貼上頻道網址或 `@handle`，輸入框下方顯示確認卡：先以 `POST /api/url-recognitions` 同步解析頻道（逾時 60 秒），再顯示頻道名稱、這個訂閱的收集設定與摘要，例如「訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 1 個月內最新的 10 支影片，已收集或刪除的不再收集」。設定以 YouTube 類型的預設值開始，可在訂閱前調整，摘要隨之更新；確認後才建立訂閱並開始首次收集。已訂閱的頻道顯示「已訂閱」，暫停中的頻道提供「恢復訂閱」並說明恢復後用它自己的收集設定檢查。
 
 訂閱保存在 `<vault>/settings/youtube-channels.json`，含暫停狀態、收集設定、上次檢查時間、超出收集範圍的影片與下一次檢查時間，隨匯出檔交換。訂閱頁只列訂閱，不列單次加入的文件。每列顯示文件數、最近新增時間與狀態欄；標題列有「自動檢查」總開關、「立即檢查」與「新增訂閱」，清單下方顯示「上次檢查 時間（名稱）· 下次檢查 時間（名稱）」。側欄依序為訂閱、文件、記錄，設定在底部；有工作進行時側欄底部顯示「更新中」，其他時候不顯示。
 

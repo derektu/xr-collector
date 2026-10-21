@@ -39,7 +39,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
 
   useEffect(() => {
     const controller = new AbortController();
-    api.listSources(controller.signal).then((list) => setSubscribed(new Set(list.sources.map((source) => `${source.type}:${source.id}`)))).catch(() => undefined);
+    api.listSubscriptions(controller.signal).then((list) => setSubscribed(new Set(list.subscriptions.map((source) => `${source.type}:${source.id}`)))).catch(() => undefined);
     return () => controller.abort();
   }, []);
 
@@ -78,7 +78,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       }, RECOLLECT_POLL_MS);
     };
     if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' }, false);
-    else api.collect(type, url).then((submission) => poll(submission.job.id))
+    else api.collect(url).then((submission) => poll(submission.job.id))
       .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }, false));
     return () => { active = false; if (timer) clearTimeout(timer); };
   }, [recollect.kind, id]);
