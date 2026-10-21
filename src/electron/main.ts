@@ -2,7 +2,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { createSourcePlugins } from '../plugins/index.js';
-import { agentConnectionFile } from '../runtime/agent-discovery.js';
+import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
@@ -196,6 +196,7 @@ app.whenReady().then(async () => {
       hasExplicitProfile,
     }),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
+    agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DESKTOP_AGENT_PORT,
     uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });

@@ -26,7 +26,7 @@
 
 ## 真實搜尋與平台邊界
 
-`npm run test:meilisearch:mac` 下載 Mac runtime，再執行 search、Agent、匯出入、合併匯入與搬移五個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少 binary 時會 skip。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這五項真實引擎驗收。
+`npm run test:meilisearch:mac` 下載 Mac runtime，再執行 search、殘留引擎清理、Agent、匯出入、合併匯入與搬移六個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少 binary 時會 skip。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這六項真實引擎驗收。
 
 `tooling` 的工作區建立整合案例只在 Mac／Windows 執行，Linux 另 skip 一項。平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 

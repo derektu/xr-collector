@@ -1,8 +1,11 @@
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
 
 export interface StartMeilisearchOptions {
   binaryPath: string;
@@ -19,16 +22,20 @@ export interface RunningMeilisearch {
 export async function startMeilisearchProcess(
   options: StartMeilisearchOptions,
 ): Promise<RunningMeilisearch> {
+  const binaryPath = path.resolve(options.binaryPath);
+  const databasePath = path.resolve(options.databasePath);
+  const pidFile = pidFilePath(databasePath);
+  await stopLeftoverProcess(pidFile, binaryPath, databasePath);
   const port = options.port ?? await availableLoopbackPort();
   const url = `http://127.0.0.1:${port}`;
   const apiKey = randomBytes(32).toString('hex');
-  await mkdir(options.databasePath, { recursive: true });
+  await mkdir(databasePath, { recursive: true });
 
   const child = spawn(
-    options.binaryPath,
+    binaryPath,
     [
       '--db-path',
-      path.resolve(options.databasePath),
+      databasePath,
       '--http-addr',
       `127.0.0.1:${port}`,
       '--env',
@@ -36,7 +43,7 @@ export async function startMeilisearchProcess(
       '--no-analytics',
     ],
     {
-      cwd: path.dirname(path.resolve(options.databasePath)),
+      cwd: path.dirname(databasePath),
       env: {
         ...process.env,
         MEILI_MASTER_KEY: apiKey,
@@ -55,9 +62,11 @@ export async function startMeilisearchProcess(
   });
 
   try {
+    if (child.pid) await writeFile(pidFile, `${JSON.stringify({ pid: child.pid } satisfies PidRecord)}\n`);
     await waitUntilHealthy(child, url, apiKey, () => processError, () => stderr);
   } catch (error) {
     await stopChild(child);
+    await removePidFile(pidFile, child.pid);
     throw error;
   }
 
@@ -69,8 +78,88 @@ export async function startMeilisearchProcess(
       if (closed) return;
       closed = true;
       await stopChild(child);
+      await removePidFile(pidFile, child.pid);
     },
   };
+}
+
+interface PidRecord { pid: number }
+
+/** The engine's process ID, kept beside its database so a later start can find an engine the app left behind. */
+export function pidFilePath(databasePath: string): string {
+  return `${path.resolve(databasePath)}.pid`;
+}
+
+/**
+ * Stops the engine a previous run left on this database when the app was killed before it could close
+ * it. The recorded process is stopped only while its command line still names this binary and this
+ * database, so a process that has since reused the ID is left alone.
+ */
+async function stopLeftoverProcess(pidFile: string, binaryPath: string, databasePath: string): Promise<void> {
+  let record: PidRecord;
+  try {
+    record = JSON.parse(await readFile(pidFile, 'utf8')) as PidRecord;
+  } catch {
+    return;
+  }
+  if (Number.isInteger(record.pid) && record.pid > 0 && isAlive(record.pid)) {
+    const commandLine = await processCommandLine(record.pid);
+    if (commandLine !== null && namesEngine(commandLine, binaryPath, databasePath)) await stopProcess(record.pid);
+  }
+  await rm(pidFile, { force: true });
+}
+
+function namesEngine(commandLine: string, binaryPath: string, databasePath: string): boolean {
+  const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  const line = normalize(commandLine);
+  return line.includes(normalize(binaryPath)) && line.includes(normalize(databasePath));
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** The full command line of a running process, or null when it cannot be read. */
+async function processCommandLine(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = process.platform === 'win32'
+      ? await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { windowsHide: true })
+      : await run('ps', ['-ww', '-o', 'command=', '-p', String(pid)]);
+    const line = stdout.trim();
+    return line || null;
+  } catch {
+    return null;
+  }
+}
+
+async function stopProcess(pid: number): Promise<void> {
+  const exited = async (timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!isAlive(pid)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return !isAlive(pid);
+  };
+  try { process.kill(pid, 'SIGTERM'); } catch { return; }
+  if (await exited(5_000)) return;
+  try { process.kill(pid, 'SIGKILL'); } catch { return; }
+  await exited(5_000);
+}
+
+async function removePidFile(pidFile: string, pid: number | undefined): Promise<void> {
+  try {
+    const record = JSON.parse(await readFile(pidFile, 'utf8')) as PidRecord;
+    if (record.pid === pid) await rm(pidFile, { force: true });
+  } catch {
+    // Nothing recorded, or another start already replaced the record.
+  }
 }
 
 async function availableLoopbackPort(): Promise<number> {

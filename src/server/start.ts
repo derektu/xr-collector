@@ -52,7 +52,12 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';
-  await app.listen({ host, port: options.port });
+  try {
+    await app.listen({ host, port: options.port });
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
   const address = app.addresses()[0];
   if (!address) throw new Error('HTTP server did not expose a listening address');
   return {

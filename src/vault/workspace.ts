@@ -16,6 +16,7 @@ import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manage
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
+import { pidFilePath } from '../search/meilisearch-process.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
@@ -923,12 +924,13 @@ export class VaultWorkspace {
     return `${this.options.searchData}-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
   }
 
-  /** Removes the search database of a Vault path and its state record; used when the path stops being a Vault. */
+  /** Removes the search database of a Vault path, its state record and its process record; used when the path stops being a Vault. */
   private async removeSearchData(root: string): Promise<void> {
     if (this.options.createSearch) return;
     const database = this.searchPath(root);
     await rm(database, { recursive: true, force: true });
     await rm(`${database}-state.json`, { force: true });
+    await rm(pidFilePath(database), { force: true });
   }
 
   private async makeBundle(root: string, port?: number): Promise<Bundle> {

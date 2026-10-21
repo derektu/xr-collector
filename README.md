@@ -51,7 +51,7 @@ npm run download:runtime
 npm run dev
 ```
 
-瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，開發用 Meilisearch 只監聽 `127.0.0.1:7177`。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
+瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，Agent API 使用 `127.0.0.1:7232`（被佔用時往後找，見 [Agent 存取](#agent-存取)），開發用 Meilisearch 只監聽 `127.0.0.1` 上隨機分配的 port，需要固定時以 `XR_COLLECTOR_MEILISEARCH_PORT` 指定。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
 
 已完成 production build 時，也可以只啟動單一 Web Server：
 
@@ -281,7 +281,7 @@ Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追
 
 尚未設定 Vault 或已記錄的 Vault 不存在時，health 顯示 runtime `not_ready` 與原因；業務 API 回傳 503 `vault_not_ready`，且不自動建立替代 Vault。使用者需透過 #20 的 Onboarding 設定 Vault。Agent token 驗證在 Not Ready 狀態仍然生效。
 
-每次啟動重新產生 Agent runtime instance、port 與 token，連線檔原子更新。macOS／其他 POSIX 環境將檔案 mode 設為 0600；Windows 不把 POSIX mode 視為權限保證，連線檔放在目前使用者的 LocalAppData 並使用該目錄繼承的 ACL，仍需 Windows 原生驗證。連線檔位於裝置資料、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 會以 health 回應核對 instance，連線失敗時重新讀取一次並區分未啟動、過期、損壞及權限問題。
+每次啟動重新產生 Agent runtime instance 與 token，連線檔原子更新。Agent listener 使用固定 port：安裝版與 Electron 為 `7222`，Web 開發模式為 `7232`；該 port 被佔用時改用其後 10 個 port 中第一個可用的，全部被佔用時改用系統分配的 port，實際位址以連線檔為準。開發與驗收可用 `XR_COLLECTOR_AGENT_PORT` 指定首選 port。macOS／其他 POSIX 環境將檔案 mode 設為 0600；Windows 不把 POSIX mode 視為權限保證，連線檔放在目前使用者的 LocalAppData 並使用該目錄繼承的 ACL，仍需 Windows 原生驗證。連線檔位於裝置資料、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 會以 health 回應核對 instance，連線失敗時重新讀取一次並區分未啟動、過期、損壞及權限問題。
 
 - Web 開發／standalone：`.data/agent-connection.json`；Skill 位於 repository 的 `skills/xr-collector-agent`。
 - 未打包 Electron 且未指定 profile：Electron userData 下的 `agent-connection.development.json`。
