@@ -29,7 +29,7 @@ import {
   type SubscriptionSettings,
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
-import type { FailureClass, SourcePlugin } from '../plugins/types.js';
+import type { FailureClass, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
 import { failedJobs, jobOverview } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
@@ -91,6 +91,8 @@ export interface JobManagerOptions {
   checkSubscription?: (type: string, id: string) => Promise<JobSubmission>;
   /** The device's request channels, one per pacing group; a group's cooldown pauses the steps of that group only. */
   pacing?: readonly Pacing[];
+  /** A target a preview recently resolved for a classified subscription address; adding it resolves no more. */
+  recentTarget?: (type: string, url: string) => SubscriptionTarget | undefined;
 }
 
 export interface JobListQuery {
@@ -1233,7 +1235,7 @@ export class JobManager {
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
       ? { id: subscribing.channelId, title: subscribing.title, url: subscribing.url }
-      : await plugin.resolveTarget!(job.source.url, { signal });
+      : this.options.recentTarget?.(type, job.source.url) ?? await plugin.resolveTarget!(job.source.url, { signal });
     const existing = (await store.list()).find((record) => record.id === resolved.id);
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;

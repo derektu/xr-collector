@@ -36,7 +36,7 @@ win:
       to: skills
     - from: resources/bin/win
       to: bin
-      filter: ['*.exe']
+      filter: ['*.exe', 'yt-dlp/**/*']
 nsis:
   oneClick: false
   perMachine: false

@@ -271,7 +271,7 @@ export interface PluginRuntime {
   /** Device profile folder. */
   profilePath: string;
   env: Readonly<Record<string, string | undefined>>;
-  /** The path of an external program, by its file name without extension and the environment variable that may name it instead. */
+  /** The path of an external program, by its path under the runtime folder without extension (`tool`, or `tool/tool` for a program that ships in its own folder) and the environment variable that may name it instead. */
   program(name: string, environmentName: string): string;
   /** This device's request channel of a pacing group the plugin declares. */
   gate(group: string): RequestChannel;

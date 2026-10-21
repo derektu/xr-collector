@@ -56,6 +56,47 @@ describe('YtDlpChannelSource', () => {
     expect(commands[1]!.join(' ')).toContain('--extractor-args youtubetab:approximate_date --playlist-start 51 --playlist-end 100');
   });
 
+  it('resolves a channel through its videos tab alone', async () => {
+    const urls: string[] = [];
+    const source = new YtDlpChannelSource({
+      run: async (args) => {
+        urls.push(args.at(-1)!);
+        return JSON.stringify({ channel_id: 'UCabcdefghijklmnopqrstuv', channel: '測試頻道' });
+      },
+    });
+
+    for (const input of [
+      '@example',
+      'https://www.youtube.com/@example?si=share',
+      'https://m.youtube.com/channel/UCabcdefghijklmnopqrstuv/',
+      'https://www.youtube.com/user/example',
+      'https://www.youtube.com/@example/videos',
+      'https://www.youtube.com/@example/shorts',
+    ]) await source.resolve(input);
+
+    expect(urls).toEqual([
+      'https://www.youtube.com/@example/videos',
+      'https://www.youtube.com/@example/videos?si=share',
+      'https://m.youtube.com/channel/UCabcdefghijklmnopqrstuv/videos',
+      'https://www.youtube.com/user/example/videos',
+      'https://www.youtube.com/@example/videos',
+      'https://www.youtube.com/@example/shorts',
+    ]);
+  });
+
+  it('reports a channel without a videos tab as one it cannot read', async () => {
+    const source = new YtDlpChannelSource({
+      run: async () => {
+        throw new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。', {
+          detail: 'ERROR: [youtube:tab] @shortsonly: This channel does not have a videos tab',
+        });
+      },
+    });
+
+    await expect(source.resolve('@shortsonly'))
+      .rejects.toEqual(expect.objectContaining<Partial<CollectorError>>({ code: 'invalid_subscription' }));
+  });
+
   it('rejects a video URL before invoking yt-dlp', async () => {
     let invoked = false;
     const source = new YtDlpChannelSource({

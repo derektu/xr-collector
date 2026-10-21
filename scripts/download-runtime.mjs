@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -17,13 +17,13 @@ if (target !== 'mac' && target !== 'win') {
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDir = path.join(projectRoot, 'resources', 'bin', target);
 const downloads = target === 'win' ? {
-  ytDlp: { url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe', sha256: '66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a' },
+  ytDlp: { url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_win.zip', sha256: '30b4c14aafab6082becff7881e41b76df46dc43ea7633479410a91e29da492bf' },
   deno: { url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-pc-windows-msvc.zip', sha256: '15e5300b0ba3c3695a7621d90160a746ec9e710228cee639afa9d580f6e3cd11' },
   meilisearch: { url: 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-windows-amd64.exe', sha256: 'edb04f8288565e413a318069600954e38574714e5a2559777f8f4e8cc16d1bf3' },
 } : {
   ytDlp: {
-    url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos',
-    sha256: '0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202',
+    url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos.zip',
+    sha256: '07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8',
   },
   deno: {
     url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-aarch64-apple-darwin.zip',
@@ -65,6 +65,25 @@ async function fileSha256(filePath) {
   return hash.digest('hex');
 }
 
+async function extractZip(zipPath, destination) {
+  if (process.platform === 'win32') {
+    const quote = (value) => `'${value.replaceAll("'", "''")}'`;
+    const command = `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destination)} -Force`;
+    await run('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')]);
+  } else {
+    await run('unzip', ['-q', '-o', zipPath, '-d', destination]);
+  }
+}
+
+async function readText(filePath) {
+  try {
+    return (await readFile(filePath, 'utf8')).trim();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit' });
@@ -91,16 +110,31 @@ function reportsVersion(command, expectedVersion) {
 await mkdir(outputDir, { recursive: true });
 const workDir = await mkdtemp(path.join(tmpdir(), 'xr-collector-runtime-'));
 try {
-  const ytDlpPath = path.join(outputDir, target === 'win' ? 'yt-dlp.exe' : 'yt-dlp');
-  if (await matchesChecksum(ytDlpPath, downloads.ytDlp.sha256)) {
+  // yt-dlp ships as the official folder build: an executable beside its `_internal` libraries. The
+  // single-file build unpacks itself into a new temporary folder on every run, and the system checks
+  // new files before they run, which costs seconds on every call. The Mac executable is renamed to
+  // `yt-dlp` so both platforms run `yt-dlp/yt-dlp[.exe]`. The SHA-256 of the extracted zip is kept
+  // beside the folder to tell an up-to-date folder from an old or partial one.
+  const ytDlpDir = path.join(outputDir, 'yt-dlp');
+  const ytDlpStamp = path.join(outputDir, 'yt-dlp.sha256');
+  if (await readText(ytDlpStamp) === downloads.ytDlp.sha256) {
     console.log('Pinned yt-dlp 2026.08.19 is already available.');
   } else {
+    const ytDlpZip = path.join(workDir, 'yt-dlp.zip');
     const ytDlpTemp = path.join(workDir, 'yt-dlp');
     console.log('Downloading pinned yt-dlp 2026.08.19…');
-    await download(downloads.ytDlp.url, downloads.ytDlp.sha256, ytDlpTemp);
-    await chmod(ytDlpTemp, 0o755);
-    await rm(ytDlpPath, { force: true });
-    await rename(ytDlpTemp, ytDlpPath);
+    await download(downloads.ytDlp.url, downloads.ytDlp.sha256, ytDlpZip);
+    await extractZip(ytDlpZip, ytDlpTemp);
+    if (target === 'mac') {
+      await rename(path.join(ytDlpTemp, 'yt-dlp_macos'), path.join(ytDlpTemp, 'yt-dlp'));
+      await chmod(path.join(ytDlpTemp, 'yt-dlp'), 0o755);
+    }
+    await rm(ytDlpStamp, { force: true });
+    await rm(ytDlpDir, { recursive: true, force: true });
+    // A single-file build from an older checkout sits where the folder goes, or beside it on Windows.
+    await rm(path.join(outputDir, 'yt-dlp.exe'), { force: true });
+    await rename(ytDlpTemp, ytDlpDir);
+    await writeFile(ytDlpStamp, `${downloads.ytDlp.sha256}\n`);
   }
 
   const denoPath = path.join(outputDir, target === 'win' ? 'deno.exe' : 'deno');
@@ -110,13 +144,7 @@ try {
     const denoZip = path.join(workDir, 'deno.zip');
     console.log('Downloading pinned Deno 2.9.6…');
     await download(downloads.deno.url, downloads.deno.sha256, denoZip);
-    if (process.platform === 'win32') {
-      const quote = (value) => `'${value.replaceAll("'", "''")}'`;
-      const command = `Expand-Archive -LiteralPath ${quote(denoZip)} -DestinationPath ${quote(workDir)} -Force`;
-      await run('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')]);
-    } else {
-      await run('unzip', ['-q', '-o', denoZip, '-d', workDir]);
-    }
+    await extractZip(denoZip, workDir);
     const denoTemp = path.join(workDir, target === 'win' ? 'deno.exe' : 'deno');
     await chmod(denoTemp, 0o755);
     await rm(denoPath, { force: true });
