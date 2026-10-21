@@ -112,12 +112,11 @@
 .status-chip.queued { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
 .status-chip.error { color:var(--error-fg); background:var(--error-bg); cursor:help; }
 .menu-anchor { position:relative; }
-.menu { position:absolute; right:0; top:calc(100% + 4px); z-index:4; min-width:148px; display:flex; flex-direction:column; padding:6px; border:1px solid var(--control-border); border-radius:9px; background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); }
+.menu { position:fixed; top:0; left:0; z-index:20; min-width:148px; display:flex; flex-direction:column; padding:6px; border:1px solid var(--control-border); border-radius:9px; background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); }
 .menu button { padding:8px 10px; border:0; border-radius:6px; color:var(--primary); background:transparent; font-size:13px; text-align:left; }
 .menu button:hover:not(:disabled) { background:var(--hover); }
 .menu button:disabled { color:var(--text-muted); cursor:not-allowed; }
 .menu button.danger { color:var(--error-fg); }
-.add-menu.start .menu { left:0; right:auto; }
 .add-menu .menu { min-width:200px; }
 .add-menu .menu button { display:flex; align-items:center; gap:12px; }
 .menu-tag { margin-left:auto; padding:1px 7px; border-radius:999px; color:var(--text-muted); background:var(--paused-bg); font-size:11px; }
@@ -136,7 +135,7 @@
 .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0; }
 .stats > div { padding:14px 16px; border:1px solid var(--border); border-radius:10px; background:var(--frame); }
 .stats dt { color:var(--text-muted); font-size:12px; }
-.stats dd { margin:6px 0 0; color:var(--primary); font-size:18px; font-weight:600; }
+.stats dd { margin:6px 0 0; color:var(--primary); font-size:18px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .panel { padding:18px 20px; border:1px solid var(--border); border-radius:12px; background:var(--frame); }
 .panel-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:10px; }
 .panel-heading h2 { margin:0; font-size:15px; font-weight:600; }
