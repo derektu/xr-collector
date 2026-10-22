@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { checkoutRoot, cleanEnv, commitOf, evidenceDir, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
-import { createRun, releaseSlot, writeJsonAtomic } from './instance.mjs';
+import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 
 /**
  * Prepares an isolated profile with a selected Vault (so moving and opening another Vault stay
@@ -65,7 +65,7 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
   writeJsonAtomic(path.join(runDir, 'run.json'), record);
 
   const start = async () => {
-    const app = await electron.launch({ executablePath: executable, args: ['.', ...runMarker(runDir)], cwd: checkout, env, timeout: 90_000 });
+    const app = await electron.launch({ executablePath: executable, args: ['.', runMarker(runDir)], cwd: checkout, env, timeout: 90_000 });
     const window = await app.firstWindow({ timeout: 90_000 });
     await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
     return { app, window };
@@ -82,9 +82,11 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
     get app() { return current.app; },
     get window() { return current.window; },
     /** Quits through the app's own shutdown path and starts again with the same profile. */
-    async relaunch() { await current.app.close(); current = await start(); return current; },
+    async relaunch() { await current.app.close(); await terminateRun(runDir); current = await start(); return current; },
+    /** Quits, ends whatever the app left running (a Meilisearch after an Electron crash), releases the slot. */
     async close({ keep = false } = {}) {
       try { await current.app.close(); } catch { /* already closed */ }
+      await terminateRun(runDir);
       releaseSlot(ports.slot, runDir);
       if (!keep) await rm(runDir, { recursive: true, force: true });
     },

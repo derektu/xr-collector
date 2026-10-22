@@ -1,8 +1,8 @@
 // Launching, attaching to and stopping one verification instance (Web mode): server.mts on a slot
 // of reserved ports, with its own profile, Vault and Web build under .local/verify-runs/<issue>-<time>-<pid>/.
 // A run's processes are found by their command line (the run marker, or Meilisearch's data path in the
-// run), not by a recorded PID, and stop signals only their process groups, so the user's own App and
-// other agents' runs are never touched.
+// run), not by a recorded PID. stop signals a whole process group only when its leader is one of
+// them, so the user's own App, terminals and other agents' runs are never touched.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -186,7 +186,7 @@ export async function launchWeb({ issue, checkout = checkoutRoot(), data = 'synt
       ? path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts') : OWN_SERVER;
     const log = openSync(path.join(runDir, 'server.log'), 'a');
     // server.mts does not read the marker; it is how stop and sweep find the run's processes.
-    server = spawn(path.join(checkout, 'node_modules', '.bin', 'tsx'), [script, ...runMarker(runDir)], {
+    server = spawn(path.join(checkout, 'node_modules', '.bin', 'tsx'), [script, runMarker(runDir)], {
       cwd: checkout, detached: true, stdio: ['ignore', log, log],
       env: {
         ...cleanEnv(), XR_VERIFY_CHECKOUT: checkout, XR_VERIFY_RUN: runDir, XR_VERIFY_DATA: data, XR_VERIFY_VAULT_MODE: vault,
@@ -273,8 +273,29 @@ export function runProcesses(record) {
 }
 
 /**
- * Stops the run's processes through their own SIGTERM shutdown (signalling each of their process
- * groups, so helpers such as esbuild go too), copies server.log into the evidence folder, releases
+ * Ends the run's processes through their own SIGTERM shutdown, with SIGKILL after 30 seconds. A
+ * process group is signalled as a whole only when its leader is one of the run's processes (the
+ * detached Web server or Electron), which takes helpers such as esbuild and Electron's helpers
+ * along; any other run process, such as a Meilisearch whose leader died, is signalled on its own.
+ */
+export async function terminateRun(runDir) {
+  const members = runMembers(runDir);
+  if (!members.length) return;
+  const groups = new Set(members.filter((member) => member.pid === member.pgid).map((member) => member.pgid));
+  const loose = members.filter((member) => !groups.has(member.pgid)).map((member) => member.pid);
+  const signal = (name) => {
+    for (const pgid of groups) { try { process.kill(-pgid, name); } catch { /* group gone */ } }
+    for (const pid of loose) { try { process.kill(pid, name); } catch { /* gone */ } }
+  };
+  const gone = () => groupMembers(groups).length === 0 && loose.every((pid) => !alive(pid));
+  signal('SIGTERM');
+  if (await waitFor(gone, 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
+  signal('SIGKILL');
+  await waitFor(gone, 'run kill', { timeout: 10_000 });
+}
+
+/**
+ * Stops the run's processes (terminateRun), copies server.log into the evidence folder, releases
  * the slot and removes the scratch folder unless `keep`. Evidence stays. An Electron run whose flow
  * is still running is refused: the flow closes it. An Electron left behind by a crashed flow is
  * stopped like a server.
@@ -285,16 +306,7 @@ export async function stopRun(runDir, { keep = false } = {}) {
   if (!record) throw new Error(`No run.json in ${runDir}`);
   if (record.unreadable) throw new Error(`${runDir}/run.json cannot be read; inspect the folder and its processes by hand`);
   if (holderLive(record)) throw new Error(`Electron run ${runDir} is held by flow PID ${record.pid}; close it from that flow`);
-  const pgids = new Set(runMembers(runDir).map((member) => member.pgid));
-  if (pgids.size) {
-    const signal = (name) => { for (const pgid of pgids) { try { process.kill(-pgid, name); } catch { /* group gone */ } } };
-    signal('SIGTERM');
-    const stopped = await waitFor(() => groupMembers(pgids).length === 0, 'run exit', { timeout: 30_000 }).then(() => true, () => false);
-    if (!stopped) {
-      signal('SIGKILL');
-      await waitFor(() => groupMembers(pgids).length === 0, 'run kill', { timeout: 10_000 });
-    }
-  }
+  await terminateRun(runDir);
   await mkdir(record.evidence, { recursive: true });
   if (existsSync(path.join(runDir, 'server.log'))) {
     await copyFile(path.join(runDir, 'server.log'), path.join(record.evidence, `${path.basename(runDir)}-server.log`));

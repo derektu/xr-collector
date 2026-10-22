@@ -73,17 +73,22 @@ export function processStart(pid) {
   }
 }
 
-/** The arguments that mark a process the run started (its Web server or Electron). */
-export const runMarker = (runDir) => ['--xr-verify-run', runDir];
+/**
+ * The argument that marks a process the run started (its Web server or Electron). The trailing slash
+ * ends the path, so a run directory never matches the start of another one, spaces included.
+ */
+export const runMarker = (runDir) => `--xr-verify-run=${runDir}/`;
 
 /**
- * Whether a command line belongs to the run: it carries the run marker, or it is Meilisearch with
- * its data in the run's profile. Other mentions of the directory (a `verify.mjs stop --run`, a
- * `tail` of its log) do not count.
+ * Whether a command line is one of the run's own programs: the Web server (server.mts) or Electron
+ * carrying the run marker, or Meilisearch with its data in the run's profile. A command that only
+ * mentions the marker or the directory (a `pgrep -f`, a `tail` of the log, `verify.mjs stop --run`)
+ * does not count.
  */
 export function isRunProcess(command, runDir) {
   const padded = ` ${command} `;
-  return padded.includes(` --xr-verify-run ${runDir} `) || padded.includes(` --db-path ${runDir}/`);
+  if (padded.includes(` ${runMarker(runDir)} `)) return /server\.mts |\/Electron\.app\/Contents\/MacOS\/Electron /u.test(padded);
+  return padded.includes(` --db-path ${runDir}/profile/`) && /\/meilisearch /u.test(padded);
 }
 
 /** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */
