@@ -4,7 +4,7 @@
 // .local/, so sweep sees the runs of every worktree.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -28,6 +28,34 @@ export function mainCheckout(from = process.cwd()) {
 export function evidenceDir(issue, label) {
   checkLabel(label);
   return path.join(checkoutRoot(), '.local', 'ticket-artifacts', String(issue), ...(label ? [String(label)] : []));
+}
+
+/**
+ * Claims the evidence folder of one labelled run and returns { evidence, label }. The first run of a
+ * label gets `<label>/`; when that folder exists, the next free `<label>-2/`, `<label>-3/`… is
+ * created, so an earlier run's results.json and screenshots are never overwritten. `label` is the
+ * folder name actually used. Without a label the evidence is the issue folder itself, shared by
+ * every unlabelled run of the issue.
+ */
+export function claimEvidence(issue, label) {
+  if (!label) {
+    const evidence = evidenceDir(issue);
+    mkdirSync(evidence, { recursive: true });
+    return { evidence, label: null };
+  }
+  mkdirSync(evidenceDir(issue), { recursive: true });
+  for (let number = 1; ; number += 1) {
+    const candidate = number === 1 ? String(label) : `${label}-${number}`;
+    const evidence = evidenceDir(issue, candidate);
+    try {
+      // Without `recursive`, mkdir fails on an existing folder, which also keeps two launches of one
+      // label from sharing a folder.
+      mkdirSync(evidence);
+      return { evidence, label: candidate };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
 }
 
 /** A label becomes one folder name: letters, digits, dot, dash and underscore. */

@@ -17,6 +17,7 @@ const USAGE = `verify.mjs <command>
   doctor   [--run <dir>]                     environment, slots and (with --run) one instance; read-only
   launch   --issue <N> [--label <name>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
            evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
+           a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
            --checkout picks the version under test; --no-build serves the checkout's existing dist/web
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
@@ -116,7 +117,7 @@ async function main() {
   if (command === 'launch') {
     if (!['synthetic', 'real'].includes(o.data) || !['selected', 'fixed', 'none'].includes(o.vault)) throw new Error(USAGE);
     const instance = await launchWeb({ issue: need('issue'), label: o.label, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
-    const { api, catalog, updateCatalog, stop, ...record } = instance;
+    const { api, catalog, updateCatalog, restart, stop, ...record } = instance;
     if (o.data === 'real') record.real = REAL;
     return print(record);
   }

@@ -5,12 +5,12 @@
 // them, so the user's own App, terminals and other agents' runs are never touched.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkoutRoot, cleanEnv, commitOf, evidenceDir, isRunProcess, processStart, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, commitOf, isRunProcess, processStart, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -163,20 +163,27 @@ export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
 
 /**
  * Starts a Web instance and waits until the UI answers and search is ready. Options: issue
- * (required), label (evidence subfolder, such as baseline), checkout, data ('synthetic' | 'real'),
- * vault ('selected' | 'fixed' | 'none'),
- * catalog (synthetic catalog; defaultCatalog() otherwise), build (false copies the checkout's
- * existing dist/web instead of building). The server is the checkout's own copy of server.mts, so
- * it matches the src/ it loads.
+ * (required), label (evidence subfolder, such as baseline; a label already used gets the next
+ * free `<label>-N`, see claimEvidence), checkout, data ('synthetic' | 'real'), vault ('selected' |
+ * 'fixed' | 'none'), catalog (synthetic catalog; defaultCatalog() otherwise), build (false copies
+ * the checkout's existing dist/web instead of building). The server is the checkout's own copy of
+ * server.mts, so it matches the src/ it loads. The returned instance carries the evidence folder
+ * and label actually used.
  */
 export async function launchWeb({ issue, label, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   checkout = path.resolve(checkout);
-  const evidence = evidenceDir(issue, label);
-  const { runDir, ports } = await createRun(issue, checkout, { label });
+  const claimed = claimEvidence(issue, label);
+  let run;
+  try {
+    run = await createRun(issue, checkout, { label: claimed.label ?? undefined });
+  } catch (error) {
+    dropEmptyEvidence(claimed);
+    throw error;
+  }
+  const { runDir, ports } = run;
   await mkdir(path.join(runDir, 'profile'), { recursive: true });
-  await mkdir(evidence, { recursive: true });
-  let server = null;
+  let pid = null;
   try {
     const initial = data === 'synthetic' ? (catalog ?? defaultCatalog()) : { youtube: { channels: [] }, feeds: {} };
     await writeFile(path.join(runDir, 'catalog.json'), JSON.stringify(initial, null, 2));
@@ -191,44 +198,68 @@ export async function launchWeb({ issue, label, checkout = checkoutRoot(), data 
     }
     const script = existsSync(path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts'))
       ? path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts') : OWN_SERVER;
-    const log = openSync(path.join(runDir, 'server.log'), 'a');
-    // server.mts does not read the marker; it is how stop and sweep find the run's processes.
-    server = spawn(path.join(checkout, 'node_modules', '.bin', 'tsx'), [script, runMarker(runDir)], {
-      cwd: checkout, detached: true, stdio: ['ignore', log, log],
-      env: {
-        ...cleanEnv(), XR_VERIFY_CHECKOUT: checkout, XR_VERIFY_RUN: runDir, XR_VERIFY_DATA: data, XR_VERIFY_VAULT_MODE: vault,
-        XR_VERIFY_UI_PORT: String(ports.ui), XR_VERIFY_SEARCH_PORT: String(ports.search),
-        XR_VERIFY_AGENT_PORT: String(ports.agent), XR_VERIFY_FEEDS_PORT: String(ports.feeds),
-      },
-    });
-    server.unref();
-    closeSync(log);
-    holdSlot(ports.slot, runDir, server.pid);
-    const url = `http://127.0.0.1:${ports.ui}`;
     const record = {
-      kind: 'web', issue: String(issue), ...(label ? { label: String(label) } : {}), runDir, evidence, checkout, ...commitOf(checkout), data, vault, ports, pid: server.pid, url,
+      kind: 'web', issue: String(issue), ...(claimed.label ? { label: claimed.label } : {}), runDir, evidence: claimed.evidence,
+      checkout, ...commitOf(checkout), data, vault, ports, pid: null, url: `http://127.0.0.1:${ports.ui}`,
       feedsOrigin: `http://127.0.0.1:${ports.feeds}`, server: script, startedAt: new Date().toISOString(),
     };
     if (data === 'synthetic') record.synthetic = syntheticAddresses(initial, record.feedsOrigin);
+    pid = spawnServer(record);
+    record.pid = pid;
     writeJsonAtomic(path.join(runDir, 'run.json'), record);
-    await waitFor(async () => {
-      if (!alive(server.pid)) throw new Error(`server exited:\n${tail(path.join(runDir, 'server.log'))}`);
-      const health = await fetch(`${url}/api/health`).then((response) => response.ok, () => false);
-      if (!health) return false;
-      if (vault === 'none') return true;
-      const search = await fetch(`${url}/api/search/status`).then((response) => response.json(), () => null);
-      return search?.status?.state === 'ready';
-    }, 'UI and search ready', { timeout: 120_000, fatal: (error) => error.message.startsWith('server exited') });
+    await serverReady(record);
     return instance(record);
   } catch (error) {
     // The run directory is this launch's own, so its server is the one to stop. The folder stays
     // for diagnosis until sweep.
-    if (server?.pid) {
-      try { process.kill(-server.pid, 'SIGKILL'); } catch { /* already gone */ }
+    if (pid) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
     }
     releaseSlot(ports.slot, runDir);
+    dropEmptyEvidence(claimed);
     throw error;
   }
+}
+
+/** Removes a labelled evidence folder a failed launch claimed but never wrote to. */
+function dropEmptyEvidence({ evidence, label }) {
+  if (!label) return;
+  try { if (readdirSync(evidence).length === 0) rmSync(evidence, { recursive: true }); } catch { /* already gone */ }
+}
+
+/**
+ * Starts the run's server.mts detached, its output appended to the run's server.log, and records the
+ * new PID in the slot lock. Returns the PID.
+ */
+function spawnServer(record) {
+  const { checkout, runDir, ports } = record;
+  const log = openSync(path.join(runDir, 'server.log'), 'a');
+  // server.mts does not read the marker; it is how stop and sweep find the run's processes.
+  const server = spawn(path.join(checkout, 'node_modules', '.bin', 'tsx'), [record.server, runMarker(runDir)], {
+    cwd: checkout, detached: true, stdio: ['ignore', log, log],
+    env: {
+      ...cleanEnv(), XR_VERIFY_CHECKOUT: checkout, XR_VERIFY_RUN: runDir, XR_VERIFY_DATA: record.data, XR_VERIFY_VAULT_MODE: record.vault,
+      XR_VERIFY_UI_PORT: String(ports.ui), XR_VERIFY_SEARCH_PORT: String(ports.search),
+      XR_VERIFY_AGENT_PORT: String(ports.agent), XR_VERIFY_FEEDS_PORT: String(ports.feeds),
+    },
+  });
+  server.unref();
+  closeSync(log);
+  holdSlot(ports.slot, runDir, server.pid);
+  return server.pid;
+}
+
+/** Waits until the UI answers and search is ready (health only while no Vault is open). */
+function serverReady(record) {
+  return waitFor(async () => {
+    if (!alive(record.pid)) throw new Error(`server exited:\n${tail(path.join(record.runDir, 'server.log'))}`);
+    const health = await fetch(`${record.url}/api/health`).then((response) => response.ok, () => false);
+    if (!health) return false;
+    const vault = await fetch(`${record.url}/api/vault/status`).then((response) => response.json(), () => null);
+    if (record.vault === 'none' && !vault?.vaultPath) return true;
+    const search = await fetch(`${record.url}/api/search/status`).then((response) => response.json(), () => null);
+    return search?.status?.state === 'ready';
+  }, 'UI and search ready', { timeout: 120_000, fatal: (error) => error.message.startsWith('server exited') });
 }
 
 const tail = (file, lines = 30) => existsSync(file) ? readFileSync(file, 'utf8').split('\n').slice(-lines).join('\n') : '';
@@ -244,7 +275,7 @@ export function attach(runDir) {
 
 function instance(record) {
   const catalogFile = path.join(record.runDir, 'catalog.json');
-  return {
+  const self = {
     ...record,
     /**
      * JSON from the same HTTP API the Web UI calls; throws with the body on an error status. A
@@ -264,8 +295,28 @@ function instance(record) {
       const current = JSON.parse(await readFile(catalogFile, 'utf8'));
       writeJsonAtomic(catalogFile, edit(current) ?? current);
     },
+    /**
+     * Stops the server and starts it again on the same run: same profile, Vault, catalog, ports and
+     * slot. By default the runtime shuts down through SIGTERM, as a user quitting the app does;
+     * `crash: true` SIGKILLs the run's processes, so the runtime sees an unclean stop on its next
+     * start. Resolves once the restarted server is ready. A `page` given here waits on about:blank
+     * meanwhile and loads its route again afterwards. server.log keeps growing: a line
+     * `--- verify restart (graceful|crash) <time> ---` separates the runs of the server.
+     */
+    async restart({ crash = false, page } = {}) {
+      const route = page ? new URL(page.url()).pathname : null;
+      if (page) await page.goto('about:blank');
+      await terminateRun(record.runDir, { kill: crash });
+      appendFileSync(path.join(record.runDir, 'server.log'), `\n--- verify restart (${crash ? 'crash' : 'graceful'}) ${new Date().toISOString()} ---\n`);
+      record.pid = spawnServer(record);
+      self.pid = record.pid;
+      writeJsonAtomic(path.join(record.runDir, 'run.json'), record);
+      await serverReady(record);
+      if (page) await page.goto(`${record.url}${route}`);
+    },
     stop: (options) => stopRun(record.runDir, options),
   };
+  return self;
 }
 
 /** Whether the flow process that launched an Electron run is still running. */
@@ -283,12 +334,13 @@ export function runProcesses(record) {
 }
 
 /**
- * Ends the run's processes through their own SIGTERM shutdown, with SIGKILL after 30 seconds. A
+ * Ends the run's processes through their own SIGTERM shutdown, with SIGKILL after 30 seconds;
+ * `kill: true` sends SIGKILL at once, an unclean stop that skips the runtime's shutdown. A
  * process group is signalled as a whole only when its leader is one of the run's processes (the
  * detached Web server or Electron), which takes helpers such as esbuild and Electron's helpers
  * along; any other run process, such as a Meilisearch whose leader died, is signalled on its own.
  */
-export async function terminateRun(runDir) {
+export async function terminateRun(runDir, { kill = false } = {}) {
   const members = runMembers(runDir);
   if (!members.length) return;
   const groups = new Set(members.filter((member) => member.pid === member.pgid).map((member) => member.pgid));
@@ -298,8 +350,10 @@ export async function terminateRun(runDir) {
     for (const pid of loose) { try { process.kill(pid, name); } catch { /* gone */ } }
   };
   const gone = () => groupMembers(groups).length === 0 && loose.every((pid) => !alive(pid));
-  signal('SIGTERM');
-  if (await waitFor(gone, 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
+  if (!kill) {
+    signal('SIGTERM');
+    if (await waitFor(gone, 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
+  }
   signal('SIGKILL');
   await waitFor(gone, 'run kill', { timeout: 10_000 });
 }

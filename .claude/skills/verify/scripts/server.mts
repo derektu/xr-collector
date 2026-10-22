@@ -17,7 +17,7 @@
 //
 // Environment: XR_VERIFY_CHECKOUT, XR_VERIFY_RUN, XR_VERIFY_DATA, XR_VERIFY_VAULT_MODE (selected | fixed | none),
 // XR_VERIFY_UI_PORT, XR_VERIFY_SEARCH_PORT, XR_VERIFY_AGENT_PORT, XR_VERIFY_FEEDS_PORT.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -138,10 +138,13 @@ const sources = data === 'synthetic'
   : await createSourcePlugins({ profilePath, env: process.env, program });
 
 // `selected` opens the Vault the way a user's chosen one opens, so moving it and opening another stay
-// available; `fixed` is the XR_COLLECTOR_VAULT path, where the location cannot change.
-if (vaultMode === 'selected') {
+// available; `fixed` is the XR_COLLECTOR_VAULT path, where the location cannot change. The Vault is
+// created on the run's first start only; a restart finds the profile's vault-selection.json and opens
+// whatever Vault it names, as the app does after the user moved or switched it.
+const selectionFile = path.join(profilePath, 'vault-selection.json');
+if (vaultMode === 'selected' && !existsSync(selectionFile)) {
   await createVaultDirectory(vaultPath, createdBy);
-  await new VaultSelection(path.join(profilePath, 'vault-selection.json')).write(vaultPath);
+  await new VaultSelection(selectionFile).write(vaultPath);
 }
 const runtime = await CollectorRuntime.start({
   profilePath,

@@ -19,7 +19,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 - **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
 - **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>[-<label>]-<本地時間>-<PID>/`（主 checkout 底下，`sweep` 因此看得到每個 worktree 的 run），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
 - **程序**：run 的程序以執行檔加命令列辨識：帶有 `--xr-verify-run=<run 目錄>/` 標記、執行 `server.mts` 的 node 與 Electron，以及 `--db-path` 在 run 目錄 profile 內的 meilisearch。不依賴 `run.json` 記錄的 PID；其他執行檔即使命令列含有標記或目錄（`pgrep -f`、`tail` 它的 log、`verify.mjs stop --run`）也不算。`stop` 只在程序群組的 leader 本身就是 run 的程序時（detached 啟動的 Web server 與 Electron）才對整個群組送訊號；其餘 run 的程序（例如 leader 已死後剩下的 Meilisearch）逐一送訊號，所以不會波及使用者 terminal 的 job 或其他 shell。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
-- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。同一票重跑時覆寫同名截圖，只留最新。
+- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放；同一個 label 的資料夾已經存在時，改用下一個空的 `<label>-2/`、`<label>-3/`……，已存在的資料夾一律不覆寫。實際用的資料夾名記在 instance 的 `label`／`evidence`、`launch` 的輸出與 `results.json` 的 `label`（例如 `baseline-2`）；報告引用證據時寫這個實際的資料夾名。沒有 label 的 run 共用 `<issue>/`，重跑時覆寫同名截圖。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。
 - **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
 ## Launch
@@ -112,7 +112,19 @@ node .local/ticket-artifacts/91/scripts/flow.mjs --checkout /Users/derektu/proje
 node .local/ticket-artifacts/91/scripts/flow.mjs --label ticket
 ```
 
-流程以 `--checkout` 決定從哪個 checkout import 函式庫：基準從主 checkout 的 skill import，本票版本從票的 worktree 的 skill import，函式庫才與它驅動的 `src/` 一致。靜態 `import` 的路徑是固定的，所以上面的流程用動態 import，並把 `checkout` 明確傳給 `launchWeb`（函式庫的預設是工作目錄所在的 checkout，基準時就會指向票的 worktree）。[examples/collect-video.mjs](examples/collect-video.mjs) 也是這個寫法。證據位置由工作目錄決定，兩次都寫進票的 worktree，分在 `91/baseline/` 與 `91/ticket/`。主 checkout 要先 `git pull` 到最新的 main，並有自己的 `node_modules`。
+流程以 `--checkout` 決定從哪個 checkout import 函式庫：基準從主 checkout 的 skill import，本票版本從票的 worktree 的 skill import，函式庫才與它驅動的 `src/` 一致。靜態 `import` 的路徑是固定的，所以上面的流程用動態 import，並把 `checkout` 明確傳給 `launchWeb`（函式庫的預設是工作目錄所在的 checkout，基準時就會指向票的 worktree）。[examples/collect-video.mjs](examples/collect-video.mjs) 也是這個寫法。證據位置由工作目錄決定，兩次都寫進票的 worktree，分在 `91/baseline/` 與 `91/ticket/`；再跑一次基準落在 `91/baseline-2/`，前一次保留。主 checkout 要先 `git pull` 到最新的 main，並有自己的 `node_modules`。
+
+### 重啟
+
+當機後接續、重啟後狀態保留這類 scenario，用 `instance.restart()` 在同一個 run 上重啟 server：同一份 runtime 程式、profile、Vault、`catalog.json`、port 與 slot。
+
+```js
+await instance.restart({ page });                // 正常關閉（SIGTERM，runtime 走自己的關閉流程）後重啟
+await instance.restart({ crash: true, page });   // 非正常結束：SIGKILL run 的程序（server 與 Meilisearch），不走關閉流程
+const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例如 crash 後 recovery.lastStop 為 crash
+```
+
+`restart` 等到重啟的 server ready（health 成功、search 為 `ready`）才回傳，之後 `api`、`openPage`、`snapshot` 照常可用；傳入 `page` 時，重啟期間它停在 `about:blank`，完成後回到原本的路由，沒傳的頁面自己 `reload()`。Vault 只在 run 第一次啟動時建立，重啟時從 profile 的 `vault-selection.json` 開回同一個 Vault（流程中搬移或換過 Vault 時開的是換過的那個）。`run.json` 與 slot lock 換成新的 server PID。server.log 是同一個檔案，往後附加，兩段之間以一行 `--- verify restart (graceful|crash) <時間> ---` 分隔。
 
 函式庫：
 
@@ -122,6 +134,7 @@ node .local/ticket-artifacts/91/scripts/flow.mjs --label ticket
 | `attach(runDir)` | 接手已啟動的 instance |
 | `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw；只有帶 `body` 的請求才送 `content-type: application/json` |
 | `instance.catalog()`／`instance.updateCatalog(fn)` | 讀／改合成資料 |
+| `instance.restart({ crash, page })` | 在同一個 run 上重啟 server（見「重啟」） |
 | `instance.stop({ keep })` | 同 CLI `stop` |
 | `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
 | `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json` |
@@ -174,7 +187,7 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 - Web 模式截圖標示為 Web 模式，不代替原生 Desktop 證據。
 - 看過每張 PNG 再交付：確認不是錯誤頁、過期畫面或空白。
 
-輸出在 `.local/ticket-artifacts/<issue>[/<label>]/`：`<scenario>-<name>.png`、`results.json`（label、受測 checkout、commit、dirty、未提交內容的雜湊 `sourceHash`、資料模式、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`（runtime 的輸出，另記每個 4xx／5xx 請求的 method、path、status、錯誤碼與訊息）、`snapshot` 的 `.png`＋`.state.json`。
+輸出在 `.local/ticket-artifacts/<issue>[/<label>[-N]]/`：`<scenario>-<name>.png`、`results.json`（label、受測 checkout、commit、dirty、未提交內容的雜湊 `sourceHash`、資料模式、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`（runtime 的輸出，另記每個 4xx／5xx 請求的 method、path、status、錯誤碼與訊息；重啟過的 run 依序包含每一段）、`snapshot` 的 `.png`＋`.state.json`。
 
 ## Cleanup
 
