@@ -14,7 +14,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, cleanEnv, commitOf, evidenceDir, processStart, runMarker } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, commitOf, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
 import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 
@@ -31,7 +31,10 @@ export async function launchElectron({ issue, label, checkout = checkoutRoot(), 
   for (const file of [executable, path.join(checkout, 'dist', 'node', 'electron', 'main.js'), path.join(checkout, 'resources', 'bin', 'mac', 'meilisearch')]) {
     if (!existsSync(file)) throw new Error(`Missing ${file}; run npm run build and npm run download:runtime in the checkout`);
   }
-  const evidence = evidenceDir(issue, label);
+  // A label already used gets the next free <label>-N folder; the record carries the one used.
+  const claimed = claimEvidence(issue, label);
+  const evidence = claimed.evidence;
+  label = claimed.label ?? undefined;
   const { runDir, ports } = await createRun(issue, checkout, { label, suffix: '-electron' });
   const profile = path.join(runDir, 'profile');
   const vault = path.join(runDir, 'vault');
