@@ -1,6 +1,6 @@
 // Driving an instance with headless Chromium and recording evidence. A flow opens a page, runs
 // scenarios through a recorder, and finishes it; the recorder writes the screenshots and
-// results.json into the instance's evidence folder (.local/ticket-artifacts/<issue>/).
+// results.json into the instance's evidence folder (.local/ticket-artifacts/<issue>[/<label>]/).
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -74,7 +74,8 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
     async finish(extra = {}) {
       const passed = results.every((result) => result.pass);
       await writeFile(path.join(instance.evidence, file), JSON.stringify({
-        issue: instance.issue, commit: instance.commit, dirty: instance.dirty, data: instance.data,
+        issue: instance.issue, label: instance.label ?? null, checkout: instance.checkout,
+        commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, data: instance.data,
         layer: 'Web 模式（headless Chromium）', url: instance.url, finishedAt: new Date().toISOString(),
         passed, results, shots, ...extra,
       }, null, 2));

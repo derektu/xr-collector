@@ -24,17 +24,17 @@ import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instanc
  * relaunch() quits and starts again with the same profile; close({ keep }) quits, releases the slot
  * and removes the scratch folder unless `keep`.
  */
-export async function launchElectron({ issue, checkout = checkoutRoot(), size = '1280x900', hidden = true } = {}) {
+export async function launchElectron({ issue, label, checkout = checkoutRoot(), size = '1280x900', hidden = true } = {}) {
   if (!issue) throw new Error('launchElectron needs an issue (number or label) for the evidence folder');
   checkout = path.resolve(checkout);
   const executable = path.join(checkout, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron');
   for (const file of [executable, path.join(checkout, 'dist', 'node', 'electron', 'main.js'), path.join(checkout, 'resources', 'bin', 'mac', 'meilisearch')]) {
     if (!existsSync(file)) throw new Error(`Missing ${file}; run npm run build and npm run download:runtime in the checkout`);
   }
-  const { runDir, ports } = await createRun(issue, checkout, '-electron');
+  const evidence = evidenceDir(issue, label);
+  const { runDir, ports } = await createRun(issue, checkout, { label, suffix: '-electron' });
   const profile = path.join(runDir, 'profile');
   const vault = path.join(runDir, 'vault');
-  const evidence = evidenceDir(issue, checkout);
   await mkdir(profile, { recursive: true });
   await mkdir(evidence, { recursive: true });
 
@@ -58,7 +58,7 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
   // run.json names this flow process as the holder, so sweep and stop leave a live run alone. The
   // run marker on Electron's command line lets them find an Electron the flow left behind.
   const record = {
-    kind: 'electron', issue: String(issue), runDir, evidence, checkout, ...commitOf(checkout), profile, vault, ports,
+    kind: 'electron', issue: String(issue), ...(label ? { label: String(label) } : {}), runDir, evidence, checkout, ...commitOf(checkout), profile, vault, ports,
     pid: process.pid, start: processStart(process.pid), data: 'real', layer: '原生 Desktop（Playwright _electron）',
     startedAt: new Date().toISOString(),
   };

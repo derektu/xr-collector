@@ -1,19 +1,28 @@
 // Example ticket flow: collect one synthetic video through the Documents page and read it.
-// A ticket copies this file to .local/ticket-artifacts/<issue>/scripts/flow.mjs, keeps the
-// launch/record/stop frame and replaces the scenarios with its own. Run from the checkout under test:
-//   node .claude/skills/verify/examples/collect-video.mjs [--issue <N>] [--keep]
+// A ticket copies this file to .local/ticket-artifacts/<issue>/scripts/flow.mjs in its own worktree,
+// keeps the launch/record/stop frame and replaces the scenarios with its own. Run from the ticket's
+// worktree; evidence goes to its .local/ticket-artifacts/<issue>[/<label>]/:
+//   node .claude/skills/verify/examples/collect-video.mjs [--issue <N>] [--label <name>] [--keep]
+//   node .claude/skills/verify/examples/collect-video.mjs --checkout <main checkout> --label baseline
 //   node .claude/skills/verify/examples/collect-video.mjs --run <runDir>
-// --run drives an instance verify.mjs launch started and leaves it running. --keep leaves an
-// instance this flow launched running for manual inspection. Stop either with verify.mjs stop --run <dir>.
+// --checkout picks the version under test (default: the worktree the command runs in); the library
+// comes from that checkout's own skill, so it matches the src/ it drives. --run drives an instance
+// verify.mjs launch started and leaves it running. --keep leaves an instance this flow launched
+// running for manual inspection. Stop either with verify.mjs stop --run <dir>.
+import { execFileSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { apiState, attach, launchWeb, openPage, recorder, waitFor } from '../scripts/lib/index.mjs';
 
 const { values: o } = parseArgs({ options: {
-  issue: { type: 'string', default: 'verify-skill' }, run: { type: 'string' }, keep: { type: 'boolean' },
+  issue: { type: 'string', default: 'verify-skill' }, label: { type: 'string' }, checkout: { type: 'string' },
+  run: { type: 'string' }, keep: { type: 'boolean' },
 } });
-const instance = o.run ? attach(o.run) : await launchWeb({ issue: o.issue });
+const checkout = path.resolve(o.checkout ?? execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim());
+const { apiState, attach, launchWeb, openPage, recorder, waitFor } = await import(
+  pathToFileURL(path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'lib', 'index.mjs')).href);
+const instance = o.run ? attach(o.run) : await launchWeb({ issue: o.issue, label: o.label, checkout });
 console.log(`run ${instance.runDir} at ${instance.url}`);
 const { page, consoleErrors, close } = await openPage(instance, { route: '/documents' });
 const record = recorder(instance, page);

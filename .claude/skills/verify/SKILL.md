@@ -17,9 +17,9 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 ## 隔離與共用規則
 
 - **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
-- **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>-<本地時間>-<PID>/`（主 checkout 底下），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
+- **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>[-<label>]-<本地時間>-<PID>/`（主 checkout 底下，`sweep` 因此看得到每個 worktree 的 run），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
 - **程序**：run 的程序以執行檔加命令列辨識：帶有 `--xr-verify-run=<run 目錄>/` 標記、執行 `server.mts` 的 node 與 Electron，以及 `--db-path` 在 run 目錄 profile 內的 meilisearch。不依賴 `run.json` 記錄的 PID；其他執行檔即使命令列含有標記或目錄（`pgrep -f`、`tail` 它的 log、`verify.mjs stop --run`）也不算。`stop` 只在程序群組的 leader 本身就是 run 的程序時（detached 啟動的 Web server 與 Electron）才對整個群組送訊號；其餘 run 的程序（例如 leader 已死後剩下的 Meilisearch）逐一送訊號，所以不會波及使用者 terminal 的 job 或其他 shell。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
-- **證據**：`.local/ticket-artifacts/<issue>/`（主 checkout 底下，gitignored，不 commit）。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。同一票重跑時覆寫同名截圖，只留最新。
+- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。同一票重跑時覆寫同名截圖，只留最新。
 - **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
 ## Launch
@@ -32,9 +32,10 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --data real     
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault fixed        # XR_COLLECTOR_VAULT 固定位置
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault none         # 尚未選 Vault，從 Onboarding 開始
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --no-build           # 不 build，複製 checkout 現有的 dist/web
+node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --label baseline --checkout /Users/derektu/projects/km/xr-collector   # 基準
 ```
 
-`launch` build Web UI、以 `tsx scripts/server.mts` 背景啟動 runtime，等到 `/api/health` 成功且 `/api/search/status` 為 `ready`（`--vault none` 只等 health）才回傳。輸出的 JSON 是 `run.json`：`runDir`、`url`、`ports`、`pid`、`commit`、`evidence`，合成模式另有 `synthetic`（可用的頻道、影片、feed 網址）。之後的指令都用 `--run <runDir>`。
+`launch` build Web UI、以 `tsx scripts/server.mts` 背景啟動 runtime，等到 `/api/health` 成功且 `/api/search/status` 為 `ready`（`--vault none` 只等 health）才回傳。輸出的 JSON 是 `run.json`：`runDir`、`url`、`ports`、`pid`、`commit`、`sourceHash`、`evidence`，合成模式另有 `synthetic`（可用的頻道、影片、feed 網址）。之後的指令都用 `--run <runDir>`。
 
 **資料模式**：
 
@@ -67,13 +68,21 @@ node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這
 
 ### 流程腳本（主要方式）
 
-票的流程放 `.local/ticket-artifacts/<issue>/scripts/flow.mjs`，從 [examples/collect-video.mjs](examples/collect-video.mjs) 複製起手：
+票的流程放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/flow.mjs`，從 [examples/collect-video.mjs](examples/collect-video.mjs) 複製起手：
 
 ```js
-// 從受測 checkout 自己的 skill import，版本才會和它的 src/ 一致。
-import { launchWeb, openPage, recorder, apiState, waitFor, subscribe, idle } from '/<受測 checkout 的絕對路徑>/.claude/skills/verify/scripts/lib/index.mjs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 
-const instance = await launchWeb({ issue: 91 });            // 或 attach(runDir) 接手 CLI 啟動的 instance
+const { values: o } = parseArgs({ options: { checkout: { type: 'string' }, label: { type: 'string' } } });
+// 從受測 checkout 自己的 skill import，版本才會和它的 src/ 一致；--checkout 換成基準時一起換（見「基準」）。
+const checkout = path.resolve(o.checkout ?? execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim());
+const { launchWeb, openPage, recorder, apiState, subscribe, idle } = await import(
+  pathToFileURL(path.join(checkout, '.claude/skills/verify/scripts/lib/index.mjs')).href);
+
+const instance = await launchWeb({ issue: 91, label: o.label, checkout });   // 或 attach(runDir) 接手 CLI 啟動的 instance
 const { page, consoleErrors, close } = await openPage(instance, { route: '/' });
 const record = recorder(instance, page);
 try {
@@ -91,15 +100,27 @@ try {
 }
 ```
 
-流程檔放在主 checkout 的 `.local/`，worktree 裡沒有這個路徑。以受測 checkout 為工作目錄、用絕對路徑執行：`cd <受測 checkout> && node <主 checkout>/.local/ticket-artifacts/91/scripts/flow.mjs`。`launchWeb` 預設驗證工作目錄所在的 checkout；`playwright` 從 import 的 skill 所在 checkout 的 `node_modules` 解析。
+在票的 worktree 執行：`node .local/ticket-artifacts/91/scripts/flow.mjs`。`launchWeb` 預設驗證工作目錄所在的 checkout，證據寫進同一個 worktree；`playwright` 從 import 的 skill 所在 checkout 的 `node_modules` 解析。
+
+### 基準
+
+回歸流程跑兩次，同一支流程：先基準，再本票版本。基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main），從票的 worktree 以 `--checkout` 指定它：
+
+```sh
+cd <票的 worktree>
+node .local/ticket-artifacts/91/scripts/flow.mjs --checkout /Users/derektu/projects/km/xr-collector --label baseline
+node .local/ticket-artifacts/91/scripts/flow.mjs --label ticket
+```
+
+流程以 `--checkout` 決定從哪個 checkout import 函式庫：基準從主 checkout 的 skill import，本票版本從票的 worktree 的 skill import，函式庫才與它驅動的 `src/` 一致。靜態 `import` 的路徑是固定的，所以上面的流程用動態 import，並把 `checkout` 明確傳給 `launchWeb`（函式庫的預設是工作目錄所在的 checkout，基準時就會指向票的 worktree）。[examples/collect-video.mjs](examples/collect-video.mjs) 也是這個寫法。證據位置由工作目錄決定，兩次都寫進票的 worktree，分在 `91/baseline/` 與 `91/ticket/`。主 checkout 要先 `git pull` 到最新的 main，並有自己的 `node_modules`。
 
 函式庫：
 
 | 函式 | 用途 |
 | --- | --- |
-| `launchWeb({ issue, checkout, data, vault, catalog, build })` | 同 CLI `launch`，回傳 instance |
+| `launchWeb({ issue, label, checkout, data, vault, catalog, build })` | 同 CLI `launch`，回傳 instance |
 | `attach(runDir)` | 接手已啟動的 instance |
-| `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw |
+| `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw；只有帶 `body` 的請求才送 `content-type: application/json` |
 | `instance.catalog()`／`instance.updateCatalog(fn)` | 讀／改合成資料 |
 | `instance.stop({ keep })` | 同 CLI `stop` |
 | `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
@@ -108,7 +129,7 @@ try {
 | `collect(instance, url)`／`subscribe(instance, url)`／`idle(instance)` | 以辨識網址＋執行動作建立前置狀態；等工作清空 |
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
-| `launchElectron({ issue, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
+| `launchElectron({ issue, label, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
 
 ### CLI 單步操作
 
@@ -153,7 +174,7 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 - Web 模式截圖標示為 Web 模式，不代替原生 Desktop 證據。
 - 看過每張 PNG 再交付：確認不是錯誤頁、過期畫面或空白。
 
-輸出在 `.local/ticket-artifacts/<issue>/`：`<scenario>-<name>.png`、`results.json`（commit、dirty、資料模式、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`、`snapshot` 的 `.png`＋`.state.json`。
+輸出在 `.local/ticket-artifacts/<issue>[/<label>]/`：`<scenario>-<name>.png`、`results.json`（label、受測 checkout、commit、dirty、未提交內容的雜湊 `sourceHash`、資料模式、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`（runtime 的輸出，另記每個 4xx／5xx 請求的 method、path、status、錯誤碼與訊息）、`snapshot` 的 `.png`＋`.state.json`。
 
 ## Cleanup
 

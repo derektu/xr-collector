@@ -18,9 +18,11 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **回歸**：票沒有改畫面，但改到畫面依賴的狀態或資料流，例如訂閱狀態、工作排隊與進度、知識庫的鎖與資料交換，仍在 Web 層執行 [功能地圖](../.claude/skills/verify/features/README.md) 中對應功能的流程，確認使用者看到的行為不變。這類行為由多個 module 拼成畫面，單元測試各自通過不代表畫面上的狀態正確。只有畫面完全讀不到的內部行為，才只靠自動檢查。
 
+**基準**：回歸流程先跑基準，再跑本票版本。基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main、不放未提交修改）：在票的 worktree 以 `--checkout <主 checkout>` 啟動 instance，跑同一支流程。票的 worktree 一開始改程式就不再等於 main，所以基準不在票的 worktree 跑，也不另建 worktree。兩次的證據分開存放，以結果比對：只在本票版本與功能檔或基準不一致的，是本票改變了行為；基準就與功能檔不一致的，是功能檔的問題，記在 PR 的待決定問題。
+
 **真實資料**：合成資料只替代 yt-dlp 與網路上的 feed，看不到限流、實際的字幕軌道、頻道辨識的耗時與真實 feed 的格式差異。改到收集、字幕選軌、頻道或網址辨識、feed 讀取的票，交付前至少以 `--data real` 執行一次相關 scenario，或執行 verify skill 的真實資料 smoke。網路或限流使 scenario 無法完成時記為 blocked，不以合成結果代替。
 
-畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；腳本放在 `.local/ticket-artifacts/<issue>/scripts/`，只寫該票特有的步驟。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
+畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`，只寫該票特有的步驟。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 
 開發主力機器是 Mac；Windows 透過另一台電腦或 Parallels VM 執行。需要 Windows 驗收時，先確認 VM 正在執行且桌面可操作。VM 未啟動或無法操作時，暫停並通知使用者，由使用者決定啟動 VM 補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
 
@@ -63,7 +65,11 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 ## 4. 交付
 
-證據放在本機 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR。同一票重跑時只留最新的證據。PR 描述的驗證段落列出：
+實作的 session 完成時，給使用者的訊息本身就列出完整結果，不只放在報告檔：每個 scenario 的結果，以及第 2 節的每一個不符合預期的觀察。每個觀察各寫一條：在哪個 scenario 看到、實際觀察、截圖路徑、處理方式（已修正並重跑，或待使用者決定）。報告檔可以更詳細，但不能有訊息裡沒有的觀察。
+
+開 PR 前，開 PR 的人逐條對照 `results.json` 與回報：每個 scenario 的 checks、observations 與記錄的狀態序列，以及功能檔不符的項目。結果檔裡有、回報卻沒提的不一致，先依第 2 節判斷，再補進 PR 的待決定問題。這一步不依賴實作 session 的自我檢查，因為它看漏的通常就是它沒意識到的地方。
+
+證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。同一票重跑時只留最新的證據。PR 描述的驗證段落列出：
 
 - 需求平台與實際驗證的平台、OS 與架構
 - 每個 scenario 的層級、資料模式、結果（pass／fail／blocked）與實際觀察
@@ -72,7 +78,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 - 未驗證的項目與待補的平台
 - 第 2 節列為待使用者決定的問題
 
-PR merge 後刪除該票的本機證據。
+PR merge 後刪除票的 worktree，證據隨之刪除。
 
 ## 5. Windows
 
@@ -102,7 +108,7 @@ Node 預設從 PATH 找到，也可傳 `-NodePath <node.exe>`。排程成功不�
 
 使用 Parallels 的人可從 Mac 用 `prlctl exec <VM名稱> --current-user powershell.exe ... -File <repo內windows-session.ps1> ...` 呼叫同一入口。VM 名稱、repo、workspace 及 Node 路徑都是該機配置；Parallels 不屬於共同前置條件。也可使用 `prlctl capture` 後以 capture 的 `--file` 匯入。
 
-Windows 驗證機只保留兩個目錄：`C:\projects\xr-collector` 是追蹤 `origin/main` 的 repo，不放未提交修改；`C:\projects\xr-collector-verify` 是從它建立的唯一 detached worktree，供每次驗證切換版本。驗證時在 verify worktree fetch 並切到受驗的分支或 PR HEAD，執行 `npm ci`、`npm run download:runtime:win` 與 build；`resources/bin/win` 與 node_modules 在不同版本間重用。profile、Vault 與 fixture 放在 `C:\projects\xr-collector-verify-data`，每次驗證前清空；截圖與結果存回 Mac 開發 checkout 的 `.local/ticket-artifacts/<issue>/`。尚未 push 的版本可從 Mac 共享磁碟上的 repo（例如 `Y:\projects\km\xr-collector`）fetch，不經 GitHub。用 `prepare` 建立的工作區在驗收結束、證據存回 Mac 後移除，不在驗證機累積。
+Windows 驗證機只保留兩個目錄：`C:\projects\xr-collector` 是追蹤 `origin/main` 的 repo，不放未提交修改；`C:\projects\xr-collector-verify` 是從它建立的唯一 detached worktree，供每次驗證切換版本。驗證時在 verify worktree fetch 並切到受驗的分支或 PR HEAD，執行 `npm ci`、`npm run download:runtime:win` 與 build；`resources/bin/win` 與 node_modules 在不同版本間重用。profile、Vault 與 fixture 放在 `C:\projects\xr-collector-verify-data`，每次驗證前清空；截圖與結果存回 Mac 上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。尚未 push 的版本可從 Mac 共享磁碟上的 repo（例如 `Y:\projects\km\xr-collector`）fetch，不經 GitHub。用 `prepare` 建立的工作區在驗收結束、證據存回 Mac 後移除，不在驗證機累積。
 
 Windows ARM／x64 模擬執行須如實標示，不代替 Intel／AMD 原生驗收。桌面鎖定、Mac 休眠或 VM 停止時，標為 blocked，恢復可用桌面後再驗證。避免透過 Mac 掛載磁碟同步 node_modules；若傳未提交檔案產生 AppleDouble `._*`，僅清除此批傳輸產生的檔案再驗證。
 
