@@ -39,6 +39,7 @@ const { youtubePlugin, YOUTUBE_PACING } = await load('src/plugins/youtube/server
 const { createRssPlugin, rssDefinition } = await load('src/plugins/rss/server.ts');
 const { createVaultDirectory } = await load('src/vault/vault-directory.ts');
 const { VaultSelection } = await load('src/vault/vault-selection.ts');
+const { exportFolder, backupFolder } = await load('src/vault/transfer-files.ts');
 const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
 
 const profilePath = path.join(run, 'profile');
@@ -150,10 +151,13 @@ const runtime = await CollectorRuntime.start({
     searchBinary: program('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
     searchData: path.join(profilePath, 'search'),
     searchPort: port('SEARCH'),
-    exportFolder: path.join(run, 'documents', 'XR Collector Exports'),
-    backupFolder: path.join(run, 'documents', 'XR Collector Backups'),
+    // The product's folder names under the run, as the app puts them under ~/Documents.
+    exportFolder: exportFolder(path.join(run, 'documents')),
+    backupFolder: backupFolder(path.join(run, 'documents')),
   },
   ...(vaultMode === 'fixed' ? { explicitVaultPath: vaultPath } : {}),
+  // Onboarding suggests this folder; inside the run, so accepting the suggestion stays isolated.
+  suggestedVaultPath: vaultPath,
   createdBy,
   connectionFile: path.join(profilePath, 'agent-connection.json'),
   skillPath: path.join(checkout, 'skills', 'xr-collector-agent'),

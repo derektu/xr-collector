@@ -2,10 +2,11 @@
 // runs in (or --checkout); scratch state and evidence live in the main checkout's .local/, so runs
 // from every ticket worktree land in one place the user reviews.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
 
 /** The top of the Git worktree containing `from`. */
 export function checkoutRoot(from = process.cwd()) {
@@ -38,6 +39,48 @@ export const SLOTS = [7250, 7254, 7258, 7262].map((base, slot) => ({
   slot, ui: base, search: base + 1, agent: base + 2, feeds: base + 3,
 }));
 
+/**
+ * The checkout's commit and its uncommitted state. `sourceHash` covers `git status` and the diff
+ * against HEAD, so an edit after launch shows up even without a new commit.
+ */
 export function commitOf(checkout) {
-  return { commit: git(checkout, ['rev-parse', 'HEAD']), dirty: git(checkout, ['status', '--porcelain']) !== '' };
+  const status = git(checkout, ['status', '--porcelain']);
+  const diff = git(checkout, ['diff', 'HEAD']);
+  return {
+    commit: git(checkout, ['rev-parse', 'HEAD']),
+    dirty: status !== '',
+    sourceHash: createHash('sha256').update(status).update('\0').update(diff).digest('hex').slice(0, 16),
+  };
+}
+
+/** Local time to the second, file-name safe: 2026-10-22T10-58-03. */
+export function stamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
+/**
+ * When a process started, as `ps` reports it; null when it is not running. A PID plus its start time
+ * names one process even after the PID is reused.
+ */
+export function processStart(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a command line names `runDir` as a whole argument or as the start of a path under it. */
+export function namesRun(command, runDir) {
+  const padded = ` ${command} `;
+  return padded.includes(` ${runDir} `) || padded.includes(` ${runDir}/`);
+}
+
+/** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */
+export function cleanEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('XR_COLLECTOR_')) delete env[key];
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
 }

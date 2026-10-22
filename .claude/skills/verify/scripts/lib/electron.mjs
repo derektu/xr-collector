@@ -10,14 +10,13 @@
 // The checkout must be built (npm run build) and have resources/bin/mac. Electron runs only inside
 // the flow process that launched it: Playwright closes it when that process exits.
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, commitOf, evidenceDir, runsRoot } from './paths.mjs';
-import { claimSlot, releaseSlot } from './instance.mjs';
-
-const stamp = () => new Date().toISOString().replace(/[:.]/gu, '-').slice(0, 19);
+import { checkoutRoot, cleanEnv, commitOf, evidenceDir, processStart } from './paths.mjs';
+import { LOADED } from './drive.mjs';
+import { claimSlot, createRunDir, releaseSlot } from './instance.mjs';
 
 /**
  * Prepares an isolated profile with a selected Vault (so moving and opening another Vault stay
@@ -32,7 +31,7 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
   for (const file of [executable, path.join(checkout, 'dist', 'node', 'electron', 'main.js'), path.join(checkout, 'resources', 'bin', 'mac', 'meilisearch')]) {
     if (!existsSync(file)) throw new Error(`Missing ${file}; run npm run build and npm run download:runtime in the checkout`);
   }
-  const runDir = path.join(runsRoot(checkout), `${issue}-${stamp()}-electron`);
+  const runDir = await createRunDir(issue, checkout, '-electron');
   const profile = path.join(runDir, 'profile');
   const vault = path.join(runDir, 'vault');
   const evidence = evidenceDir(issue, checkout);
@@ -43,28 +42,41 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
   const load = (relative) => import(pathToFileURL(path.join(checkout, 'dist', 'node', relative)).href);
   const { createVaultDirectory } = await load('vault/vault-directory.js');
   const { VaultSelection } = await load('vault/vault-selection.js');
+  const { EXPORT_FOLDER_NAME, BACKUP_FOLDER_NAME } = await load('vault/transfer-files.js');
   await createVaultDirectory(vault, 'XR Collector (verify skill, Electron)');
   await new VaultSelection(path.join(profile, 'vault-selection.json')).write(vault);
 
+  // The shell's own XR_COLLECTOR_* settings (a fixed Vault, ports) would break isolation.
   const env = {
-    ...process.env,
+    ...cleanEnv(),
     XR_COLLECTOR_PROFILE: profile,
     XR_COLLECTOR_AGENT_PORT: String(ports.agent),
-    XR_COLLECTOR_EXPORT_DIR: path.join(runDir, 'documents', 'XR Collector Exports'),
-    XR_COLLECTOR_BACKUP_DIR: path.join(runDir, 'documents', 'XR Collector Backups'),
+    XR_COLLECTOR_EXPORT_DIR: path.join(runDir, 'documents', EXPORT_FOLDER_NAME),
+    XR_COLLECTOR_BACKUP_DIR: path.join(runDir, 'documents', BACKUP_FOLDER_NAME),
     XR_COLLECTOR_VALIDATION_WINDOW_SIZE: size,
     ...(hidden ? { XR_COLLECTOR_VALIDATION_HIDDEN: '1' } : {}),
   };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const record = { issue: String(issue), runDir, evidence, checkout, ...commitOf(checkout), profile, vault, ports, data: 'real', layer: '原生 Desktop（Playwright _electron）' };
+  // run.json names this flow process as the holder, so sweep and stop leave a live run alone.
+  const record = {
+    kind: 'electron', issue: String(issue), runDir, evidence, checkout, ...commitOf(checkout), profile, vault, ports,
+    pid: process.pid, start: processStart(process.pid), data: 'real', layer: '原生 Desktop（Playwright _electron）',
+    startedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(runDir, 'run.json'), JSON.stringify(record, null, 2));
 
   const start = async () => {
     const app = await electron.launch({ executablePath: executable, args: ['.'], cwd: checkout, env, timeout: 90_000 });
     const window = await app.firstWindow({ timeout: 90_000 });
-    await window.locator('[data-testid^="page-"]').first().waitFor({ timeout: 90_000 });
+    await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
     return { app, window };
   };
-  let current = await start();
+  let current;
+  try {
+    current = await start();
+  } catch (error) {
+    releaseSlot(ports.slot, runDir);
+    throw error;
+  }
   const handle = {
     ...record,
     get app() { return current.app; },

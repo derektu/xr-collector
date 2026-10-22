@@ -60,7 +60,10 @@ export function syntheticAddresses(catalog, feedsOrigin) {
   };
 }
 
-/** Real sources for `--data real`: a short public video with manual subtitles and a stable feed. */
+/**
+ * Real sources for `--data real`: a public talk of about 20 minutes with manual subtitles (collecting
+ * it takes a while), and a feed that publishes often.
+ */
 export const REAL = {
   video: 'https://www.youtube.com/watch?v=iG9CE55wbtY',
   feed: 'https://github.blog/feed/',

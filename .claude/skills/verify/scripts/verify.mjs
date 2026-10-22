@@ -8,7 +8,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
 import { apiState, openPage } from './lib/drive.mjs';
-import { attach, launchWeb, ownsProcess, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
+import { attach, launchWeb, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
 import { checkoutRoot, commitOf, evidenceDir, mainCheckout, SLOTS } from './lib/paths.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { REAL } from './lib/synthetic.mjs';
@@ -16,10 +16,11 @@ import { REAL } from './lib/synthetic.mjs';
 const USAGE = `verify.mjs <command>
   doctor   [--run <dir>]                     environment, slots and (with --run) one instance; read-only
   launch   --issue <N> [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
+           --no-build serves the checkout's existing dist/web (npm run build:web) instead of building one
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
-  sweep                                        remove scratch folders of runs whose server is gone`;
+  sweep                                        remove stale slot locks and scratch folders of runs with no live process`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
   issue: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
@@ -72,16 +73,17 @@ async function doctor() {
     const now = commitOf(instance.checkout);
     report.instance = {
       runDir: instance.runDir, url: instance.url, data: instance.data, vault: instance.vault, pid: instance.pid,
-      ownsProcess: ownsProcess(instance.pid, instance.runDir),
+      processes: runProcesses(instance).map((member) => member.pid),
       health: await fetch(`${instance.url}/api/health`).then((response) => response.ok, () => false),
       search: search?.status?.state ?? null,
       vaultPath: vault?.vaultPath ?? null,
       vaultInsideRun: Boolean(vault?.vaultPath?.startsWith(instance.runDir)),
       launchedCommit: instance.commit, checkoutCommit: now.commit,
-      stale: now.commit !== instance.commit ? 'checkout moved since launch; relaunch to test the current code' : null,
+      stale: now.commit !== instance.commit ? 'checkout moved to another commit since launch; relaunch to test the current code'
+        : now.sourceHash !== instance.sourceHash ? 'checkout has uncommitted changes made after launch; relaunch to test them' : null,
     };
     const i = report.instance;
-    healthy &&= i.ownsProcess && i.health && (instance.vault === 'none' || (i.search === 'ready' && i.vaultInsideRun));
+    healthy &&= i.processes.length > 0 && i.health && (instance.vault === 'none' || (i.search === 'ready' && i.vaultInsideRun));
   }
   report.healthy = healthy;
   print(report);

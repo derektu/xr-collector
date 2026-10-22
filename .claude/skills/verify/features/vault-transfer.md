@@ -27,8 +27,8 @@ Preconditions:
 - 所有路徑都放在 run 目錄內，例如 `path.join(instance.runDir, 'exports', 'a.zip')`、`path.join(instance.runDir, 'moved-vault')`。
 
 - **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是 run 目錄內的 `vault`，`vault-counts` 與文件數一致。
-- **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector Exports/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
-- **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-next`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector Backups/` 多一份匯入前備份。
+- **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector 匯出/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
+- **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-next`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
 - **完全取代。** 同上選 `import-mode-replace`，`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
 - **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`。
 - **搬移。** `vault-move` → `move-dialog`，`move-target` 填 `<runDir>/moved-vault`。等 `move-facts` 顯示檢查結果（`move-check-problem` 不出現）後點 `move-confirm`，完成出現 `move-result-path`。`vault-path` 變成新路徑；舊資料夾不再有文件；`GET /api/vault/status` 的 `vaultPath` 一致；文件頁與搜尋照常。

@@ -16,21 +16,22 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 ## 隔離與共用規則
 
-- **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
-- **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>-<時間>/`（主 checkout 底下），內含 profile、Vault、這次 build 的 Web UI、`catalog.json`、`server.log`、`run.json`。匯出與備份的預設目錄也在 run 目錄內，不碰 `~/Documents`。
-- **程序**：`stop` 只送訊號給 `run.json` 記錄的 PID，而且先確認該程序的命令列帶有 `--run <這個 run 目錄>`；不符就拒絕。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
+- **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
+- **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>-<本地時間>-<PID>/`（主 checkout 底下），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
+- **程序**：server 在自己的程序群組（tsx、node、Meilisearch）。`stop` 只對 `run.json` 記錄的群組送訊號，而且群組內要有程序的命令列帶有這個 run 目錄；沒有就視為不是這個 run 的程序，不送訊號。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
 - **證據**：`.local/ticket-artifacts/<issue>/`（主 checkout 底下，gitignored，不 commit）。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。同一票重跑時覆寫同名截圖，只留最新。
-- **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與是否有未提交修改；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器直接載入受測 checkout 的 `src/`。程式改了就重新 `launch`，`doctor --run` 會指出 commit 已變。
+- **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
 ## Launch
 
-前置（每個 checkout 一次）：`npm ci`；`npx playwright install chromium`（只在 doctor 說缺少時）；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno）。
+前置（每個 checkout 一次，每個 worktree 都要各做一次，`node_modules` 與 `resources/bin` 不共用）：`npm ci`；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno）；`npx playwright install chromium`（只在 doctor 說缺少時）。
 
 ```sh
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --data real          # 真實 YouTube／feed
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault fixed        # XR_COLLECTOR_VAULT 固定位置
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault none         # 尚未選 Vault，從 Onboarding 開始
+node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --no-build           # 不 build，複製 checkout 現有的 dist/web
 ```
 
 `launch` build Web UI、以 `tsx scripts/server.mts` 背景啟動 runtime，等到 `/api/health` 成功且 `/api/search/status` 為 `ready`（`--vault none` 只等 health）才回傳。輸出的 JSON 是 `run.json`：`runDir`、`url`、`ports`、`pid`、`commit`、`evidence`，合成模式另有 `synthetic`（可用的頻道、影片、feed 網址）。之後的指令都用 `--run <runDir>`。
@@ -69,7 +70,8 @@ node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這
 票的流程放 `.local/ticket-artifacts/<issue>/scripts/flow.mjs`，從 [examples/collect-video.mjs](examples/collect-video.mjs) 複製起手：
 
 ```js
-import { launchWeb, openPage, recorder, apiState, waitFor, subscribe, idle } from '<repo>/.claude/skills/verify/scripts/lib/index.mjs';
+// 從受測 checkout 自己的 skill import，版本才會和它的 src/ 一致。
+import { launchWeb, openPage, recorder, apiState, waitFor, subscribe, idle } from '/<受測 checkout 的絕對路徑>/.claude/skills/verify/scripts/lib/index.mjs';
 
 const instance = await launchWeb({ issue: 91 });            // 或 attach(runDir) 接手 CLI 啟動的 instance
 const { page, consoleErrors, close } = await openPage(instance, { route: '/' });
@@ -89,7 +91,7 @@ try {
 }
 ```
 
-從受測 checkout 執行：`node .local/ticket-artifacts/91/scripts/flow.mjs`。`import` 用主 checkout 的絕對路徑或相對路徑皆可；`playwright` 從 skill 所在 checkout 的 `node_modules` 解析。
+流程檔放在主 checkout 的 `.local/`，worktree 裡沒有這個路徑。以受測 checkout 為工作目錄、用絕對路徑執行：`cd <受測 checkout> && node <主 checkout>/.local/ticket-artifacts/91/scripts/flow.mjs`。`launchWeb` 預設驗證工作目錄所在的 checkout；`playwright` 從 import 的 skill 所在 checkout 的 `node_modules` 解析。
 
 函式庫：
 
@@ -129,7 +131,7 @@ node $V snapshot --run <runDir> --name N91-overview --route /documents [--theme 
 只用於依賴 Electron 或平台能力的 scenario（原生對話框、preload bridge、視窗、`shell.openExternal`、同 profile 重啟），並在票的結尾執行。受測 checkout 先 `npm run build`（node 與 web 都要；Electron 讀 checkout 的 `dist/web`，只 build node 會看到舊畫面）與 `npm run download:runtime`；`node_modules/electron/dist` 不存在時跑 `node node_modules/electron/install.js`。doctor 的 `electron`、`electronBuild`、`electronWebCurrent` 三項都要是 ok。
 
 ```js
-import { launchElectron, stubDialogs } from '<repo>/.claude/skills/verify/scripts/lib/index.mjs';
+import { launchElectron, stubDialogs } from '/<受測 checkout 的絕對路徑>/.claude/skills/verify/scripts/lib/index.mjs';
 const desktop = await launchElectron({ issue: 91 });       // XR_COLLECTOR_VALIDATION_HIDDEN=1
 await stubDialogs(desktop.app, { open: '/…/run 目錄內的資料夾' });
 await desktop.window.getByTestId('nav-settings').click();
@@ -138,7 +140,7 @@ await desktop.relaunch();                                  // 同一 profile 重
 await desktop.close();
 ```
 
-Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<時間>-electron/`。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過，流程結束後兩者都能清掉它。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
 
 ## Evidence
 
@@ -161,7 +163,7 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
 node .claude/skills/verify/scripts/verify.mjs sweep                        # 刪除 server 已不在的 scratch 目錄
 ```
 
-`stop` 以 SIGTERM 讓 runtime 正常關閉（含 Meilisearch），30 秒內沒結束才對同一程序群組送 SIGKILL。流程腳本中途 crash 時，server 仍在跑：用 `doctor` 看哪個 slot 被占、拿 `runDir` 跑 `stop`。每次失敗的嘗試之後都要 stop，避免留下程序與 port。清理不刪 `.local/ticket-artifacts/`。
+`stop` 對 server 的程序群組送 SIGTERM，讓 runtime 正常關閉（含 Meilisearch），等到群組內沒有程序；30 秒內沒結束才送 SIGKILL。流程腳本中途 crash 時，server 仍在跑：用 `doctor` 看哪個 slot 被占、拿 `runDir` 跑 `stop`。`launch` 失敗時會結束自己的 server 並釋放 slot，run 目錄留著供診斷，之後由 `sweep` 清掉。每次失敗的嘗試之後都要 stop，避免留下程序與 port。清理不刪 `.local/ticket-artifacts/`。
 
 ## 平台
 

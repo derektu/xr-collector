@@ -6,17 +6,25 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { sleep } from './wait.mjs';
 
+/** What the UI shows once loaded: a page of the app, or Onboarding while no Vault is ready. */
+export const LOADED = '[data-testid^="page-"], .onboarding-screen';
+
 /** A headless page on the instance's UI, zh-TW, Taipei time, dark scheme by default. */
 export async function openPage(instance, { viewport = { width: 1280, height: 860 }, colorScheme = 'dark', route = '/' } = {}) {
   const browser = await chromium.launch();
-  const context = await browser.newContext({ viewport, locale: 'zh-TW', timezoneId: 'Asia/Taipei', colorScheme });
-  const page = await context.newPage();
-  const consoleErrors = [];
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-  page.on('pageerror', (error) => consoleErrors.push(String(error)));
-  await page.goto(`${instance.url}${route}`);
-  await page.locator('[data-testid^="page-"]').first().waitFor({ timeout: 30_000 });
-  return { browser, context, page, consoleErrors, close: () => browser.close() };
+  try {
+    const context = await browser.newContext({ viewport, locale: 'zh-TW', timezoneId: 'Asia/Taipei', colorScheme });
+    const page = await context.newPage();
+    const consoleErrors = [];
+    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+    page.on('pageerror', (error) => consoleErrors.push(String(error)));
+    await page.goto(`${instance.url}${route}`);
+    await page.locator(LOADED).first().waitFor({ timeout: 30_000 });
+    return { browser, context, page, consoleErrors, close: () => browser.close() };
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
 }
 
 /**
