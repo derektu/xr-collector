@@ -212,8 +212,8 @@ describe('manual retry (A-T9)', () => {
     expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id, scope: { trigger: 'subscribe' } });
     const done = await manager.whenSettled(retried.job.id);
     expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
-    expect(subs.of('subscribed')).toEqual([expect.objectContaining({ id: done.result!.channelId, outcome: 'created' })]);
-    expect(subs.get('youtube', done.result!.channelId!)!.settings).toEqual(settings);
+    expect(subs.of('subscribed')).toEqual([expect.objectContaining({ id: done.result!.subscriptionId, outcome: 'created' })]);
+    expect(subs.get('youtube', done.result!.subscriptionId!)!.settings).toEqual(settings);
   });
 
   it('checks the subscription of a failed channel job now, and follows its pause or removal', async () => {

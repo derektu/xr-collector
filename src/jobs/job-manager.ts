@@ -472,7 +472,7 @@ export class JobManager {
         const subscribing = job.checkpoint?.subscribing;
         return {
           jobId: job.id, url: job.source.url,
-          targetId: job.result?.channelId ?? subscribing?.channelId ?? null,
+          targetId: job.result?.subscriptionId ?? subscribing?.subscriptionId ?? null,
           title: job.source.title ?? subscribing?.title ?? null,
           waiting: job.state !== 'running' || Boolean(job.wait),
         };
@@ -819,11 +819,11 @@ export class JobManager {
         checkJobs.push(job);
       }
       const subscribing = role === 'add' ? job.checkpoint?.subscribing : undefined;
-      if (subscribing && await this.subscriptions.stopped(job.source.type, subscribing.channelId) !== 'subscription_removed') {
+      if (subscribing && await this.subscriptions.stopped(job.source.type, subscribing.subscriptionId) !== 'subscription_removed') {
         // The subscription was written before the stop; its first check is dispatched now, before the
         // scheduler can start a check of the same subscription, so that check joins it.
         const restored = this.restore(job, { queue: false });
-        await this.subscribeResolved(restored, { id: subscribing.channelId, title: subscribing.title, url: subscribing.url });
+        await this.subscribeResolved(restored, { id: subscribing.subscriptionId, title: subscribing.title, url: subscribing.url });
         continue;
       }
       this.restore(job);
@@ -1291,7 +1291,7 @@ export class JobManager {
     // A job interrupted while subscribing already knows its target and may have added it.
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
-      ? { id: subscribing.channelId, title: subscribing.title, url: subscribing.url }
+      ? { id: subscribing.subscriptionId, title: subscribing.title, url: subscribing.url }
       : this.options.recentTarget?.(job.source.type, job.source.url) ?? await plugin.resolveTarget!(job.source.url, { signal });
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
@@ -1308,7 +1308,7 @@ export class JobManager {
       beforeCreate: async () => {
         this.update(job, {
           source: { ...job.source, id: target.id, title: target.title },
-          checkpoint: { ...job.checkpoint, subscribing: { channelId: target.id, title: target.title, url: target.url } },
+          checkpoint: { ...job.checkpoint, subscribing: { subscriptionId: target.id, title: target.title, url: target.url } },
         });
         await this.options.store.flush();
       },
@@ -1316,7 +1316,7 @@ export class JobManager {
     const { subscription, check } = result;
     this.update(job, { source: { ...job.source, id: subscription.id, title: subscription.title } });
     this.finish(job, 'completed', {
-      outcome: result.outcome, channelId: subscription.id, ...(check ? { followUpJobId: check.job.id } : {}),
+      outcome: result.outcome, subscriptionId: subscription.id, ...(check ? { followUpJobId: check.job.id } : {}),
     }, null);
   }
 
@@ -1572,7 +1572,7 @@ export class JobManager {
   private subscriptionOf(job: CollectionJob): string | null {
     const role = roleOf(job);
     if (role === 'check') return job.source.id;
-    if (role === 'add') return job.result?.channelId ?? job.checkpoint?.subscribing?.channelId ?? null;
+    if (role === 'add') return job.result?.subscriptionId ?? job.checkpoint?.subscribing?.subscriptionId ?? null;
     if (!job.parentId) return null;
     const parent = this.jobs.get(job.parentId) ?? this.options.store.get(job.parentId);
     return parent && roleOf(parent) === 'check' ? parent.source.id : null;

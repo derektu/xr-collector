@@ -62,7 +62,7 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   });
   const subscribe = async (name: string): Promise<{ id: string; first: CollectionJob }> => {
     const added = await jobs.whenSettled((await channels.add(`@${name}`)).job.id);
-    return { id: added.result!.channelId!, first: await jobs.whenSettled(added.result!.followUpJobId!) };
+    return { id: added.result!.subscriptionId!, first: await jobs.whenSettled(added.result!.followUpJobId!) };
   };
   const status = async (id: string) => (await channels.listSubscriptions()).find((subscription) => subscription.id === id)!.checkStatus;
   return {
