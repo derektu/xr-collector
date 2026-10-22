@@ -41,6 +41,8 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 機器缺少必要平台時，該平台維持「待驗證」。Windows 開發者可先完成共用與 Windows 案例，再找 Mac 補 Mac 案例；反向亦同。
 
+開發中需求或 scenario 有變動時，先更新 issue 的驗收計畫與預期並記錄原因，再驗證對應的版本。無法執行的 scenario 標為未驗證，不以 build 成功或舊截圖宣稱通過。
+
 ## 2. 執行
 
 依 verify skill 啟動隔離的 instance、執行流程腳本並清理。port、資料目錄、受測版本、程序辨識與證據位置都由 skill 定義。
@@ -57,6 +59,8 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 會開啟原生對話框的 scenario（例如選擇資料夾、選擇備份檔），以 verify skill 的 `stubDialogs` 在主程序替換 `dialog.showOpenDialog`、`dialog.showSaveDialog` 的回應，回傳 run 目錄內的路徑並記錄呼叫參數，不開啟真的對話框。替換後證明的是 App 對對話框參數與結果的處理，不證明原生對話框本身；驗證對話框的外觀、預設路徑或平台提示時不替換，以原生截圖為證據。
 
+平台功能（Tray／選單列、登入自啟、更新等）同樣要能由流程查詢與觸發：主程式提供只在驗證模式開啟的控制通道，以環境變數開關，正式使用時不開啟；verify skill 的函式庫提供對應的呼叫方式。只有正確與否取決於作業系統畫面的項目，例如圖示確實出現在選單列、安裝程式與系統安全提示的畫面，才在驗收計畫標為實機目視，數量盡量少。
+
 以下情況關閉背景模式，並在 issue 的驗收計畫註明執行時會跳出視窗：
 
 - scenario 驗證的是視窗顯示、聚焦、Dock、Tray／選單列本身。
@@ -69,7 +73,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 開 PR 前，開 PR 的人逐條對照 `results.json` 與回報：每個 scenario 的 checks、observations 與記錄的狀態序列，以及功能檔不符的項目。結果檔裡有、回報卻沒提的不一致，先依第 2 節判斷，再補進 PR 的待決定問題。這一步不依賴實作 session 的自我檢查，因為它看漏的通常就是它沒意識到的地方。
 
-證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。同一票重跑時只留最新的證據。PR 描述的驗證段落列出：
+證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。同一個 label 重跑時，verify skill 改用下一個編號的子目錄，先前的證據保留；回報引用證據時寫實際的子目錄名。PR 描述的驗證段落列出：
 
 - 需求平台與實際驗證的平台、OS 與架構
 - 每個 scenario 的層級、資料模式、結果（pass／fail／blocked）與實際觀察

@@ -4,6 +4,10 @@
 
 新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為 [Round 2 計畫](docs/round-2-plan.md)、[產品範圍](docs/product-brief.md)、當前 issue 及其引用的規格。`docs/history/mvp-plan.md` 是第一輪歷史，`docs/research/README.md` 只供後續選型查閱。驗收 scenario 在實作前記錄於 issue；依 scenario 實際操作與比對，不能用 build 成功取代行為驗收。
 
+issue 只寫本票特有的內容：問題、預期行為、本票的驗收計畫與相依關係。適用每張票的規則寫在本檔與 [開發驗證流程](docs/development-validation.md)，不複製進 issue 或派工說明；規則改變時只改這兩處。
+
+所有新增或修改的業務 API 同時供 UI 與已授權 Agent 使用；Agent Skill、錯誤、工作狀態與必要的持久事件隨該票同步更新。
+
 App 尚未 release，本機存的資料（例如 `jobs.json`、設定）不保證跨版本相容。改資料格式或欄位名時，程式只讀寫目前的格式，不寫舊格式的轉換或相容層，也不留指稱舊格式的命名與註解；格式不相容的本機資料直接刪除。寫 issue 的預期行為與驗收計畫時，同樣不列升級相容或舊紀錄接續。
 
 自動檢查使用 `npm run verify`。測試按功能分目錄，分類、真實引擎測試與平台 skip 邊界見 [測試說明](tests/README.md)。
