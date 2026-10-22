@@ -48,7 +48,7 @@ describe('document presentation', () => {
         ],
       }],
     });
-    expect(menu.all).toEqual({ value: '', label: '全部頻道（4）' });
+    expect(menu.all).toEqual({ value: '', label: '全部（4）' });
     expect(menu.groups[0]!.options).toEqual([
       { value: 'youtube', label: 'YouTube・全部（4）' },
       { value: 'youtube:UC-a', label: '頻道 A（2）' },

@@ -112,7 +112,7 @@ export function collectionRecord(
     if (collected.has(key)) continue;
     const reason = definition?.failureLabels?.[failure.errorCode] ?? '收集失敗';
     const common = {
-      at: failure.failedAt, key, title: failure.title, url: definition?.item.urlForKey(key) ?? '', errorCode: failure.errorCode, reason,
+      at: failure.failedAt, key, title: failure.title, url: failure.url ?? definition?.item.urlForKey?.(key) ?? '', errorCode: failure.errorCode, reason,
       attempts: failure.attempts,
     };
     entries.push(failure.skipped

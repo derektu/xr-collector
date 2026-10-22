@@ -181,7 +181,7 @@ export function Documents({ state, revision, scroller, onState, onOpen, onNaviga
         {draft ? <button type="button" className="search-clear" aria-label="清除搜尋" onClick={() => { setDraft(''); onState({ ...state, query: '', page: 1 }); }}>×</button> : null}
       </label>
       <label className="source-select">
-        <span className="visually-hidden">頻道</span>
+        <span className="visually-hidden">篩選文件</span>
         <Icon name="sources" size={15} />
         <select value={state.source} onChange={(event) => onState({ ...state, source: event.target.value, page: 1 })} data-testid="documents-source">
           <option value={options.all.value}>{options.all.label}</option>

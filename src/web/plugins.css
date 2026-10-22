@@ -1,5 +1,7 @@
 /* Badge colors of each source type's icon, by theme. */
-[data-theme="duskblue"] { --badge-youtube-bg:#2a1e2a; --badge-youtube-fg:#ff7a7a; }
-[data-theme="silverblue"] { --badge-youtube-bg:#fbe5e5; --badge-youtube-fg:#c62828; }
+[data-theme="duskblue"] { --badge-youtube-bg:#2a1e2a; --badge-youtube-fg:#ff7a7a; --badge-rss-bg:#2e2418; --badge-rss-fg:#ffa94d; }
+[data-theme="silverblue"] { --badge-youtube-bg:#fbe5e5; --badge-youtube-fg:#c62828; --badge-rss-bg:#fdebd8; --badge-rss-fg:#c25e00; }
 .type-badge.type-youtube { color:var(--badge-youtube-fg); background:var(--badge-youtube-bg); }
 .log-type.type-youtube { color:var(--badge-youtube-fg); }
+.type-badge.type-rss { color:var(--badge-rss-fg); background:var(--badge-rss-bg); }
+.log-type.type-rss { color:var(--badge-rss-fg); }

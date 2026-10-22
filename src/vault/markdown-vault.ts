@@ -4,7 +4,7 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
 import { sourceDefinition, sourceDefinitions } from '../core/source-registry.js';
-import type { DocumentMetadata, SavedDocument } from '../core/types.js';
+import type { ContentExtent, DocumentMetadata, SavedDocument } from '../core/types.js';
 import { CollectorError } from '../core/types.js';
 import type { CapturedDocument } from '../plugins/types.js';
 import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
@@ -28,7 +28,7 @@ interface StoredMetadata {
     publisher_id?: string;
     published_at?: string;
     collected_at: string;
-    content_extent: 'full';
+    content_extent: ContentExtent;
     source_tags: [];
     [field: string]: unknown;
   };
@@ -85,6 +85,7 @@ function toSavedDocument(metadata: StoredMetadata, bodyMarkdown: string): SavedD
     },
     publishedAt: metadata.collector.published_at ?? null,
     collectedAt: metadata.collector.collected_at,
+    contentExtent: metadata.collector.content_extent === 'summary' ? 'summary' : 'full',
     ...(details ? { [sourceType]: details } : {}),
     bodyMarkdown,
   };
@@ -168,7 +169,7 @@ export class MarkdownVault implements DocumentVault {
         source_id: capture.key,
         publisher: capture.publisher.name,
         collected_at: collectedAt,
-        content_extent: 'full',
+        content_extent: capture.contentExtent ?? 'full',
         ...definition.frontmatter.write(capture.details),
         source_tags: [],
       },
@@ -196,8 +197,8 @@ export class MarkdownVault implements DocumentVault {
   }
 
   /**
-   * Metadata of every visible document of every registered source type, without bodies, newest
-   * collection first. Only files named `documents/<source type>/<source ID>.md` with a valid source
+   * Metadata of every visible document of every registered source type, without bodies or content
+   * extent, newest collection first. Only files named `documents/<source type>/<source ID>.md` with a valid source
    * ID are documents; any other file belongs to someone else and is not read. A document file that
    * cannot be read fails the listing with a `DocumentFileError`.
    */
@@ -224,7 +225,7 @@ export class MarkdownVault implements DocumentVault {
       const batch = await Promise.all(relatives.slice(start, start + READ_CONCURRENCY).map((relative) => this.readListed(relative)));
       for (const document of batch) {
         if (!document || hidden(document, deletions)) continue;
-        const { bodyMarkdown: _body, ...rest } = document;
+        const { bodyMarkdown: _body, contentExtent: _extent, ...rest } = document;
         // A copy, because strings parsed out of the file can keep the whole file text in memory.
         metadata.push(structuredClone(rest));
       }

@@ -102,8 +102,8 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       {state.kind === 'deleted' ? <section className="reader-missing" data-testid="reader-deleted">
         <h1 className="reader-title">這份文件已刪除</h1>
         {recollect.kind === 'failed' ? <p className="add-problem" role="alert">{recollect.message}</p> : null}
-        <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
-          data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button>
+        {sourceUrlOfDocumentId(id) ? <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
+          data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button> : null}
       </section> : null}
       {state.kind === 'error' ? <p className="documents-error" role="alert">{state.message}</p> : null}
       {state.kind === 'ready' ? <ReaderDocument document={state.document} subscribed={subscribed.has(`${state.document.sourceType}:${state.document.publisher.id}`)} onOpenSource={onOpenSource} /> : null}

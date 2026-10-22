@@ -166,7 +166,7 @@ describe('documents HTTP contract', () => {
       }],
     });
 
-    for (const query of ['channel=%E5%90%8C%E5%90%8D%E9%A0%BB%E9%81%93', 'publisherId=UC-a', 'sourceType=rss', 'sourceType=youtube&publisherId=']) {
+    for (const query of ['channel=%E5%90%8C%E5%90%8D%E9%A0%BB%E9%81%93', 'publisherId=UC-a', 'sourceType=web', 'sourceType=youtube&publisherId=']) {
       const response = await app.inject(`/api/documents?${query}`);
       expect([response.statusCode, response.json().error.code]).toEqual([400, 'invalid_request']);
     }

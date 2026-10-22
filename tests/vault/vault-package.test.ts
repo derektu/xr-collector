@@ -216,7 +216,7 @@ describe('refusing packages (PKG-03)', () => {
     await refused(await zipOf([{ name: 'settings/youtube-schedule.json', data: '{}' }, { name: 'settings/YouTube-schedule.json', data: '{}' }, { name: MANIFEST, data: '{}' }]), '大小寫');
     await refused(Buffer.from(JSON.stringify({ format: 'xr-collector-vault', version: 3, files: [] })), 'zip');
     await refused(Buffer.from('not a package'), 'zip');
-    await refused(await packageOf([], { formatVersion: 2 }), '格式版本');
+    await refused(await packageOf([], { formatVersion: 3 }), '格式版本');
     await refused(await packageOf([], { format: 'xr-collector-vault' }), '不是 XR Collector');
     await refused(await zipOf([{ name: 'documents/youtube/dQw4w9WgXcQ.md', data: 'x' }]), 'manifest.json');
   });

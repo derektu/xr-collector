@@ -51,7 +51,6 @@ export const DOCUMENT_ADD_ITEMS: readonly AddMenuItem[] = [
 export const PLANNED_SUBSCRIPTION_TYPES: readonly { type: string; label: string }[] = [
   { type: 'x', label: 'X 帳號' },
   { type: 'facebook', label: 'Facebook 粉專' },
-  { type: 'rss', label: 'RSS' },
 ];
 
 /** The menu item of a registered subscription kind. */
@@ -94,7 +93,7 @@ export function addPlaceholder(mode: AddMode): string {
 
 /** The body of the dialog an unsupported item opens. */
 export function unsupportedText(item: Pick<AddMenuItem, 'label'>): string {
-  // A Latin name is set off from the Chinese text by a space, as in 「目前還不支援 RSS。」.
+  // A Latin name is set off from the Chinese text by a space, as in 「目前還不支援 X 帳號。」.
   return `目前還不支援${/^[A-Za-z]/u.test(item.label) ? ' ' : ''}${item.label}。`;
 }
 
@@ -106,12 +105,12 @@ export interface AddMismatch {
 }
 
 /**
- * Whether the recognized address belongs in the other add dialog. Only the kind decides, so a
+ * Whether the recognized address belongs in the other add dialog. The kind decides, so a
  * subscription address whose preview is unavailable, such as during a source's cooldown, still
- * offers the switch.
+ * offers the switch; an address its type found is no target of that kind offers none.
  */
-export function addMismatch(mode: AddMode, recognition: Pick<UrlRecognition, 'kind'> & Partial<Pick<UrlRecognition, 'sourceType'>>): AddMismatch | null {
-  if (!recognition.kind) return null;
+export function addMismatch(mode: AddMode, recognition: Pick<UrlRecognition, 'kind'> & Partial<Pick<UrlRecognition, 'sourceType' | 'status'>>): AddMismatch | null {
+  if (!recognition.kind || recognition.status === 'unsupported') return null;
   const owner = recognition.sourceType ? sourceDeclaration(recognition.sourceType) : undefined;
   const declarations = owner ? [owner] : sourceDeclarations();
   const found = declarations.flatMap((declaration) => declaration.kinds

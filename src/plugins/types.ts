@@ -1,4 +1,5 @@
 import type {
+  ContentExtent,
   DocumentMetadata,
   JobPhase,
   SourceTypeInfo,
@@ -49,6 +50,8 @@ export interface CapturedItem {
   publisher: { id: string | null; name: string };
   publishedAt: string | null;
   bodyMarkdown: string;
+  /** How much of the item the body holds; `full` when omitted. */
+  contentExtent?: ContentExtent;
   /** The type-specific details the document carries under a field named after its source type. */
   details: Record<string, unknown> | null;
 }
@@ -75,6 +78,8 @@ export interface RequestContext {
   priority?: 'interactive' | 'background';
   /** A capture skips an item published earlier than this time with `out_of_range`, before downloading its content. */
   publishedNotBefore?: string;
+  /** For a capture of an item a subscription check found: that subscription's target. */
+  subscription?: SubscriptionTarget;
 }
 
 /** What a pasted address asks for: one item, or a subscription to the address it normalizes to. */
@@ -100,8 +105,11 @@ export interface ItemDeclaration {
   keyPattern: RegExp;
   /** The frontmatter `type` of the type's documents. */
   documentType: string;
-  /** The canonical address of an item. */
-  urlForKey(key: string): string;
+  /**
+   * The canonical address of an item, for a type whose keys determine it. Without it, an item's
+   * address is known only from the listing or capture that reported it.
+   */
+  urlForKey?(key: string): string;
   /** The reader's link to the item at its source. */
   openOriginalLabel: string;
 }

@@ -22,9 +22,9 @@ describe('add menus (N75-T2)', () => {
   it('lists every item of both menus and marks the ones not supported yet', () => {
     expect(DOCUMENT_ADD_ITEMS.map((item) => [item.label, item.mode])).toEqual([['網址', 'url'], ['檔案', null], ['寫筆記', null]]);
     expect(subscriptionAddItems().map((item) => [item.label, item.mode])).toEqual([
-      ['YouTube 頻道', 'youtube-channel'], ['X 帳號', null], ['Facebook 粉專', null], ['RSS', null],
+      ['YouTube 頻道', 'youtube-channel'], ['RSS', 'rss-feed'], ['X 帳號', null], ['Facebook 粉專', null],
     ]);
-    expect(addDialogTitles()).toEqual({ url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道' });
+    expect(addDialogTitles()).toEqual({ url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道', 'rss-feed': '訂閱 RSS' });
   });
 
   it('names the unsupported dialog after its item', () => {
@@ -34,7 +34,6 @@ describe('add menus (N75-T2)', () => {
     };
     expect(dialog(subscriptionAddItems(), 'facebook')).toEqual(['訂閱 Facebook 粉專', '目前還不支援 Facebook 粉專。']);
     expect(dialog(subscriptionAddItems(), 'x')).toEqual(['訂閱 X 帳號', '目前還不支援 X 帳號。']);
-    expect(dialog(subscriptionAddItems(), 'rss')).toEqual(['訂閱 RSS', '目前還不支援 RSS。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'file')).toEqual(['加入檔案', '目前還不支援檔案。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'note')).toEqual(['寫筆記', '目前還不支援寫筆記。']);
   });
@@ -61,6 +60,12 @@ describe('add dialog mismatch (N75-T3)', () => {
   it('offers the switch for a channel whose preview a YouTube cooldown made unavailable', () => {
     const cooling = recognition({ status: 'unavailable', kind: 'channel', kindLabel: 'YouTube 頻道', message: 'YouTube 暫時限制連線。' });
     expect(addMismatch('url', cooling)?.switchTo).toBe('youtube-channel');
+  });
+
+  it('offers no switch for an address its type found is no subscription target', () => {
+    const notFeed = recognition({ status: 'unsupported', sourceType: 'rss', kind: 'feed', kindLabel: 'RSS', message: '這個網址沒有 RSS feed。' });
+    expect(addMismatch('url', notFeed)).toBeNull();
+    expect(isUnsupportedUrl(notFeed)).toBe(false);
   });
 
   it('says nothing when the kind matches the dialog', () => {

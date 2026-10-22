@@ -15,6 +15,12 @@ export interface DocumentPublisher {
  */
 export interface DocumentDetails {}
 
+/**
+ * How much of the item a document body holds: `full` for the whole content, `summary` for only the
+ * summary the source offers.
+ */
+export type ContentExtent = 'full' | 'summary';
+
 /** Source-independent document fields shared by browse, search and read. */
 export interface DocumentMetadata extends DocumentDetails {
   id: string;
@@ -27,6 +33,8 @@ export interface DocumentMetadata extends DocumentDetails {
   publisher: DocumentPublisher;
   publishedAt: string | null;
   collectedAt: string;
+  /** Set on a document read from the Vault; browse and search results leave it out. */
+  contentExtent?: ContentExtent;
 }
 
 export interface SavedDocument extends DocumentMetadata {
@@ -161,7 +169,9 @@ export interface ItemFailureEntry {
   failedAt: string;
   /** True once the item reached the attempt limit or failed in a way no retry changes; checks no longer try it. */
   skipped: boolean;
-  [keyField: string]: string | number | boolean;
+  /** The item's address, kept for a source type whose keys do not determine it. */
+  url?: string;
+  [keyField: string]: string | number | boolean | undefined;
 }
 
 /**

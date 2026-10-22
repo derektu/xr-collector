@@ -59,11 +59,11 @@ export interface SourceOptionGroup {
 }
 
 /**
- * One grouped menu: every channel, then per source type its own "all" entry followed by its
+ * One grouped menu: every document, then per source type its own "all" entry followed by its
  * publishers. A publisher whose subscription was removed is marked; one only added item by item is not.
  */
 export function sourceOptions(sources: DocumentSources | null): { all: SourceOption; groups: SourceOptionGroup[] } {
-  const all = { value: '', label: `全部頻道（${sources?.total ?? 0}）` };
+  const all = { value: '', label: `全部（${sources?.total ?? 0}）` };
   const groups = (sources?.groups ?? []).map((group) => ({
     label: group.label,
     options: [
@@ -184,11 +184,14 @@ export function pageWithRows(page: number, rowsOnPage: number, total: number): n
   return rowsOnPage === 0 && page > 1 ? Math.min(page - 1, totalPages(total)) : page;
 }
 
-/** The source address of a document ID, for collecting a deleted document again; null for an unknown ID. */
+/**
+ * The source address of a document ID, for collecting a deleted document again; null for an unknown
+ * ID and for a type whose keys do not determine an address.
+ */
 export function sourceUrlOfDocumentId(id: string): string | null {
   const separator = id.indexOf(':');
   if (separator < 0) return null;
   const item = sourceDeclaration(id.slice(0, separator))?.item;
   const key = id.slice(separator + 1);
-  return item && item.keyPattern.test(key) ? item.urlForKey(key) : null;
+  return item?.urlForKey && item.keyPattern.test(key) ? item.urlForKey(key) : null;
 }

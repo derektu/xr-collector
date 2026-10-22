@@ -27,7 +27,9 @@ export interface SourceTypeDeclaration extends SourceTypeInfo {
 /**
  * The recognition of a source plugin's addresses: a single item offers to collect it, and a
  * subscription address is resolved now to offer subscribing, or resuming a paused subscription.
- * The actions call the routes every source type shares.
+ * An address the type finds is no subscription target (`invalid_subscription`) is `unsupported`;
+ * one it cannot resolve for now, such as during a cooldown, is `unavailable`. The actions call the
+ * routes every source type shares.
  */
 export function recognizingSourceType(declaration: SourcePluginDeclaration): SourceTypeDeclaration {
   const type = declaration.id;
@@ -63,7 +65,8 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
         preview = await context.previewSubscription(type, classified.url);
       } catch (error) {
         if (error instanceof CollectorError) {
-          return { ...base('unavailable', classified.url), sourceType: type, kind, kindLabel, message: error.message };
+          const status = error.code === 'invalid_subscription' ? 'unsupported' : 'unavailable';
+          return { ...base(status, classified.url), sourceType: type, kind, kindLabel, message: error.message };
         }
         throw error;
       }

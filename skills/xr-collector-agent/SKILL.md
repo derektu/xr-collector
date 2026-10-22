@@ -51,11 +51,27 @@ GET /api/jobs/<job-id>
 Authorization: Bearer <token>
 ```
 
+```http
+POST /api/subscription-previews
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"url":"https://blog.example.com/"}
+```
+
+```http
+PATCH /api/subscriptions/rss/<subscription-id>
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"settings":{"backfillWindow":"3m","backfillMaxItems":20}}
+```
+
 文件 ID 僅為格式範例；實際操作請使用 browse/search 回傳的 ID。
 
 ## 操作與判讀
 
-- 文件欄位不分類型：`id`（穩定 ID，例如 `youtube:<videoId>`）、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`（`id`、`name`；舊文件的 `id` 可能是 null）、`publishedAt`（未知為 null）、`collectedAt`。字幕語言與人工／自動字幕只在 YouTube 文件的 `youtube`（`languageCode`、`languageName`、`subtitleKind`）。
+- 文件欄位不分類型：`id`（穩定 ID，例如 `youtube:<videoId>`、`rss:<key>`）、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`（`id`、`name`；舊文件的 `id` 可能是 null）、`publishedAt`（未知為 null）、`collectedAt`。`GET /api/documents/:id` 另有 `contentExtent`：`full` 為完整內容，`summary` 為只有摘要（RSS feed 只提供摘要的文章）。字幕語言與人工／自動字幕只在 YouTube 文件的 `youtube`（`languageCode`、`languageName`、`subtitleKind`）。
 - 文件篩選使用穩定 ID：`sourceType`（目前為 `youtube`）與 `publisherId`（頻道 ID；沒有頻道 ID 的舊文件用 `none`），`publisherId` 必須搭配 `sourceType`。browse 與 search 接受相同篩選。頻道名稱只是顯示文字，`channel` 參數回 400 `invalid_request`。`GET /api/documents/sources` 回傳 `sources.total` 與 `sources.groups`：每種類型的 `count` 及 `publishers`（`id`、`name`、`count`、`subscribed`、`removed`）。`subscribed: false` 表示頻道不在訂閱清單，包括已移除訂閱及只以單支影片收集的頻道，`null` 表示無頻道 ID；`removed: true` 表示該頻道的訂閱已移除、文件保留，名稱取自移除紀錄。這份統計直接讀 Vault，不受搜尋索引狀態影響。
 - Browse 回傳 `documents`、`total`、`offset`、`limit`、`nextOffset`；每份文件附 `excerpt`（正文開頭的純文字，不是摘要）。把下一頁的 `offset` query 設為 `nextOffset`，直到回傳 null。依收集時間新到舊、同時間依 ID 排序；收集中翻頁可能遇到移動的結果，跨頁以 ID 去重。
 - Search 使用 `q` query，支援上述篩選、`publishedFrom`／`publishedTo`（YYYY-MM-DD）、`offset`、`limit`；`offset` 必須是 `limit` 的整數倍。依相關度排序，回傳 `hits`、`total`（精確命中數，最多計到 10000）、`offset`、`limit`。`hits[].snippet` 是命中附近的片段，命中詞以 `<mark>`／`</mark>` 標出，引用時去掉標記。列表可瀏覽全部文件。空結果只表示此條件目前沒有命中。
@@ -119,14 +135,21 @@ Authorization: Bearer <token>
 - `PATCH /api/subscriptions/:type/:id` `{"enabled":false}` 暫停：排隊中的頻道工作與尚未開始的影片結束為 `skipped`，正在擷取的影片會完成保存。`{"enabled":true}` 恢復並立即檢查，回傳 `{"subscription":...,"submission":...}`。`DELETE` 移除訂閱，query `documents` 為 `keep`（預設，文件保留）或 `delete`（先替該訂閱正在擷取的影片寫入刪除紀錄，之後擷取完成也不保存；再等這些擷取與單支影片加入完成，最多約 30 秒，逐份刪除該訂閱的文件，與 `DELETE /api/documents/:id` 相同，每份都留下刪除紀錄與 `document.deleted` 事件；超過時間才完成的單支影片加入若屬於該訂閱，完成時刪除），其他值回 400 `invalid_request`；回傳 `{"removed":true,"documentsKept":N,"documentsDeleted":M,"documentsFailed":K}`，`documentsDeleted` 是實際刪掉的文件數：擷取中的影片若在刪除紀錄寫入前已保存，會被刪除並計入；被刪除紀錄擋下、沒有保存的不計入。`documentsFailed` 是刪不掉而保留的文件數，移除本身仍完成並記錄 `subscription.removed`。一併刪除前先向使用者確認文件數；訂閱的 `capturing: true` 表示還有影片在擷取，即使文件數為 0 也可能留下文件。暫停與移除在服務重啟後維持原狀。
 - `POST /api/subscription-checks` 不帶 body 時立即檢查所有類型中啟用中的訂閱，並從此刻重算下次自動檢查；帶 `{"subscriptions":[{"type":"...","id":"..."}]}` 只檢查指定訂閱，任一訂閱不存在回 404 `subscription_not_found`、暫停中回 409 `subscription_paused`，此時不開始任何檢查。兩者都回傳 202 `{"submissions":[{"job":...,"deduplicated":...}]}`，並把被檢查訂閱的下一次檢查移到此刻加上各自的頻率。
 
+### RSS
+
+- RSS 只有訂閱，沒有單篇收集。訂閱網址可以是 RSS 2.0、RSS 1.0 或 Atom feed 的網址，也可以是以 `<link rel="alternate">` 宣告 feed 的網站網址；沒有其他類型接受的 http(s) 網址都交給 RSS 辨識，預覽時連線查詢，找不到 feed 時辨識結果為 `unsupported`，訂閱回 400 `invalid_subscription`（「這個網址沒有 RSS feed。」）。`POST /api/items` 對 RSS 網址回 400 `invalid_url`。
+- 訂閱的 `type` 為 `"rss"`，`id` 由 feed 網址算出；`preview.target.url` 是實際的 feed 網址，以它訂閱。設定欄位與 YouTube 相同：`intervalMinutes`、`backfillWindow`、`backfillMaxItems`，新訂閱預設 60 分、`1m`、10 篇。每次檢查讀一次 feed，依發布時間取範圍內最新的文章；沒有發布時間的文章視為最新。文章內容取自 feed，HTML 轉為 Markdown，圖片保留為遠端連結。
+- 文章以 feed 內的 guid（Atom 為 `id`）識別，沒有時依序用文章網址、標題加發布時間；同一篇文章出現在兩個 RSS 訂閱時各存一份。文件 ID 為 `rss:<16 位十六進位>`，`publisher` 是 feed 名稱與訂閱 ID。訂閱的 `outOfRange`、`failures` 以 `articleKey` 記文章，`failures` 另帶 `url`。
+- 錯誤碼：`network_error`（連線失敗、逾時或網站 5xx，自動重試）、`rate_limited`（網站回 429，所有 RSS 訂閱共用的 `rss` 請求通道冷卻，`GET /api/pacing` 的 `group` 為 `rss`）、`feed_not_found`（404、410）、`feed_unavailable`（其他拒絕或內容超過 5 MB）、`feed_invalid`（不是可讀的 feed）、`article_missing`（文章已不在 feed）。後四者讓該次檢查失敗或該篇文章留到下次檢查再試。
+
 ## 訂閱清單與網址辨識
 
-- `GET /api/source-types` 回傳 `sourceTypes`：每種類型的 `id`（目前只有 `youtube`）、`label`、`icon`、`kinds`（`id`、`label`、`capability`：`single` 單篇收集或 `subscription` 訂閱、`itemNoun`）、`requiresLogin` 與每個訂閱的收集設定欄位 `settings`（`key`、`label`、`options`、`default`）。
-- 使用者貼上網址而不確定要做什麼時，先呼叫 `POST /api/url-recognitions` `{"url":"..."}`。只有缺少或空白的 `url` 回 400 `invalid_request`；其他情況一律回 200 的 `recognition`。沒有 scheme 的 YouTube 網址（`youtube.com/watch?v=…`、`youtu.be/…`、`www.youtube.com/@…`）視為 https://，`recognition.url` 是補上 scheme 後的網址；其他沒有 scheme 的字串為 `unsupported`。以 `status` 判讀：
+- `GET /api/source-types` 回傳 `sourceTypes`：每種類型的 `id`（`youtube`、`rss`）、`label`、`icon`、`kinds`（`id`、`label`、`capability`：`single` 單篇收集或 `subscription` 訂閱、`itemNoun`）、`requiresLogin` 與每個訂閱的收集設定欄位 `settings`（`key`、`label`、`options`、`default`）。
+- 使用者貼上網址而不確定要做什麼時，先呼叫 `POST /api/url-recognitions` `{"url":"..."}`。只有缺少或空白的 `url` 回 400 `invalid_request`；其他情況一律回 200 的 `recognition`。沒有 scheme 的 YouTube 網址（`youtube.com/watch?v=…`、`youtu.be/…`、`www.youtube.com/@…`）視為 https://，`recognition.url` 是補上 scheme 後的網址；其他沒有 scheme、但形如網域加路徑的字串（`example.com/blog`）同樣補上 https:// 交給 RSS；其餘為 `unsupported`。以 `status` 判讀：
   - `ready`：可操作。`kind` 為 `video` 或 `channel`，`target` 是影片或頻道（影片不連線查詢，`title` 為 null）。頻道會同步解析（最多約 60 秒），`subscription` 是既有訂閱（`id`、`enabled`、`settings`），`settings` 是新訂閱的預設設定，`autoCollection` 是自動檢查總開關。
   - `login_required`：該類型需要登入，`login` 說明要登入的服務；目前沒有這類網址。
-  - `unsupported`：播放清單、其他網站或不是網址，`message` 說明原因。
-  - `unavailable`：頻道無法解析或連線逾時，`message` 說明原因，可稍後重試。
+  - `unsupported`：播放清單、不是 http(s) 網址、不是網址，或該類型確認網址不是可訂閱的目標（不存在的頻道、沒有 feed 的網頁；此時 `sourceType` 仍是該類型），`message` 說明原因。
+  - `unavailable`：暫時無法解析，例如連線逾時或冷卻中，`message` 說明原因，可稍後重試。
 - `recognition.actions` 列出可做的動作：`collect`（收集單篇，`POST /api/items`）、`subscribe`（訂閱，`POST /api/subscriptions`）、`resume`（恢復已暫停的訂閱，`PATCH /api/subscriptions/:type/:id`）。每個動作附 `request`（`method`、`path`、`body`），向使用者確認後照原樣送出即可。已訂閱且啟用中的目標沒有動作。
 - `GET /api/subscriptions` 回傳 `subscriptions`（每個訂閱一筆，欄位見「訂閱與自動檢查」）、`pending`（已接受、還在解析的訂閱請求，舊到新：`type`、`jobId`、`url`、`title`（解析前為 null）與 `checkStatus`；訂閱完成後改列在 `subscriptions`，解析失敗時消失，原因見該工作的 `error` 與記錄）、`unsubscribed`（不屬於任何目前訂閱的文件：單篇收集、已移除訂閱留下的文件、沒有發布者 ID 的文件；`documentCount`、`lastCollectedAt`）與 `types`（各類型的訂閱數）。query `type` 只列該類型，`pending`、`unsubscribed` 與 `types` 也只計該類型；不支援的類型回 400 `invalid_request`。單篇收集的項目若屬於已訂閱的發布者，計入該訂閱。文件數依發布者 ID 計算，`lastCollectedAt` 是收集時間，不是發布時間。
 - `GET /api/subscriptions/:type/:id` 回傳 `subscription`（同上一筆）與 `collection`：UI「收集紀錄」的同一份列表，新到舊，最多 30 筆。每支影片一筆，取目前狀態，以 `kind` 區分：

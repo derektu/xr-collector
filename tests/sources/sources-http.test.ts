@@ -84,7 +84,7 @@ describe('source list (T-06, T-08)', () => {
     });
     // beta's single video, gamma's three kept documents and the legacy document without a publisher ID.
     expect(body.unsubscribed).toEqual({ documentCount: 5, lastCollectedAt: new Date(w.clock.now.getTime() - 5 * MINUTE).toISOString() });
-    expect(body.types).toEqual([{ type: 'youtube', count: 1 }]);
+    expect(body.types).toEqual([{ type: 'youtube', count: 1 }, { type: 'rss', count: 0 }]);
     await w.app.close();
   });
 
