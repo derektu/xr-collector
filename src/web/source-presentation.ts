@@ -1,4 +1,4 @@
-import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
+import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, RetryCause, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { itemNoun, triggerLabel } from './subscription-presentation.js';
@@ -95,6 +95,12 @@ export function displayUrl(url: string): string {
 /** A failure in the source type's own short words, or its message when the type has none for its code. */
 export function failureLabel(type: string, error: { code: string; message: string }): string {
   return sourceDeclaration(type)?.failureLabels?.[error.code] ?? error.message;
+}
+
+/** Why work waits for a retry: the failure with the attempt that comes next, "網路錯誤（第 2／3 次）", or "<source> 限制連線". */
+export function retryCauseLabel(type: string, cause: RetryCause): string {
+  if (cause.reason === 'rate_limited') return `${sourceDeclaration(type)?.label ?? type} 限制連線`;
+  return `${failureLabel(type, cause.error)}（第 ${cause.attempt}／${cause.maxAttempts} 次）`;
 }
 
 /**

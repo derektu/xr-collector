@@ -36,7 +36,9 @@ describe('subscription presentation (A6)', () => {
     expect(asksAboutDocuments(subscription())).toBe(true);
     expect(asksAboutDocuments(subscription({ documentCount: 0 }))).toBe(false);
     expect(asksAboutDocuments(subscription({ documentCount: 0, capturing: true }))).toBe(true);
-    expect(asksAboutDocuments(subscription({ documentCount: 0, checkStatus: { state: 'updating', done: 0, total: 0 } }))).toBe(true);
+    expect(asksAboutDocuments(subscription({ documentCount: 0, checkStatus: { state: 'checking' } }))).toBe(true);
+    expect(asksAboutDocuments(subscription({ documentCount: 0, checkStatus: { state: 'downloading', done: 1, total: 3 } }))).toBe(true);
+    expect(asksAboutDocuments(subscription({ documentCount: 0, checkStatus: { state: 'retrying', at: '2026-10-15T06:02:00.000Z', cause: { reason: 'rate_limited' } } }))).toBe(true);
     expect(asksAboutDocuments(subscription({ documentCount: 0, checkStatus: { state: 'queued' } }))).toBe(true);
   });
 });
@@ -48,9 +50,12 @@ describe('subscription status text (N75-T4)', () => {
 
   it('words every status, progress once the total is known, and the next check by day', () => {
     const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
-    expect(subscriptionStatusText({ state: 'updating', done: 0, total: 0 }, now)).toBe('更新中');
-    expect(subscriptionStatusText({ state: 'updating', done: 3, total: 10 }, now)).toBe('更新中 3/10');
     expect(subscriptionStatusText({ state: 'queued' }, now)).toBe('排隊中');
+    expect(subscriptionStatusText({ state: 'adding' }, now)).toBe('新增中');
+    expect(subscriptionStatusText({ state: 'checking' }, now)).toBe('檢查中');
+    expect(subscriptionStatusText({ state: 'downloading', done: 3, total: 10 }, now)).toBe('下載中 3/10');
+    const error = { code: 'network_error', message: '無法連線到 YouTube。' };
+    expect(subscriptionStatusText({ state: 'retrying', at: '2026-10-15T06:02:00.000Z', cause: { reason: 'failed', error, attempt: 2, maxAttempts: 3 } }, now)).toBe('錯誤・14:02 重試');
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, now)).toBe('下次 18:52');
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T00:05:00.000Z' }, now)).toBe('下次 明天 08:05');
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T16:30:00.000Z' }, now)).toBe('下次 10-17 00:30');
@@ -59,8 +64,11 @@ describe('subscription status text (N75-T4)', () => {
     expect(subscriptionStatusText({ state: 'login_required' }, now)).toBe('需要重新登入');
   });
 
-  it('colors working, waiting, scheduled, stopped and sign-in states apart', () => {
-    expect(subscriptionStatusTone({ state: 'updating', done: 0, total: 0 })).toBe('collecting');
+  it('colors working, retrying, scheduled, waiting, stopped and sign-in states apart', () => {
+    expect(subscriptionStatusTone({ state: 'adding' })).toBe('collecting');
+    expect(subscriptionStatusTone({ state: 'checking' })).toBe('collecting');
+    expect(subscriptionStatusTone({ state: 'downloading', done: 0, total: 3 })).toBe('collecting');
+    expect(subscriptionStatusTone({ state: 'retrying', at: '2026-10-15T06:02:00.000Z', cause: { reason: 'rate_limited' } })).toBe('retrying');
     expect(subscriptionStatusTone({ state: 'queued' })).toBe('queued');
     expect(subscriptionStatusTone({ state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' })).toBe('tracking');
     expect(subscriptionStatusTone({ state: 'paused' })).toBe('paused');

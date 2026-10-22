@@ -75,7 +75,7 @@ describe('subscription requests in the list (N75-T6)', () => {
     const accepted = await w.channels.add('@alpha');
     const pending = (await w.send('GET', '/api/subscriptions')).body;
     expect(pending.subscriptions).toEqual([]);
-    expect(pending.pending).toEqual([{ type: 'youtube', jobId: accepted.job.id, url: accepted.job.source.url, title: null, checkStatus: expect.objectContaining({ state: expect.stringMatching(/^(queued|updating)$/u) }) }]);
+    expect(pending.pending).toEqual([{ type: 'youtube', jobId: accepted.job.id, url: accepted.job.source.url, title: null, checkStatus: expect.objectContaining({ state: expect.stringMatching(/^(queued|adding)$/u) }) }]);
 
     release();
     const added = await w.jobs.whenSettled(accepted.job.id);

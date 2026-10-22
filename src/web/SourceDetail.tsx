@@ -11,6 +11,7 @@ import {
   displayUrl,
   initials,
   nextCheckLabel,
+  retryCauseLabel,
   shortTimeLabel,
 } from './source-presentation.js';
 import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
@@ -136,6 +137,8 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     </header>
 
     {source.status === 'error' && source.lastError ? <p className="detail-problem" role="alert">最近一次檢查失敗：{source.lastError.message}</p> : null}
+    {source.checkStatus.state === 'retrying'
+      ? <p className="detail-retry" data-testid="detail-retry-reason">{retryCauseLabel(source.type, source.checkStatus.cause)}</p> : null}
 
     <dl className="stats">
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>

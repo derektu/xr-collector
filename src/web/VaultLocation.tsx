@@ -185,7 +185,7 @@ function MoveDialog({ vaultPath, resume, onBackground, onClose }: {
       {checkProblem ? <p className="add-problem" role="alert" data-testid="move-check-problem">{checkProblem}</p> : null}
       {check ? <p className="hint" data-testid="move-space">需要 {sizeLabel(check.requiredBytes)}（含安全餘量）・可用 {sizeLabel(check.availableBytes)}</p> : null}
       <ul className="fact-list" data-testid="move-facts">
-        <li>先等執行中的收集步驟完成；排隊的工作保留，搬移完成後在新位置接續。</li>
+        <li>先等進行中的收集步驟完成；排隊的工作保留，搬移完成後在新位置接續。</li>
         <li>完整複製並逐檔檢查後才切換；切換前目前位置 <code>{vaultPath}</code> 的資料不會變動。</li>
         <li>切換成功後清除原位置。搬移期間可以瀏覽文件，加入內容與設定變更要等搬移完成。</li>
       </ul>
@@ -265,7 +265,7 @@ function OpenOtherDialog({ vaultPath, activeJobs, resume, onBackground, onClose 
         <li>開啟 <code>{found.path}</code>，有 {found.documentCount} 份文件。</li>
         <li>目前的知識庫保留在 <code>{vaultPath}</code>，內容不會變更。</li>
         {activeJobs > 0
-          ? <li data-testid="open-vault-paused">目前有 {activeJobs} 個收集工作：執行中的步驟先完成，其餘暫停，回到這個知識庫時接續。</li>
+          ? <li data-testid="open-vault-paused">目前有 {activeJobs} 個收集工作：進行中的步驟先完成，其餘暫停，回到這個知識庫時接續。</li>
           : <li>目前沒有進行中的收集工作。</li>}
         <li>要開啟的知識庫有未完成的收集工作時，開啟後接續。</li>
       </ul>

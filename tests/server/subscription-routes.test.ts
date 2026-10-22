@@ -343,10 +343,10 @@ describe('the jobs page routes (N69-T9)', () => {
     expect(fromAgent).toEqual(fromUi);
     expect(fromAgent).toMatchObject({ status: 200, body: { overview: { running: [], queued: [], failed: [{
       jobId: failed.id, type: 'fake', role: 'item', title: null, url: 'https://fake.example/item/broken-1', publisher: null, progress: null,
-      wait: null, retry: null, error: { code: 'video_unavailable' }, failedAt: failed.finishedAt,
+      status: null, error: { code: 'video_unavailable' }, failedAt: failed.finishedAt,
     }] } } });
     expect(Object.keys(fromAgent.body.overview.failed[0]).sort()).toEqual(
-      ['error', 'failedAt', 'jobId', 'progress', 'publisher', 'retry', 'role', 'title', 'type', 'url', 'wait'],
+      ['error', 'failedAt', 'jobId', 'progress', 'publisher', 'role', 'status', 'title', 'type', 'url'],
     );
     const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
     for (const field of Object.keys(fromAgent.body.overview.failed[0])) expect(skill, field).toContain(`\`${field}\``);

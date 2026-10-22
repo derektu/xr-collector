@@ -191,16 +191,42 @@ export interface OutOfRangeEntry {
 export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
 
 /**
- * What a subscription is doing now, as its status column shows it. `updating`: a check or its
- * collection runs, `total` is 0 until the check knows how many items it collects. `queued`: a check
- * is due but waits for its turn, a source cooldown or a retry. `scheduled`: nothing runs and the
- * next automatic check is at `nextCheckAt` (null until the scheduler plans it). `paused`: the user
- * paused it. `auto_check_off`: automatic checks are off for every subscription. `login_required`:
- * the source needs the user to sign in again.
+ * Why work that started cannot go on and goes on by itself later. `rate_limited`: the source
+ * limited requests and the work continues when the cooldown ends. `failed`: a transient failure;
+ * `attempt` of `maxAttempts` starts at the retry time.
+ */
+export type RetryCause =
+  | { reason: 'rate_limited' }
+  | { reason: 'failed'; error: JobError; attempt: number; maxAttempts: number };
+
+/**
+ * What unfinished top-level work is doing. `queued`: it has not started and waits for its turn.
+ * `checking`: a check lists its subscription and knows no items to collect yet, or a subscription
+ * request resolves its address. `downloading`: an item collects, or a check collects its items,
+ * also while the capture slot serves other work. `retrying`: nothing can go on until `at`, because
+ * the work's own step waits for a retry or a cooldown, or every item a check still collects does.
+ */
+export type WorkStatus =
+  | { state: 'queued' }
+  | { state: 'checking' }
+  | { state: 'downloading' }
+  | { state: 'retrying'; at: string; cause: RetryCause };
+
+/**
+ * What a subscription is doing now, as its status column shows it. While a check is unfinished:
+ * `queued` before it starts, `checking` while it lists, `downloading` with `done` of `total` items
+ * once it knows them, `retrying` while it cannot go on. A subscription request still resolving its
+ * address is `adding`. Without a check: `queued` when a check is due and not dispatched yet,
+ * `scheduled` with the next automatic check, `paused` when the user paused it, `auto_check_off`
+ * when automatic checks are off for every subscription, `login_required` when the source needs the
+ * user to sign in again.
  */
 export type SubscriptionCheckStatus =
-  | { state: 'updating'; done: number; total: number }
   | { state: 'queued' }
+  | { state: 'adding' }
+  | { state: 'checking' }
+  | { state: 'downloading'; done: number; total: number }
+  | { state: 'retrying'; at: string; cause: RetryCause }
   | { state: 'scheduled'; nextCheckAt: string }
   | { state: 'paused' }
   | { state: 'auto_check_off' }
@@ -585,19 +611,17 @@ export interface JobOverviewEntry {
   publisher: string | null;
   /** A check's items so far; null for other work and before the check knows its items. */
   progress: { done: number; total: number } | null;
-  /** The cooldown the work waits for. */
-  wait: JobWait | null;
-  /** When waiting work tries again after a transient failure, and why it failed. */
-  retry: { nextAttemptAt: string; lastError: JobError } | null;
+  /** What unfinished work is doing; null for a failed entry. */
+  status: WorkStatus | null;
   /** Why a failed entry failed. */
   error: JobError | null;
   failedAt: string | null;
 }
 
 /**
- * Everything the app is doing now, from the UI or an Agent. `running`: work collecting now.
- * `queued`: work waiting for its turn, in the order it starts; work waiting for a cooldown or a
- * retry comes last, by when it continues. `failed`: single items and subscription requests that
+ * Everything the app is doing now, from the UI or an Agent. `running`: work that started and has
+ * not finished, including work waiting for a retry or a cooldown. `queued`: work that has not
+ * started, in the order it starts. `failed`: single items and subscription requests that
  * failed, until a retry succeeds, the user removes them, the item has a document or 7 days pass.
  */
 export interface JobOverview {

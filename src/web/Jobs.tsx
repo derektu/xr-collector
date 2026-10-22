@@ -6,8 +6,8 @@ import { jobEntryLabel } from './jobs-presentation.js';
 import { ACTIVE_POLL_MS, IDLE_POLL_MS } from './use-collection-status.js';
 
 /**
- * Everything the app is doing now: work running, work queued in the order it starts, and failed
- * single items with retry and remove. It refreshes itself, quickly while any work is unfinished.
+ * Everything the app is doing now: work that started with what it is doing, work queued in the
+ * order it starts, and failed single items with retry and remove. It refreshes itself, quickly while any work is unfinished.
  */
 export function Jobs({ revision, onChanged }: {
   revision: number;
@@ -63,13 +63,13 @@ export function Jobs({ revision, onChanged }: {
       <span className="job-text">
         <span className="job-title-line">
           <span className={label.named ? 'job-name' : 'job-name address'} title={entry.url}>{label.title}</span>
-          {progress ? <span className="job-progress-count">{progress.done}/{progress.total}</span> : null}
         </span>
         {extra.failed && label.reason ? <span className="job-sub failed">{label.reason}</span>
           : label.subtitle ? <span className="job-sub">{label.subtitle}</span> : null}
+        {label.retryReason ? <span className="job-sub retrying" data-testid="job-retry-reason">{label.retryReason}</span> : null}
         {progress ? <progress value={progress.done} max={progress.total} aria-label={`${label.title}進度`} /> : null}
       </span>
-      {label.waiting ? <span className={`job-wait ${label.waiting.tone}`}><Icon name="jobs" size={13} />{label.waiting.text}</span> : null}
+      {label.status ? <span className={`status-chip ${label.status.tone}`} data-testid="job-status">{label.status.text}</span> : null}
       {extra.failed ? <span className="job-actions">
         <button type="button" className="button small" disabled={acting === entry.jobId} onClick={() => void act(entry, 'retry')} data-testid="job-retry">
           <Icon name="refresh" size={14} />重試</button>

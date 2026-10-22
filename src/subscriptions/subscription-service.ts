@@ -162,9 +162,9 @@ export class SubscriptionService {
     const subscribed = new Set((await this.store.list()).map((record) => record.id));
     return this.jobs.subscriptionWork(this.type).adds
       .filter((entry) => !entry.targetId || !subscribed.has(entry.targetId))
-      .map(({ jobId, url, title, waiting }) => ({
+      .map(({ jobId, url, title, status }) => ({
         type: this.type, jobId, url, title,
-        checkStatus: waiting ? { state: 'queued' } : { state: 'updating', done: 0, total: 0 },
+        checkStatus: status.state === 'queued' || status.state === 'retrying' ? status : { state: 'adding' },
       }));
   }
 
@@ -599,8 +599,8 @@ interface StatusContext {
 
 /**
  * What a subscription is doing now. Its own state comes first: paused, then a source that needs a
- * new sign-in. An active check shows as updating with its progress, or as queued while the job
- * manager reports it waiting for its turn. Without a check, automatic checks being off comes next;
+ * new sign-in. An active check shows what it is doing, with its item progress while it downloads.
+ * Without a check, automatic checks being off comes next;
  * a check that came due and was not dispatched yet, or has no time yet, is queued; otherwise the
  * next check time shows. A failed last check does not change the status.
  */
@@ -611,7 +611,7 @@ export function checkStatus(
 ): SubscriptionCheckStatus {
   if (!record.enabled) return { state: 'paused' };
   if (context.loginRequired) return { state: 'login_required' };
-  if (check) return check.waiting ? { state: 'queued' } : { state: 'updating', done: check.done, total: check.total };
+  if (check) return check.status.state === 'downloading' ? { state: 'downloading', done: check.done, total: check.total } : check.status;
   if (!context.autoCheck) return { state: 'auto_check_off' };
   const next = record.nextCheckAt ?? null;
   // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
