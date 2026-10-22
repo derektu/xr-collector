@@ -8,6 +8,7 @@ import {
 } from '../core/types.js';
 import { subscriptionDefinitions } from '../core/source-registry.js';
 import { SubscriptionService, SubscriptionServices } from '../subscriptions/subscription-service.js';
+import { forwardingPort } from '../jobs/subscription-port.js';
 import { CollectionScheduler } from '../subscriptions/scheduler.js';
 import { JsonSubscriptionStore, type SubscriptionStore } from '../subscriptions/subscription-store.js';
 import { JsonScheduleStore } from '../subscriptions/schedule-store.js';
@@ -964,8 +965,8 @@ export class VaultWorkspace {
       store: this.jobStore,
       plugins,
       documents: collector,
-      subscriptions: stores,
-      checkSubscription: async (type, id) => (await bundle.subscriptions.of(type)!.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
+      // The subscriptions are built with the jobs they dispatch to, so the port reaches them through the bundle.
+      subscriptions: forwardingPort(() => bundle.subscriptions),
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),

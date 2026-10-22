@@ -40,7 +40,6 @@ async function fixture() {
   const jobs = new JobManager({
     vaultPath: path.join(root, 'vault'), store: JobStore.memory(), documents: collector,
     plugins: [youtubePlugin({ capture, resolveChannel: vi.fn(), discover: vi.fn() })],
-    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null } },
   });
   return { root, vault, collector, capture, jobs };
 }

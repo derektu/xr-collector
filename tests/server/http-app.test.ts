@@ -147,6 +147,7 @@ describe('HTTP app', () => {
     const channels = {
       type: 'youtube',
       list: async () => [savedChannel],
+      checkable: async () => [savedChannel],
       listSubscriptions: async () => [subscription],
       preview: async (url: string) => {
         calls.push(['preview', url]);

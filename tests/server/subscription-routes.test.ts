@@ -13,7 +13,8 @@ import { YOUTUBE_PACING, youtubePlugin } from '../../src/plugins/youtube/server.
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE_DEFAULTS, FakeSource } from '../support/fake-source-plugin.js';
@@ -66,8 +67,8 @@ async function world() {
   const plugins = [youtubePlugin(youtube), createFakePlugin(FAKE, fake, gates[1])];
   const collector = new Collector(new MarkdownVault(root, { now }));
   const stores = { youtube: new JsonSubscriptionStore(root, 'youtube', now), fake: new JsonSubscriptionStore(root, 'fake', now) };
-  const jobs = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins, documents: collector, subscriptions: stores, now,
+  const jobs: JobManager = new JobManager({
+    vaultPath: root, store: JobStore.memory(now), plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },
   });
   let scheduler!: CollectionScheduler;

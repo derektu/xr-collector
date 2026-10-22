@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import type { CollectionJob } from '../../src/core/types.js';
@@ -33,8 +34,8 @@ async function world() {
   const vault = new MarkdownVault(root, { now });
   const collector = new Collector(vault, { index: async () => {}, remove: async () => {} });
   const channelStore = new JsonSubscriptionStore(root, 'youtube');
-  const jobs = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now,
+  const jobs: JobManager = new JobManager({
+    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {

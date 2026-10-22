@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
@@ -64,7 +65,7 @@ const emptyVault: DocumentVault = {
 
 function setup(source: Partial<YouTubeSource> = {}) {
   const store = new MemoryChannelStore();
-  const jobs = new JobManager({
+  const jobs: JobManager = new JobManager({
     vaultPath: '/vault',
     store: JobStore.memory(),
     plugins: [youtubePlugin({
@@ -74,17 +75,14 @@ function setup(source: Partial<YouTubeSource> = {}) {
       ...source,
     })],
     documents: new Collector(emptyVault),
-    subscriptions: { youtube: store },
+    subscriptions: forwardingPort(() => new SubscriptionServices([channels])),
   });
-  return {
-    store,
-    jobs,
-    channels: new SubscriptionService('youtube', store, jobs, {
-      autoCollection: async () => true,
-      resolveTarget: async () => { throw new Error('not used'); },
-      documents: async () => [],
-    }),
-  };
+  const channels = new SubscriptionService('youtube', store, jobs, {
+    autoCollection: async () => true,
+    resolveTarget: async () => { throw new Error('not used'); },
+    documents: async () => [],
+  });
+  return { store, jobs, channels };
 }
 
 describe('SubscriptionService', () => {

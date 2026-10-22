@@ -2,16 +2,14 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
-  type SubscriptionRecord,
 } from '../../src/core/types.js';
-import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
+import { JobManager, checkActivity, type JobLimits } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
@@ -19,8 +17,9 @@ import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 
 const VAULT = '/vaults/a';
@@ -58,29 +57,6 @@ class MemoryVault implements DocumentVault {
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
 }
 
-class MemoryChannels implements SubscriptionStore {
-  readonly channels: SubscriptionRecord[] = [];
-  async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
-  async remove() { return false; }
-  async setEnabled() { return null; }
-  async update(id: string, patch: SubscriptionPatch) {
-    const channel = this.channels.find((candidate) => candidate.id === id);
-    if (!channel) return null;
-    Object.assign(channel, patch);
-    return { ...channel };
-  }
-  async updateMany(patches: Map<string, SubscriptionPatch>) { return this.updateWith(() => patches); }
-  async updateWith(change: (channels: readonly SubscriptionRecord[]) => Map<string, SubscriptionPatch>) {
-    const updated: SubscriptionRecord[] = [];
-    for (const [id, patch] of change(this.channels)) {
-      const channel = await this.update(id, patch);
-      if (channel) updated.push(channel);
-    }
-    return updated;
-  }
-}
-
 /** A YouTube source whose captures wait until the test releases them. */
 class ControlledSource implements YouTubeSource {
   readonly captures: string[] = [];
@@ -95,7 +71,7 @@ class ControlledSource implements YouTubeSource {
     return { id, title: `頻道 ${handle}`, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 
-  async discover(channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(channel: SubscriptionTarget, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     return (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit);
   }
 
@@ -119,7 +95,7 @@ class ControlledSource implements YouTubeSource {
 
 function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failIndex?: boolean } = {}) {
   const vault = new MemoryVault();
-  const channels = new MemoryChannels();
+  const subs = new SubscriptionRecorder();
   const source = new ControlledSource();
   const search = {
     index: vi.fn(async () => { if (options.failIndex) throw new Error('meilisearch down'); }),
@@ -127,24 +103,23 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
   const store = options.store ?? JobStore.memory();
   let sequence = 0;
   const manager = new JobManager({
-    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: { youtube: channels },
+    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
     ...(options.limits ? { limits: options.limits } : {}),
     createId: () => `job-${++sequence}`,
   });
+  subs.attach(manager);
   /** Subscribes to the channel and checks it once. */
-  const collect = (subscribed: SubscriptionRecord) => {
-    if (!channels.channels.some((candidate) => candidate.id === subscribed.id)) channels.channels.push(subscribed);
+  const collect = (target: SubscriptionTarget) => {
+    // Listed videos carry no publish time, so they are all in range; the limit is the largest offered.
+    const subscribed = subs.get('youtube', target.id)
+      ?? subs.add('youtube', target, { settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 } });
     return manager.submitCheck('youtube', subscribed, 'manual');
   };
-  return { manager, vault, channels, source, search, store, collect };
+  return { manager, vault, subs, source, search, store, collect };
 }
 
-function channel(id: string, title = id): SubscriptionRecord {
-  // Listed videos carry no publish time, so they are all in range; the limit is the largest offered.
-  return {
-    id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
-  };
+function channel(id: string, title = id): SubscriptionTarget {
+  return { id, title, url: `https://www.youtube.com/channel/${id}/videos` };
 }
 
 function videos(count: number, prefix: string): DiscoveredYouTubeVideo[] {
@@ -272,15 +247,18 @@ describe('JobManager', () => {
   });
 
   it('adds a resolved channel and starts its collection as a follow-up job', async () => {
-    const { manager, source, channels } = setup();
+    const { manager, source, subs } = setup();
     source.holdCaptures = false;
     const added = await manager.submit('youtube', '@sample');
     expect(added.job).toMatchObject({ kind: 'youtube.channel-add', source: { id: null, url: 'https://www.youtube.com/@sample' } });
     const job = await manager.whenSettled(added.job.id);
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
-    expect(channels.channels).toHaveLength(1);
+    const [subscribed] = subs.of('subscribed');
+    expect(subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: 'UCsamplexxxxxxxxxxxxxxxx', outcome: 'created', resumed: false }]);
+    expect(subs.get('youtube', subscribed!.id)?.settings).toEqual({ intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 });
     const followUp = await manager.whenSettled(job.result!.followUpJobId!);
-    expect(followUp).toMatchObject({ kind: 'youtube.channel', source: { id: channels.channels[0]!.id }, result: { outcome: 'empty' } });
+    expect(followUp).toMatchObject({ kind: 'youtube.channel', source: { id: subscribed!.id }, result: { outcome: 'empty' } });
+    expect(subs.of('checked')).toEqual([expect.objectContaining({ id: subscribed!.id, candidates: [], collecting: [] })]);
   });
 
   it('rejects playlists and unknown addresses before accepting a job', async () => {
@@ -300,7 +278,7 @@ describe('JobManager', () => {
     expect(manager.list({ limit: 2, cursor: first.nextCursor! })).toMatchObject({ jobs: [{ source: { id: videoId(0) } }], nextCursor: null });
 
     const other = new JobManager({
-      vaultPath: '/vaults/b', store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: { youtube: new MemoryChannels() },
+      vaultPath: '/vaults/b', store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: new SubscriptionRecorder(),
     });
     expect(other.list().jobs).toEqual([]);
     expect(() => other.get(first.jobs[0]!.id)).toThrowError(expect.objectContaining({ code: 'job_not_found' }));
@@ -352,7 +330,49 @@ describe('JobManager', () => {
     releaseResolve();
     await closingSecond;
     expect(second.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', error: { code: 'interrupted' } });
-    expect(second.channels.channels).toEqual([]);
+    expect(second.subs.subscriptions.size).toBe(0);
+    expect(second.subs.of('subscribed')).toEqual([]);
+  });
+});
+
+describe('checkActivity', () => {
+  const now = '2026-10-15T04:00:00.000Z';
+  const later = '2026-10-15T05:00:00.000Z';
+  const error = { code: 'network_error', message: '無法連線。' };
+  const retry = { attempts: 1, maxAttempts: 3, nextAttemptAt: later, lastError: error };
+  const check = (overrides: Partial<CollectionJob>): CollectionJob => ({
+    id: 'j', kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: VAULT, parentId: null,
+    source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
+    createdAt: now, startedAt: now, finishedAt: null, updatedAt: now,
+    progress: { total: 10, done: 3, created: 3, existing: 0, failed: 0 }, items: null, result: null, error: null, ...overrides,
+  });
+  const item = (state: 'queued' | 'running' | 'completed', extra = {}) => ({ sourceId: 'v', title: 'v', url: 'u', jobId: 'x', state, outcome: null, error: null, ...extra });
+  const cooldown = { wait: { reason: 'rate_limited' as const, until: later } };
+  const collecting = { jobId: 'j', waiting: false, done: 3, total: 10 };
+  const waiting = { ...collecting, waiting: true };
+
+  it('collects while the check runs and its own step or one of its items goes on', () => {
+    expect(checkActivity(check({}))).toEqual(collecting);
+    expect(checkActivity(check({ items: [item('queued', cooldown), item('running')] }))).toEqual(collecting);
+    expect(checkActivity(check({ items: [item('completed'), item('completed')] }))).toEqual(collecting);
+  });
+
+  it('waits for its turn before it starts or while its own step waits', () => {
+    expect(checkActivity(check({ state: 'queued' }))).toEqual(waiting);
+    expect(checkActivity(check({ state: 'queued', ...cooldown }))).toEqual(waiting);
+    expect(checkActivity(check(cooldown))).toEqual(waiting);
+    expect(checkActivity(check({ retry }))).toEqual(waiting);
+  });
+
+  it('waits while none of the items it still collects is running', () => {
+    expect(checkActivity(check({ items: [item('completed'), item('queued', cooldown), item('queued', cooldown)] }))).toEqual(waiting);
+    expect(checkActivity(check({ items: [item('queued', { retry })] }))).toEqual(waiting);
+    // Other work holds the capture slot.
+    expect(checkActivity(check({ items: [item('completed'), item('queued')] }))).toEqual(waiting);
+  });
+
+  it('counts no progress for a check that has not listed yet', () => {
+    expect(checkActivity(check({ state: 'queued', progress: null }))).toEqual({ jobId: 'j', waiting: true, done: 0, total: 0 });
   });
 });
 

@@ -4,13 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
-import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
   type DocumentSummary,
   type SavedDocument,
-  type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
@@ -29,8 +27,9 @@ import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 
 // Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
@@ -59,20 +58,6 @@ class MemoryVault implements DocumentVault {
   }
   async list(): Promise<DocumentSummary[]> { return []; }
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
-}
-
-class MemoryChannels implements SubscriptionStore {
-  readonly channels: SubscriptionRecord[] = [];
-  async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
-  async remove() { return false; }
-  async setEnabled() { return null; }
-  async update(id: string, patch: SubscriptionPatch) {
-    const channel = this.channels.find((candidate) => candidate.id === id);
-    if (!channel) return null;
-    Object.assign(channel, patch);
-    return { ...channel };
-  }
 }
 
 interface Timer { at: number; callback: () => void; cancelled: boolean }
@@ -111,7 +96,7 @@ class GatedSource implements YouTubeSource {
     return this.request(`resolve:${url}`, () => ({ id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url }), options);
   }
 
-  discover(channel: SubscriptionRecord, page: ListingPage, options?: RequestOptions): Promise<DiscoveredYouTubeVideo[]> {
+  discover(channel: SubscriptionTarget, page: ListingPage, options?: RequestOptions): Promise<DiscoveredYouTubeVideo[]> {
     return this.request(`list:${channel.id}`, () => (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit), options);
   }
 
@@ -162,7 +147,7 @@ async function world(options: { waitMs?: number } = {}) {
     await settle();
   };
   const vault = new MemoryVault();
-  const channels = new MemoryChannels();
+  const subs = new SubscriptionRecorder();
   const statePath = path.join(directory, 'youtube-pacing.json');
   const jobsPath = path.join(directory, 'jobs');
   let sequence = 0;
@@ -174,14 +159,15 @@ async function world(options: { waitMs?: number } = {}) {
     const store = await JobStore.open(jobsPath, clock);
     const source = new GatedSource(gate);
     const manager = new JobManager({
-      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: { youtube: channels },
+      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
       now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
     });
+    subs.attach(manager);
     processes.push({ gate, store, manager });
     return { gate, store, source, manager };
   };
   const events = async () => (await readEventFiles(jobsPath)).filter((event) => event.vaultPath === VAULT);
-  return { boot, advance, clock: () => now, vault, channels, events };
+  return { boot, advance, clock: () => now, vault, subs, events };
 }
 
 describe('jobs during a YouTube cooldown (P-T5)', () => {
@@ -254,11 +240,9 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
   it('shows the wait on the channel item and resumes a channel check after the cooldown', async () => {
     const w = await world();
     const p = await w.boot();
-    const channel: SubscriptionRecord = {
+    const channel = w.subs.add('youtube', {
       id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url: 'https://www.youtube.com/channel/UCpacingpacingpacingpaci/videos',
-      enabled: true, addedAt: new Date(T0).toISOString(), settings: { ...DEFAULT_POLICY },
-    };
-    w.channels.channels.push(channel);
+    }, { settings: { ...DEFAULT_POLICY } });
     p.source.channelVideos.set(channel.id, [{ id: 'ccccccccccc', title: '影片', url: watchUrl('ccccccccccc'), publishedAt: null, upcoming: false }]);
     p.source.failures.set('subtitles:ccccccccccc', [limited()]);
     const accepted = await p.manager.submitCheck('youtube', channel, 'manual');
@@ -269,16 +253,17 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const done = await p.manager.whenSettled(accepted.job.id);
     expect(done).toMatchObject({ state: 'completed', progress: { created: 1 } });
     expect(done.items![0]!.wait).toBeUndefined();
+    // Waiting out a cooldown is no failure of the item.
+    expect(w.subs.of('failed')).toEqual([]);
+    expect(w.subs.of('collected')).toEqual([{ kind: 'collected', type: 'youtube', id: channel.id, key: 'ccccccccccc' }]);
   });
 
   it('defers a channel check limited while listing, and keeps network errors at three attempts', async () => {
     const w = await world();
     const p = await w.boot();
-    const channel: SubscriptionRecord = {
+    const channel = w.subs.add('youtube', {
       id: 'UCpacingpacingpacingpaci', title: '節奏頻道', url: 'https://www.youtube.com/channel/UCpacingpacingpacingpaci/videos',
-      enabled: true, addedAt: new Date(T0).toISOString(), settings: { ...DEFAULT_POLICY },
-    };
-    w.channels.channels.push(channel);
+    }, { settings: { ...DEFAULT_POLICY } });
     p.source.failures.set(`list:${channel.id}`, [limited()]);
     const check = await p.manager.submitCheck('youtube', channel, 'manual');
     await w.advance(0);

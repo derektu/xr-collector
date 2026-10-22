@@ -14,8 +14,8 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/core` | 共用型別、來源類型登錄（`source-registry.ts`）、文件保存與索引 |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
-| `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單 |
-| `src/subscriptions` | 各來源類型的訂閱與設定檔讀寫、每次檢查的收集規則（範圍內最新 N 則）、檢查工作提交及依各訂閱頻率的週期檢查 |
+| `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、自動重試、請求通道冷卻時的等待、重啟接續與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報，並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、最近一次檢查成功或失敗、新增中的請求） |
+| `src/subscriptions` | 訂閱資料唯一的寫入者：建立訂閱、派工與派工時間、收集進度（上次檢查時間、範圍外項目、失敗項目與跨檢查的失敗次數），以及每次檢查的收集規則（範圍內最新 N 則）；整份清單驗證通過才開始的手動檢查、依各訂閱頻率的週期檢查，並把工作事實與訂閱本身的狀態組合成訂閱狀態 |
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
 | `src/vault` | Markdown 保存、active Vault、匯出檔、以較新為準的匯入合併、搬移與中斷恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
@@ -25,13 +25,15 @@ UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋�
 
 收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
 
+`JobManager` 與訂閱之間只有訂閱 port 這一條 seam；正式環境由 `SubscriptionServices` 實作。只有開始探索的新檢查算一次派工，由 `SubscriptionService` 送出並更新派工時間：定時檢查、立即檢查與新增訂閱後的首次檢查。新增訂閱的工作解析完網址後，把結果與接受時的收集設定交給 `SubscriptionService` 建立訂閱並派工首次檢查。重試失敗項目與重啟後接續中斷的檢查不是派工，不更新派工時間與上次檢查時間。檢查開始探索前向 port 取得計畫（收集範圍、要排除的項目，或訂閱已暫停／移除）；項目工作寫入持久紀錄後才回報這次的候選，收集進度因此一定在項目工作之後寫入。工作內暫時性錯誤的自動重試次數屬於 `JobManager`，同一項目跨檢查的失敗次數屬於 `SubscriptionService`，兩者分開計算。
+
 檢查中收集失敗的項目記在訂閱的 `failures`，不讓檢查失敗；之後的檢查重試它，失敗滿 3 次或屬 plugin 分類為不重試的錯誤時略過。檢查只有列出訂閱失敗時才算失敗。單一項目與新增訂閱的失敗留在工作頁的失敗區，可重試或移除。
 
 核心（工作、訂閱、排程、Vault、搜尋、活動紀錄、資料交換、HTTP 與共用畫面）不認得任何來源類型，只經由 `src/plugins/types.ts` 的介面與來源類型登錄操作來源。每個 plugin 宣告它接受的網址、項目擷取、訂閱列出項目的方式、失敗的重試分類、請求節奏、訂閱設定、文件的來源專屬 frontmatter、畫面用字、需要的 Vault 與匯出檔格式版本，以及核心之外的錯誤碼與其 HTTP 狀態；工作種類在線上寫為 `<類型>.<名稱>`，去重以來源類型區分。HTTP 的收集與訂閱路由不分類型：`POST /api/submissions`、`POST /api/items` 與 `POST /api/subscriptions` 由網址找到所屬的來源類型，訂閱以 `/api/subscriptions/:type/:id` 識別，排程（`/api/schedule`）涵蓋所有類型，請求通道狀態（`/api/pacing`）每個請求群組一筆；回應以訂閱為名詞（`subscription`、`subscriptions`、`subscriptionId`），新增來源類型不需要新路由。Server 程序與 Electron 由 `src/plugins/index.ts` 的來源清單組裝 plugin，清單每一項是一個來源類型的定義與 plugin factory，factory 從組裝端取得外部程式路徑與所屬請求群組的通道；Web 畫面由 `src/web/plugins.tsx` 登錄宣告。新增訂閱選單中尚未支援的類型（X、Facebook、RSS）是 `src/web/add-menu.ts` 的資料，以相同 ID 登錄的 plugin 會取代它的位置。登錄外的來源類型留下的文件、工作與訂閱照原樣保存，核心不對它們動作。
 
 每個程序對每個請求群組有一條請求通道（`PacingGate`），群組內的請求都經過它：同一時間只有一個請求，相鄰請求間依 plugin 宣告隨機等待，讓取用節奏接近一般使用者、不形成固定規律；被限制連線時通道冷卻（5 分鐘起、連續限制加倍、上限 60 分鐘），冷卻狀態存於 profile 的 `<群組>-pacing.json`，冷卻期間工作留在佇列並標示等待，不消耗重試次數，其他群組不受影響。YouTube plugin 的群組是 `youtube`，所有 yt-dlp 請求都經過它，相鄰請求間等待 4–12 秒。字幕選擇只採原文軌道：自動字幕以 yt-dlp 實際下載的格式判斷是否為翻譯，同一語言優先 `-orig` 軌道。
 
-Scheduler 涵蓋所有來源類型的訂閱，到期時提交檢查工作即返回，以工作結束的通知記錄上次結果。
+Scheduler 涵蓋所有來源類型的訂閱，到期時經 `SubscriptionService` 派工即返回，以工作結束的通知記錄上次結果；「檢查全部」也一律經由它的 `runNow`。`POST /api/subscription-checks` 列出的訂閱由 `SubscriptionServices` 先驗證整份清單，任何一個不存在或已暫停就整個拒絕，不開始任何工作。
 
 ## Runtime 與資料
 

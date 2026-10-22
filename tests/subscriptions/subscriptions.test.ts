@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { DEFAULT_POLICY, type CollectionPolicy } from '../../src/plugins/youtube/settings.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
@@ -42,8 +43,8 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   const build = () => {
     const channelStore = new JsonSubscriptionStore(root, 'youtube');
     const collector = new Collector(documents);
-    const jobs = new JobManager({
-      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now,
+    const jobs: JobManager = new JobManager({
+      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
       // Failed checks here drive the catch-up rules; automatic retries have their own cases.
       retry: { maxAttempts: 1 },

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PacingEvent, Pacing } from '../../src/pacing/pacing-gate.js';
-import { SubscriptionService, checkStatus } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices, checkStatus } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type PacingStatus } from '../../src/core/types.js';
@@ -49,8 +50,9 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   const channelStore = new JsonSubscriptionStore(root, 'youtube');
   const pacing = new ScriptedPacing();
   let autoCheck = true;
-  const jobs = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now, pacing: [pacing],
+  const jobs: JobManager = new JobManager({
+    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector,
+    subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },
     setTimer: () => () => undefined,
@@ -200,24 +202,17 @@ describe('subscription check status computed by the service (N75-T5)', () => {
   it('orders paused, sign-in, active work, the auto check switch and the schedule', () => {
     const now = new Date('2026-10-15T04:00:00.000Z');
     const later = '2026-10-15T05:00:00.000Z';
-    const job = (overrides: Partial<CollectionJob>): CollectionJob => ({
-      id: 'j', kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: '/v', parentId: null,
-      source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
-      createdAt: now.toISOString(), startedAt: now.toISOString(), finishedAt: null, updatedAt: now.toISOString(),
-      progress: { total: 10, done: 3, created: 3, existing: 0, failed: 0 }, items: null, result: null, error: null, ...overrides,
-    });
-    const item = (state: 'queued' | 'running' | 'completed', extra = {}) => ({ sourceId: 'v', title: 'v', url: 'u', jobId: 'x', state, outcome: null, error: null, ...extra });
+    // Work facts as the job manager reports them for a subscription's queued or running check.
+    const collecting = { jobId: 'j', waiting: false, done: 3, total: 10 };
+    const waiting = { ...collecting, waiting: true };
     const context = { autoCheck: true, now, loginRequired: false };
     const enabled = { enabled: true, nextCheckAt: later };
 
-    expect(checkStatus({ enabled: false, nextCheckAt: null }, job({}), { ...context, loginRequired: true })).toEqual({ state: 'paused' });
-    expect(checkStatus(enabled, job({}), { ...context, loginRequired: true })).toEqual({ state: 'login_required' });
-    expect(checkStatus(enabled, job({}), { ...context, autoCheck: false })).toEqual({ state: 'updating', done: 3, total: 10 });
-    expect(checkStatus(enabled, job({ state: 'queued' }), context)).toEqual({ state: 'queued' });
-    expect(checkStatus(enabled, job({ state: 'queued', wait: { reason: 'rate_limited', until: later } }), context)).toEqual({ state: 'queued' });
-    const cooldown = { wait: { reason: 'rate_limited' as const, until: later } };
-    expect(checkStatus(enabled, job({ items: [item('completed'), item('queued', cooldown), item('queued', cooldown)] }), context)).toEqual({ state: 'queued' });
-    expect(checkStatus(enabled, job({ items: [item('queued', cooldown), item('running')] }), context)).toEqual({ state: 'updating', done: 3, total: 10 });
+    expect(checkStatus({ enabled: false, nextCheckAt: null }, collecting, { ...context, loginRequired: true })).toEqual({ state: 'paused' });
+    expect(checkStatus(enabled, collecting, { ...context, loginRequired: true })).toEqual({ state: 'login_required' });
+    expect(checkStatus(enabled, collecting, { ...context, autoCheck: false })).toEqual({ state: 'updating', done: 3, total: 10 });
+    expect(checkStatus(enabled, waiting, context)).toEqual({ state: 'queued' });
+    expect(checkStatus(enabled, collecting, context)).toEqual({ state: 'updating', done: 3, total: 10 });
     expect(checkStatus(enabled, null, { ...context, autoCheck: false })).toEqual({ state: 'auto_check_off' });
     expect(checkStatus({ enabled: true, nextCheckAt: now.toISOString() }, null, context)).toEqual({ state: 'queued' });
     expect(checkStatus(enabled, null, context)).toEqual({ state: 'scheduled', nextCheckAt: later });
