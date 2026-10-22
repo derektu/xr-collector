@@ -15,6 +15,8 @@ const CONTRACT = 'src/plugins/types.ts';
 const PLUGIN_ENTRIES = new Set([CONTRACT, 'src/plugins/index.ts']);
 const WEB_ASSEMBLY = new Set(['src/web/plugins.tsx', 'src/web/plugins.css']);
 const TYPE_NAME = /youtube|yt-?dlp|rss/iu;
+/** A subscription is a `subscriptionId` in the core; `channelId` is YouTube's word. */
+const CHANNEL_ID = /channelId/iu;
 const IMPORT = /(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/gu;
 
 function filesUnder(directory: string): string[] {
@@ -36,6 +38,13 @@ describe('a core that names no source type (P-T3)', () => {
   it('leaves YouTube, yt-dlp and RSS out of every core file', () => {
     const naming = coreFiles.flatMap((file) => readFileSync(file, 'utf8').split('\n')
       .map((line, index) => TYPE_NAME.test(line) ? `${file}:${index + 1}: ${line.trim()}` : null)
+      .filter((line): line is string => line !== null));
+    expect(naming).toEqual([]);
+  });
+
+  it('names a subscription subscriptionId, never channelId, in every core file', () => {
+    const naming = coreFiles.flatMap((file) => readFileSync(file, 'utf8').split('\n')
+      .map((line, index) => CHANNEL_ID.test(line) ? `${file}:${index + 1}: ${line.trim()}` : null)
       .filter((line): line is string => line !== null));
     expect(naming).toEqual([]);
   });

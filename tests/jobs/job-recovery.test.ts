@@ -347,7 +347,7 @@ describe('channel-add jobs across restarts (R-T3)', () => {
     const done = await g2.manager.whenSettled(adding.job.id);
     const followUp = await g2.manager.whenSettled(done.result!.followUpJobId!);
 
-    expect(done.result).toMatchObject({ outcome: 'created', channelId: subscribed.id });
+    expect(done.result).toMatchObject({ outcome: 'created', subscriptionId: subscribed.id });
     expect(followUp).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { created: 2 } });
     // The request hands its subscription over again as resumed, so the subscription found is its own.
     expect(w.subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: subscribed.id, outcome: 'created', resumed: true }]);

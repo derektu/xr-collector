@@ -160,7 +160,7 @@ describe('first subscription (S-T3)', () => {
     await subscribe(w, 'again');
     await w.channels.setEnabled(id, false);
     const repeated = await w.jobs.whenSettled((await w.channels.add('@again')).job.id);
-    expect(repeated.result).toEqual({ outcome: 'existing', channelId: id });
+    expect(repeated.result).toEqual({ outcome: 'existing', subscriptionId: id });
     expect((await w.channelStore.list())[0]).toMatchObject({ enabled: false });
   });
 });

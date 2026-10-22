@@ -445,8 +445,8 @@ export interface JobCheckpoint {
   claimedAt?: string;
   /** An add job: the settings the new subscription starts with, chosen when the job was accepted. */
   settings?: SubscriptionSettings;
-  /** An add job resolved this target and is subscribing to it; `channelId` is the target's ID. */
-  subscribing?: { channelId: string; title: string; url: string };
+  /** An add job resolved this target and is subscribing to it; `subscriptionId` is the target's ID. */
+  subscribing?: { subscriptionId: string; title: string; url: string };
   /** A check job recorded its discovered items at this time; the subscription's last check time follows it. */
   discovered?: { at: string };
   /**
@@ -491,8 +491,8 @@ export interface JobResult {
   /** The search projection includes the saved document. */
   indexed?: boolean;
   indexMessage?: string;
-  /** The subscription an add job subscribed to or found, under the job record's stored name; the HTTP API returns it as `subscriptionId`. */
-  channelId?: string;
+  /** The subscription an add job subscribed to or found. */
+  subscriptionId?: string;
   /** The check job an add job started. */
   followUpJobId?: string;
 }
@@ -561,11 +561,8 @@ export interface JobPage {
   nextCursor: string | null;
 }
 
-/** A job result as the HTTP API returns it; `subscriptionId` is the subscription an add job subscribed to or found. */
-export type JobResultView = Omit<JobResult, 'channelId'> & { subscriptionId?: string };
-
 /** A job as the HTTP API returns it, without the data that only serves restarts. */
-export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser' | 'result'> & { result: JobResultView | null };
+export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser'>;
 
 export interface JobSubmissionView {
   job: JobView;

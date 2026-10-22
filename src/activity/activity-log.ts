@@ -385,7 +385,7 @@ export class ActivityLog {
       const owner = job.parentId ? lookup(job.parentId) : job;
       const role = owner ? jobRole(owner.kind)?.role : undefined;
       if (role === 'check' && owner!.source.id) event.subscriptionId = owner!.source.id;
-      else if (role === 'add' && owner!.result?.channelId) event.subscriptionId = owner!.result.channelId;
+      else if (role === 'add' && owner!.result?.subscriptionId) event.subscriptionId = owner!.result.subscriptionId;
     }
     return event;
   }

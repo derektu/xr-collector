@@ -623,12 +623,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   return app;
 }
 
-/** A job as the HTTP API returns it: restart data left out, and an add job's subscription named `subscriptionId`. */
+/** A job as the HTTP API returns it: restart data left out. */
 function jobView(job: CollectionJob): JobView {
-  const { checkpoint: _checkpoint, claimedByUser: _claimed, result, ...rest } = job;
-  if (!result) return { ...rest, result: null };
-  const { channelId, ...outcome } = result;
-  return { ...rest, result: channelId === undefined ? outcome : { ...outcome, subscriptionId: channelId } };
+  const { checkpoint: _checkpoint, claimedByUser: _claimed, ...view } = job;
+  return view;
 }
 
 function submissionView(submission: JobSubmission): JobSubmissionView {
