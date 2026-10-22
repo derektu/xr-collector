@@ -3,6 +3,7 @@
 // from every ticket worktree land in one place the user reviews.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -40,17 +41,18 @@ export const SLOTS = [7250, 7254, 7258, 7262].map((base, slot) => ({
 }));
 
 /**
- * The checkout's commit and its uncommitted state. `sourceHash` covers `git status` and the diff
- * against HEAD, so an edit after launch shows up even without a new commit.
+ * The checkout's commit and its uncommitted state. `sourceHash` covers `git status`, the diff
+ * against HEAD and the contents of untracked files that are not ignored, so any edit after launch
+ * shows up even without a new commit.
  */
 export function commitOf(checkout) {
   const status = git(checkout, ['status', '--porcelain']);
-  const diff = git(checkout, ['diff', 'HEAD']);
-  return {
-    commit: git(checkout, ['rev-parse', 'HEAD']),
-    dirty: status !== '',
-    sourceHash: createHash('sha256').update(status).update('\0').update(diff).digest('hex').slice(0, 16),
-  };
+  const hash = createHash('sha256').update(status).update('\0').update(git(checkout, ['diff', 'HEAD']));
+  for (const file of git(checkout, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)) {
+    hash.update(`\0${file}\0`);
+    try { hash.update(readFileSync(path.join(checkout, file))); } catch { /* removed meanwhile */ }
+  }
+  return { commit: git(checkout, ['rev-parse', 'HEAD']), dirty: status !== '', sourceHash: hash.digest('hex').slice(0, 16) };
 }
 
 /** Local time to the second, file-name safe: 2026-10-22T10-58-03. */
@@ -71,10 +73,17 @@ export function processStart(pid) {
   }
 }
 
-/** Whether a command line names `runDir` as a whole argument or as the start of a path under it. */
-export function namesRun(command, runDir) {
+/** The arguments that mark a process the run started (its Web server or Electron). */
+export const runMarker = (runDir) => ['--xr-verify-run', runDir];
+
+/**
+ * Whether a command line belongs to the run: it carries the run marker, or it is Meilisearch with
+ * its data in the run's profile. Other mentions of the directory (a `verify.mjs stop --run`, a
+ * `tail` of its log) do not count.
+ */
+export function isRunProcess(command, runDir) {
   const padded = ` ${command} `;
-  return padded.includes(` ${runDir} `) || padded.includes(` ${runDir}/`);
+  return padded.includes(` --xr-verify-run ${runDir} `) || padded.includes(` --db-path ${runDir}/`);
 }
 
 /** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */

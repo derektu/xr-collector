@@ -10,13 +10,13 @@
 // The checkout must be built (npm run build) and have resources/bin/mac. Electron runs only inside
 // the flow process that launched it: Playwright closes it when that process exits.
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, cleanEnv, commitOf, evidenceDir, processStart } from './paths.mjs';
+import { checkoutRoot, cleanEnv, commitOf, evidenceDir, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
-import { claimSlot, createRunDir, releaseSlot } from './instance.mjs';
+import { createRun, releaseSlot, writeJsonAtomic } from './instance.mjs';
 
 /**
  * Prepares an isolated profile with a selected Vault (so moving and opening another Vault stay
@@ -31,13 +31,12 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
   for (const file of [executable, path.join(checkout, 'dist', 'node', 'electron', 'main.js'), path.join(checkout, 'resources', 'bin', 'mac', 'meilisearch')]) {
     if (!existsSync(file)) throw new Error(`Missing ${file}; run npm run build and npm run download:runtime in the checkout`);
   }
-  const runDir = await createRunDir(issue, checkout, '-electron');
+  const { runDir, ports } = await createRun(issue, checkout, '-electron');
   const profile = path.join(runDir, 'profile');
   const vault = path.join(runDir, 'vault');
   const evidence = evidenceDir(issue, checkout);
   await mkdir(profile, { recursive: true });
   await mkdir(evidence, { recursive: true });
-  const ports = await claimSlot(runDir);
 
   const load = (relative) => import(pathToFileURL(path.join(checkout, 'dist', 'node', relative)).href);
   const { createVaultDirectory } = await load('vault/vault-directory.js');
@@ -56,16 +55,17 @@ export async function launchElectron({ issue, checkout = checkoutRoot(), size = 
     XR_COLLECTOR_VALIDATION_WINDOW_SIZE: size,
     ...(hidden ? { XR_COLLECTOR_VALIDATION_HIDDEN: '1' } : {}),
   };
-  // run.json names this flow process as the holder, so sweep and stop leave a live run alone.
+  // run.json names this flow process as the holder, so sweep and stop leave a live run alone. The
+  // run marker on Electron's command line lets them find an Electron the flow left behind.
   const record = {
     kind: 'electron', issue: String(issue), runDir, evidence, checkout, ...commitOf(checkout), profile, vault, ports,
     pid: process.pid, start: processStart(process.pid), data: 'real', layer: '原生 Desktop（Playwright _electron）',
     startedAt: new Date().toISOString(),
   };
-  await writeFile(path.join(runDir, 'run.json'), JSON.stringify(record, null, 2));
+  writeJsonAtomic(path.join(runDir, 'run.json'), record);
 
   const start = async () => {
-    const app = await electron.launch({ executablePath: executable, args: ['.'], cwd: checkout, env, timeout: 90_000 });
+    const app = await electron.launch({ executablePath: executable, args: ['.', ...runMarker(runDir)], cwd: checkout, env, timeout: 90_000 });
     const window = await app.firstWindow({ timeout: 90_000 });
     await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
     return { app, window };

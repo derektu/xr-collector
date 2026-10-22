@@ -8,7 +8,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
 import { apiState, openPage } from './lib/drive.mjs';
-import { attach, launchWeb, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
+import { attach, launchWeb, portFree, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
 import { checkoutRoot, commitOf, evidenceDir, mainCheckout, SLOTS } from './lib/paths.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { REAL } from './lib/synthetic.mjs';
@@ -58,11 +58,15 @@ async function doctor() {
     // Electron serves the checkout's dist/web; Web mode builds its own copy into the run.
     electronWebCurrent: { ok: builtAfterSources(checkout), fix: 'npm run build; Electron would show an older UI (Electron flows only)' },
   };
+  // A slot is usable only with no live lock and all four ports free, the same test launch applies.
   const holders = slotHolders();
-  const slots = SLOTS.map((ports) => {
+  const slots = await Promise.all(SLOTS.map(async (ports) => {
     const holder = holders.find((lock) => lock.slot === ports.slot);
-    return { ...ports, state: !holder ? 'free' : holder.live ? 'in use' : 'stale lock', runDir: holder?.runDir ?? null };
-  });
+    const busyPorts = [];
+    for (const port of [ports.ui, ports.search, ports.agent, ports.feeds]) if (!(await portFree(port))) busyPorts.push(port);
+    const state = holder?.live ? 'in use' : busyPorts.length ? 'ports busy' : holder ? 'stale lock' : 'free';
+    return { ...ports, state, busyPorts, runDir: holder?.runDir ?? null };
+  }));
   const report = { checkout, ...commitOf(checkout), checks, slots, evidenceRoot: path.dirname(evidenceDir('x', checkout)) };
   let healthy = ['platform', 'node', 'dependencies', 'chromium', 'meilisearch'].every((key) => checks[key].ok);
   if (o.run) {
@@ -125,7 +129,7 @@ async function main() {
   }
   if (command === 'snapshot') return snapshot();
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
-  if (command === 'sweep') return print({ removed: sweepStale(mainCheckout()) });
+  if (command === 'sweep') return print(sweepStale(mainCheckout()));
   throw new Error(`Unknown command ${command}\n${USAGE}`);
 }
 main().catch((error) => { console.error(error.message); process.exitCode = 1; });

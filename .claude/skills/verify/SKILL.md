@@ -18,7 +18,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 - **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
 - **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>-<本地時間>-<PID>/`（主 checkout 底下），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
-- **程序**：server 在自己的程序群組（tsx、node、Meilisearch）。`stop` 只對 `run.json` 記錄的群組送訊號，而且群組內要有程序的命令列帶有這個 run 目錄；沒有就視為不是這個 run 的程序，不送訊號。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
+- **程序**：run 的程序以命令列辨識：Web server 與 Electron 帶有 `--xr-verify-run <run 目錄>` 標記，Meilisearch 的 `--db-path` 在 run 目錄內。`stop` 只對這些程序所在的程序群組送訊號，不依賴 `run.json` 記錄的 PID；命令列只是提到 run 目錄的其他程序（例如 `tail` 它的 log）不算。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
 - **證據**：`.local/ticket-artifacts/<issue>/`（主 checkout 底下，gitignored，不 commit）。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。同一票重跑時覆寫同名截圖，只留最新。
 - **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
@@ -140,7 +140,7 @@ await desktop.relaunch();                                  // 同一 profile 重
 await desktop.close();
 ```
 
-Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過，流程結束後兩者都能清掉它。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過。流程 crash 而 Electron 還活著時，`sweep` 也會略過（列在 `live`），`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch；Electron 結束後兩者都能清掉 run 目錄。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
 
 ## Evidence
 
@@ -160,10 +160,10 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 ```sh
 node .claude/skills/verify/scripts/verify.mjs stop --run <runDir>          # 停止、複製 server.log、釋放 slot、刪 scratch
 node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同上但保留 profile 與 Vault 供檢查
-node .claude/skills/verify/scripts/verify.mjs sweep                        # 刪除 server 已不在的 scratch 目錄
+node .claude/skills/verify/scripts/verify.mjs sweep                        # 清 stale lock 與沒有存活程序的 scratch 目錄
 ```
 
-`stop` 對 server 的程序群組送 SIGTERM，讓 runtime 正常關閉（含 Meilisearch），等到群組內沒有程序；30 秒內沒結束才送 SIGKILL。流程腳本中途 crash 時，server 仍在跑：用 `doctor` 看哪個 slot 被占、拿 `runDir` 跑 `stop`。`launch` 失敗時會結束自己的 server 並釋放 slot，run 目錄留著供診斷，之後由 `sweep` 清掉。每次失敗的嘗試之後都要 stop，避免留下程序與 port。清理不刪 `.local/ticket-artifacts/`。
+`stop` 對 run 的程序群組送 SIGTERM，讓 runtime 正常關閉（含 Meilisearch），等到群組內沒有程序；30 秒內沒結束才送 SIGKILL。`sweep` 輸出 `removed`（已刪）、`live`（還有程序，略過）、`unreadable`（`run.json` 無法解析，略過，需手動檢查）；`doctor` 的 slot 狀態與 `launch` 用同一個判斷，`ports busy` 表示沒有 lock 但 port 被占用。流程腳本中途 crash 時，server 仍在跑：用 `doctor` 看哪個 slot 被占、拿 `runDir` 跑 `stop`。`launch` 失敗時會結束自己的 server 並釋放 slot，run 目錄留著供診斷，之後由 `sweep` 清掉。每次失敗的嘗試之後都要 stop，避免留下程序與 port。清理不刪 `.local/ticket-artifacts/`。
 
 ## 平台
 
