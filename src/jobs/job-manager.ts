@@ -24,11 +24,12 @@ import {
   MAX_CHECK_ATTEMPTS,
   type SkipReason,
   type SubscriptionSettings,
+  type WorkStatus,
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
-import { failedJobs, jobOverview, waitsForTurn } from './job-board.js';
+import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 import type { SubscriptionPort } from './subscription-port.js';
 
@@ -97,10 +98,10 @@ export interface JobListQuery {
   cursor?: string;
 }
 
-/** A check in progress: its item progress, and whether it waits for its turn instead of collecting. */
+/** A check in progress: what it is doing and its item progress. */
 export interface CheckActivity {
   jobId: string;
-  waiting: boolean;
+  status: WorkStatus;
   done: number;
   total: number;
 }
@@ -122,7 +123,7 @@ export interface SubscriptionRequestWork {
   /** The subscription it resolved to so far; null before resolution. */
   targetId: string | null;
   title: string | null;
-  waiting: boolean;
+  status: WorkStatus;
 }
 
 export interface SubscriptionWorkReport {
@@ -131,16 +132,11 @@ export interface SubscriptionWorkReport {
   adds: SubscriptionRequestWork[];
 }
 
-/**
- * Whether a queued or running check job collects now or waits for its turn: it waits while it has
- * not started, while its own step waits for a cooldown or a retry, while none of the items it still
- * has to collect is running because other work holds the capture slot, and while every such item
- * waits for a cooldown or a retry. Items show `running` while their item job runs.
- */
+/** What a queued or running check job is doing; items show `running` while their item job runs. */
 export function checkActivity(job: CollectionJob): CheckActivity {
   return {
     jobId: job.id,
-    waiting: job.state === 'queued' || waitsForTurn(job),
+    status: workStatus(job),
     done: job.progress?.done ?? 0,
     total: job.progress?.total ?? 0,
   };
@@ -474,7 +470,7 @@ export class JobManager {
           jobId: job.id, url: job.source.url,
           targetId: job.result?.subscriptionId ?? subscribing?.subscriptionId ?? null,
           title: job.source.title ?? subscribing?.title ?? null,
-          waiting: job.state !== 'running' || Boolean(job.wait),
+          status: workStatus(job),
         };
       });
     return { subscriptions, adds };
@@ -605,14 +601,7 @@ export class JobManager {
       .map((job) => this.withLiveItems(publicJob(this.jobs.get(job.id) ?? job)));
     return jobOverview(jobs, {
       now: this.now(),
-      queuePosition: (job) => {
-        // A check past discovery waits as early as the first of its items in line.
-        const positions = (job.items ?? []).flatMap((item) => {
-          const position = item.jobId ? this.queueOrder.get(item.jobId) : undefined;
-          return position === undefined ? [] : [position];
-        });
-        return positions.length > 0 ? Math.min(...positions) : this.queueOrder.get(job.id);
-      },
+      queuePosition: (job) => this.queueOrder.get(job.id),
       hasDocument: (type, key) => this.hasDocument(type, key),
     });
   }

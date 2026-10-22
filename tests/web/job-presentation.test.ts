@@ -1,15 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
 import {
-  jobItemLabel,
   jobKindLabel,
   jobPhaseLabel,
   jobProgressLabel,
   jobResultLabel,
-  jobStateLabel,
   recoveryLabel,
-  retryLabel,
-  waitLabel,
 } from '../../src/web/job-presentation.js';
 
 const originalZone = process.env.TZ;
@@ -26,14 +22,6 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 }
 
 describe('job presentation', () => {
-  it('shows a job waiting for a YouTube cooldown with the time it continues', () => {
-    const wait = { reason: 'rate_limited' as const, until: '2026-10-15T06:05:00.000Z' };
-    const waiting = job({ state: 'queued', phase: 'capture', wait, retry: { attempts: 1, maxAttempts: 3, nextAttemptAt: null, lastError: { code: 'network_error', message: 'x' } } });
-    expect(jobStateLabel(waiting)).toBe('等待中');
-    expect(waitLabel(wait, 'youtube')).toBe('YouTube 限制連線，約 14:05 繼續');
-    expect(waitLabel(undefined, 'youtube')).toBeNull();
-  });
-
   it('states saving and indexing separately for a video', () => {
     expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toBe('文件已保存・已更新搜尋');
     expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: false } }))).toBe('文件已保存，搜尋更新失敗');
@@ -63,19 +51,11 @@ describe('job presentation', () => {
   });
 
 
-  it('states retries, restarts and their outcome', () => {
-    const lastError = { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。' };
-    const waiting = job({ state: 'queued', retry: { attempts: 1, maxAttempts: 3, nextAttemptAt: '2026-10-15T06:02:00.000Z', lastError } });
-    expect(jobStateLabel(waiting)).toBe('等待重試');
-    expect(retryLabel(waiting.retry)).toBe('無法連線到 YouTube，請稍後再試。・14:02 自動重試（第 2／3 次）');
-    expect(retryLabel({ ...waiting.retry!, nextAttemptAt: null })).toBeNull();
+  it('states restarts and their outcome', () => {
     const recovery = { resumedCount: 1, uncleanStops: 0, lastInterruptedAt: '2026-10-15T06:00:00.000Z', lastResumedAt: '2026-10-15T06:01:00.000Z' };
     expect(recoveryLabel(job({ state: 'running', recovery }))).toBe('服務重新啟動後已接續');
     expect(recoveryLabel(job({ state: 'completed', recovery }))).toBe('曾中斷後接續');
     expect(recoveryLabel(job({ state: 'completed' }))).toBeNull();
     expect(jobResultLabel(job({ state: 'interrupted', error: { code: 'interrupted', message: '服務停止。' } }))).toBe('已中斷，重新開啟時接續');
-    expect(jobItemLabel({ sourceId: 'a', title: 'a', url: 'u', jobId: 'j', state: 'queued', outcome: null, error: null, retry: waiting.retry! })).toBe('等待重試');
-    expect(jobItemLabel({ sourceId: 'a', title: 'a', url: 'u', jobId: 'j', state: 'completed', outcome: 'skipped', skipReason: 'superseded', error: null }))
-      .toBe('略過・已由較新的工作接續');
   });
 });

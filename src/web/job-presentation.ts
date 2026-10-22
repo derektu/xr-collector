@@ -1,11 +1,7 @@
-import type { JobView, JobItem, JobPhase, JobRetry, JobState, JobWait, SkipReason } from '../core/types.js';
+import type { JobView, JobPhase, SkipReason } from '../core/types.js';
 import { jobRole, sourceDeclaration } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { channelJobLabel } from './subscription-presentation.js';
-
-const STATE_LABELS: Record<JobState, string> = {
-  queued: '排隊中', running: '執行中', completed: '完成', failed: '失敗', interrupted: '已中斷',
-};
 
 /** The declaration of a job's source type. */
 function declarationOf(job: Pick<JobView, 'source'>): SourcePluginDeclaration | undefined {
@@ -38,38 +34,6 @@ export function jobKindLabel(job: JobView): string {
   if (role === 'item') return nounOf(job);
   if (role === 'check') return channelJobLabel(job);
   return `訂閱${targetOf(job)}`;
-}
-
-export function jobStateLabel(job: Pick<JobView, 'state' | 'retry' | 'wait'>): string {
-  if (job.state === 'queued' && job.wait) return '等待中';
-  if (job.state === 'queued' && job.retry?.nextAttemptAt) return '等待重試';
-  return STATE_LABELS[job.state];
-}
-
-/** The state of one item in a check job. */
-export function jobItemLabel(item: JobItem): string {
-  if (item.outcome === 'created') return '新增';
-  if (item.outcome === 'existing') return '已存在';
-  if (item.outcome === 'skipped') return `略過・${skipReasonLabel(item.skipReason)}`;
-  return jobStateLabel(item);
-}
-
-function clockTime(value: string): string {
-  const date = new Date(value);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-/** Why a job waits and when it tries again: "無法連線…・14:02 自動重試（第 2／3 次）". */
-export function retryLabel(retry: JobRetry | null | undefined): string | null {
-  if (!retry?.nextAttemptAt) return null;
-  return `${retry.lastError.message}・${clockTime(retry.nextAttemptAt)} 自動重試（第 ${retry.attempts + 1}／${retry.maxAttempts} 次）`;
-}
-
-/** Why a queued job of the type waits for its source, e.g. "<source> 限制連線，約 14:05 繼續". */
-export function waitLabel(wait: JobWait | null | undefined, type: string): string | null {
-  if (!wait) return null;
-  const label = sourceDeclaration(type)?.label ?? type;
-  return `${label} 限制連線，約 ${clockTime(wait.until)} 繼續`;
 }
 
 /** Whether the job continued after the service restarted. */

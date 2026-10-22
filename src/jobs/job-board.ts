@@ -1,5 +1,5 @@
 import { jobRole } from '../core/source-registry.js';
-import type { CollectionJob, JobOverview, JobOverviewEntry, JobRole } from '../core/types.js';
+import type { CollectionJob, JobOverview, JobOverviewEntry, JobRole, WorkStatus } from '../core/types.js';
 
 /** How long a failed single item or subscription request stays in the failed section. */
 export const FAILED_RETENTION_MS = 7 * 86_400_000;
@@ -7,50 +7,61 @@ export const FAILED_RETENTION_MS = 7 * 86_400_000;
 /** What the jobs page needs to know about work beyond the jobs themselves. */
 export interface JobBoardContext {
   now: Date;
-  /** Where a queued job stands in its queue; smaller starts earlier. Unknown for jobs not in a queue. */
+  /** Where a job that has not started stands in its queue; smaller starts earlier. Unknown for jobs not in a queue. */
   queuePosition(job: CollectionJob): number | undefined;
   /** Whether an item of this type and key already has a document. */
   hasDocument(type: string, key: string): Promise<boolean>;
 }
 
 /**
- * A running check job that is not collecting anything itself: its own step waits for a cooldown
- * or a retry, none of its unfinished items is running, or every unfinished item waits.
+ * What a queued or running top-level job is doing. A job that has not started is queued, also
+ * while its source cools down; once started it never is again. A started job retries while its own
+ * step waits for a retry or a cooldown, and a check also while every item it still collects does;
+ * otherwise a check is downloading once it knows items to collect and checking before.
  */
-export function waitsForTurn(job: CollectionJob): boolean {
-  if (job.wait || job.retry?.nextAttemptAt) return true;
+export function workStatus(job: CollectionJob): WorkStatus {
+  if (!job.startedAt) return { state: 'queued' };
+  const own = retryOf(job);
+  if (own) return own;
   const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
-  if (unfinished.length === 0) return false;
-  return unfinished.every((item) => item.state === 'queued' || item.wait || item.retry?.nextAttemptAt);
+  const items = unfinished.map(retryOf);
+  if (items.length > 0 && items.every((item) => item !== null)) return earliest(items, (item) => item.at)!;
+  switch (roleOf(job)) {
+    case 'check': return job.progress?.total ? { state: 'downloading' } : { state: 'checking' };
+    case 'add': return { state: 'checking' };
+    default: return { state: 'downloading' };
+  }
+}
+
+/** The retry a job or a check's item waits for: the cooldown's end, or its next attempt. */
+function retryOf(work: Pick<CollectionJob, 'wait' | 'retry'>): Extract<WorkStatus, { state: 'retrying' }> | null {
+  if (work.wait) return { state: 'retrying', at: work.wait.until, cause: { reason: 'rate_limited' } };
+  if (!work.retry?.nextAttemptAt) return null;
+  const { attempts, maxAttempts, nextAttemptAt, lastError } = work.retry;
+  return { state: 'retrying', at: nextAttemptAt, cause: { reason: 'failed', error: lastError, attempt: attempts + 1, maxAttempts } };
 }
 
 /**
- * The jobs page from the Vault's top-level jobs, live ones with their items' current state. A check
- * runs while it lists its subscription or one of its items is collecting, and is queued otherwise;
- * other work runs while its step runs and is not waiting. Only the newest job of each target counts
- * for the failed section.
+ * The jobs page from the Vault's top-level jobs, live ones with their items' current state. Work
+ * that started is running until it finishes; work that has not started is queued in the order it
+ * starts. Only the newest job of each target counts for the failed section.
  */
 export async function jobOverview(jobs: readonly CollectionJob[], context: JobBoardContext): Promise<JobOverview> {
   const running: JobOverviewEntry[] = [];
-  const ready: Array<{ entry: JobOverviewEntry; position: number }> = [];
-  const waiting: Array<{ entry: JobOverviewEntry; at: string }> = [];
+  const queued: Array<{ entry: JobOverviewEntry; position: number }> = [];
   for (const job of jobs) {
     const role = roleOf(job);
     if (!role || job.parentId !== null || (job.state !== 'queued' && job.state !== 'running')) continue;
-    const entry = entryOf(job, role);
-    const isRunning = role === 'check'
-      ? job.state === 'running' && !waitsForTurn(job)
-      : job.state === 'running' && !job.wait;
-    if (isRunning) running.push(entry);
-    else if (entry.wait || entry.retry) waiting.push({ entry, at: entry.wait?.until ?? entry.retry!.nextAttemptAt });
-    else ready.push({ entry, position: positionOf(job, context) });
+    const status = workStatus(job);
+    const entry = entryOf(job, role, status);
+    if (status.state === 'queued') queued.push({ entry, position: context.queuePosition(job) ?? Number.MAX_SAFE_INTEGER });
+    else running.push(entry);
   }
-  ready.sort((left, right) => left.position - right.position);
-  waiting.sort((left, right) => left.at.localeCompare(right.at));
+  queued.sort((left, right) => left.position - right.position);
   return {
     running,
-    queued: [...ready.map(({ entry }) => entry), ...waiting.map(({ entry }) => entry)],
-    failed: (await failedJobs(jobs, context)).map((job) => entryOf(job, roleOf(job)!)),
+    queued: queued.map(({ entry }) => entry),
+    failed: (await failedJobs(jobs, context)).map((job) => entryOf(job, roleOf(job)!, null)),
   };
 }
 
@@ -79,13 +90,7 @@ export async function failedJobs(jobs: readonly CollectionJob[], context: Pick<J
   return failed.sort((left, right) => (right.finishedAt ?? '').localeCompare(left.finishedAt ?? ''));
 }
 
-function entryOf(job: CollectionJob, role: JobRole): JobOverviewEntry {
-  const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
-  // A check whose remaining items all wait shows the wait that ends first.
-  const itemWaits = unfinished.length > 0 && unfinished.every((item) => item.wait || item.retry?.nextAttemptAt);
-  const wait = job.wait ?? (itemWaits ? earliest(unfinished.flatMap((item) => item.wait ? [item.wait] : []), (value) => value.until) : null);
-  const retrySource = job.retry?.nextAttemptAt ? job.retry
-    : itemWaits && !wait ? earliest(unfinished.flatMap((item) => item.retry?.nextAttemptAt ? [item.retry] : []), (value) => value.nextAttemptAt!) : null;
+function entryOf(job: CollectionJob, role: JobRole, status: WorkStatus | null): JobOverviewEntry {
   return {
     jobId: job.id,
     type: job.source.type,
@@ -94,17 +99,10 @@ function entryOf(job: CollectionJob, role: JobRole): JobOverviewEntry {
     url: job.source.url,
     publisher: role === 'item' ? job.source.publisher ?? null : null,
     progress: role === 'check' && job.progress ? { done: job.progress.done, total: job.progress.total } : null,
-    wait: wait ?? null,
-    retry: retrySource?.nextAttemptAt ? { nextAttemptAt: retrySource.nextAttemptAt, lastError: retrySource.lastError } : null,
+    status,
     error: job.state === 'failed' ? job.error : null,
     failedAt: job.state === 'failed' ? job.finishedAt : null,
   };
-}
-
-function positionOf(job: CollectionJob, context: JobBoardContext): number {
-  const own = context.queuePosition(job);
-  if (own !== undefined) return own;
-  return Number.MAX_SAFE_INTEGER;
 }
 
 function earliest<T>(values: T[], at: (value: T) => string): T | null {

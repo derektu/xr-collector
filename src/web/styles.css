@@ -106,7 +106,7 @@
 .status-chip { display:inline-block; padding:3px 9px; border-radius:999px; color:var(--paused-fg); background:var(--paused-bg); font-size:12px; white-space:nowrap; }
 .status-chip.tracking { color:var(--tracking-fg); background:var(--tracking-bg); }
 .status-chip.collecting { color:var(--collecting-fg); background:var(--collecting-bg); }
-.status-chip.queued { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
+.status-chip.retrying { color:var(--warning); background:color-mix(in srgb, var(--warning) 14%, transparent); }
 .status-chip.error { color:var(--error-fg); background:var(--error-bg); cursor:help; }
 .menu-anchor { position:relative; }
 .menu { position:fixed; top:0; left:0; z-index:20; min-width:148px; display:flex; flex-direction:column; padding:6px; border:1px solid var(--control-border); border-radius:9px; background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); }
@@ -128,6 +128,7 @@
 .detail-title-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 .detail-kind { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 0 0; color:var(--text-muted); font-size:13px; }
 .detail-kind a { color:var(--accent); text-decoration:none; overflow-wrap:anywhere; }
+.detail-retry { margin:0; padding:10px 14px; border:1px solid color-mix(in srgb, var(--warning) 45%, transparent); border-radius:9px; color:var(--warning); background:color-mix(in srgb, var(--warning) 9%, transparent); font-size:13px; }
 .detail-problem { margin:0; padding:10px 14px; border:1px solid color-mix(in srgb, var(--error) 45%, transparent); border-radius:9px; color:var(--error-fg); background:var(--error-bg); font-size:13px; }
 .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0; }
 .stats > div { padding:14px 16px; border:1px solid var(--border); border-radius:10px; background:var(--frame); }
@@ -261,15 +262,14 @@ dialog::backdrop { background:var(--overlay); }
 .job-title-line { display:flex; align-items:baseline; gap:10px; min-width:0; }
 .job-name { min-width:0; overflow:hidden; color:var(--primary); font-size:14px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 .job-name.address { color:var(--secondary); font-weight:400; }
-.job-progress-count { flex:none; margin-left:auto; color:var(--secondary); font-size:12px; font-variant-numeric:tabular-nums; }
 .job-sub { color:var(--text-muted); font-size:12px; }
 .job-sub.failed { color:var(--error-fg); }
+.job-sub.retrying { color:var(--warning); }
 .job-row progress { width:100%; height:6px; appearance:none; border:0; border-radius:3px; background:var(--card); }
 .job-row progress::-webkit-progress-bar { border-radius:3px; background:var(--card); }
 .job-row progress::-webkit-progress-value { border-radius:3px; background:var(--accent); }
 .job-row progress::-moz-progress-bar { border-radius:3px; background:var(--accent); }
-.job-wait { flex:none; display:inline-flex; align-items:center; gap:5px; color:var(--secondary); font-size:12px; white-space:nowrap; }
-.job-wait.cooldown { color:var(--warning); }
+.job-row .status-chip { flex:none; }
 .job-actions { flex:none; display:flex; gap:8px; }
 .jobs-empty h2 { margin:0; color:var(--secondary); font-size:15px; font-weight:500; text-align:center; }
 
@@ -387,7 +387,7 @@ dialog::backdrop { background:var(--overlay); }
 
 
 @media (max-width:720px) {
-  .job-row { flex-wrap:wrap; } .job-wait,.job-actions { margin-left:42px; }
+  .job-row { flex-wrap:wrap; } .job-row .status-chip,.job-actions { margin-left:42px; }
   .collection-row:not(.collected),.collection-row.collected a { grid-template-columns:20px minmax(0,1fr) auto; }
   .collection-detail { grid-column:2 / -1; grid-row:2; white-space:normal; }
   .log-row { grid-template-columns:auto auto auto; justify-content:start; } .log-row > :last-child { grid-column:1 / -1; }

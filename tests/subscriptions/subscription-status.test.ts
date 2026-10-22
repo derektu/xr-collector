@@ -91,24 +91,24 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect(await w.status(beta)).toEqual({ state: 'paused' });
   });
 
-  it('shows updating with item progress while a check collects', async () => {
+  it('shows downloading with item progress while a check collects', async () => {
     const w = await world();
     const alpha = w.source.addChannel('alpha');
     const videos = w.source.publish(alpha, 'a', w.clock.now, [1, 2, 3]);
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
     await vi.waitFor(() => expect(w.source.running()).toHaveLength(3));
-    expect(await w.status(alpha)).toEqual({ state: 'updating', done: 0, total: 3 });
+    expect(await w.status(alpha)).toEqual({ state: 'downloading', done: 0, total: 3 });
 
     w.source.release(videos[0]!);
-    await vi.waitFor(async () => expect(await w.status(alpha)).toEqual({ state: 'updating', done: 1, total: 3 }));
+    await vi.waitFor(async () => expect(await w.status(alpha)).toEqual({ state: 'downloading', done: 1, total: 3 }));
     w.source.release(videos[1]!);
     w.source.release(videos[2]!);
     await w.jobs.whenSettled(added.result!.followUpJobId!);
     expect((await w.status(alpha)).state).toBe('scheduled');
   });
 
-  it('shows queued for a check behind another subscription and updating once its discovery starts', async () => {
+  it('shows queued for a check behind another subscription and checking once its discovery starts', async () => {
     const w = await world();
     const alpha = w.source.addChannel('alpha');
     const beta = w.source.addChannel('beta');
@@ -119,39 +119,14 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const submissions = await w.channels.startRun({ trigger: 'manual' });
     await vi.waitFor(() => expect(w.source.listingRequests.at(-1)?.channelId).toBe(alpha));
 
-    expect(await w.status(alpha)).toEqual({ state: 'updating', done: 0, total: 0 });
+    expect(await w.status(alpha)).toEqual({ state: 'checking' });
     expect(await w.status(beta)).toEqual({ state: 'queued' });
     release();
     w.source.holdDiscovery = null;
     await Promise.all(submissions.map(({ job }) => w.jobs.whenSettled(job.id)));
   });
 
-  it('shows queued while its videos wait behind the videos of another subscription', async () => {
-    const w = await world({ capture: 1 });
-    const alpha = w.source.addChannel('alpha');
-    const beta = w.source.addChannel('beta');
-    const alphaVideos = w.source.publish(alpha, 'a', w.clock.now, [1, 2]);
-    const betaVideos = w.source.publish(beta, 'b', w.clock.now, [1]);
-    w.source.holdCaptures = true;
-    const first = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
-    const second = await w.jobs.whenSettled((await w.channels.add('@beta')).job.id);
-    await vi.waitFor(async () => expect((await w.jobs.get(second.result!.followUpJobId!))?.items).toHaveLength(1));
-    expect(w.source.running()).toEqual([alphaVideos[0]]);
-
-    expect(await w.status(alpha)).toEqual({ state: 'updating', done: 0, total: 2 });
-    expect(await w.status(beta)).toEqual({ state: 'queued' });
-
-    w.source.release(alphaVideos[0]!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([alphaVideos[1]]));
-    w.source.release(alphaVideos[1]!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([betaVideos[0]]));
-    expect(await w.status(beta)).toEqual({ state: 'updating', done: 0, total: 1 });
-    w.source.release(betaVideos[0]!);
-    await w.jobs.whenSettled(first.result!.followUpJobId!);
-    await w.jobs.whenSettled(second.result!.followUpJobId!);
-  });
-
-  it('shows queued while a YouTube cooldown holds the check', async () => {
+  it('shows queued while a YouTube cooldown holds a check that has not started', async () => {
     const w = await world();
     const alpha = w.source.addChannel('alpha');
     await w.subscribe('alpha');
@@ -161,7 +136,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect(await w.status(alpha)).toEqual({ state: 'queued' });
   });
 
-  it('shows queued while every video left waits for a retry, and a failed video leaves the status alone', async () => {
+  it('shows the retry while every video left waits for one, and a failed video leaves the status alone', async () => {
     const w = await world({ maxAttempts: 2 });
     const alpha = w.source.addChannel('alpha');
     const [failing, fine] = w.source.publish(alpha, 'a', w.clock.now, [1, 2]);
@@ -171,7 +146,10 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     await vi.waitFor(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === fine)?.state).toBe('completed'));
     await vi.waitFor(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === failing)?.retry?.nextAttemptAt).toBeTruthy());
 
-    expect(await w.status(alpha)).toEqual({ state: 'queued' });
+    const retry = w.jobs.get(check).items!.find((item) => item.sourceId === failing)!.retry!;
+    expect(await w.status(alpha)).toEqual({
+      state: 'retrying', at: retry.nextAttemptAt, cause: { reason: 'failed', error: retry.lastError, attempt: 2, maxAttempts: 2 },
+    });
   });
 
   it('keeps showing the next check after a video failed for good', async () => {
@@ -203,16 +181,18 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const now = new Date('2026-10-15T04:00:00.000Z');
     const later = '2026-10-15T05:00:00.000Z';
     // Work facts as the job manager reports them for a subscription's queued or running check.
-    const collecting = { jobId: 'j', waiting: false, done: 3, total: 10 };
-    const waiting = { ...collecting, waiting: true };
+    const collecting = { jobId: 'j', status: { state: 'downloading' as const }, done: 3, total: 10 };
+    const waiting = { ...collecting, status: { state: 'queued' as const } };
+    const checking = { ...collecting, status: { state: 'checking' as const } };
     const context = { autoCheck: true, now, loginRequired: false };
     const enabled = { enabled: true, nextCheckAt: later };
 
     expect(checkStatus({ enabled: false, nextCheckAt: null }, collecting, { ...context, loginRequired: true })).toEqual({ state: 'paused' });
     expect(checkStatus(enabled, collecting, { ...context, loginRequired: true })).toEqual({ state: 'login_required' });
-    expect(checkStatus(enabled, collecting, { ...context, autoCheck: false })).toEqual({ state: 'updating', done: 3, total: 10 });
+    expect(checkStatus(enabled, collecting, { ...context, autoCheck: false })).toEqual({ state: 'downloading', done: 3, total: 10 });
     expect(checkStatus(enabled, waiting, context)).toEqual({ state: 'queued' });
-    expect(checkStatus(enabled, collecting, context)).toEqual({ state: 'updating', done: 3, total: 10 });
+    expect(checkStatus(enabled, checking, context)).toEqual({ state: 'checking' });
+    expect(checkStatus(enabled, collecting, context)).toEqual({ state: 'downloading', done: 3, total: 10 });
     expect(checkStatus(enabled, null, { ...context, autoCheck: false })).toEqual({ state: 'auto_check_off' });
     expect(checkStatus({ enabled: true, nextCheckAt: now.toISOString() }, null, context)).toEqual({ state: 'queued' });
     expect(checkStatus(enabled, null, context)).toEqual({ state: 'scheduled', nextCheckAt: later });

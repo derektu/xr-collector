@@ -405,14 +405,14 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
     w.advance(MINUTE);
     await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['status'] });
     await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['status-new']));
-    expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'updating', done: 0, total: 1 });
+    expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'downloading', done: 0, total: 1 });
     w.sources.fake.release('status-new');
     await w.idle();
 
     w.sources.fake.listFailures.push(new CollectorError('rate_limited', '來源暫時限制連線。'));
     const [limited] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['other'] });
     await vi.waitFor(() => expect(w.jobs.get(limited!.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
-    expect(await w.checkStatus('fake', 'other')).toEqual({ state: 'queued' });
+    expect(await w.checkStatus('fake', 'other')).toEqual({ state: 'retrying', at: w.jobs.get(limited!.job.id).wait!.until, cause: { reason: 'rate_limited' } });
     w.advance(10 * MINUTE);
     w.fire();
     await w.jobs.whenSettled(limited!.job.id);
@@ -674,11 +674,17 @@ describe('failed items of a type the core does not name (N69-T2–T7)', () => {
     const failedOne = await w.jobs.submitItem('fake', itemUrl('fake', 'gone-1'));
 
     let overview = await w.jobs.overview();
-    expect(overview.running).toEqual([expect.objectContaining({ jobId: check, role: 'check', title: 'fake 動態 busy', progress: { done: 0, total: 3 } })]);
-    expect(overview.queued.map((entry) => [entry.jobId, entry.role, entry.title, Boolean(entry.retry)])).toEqual([
-      [named.job.id, 'item', null, false], [failedOne.job.id, 'item', null, false], [retrying.job.id, 'item', null, true],
+    expect(overview.running.map((entry) => [entry.jobId, entry.role, entry.status?.state])).toEqual(expect.arrayContaining([
+      [check, 'check', 'downloading'], [retrying.job.id, 'item', 'retrying'],
+    ]));
+    expect(overview.running).toHaveLength(2);
+    expect(overview.running.find((entry) => entry.jobId === check)).toMatchObject({ title: 'fake 動態 busy', progress: { done: 0, total: 3 } });
+    expect(overview.queued.map((entry) => [entry.jobId, entry.role, entry.title, entry.status?.state])).toEqual([
+      [named.job.id, 'item', null, 'queued'], [failedOne.job.id, 'item', null, 'queued'],
     ]);
-    expect(overview.queued[2]).toMatchObject({ url: itemUrl('fake2', 'retry-1'), retry: { lastError: { code: 'network_error' } }, error: null });
+    expect(overview.running.find((entry) => entry.jobId === retrying.job.id)).toMatchObject({
+      url: itemUrl('fake2', 'retry-1'), status: { cause: { reason: 'failed', error: { code: 'network_error' }, attempt: 2, maxAttempts: 3 } }, error: null,
+    });
     expect(overview.failed).toEqual([]);
 
     w.sources.fake.release('busy-00');
