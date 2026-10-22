@@ -15,15 +15,16 @@ import { REAL } from './lib/synthetic.mjs';
 
 const USAGE = `verify.mjs <command>
   doctor   [--run <dir>]                     environment, slots and (with --run) one instance; read-only
-  launch   --issue <N> [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
-           --no-build serves the checkout's existing dist/web (npm run build:web) instead of building one
+  launch   --issue <N> [--label <name>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
+           evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
+           --checkout picks the version under test; --no-build serves the checkout's existing dist/web
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
-  issue: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
+  issue: { type: 'string' }, label: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
   checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
@@ -67,7 +68,7 @@ async function doctor() {
     const state = holder?.live ? 'in use' : busyPorts.length ? 'ports busy' : holder ? 'stale lock' : 'free';
     return { ...ports, state, busyPorts, runDir: holder?.runDir ?? null };
   }));
-  const report = { checkout, ...commitOf(checkout), checks, slots, evidenceRoot: path.dirname(evidenceDir('x', checkout)) };
+  const report = { checkout, ...commitOf(checkout), checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
   let healthy = ['platform', 'node', 'dependencies', 'chromium', 'meilisearch'].every((key) => checks[key].ok);
   if (o.run) {
     const instance = attach(o.run);
@@ -104,7 +105,7 @@ async function snapshot() {
   await page.screenshot({ path: png });
   await close();
   const state = path.join(instance.evidence, `${name}.state.json`);
-  await writeFile(state, JSON.stringify({ commit: instance.commit, dirty: instance.dirty, route: o.route, takenAt: new Date().toISOString(), ...(await apiState(instance)) }, null, 2));
+  await writeFile(state, JSON.stringify({ commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, route: o.route, takenAt: new Date().toISOString(), ...(await apiState(instance)) }, null, 2));
   print({ screenshot: png, state });
 }
 
@@ -114,7 +115,7 @@ async function main() {
   if (command === 'doctor') return doctor();
   if (command === 'launch') {
     if (!['synthetic', 'real'].includes(o.data) || !['selected', 'fixed', 'none'].includes(o.vault)) throw new Error(USAGE);
-    const instance = await launchWeb({ issue: need('issue'), checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
+    const instance = await launchWeb({ issue: need('issue'), label: o.label, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
     const { api, catalog, updateCatalog, stop, ...record } = instance;
     if (o.data === 'real') record.real = REAL;
     return print(record);

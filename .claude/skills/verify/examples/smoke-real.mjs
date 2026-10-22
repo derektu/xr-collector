@@ -1,15 +1,15 @@
 // Real-data smoke: one real YouTube video (yt-dlp) and one real RSS feed, through the same screens
 // as the synthetic flows. It needs the network and resources/bin/mac from npm run download:runtime;
 // YouTube may rate-limit, which shows as a failed job, not as a harness error. Run from the checkout:
-//   node .claude/skills/verify/examples/smoke-real.mjs [--issue <N>] [--video <url>] [--feed <url>] [--keep]
+//   node .claude/skills/verify/examples/smoke-real.mjs [--issue <N>] [--label <name>] [--video <url>] [--feed <url>] [--keep]
 import { parseArgs } from 'node:util';
 import { apiState, launchWeb, openPage, REAL, recorder, waitFor } from '../scripts/lib/index.mjs';
 
 const { values: o } = parseArgs({ options: {
-  issue: { type: 'string', default: 'smoke' }, video: { type: 'string', default: REAL.video },
+  issue: { type: 'string', default: 'smoke' }, label: { type: 'string' }, video: { type: 'string', default: REAL.video },
   feed: { type: 'string', default: REAL.feed }, keep: { type: 'boolean' },
 } });
-const instance = await launchWeb({ issue: o.issue, data: 'real' });
+const instance = await launchWeb({ issue: o.issue, label: o.label, data: 'real' });
 console.log(`run ${instance.runDir} at ${instance.url}`);
 const { page, consoleErrors, close } = await openPage(instance, { route: '/documents' });
 const record = recorder(instance, page, { file: 'smoke-results.json' });

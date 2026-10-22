@@ -166,6 +166,28 @@ const runtime = await CollectorRuntime.start({
   webRoot: path.join(run, 'web'),
 });
 console.log(`verify server ready at ${runtime.server.url} (${data} data, Vault ${vaultMode})`);
+logFailedRequests(runtime.server.app.server);
+
+// The product's HTTP app runs without a logger, so server.log records each answer with status 400
+// or above: method, path, status and the code and message of its { error } body. Watching the
+// underlying Node server leaves the app itself untouched.
+function logFailedRequests(server: import('node:http').Server): void {
+  server.prependListener('request', (request, response) => {
+    const chunks: Buffer[] = [];
+    const end = response.end.bind(response) as (...args: unknown[]) => typeof response;
+    response.end = ((...args: unknown[]) => {
+      if (response.statusCode >= 400 && (typeof args[0] === 'string' || Buffer.isBuffer(args[0]))) chunks.push(Buffer.from(args[0]));
+      return end(...args);
+    }) as typeof response.end;
+    response.on('finish', () => {
+      if (response.statusCode < 400) return;
+      let error: { code?: string; message?: string } | undefined;
+      try { error = JSON.parse(Buffer.concat(chunks).toString('utf8')).error; } catch { /* not JSON */ }
+      const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      console.error(`[${new Date().toISOString()}] ${request.method} ${pathname} → ${response.statusCode} ${error?.code ?? '-'}${error?.message ? ` ${error.message}` : ''}`);
+    });
+  });
+}
 
 let stopping = false;
 async function stop(): Promise<void> {

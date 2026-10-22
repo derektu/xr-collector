@@ -148,10 +148,10 @@ export function releaseSlot(slot, runDir) {
  * Creates a new run directory and claims a slot for it; the PID in its name keeps simultaneous
  * launches of one issue apart. When no slot is free the directory is removed again.
  */
-export async function createRun(issue, checkout, suffix = '') {
+export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
   const root = runsRoot(checkout);
   await mkdir(root, { recursive: true });
-  const runDir = path.join(root, `${issue}-${stamp()}-${process.pid}${suffix}`);
+  const runDir = path.join(root, `${issue}${label ? `-${label}` : ''}-${stamp()}-${process.pid}${suffix}`);
   await mkdir(runDir);
   try {
     return { runDir, ports: await claimSlot(runDir) };
@@ -163,16 +163,17 @@ export async function createRun(issue, checkout, suffix = '') {
 
 /**
  * Starts a Web instance and waits until the UI answers and search is ready. Options: issue
- * (required), checkout, data ('synthetic' | 'real'), vault ('selected' | 'fixed' | 'none'),
+ * (required), label (evidence subfolder, such as baseline), checkout, data ('synthetic' | 'real'),
+ * vault ('selected' | 'fixed' | 'none'),
  * catalog (synthetic catalog; defaultCatalog() otherwise), build (false copies the checkout's
  * existing dist/web instead of building). The server is the checkout's own copy of server.mts, so
  * it matches the src/ it loads.
  */
-export async function launchWeb({ issue, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
+export async function launchWeb({ issue, label, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   checkout = path.resolve(checkout);
-  const { runDir, ports } = await createRun(issue, checkout);
-  const evidence = evidenceDir(issue, checkout);
+  const evidence = evidenceDir(issue, label);
+  const { runDir, ports } = await createRun(issue, checkout, { label });
   await mkdir(path.join(runDir, 'profile'), { recursive: true });
   await mkdir(evidence, { recursive: true });
   let server = null;
@@ -205,7 +206,7 @@ export async function launchWeb({ issue, checkout = checkoutRoot(), data = 'synt
     holdSlot(ports.slot, runDir, server.pid);
     const url = `http://127.0.0.1:${ports.ui}`;
     const record = {
-      kind: 'web', issue: String(issue), runDir, evidence, checkout, ...commitOf(checkout), data, vault, ports, pid: server.pid, url,
+      kind: 'web', issue: String(issue), ...(label ? { label: String(label) } : {}), runDir, evidence, checkout, ...commitOf(checkout), data, vault, ports, pid: server.pid, url,
       feedsOrigin: `http://127.0.0.1:${ports.feeds}`, server: script, startedAt: new Date().toISOString(),
     };
     if (data === 'synthetic') record.synthetic = syntheticAddresses(initial, record.feedsOrigin);
@@ -245,10 +246,13 @@ function instance(record) {
   const catalogFile = path.join(record.runDir, 'catalog.json');
   return {
     ...record,
-    /** JSON from the same HTTP API the Web UI calls; throws with the body on an error status. */
+    /**
+     * JSON from the same HTTP API the Web UI calls; throws with the body on an error status. A
+     * request carries content-type: application/json only when it has a body, as the UI's do.
+     */
     async api(pathname, init = {}) {
       const response = await fetch(`${record.url}${pathname}`, {
-        ...init, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+        ...init, headers: { ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}), ...(init.headers ?? {}) },
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${pathname} → ${response.status} ${JSON.stringify(body)}`);

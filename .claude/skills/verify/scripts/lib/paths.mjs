@@ -1,6 +1,7 @@
 // Where a verification run keeps things. The checkout under test is the Git worktree the command
-// runs in (or --checkout); scratch state and evidence live in the main checkout's .local/, so runs
-// from every ticket worktree land in one place the user reviews.
+// runs in (or --checkout). Evidence belongs to the worktree the command runs in, next to the ticket's
+// flow scripts, whichever checkout is under test. Scratch state of runs lives in the main checkout's
+// .local/, so sweep sees the runs of every worktree.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -19,9 +20,19 @@ export function mainCheckout(from = process.cwd()) {
   return path.dirname(path.resolve(from, git(from, ['rev-parse', '--git-common-dir'])));
 }
 
-/** Evidence of one issue: screenshots, results.json, server logs. Never removed by cleanup. */
-export function evidenceDir(issue, from = process.cwd()) {
-  return path.join(mainCheckout(from), '.local', 'ticket-artifacts', String(issue));
+/**
+ * Evidence of one issue in the worktree the command runs in: screenshots, results.json, server logs.
+ * A label (baseline, ticket, …) keeps the runs of one issue in their own subfolders. Never removed by
+ * cleanup.
+ */
+export function evidenceDir(issue, label) {
+  checkLabel(label);
+  return path.join(checkoutRoot(), '.local', 'ticket-artifacts', String(issue), ...(label ? [String(label)] : []));
+}
+
+/** A label becomes one folder name: letters, digits, dot, dash and underscore. */
+export function checkLabel(label) {
+  if (label !== undefined && !/^[\w.-]+$/.test(String(label))) throw new Error(`Label ${label} must be one folder name: letters, digits, ., - or _`);
 }
 
 /** Scratch folders of runs: profile, Vault, the run's Web build, run.json. Removed by stop. */
