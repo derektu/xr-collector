@@ -80,15 +80,18 @@ export function processStart(pid) {
 export const runMarker = (runDir) => `--xr-verify-run=${runDir}/`;
 
 /**
- * Whether a command line is one of the run's own programs: the Web server (server.mts) or Electron
- * carrying the run marker, or Meilisearch with its data in the run's profile. A command that only
- * mentions the marker or the directory (a `pgrep -f`, a `tail` of the log, `verify.mjs stop --run`)
- * does not count.
+ * Whether a process is one of the run's own programs, by its executable and command line: node
+ * running server.mts or Electron, carrying the run marker, or meilisearch with its data in the run's
+ * profile. Any other program that mentions the marker or the directory (a `pgrep -f` with the whole
+ * server command line as its pattern, a `tail` of the log, `verify.mjs stop --run`) does not count.
  */
-export function isRunProcess(command, runDir) {
+export function isRunProcess(command, runDir, executable) {
+  const program = path.basename(executable ?? '');
   const padded = ` ${command} `;
-  if (padded.includes(` ${runMarker(runDir)} `)) return /server\.mts |\/Electron\.app\/Contents\/MacOS\/Electron /u.test(padded);
-  return padded.includes(` --db-path ${runDir}/profile/`) && /\/meilisearch /u.test(padded);
+  if (padded.includes(` ${runMarker(runDir)} `)) {
+    return (program === 'node' && padded.includes('server.mts ')) || (program === 'Electron' && executable.endsWith('/Contents/MacOS/Electron'));
+  }
+  return program === 'meilisearch' && padded.includes(` --db-path ${runDir}/profile/`);
 }
 
 /** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */

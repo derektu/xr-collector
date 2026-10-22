@@ -19,18 +19,24 @@ const OWN_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 export const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const commandOf = (pid) => { try { return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim(); } catch { return ''; } };
 
-/** Every process on the machine: { pid, pgid, command }. */
+/**
+ * Every process on the machine: { pid, pgid, executable, command }. The executable (`ps` comm) comes
+ * from a second listing; a process that starts or ends between the two has none.
+ */
 function processTable() {
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,pgid=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  return table.split('\n').map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line)).filter(Boolean)
-    .map((match) => ({ pid: Number(match[1]), pgid: Number(match[2]), command: match[3] }));
+  const list = (columns) => execFileSync('ps', ['-A', '-o', columns], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+    .split('\n').map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line)).filter(Boolean);
+  const executables = new Map(list('pid=,pgid=,comm=').map((match) => [Number(match[1]), match[3]]));
+  return list('pid=,pgid=,command=').map((match) => ({
+    pid: Number(match[1]), pgid: Number(match[2]), executable: executables.get(Number(match[1])) ?? null, command: match[3],
+  }));
 }
 
 const groupMembers = (pgids) => processTable().filter((entry) => pgids.has(entry.pgid));
 
 /** Processes the run started: its Web server or Electron (run marker) and Meilisearch. */
 function runMembers(runDir) {
-  return processTable().filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir));
+  return processTable().filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable));
 }
 
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
