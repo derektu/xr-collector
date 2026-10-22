@@ -83,7 +83,7 @@ npm run build
 
 單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址或加入頻道操作。
 
-原生 PR 驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。`npm run validation -- doctor` 檢查本機能力，`prepare` 自動建立指定版本的獨立 worktree。跨機證據彙整與完整命令見 [開發驗證流程](docs/development-validation.md)。
+畫面與原生行為的驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。Mac 以 [verify skill](.claude/skills/verify/SKILL.md) 啟動隔離的 instance 操作 App，Windows 使用 `npm run validation` 工作區工具。層級與交付規則見 [開發驗證流程](docs/development-validation.md)。
 
 macOS arm64／Windows x64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
 
