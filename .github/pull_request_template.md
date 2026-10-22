@@ -4,12 +4,12 @@
 
 ## 驗證
 
-<!-- 依 docs/development-validation.md 執行；填寫實際 HEAD。 -->
+<!-- 依 docs/development-validation.md 第 4 節填寫；證據只放本機，不上傳。 -->
 
 - HEAD：
 - CI／自動化結果（含 skipped）：
-- 驗收計畫／需求平台及原因（共用任一、Mac、Windows 或兩者）：
-- 本機可用平台／實際 OS 與 host、runtime 架構：
-- 各 scenario 結果、截圖與跨機彙整報告：
-- 證據／manifest 連結：
-- 未驗證項目：
+- 需求平台及原因／實際驗證的平台、OS 與架構：
+- 各 scenario 的層級、資料模式、結果與實際觀察：
+- 證據的本機路徑：
+- 未驗證項目與待補平台：
+- 待決定的問題：
