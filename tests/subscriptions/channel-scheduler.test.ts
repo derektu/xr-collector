@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
@@ -42,8 +43,8 @@ async function world(schedule: StoredSchedule = { enabled: true }) {
   const documents = new MemoryDocuments(now);
   const channelStore = new JsonSubscriptionStore(root, 'youtube');
   const collector = new Collector(documents);
-  const jobs = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channelStore }, now,
+  const jobs: JobManager = new JobManager({
+    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
     limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 },
   });
   const scheduleStore = new MemoryScheduleStore(schedule);

@@ -7,7 +7,8 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
-import { sourceDeclaration, sourceDeclarations, sourceDefinitions, subscriptionKindLabel } from '../core/source-registry.js';
+import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
+import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../plugins/types.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
 import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
@@ -55,6 +56,8 @@ export interface SubscriptionCollection {
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
   /** Subscriptions removed and not added again. */
   listRemovals?(): Promise<Array<{ id: string; title: string }>>;
+  /** The listed subscriptions a manual check covers; refuses a missing or paused one. */
+  checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
   startRun(request: { trigger: 'manual'; subscriptionIds?: string[] }): Promise<JobSubmission[]>;
   checkJobs(id: string): CollectionJob[];
 }
@@ -558,27 +561,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const listed = body.subscriptions;
       if (listed === undefined) {
         // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
-        const submissions = options.schedule ? await options.schedule.runNow() : await checkEveryEnabled(subscriptions);
+        if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
+        const submissions = await options.schedule.runNow();
         return reply.code(202).send({ submissions: submissions.map(submissionView) });
       }
       if (!Array.isArray(listed) || listed.length === 0 || !listed.every(isSubscriptionKey)) {
         throw new CollectorError('invalid_request', 'subscriptions 必須是非空的 {type, id} 清單。');
       }
-      const byType = new Map<string, string[]>();
-      for (const { type, id } of listed) byType.set(type, [...byType.get(type) ?? [], id]);
-      // Every listed subscription is checked before any job starts, so a refused request starts nothing.
-      const runs = await Promise.all([...byType].map(async ([type, ids]) => {
-        const { collection } = collectionOf(type);
-        const records = await collection.list();
-        for (const id of ids) {
-          const record = records.find((candidate) => candidate.id === id);
-          if (!record) throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
-          if (!record.enabled) throw new CollectorError('subscription_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
-        }
-        return { collection, ids };
-      }));
-      const submissions: JobSubmission[] = [];
-      for (const { collection, ids } of runs) submissions.push(...await collection.startRun({ trigger: 'manual', subscriptionIds: ids }));
+      const submissions = await startChecks((type) => collectionOf(type).collection, listed);
       return reply.code(202).send({ submissions: submissions.map(submissionView) });
     });
   }
@@ -669,16 +659,6 @@ function isSubscriptionKey(value: unknown): value is { type: string; id: string 
   const { type, id } = value as Record<string, unknown>;
   return Object.keys(value).every((key) => key === 'type' || key === 'id')
     && typeof type === 'string' && type.length > 0 && typeof id === 'string' && id.length > 0;
-}
-
-/** Checks the enabled subscriptions of every type; used when no scheduler serves the request. */
-async function checkEveryEnabled(collections: readonly SubscriptionCollection[]): Promise<JobSubmission[]> {
-  const submissions: JobSubmission[] = [];
-  for (const collection of collections) {
-    if ((await collection.list()).some((record) => record.enabled)) submissions.push(...await collection.startRun({ trigger: 'manual' }));
-  }
-  if (submissions.length === 0) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
-  return submissions;
 }
 
 /** The label a source type gives its pacing group; the group ID when no registered type declares it. */

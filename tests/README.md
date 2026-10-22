@@ -12,16 +12,16 @@
 | `plugins/rss` | RSS plugin：RSS 2.0／RDF／Atom 解析、文章識別與 key（`feed.test.ts`）、HTML 轉 Markdown（圖片、表格、相對連結、移除的元素，`html.test.ts`）、網址與頁面宣告的 feed、讀取失敗分類、快取與重啟（`source.test.ts`）、經工作與 Vault 的首次收集、範圍與數量、只有摘要（`rss-collection.test.ts`），以及 UI／Agent 共用路由與 Skill（`rss-http.test.ts`）；以 `synthetic-feeds.ts` 的本機 feed 伺服器驗證 |
 | `pacing` | 請求通道：單一連線、隨機等待、冷卻與狀態檔 |
 | `sources` | 網址辨識；訂閱清單、新增中的訂閱、文件頻道篩選的「已移除」、移除訂閱並刪除文件（擷取中的影片、單支影片加入、超過等待時間、部分刪除失敗）與 UI／Agent 讀到相同欄位的 HTTP 契約（`subscription-http.test.ts`） |
-| `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試，以及 YouTube 冷卻期間的等待與接續 |
+| `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試，以及 YouTube 冷卻期間的等待與接續；以 `tests/support/subscription-recorder.ts` 的 in-memory 訂閱 port 驗證，只斷言工作回報給訂閱的內容 |
 | `activity` | 記錄的日檔與舊檔相容、30 天保留與跨時區日界、cursor 分頁、篩選、遮蔽、寫入失敗、手動重試、工作摘要，以及 Vault 鎖與 Not Ready 時的查詢 |
-| `subscriptions` | 訂閱、各訂閱的收集設定、失敗項目欄位與設定檔版本檢查、時間邊界、每次檢查的收集規則（範圍內最新 N 則、不往前補足）、暫停／移除收斂、頻道工作提交與排程、服務計算的訂閱狀態（`subscription-status.test.ts`：更新中、排在其他訂閱後、冷卻、等待重試、到期未派出、自動檢查關閉）；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證 |
+| `subscriptions` | 訂閱、各訂閱的收集設定、失敗項目欄位與設定檔版本檢查、時間邊界、每次檢查的收集規則（範圍內最新 N 則、不往前補足）、暫停／移除收斂、頻道工作提交與排程、服務計算的訂閱狀態（`subscription-status.test.ts`：更新中、排在其他訂閱後、冷卻、等待重試、到期未派出、自動檢查關閉）；以 `synthetic-youtube.ts` 的合成頻道與可控時鐘驗證。訂閱規則經 `SubscriptionService` 搭配真的 `JobManager` 與假來源 plugin 驗證（`subscription-writer.test.ts`：失敗滿 3 次與不重試錯誤標記為已略過、成功或離開範圍移除失敗項目、範圍外項目、三種派工更新派工時間、重試失敗項目與重啟接續不更新派工時間與上次檢查時間、多類型請求含已暫停訂閱時整個拒絕） |
 | `vault` | 文件格式與文件路徑、zip 匯出檔（manifest、路徑與內容檢查、只打包登記的檔案、刪除紀錄與未知欄位）、匯出到檔案與預設匯出目錄、以較新為準的合併（刪除帶回另一台、刪除與新增同時發生、兩邊修改、刪除與修改、兩邊都刪除時採用較新的紀錄、時間相同保留本機、同一支影片、從未交換的知識庫、訂閱的新增修改移除與移除紀錄、沒有需要匯入、完全取代）、匯入前備份與備份目錄、原地套用的中斷恢復（journal 寫入前、改名進行一半）、從匯出檔建立知識庫、資料交換期間的收集暫停、知識庫搬移（目標檢查、逐檔驗證、失敗注入、中斷恢復、清理失敗）、同庫識別與開啟其他知識庫 |
 | `search` | 搜尋狀態、索引（含 YouTube 文件內容雜湊的固定值）與真實引擎 |
 | `server` | HTTP 契約與 Agent 授權；不分類型的收集、訂閱、排程與請求通道路由，以 YouTube 與假來源 plugin 各跑一次，含類型專屬路由回 404 與 UI／Agent 讀到相同結果（`subscription-routes.test.ts`）；核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
 | `web` | 畫面使用的狀態／呈現邏輯（含工作頁列的標題、副標與等待文字，`jobs-presentation.test.ts`）、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
-| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`） |
-| `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）、假來源 plugin（`fake-source-plugin.ts`）與合成 feed 伺服器（`synthetic-feeds.ts`） |
+| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`），以及 `src/jobs` 不引用訂閱檔讀寫、`src/subscriptions` 不引用工作頁規則、只從 `src/jobs` 引用型別的掃描（`subscription-seam.test.ts`） |
+| `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）、假來源 plugin（`fake-source-plugin.ts`）、in-memory 訂閱 port（`subscription-recorder.ts`）與合成 feed 伺服器（`synthetic-feeds.ts`） |
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 

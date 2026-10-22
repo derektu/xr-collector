@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { selectCandidates } from '../subscriptions/candidates.js';
-import type { SubscriptionStore } from '../subscriptions/subscription-store.js';
 import type { Collector } from '../core/collector.js';
 import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
 import {
@@ -23,16 +22,15 @@ import {
   type JobSummary,
   type ItemFailureEntry,
   MAX_CHECK_ATTEMPTS,
-  type OutOfRangeEntry,
   type SkipReason,
-  type SubscriptionRecord,
   type SubscriptionSettings,
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
-import { failedJobs, jobOverview } from './job-board.js';
+import { failedJobs, jobOverview, waitsForTurn } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
+import type { SubscriptionPort } from './subscription-port.js';
 
 export interface JobLimits {
   /** Subscription resolution and discovery running at once. */
@@ -79,16 +77,14 @@ export interface JobManagerOptions {
   /** The assembled source plugins; a job of any other type is kept as it is and not run. */
   plugins: readonly SourcePlugin[];
   documents: Collector;
-  /** The subscriptions of each type with subscriptions, keyed by type. */
-  subscriptions: Readonly<Record<string, SubscriptionStore>>;
+  /** What subscription work reads from and reports to its subscriptions; required for subscription jobs. */
+  subscriptions?: SubscriptionPort;
   limits?: Partial<JobLimits>;
   retry?: Partial<RetryPolicy>;
   now?: () => Date;
   createId?: () => string;
   /** Starts a timer and returns its cancel function; retries wait through it. */
   setTimer?: (callback: () => void, ms: number) => () => void;
-  /** Checks one subscription now, as a manual check does; a failed check job is retried through it. */
-  checkSubscription?: (type: string, id: string) => Promise<JobSubmission>;
   /** The device's request channels, one per pacing group; a group's cooldown pauses the steps of that group only. */
   pacing?: readonly Pacing[];
   /** A target a preview recently resolved for a classified subscription address; adding it resolves no more. */
@@ -99,6 +95,55 @@ export interface JobListQuery {
   state?: 'active' | 'all';
   limit?: number;
   cursor?: string;
+}
+
+/** A check in progress: its item progress, and whether it waits for its turn instead of collecting. */
+export interface CheckActivity {
+  jobId: string;
+  waiting: boolean;
+  done: number;
+  total: number;
+}
+
+/** What the jobs of one subscription are doing. */
+export interface SubscriptionWork {
+  /** The check queued or running for the subscription; null without one. */
+  check: CheckActivity | null;
+  /** Whether an item a check of the subscription queued is still capturing, a stopped check's included. */
+  capturing: boolean;
+  /** How the latest check that completed or failed ended; an interrupted check says nothing about the source. */
+  lastCheck: { state: 'completed' } | { state: 'failed'; error: JobError | null } | null;
+}
+
+/** A subscription request still resolving its address or subscribing. */
+export interface SubscriptionRequestWork {
+  jobId: string;
+  url: string;
+  /** The subscription it resolved to so far; null before resolution. */
+  targetId: string | null;
+  title: string | null;
+  waiting: boolean;
+}
+
+export interface SubscriptionWorkReport {
+  /** Keyed by subscription ID; a subscription without any check job is absent. */
+  subscriptions: Map<string, SubscriptionWork>;
+  adds: SubscriptionRequestWork[];
+}
+
+/**
+ * Whether a queued or running check job collects now or waits for its turn: it waits while it has
+ * not started, while its own step waits for a cooldown or a retry, while none of the items it still
+ * has to collect is running because other work holds the capture slot, and while every such item
+ * waits for a cooldown or a retry. Items show `running` while their item job runs.
+ */
+export function checkActivity(job: CollectionJob): CheckActivity {
+  return {
+    jobId: job.id,
+    waiting: job.state === 'queued' || waitsForTurn(job),
+    done: job.progress?.done ?? 0,
+    total: job.progress?.total ?? 0,
+  };
 }
 
 const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);
@@ -146,6 +191,7 @@ export class JobManager {
   /** Items a check job queued that the user then submitted directly; pausing never skips them. */
   private readonly manualClaims = new Set<string>();
   private closed = false;
+  private resuming = false;
   /** Number of holds in force; while any is, no queued step starts. */
   private holds = 0;
   /**
@@ -216,10 +262,10 @@ export class JobManager {
     return this.plugins.get(job.source.type)?.pacing?.group ?? null;
   }
 
-  private subscriptionStore(type: string): SubscriptionStore {
-    const store = this.options.subscriptions[type];
-    if (!store) throw new Error(`Source type ${type} has no subscription store`);
-    return store;
+  private get subscriptions(): SubscriptionPort {
+    const port = this.options.subscriptions;
+    if (!port) throw new Error('This job manager runs no subscription work');
+    return port;
   }
 
   /**
@@ -345,9 +391,9 @@ export class JobManager {
 
   /**
    * Starts one check of a subscription; an active job of the same subscription is returned
-   * instead, so the check joins it.
+   * instead, so the check joins it. Only the subscriptions dispatch checks.
    */
-  async submitCheck(type: string, subscription: SubscriptionRecord, trigger: ChannelJobTrigger): Promise<JobSubmission> {
+  async submitCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): Promise<JobSubmission> {
     const submission = this.enqueueCheck(type, subscription, trigger);
     await this.options.store.flush();
     this.pump();
@@ -395,16 +441,43 @@ export class JobManager {
   }
 
   /**
-   * The check job of this subscription that is still queued or running. Its items show `running`
-   * while their item job runs, so a caller can tell a check that collects from one whose items
-   * wait behind other work.
+   * What the jobs of one source type are doing for its subscriptions: per subscription, the check in
+   * progress, whether any of its items is capturing and how its latest check ended; and the
+   * subscription requests still resolving or subscribing, oldest first.
    */
-  activeCheck(type: string, id: string): CollectionJob | null {
-    for (const job of this.jobs.values()) {
-      if (!isRole(job, type, 'check') || job.source.id !== id || this.stoppedJobs.has(job.id)) continue;
-      return this.withLiveItems(structuredClone(job));
+  subscriptionWork(type: string): SubscriptionWorkReport {
+    const subscriptions = new Map<string, SubscriptionWork>();
+    const entry = (id: string): SubscriptionWork => {
+      let work = subscriptions.get(id);
+      if (!work) subscriptions.set(id, work = { check: null, capturing: false, lastCheck: null });
+      return work;
+    };
+    // The store lists newest first, so the first completed or failed check of a subscription is its latest.
+    for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
+      if (!isRole(job, type, 'check') || !job.source.id) continue;
+      const work = entry(job.source.id);
+      if (!work.lastCheck && (job.state === 'completed' || job.state === 'failed')) {
+        work.lastCheck = job.state === 'completed' ? { state: 'completed' } : { state: 'failed', error: job.error };
+      }
     }
-    return null;
+    for (const job of this.jobs.values()) {
+      if (!isRole(job, type, 'check') || !job.source.id) continue;
+      if (!this.stoppedJobs.has(job.id) && !entry(job.source.id).check) entry(job.source.id).check = checkActivity(this.withLiveItems(job));
+    }
+    for (const [id, work] of subscriptions) work.capturing = this.pendingCaptures(type, id).checkItems.length > 0;
+    const adds = [...this.jobs.values()]
+      .filter((job) => isRole(job, type, 'add'))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((job): SubscriptionRequestWork => {
+        const subscribing = job.checkpoint?.subscribing;
+        return {
+          jobId: job.id, url: job.source.url,
+          targetId: job.result?.channelId ?? subscribing?.channelId ?? null,
+          title: job.source.title ?? subscribing?.title ?? null,
+          waiting: job.state !== 'running' || Boolean(job.wait),
+        };
+      });
+    return { subscriptions, adds };
   }
 
   /** Items record their item job's outcome when it ends; meanwhile a running item shows as `running`. */
@@ -415,24 +488,6 @@ export class JobManager {
       items: job.items.map((item) => item.state === 'queued' && item.jobId && this.jobs.get(item.jobId)?.state === 'running'
         ? { ...item, state: 'running' } : item),
     };
-  }
-
-  /**
-   * Subscription requests of one source type still queued or running, oldest first, with the
-   * target each one has resolved to so far (null before resolution).
-   */
-  activeSubscriptionAdds(type: string): Array<{ job: CollectionJob; targetId: string | null; title: string | null }> {
-    return [...this.jobs.values()]
-      .filter((job) => isRole(job, type, 'add'))
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .map((job) => {
-        const subscribing = job.checkpoint?.subscribing;
-        return {
-          job: publicJob(structuredClone(job)),
-          targetId: job.result?.channelId ?? subscribing?.channelId ?? null,
-          title: job.source.title ?? subscribing?.title ?? null,
-        };
-      });
   }
 
   /**
@@ -517,15 +572,16 @@ export class JobManager {
       const retryItems = job.items.filter((item) => item.state === 'failed')
         .map((item) => ({ sourceId: item.sourceId, title: item.title, url: item.url }));
       if (retryItems.length === 0) throw new CollectorError('job_not_retryable', `這個工作沒有失敗的${noun}。`);
-      const stopped = await this.subscriptionStopped(type, job.source.id!);
+      // Collecting failed items again is not a check: no dispatch, and the subscription's check time stays.
+      const stopped = await this.subscriptions.stopped(type, job.source.id!);
       if (stopped === 'subscription_removed') throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
       if (stopped) throw new CollectorError('subscription_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
       submission = this.enqueue(job.kind, type, jobKey(job), {
         id: job.source.id, url: job.source.url, title: job.source.title,
       }, null, { scope: { trigger: 'manual' }, checkpoint: { retryItems }, retryOf: job.id });
     } else {
-      if (!this.options.checkSubscription || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
-      submission = await this.options.checkSubscription(type, job.source.id);
+      if (!this.options.subscriptions || !job.source.id) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
+      submission = await this.subscriptions.checkNow(type, job.source.id);
       const started = this.jobs.get(submission.job.id);
       if (started && !submission.deduplicated) {
         this.update(started, { retryOf: job.id });
@@ -683,6 +739,17 @@ export class JobManager {
    */
   async resume(): Promise<void> {
     if (this.closed) return;
+    // Work the subscriptions dispatch meanwhile waits in line until every interrupted job is back.
+    this.resuming = true;
+    try {
+      await this.resumeJobs();
+    } finally {
+      this.resuming = false;
+    }
+    this.pump();
+  }
+
+  private async resumeJobs(): Promise<void> {
     const { store } = this.options;
     const superseded: CollectionJob[] = [];
     const pending: CollectionJob[] = [];
@@ -734,10 +801,6 @@ export class JobManager {
       if (roleOf(job) === 'check') skipCheck(job, 'superseded');
       else if (!settled.has(job.id)) settle(job, 'completed', { outcome: 'skipped', skipReason: 'superseded' }, null);
     }
-    const subscriptions = new Map<string, SubscriptionRecord[]>();
-    for (const [type, subscriptionStore] of Object.entries(this.options.subscriptions)) {
-      subscriptions.set(type, await subscriptionStore.list());
-    }
     const checkJobs: CollectionJob[] = [];
     // Subscription work first, so its items follow the subscription's state.
     for (const job of pending) {
@@ -747,10 +810,8 @@ export class JobManager {
         settle(job, 'failed', { outcome: 'failed' }, repeated);
         continue;
       }
-      const records = subscriptions.get(job.source.type) ?? [];
       if (role === 'check') {
-        const subscription = records.find((candidate) => candidate.id === job.source.id);
-        const reason: SkipReason | null = !subscription ? 'subscription_removed' : !subscription.enabled ? 'subscription_paused' : null;
+        const reason = await this.subscriptions.stopped(job.source.type, job.source.id!);
         if (reason) {
           skipCheck(job, reason);
           continue;
@@ -758,14 +819,11 @@ export class JobManager {
         checkJobs.push(job);
       }
       const subscribing = role === 'add' ? job.checkpoint?.subscribing : undefined;
-      const subscribed = subscribing ? records.find((candidate) => candidate.id === subscribing.channelId) : undefined;
-      if (subscribed) {
-        // The subscription was written before the stop; its first collection is queued now, before the
+      if (subscribing && await this.subscriptions.stopped(job.source.type, subscribing.channelId) !== 'subscription_removed') {
+        // The subscription was written before the stop; its first check is dispatched now, before the
         // scheduler can start a check of the same subscription, so that check joins it.
         const restored = this.restore(job, { queue: false });
-        this.update(restored, { source: { ...restored.source, id: subscribed.id, title: subscribed.title } });
-        const followUp = this.enqueueCheck(job.source.type, subscribed, 'subscribe');
-        this.finish(restored, 'completed', { outcome: 'created', channelId: subscribed.id, followUpJobId: followUp.job.id }, null);
+        await this.subscribeResolved(restored, { id: subscribing.channelId, title: subscribing.title, url: subscribing.url });
         continue;
       }
       this.restore(job);
@@ -789,11 +847,11 @@ export class JobManager {
       });
       this.update(job, { items, progress: progressOf(items) });
       const discovered = job.checkpoint?.discovered;
-      if (discovered && !job.checkpoint?.retryItems) await this.recordCheck(job.source.type, job.source.id!, discovered.at);
+      // The check's own discovery time, in case the stop came before it was recorded; resuming is no new check.
+      if (discovered && !job.checkpoint?.retryItems) await this.subscriptions.checked(job.source.type, job.source.id!, { at: discovered.at });
       if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
     }
     await store.flush();
-    this.pump();
   }
 
   /**
@@ -892,7 +950,7 @@ export class JobManager {
     }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
   }
 
-  private enqueueCheck(type: string, subscription: SubscriptionRecord, trigger: ChannelJobTrigger): JobSubmission {
+  private enqueueCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): JobSubmission {
     const kind = jobKind(type, 'check');
     if (!kind) throw new Error(`Source type ${type} has no check jobs`);
     return this.enqueue(kind, type, `${type}:check:${subscription.id}`, {
@@ -1028,7 +1086,7 @@ export class JobManager {
   }
 
   private pump(): void {
-    if (this.closed || this.holds > 0) return;
+    if (this.closed || this.holds > 0 || this.resuming) return;
     // Every step reads from its source, so no step of a cooling pacing group starts; other groups go on.
     while (this.runningDiscovery < this.limits.discovery) {
       const index = this.discoveryQueue.findIndex((id) => {
@@ -1131,7 +1189,7 @@ export class JobManager {
           phase: 'index', documentId: document.id,
         });
       }
-      await this.clearFailure(job);
+      await this.reportCollected(job);
       if (this.jobs.get(job.id) !== job) return;
       this.finish(job, 'completed', {
         outcome, documentId: document.id, saved: true, indexed: index.indexed,
@@ -1139,7 +1197,7 @@ export class JobManager {
       }, null);
     } catch (error) {
       if (error instanceof CollectorError && (error.code === 'out_of_range' || error.code === 'document_deleted')) {
-        if (error.code === 'out_of_range') await this.recordOutOfRange(job);
+        if (error.code === 'out_of_range') await this.reportOutOfRange(job);
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: error.code === 'out_of_range' ? 'out_of_range' : 'deleted' }, null);
         return;
       }
@@ -1172,7 +1230,7 @@ export class JobManager {
     const attempts = (job.retry?.attempts ?? 0) + 1;
     const failureClass = this.classify(job, error);
     if (failureClass !== 'retry_now') {
-      await this.recordFailure(job, error, failureClass);
+      await this.reportFailure(job, error, failureClass);
       if (this.jobs.get(job.id) !== job) return;
       this.finish(job, 'failed', { outcome: 'failed' }, error, detail);
       return;
@@ -1182,7 +1240,7 @@ export class JobManager {
       this.update(job, { retry: { attempts, maxAttempts, nextAttemptAt: null, lastError: error } });
       this.notifyItemRetry(job);
       // Transient failures that outlast the attempts of one check leave the item to the next check.
-      await this.recordFailure(job, error, 'retry_next_check');
+      await this.reportFailure(job, error, 'retry_next_check');
       if (this.jobs.get(job.id) !== job) return;
       const message = attempts > 1 ? `${error.message}（已嘗試 ${attempts} 次）` : error.message;
       this.finish(job, 'failed', { outcome: 'failed' }, { code: error.code, message }, detail);
@@ -1229,50 +1287,36 @@ export class JobManager {
 
   private async addSubscription(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'resolve');
-    const type = job.source.type;
-    const plugin = this.requirePlugin(type);
-    const store = this.subscriptionStore(type);
+    const plugin = this.requirePlugin(job.source.type);
     // A job interrupted while subscribing already knows its target and may have added it.
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
       ? { id: subscribing.channelId, title: subscribing.title, url: subscribing.url }
-      : this.options.recentTarget?.(type, job.source.url) ?? await plugin.resolveTarget!(job.source.url, { signal });
-    const existing = (await store.list()).find((record) => record.id === resolved.id);
+      : this.options.recentTarget?.(job.source.type, job.source.url) ?? await plugin.resolveTarget!(job.source.url, { signal });
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
-    if (existing && subscribing) {
-      this.update(job, { source: { ...job.source, id: existing.id, title: existing.title } });
-      const followUp = this.enqueueCheck(type, existing, 'subscribe');
-      this.finish(job, 'completed', { outcome: 'created', channelId: existing.id, followUpJobId: followUp.job.id }, null);
-      return;
-    }
-    if (existing) {
-      // An existing subscription keeps its own state; a paused one is resumed explicitly.
-      this.update(job, { source: { ...job.source, id: existing.id, title: existing.title } });
-      this.finish(job, 'completed', { outcome: 'existing', channelId: existing.id }, null);
-      return;
-    }
-    this.update(job, {
-      source: { ...job.source, id: resolved.id, title: resolved.title },
-      checkpoint: { ...job.checkpoint, subscribing: { channelId: resolved.id, title: resolved.title, url: resolved.url } },
+    await this.subscribeResolved(job, resolved);
+  }
+
+  /**
+   * Hands a subscription request's resolved target and accepted settings to the subscriptions,
+   * which subscribe it and dispatch its first check, and ends the request with that check.
+   */
+  private async subscribeResolved(job: CollectionJob, target: SubscriptionTarget): Promise<void> {
+    const result = await this.subscriptions.subscribe(job.source.type, target, this.acceptedSettings(job), {
+      resumed: Boolean(job.checkpoint?.subscribing),
+      beforeCreate: async () => {
+        this.update(job, {
+          source: { ...job.source, id: target.id, title: target.title },
+          checkpoint: { ...job.checkpoint, subscribing: { channelId: target.id, title: target.title, url: target.url } },
+        });
+        await this.options.store.flush();
+      },
     });
-    await this.options.store.flush();
-    // The first collection below is this subscription's first check; the next one is an interval later.
-    const settings = this.acceptedSettings(job);
-    const now = this.now();
-    const subscription = await store.add({
-      ...resolved, enabled: true, addedAt: now.toISOString(), lastCheckedAt: null,
-      settings: { ...settings }, lastDispatchedAt: now.toISOString(),
-      nextCheckAt: new Date(now.getTime() + settings.intervalMinutes * 60_000).toISOString(),
-    });
-    this.recordEvent({
-      severity: 'info', eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`,
-      sourceType: type, sourceId: subscription.id, sourceTitle: subscription.title, subscriptionId: subscription.id,
-    });
+    const { subscription, check } = result;
     this.update(job, { source: { ...job.source, id: subscription.id, title: subscription.title } });
-    const followUp = this.enqueueCheck(type, subscription, 'subscribe');
     this.finish(job, 'completed', {
-      outcome: 'created', channelId: subscription.id, followUpJobId: followUp.job.id,
+      outcome: result.outcome, channelId: subscription.id, ...(check ? { followUpJobId: check.job.id } : {}),
     }, null);
   }
 
@@ -1282,28 +1326,22 @@ export class JobManager {
   }
 
   /**
-   * Lists the subscription and queues one item job per item found. The range comes from the
-   * subscription's settings at this moment and is measured back from now, so a job that waited in
+   * Lists the subscription and queues one item job per item found. The plan comes from the
+   * subscription at this moment and its range is measured back from now, so a job that waited in
    * the queue or across a restart checks the range a check started now would.
    */
   private async discover(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'discover');
     const type = job.source.type;
+    const id = job.source.id!;
     const plugin = this.requirePlugin(type);
-    const keyField = plugin.storage!.outOfRangeKeyField;
     const retryItems = job.checkpoint?.retryItems;
-    const subscription = (await this.subscriptionStore(type).list()).find((candidate) => candidate.id === job.source.id);
-    if (!subscription?.enabled) {
-      this.finish(job, 'completed', { outcome: 'skipped', skipReason: subscription ? 'subscription_paused' : 'subscription_removed' }, null);
+    const plan = await this.subscriptions.planCheck(type, id, this.now());
+    if ('stopped' in plan) {
+      this.finish(job, 'completed', { outcome: 'skipped', skipReason: plan.stopped }, null);
       return;
     }
-    const target = { ...subscription, title: job.source.title ?? subscription.title, url: job.source.url };
-    const range = plugin.subscription!.checkRange(subscription.settings, this.now());
-    // A range that starts no earlier than the one that skipped an item still leaves it out.
-    const outside = new Set((subscription.outOfRange ?? [])
-      .filter((entry) => entry.before <= range.since.toISOString()).map((entry) => entry[keyField]));
-    // Skipped items stay candidates that are not collected, so no older item takes their place.
-    for (const entry of subscription.failures ?? []) if (entry.skipped) outside.add(entry[keyField] as string);
+    const target = { ...plan.target, title: job.source.title ?? plan.target.title, url: job.source.url };
     const discovery = retryItems
       ? {
         candidates: null,
@@ -1311,13 +1349,13 @@ export class JobManager {
         publishedNotBefore: null,
       }
       : await selectCandidates(
-        plugin.listSubscriptionItems!(target, { signal }), range,
+        plugin.listSubscriptionItems!(target, { signal }), plan.range,
         // Collected, deleted, out-of-range and skipped items stay candidates that are not collected, so they still fill the item limit.
-        async (key) => outside.has(key) || this.options.documents.isKnown({ sourceType: type, sourceId: key }),
+        async (key) => plan.excluded.has(key) || this.options.documents.isKnown({ sourceType: type, sourceId: key }),
       );
     // The service stopped while discovering; close() records the job as interrupted.
     if (this.closed) return;
-    const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptionStopped(type, subscription.id);
+    const reason = this.stoppedJobs.get(job.id) ?? await this.subscriptions.stopped(type, id);
     if (reason) {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       return;
@@ -1347,7 +1385,7 @@ export class JobManager {
     this.event(job, {
       severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
     });
-    // The check time is saved only after the accepted items are recorded, so a stop in between finds them again.
+    // The check is reported only after the accepted items are recorded, so a stop in between finds them again.
     await this.options.store.flush();
     if (this.stoppedJobs.has(job.id) || retryItems) {
       // A job stopped while its items were being recorded leaves the subscription to the later job;
@@ -1355,59 +1393,19 @@ export class JobManager {
       this.completeCheckIfDone(job);
       return;
     }
-    const saved = await this.recordCheck(type, subscription.id, discovered.at, new Set(discovery.candidates ?? []),
-      new Set(discovery.items.map((item) => item.key)));
-    if (!saved) this.stopSubscription(type, subscription.id, 'subscription_removed');
-    else if (!saved.enabled) this.stopSubscription(type, subscription.id, 'subscription_paused');
+    const stopped = await this.subscriptions.checked(type, id, {
+      at: discovered.at, candidates: new Set(discovery.candidates ?? []), collecting: new Set(discovery.items.map((item) => item.key)),
+    });
+    if (stopped) this.stopSubscription(type, id, stopped);
     if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
   }
 
-  /**
-   * Records a check of the subscription at `at`, keeping a later check time already recorded, and
-   * returns the subscription, or null once it is removed. Recording the same check again changes
-   * nothing. With the check's `candidates`, out-of-range items that are no longer candidates are
-   * forgotten, and so are failed items that are no longer candidates or already have a document:
-   * a failure stays only while the item is skipped or among the items the check collects.
-   */
-  private async recordCheck(
-    type: string, id: string, at: string, candidates?: ReadonlySet<string>, collecting?: ReadonlySet<string>,
-  ): Promise<SubscriptionRecord | null> {
-    const store = this.subscriptionStore(type);
-    const keyField = this.requirePlugin(type).storage!.outOfRangeKeyField;
-    const current = (await store.list()).find((candidate) => candidate.id === id);
-    if (candidates && current?.outOfRange?.some((entry) => !candidates.has(entry[keyField]!))) {
-      await this.updateOutOfRange(type, id, (entries) => entries.filter((entry) => candidates.has(entry[keyField]!)));
-    }
-    if (candidates && collecting) {
-      const kept = (entry: ItemFailureEntry) => {
-        const key = entry[keyField] as string;
-        return candidates.has(key) && (entry.skipped || collecting.has(key));
-      };
-      if (current?.failures?.some((entry) => !kept(entry))) await this.updateFailures(type, id, (entries) => entries.filter(kept));
-    }
-    if (!current || (current.lastCheckedAt && current.lastCheckedAt >= at)) return current ?? null;
-    return store.update(id, { lastCheckedAt: at });
-  }
-
-  /** Remembers that a check job's item was published before the range start it was checked against. */
-  private async recordOutOfRange(item: CollectionJob): Promise<void> {
-    const subscriptionId = item.parentId ? this.jobs.get(item.parentId)?.source.id : null;
-    const before = item.publishedNotBefore;
-    const key = item.source.id;
-    const type = item.source.type;
-    const keyField = this.plugin(type)?.storage?.outOfRangeKeyField;
-    if (!subscriptionId || !before || !key || !keyField) return;
-    await this.updateOutOfRange(type, subscriptionId, (entries) => [
-      ...entries.filter((entry) => entry[keyField] !== key), { [keyField]: key, before } as OutOfRangeEntry,
-    ]);
-  }
-
-  /** Changes a subscription's out-of-range items in one serialized store update. */
-  private async updateOutOfRange(type: string, id: string, change: (entries: OutOfRangeEntry[]) => OutOfRangeEntry[]): Promise<void> {
-    await this.subscriptionStore(type).updateWith((records) => {
-      const current = records.find((candidate) => candidate.id === id);
-      return current ? new Map([[id, { outOfRange: change(current.outOfRange ?? []) }]]) : new Map();
-    });
+  /** The check job's subscription an item job collects for, with the item's key; null for any other job. */
+  private checkItemOf(item: CollectionJob): { type: string; subscriptionId: string; key: string } | null {
+    if (roleOf(item) !== 'item' || !item.parentId || !item.source.id) return null;
+    const parent = this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId);
+    if (!parent || roleOf(parent) !== 'check' || !parent.source.id) return null;
+    return { type: item.source.type, subscriptionId: parent.source.id, key: item.source.id };
   }
 
   /** The target of the subscription whose check found an item; undefined for an item submitted on its own. */
@@ -1417,60 +1415,49 @@ export class JobManager {
     return { id: parent.source.id, title: parent.source.title ?? '', url: parent.source.url };
   }
 
-  /** The subscription a check job's item collects for, with the key field its failures use; null for any other job. */
-  private failureTarget(item: CollectionJob): { type: string; subscriptionId: string; key: string; keyField: string } | null {
-    if (roleOf(item) !== 'item' || !item.parentId || !item.source.id) return null;
-    const parent = this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId);
-    const keyField = this.plugin(item.source.type)?.storage?.outOfRangeKeyField;
-    if (!parent || roleOf(parent) !== 'check' || !parent.source.id || !keyField) return null;
-    return { type: item.source.type, subscriptionId: parent.source.id, key: item.source.id, keyField };
+  /** Reports a check item's range start that its publish time came before. */
+  private async reportOutOfRange(item: CollectionJob): Promise<void> {
+    const target = this.checkItemOf(item);
+    if (!target || !item.publishedNotBefore) return;
+    await this.subscriptions.itemOutOfRange(target.type, target.subscriptionId, target.key, item.publishedNotBefore);
+  }
+
+  /** Reports a collected check item. */
+  private async reportCollected(item: CollectionJob): Promise<void> {
+    const target = this.checkItemOf(item);
+    if (!target) return;
+    await this.quietly(() => this.subscriptions.itemCollected(target.type, target.subscriptionId, target.key));
   }
 
   /**
-   * Counts one failed attempt of a check's item in its subscription's failure record. `skip`, and
-   * reaching the attempt limit, mark the item skipped; a source that needs a new sign-in counts nothing.
+   * Reports a check item that failed for good within this job, with its source's failure class, and
+   * records the failure count the subscription keeps across checks. A limit or a source that needs a
+   * new sign-in is no failure of the item.
    */
-  private async recordFailure(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
+  private async reportFailure(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
     if (failureClass === 'login_required' || failureClass === 'rate_limited') return;
-    const target = this.failureTarget(item);
+    const target = this.checkItemOf(item);
     if (!target) return;
-    let recorded: ItemFailureEntry | null = null;
+    let entry: ItemFailureEntry | null = null;
     // A failure record that cannot be written leaves the item to be tried as if it had not failed.
-    await this.quietly(() => this.updateFailures(target.type, target.subscriptionId, (entries) => {
-      const previous = entries.find((entry) => entry[target.keyField] === target.key);
-      const attempts = (previous?.attempts ?? 0) + 1;
-      recorded = {
-        [target.keyField]: target.key, title: item.source.title ?? previous?.title ?? '', attempts, errorCode: error.code,
-        failedAt: this.now().toISOString(), skipped: failureClass === 'skip' || attempts >= MAX_CHECK_ATTEMPTS,
-        ...(this.plugin(item.source.type)?.item.urlForKey ? {} : { url: item.source.url }),
-      };
-      return [...entries.filter((entry) => entry !== previous), recorded];
-    }));
-    const entry = recorded as ItemFailureEntry | null;
-    if (!entry) return;
+    await this.quietly(async () => {
+      entry = await this.subscriptions.itemFailed(target.type, target.subscriptionId, {
+        key: target.key, title: item.source.title, url: item.source.url,
+      }, error, failureClass);
+    });
+    const recorded = entry as ItemFailureEntry | null;
+    if (!recorded) return;
     const label = this.plugin(item.source.type)?.failureLabels?.[error.code] ?? '收集失敗';
     const name = item.source.title ? `「${item.source.title}」` : item.source.url;
-    this.event(item, entry.skipped
+    this.event(item, recorded.skipped
       ? {
-        severity: 'info', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: entry.attempts,
-        message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${entry.attempts} 次`}`,
+        severity: 'info', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
+        message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`,
       }
       : {
-        severity: 'warning', eventType: 'subscription.item_failed', errorCode: error.code, attempt: entry.attempts,
-        message: `${name}${label}・已試 ${entry.attempts}/${MAX_CHECK_ATTEMPTS} 次`,
+        severity: 'warning', eventType: 'subscription.item_failed', errorCode: error.code, attempt: recorded.attempts,
+        message: `${name}${label}・已試 ${recorded.attempts}/${MAX_CHECK_ATTEMPTS} 次`,
       });
-  }
-
-  /** Forgets a check item's failure once it is collected. */
-  private async clearFailure(item: CollectionJob): Promise<void> {
-    const target = this.failureTarget(item);
-    if (!target) return;
-    await this.quietly(async () => {
-      const current = (await this.subscriptionStore(target.type).list()).find((candidate) => candidate.id === target.subscriptionId);
-      if (!current?.failures?.some((entry) => entry[target.keyField] === target.key)) return;
-      await this.updateFailures(target.type, target.subscriptionId,
-        (entries) => entries.filter((entry) => entry[target.keyField] !== target.key));
-    });
   }
 
   private async quietly(write: () => Promise<void>): Promise<void> {
@@ -1479,23 +1466,6 @@ export class JobManager {
     } catch (error) {
       console.error('Subscription failure record update failed', error);
     }
-  }
-
-  /** Changes a subscription's failure record in one serialized store update. */
-  private async updateFailures(type: string, id: string, change: (entries: ItemFailureEntry[]) => ItemFailureEntry[]): Promise<void> {
-    await this.subscriptionStore(type).updateWith((records) => {
-      const current = records.find((candidate) => candidate.id === id);
-      if (!current) return new Map();
-      const next = change(current.failures ?? []);
-      return new Map([[id, { failures: next.length > 0 ? next : undefined }]]);
-    });
-  }
-
-  /** Null while the subscription exists and is enabled; otherwise why its work stops. */
-  private async subscriptionStopped(type: string, id: string): Promise<SkipReason | null> {
-    const subscription = (await this.subscriptionStore(type).list()).find((candidate) => candidate.id === id);
-    if (!subscription) return 'subscription_removed';
-    return subscription.enabled ? null : 'subscription_paused';
   }
 
   private onItemSettled(child: CollectionJob): void {

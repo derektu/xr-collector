@@ -2,7 +2,6 @@ import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type CollectorOptions } from '../../src/core/collector.js';
 import {
   CollectorError,
@@ -19,8 +18,9 @@ import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
@@ -45,22 +45,10 @@ function captured(id: string): CapturedTranscript {
   };
 }
 
-class MemoryChannels implements SubscriptionStore {
-  readonly channels: SubscriptionRecord[] = [{
-    id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
-    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
-  }];
-  async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
-  async remove() { return false; }
-  async setEnabled() { return null; }
-  async update(id: string, patch: SubscriptionPatch) {
-    const channel = this.channels.find((candidate) => candidate.id === id);
-    if (!channel) return null;
-    Object.assign(channel, patch);
-    return { ...channel };
-  }
-}
+const SUBSCRIPTION: SubscriptionRecord = {
+  id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
+  settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
+};
 
 /** Lists the channel's videos newest first; captures wait while held and fail as told. */
 class Source implements YouTubeSource {
@@ -71,7 +59,7 @@ class Source implements YouTubeSource {
   private readonly waiting = new Map<string, () => void>();
 
   async resolveChannel(): Promise<ResolvedYouTubeChannel> { throw new Error('unused'); }
-  async discover(_channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(_channel: SubscriptionTarget, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     return this.listing.slice(page.offset, page.offset + page.limit)
       .map((id) => ({ id, title: `影片 ${id}`, url: watchUrl(id), publishedAt: null, upcoming: false }));
   }
@@ -124,7 +112,8 @@ async function world(options: { holdAdds?: boolean } = {}) {
   };
   const events: Parameters<NonNullable<CollectorOptions['recordEvent']>>[0][] = [];
   const collector = new Collector(vault, search, { recordEvent: (entry) => events.push(entry) });
-  const channels = new MemoryChannels();
+  const subs = new SubscriptionRecorder();
+  const subscription = subs.add('youtube', SUBSCRIPTION, { settings: SUBSCRIPTION.settings });
   const source = new Source();
   let sequence = 0;
 
@@ -132,14 +121,15 @@ async function world(options: { holdAdds?: boolean } = {}) {
     const store = await JobStore.open(jobsDirectory, () => clock.now);
     stores.push(store);
     const manager = new JobManager({
-      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: { youtube: channels },
+      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: subs,
       limits: { discovery: 1, capture: 1 }, now: () => clock.now, createId: () => `job-${++sequence}`,
     });
+    subs.attach(manager);
     return { store, manager };
   }
 
   return {
-    root, vault, collector, channels, source, clock, tick, indexed, removed, events, boot,
+    root, vault, collector, subs, subscription, source, clock, tick, indexed, removed, events, boot,
     setRemoveFails(value: boolean) { removeFails = value; },
     /** Holds index removals until the returned function runs, like a removal waiting behind a rebuild. */
     holdRemovals() { let open = () => {}; removeGate = new Promise((resolve) => { open = resolve; }); return () => { removeGate = null; open(); }; },
@@ -150,7 +140,7 @@ async function world(options: { holdAdds?: boolean } = {}) {
       return manager.whenSettled(submission.job.id);
     },
     async checkChannel(manager: JobManager) {
-      const submission = await manager.submitCheck('youtube', channels.channels[0]!, 'manual');
+      const submission = await manager.submitCheck('youtube', subscription, 'manual');
       return manager.whenSettled(submission.job.id);
     },
   };
@@ -185,7 +175,7 @@ describe('deleting a document (A1)', () => {
       }],
     });
     expect((await w.collector.list()).map((document) => document.id)).toEqual([`youtube:${b}`]);
-    expect((await w.collector.sources({ youtube: { subscriptions: w.channels.channels } })).total).toBe(1);
+    expect((await w.collector.sources({ youtube: { subscriptions: [SUBSCRIPTION] } })).total).toBe(1);
     expect(await w.collector.findExisting(youtubeKey(a))).toBeNull();
     expect([...w.indexed.keys()]).toEqual([`youtube:${b}`]);
     await expect(w.collector.read(`youtube:${a}`)).rejects.toMatchObject({ code: 'document_deleted' });
@@ -348,7 +338,7 @@ describe('deletions and collection (A4)', () => {
     await w.collect(manager, a);
     w.tick();
     await w.collector.delete(`youtube:${a}`);
-    w.channels.channels[0]!.settings = { ...w.channels.channels[0]!.settings, backfillMaxItems: 5 };
+    w.subscription.settings = { ...w.subscription.settings, backfillMaxItems: 5 };
     w.source.listing = [a, b, c, vid('delta'), vid('echo'), vid('foxtrot')];
 
     const job = await w.checkChannel(manager);
@@ -407,9 +397,12 @@ describe('deletions and collection (A4)', () => {
     await w.collector.delete(`youtube:${a}`);
 
     const captures = w.source.captures.length;
+    const checks = w.subs.of('checked').length;
     const retry = await manager.retry(first.id);
     const retried = await manager.whenSettled(retry.job.id);
     expect(retried.items).toEqual([expect.objectContaining({ sourceId: a, outcome: 'skipped', skipReason: 'deleted' })]);
+    // Collecting failed videos again is no check of the subscription.
+    expect(w.subs.of('checked')).toHaveLength(checks);
     expect(await w.vault.read(`youtube:${a}`)).toBeNull();
     // The deletion is checked before capture, so YouTube is not asked for the transcript.
     expect(w.source.captures).toHaveLength(captures);
@@ -488,7 +481,7 @@ describe('deletion races (A5)', () => {
     const [hold, a] = [vid('hold'), vid('alpha')];
     w.source.listing = [hold, a];
     w.source.held.add(hold);
-    const channel = await manager.submitCheck('youtube', w.channels.channels[0]!, 'manual');
+    const channel = await manager.submitCheck('youtube', w.subscription, 'manual');
     await w.source.capturing(hold);
     // The user claims the queued video, the document arrives and is deleted, then the user asks again.
     expect(await manager.submitItem('youtube', watchUrl(a))).toMatchObject({ deduplicated: true });
@@ -511,7 +504,7 @@ describe('deletion races (A5)', () => {
     const [a, b] = [vid('alpha'), vid('bravo')];
     w.source.listing = [a, b];
     w.source.held.add(a);
-    await first.manager.submitCheck('youtube', w.channels.channels[0]!, 'manual');
+    await first.manager.submitCheck('youtube', w.subscription, 'manual');
     await w.source.capturing(a);
     const explicit = await first.manager.submitItem('youtube', watchUrl(b));
     // Both videos exist and are deleted while the jobs wait; then the service stops abruptly.

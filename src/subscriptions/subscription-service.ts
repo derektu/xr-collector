@@ -1,29 +1,27 @@
 import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
-import type { JobManager } from '../jobs/job-manager.js';
-import { waitsForTurn } from '../jobs/job-board.js';
+import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
+import type { CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
 import { requireDefinition, subscriptionKindLabel } from '../core/source-registry.js';
-import type { SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../plugins/types.js';
+import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../plugins/types.js';
 import {
   CollectorError,
   type ChannelJobTrigger,
   type CollectionJob,
   type DocumentMetadata,
+  type ItemFailureEntry,
+  type JobError,
   type JobSubmission,
+  MAX_CHECK_ATTEMPTS,
+  type OutOfRangeEntry,
   type PendingSubscription,
   type Subscription,
   type SubscriptionCheckStatus,
   type SubscriptionPreview,
   type SubscriptionRecord,
+  type SkipReason,
   type SubscriptionSettings,
 } from '../core/types.js';
-
-/**
- * Check job states that decide whether a subscription shows an error: the latest completed or
- * failed job. An interrupted job (a shutdown or restart) says nothing about the source, so it
- * neither raises nor clears an error.
- */
-const DECIDING = new Set(['completed', 'failed']);
 
 /** A preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;
@@ -97,7 +95,9 @@ export interface EnabledResult {
 
 /**
  * The subscriptions of one source type and the entry points that turn them into collection jobs.
- * Every subscription is known by its type and its ID within the type.
+ * Every subscription is known by its type and its ID within the type. The service is the only
+ * writer of its subscriptions: it creates them, dispatches every check, which moves the dispatch
+ * times, and records what checks report as collection progress.
  */
 export class SubscriptionService {
   private readonly now: () => Date;
@@ -131,23 +131,23 @@ export class SubscriptionService {
       if (!entry.latest || document.collectedAt > entry.latest) entry.latest = document.collectedAt;
       counts.set(document.publisher.id, entry);
     }
-    const history = this.jobs.checkJobs(this.type);
+    const work = this.jobs.subscriptionWork(this.type).subscriptions;
     const now = this.now();
     return records.map((record) => {
-      const job = this.jobs.activeCheck(this.type, record.id);
+      const { check = null, capturing = false, lastCheck = null } = work.get(record.id) ?? {};
       const totals = counts.get(record.id);
-      const lastDeciding = (history.get(record.id) ?? []).find((candidate) => DECIDING.has(candidate.state));
-      const failed = record.enabled && !job && lastDeciding?.state === 'failed';
+      // An interrupted check says nothing about the source, so only a completed or failed one decides the error.
+      const failed = record.enabled && !check && lastCheck?.state === 'failed';
       return {
         ...record,
         lastCheckedAt: record.lastCheckedAt ?? null,
         nextCheckAt: record.nextCheckAt ?? null,
         lastDispatchedAt: record.lastDispatchedAt ?? null,
-        status: !record.enabled ? 'paused' : job ? 'collecting' : failed ? 'error' : 'tracking',
-        checkStatus: checkStatus(record, job, { autoCheck, now, loginRequired: this.options.loginRequired?.(record) ?? false }),
-        capturing: this.jobs.pendingCaptures(this.type, record.id).checkItems.length > 0,
-        lastError: failed ? lastDeciding.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
-        activeJob: job ? { id: job.id, done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 } : null,
+        status: !record.enabled ? 'paused' : check ? 'collecting' : failed ? 'error' : 'tracking',
+        checkStatus: checkStatus(record, check, { autoCheck, now, loginRequired: this.options.loginRequired?.(record) ?? false }),
+        capturing,
+        lastError: failed ? lastCheck.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
+        activeJob: check ? { id: check.jobId, done: check.done, total: check.total } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,
       };
@@ -160,11 +160,11 @@ export class SubscriptionService {
    */
   async pendingSubscriptions(): Promise<PendingSubscription[]> {
     const subscribed = new Set((await this.store.list()).map((record) => record.id));
-    return this.jobs.activeSubscriptionAdds(this.type)
+    return this.jobs.subscriptionWork(this.type).adds
       .filter((entry) => !entry.targetId || !subscribed.has(entry.targetId))
-      .map(({ job, title }) => ({
-        type: this.type, jobId: job.id, url: job.source.url, title,
-        checkStatus: job.state === 'running' && !job.wait ? { state: 'updating', done: 0, total: 0 } : { state: 'queued' },
+      .map(({ jobId, url, title, waiting }) => ({
+        type: this.type, jobId, url, title,
+        checkStatus: waiting ? { state: 'queued' } : { state: 'updating', done: 0, total: 0 },
       }));
   }
 
@@ -366,45 +366,189 @@ export class SubscriptionService {
   }
 
   /**
-   * Submits one collection job per subscription: the listed ones, or every enabled one. A
-   * subscription whose job is still queued or running returns that job, so the check joins it.
-   * Each checked subscription's next automatic check moves on, also when it joined an active job:
-   * a scheduled check keeps its rhythm from the time that came due, any other dispatch counts an
-   * interval from now.
+   * The listed subscriptions a manual check covers, each checked before any job starts: a missing
+   * or paused one refuses the whole request.
+   */
+  async checkable(ids: readonly string[]): Promise<SubscriptionRecord[]> {
+    const all = await this.store.list();
+    return [...new Set(ids)].map((id) => {
+      const record = all.find((candidate) => candidate.id === id);
+      if (!record) throw this.notFound();
+      if (!record.enabled) throw new CollectorError('subscription_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
+      return record;
+    });
+  }
+
+  /**
+   * Dispatches one check per subscription: the listed ones, or every enabled one. A subscription
+   * whose job is still queued or running returns that job, so the check joins it. Each checked
+   * subscription's next automatic check moves on, also when it joined an active job: a scheduled
+   * check keeps its rhythm from the time that came due, any other dispatch counts an interval from now.
    */
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
-    const all = await this.store.list();
     let selected: SubscriptionRecord[];
     if (request.subscriptionIds && request.trigger === 'scheduled') {
       // Due subscriptions were read a moment ago; one paused or removed since then is left out.
       const ids = new Set(request.subscriptionIds);
-      selected = all.filter((record) => ids.has(record.id) && record.enabled);
+      selected = (await this.store.list()).filter((record) => ids.has(record.id) && record.enabled);
     } else if (request.subscriptionIds) {
-      selected = [...new Set(request.subscriptionIds)].map((id) => {
-        const record = all.find((candidate) => candidate.id === id);
-        if (!record) throw this.notFound();
-        if (!record.enabled) throw new CollectorError('subscription_paused', `「${record.title}」已暫停，請先恢復訂閱。`);
-        return record;
-      });
+      selected = await this.checkable(request.subscriptionIds);
     } else {
-      selected = all.filter((record) => record.enabled);
+      selected = (await this.store.list()).filter((record) => record.enabled);
     }
     if (selected.length === 0) {
       if (request.trigger === 'scheduled') return [];
       throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
     }
+    return this.dispatch(selected, request.trigger);
+  }
+
+  /** Submits a check of each subscription and records the dispatch. */
+  private async dispatch(selected: readonly SubscriptionRecord[], trigger: StartRunRequest['trigger']): Promise<JobSubmission[]> {
     const now = this.now();
     const submissions: JobSubmission[] = [];
-    for (const record of selected) submissions.push(await this.jobs.submitCheck(this.type, record, request.trigger));
+    for (const record of selected) submissions.push(await this.jobs.submitCheck(this.type, record, trigger));
     const ids = new Set(selected.map((record) => record.id));
     // Computed from the current rows, so a settings change made meanwhile keeps its interval and
     // a subscription paused meanwhile gets no next check.
     await this.store.updateWith((records) => new Map(records
       .filter((record) => ids.has(record.id) && record.enabled)
       .map((record) => [record.id, {
-        lastDispatchedAt: now.toISOString(), nextCheckAt: nextCheckAfterDispatch(record, request.trigger, now).toISOString(),
+        lastDispatchedAt: now.toISOString(), nextCheckAt: nextCheckAfterDispatch(record, trigger, now).toISOString(),
       }] as const)));
     return submissions;
+  }
+
+  /** Port entry: why a subscription's work stops, or null while it exists and is enabled. */
+  async stopped(id: string): Promise<SkipReason | null> {
+    const record = (await this.store.list()).find((candidate) => candidate.id === id);
+    if (!record) return 'subscription_removed';
+    return record.enabled ? null : 'subscription_paused';
+  }
+
+  /** Port entry: a manual check of one subscription, such as retrying a check whose listing failed. */
+  async checkNow(id: string): Promise<JobSubmission> {
+    return (await this.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!;
+  }
+
+  /**
+   * Port entry: the plan of a check whose discovery starts at `at`. The range comes from the
+   * subscription's settings now. An item stays out while it is out of range for a range that starts
+   * no earlier than the one that left it out, and while it is skipped after failing.
+   */
+  async planCheck(id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
+    const record = (await this.store.list()).find((candidate) => candidate.id === id);
+    if (!record?.enabled) return { stopped: record ? 'subscription_paused' : 'subscription_removed' };
+    const range = this.subscription.checkRange(record.settings, at);
+    const since = range.since.toISOString();
+    const excluded = new Set((record.outOfRange ?? []).filter((entry) => entry.before <= since).map((entry) => entry[this.keyField]!));
+    for (const entry of record.failures ?? []) if (entry.skipped) excluded.add(entry[this.keyField] as string);
+    return { target: record, range, excluded };
+  }
+
+  /**
+   * Port entry: records a check that started at `at`, keeping a later check time already recorded;
+   * recording the same check again changes nothing. With the check's candidates, out-of-range items
+   * that are no longer candidates are forgotten, and so are failed items that are no longer
+   * candidates or already have a document: a failure stays only while the item is skipped or among
+   * the items the check collects. Returns why the subscription's work stops, if it does.
+   */
+  async checked(id: string, report: CheckReport): Promise<SkipReason | null> {
+    const { candidates, collecting } = report;
+    const key = (entry: OutOfRangeEntry | ItemFailureEntry) => entry[this.keyField] as string;
+    const [record] = await this.store.updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current) return new Map();
+      const patch: Partial<SubscriptionRecord> = {};
+      if (candidates && current.outOfRange?.some((entry) => !candidates.has(key(entry)))) {
+        patch.outOfRange = current.outOfRange.filter((entry) => candidates.has(key(entry)));
+      }
+      if (candidates && collecting) {
+        const kept = (entry: ItemFailureEntry) => candidates.has(key(entry)) && (entry.skipped || collecting.has(key(entry)));
+        if (current.failures?.some((entry) => !kept(entry))) {
+          const failures = current.failures.filter(kept);
+          patch.failures = failures.length > 0 ? failures : undefined;
+        }
+      }
+      if (!current.lastCheckedAt || current.lastCheckedAt < report.at) patch.lastCheckedAt = report.at;
+      return Object.keys(patch).length > 0 ? new Map([[id, patch]]) : new Map();
+    });
+    const current = record ?? (await this.store.list()).find((candidate) => candidate.id === id);
+    if (!current) return 'subscription_removed';
+    return current.enabled ? null : 'subscription_paused';
+  }
+
+  /** Port entry: a collected item no longer counts as failed. */
+  async itemCollected(id: string, itemKey: string): Promise<void> {
+    await this.store.updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current?.failures?.some((entry) => entry[this.keyField] === itemKey)) return new Map();
+      const failures = current.failures.filter((entry) => entry[this.keyField] !== itemKey);
+      return new Map([[id, { failures: failures.length > 0 ? failures : undefined }]]);
+    });
+  }
+
+  /**
+   * Port entry: counts one failed check of an item. `skip`, and reaching MAX_CHECK_ATTEMPTS, mark
+   * it skipped. Returns the item's failure record, or null when the subscription is gone.
+   */
+  async itemFailed(id: string, item: { key: string; title: string | null; url: string }, error: JobError, failureClass: FailureClass): Promise<ItemFailureEntry | null> {
+    let recorded: ItemFailureEntry | null = null;
+    await this.store.updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current) return new Map();
+      const entries = current.failures ?? [];
+      const previous = entries.find((entry) => entry[this.keyField] === item.key);
+      const attempts = (previous?.attempts ?? 0) + 1;
+      recorded = {
+        [this.keyField]: item.key, title: item.title ?? previous?.title ?? '', attempts, errorCode: error.code,
+        failedAt: this.now().toISOString(), skipped: failureClass === 'skip' || attempts >= MAX_CHECK_ATTEMPTS,
+        ...(this.definition.item.urlForKey ? {} : { url: item.url }),
+      };
+      return new Map([[id, { failures: [...entries.filter((entry) => entry !== previous), recorded] }]]);
+    });
+    return recorded;
+  }
+
+  /** Port entry: remembers an item published before the range start `before` of the check that found it. */
+  async itemOutOfRange(id: string, itemKey: string, before: string): Promise<void> {
+    await this.store.updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current) return new Map();
+      const outOfRange = [
+        ...(current.outOfRange ?? []).filter((entry) => entry[this.keyField] !== itemKey),
+        { [this.keyField]: itemKey, before } as OutOfRangeEntry,
+      ];
+      return new Map([[id, { outOfRange }]]);
+    });
+  }
+
+  /**
+   * Port entry: subscribes a resolved target with the settings accepted with the request and
+   * dispatches its first check; the next check is an interval later. An existing subscription keeps
+   * its own state and settings and gets no check, unless the request that created it was interrupted
+   * before its first check (`resumed`).
+   */
+  async subscribe(target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
+    const existing = (await this.store.list()).find((record) => record.id === target.id);
+    if (existing && !options.resumed) return { subscription: existing, outcome: 'existing', check: null };
+    let subscription = existing;
+    if (!subscription) {
+      await options.beforeCreate();
+      const now = this.now();
+      subscription = await this.store.add({
+        id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), lastCheckedAt: null,
+        settings: { ...settings }, lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, settings.intervalMinutes).toISOString(),
+      });
+      this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
+    }
+    // The dispatch times were written with the subscription, so a first check resumed after a stop keeps them.
+    const check = await this.jobs.submitCheck(this.type, subscription, 'subscribe');
+    return { subscription, outcome: 'created', check };
+  }
+
+  private get keyField(): string {
+    return this.definition.storage!.outOfRangeKeyField;
   }
 
   whenSettled(jobId: string): Promise<CollectionJob> {
@@ -447,25 +591,27 @@ function nextCheckAfterDispatch(record: SubscriptionRecord, trigger: StartRunReq
   return new Date(due + periods * interval);
 }
 
+interface StatusContext {
+  autoCheck: boolean;
+  now: Date;
+  loginRequired: boolean;
+}
+
 /**
  * What a subscription is doing now. Its own state comes first: paused, then a source that needs a
- * new sign-in. An active check shows as updating unless it waits for its turn: the check has not
- * started, none of the items it still has to collect is running because other work holds the
- * capture slot, or every such item waits for a cooldown or a retry. Then it is queued. Without a check,
- * automatic checks being off comes next; a check that came due and was not dispatched yet, or has
- * no time yet, is queued; otherwise the next check time shows. A failed last check does not change the status.
+ * new sign-in. An active check shows as updating with its progress, or as queued while the job
+ * manager reports it waiting for its turn. Without a check, automatic checks being off comes next;
+ * a check that came due and was not dispatched yet, or has no time yet, is queued; otherwise the
+ * next check time shows. A failed last check does not change the status.
  */
 export function checkStatus(
   record: Pick<SubscriptionRecord, 'enabled' | 'nextCheckAt'>,
-  job: CollectionJob | null,
-  context: { autoCheck: boolean; now: Date; loginRequired: boolean },
+  check: CheckActivity | null,
+  context: StatusContext,
 ): SubscriptionCheckStatus {
   if (!record.enabled) return { state: 'paused' };
   if (context.loginRequired) return { state: 'login_required' };
-  if (job) {
-    if (job.state === 'queued' || waitsForTurn(job)) return { state: 'queued' };
-    return { state: 'updating', done: job.progress?.done ?? 0, total: job.progress?.total ?? 0 };
-  }
+  if (check) return check.waiting ? { state: 'queued' } : { state: 'updating', done: check.done, total: check.total };
   if (!context.autoCheck) return { state: 'auto_check_off' };
   const next = record.nextCheckAt ?? null;
   // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
@@ -512,9 +658,10 @@ function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: nu
 
 /**
  * The subscription services of one Vault, one per source type with subscriptions, in registration
- * order. HTTP routes and the scheduler reach a subscription through its type's service.
+ * order. HTTP routes and the scheduler reach a subscription through its type's service; the job
+ * manager reaches every type through this object as its subscription port.
  */
-export class SubscriptionServices {
+export class SubscriptionServices implements SubscriptionPort {
   private readonly byType: Map<string, SubscriptionService>;
 
   constructor(services: Iterable<SubscriptionService>) {
@@ -529,4 +676,79 @@ export class SubscriptionServices {
   all(): SubscriptionService[] {
     return [...this.byType.values()];
   }
+
+  /**
+   * Checks the listed subscriptions of any types now. The whole list is validated first, so a
+   * missing or paused subscription, or a type without subscriptions, refuses the request before
+   * any job starts.
+   */
+  async startChecks(listed: ReadonlyArray<{ type: string; id: string }>): Promise<JobSubmission[]> {
+    return startChecks((type) => this.of(type), listed);
+  }
+
+  planCheck(type: string, id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
+    return this.require(type).planCheck(id, at);
+  }
+
+  checked(type: string, id: string, report: CheckReport): Promise<SkipReason | null> {
+    return this.require(type).checked(id, report);
+  }
+
+  itemCollected(type: string, id: string, key: string): Promise<void> {
+    return this.require(type).itemCollected(id, key);
+  }
+
+  itemFailed(type: string, id: string, item: { key: string; title: string | null; url: string }, error: JobError, failureClass: FailureClass): Promise<ItemFailureEntry | null> {
+    return this.require(type).itemFailed(id, item, error, failureClass);
+  }
+
+  itemOutOfRange(type: string, id: string, key: string, before: string): Promise<void> {
+    return this.require(type).itemOutOfRange(id, key, before);
+  }
+
+  subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
+    return this.require(type).subscribe(target, settings, options);
+  }
+
+  /** A type without subscriptions here has none to stop, so its work counts as removed. */
+  async stopped(type: string, id: string): Promise<SkipReason | null> {
+    return this.of(type)?.stopped(id) ?? 'subscription_removed';
+  }
+
+  checkNow(type: string, id: string): Promise<JobSubmission> {
+    return this.require(type).checkNow(id);
+  }
+
+  private require(type: string): SubscriptionService {
+    const service = this.of(type);
+    if (!service) throw new Error(`Source type ${type} has no subscription service`);
+    return service;
+  }
+}
+
+/** The part of a type's subscription service a manual check of listed subscriptions uses. */
+export interface CheckEntry {
+  checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
+  startRun(request: StartRunRequest): Promise<JobSubmission[]>;
+}
+
+/**
+ * Checks listed subscriptions of any types: every type's list is validated before the first job
+ * starts, so a refused request starts nothing.
+ */
+export async function startChecks(
+  serviceOf: (type: string) => CheckEntry | null,
+  listed: ReadonlyArray<{ type: string; id: string }>,
+): Promise<JobSubmission[]> {
+  const byType = new Map<string, string[]>();
+  for (const { type, id } of listed) byType.set(type, [...byType.get(type) ?? [], id]);
+  const runs = await Promise.all([...byType].map(async ([type, ids]) => {
+    const service = serviceOf(type);
+    if (!service) throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
+    await service.checkable(ids);
+    return { service, ids };
+  }));
+  const submissions: JobSubmission[] = [];
+  for (const { service, ids } of runs) submissions.push(...await service.startRun({ trigger: 'manual', subscriptionIds: ids }));
+  return submissions;
 }

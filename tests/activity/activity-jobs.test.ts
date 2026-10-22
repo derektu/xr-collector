@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
-import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
@@ -13,14 +13,16 @@ import {
   type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
+import { forwardingPort, type SubscriptionPort } from '../../src/jobs/subscription-port.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
@@ -54,33 +56,6 @@ class MemoryVault implements DocumentVault {
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
 }
 
-class MemoryChannels implements SubscriptionStore {
-  readonly channels: SubscriptionRecord[] = [];
-  async list() { return this.channels.map((channel) => ({ ...channel })); }
-  async add(channel: SubscriptionRecord) { this.channels.push(channel); return channel; }
-  async remove(id: string) {
-    const index = this.channels.findIndex((channel) => channel.id === id);
-    if (index >= 0) this.channels.splice(index, 1);
-    return index >= 0;
-  }
-  async setEnabled(id: string, enabled: boolean) { return this.update(id, { enabled }); }
-  async update(id: string, patch: SubscriptionPatch) {
-    const channel = this.channels.find((candidate) => candidate.id === id);
-    if (!channel) return null;
-    Object.assign(channel, patch);
-    return { ...channel };
-  }
-  async updateMany(patches: Map<string, SubscriptionPatch>) { return this.updateWith(() => patches); }
-  async updateWith(change: (channels: readonly SubscriptionRecord[]) => Map<string, SubscriptionPatch>) {
-    const updated: SubscriptionRecord[] = [];
-    for (const [id, patch] of change(this.channels)) {
-      const channel = await this.update(id, patch);
-      if (channel) updated.push(channel);
-    }
-    return updated;
-  }
-}
-
 /** Failures queued per call kind; captures can wait until released. */
 class ScriptedSource implements YouTubeSource {
   readonly captureFailures = new Map<string, CollectorError[]>();
@@ -98,7 +73,7 @@ class ScriptedSource implements YouTubeSource {
     return { id, title: `頻道 ${handle}`, url: `https://www.youtube.com/channel/${id}/videos` };
   }
 
-  async discover(channel: SubscriptionRecord, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
+  async discover(channel: SubscriptionTarget, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
     const failure = this.discoverFailures.shift();
     if (failure) throw failure;
     return (this.channelVideos.get(channel.id) ?? []).slice(page.offset, page.offset + page.limit);
@@ -119,25 +94,41 @@ let tick = 0;
 /** Each reading is a millisecond later, so events keep the order they happened in. */
 const clock = () => new Date(T0.getTime() + tick++);
 
-function setup(store: JobStore = JobStore.memory(clock), limits: { capture?: number } = {}) {
+/** A job manager over a scripted source that reports to `subscriptions`. */
+function build(subscriptions: SubscriptionPort, store: JobStore, limits: { capture?: number } = {}) {
   const vault = new MemoryVault();
-  const channels = new MemoryChannels();
   const source = new ScriptedSource();
   const timers: Array<() => void> = [];
   let sequence = 0;
-  let collector: SubscriptionService | null = null;
   const manager = new JobManager({
-    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: { youtube: channels },
+    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions,
     now: clock, createId: () => `job-${++sequence}`, limits,
     setTimer: (callback) => { timers.push(callback); return () => undefined; },
-    checkSubscription: async (_type, id) => (await collector!.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
-  });
-  collector = new SubscriptionService('youtube', channels, manager, {
-    autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: async () => [], now: clock,
   });
   const runTimers = () => { for (const callback of timers.splice(0)) callback(); };
   const events = async (query: Parameters<typeof store.activity.query>[0] = {}) => (await store.activity.query(query, { vaultPath: VAULT })).events;
-  return { manager, store, channels, source, vault, collector, runTimers, events };
+  return { manager, store, source, vault, runTimers, events };
+}
+
+/** Jobs whose subscriptions are an in-memory recorder of what the jobs report. */
+function setup(store: JobStore = JobStore.memory(clock), limits: { capture?: number } = {}) {
+  const subs = new SubscriptionRecorder();
+  const world = build(subs, store, limits);
+  subs.attach(world.manager);
+  return { ...world, subs };
+}
+
+/** Jobs and the real subscription service over a subscriptions file in a temporary Vault. */
+async function setupWithService() {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-subscriptions-'));
+  directories.push(root);
+  const channelStore = new JsonSubscriptionStore(root, 'youtube', clock);
+  let service: SubscriptionService | null = null;
+  const world = build(forwardingPort(() => new SubscriptionServices([service!])), JobStore.memory(clock));
+  service = new SubscriptionService('youtube', channelStore, world.manager, {
+    autoCollection: async () => true, resolveTarget: (url) => world.source.resolveChannel(url), documents: async () => [], now: clock,
+  });
+  return { ...world, channelStore, service };
 }
 
 function subscription(id: string): SubscriptionRecord {
@@ -145,6 +136,12 @@ function subscription(id: string): SubscriptionRecord {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(),
     settings: { ...DEFAULT_POLICY },
   };
+}
+
+/** Subscribes the recorder to a channel with the default settings. */
+function subscribe(subs: SubscriptionRecorder, id: string) {
+  const { settings, ...target } = subscription(id);
+  return subs.add('youtube', target, { settings });
 }
 
 const noSubtitles = () => new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。');
@@ -206,23 +203,26 @@ describe('manual retry (A-T9)', () => {
   });
 
   it('subscribes again with the settings a failed subscription request was accepted with', async () => {
-    const { manager, source, channels } = setup();
+    const { manager, source, subs } = setup();
     source.resolveFailures.push(new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。'));
     const settings = { intervalMinutes: 120, backfillWindow: '1w' as const, backfillMaxItems: 5 };
     const failed = await manager.whenSettled((await manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@retry', settings)).job.id);
     expect(failed.state).toBe('failed');
     const retried = await manager.retry(failed.id);
     expect(retried.job).toMatchObject({ kind: 'youtube.channel-add', retryOf: failed.id, scope: { trigger: 'subscribe' } });
-    expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
-    expect(channels.channels[0]!.settings).toEqual(settings);
+    const done = await manager.whenSettled(retried.job.id);
+    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(subs.of('subscribed')).toEqual([expect.objectContaining({ id: done.result!.channelId, outcome: 'created' })]);
+    expect(subs.get('youtube', done.result!.channelId!)!.settings).toEqual(settings);
   });
 
   it('checks the subscription of a failed channel job now, and follows its pause or removal', async () => {
-    const { manager, source, channels, collector } = setup();
-    channels.channels.push(subscription('UC1'), subscription('UC2'));
+    const { manager, source, channelStore, service } = await setupWithService();
+    await channelStore.add(subscription('UC1'));
+    await channelStore.add(subscription('UC2'));
     source.channelVideos.set('UC1', [{ id: 'ddddddddddd', title: '新影片', url: watchUrl('ddddddddddd'), publishedAt: T0.toISOString(), upcoming: false }]);
     source.discoverFailures.push(new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。'));
-    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC1'] });
+    const [first] = await service.startRun({ trigger: 'scheduled', subscriptionIds: ['UC1'] });
     const failed = await manager.whenSettled(first!.job.id);
     expect(failed.state).toBe('failed');
 
@@ -231,27 +231,30 @@ describe('manual retry (A-T9)', () => {
     expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', progress: { created: 1 } });
 
     source.discoverFailures.push(new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。'));
-    const [second] = await collector.startRun({ trigger: 'manual', subscriptionIds: ['UC2'] });
+    const [second] = await service.startRun({ trigger: 'manual', subscriptionIds: ['UC2'] });
     const failedAgain = await manager.whenSettled(second!.job.id);
-    channels.channels[1]!.enabled = false;
+    await channelStore.setEnabled('UC2', false);
     await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'subscription_paused' });
-    channels.channels.splice(1, 1);
+    await channelStore.remove('UC2');
     await expect(manager.retry(failedAgain.id)).rejects.toMatchObject({ code: 'subscription_not_found' });
     expect(manager.get(failedAgain.id).retriedBy).toBeUndefined();
   });
 
-  it('collects the failed videos of a channel job again, without discovery or recording a check', async () => {
-    const { manager, source, channels, collector, vault } = setup();
-    channels.channels.push(subscription('UC3'));
+  it('collects the failed videos of a channel job again, without discovery or reporting a check', async () => {
+    const { manager, source, subs, vault } = setup();
+    subscribe(subs, 'UC3');
     const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
     source.channelVideos.set('UC3', [video('mmmmmmmmmmm'), video('nnnnnnnnnnn')]);
     source.captureFailures.set('mmmmmmmmmmm', [noSubtitles()]);
     source.captureFailures.set('nnnnnnnnnnn', [noSubtitles()]);
-    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC3'] });
-    const failed = await manager.whenSettled(first!.job.id);
+    const first = await manager.submitCheck('youtube', subs.get('youtube', 'UC3')!, 'scheduled');
+    const failed = await manager.whenSettled(first.job.id);
     // Failed videos are left to later checks; the check itself completes.
     expect(failed).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { failed: 2 } });
-    const checked = { ...channels.channels[0]! };
+    expect(subs.of('failed').map((report) => [report.key, report.errorCode])).toEqual([
+      ['mmmmmmmmmmm', 'no_subtitles'], ['nnnnnnnnnnn', 'no_subtitles'],
+    ]);
+    expect(subs.of('checked')).toHaveLength(1);
 
     // The videos left the listing: a new check would find nothing.
     source.channelVideos.set('UC3', []);
@@ -263,20 +266,21 @@ describe('manual retry (A-T9)', () => {
     expect(done.items!.map((item) => item.sourceId)).toEqual(['mmmmmmmmmmm', 'nnnnnnnnnnn']);
     expect(done.items!.every((item) => manager.get(item.jobId!).publishedNotBefore === undefined)).toBe(true);
     expect(source.discoverFailures).toHaveLength(1);
-    expect(channels.channels[0]!.lastCheckedAt).toBe(checked.lastCheckedAt);
+    expect(subs.of('checked')).toHaveLength(1);
+    expect(subs.of('collected').map((report) => report.key)).toEqual(['mmmmmmmmmmm', 'nnnnnnnnnnn']);
     expect(await vault.getBySourceId('nnnnnnnnnnn')).not.toBeNull();
     expect(manager.get(failed.id).retriedBy).toBe(retried.job.id);
     await expect(manager.retry(failed.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
   });
 
   it('retries only the failed videos of a channel job that completed with some failing', async () => {
-    const { manager, source, channels, collector } = setup();
-    channels.channels.push(subscription('UC4'));
+    const { manager, source, subs } = setup();
+    const channel = subscribe(subs, 'UC4');
     const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
     source.channelVideos.set('UC4', [video('ooooooooooo'), video('ppppppppppp')]);
     source.captureFailures.set('ppppppppppp', [noSubtitles()]);
-    const [first] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC4'] });
-    const partial = await manager.whenSettled(first!.job.id);
+    const first = await manager.submitCheck('youtube', channel, 'scheduled');
+    const partial = await manager.whenSettled(first.job.id);
     expect(partial).toMatchObject({ state: 'completed', result: { outcome: 'partial' } });
 
     const retried = await manager.retry(partial.id);
@@ -285,8 +289,8 @@ describe('manual retry (A-T9)', () => {
     expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(manager.get(partial.id).retriedBy).toBe(retried.job.id);
 
-    const [clean] = await collector.startRun({ trigger: 'manual', subscriptionIds: ['UC4'] });
-    const finished = await manager.whenSettled(clean!.job.id);
+    const clean = await manager.submitCheck('youtube', channel, 'manual');
+    const finished = await manager.whenSettled(clean.job.id);
     expect(finished.state).toBe('completed');
     await expect(manager.retry(finished.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
   });
@@ -322,10 +326,10 @@ describe('job summary and event fields', () => {
   });
 
   it('records title, subscription, parent and trigger on the events of a channel job and its videos', async () => {
-    const { manager, source, channels, collector, events } = setup();
-    channels.channels.push(subscription('UC9'));
+    const { manager, source, channelStore, service, events } = await setupWithService();
+    await channelStore.add(subscription('UC9'));
     source.channelVideos.set('UC9', [{ id: 'iiiiiiiiiii', title: '頻道影片', url: watchUrl('iiiiiiiiiii'), publishedAt: T0.toISOString(), upcoming: false }]);
-    const [submission] = await collector.startRun({ trigger: 'scheduled', subscriptionIds: ['UC9'] });
+    const [submission] = await service.startRun({ trigger: 'scheduled', subscriptionIds: ['UC9'] });
     await manager.whenSettled(submission!.job.id);
     const saved = (await events({ eventType: ['document.saved'] }))[0]!;
     expect(saved).toMatchObject({ subscriptionId: 'UC9', parentJobId: submission!.job.id, sourceTitle: '影片 iiiiiiiiiii', documentId: 'youtube:iiiiiiiiiii' });
@@ -336,7 +340,7 @@ describe('job summary and event fields', () => {
     const videoAccepted = (await events({ eventType: ['job.accepted'] })).find((entry) => entry.parentJobId === submission!.job.id)!;
     expect(videoAccepted.sourceTitle).toBe('頻道影片');
     expect((await events({ subscriptionId: 'UC9' })).length).toBeGreaterThanOrEqual(6);
-    await collector.setEnabled('UC9', false);
+    await service.setEnabled('UC9', false);
     expect((await events({ subscriptionId: 'UC9', eventType: ['subscription.paused'] }))[0]).toMatchObject({ sourceTitle: '頻道 UC9' });
   });
 });

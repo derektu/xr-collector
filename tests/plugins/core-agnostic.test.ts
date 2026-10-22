@@ -8,10 +8,11 @@ import { Collector } from '../../src/core/collector.js';
 import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { CollectorError, type CollectionJob, type SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
+import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
-import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -86,11 +87,10 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     const stores = { fake: new JsonSubscriptionStore(root, 'fake', now), fake2: new JsonSubscriptionStore(root, 'fake2', now) };
     let services!: Record<'fake' | 'fake2', SubscriptionService>;
     const jobs: JobManager = new JobManager({
-      vaultPath: root, store, plugins, documents: collector, subscriptions: stores, now, setTimer,
+      vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(Object.values(services))), now, setTimer,
       pacing: [gates.fake, gates.fake2],
       limits: { discovery: 1, capture: options.capture ?? 2 },
       retry: options.retry ?? { maxAttempts: 1, delaysMs: [MINUTE] },
-      checkSubscription: async (type, id) => (await services[type as 'fake' | 'fake2'].startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!,
     });
     let scheduler!: CollectionScheduler;
     const service = (type: 'fake' | 'fake2') => new SubscriptionService(type, stores[type], jobs, {
@@ -376,7 +376,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const remaining = new FakeSource('fake');
     const manager = new JobManager({
       vaultPath: w.root, store: reopened, plugins: [createFakePlugin(FAKE, remaining)],
-      documents: new Collector(new MarkdownVault(w.root)), subscriptions: {},
+      documents: new Collector(new MarkdownVault(w.root)),
     });
     await manager.resume();
     await vi.waitFor(() => expect(manager.isBusy()).toBe(false));
