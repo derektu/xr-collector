@@ -1,6 +1,6 @@
 # 開發驗證流程
 
-PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`；畫面與原生行為由 agent 以 [verify skill](../.claude/skills/verify/SKILL.md) 實際操作 App 驗證，尚未設定為自動 Desktop runner 或 branch protection gate。
+PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；畫面與原生行為由 agent 以 [verify skill](../.claude/skills/verify/SKILL.md) 實際操作 App 驗證，尚未設定為自動 Desktop runner 或 branch protection gate。
 
 ## 驗證層級
 
