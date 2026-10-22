@@ -110,7 +110,8 @@ function isFailure(value: unknown, keyField: string): boolean {
   const entry = value as Partial<ItemFailureEntry>;
   return typeof entry[keyField] === 'string' && typeof entry.title === 'string'
     && typeof entry.attempts === 'number' && Number.isInteger(entry.attempts) && entry.attempts >= 1
-    && typeof entry.errorCode === 'string' && typeof entry.failedAt === 'string' && typeof entry.skipped === 'boolean';
+    && typeof entry.errorCode === 'string' && typeof entry.failedAt === 'string' && typeof entry.skipped === 'boolean'
+    && (entry.url === undefined || typeof entry.url === 'string');
 }
 
 function isOptionalTime(value: unknown): boolean {

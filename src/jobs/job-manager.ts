@@ -29,7 +29,7 @@ import {
   type SubscriptionSettings,
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
-import type { FailureClass, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
+import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
 import { limitText, redact } from '../activity/redact.js';
 import { failedJobs, jobOverview } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
@@ -316,7 +316,7 @@ export class JobManager {
   }
 
   async submitItem(type: string, url: string): Promise<JobSubmission> {
-    const submission = this.enqueueItem(type, url, null);
+    const submission = this.enqueueItem(type, this.requirePlugin(type).parseItem(url), null);
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -507,7 +507,7 @@ export class JobManager {
     if (job.retriedBy) throw new CollectorError('job_not_retryable', '這個工作已經重試過，請查看重試的工作。');
     let submission: JobSubmission;
     if (role === 'item') {
-      submission = this.enqueueItem(type, job.source.url, null, null, { retryOf: job.id }, job.source.title);
+      submission = this.enqueueItem(type, itemRefOf(job, plugin), null, null, { retryOf: job.id }, job.source.title);
     } else if (role === 'add') {
       const settings = this.acceptedSettings(job);
       submission = this.enqueue(job.kind, type, jobKey(job), { id: null, url: job.source.url, title: null }, null, {
@@ -884,11 +884,9 @@ export class JobManager {
   }
 
   private enqueueItem(
-    type: string, url: string, parentId: string | null, publishedNotBefore: string | null = null,
+    type: string, ref: Pick<ItemRef, 'key' | 'url'>, parentId: string | null, publishedNotBefore: string | null = null,
     extra: Pick<CollectionJob, 'retryOf'> = {}, title: string | null = null,
   ): JobSubmission {
-    const plugin = this.requirePlugin(type);
-    const ref = plugin.parseItem(url);
     return this.enqueue(jobKind(type, 'item')!, type, `${type}:item:${ref.key}`, {
       id: ref.key, url: ref.url, title,
     }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
@@ -1093,7 +1091,7 @@ export class JobManager {
     this.start(job, 'capture');
     try {
       const plugin = this.requirePlugin(job.source.type);
-      const ref = plugin.parseItem(job.source.url);
+      const ref = itemRefOf(job, plugin);
       const key = { sourceType: plugin.id, sourceId: ref.key };
       const { documents } = this.options;
       let document = await documents.findExisting(key);
@@ -1104,9 +1102,12 @@ export class JobManager {
         return;
       }
       if (!document) {
-        const captured = await plugin.captureItem(
-          ref, { ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}), signal },
-        );
+        const subscription = this.subscriptionTargetOf(job);
+        const captured = await plugin.captureItem(ref, {
+          ...(job.publishedNotBefore ? { publishedNotBefore: job.publishedNotBefore } : {}),
+          ...(subscription ? { subscription } : {}),
+          signal,
+        });
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title, publisher: captured.publisher.name } });
         // The save phase is on disk before the document is, so a restart knows who saved it.
         await this.options.store.flush();
@@ -1327,7 +1328,7 @@ export class JobManager {
         sourceId: found.key, title, url: found.url, jobId: null, state: 'queued', outcome: null, error: null,
       };
       try {
-        const submission = this.enqueueItem(type, found.url, job.id, discovery.publishedNotBefore, {}, title || null);
+        const submission = this.enqueueItem(type, found, job.id, discovery.publishedNotBefore, {}, title || null);
         item.jobId = submission.job.id;
         item.state = submission.job.state;
         if (submission.job.wait) item.wait = submission.job.wait;
@@ -1409,6 +1410,13 @@ export class JobManager {
     });
   }
 
+  /** The target of the subscription whose check found an item; undefined for an item submitted on its own. */
+  private subscriptionTargetOf(item: CollectionJob): SubscriptionTarget | undefined {
+    const parent = item.parentId ? this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId) : undefined;
+    if (!parent || roleOf(parent) !== 'check' || !parent.source.id) return undefined;
+    return { id: parent.source.id, title: parent.source.title ?? '', url: parent.source.url };
+  }
+
   /** The subscription a check job's item collects for, with the key field its failures use; null for any other job. */
   private failureTarget(item: CollectionJob): { type: string; subscriptionId: string; key: string; keyField: string } | null {
     if (roleOf(item) !== 'item' || !item.parentId || !item.source.id) return null;
@@ -1434,6 +1442,7 @@ export class JobManager {
       recorded = {
         [target.keyField]: target.key, title: item.source.title ?? previous?.title ?? '', attempts, errorCode: error.code,
         failedAt: this.now().toISOString(), skipped: failureClass === 'skip' || attempts >= MAX_CHECK_ATTEMPTS,
+        ...(this.plugin(item.source.type)?.item.urlForKey ? {} : { url: item.source.url }),
       };
       return [...entries.filter((entry) => entry !== previous), recorded];
     }));
@@ -1651,6 +1660,15 @@ function publicJob(job: CollectionJob): CollectionJob {
   delete copy.checkpoint;
   delete copy.claimedByUser;
   return copy;
+}
+
+/**
+ * The item an item job collects. Its key is the one recorded when the job was queued, so an item
+ * whose key its address does not determine keeps the key its listing gave it.
+ */
+function itemRefOf(job: CollectionJob, plugin: SourcePlugin): ItemRef {
+  if (job.source.id) return { key: job.source.id, url: job.source.url, title: job.source.title };
+  return plugin.parseItem(job.source.url);
 }
 
 /** The role of a job's kind; undefined for a kind of an unregistered type. */

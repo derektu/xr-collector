@@ -2,11 +2,17 @@ import path from 'node:path';
 import { registerScheduleFile, registerSourceDefinitions } from '../core/source-registry.js';
 import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../pacing/pacing-gate.js';
 import type { SourceDefinition, SourceEntry, SourcePlugin } from './types.js';
+import { createRssPlugin, rssDefinition } from './rss/server.js';
 import { createYouTubePlugin, youtubeDefinition } from './youtube/server.js';
 
-/** The source types this product offers, in display order. Adding a type means adding its entry here. */
+/**
+ * The source types this product offers, in display order. Adding a type means adding its entry
+ * here. An address belongs to the first type that owns it, so RSS, which owns every web address,
+ * comes last.
+ */
 export const SOURCES: readonly SourceEntry[] = [
   { definition: youtubeDefinition, create: createYouTubePlugin },
+  { definition: rssDefinition as SourceDefinition, create: createRssPlugin },
 ];
 
 export const SOURCE_DEFINITIONS: readonly SourceDefinition[] = SOURCES.map((entry) => entry.definition);

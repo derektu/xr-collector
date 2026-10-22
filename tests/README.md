@@ -9,6 +9,7 @@
 | `core` | 文件保存與索引、刪除紀錄與重新收集的互斥及競態 |
 | `plugins` | 核心與來源類型無關（`core-agnostic.test.ts`：以 `tests/support/fake-source-plugin.ts` 的兩個假來源類型 `fake`、`fake2` 走過單一項目、去重、訂閱預覽與檢查、範圍內最新 N 則、重試分類、各請求群組各自冷卻、暫停與移除、刪除後略過與明確重新收集、重啟接續、未登錄類型的工作保持中斷且不執行、訂閱狀態（含 workspace 由 plugin 的登入狀態判斷），以及與 YouTube 並存的匯出、合併與完全取代，以及檢查中失敗項目的次數、略過、重試與收集紀錄、工作頁的排隊順序與失敗區）；來源類型宣告的 Vault 與匯出檔格式版本（`format-versions.test.ts`） |
 | `plugins/youtube` | YouTube plugin：網址、語言、字幕整理、收集設定、yt-dlp 輸出解析、字幕軌道選擇、頻道列出，以及失敗原因的分類與用字（`failures.test.ts`） |
+| `plugins/rss` | RSS plugin：RSS 2.0／RDF／Atom 解析、文章識別與 key（`feed.test.ts`）、HTML 轉 Markdown（圖片、表格、相對連結、移除的元素，`html.test.ts`）、網址與頁面宣告的 feed、讀取失敗分類、快取與重啟（`source.test.ts`）、經工作與 Vault 的首次收集、範圍與數量、只有摘要（`rss-collection.test.ts`），以及 UI／Agent 共用路由與 Skill（`rss-http.test.ts`）；以 `synthetic-feeds.ts` 的本機 feed 伺服器驗證 |
 | `pacing` | 請求通道：單一連線、隨機等待、冷卻與狀態檔 |
 | `sources` | 網址辨識；訂閱清單、新增中的訂閱、文件頻道篩選的「已移除」、移除訂閱並刪除文件（擷取中的影片、單支影片加入、超過等待時間、部分刪除失敗）與 UI／Agent 讀到相同欄位的 HTTP 契約（`subscription-http.test.ts`） |
 | `jobs` | 收集工作的接受、去重、有界派工、持久紀錄、重啟接續與自動重試，以及 YouTube 冷卻期間的等待與接續 |
@@ -19,8 +20,8 @@
 | `server` | HTTP 契約與 Agent 授權；不分類型的收集、訂閱、排程與請求通道路由，以 YouTube 與假來源 plugin 各跑一次，含類型專屬路由回 404 與 UI／Agent 讀到相同結果（`subscription-routes.test.ts`）；核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
 | `web` | 畫面使用的狀態／呈現邏輯（含工作頁列的標題、副標與等待文字，`jobs-presentation.test.ts`）、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
-| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`） |
-| `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）與假來源 plugin（`fake-source-plugin.ts`） |
+| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`） |
+| `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）、假來源 plugin（`fake-source-plugin.ts`）與合成 feed 伺服器（`synthetic-feeds.ts`） |
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 

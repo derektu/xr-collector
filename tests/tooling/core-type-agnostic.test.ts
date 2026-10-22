@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The core knows source types only through the plugin contract and the registry. Only the plugins
+// The core knows source types only through the plugin contract and the registry (P-T3, R11-T8). Only the plugins
 // and the two assembly lists name a type: `src/plugins/index.ts` for the server processes and
 // `src/web/plugins.tsx` (with its stylesheet) for the UI. The contract itself names none.
 
@@ -14,7 +14,7 @@ const CONTRACT = 'src/plugins/types.ts';
 /** The files under `src/plugins` a core file may import: the contract and the server assembly list. */
 const PLUGIN_ENTRIES = new Set([CONTRACT, 'src/plugins/index.ts']);
 const WEB_ASSEMBLY = new Set(['src/web/plugins.tsx', 'src/web/plugins.css']);
-const TYPE_NAME = /youtube|yt-?dlp/iu;
+const TYPE_NAME = /youtube|yt-?dlp|rss/iu;
 const IMPORT = /(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/gu;
 
 function filesUnder(directory: string): string[] {
@@ -33,19 +33,19 @@ describe('a core that names no source type (P-T3)', () => {
     expect(coreFiles).toEqual(expect.arrayContaining(['src/jobs/job-manager.ts', 'src/server/app.ts', 'src/web/App.tsx', CONTRACT]));
   });
 
-  it('leaves YouTube and yt-dlp out of every core file', () => {
+  it('leaves YouTube, yt-dlp and RSS out of every core file', () => {
     const naming = coreFiles.flatMap((file) => readFileSync(file, 'utf8').split('\n')
       .map((line, index) => TYPE_NAME.test(line) ? `${file}:${index + 1}: ${line.trim()}` : null)
       .filter((line): line is string => line !== null));
     expect(naming).toEqual([]);
   });
 
-  it('imports no file of the YouTube plugin from the core', () => {
+  it.each(['youtube', 'rss'])('imports no file of the %s plugin from the core', (type) => {
     const imports = coreFiles.flatMap((file) => [...readFileSync(file, 'utf8').matchAll(IMPORT)]
       .map((match) => match[1]!)
       .filter((specifier) => specifier.startsWith('.'))
       .map((specifier) => path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)))
-      .filter((target) => target.startsWith('src/plugins/youtube/'))
+      .filter((target) => target.startsWith(`src/plugins/${type}/`))
       .map((target) => `${file} -> ${target}`));
     expect(imports).toEqual([]);
   });

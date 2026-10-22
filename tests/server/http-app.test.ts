@@ -292,7 +292,7 @@ describe('HTTP app', () => {
     const rejected = await Promise.all([
       '/api/search?q=x&channel=%E6%B8%AC%E8%A9%A6%E9%A0%BB%E9%81%93',
       '/api/search?q=x&publisherId=UC-test',
-      '/api/search?q=x&sourceType=rss',
+      '/api/search?q=x&sourceType=web',
       '/api/search?q=x&offset=5&limit=20',
       '/api/search?q=x&sourceType=youtube&sourceType=youtube',
     ].map((url) => app.inject({ method: 'GET', url })));

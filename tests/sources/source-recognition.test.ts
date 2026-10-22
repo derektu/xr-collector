@@ -38,7 +38,7 @@ describe('source type declarations (T-01)', () => {
 
     expect(response.statusCode).toBe(200);
     const { sourceTypes } = response.json();
-    expect(sourceTypes.map((type: { id: string }) => type.id)).toEqual(['youtube']);
+    expect(sourceTypes.map((type: { id: string }) => type.id)).toEqual(['youtube', 'rss']);
     const [youtube] = sourceTypes;
     expect(youtube).toMatchObject({
       label: 'YouTube', icon: 'youtube', requiresLogin: false,
@@ -116,21 +116,19 @@ describe('URL recognition (T-02 to T-05)', () => {
     expect(active).toMatchObject({ status: 'ready', subscription: { id: CHANNEL_ID, enabled: true }, actions: [] });
   });
 
-  it('reports a channel that cannot be resolved as unavailable', async () => {
+  it('reports a channel that names none as unsupported and one that cannot be read now as unavailable', async () => {
     const missing = (await recognize('@nobody', channelsWith({}).channels)).json().recognition;
     const offline = (await recognize('@channel-one', channelsWith({}, new CollectorError('network_error', '連線逾時，請稍後再試。')).channels)).json().recognition;
 
-    expect(missing).toMatchObject({ status: 'unavailable', sourceType: 'youtube', kind: 'channel', actions: [], message: '無法辨認這個 YouTube 頻道。' });
+    expect(missing).toMatchObject({ status: 'unsupported', sourceType: 'youtube', kind: 'channel', actions: [], message: '無法辨認這個 YouTube 頻道。' });
     expect(offline).toMatchObject({ status: 'unavailable', message: '連線逾時，請稍後再試。' });
   });
 
   it.each([
     ['https://www.youtube.com/playlist?list=PLabc', 'youtube', '播放清單'],
     ['https://www.youtube.com/feed/trending', 'youtube', '不包含可辨識'],
-    ['https://example.com/article', null, '目前還不支援這個網站'],
     ['not a url', null, '請貼上完整網址'],
-    ['example.com/article', null, '請貼上完整網址'],
-    ['www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ', null, '請貼上完整網址'],
+    ['ftp://example.com/feed', null, '目前還不支援這個網站'],
     ['youtube', null, '請貼上完整網址'],
   ])('answers %s as unsupported with a reason', async (url, sourceType, reason) => {
     const response = await recognize(url, channelsWith({}).channels);
@@ -154,7 +152,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       recognize: recognizeFixture,
     } as unknown as SourceTypeDeclaration;
     const { channels, preview } = channelsWith({});
-    const recognition = (await recognize('https://login.example/page', channels, [...sourceTypeDeclarations(), fixture])).json().recognition;
+    const recognition = (await recognize('https://login.example/page', channels, [fixture, ...sourceTypeDeclarations()])).json().recognition;
 
     expect(recognition).toEqual({
       status: 'login_required', sourceType: 'fixture', kind: null, kindLabel: null, url: 'https://login.example/page',
@@ -163,6 +161,35 @@ describe('URL recognition (T-02 to T-05)', () => {
     });
     expect(recognizeFixture).not.toHaveBeenCalled();
     expect(preview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['https://example.com/article', 'https://example.com/article'],
+    ['example.com/article', 'https://example.com/article'],
+    ['www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ', 'https://www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ'],
+  ])('hands %s, a web address no other type owns, to RSS to look for a feed', async (input, resolved) => {
+    const preview = vi.fn(async (): Promise<SubscriptionPreview> => {
+      throw new CollectorError('invalid_subscription', '這個網址沒有 RSS feed。');
+    });
+    const feeds = { type: 'rss', preview, listSubscriptions: async () => [], checkJobs: () => [] } as unknown as SubscriptionCollection;
+    const recognition = (await recognize(input, feeds)).json().recognition;
+
+    expect(preview).toHaveBeenCalledWith(resolved);
+    expect(recognition).toMatchObject({ status: 'unsupported', sourceType: 'rss', kind: 'feed', actions: [], message: '這個網址沒有 RSS feed。' });
+  });
+
+  it('offers to subscribe to the feed a web address leads to', async () => {
+    const target = { id: '0123456789abcdef', title: '部落格', url: 'https://example.com/feed.xml' };
+    const preview = vi.fn(async (): Promise<SubscriptionPreview> => ({
+      type: 'rss', target, subscription: null, settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 }, autoCollection: true,
+    }));
+    const feeds = { type: 'rss', preview, listSubscriptions: async () => [], checkJobs: () => [] } as unknown as SubscriptionCollection;
+    const recognition = (await recognize('https://example.com/', feeds)).json().recognition;
+
+    expect(recognition).toMatchObject({
+      status: 'ready', sourceType: 'rss', kind: 'feed', kindLabel: 'RSS', target,
+      actions: [{ id: 'subscribe', label: '訂閱網站', request: { method: 'POST', path: '/api/subscriptions', body: { url: target.url } } }],
+    });
   });
 
   it('lets the first declaration that owns an address recognize it', async () => {

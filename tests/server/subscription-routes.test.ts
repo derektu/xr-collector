@@ -155,7 +155,7 @@ describe.each(['youtube', 'fake'] as const)('subscription and collection routes 
 
     for (const route of ['/api/submissions', '/api/items']) {
       expect(await w.send('POST', route, {})).toMatchObject({ status: 400, body: { error: { code: 'invalid_request' } } });
-      expect(await w.send('POST', route, { url: 'https://elsewhere.example/page' })).toMatchObject({ status: 400, body: { error: { code: 'unsupported_url' } } });
+      expect(await w.send('POST', route, { url: 'ftp://elsewhere.example/page' })).toMatchObject({ status: 400, body: { error: { code: 'unsupported_url' } } });
       expect(await w.send('POST', route, { url: 'not an address' })).toMatchObject({ status: 400, body: { error: { code: 'invalid_url' } } });
     }
     await w.close();

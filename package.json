@@ -29,11 +29,16 @@
   },
   "dependencies": {
     "@fastify/static": "10.1.4",
+    "fast-xml-parser": "5.11.2",
     "fastify": "5.12.5",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
+    "rehype-parse": "9.0.1",
+    "rehype-remark": "10.0.1",
     "remark-gfm": "4.0.1",
+    "remark-stringify": "11.0.0",
+    "unified": "11.0.5",
     "yaml": "2.9.1",
     "yauzl": "3.4.0",
     "yazl": "3.3.1"
