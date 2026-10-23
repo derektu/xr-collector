@@ -10,14 +10,17 @@ import { chromium } from 'playwright';
 import { apiState, openPage } from './lib/drive.mjs';
 import { attach, launchWeb, portFree, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
 import { checkoutRoot, commitOf, evidenceDir, mainCheckout, SLOTS } from './lib/paths.mjs';
+import { BIN_PLATFORM, desktopTarget, runtimeBin } from './lib/target.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { REAL } from './lib/synthetic.mjs';
 
 const USAGE = `verify.mjs <command>
-  doctor   [--run <dir>]                     environment, slots and (with --run) one instance; read-only
-  launch   --issue <N> [--label <name>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
+  doctor   [--run <dir>] [--app <path>]      environment, slots, (with --run) one instance and (with --app) a packaged app;
+           read-only; "missing" lists what is not ready, each with its fix; exit code 2 when not healthy
+  launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
            evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
            a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
+           --evidence <dir> writes it there instead (a missing or empty folder);
            --checkout picks the version under test; --no-build serves the checkout's existing dist/web
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
@@ -25,7 +28,7 @@ const USAGE = `verify.mjs <command>
   sweep                                        remove stale slot locks and scratch folders of runs with no live process`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
-  issue: { type: 'string' }, label: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
+  issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
   checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
@@ -45,21 +48,39 @@ function builtAfterSources(checkout) {
 
 async function doctor() {
   const checkout = path.resolve(o.checkout ?? checkoutRoot());
-  const bin = (name) => path.join(checkout, 'resources', 'bin', 'mac', name);
+  const bin = runtimeBin(checkout);
   const [major, minor] = process.versions.node.split('.').map(Number);
+  const item = (ok, fields) => ({ ok, ...fields });
   const checks = {
-    platform: { ok: process.platform === 'darwin' && process.arch === 'arm64', value: `${process.platform} ${process.arch}`, fix: 'Mac arm64 only; Windows is pending in SKILL.md' },
-    node: { ok: major > 22 || (major === 22 && minor >= 12), value: process.version, fix: 'Node >= 22.12 (.nvmrc)' },
-    dependencies: { ok: existsSync(path.join(checkout, 'node_modules', '.bin', 'tsx')) && existsSync(path.join(checkout, 'node_modules', 'playwright')), fix: 'npm ci in the checkout' },
-    chromium: { ok: existsSync(chromium.executablePath()), value: chromium.executablePath(), fix: 'npx playwright install chromium' },
-    meilisearch: { ok: existsSync(bin('meilisearch')), fix: 'npm run download:runtime' },
-    ytdlp: { ok: existsSync(bin(path.join('yt-dlp', 'yt-dlp'))), fix: 'npm run download:runtime (needed by --data real and Electron)' },
-    // npm may skip Electron's install script, which downloads the executable.
-    electron: { ok: existsSync(path.join(checkout, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron')), fix: 'node node_modules/electron/install.js (needed by Electron flows only)' },
-    electronBuild: { ok: existsSync(path.join(checkout, 'dist', 'node', 'electron', 'main.js')), fix: 'npm run build (needed by Electron flows only)' },
-    // Electron serves the checkout's dist/web; Web mode builds its own copy into the run.
-    electronWebCurrent: { ok: builtAfterSources(checkout), fix: 'npm run build; Electron would show an older UI (Electron flows only)' },
+    platform: item(process.platform === 'darwin' && process.arch === 'arm64', { value: `${process.platform} ${process.arch}`, fix: 'Mac arm64 Node (an x64 Node runs under Rosetta and tests another architecture); Windows is pending in SKILL.md' }),
+    node: item(major > 22 || (major === 22 && minor >= 12), { value: process.version, fix: 'Node >= 22.12 (.nvmrc)' }),
+    dependencies: item(existsSync(path.join(checkout, 'node_modules', '.bin', 'tsx')) && existsSync(path.join(checkout, 'node_modules', 'playwright')), { fix: 'npm ci in the checkout' }),
+    chromium: item(existsSync(chromium.executablePath()), { path: chromium.executablePath(), fix: 'npx playwright install chromium' }),
+    runtimeBin: item(existsSync(bin), { path: bin, fix: `npm run download:runtime (resources/bin/${BIN_PLATFORM})` }),
+    meilisearch: item(existsSync(path.join(bin, 'meilisearch')), { path: path.join(bin, 'meilisearch'), fix: 'npm run download:runtime' }),
+    ytdlp: item(existsSync(path.join(bin, 'yt-dlp', 'yt-dlp')), { path: path.join(bin, 'yt-dlp', 'yt-dlp'), fix: 'npm run download:runtime (needed by --data real and Electron)' }),
   };
+  const required = ['platform', 'node', 'dependencies', 'chromium', 'runtimeBin', 'meilisearch'];
+  /** The prerequisites of a Desktop target, or one failed check on a platform Desktop runs do not support. */
+  const desktopNeeds = (app) => {
+    try {
+      return desktopTarget({ checkout, app }).requires;
+    } catch (error) {
+      return [{ check: 'desktop', ok: false, fix: error.message }];
+    }
+  };
+  // Prerequisites of the development Electron; desktop flows without --app need them.
+  for (const need of desktopNeeds()) {
+    if (!(need.check in checks)) checks[need.check] = item(need.ok, { path: need.path, fix: `${need.fix} (Electron flows only)` });
+  }
+  // Electron serves the checkout's dist/web; Web mode builds its own copy into the run.
+  checks.electronWebCurrent = item(builtAfterSources(checkout), { fix: 'npm run build; Electron would show an older UI (Electron flows only)' });
+  if (o.app) {
+    for (const need of desktopNeeds(o.app)) {
+      checks[need.check] = item(need.ok, { path: need.path, ...(need.value !== undefined ? { value: need.value } : {}), fix: need.fix });
+      required.push(need.check);
+    }
+  }
   // A slot is usable only with no live lock and all four ports free, the same test launch applies.
   const holders = slotHolders();
   const slots = await Promise.all(SLOTS.map(async (ports) => {
@@ -69,8 +90,10 @@ async function doctor() {
     const state = holder?.live ? 'in use' : busyPorts.length ? 'ports busy' : holder ? 'stale lock' : 'free';
     return { ...ports, state, busyPorts, runDir: holder?.runDir ?? null };
   }));
-  const report = { checkout, ...commitOf(checkout), checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
-  let healthy = ['platform', 'node', 'dependencies', 'chromium', 'meilisearch'].every((key) => checks[key].ok);
+  const missing = Object.entries(checks).filter(([, check]) => !check.ok)
+    .map(([check, { path: file, fix }]) => ({ check, required: required.includes(check), ...(file ? { path: file } : {}), fix }));
+  const report = { checkout, ...commitOf(checkout), ...(o.app ? { app: path.resolve(o.app) } : {}), missing, checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
+  let healthy = required.every((key) => checks[key].ok);
   if (o.run) {
     const instance = attach(o.run);
     const get = (route) => fetch(`${instance.url}${route}`).then((response) => response.json(), () => null);
@@ -116,7 +139,7 @@ async function main() {
   if (command === 'doctor') return doctor();
   if (command === 'launch') {
     if (!['synthetic', 'real'].includes(o.data) || !['selected', 'fixed', 'none'].includes(o.vault)) throw new Error(USAGE);
-    const instance = await launchWeb({ issue: need('issue'), label: o.label, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
+    const instance = await launchWeb({ issue: need('issue'), label: o.label, evidence: o.evidence, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
     const { api, catalog, updateCatalog, restart, stop, ...record } = instance;
     if (o.data === 'real') record.real = REAL;
     return print(record);

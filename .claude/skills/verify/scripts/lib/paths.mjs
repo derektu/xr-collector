@@ -4,7 +4,7 @@
 // .local/, so sweep sees the runs of every worktree.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -31,18 +31,28 @@ export function evidenceDir(issue, label) {
 }
 
 /**
- * Claims the evidence folder of one labelled run and returns { evidence, label }. The first run of a
- * label gets `<label>/`; when that folder exists, the next free `<label>-2/`, `<label>-3/`… is
- * created, so an earlier run's results.json and screenshots are never overwritten. `label` is the
- * folder name actually used. Without a label the evidence is the issue folder itself, shared by
- * every unlabelled run of the issue.
+ * Claims the evidence folder of one run and returns { evidence, label, created }. An explicit
+ * `evidence` folder (a path from the command line, for a run whose evidence is collected from
+ * another machine) is used as given; it must be missing or empty, so a run never mixes with an
+ * earlier one. Otherwise the first run of a label gets `<label>/`; when that folder exists, the next
+ * free `<label>-2/`, `<label>-3/`… is created, so an earlier run's results.json and screenshots are
+ * never overwritten. `label` is the folder name actually used, or the label as given with an explicit
+ * folder. Without either, the evidence is the issue folder itself, shared by every unlabelled run of
+ * the issue. `created` tells whether this call made the folder.
  */
-export function claimEvidence(issue, label) {
+export function claimEvidence(issue, label, { evidence: explicit } = {}) {
   checkLabel(label);
+  if (explicit) {
+    const evidence = path.resolve(explicit);
+    if (existsSync(evidence) && readdirSync(evidence).length) throw new Error(`Evidence folder ${evidence} is not empty; give a new or empty folder`);
+    const created = !existsSync(evidence);
+    mkdirSync(evidence, { recursive: true });
+    return { evidence, label: label === undefined ? null : String(label), created };
+  }
   if (!label) {
     const evidence = evidenceDir(issue);
     mkdirSync(evidence, { recursive: true });
-    return { evidence, label: null };
+    return { evidence, label: null, created: false };
   }
   mkdirSync(evidenceDir(issue), { recursive: true });
   for (let number = 1; ; number += 1) {
@@ -52,7 +62,7 @@ export function claimEvidence(issue, label) {
       // Without `recursive`, mkdir fails on an existing folder, which also keeps two launches of one
       // label from sharing a folder.
       mkdirSync(evidence);
-      return { evidence, label: candidate };
+      return { evidence, label: candidate, created: true };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }
@@ -121,17 +131,21 @@ export function processStart(pid) {
  */
 export const runMarker = (runDir) => `--xr-verify-run=${runDir}/`;
 
+/** The main executable of a macOS app bundle: development Electron or a packaged app. */
+const isAppExecutable = (executable) => /\.app\/Contents\/MacOS\/[^/]+$/u.test(executable);
+
 /**
  * Whether a process is one of the run's own programs, by its executable and command line: node
- * running server.mts or Electron, carrying the run marker, or meilisearch with its data in the run's
- * profile. Any other program that mentions the marker or the directory (a `pgrep -f` with the whole
- * server command line as its pattern, a `tail` of the log, `verify.mjs stop --run`) does not count.
+ * running server.mts or an app's main executable (development Electron or the packaged app),
+ * carrying the run marker, or meilisearch with its data in the run's profile. Any other program
+ * that mentions the marker or the directory (a `pgrep -f` with the whole server command line as its
+ * pattern, a `tail` of the log, `verify.mjs stop --run`) does not count.
  */
 export function isRunProcess(command, runDir, executable) {
   const program = path.basename(executable ?? '');
   const padded = ` ${command} `;
   if (padded.includes(` ${runMarker(runDir)} `)) {
-    return (program === 'node' && padded.includes('server.mts ')) || (program === 'Electron' && executable.endsWith('/Contents/MacOS/Electron'));
+    return (program === 'node' && padded.includes('server.mts ')) || isAppExecutable(executable ?? '');
   }
   return program === 'meilisearch' && padded.includes(` --db-path ${runDir}/profile/`);
 }

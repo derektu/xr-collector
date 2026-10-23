@@ -164,16 +164,16 @@ export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
 /**
  * Starts a Web instance and waits until the UI answers and search is ready. Options: issue
  * (required), label (evidence subfolder, such as baseline; a label already used gets the next
- * free `<label>-N`, see claimEvidence), checkout, data ('synthetic' | 'real'), vault ('selected' |
- * 'fixed' | 'none'), catalog (synthetic catalog; defaultCatalog() otherwise), build (false copies
- * the checkout's existing dist/web instead of building). The server is the checkout's own copy of
- * server.mts, so it matches the src/ it loads. The returned instance carries the evidence folder
- * and label actually used.
+ * free `<label>-N`, see claimEvidence), evidence (an explicit evidence folder, missing or empty),
+ * checkout, data ('synthetic' | 'real'), vault ('selected' | 'fixed' | 'none'), catalog (synthetic
+ * catalog; defaultCatalog() otherwise), build (false copies the checkout's existing dist/web instead
+ * of building). The server is the checkout's own copy of server.mts, so it matches the src/ it
+ * loads. The returned instance carries the evidence folder and label actually used.
  */
-export async function launchWeb({ issue, label, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
+export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   checkout = path.resolve(checkout);
-  const claimed = claimEvidence(issue, label);
+  const claimed = claimEvidence(issue, label, { evidence });
   let run;
   try {
     run = await createRun(issue, checkout, { label: claimed.label ?? undefined });
@@ -221,9 +221,9 @@ export async function launchWeb({ issue, label, checkout = checkoutRoot(), data 
   }
 }
 
-/** Removes a labelled evidence folder a failed launch claimed but never wrote to. */
-function dropEmptyEvidence({ evidence, label }) {
-  if (!label) return;
+/** Removes an evidence folder a failed launch made but never wrote to. */
+function dropEmptyEvidence({ evidence, created }) {
+  if (!created) return;
   try { if (readdirSync(evidence).length === 0) rmSync(evidence, { recursive: true }); } catch { /* already gone */ }
 }
 
