@@ -310,6 +310,50 @@ describe('CollectorRuntime', () => {
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 
+  it('names a previewed channel from acceptance while it waits behind another subscription request', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const other = { id: 'UC-other', title: 'Other', url: 'https://www.youtube.com/channel/UC-other' };
+    const resolve = vi.fn(async (url: string) => {
+      if (!url.includes('@other')) return runtimeChannel;
+      await held;
+      return other;
+    });
+    const setup = await options({ capture: vi.fn() }, undefined, resolve);
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(async () => { release(); await runtime.close(); });
+    const post = (route: string, body: unknown) => fetch(`${runtime.server.url}${route}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    const preview = (await (await post('/api/subscription-previews', { url: '@runtime' })).json()).preview;
+    // A request nobody previewed resolves in the single discovery slot, so the previewed one waits in the queue.
+    const blocking = (await (await post('/api/subscriptions', { url: 'https://www.youtube.com/@other' })).json()).job.id as string;
+    await vi.waitFor(async () => {
+      expect((await (await fetch(`${runtime.server.url}/api/jobs/${blocking}`)).json()).job.state).toBe('running');
+    });
+    const accepted = await post('/api/subscriptions', { url: preview.target.url });
+    expect(accepted.status).toBe(202);
+    const job = (await accepted.json()).job;
+    expect(job).toMatchObject({ state: 'queued', source: { title: 'Runtime' } });
+    const { overview } = await (await fetch(`${runtime.server.url}/api/jobs/overview`)).json();
+    expect(overview.running).toEqual([expect.objectContaining({ jobId: blocking, title: null })]);
+    expect(overview.queued).toEqual([expect.objectContaining({ jobId: job.id, role: 'add', title: 'Runtime' })]);
+    // The stored event names the channel itself, not only once the log reads it next to the job.
+    await vi.waitFor(async () => {
+      const events = await readEventFiles(path.join(setup.value.profilePath, 'jobs'));
+      expect(events.find((event) => event.jobId === job.id && event.eventType === 'job.accepted')).toMatchObject({ sourceTitle: 'Runtime' });
+    });
+
+    release();
+    await vi.waitFor(async () => {
+      expect((await (await fetch(`${runtime.server.url}/api/jobs/${job.id}`)).json()).job).toMatchObject({
+        state: 'completed', result: { subscriptionId: 'UC-runtime' },
+      });
+    });
+    expect(resolve.mock.calls.map(([url]) => url)).toEqual(['https://www.youtube.com/@runtime', 'https://www.youtube.com/@other']);
+  });
+
   it('wires Agent channel and schedule operations to the UI workspace', async () => {
     const setup = await options({ capture: vi.fn() });
     const runtime = await CollectorRuntime.start(setup.value);

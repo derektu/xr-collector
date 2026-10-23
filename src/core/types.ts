@@ -471,6 +471,8 @@ export interface JobCheckpoint {
   claimedAt?: string;
   /** An add job: the settings the new subscription starts with, chosen when the job was accepted. */
   settings?: SubscriptionSettings;
+  /** An add job: the target a preview resolved for its address before the job was accepted; the job subscribes to it without resolving. */
+  target?: { id: string; title: string; url: string };
   /** An add job resolved this target and is subscribing to it; `subscriptionId` is the target's ID. */
   subscribing?: { subscriptionId: string; title: string; url: string };
   /** A check job recorded its discovered items at this time; the subscription's last check time follows it. */
