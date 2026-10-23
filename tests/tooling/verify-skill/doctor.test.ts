@@ -19,7 +19,12 @@ interface Missing { check: string; required: boolean; path?: string; fix: string
 
 /** Runs doctor in `cwd` and returns its exit code and report. */
 async function doctor(cwd: string, ...args: string[]) {
-  const result = await promisify(execFile)(process.execPath, [CLI, 'doctor', ...args], { cwd, env: { ...process.env, HOME: home, USERPROFILE: home } })
+  return doctorWith({}, cwd, ...args);
+}
+
+/** Runs doctor with extra environment variables. */
+async function doctorWith(env: Record<string, string>, cwd: string, ...args: string[]) {
+  const result = await promisify(execFile)(process.execPath, [CLI, 'doctor', ...args], { cwd, env: { ...process.env, HOME: home, USERPROFILE: home, ...env } })
     .then((done) => ({ code: 0, stdout: done.stdout }), (failed) => ({ code: failed.code as number, stdout: failed.stdout as string }));
   const report = JSON.parse(result.stdout) as {
     healthy: boolean; missing: Missing[]; checks: Record<string, { value?: string }>;
@@ -106,6 +111,21 @@ describe.skipIf(process.platform !== 'darwin')('doctor', () => {
     expect(required).not.toContain('electron');
     expect(required.some((check) => check.startsWith('app'))).toBe(false);
   }, 30_000);
+
+  it('requires Chromium for Web mode only', async () => {
+    const { worktree } = repository();
+    // An empty browsers folder: Playwright finds no Chromium.
+    const noBrowsers = { PLAYWRIGHT_BROWSERS_PATH: temp('browsers') };
+    const web = await doctorWith(noBrowsers, worktree);
+    const packaged = await doctorWith(noBrowsers, worktree, '--app', fakeApp('101100011'));
+    const electron = await doctorWith(noBrowsers, worktree, '--electron');
+
+    expect(web.required).toContain('chromium');
+    for (const desktop of [packaged, electron]) {
+      expect(desktop.report.missing.find((item) => item.check === 'chromium')).toMatchObject({ required: false });
+    }
+    expect(electron.required).toEqual(expect.arrayContaining(['electron', 'electronBuild']));
+  }, 60_000);
 });
 
 /**

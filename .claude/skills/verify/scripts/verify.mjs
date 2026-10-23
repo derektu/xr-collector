@@ -17,9 +17,11 @@ import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
 
 const USAGE = `verify.mjs <command>
-  doctor   [--run <dir>] [--app <path>]      environment, slots, (with --run) one instance and (with --app) a packaged app
-           (a .app on macOS, the .exe on Windows); read-only; "missing" lists what is not ready, each with its fix;
-           exit code 2 when not healthy
+  doctor   [--run <dir>] [--app <path>] [--electron]
+           environment, slots, (with --run) one instance and (with --app) a packaged app (a .app on macOS, the .exe
+           on Windows); --electron requires the development Electron; with --app or --electron the run is a Desktop
+           one and Chromium (Web mode) is not required; read-only; "missing" lists what is not ready, each with its
+           fix; exit code 2 when not healthy
   launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
            evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
            a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
@@ -35,7 +37,7 @@ const USAGE = `verify.mjs <command>
            exit code 2 when not complete`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
-  issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
+  issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, electron: { type: 'boolean' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
   checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
@@ -77,8 +79,9 @@ async function doctor() {
     meilisearch: item(existsSync(path.join(bin, exe('meilisearch'))), { path: path.join(bin, exe('meilisearch')), fix: download }),
     ytdlp: item(existsSync(path.join(bin, 'yt-dlp', exe('yt-dlp'))), { path: path.join(bin, 'yt-dlp', exe('yt-dlp')), fix: `${download} (needed by --data real and Electron)` }),
   };
-  // Chromium serves Web mode only, which Windows does not run.
-  const required = ['platform', 'node', 'dependencies', ...(WINDOWS ? [] : ['chromium']), 'runtimeBin', 'meilisearch'];
+  // Chromium serves Web mode only, which Windows does not run and a Desktop run (--app, --electron) does not use.
+  const desktop = Boolean(o.app || o.electron);
+  const required = ['platform', 'node', 'dependencies', ...(WINDOWS || desktop ? [] : ['chromium']), 'runtimeBin', 'meilisearch'];
   /** The prerequisites of a Desktop target, or one failed check on a platform Desktop runs do not support. */
   const desktopNeeds = (app) => {
     try {
@@ -87,12 +90,15 @@ async function doctor() {
       return [{ check: 'desktop', ok: false, fix: error.message }];
     }
   };
-  // Prerequisites of the development Electron; desktop flows without --app need them.
+  // Prerequisites of the development Electron: required with --electron, listed for reference otherwise.
   for (const need of desktopNeeds()) {
-    if (!(need.check in checks)) checks[need.check] = item(need.ok, { path: need.path, fix: `${need.fix} (Electron flows only)` });
+    if (need.check in checks) continue;
+    checks[need.check] = item(need.ok, { path: need.path, fix: `${need.fix} (Electron flows only)` });
+    if (o.electron) required.push(need.check);
   }
   // Electron serves the checkout's dist/web; Web mode builds its own copy into the run.
   checks.electronWebCurrent = item(builtAfterSources(checkout), { fix: 'npm run build; Electron would show an older UI (Electron flows only)' });
+  if (o.electron) required.push('electronWebCurrent');
   if (o.app) {
     for (const need of desktopNeeds(o.app)) {
       checks[need.check] = item(need.ok, { path: need.path, ...(need.value !== undefined ? { value: need.value } : {}), fix: need.fix });
