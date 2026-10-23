@@ -20,6 +20,7 @@ import type {
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
+import { RecentTargets } from '../../src/subscriptions/recent-targets.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 
@@ -94,7 +95,7 @@ class ControlledSource implements YouTubeSource {
   running(): string[] { return [...this.pending.keys()]; }
 }
 
-function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failIndex?: boolean } = {}) {
+function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
   const vault = new MemoryVault();
   const subs = new SubscriptionRecorder();
   const source = new ControlledSource();
@@ -106,6 +107,7 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
   const manager = new JobManager({
     vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
     ...(options.limits ? { limits: options.limits } : {}),
+    ...(options.recentTargets ? { recentTarget: (type: string, url: string) => options.recentTargets!.get(type, url) } : {}),
     createId: () => `job-${++sequence}`,
   });
   subs.attach(manager);
@@ -260,6 +262,42 @@ describe('JobManager', () => {
     const followUp = await manager.whenSettled(job.result!.followUpJobId!);
     expect(followUp).toMatchObject({ kind: 'youtube.channel', source: { id: subscribed!.id }, result: { outcome: 'empty' } });
     expect(subs.of('checked')).toEqual([expect.objectContaining({ id: subscribed!.id, candidates: [], collecting: [] })]);
+  });
+
+  it('names a previewed subscription request from acceptance and subscribes to that target after the preview expires', async () => {
+    let now = 0;
+    const recentTargets = new RecentTargets(1000, () => now);
+    const { manager, source, subs } = setup({ recentTargets });
+    source.holdCaptures = false;
+    const resolveChannel = source.resolveChannel.bind(source);
+    let releaseBlocker!: () => void;
+    const resolved: string[] = [];
+    source.resolveChannel = async (url) => {
+      resolved.push(url);
+      if (url.endsWith('@blocker')) await new Promise<void>((resolve) => { releaseBlocker = resolve; });
+      return resolveChannel(url);
+    };
+    const previewed = channel('UCpreviewedxxxxxxxxxxxxx', '預覽的頻道');
+    recentTargets.remember('youtube', 'https://www.youtube.com/@previewed', previewed);
+
+    // A request nobody previewed holds the single discovery slot, so the previewed one waits in the queue.
+    const blocker = await manager.submit('youtube', '@blocker');
+    await vi.waitFor(() => expect(manager.get(blocker.job.id).phase).toBe('resolve'));
+    const added = await manager.submit('youtube', '@previewed');
+    expect(added.job).toMatchObject({ state: 'queued', source: { id: null, title: '預覽的頻道' } });
+    expect(manager.subscriptionWork('youtube').adds).toEqual([
+      expect.objectContaining({ jobId: blocker.job.id, title: null }),
+      expect.objectContaining({ jobId: added.job.id, title: '預覽的頻道' }),
+    ]);
+
+    now = 5000;
+    expect(recentTargets.get('youtube', 'https://www.youtube.com/@previewed')).toBeUndefined();
+    releaseBlocker();
+    expect(await manager.whenSettled(added.job.id)).toMatchObject({
+      state: 'completed', source: { id: previewed.id, title: '預覽的頻道' }, result: { subscriptionId: previewed.id },
+    });
+    expect(resolved).toEqual(['https://www.youtube.com/@blocker']);
+    expect(subs.get('youtube', previewed.id)).toMatchObject({ title: '預覽的頻道', url: previewed.url });
   });
 
   it('rejects playlists and unknown addresses before accepting a job', async () => {

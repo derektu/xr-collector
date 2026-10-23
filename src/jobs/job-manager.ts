@@ -88,7 +88,7 @@ export interface JobManagerOptions {
   setTimer?: (callback: () => void, ms: number) => () => void;
   /** The device's request channels, one per pacing group; a group's cooldown pauses the steps of that group only. */
   pacing?: readonly Pacing[];
-  /** A target a preview recently resolved for a classified subscription address; adding it resolves no more. */
+  /** A target a preview recently resolved for a classified subscription address; a subscription request accepted for it resolves no more. */
   recentTarget?: (type: string, url: string) => SubscriptionTarget | undefined;
 }
 
@@ -367,7 +367,8 @@ export class JobManager {
   /**
    * Resolves a subscription address and subscribes to it. A new subscription starts with
    * `settings` (the source type's defaults when omitted) and its first check follows them; an
-   * existing subscription keeps its own state and settings.
+   * existing subscription keeps its own state and settings. An address a preview resolved recently
+   * keeps that target from acceptance on, so the job is named while it waits and resolves no more.
    */
   async submitSubscriptionAdd(type: string, url: string, settings?: SubscriptionSettings): Promise<JobSubmission> {
     const plugin = this.requirePlugin(type);
@@ -377,9 +378,13 @@ export class JobManager {
       throw new CollectorError('invalid_subscription', plugin.prompts.subscriptionInput);
     }
     const accepted = settings ?? plugin.subscription.defaults;
+    const target = this.options.recentTarget?.(type, input.url);
     const submission = this.enqueue(kind, type, `${type}:add:${input.url.toLowerCase()}`, {
-      id: null, url: input.url, title: null,
-    }, null, { scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...accepted } } });
+      id: null, url: input.url, title: target?.title ?? null,
+    }, null, {
+      scope: { trigger: 'subscribe' },
+      checkpoint: { settings: { ...accepted }, ...(target ? { target: { id: target.id, title: target.title, url: target.url } } : {}) },
+    });
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -1277,11 +1282,12 @@ export class JobManager {
   private async addSubscription(job: CollectionJob, signal: AbortSignal): Promise<void> {
     this.start(job, 'resolve');
     const plugin = this.requirePlugin(job.source.type);
-    // A job interrupted while subscribing already knows its target and may have added it.
+    // A job interrupted while subscribing already knows its target and may have added it; a job
+    // accepted after a preview subscribes to the previewed target.
     const subscribing = job.checkpoint?.subscribing;
     const resolved = subscribing
       ? { id: subscribing.subscriptionId, title: subscribing.title, url: subscribing.url }
-      : this.options.recentTarget?.(job.source.type, job.source.url) ?? await plugin.resolveTarget!(job.source.url, { signal });
+      : job.checkpoint?.target ?? await plugin.resolveTarget!(job.source.url, { signal });
     // The service stopped while resolving; close() records the job as interrupted.
     if (this.closed) return;
     await this.subscribeResolved(job, resolved);
