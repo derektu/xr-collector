@@ -7,10 +7,10 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 驗證層級與證據規則以 [開發驗證流程](../../../docs/development-validation.md#驗證層級) 為準。本 skill 提供兩件事：
 
-- **CLI** `scripts/verify.mjs`：`doctor`、`launch`、`seed`、`snapshot`、`state`、`stop`、`sweep`，負責環境與 instance 的生命週期。
+- **CLI** `scripts/verify.mjs`：`doctor`、`launch`、`seed`、`snapshot`、`state`、`stop`、`sweep`，負責環境與 instance 的生命週期；`flows` 執行已收錄的回歸流程。
 - **函式庫** `scripts/lib/index.mjs`：啟動／接手 instance、`waitFor`、合成資料、經 API 建立前置狀態、headless 頁面、scenario 紀錄與截圖、資料狀態讀取、Electron 啟動與對話框替換。每張票的流程腳本 import 它，只寫該票特有的步驟。
 
-一步一個 CLI 指令適合臨時看一眼；票的驗收寫成一支流程腳本，修改後整條重跑。
+一步一個 CLI 指令適合臨時看一眼；票的驗收寫成一支流程腳本，修改後整條重跑。功能已有收錄的回歸流程時，先跑它（見「已收錄流程」）。
 
 功能地圖在 [features/README.md](features/README.md)，每個功能列出入口、操作方式、證明它可用的最終狀態與陷阱。
 
@@ -148,6 +148,29 @@ node .local/ticket-artifacts/91/scripts/flow.mjs --label ticket
 
 流程以 `--checkout` 決定從哪個 checkout import 函式庫：基準從主 checkout 的 skill import，本票版本從票的 worktree 的 skill import，函式庫才與它驅動的 `src/` 一致。靜態 `import` 的路徑是固定的，所以上面的流程用動態 import，並把 `checkout` 明確傳給 `launchWeb`（函式庫的預設是工作目錄所在的 checkout，基準時就會指向票的 worktree）。[examples/collect-video.mjs](examples/collect-video.mjs) 也是這個寫法。證據位置由工作目錄決定，兩次都寫進票的 worktree，分在 `91/baseline/` 與 `91/ticket/`；再跑一次基準落在 `91/baseline-2/`，前一次保留。主 checkout 要先 `git pull` 到最新的 main，並有自己的 `node_modules`。
 
+### 已收錄流程
+
+已收錄流程是 commit 進 repo 的回歸流程，放在 `flows/<名稱>.mjs`，每張改到它涵蓋功能的票都跑它。
+
+```sh
+V=.claude/skills/verify/scripts/verify.mjs
+node $V flows list                                                   # 每支流程與它涵蓋的子功能
+node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
+node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
+```
+
+- **版本**：流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 只決定受測的 `src/`：Web UI 從受測 checkout build，伺服器是受測 checkout 自己的 `server.mts`。基準與本票版本因此跑同一份斷言，受測 checkout 沒有這支流程也能當基準。票自己的 `.local` 流程則從受測 checkout import 函式庫（見「基準」）。
+- **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
+- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop；`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
+- **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
+- **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
+
+**收錄規則**：
+
+1. 票自己的流程先放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
+2. 同一個流程被第二張票用到時，那張票把它收進 `flows/`：斷言改成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能。
+3. 票改變了已收錄流程所檢查的行為時，同一張票更新該流程與功能地圖；改過的斷言在基準上失敗、在本票版本通過。
+
 ### 重啟
 
 當機後接續、重啟後狀態保留這類 scenario，用 `instance.restart()` 在同一個 run 上重啟 server：同一份 runtime 程式、profile、Vault、`catalog.json`、port 與 slot。
@@ -171,7 +194,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `instance.restart({ crash, page })` | 在同一個 run 上重啟 server（見「重啟」） |
 | `instance.stop({ keep })` | 同 CLI `stop` |
 | `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
-| `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json`。`page` 可以是回傳目前頁面的函式（Electron `relaunch()` 後換了視窗） |
+| `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json`。scenario 內的 `expect(ok, text, { id, expected, actual })` 第三個參數可省略，`shot(name, page)` 可截另一個分頁。`page` 可以是回傳目前頁面的函式（Electron `relaunch()` 後換了視窗） |
 | `apiState(instance)` | Vault、訂閱、工作、文件（所有分頁）、搜尋的 API 快照 |
 | `instance.state()`、`readState(runDir)` | `api`、`vault`、`profile`、`index` 的資料狀態（見「State」） |
 | `collect(instance, url)`／`subscribe(instance, url)`／`idle(instance)` | 以辨識網址＋執行動作建立前置狀態；等工作清空 |
@@ -288,7 +311,7 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
 
 本 skill 的 CLI 與函式庫有兩層測試：
 
-- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉、Windows 程序啟動監看只結束一次且不碰已結束的 PID，summary 的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario，`state` 依格式讀 Vault 與 profile、讀取不寫入、停止的 run 的 `api` 與 `index` 為 unavailable、從程序環境變數讀 Meilisearch 的 key（Mac 與 Linux），以及 `doctor --issue` 的 current／STALE 判斷（commit 不同、只有未提交內容不同、checkout 不在這台機器）與 exit code 不受影響。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
+- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉、Windows 程序啟動監看只結束一次且不碰已結束的 PID，summary 的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario，`state` 依格式讀 Vault 與 profile、讀取不寫入、停止的 run 的 `api` 與 `index` 為 unavailable、從程序環境變數讀 Meilisearch 的 key（Mac 與 Linux），以及 `doctor --issue` 的 current／STALE 判斷（commit 不同、只有未提交內容不同、checkout 不在這台機器）與 exit code 不受影響；已收錄流程的狀態序列與工作頁分區判斷、recorder 的 check 格式，以及功能地圖的 `Regression flows` 與流程的 `covers` 一致。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
 - **整合 smoke**：`npm run test:verify-skill:mac`（`scripts/smoke.mjs [--issue <N>] [--checkout <dir>]`），只在 Mac 本機執行，需要 Playwright Chromium 與 `npm run download:runtime`。Web 模式合成資料：launch → 訂閱 → `restart()` → `restart({ crash: true })` → `stop({ keep: true })` → `sweep`，斷言狀態保留、中斷的工作完成且 `lastStop` 為 `crash`、`server.log` 的重啟分隔、結束後沒有命令列含有 run 目錄的程序且 slot 已釋放，以及用到的 port 都是 verify slot、7222／7175 的 listener 前後相同。證據在 `.local/ticket-artifacts/<issue>/smoke[-N]/`（預設 issue 為 `verify-smoke`）。改 `scripts/` 時在本機跑一次。
 - **Desktop smoke**：`npm run test:verify-skill:desktop:mac -- [--app <path>]`，Windows 是 `npm run test:verify-skill:desktop:win -- [--app <path>]`（`scripts/smoke-desktop.mjs`，見「打包版」），在本機執行，需要網路。改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或程序辨識時，兩個平台的開發版與打包版各跑一次。
 

@@ -29,8 +29,25 @@ export async function openPage(instance, { viewport = { width: 1280, height: 860
 }
 
 /**
+ * One check of results.json. `detail` ({ id, expected, actual }) gives the check a stable ID, so two
+ * runs of a flow compare check by check, and says what was expected and what was seen.
+ */
+export function checkEntry(ok, text, detail) {
+  if (!detail) return { ok: Boolean(ok), text };
+  return { id: detail.id, ok: Boolean(ok), text, expected: detail.expected, actual: detail.actual };
+}
+
+/** The line printed for a failed check: its ID, text, and what was expected against what was seen. */
+export function failureHint(text, detail) {
+  if (!detail) return text;
+  const show = (value) => (typeof value === 'string' ? value : JSON.stringify(value));
+  return `[${detail.id}] ${text}\n      預期：${show(detail.expected)}\n      實際：${show(detail.actual)}`;
+}
+
+/**
  * Records scenarios for one flow. `scenario(id, title, body)` runs `body({ expect, shot, themed, note })`:
- * `expect(ok, text)` records a check, `shot(name)` saves `<id>-<name>.png`, `themed(name)` saves
+ * `expect(ok, text, detail?)` records a check (see checkEntry), `shot(name, page?)` saves `<id>-<name>.png` (of another
+ * page when given), `themed(name)` saves
  * dark and light variants, `note(key, value)` keeps an observation. A throw fails the scenario and
  * saves `<id>-error.png`. `finish(extra)` writes results.json and returns whether every scenario passed.
  * `page` may be a function returning the page, for a flow whose page changes (a relaunched Electron).
@@ -39,9 +56,9 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
   const results = [];
   const shots = [];
   const current = () => (typeof page === 'function' ? page() : page);
-  const save = async (name) => {
+  const save = async (name, from = current()) => {
     const target = path.join(instance.evidence, `${name}.png`);
-    await current().screenshot({ path: target });
+    await from.screenshot({ path: target });
     shots.push(path.basename(target));
     return target;
   };
@@ -50,11 +67,11 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
     async scenario(id, title, body) {
       const checks = [];
       const observations = {};
-      const expect = (ok, text) => {
-        checks.push({ ok: Boolean(ok), text });
-        if (!ok) console.log(`  ✗ ${id}: ${text}`);
+      const expect = (ok, text, detail) => {
+        checks.push(checkEntry(ok, text, detail));
+        if (!ok) console.log(`  ✗ ${id}: ${failureHint(text, detail)}`);
       };
-      const shot = (name) => save(`${id}-${name}`);
+      const shot = (name, from) => save(`${id}-${name}`, from);
       const themed = async (name) => {
         for (const scheme of ['dark', 'light']) {
           await current().emulateMedia({ colorScheme: scheme });

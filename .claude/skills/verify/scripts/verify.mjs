@@ -14,6 +14,7 @@ import { environment, exe, WINDOWS } from './lib/platform.mjs';
 import { BIN_PLATFORM, desktopTarget, runtimeBin } from './lib/target.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { evidenceFreshness } from './lib/freshness.mjs';
+import { listFlows, runFlows } from './lib/flows.mjs';
 import { apiState, readState } from './lib/state.mjs';
 import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
@@ -35,6 +36,12 @@ const USAGE = `verify.mjs <command>
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process
+  flows list                                   the recorded regression flows and the feature-map sub-features each covers
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>]
+           runs the named recorded flows (all without names), each on its own instance; the flows and this
+           library come from the checkout the command runs in, --checkout picks only the src/ under test;
+           evidence goes to .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows);
+           exit code 1 when any flow fails
   summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
            whether every scenario passed on every given platform (any one platform without --platform), counting
            only results of that commit from a clean checkout; --scenario names a scenario the flow must record;
@@ -185,6 +192,14 @@ async function main() {
   if (command === 'snapshot') return snapshot();
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
   if (command === 'sweep') return print(sweepStale(mainCheckout()));
+  if (command === 'flows') {
+    if (positionals[1] === 'list') return print((await listFlows()).map(({ name, title, covers }) => ({ name, title, covers })));
+    if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
+    const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout });
+    print(outcome);
+    if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
+    return;
+  }
   if (command === 'summary') {
     const platforms = o.platform ?? [];
     if (platforms.some((platform) => !['darwin', 'win32'].includes(platform))) throw new Error(`--platform is darwin or win32\n${USAGE}`);

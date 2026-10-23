@@ -18,6 +18,10 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **回歸**：票沒有改畫面，但改到畫面依賴的狀態或資料流，例如訂閱狀態、工作排隊與進度、知識庫的鎖與資料交換，仍在 Web 層執行 [功能地圖](../.claude/skills/verify/features/README.md) 中對應功能的流程，確認使用者看到的行為不變。這類行為由多個 module 拼成畫面，單元測試各自通過不代表畫面上的狀態正確。只有畫面完全讀不到的內部行為，才只靠自動檢查。
 
+- 先跑相關的已收錄流程（verify skill 的 `flows run`），沒有收錄的才在票的 `.local/` 自己寫。每個功能檔的 `Regression flows` 列出涵蓋它的已收錄流程，從票改到的功能就查得到要跑哪幾支。
+- 驗收計畫列出要跑的已收錄流程與原因；功能相關但不跑的，也寫出原因。協調者與使用者審驗收計畫時，以這份清單判斷有沒有漏跑。
+- 流程何時收錄、何時更新，依 [verify skill 的收錄規則](../.claude/skills/verify/SKILL.md#已收錄流程)：同一個流程被第二張票用到時收錄；票改變了已收錄流程所檢查的行為時，同一張票更新它。
+
 **基準**：回歸流程先跑基準，再跑本票版本。基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main、不放未提交修改）：在票的 worktree 以 `--checkout <主 checkout>` 啟動 instance，跑同一支流程。票的 worktree 一開始改程式就不再等於 main，所以基準不在票的 worktree 跑，也不另建 worktree。兩次的證據分開存放，以結果比對：只在本票版本與功能檔或基準不一致的，是本票改變了行為；基準就與功能檔不一致的，是功能檔的問題，記在 PR 的待決定問題。
 
 **斷言要能失敗**：證明本票新行為的斷言，在基準上必須失敗；基準上也通過的斷言不證明本票的修改，要改寫到能區分兩者。修正完成後，保留測試與斷言、拿掉修正再跑一次，例如以 `git archive` 匯出基準的程式執行新測試，斷言必須跟著失敗；交付報告附上這次失敗的輸出，只列斷言與數量。單元測試與 Web 流程的斷言都適用。確認行為不變的回歸斷言則在基準與本票版本都通過。
@@ -26,7 +30,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **真實資料**：合成資料只替代 yt-dlp 與網路上的 feed，看不到限流、實際的字幕軌道、頻道辨識的耗時與真實 feed 的格式差異。改到收集、字幕選軌、頻道或網址辨識、feed 讀取的票，交付前至少以 `--data real` 執行一次相關 scenario，或執行 verify skill 的真實資料 smoke。網路或限流使 scenario 無法完成時記為 blocked，不以合成結果代替。
 
-畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`，只寫該票特有的步驟。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
+畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；票自己的腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`，只寫該票特有的步驟；已收錄流程放在 verify skill 的 `flows/`。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 
 開發主力機器是 Mac；Windows 由另一台機器補驗，見第 5 節。需要 Windows 驗收而那台機器無法使用時（例如 VM 沒有開），暫停並通知使用者，由使用者決定補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
 

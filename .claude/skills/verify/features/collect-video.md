@@ -36,3 +36,7 @@ Preconditions:
 - 同一支影片已收集時，再加入會去重；需要新文件就換影片 ID。
 - 「開啟原始影片」在 Web 模式是一般連結；驗證它交給系統瀏覽器、App 視窗不跳走，需要 Electron 加 `recordOpenExternal(app)`。
 - 真實影片（`--data real`）受 YouTube 限流影響，失敗會出現在工作頁，不是 harness 問題；`resources/bin/mac/yt-dlp/yt-dlp` 必須是資料夾版（`npm run download:runtime`）。
+
+## Regression flows
+
+沒有已收錄的流程。

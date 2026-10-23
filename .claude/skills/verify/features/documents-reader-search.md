@@ -37,3 +37,7 @@ Preconditions:
 - `documents-source` 是原生 `<select>`，展開的選單截不到；把選項文字寫進 observations，必要時在頁面加一個標示「驗收註記」的浮層再截圖，截完移除。
 - 刪除紀錄會讓後續訂閱檢查略過該影片；之後的 scenario 依賴同一支影片時改用別支。
 - `--vault none` 時文件頁顯示 `documents-empty-vault`，不是錯誤。
+
+## Regression flows
+
+沒有已收錄的流程。
