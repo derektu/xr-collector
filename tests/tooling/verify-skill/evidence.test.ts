@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkLabel, claimEvidence, evidenceDir, runsRoot } from '../../../.claude/skills/verify/scripts/lib/paths.mjs';
+import { checkLabel, claimEvidence, dropUnusedEvidence, evidenceDir, runsRoot } from '../../../.claude/skills/verify/scripts/lib/paths.mjs';
 import { cleanUp, LIB, repository, temp } from './support.js';
 
 const original = process.cwd();
@@ -82,7 +82,30 @@ describe('claimEvidence', () => {
 
     writeFileSync(path.join(empty, 'results.json'), '{"run":1}');
     expect(() => claimEvidence(111, undefined, { evidence: empty })).toThrow('not empty');
-    expect(readdirSync(empty)).toEqual(['results.json']);
+    expect(readdirSync(empty).sort()).toEqual(['.claimed', 'results.json']);
+  });
+
+  it('hands an explicit folder to one of the runs given it at the same time', async () => {
+    const { worktree } = inWorktree();
+    const target = path.join(temp('evidence'), 'shared');
+    const script = `const { claimEvidence } = await import(${JSON.stringify(pathToFileURL(path.join(LIB, 'paths.mjs')).href)});
+      try { claimEvidence(111, undefined, { evidence: ${JSON.stringify(target)} }); console.log('claimed'); } catch (error) { console.log(error.message.includes('not empty') ? 'refused' : error.message); }`;
+    const launches = Array.from({ length: 6 }, () =>
+      promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { cwd: worktree }));
+    const outcomes = (await Promise.all(launches)).map((result) => result.stdout.trim()).sort();
+
+    expect(outcomes).toEqual(['claimed', 'refused', 'refused', 'refused', 'refused', 'refused']);
+  }, 20_000);
+
+  it('drops an explicit folder a failed launch made, and keeps one it was given', () => {
+    inWorktree();
+    const made = path.join(temp('evidence'), 'new');
+    dropUnusedEvidence(claimEvidence(111, undefined, { evidence: made }));
+    expect(existsSync(made)).toBe(false);
+
+    const given = temp('evidence');
+    dropUnusedEvidence(claimEvidence(111, undefined, { evidence: given }));
+    expect(existsSync(given)).toBe(true);
   });
 });
 

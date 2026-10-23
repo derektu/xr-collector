@@ -10,7 +10,7 @@ import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkoutRoot, claimEvidence, cleanEnv, commitOf, isRunProcess, processStart, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, processStart, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -23,7 +23,7 @@ const commandOf = (pid) => { try { return execFileSync('ps', ['-p', String(pid),
  * Every process on the machine: { pid, pgid, executable, command }. The executable (`ps` comm) comes
  * from a second listing; a process that starts or ends between the two has none.
  */
-function processTable() {
+export function processTable() {
   const list = (columns) => execFileSync('ps', ['-A', '-o', columns], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
     .split('\n').map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line)).filter(Boolean);
   const executables = new Map(list('pid=,pgid=,comm=').map((match) => [Number(match[1]), match[3]]));
@@ -178,7 +178,7 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
   try {
     run = await createRun(issue, checkout, { label: claimed.label ?? undefined });
   } catch (error) {
-    dropEmptyEvidence(claimed);
+    dropUnusedEvidence(claimed);
     throw error;
   }
   const { runDir, ports } = run;
@@ -216,15 +216,9 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
     }
     releaseSlot(ports.slot, runDir);
-    dropEmptyEvidence(claimed);
+    dropUnusedEvidence(claimed);
     throw error;
   }
-}
-
-/** Removes an evidence folder a failed launch made but never wrote to. */
-function dropEmptyEvidence({ evidence, created }) {
-  if (!created) return;
-  try { if (readdirSync(evidence).length === 0) rmSync(evidence, { recursive: true }); } catch { /* already gone */ }
 }
 
 /**

@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { alive, cleanUp, deadPid, isolateHome, mentioning, repository, start, temp, until } from './support.js';
 
 const home = isolateHome();
-const { isRunProcess, runMarker, runsRoot, SLOT_LOCKS } = await import('../../../.claude/skills/verify/scripts/lib/paths.mjs');
+const { isRunProcess, isUnmarkedAppInstance, runMarker, runsRoot, SLOT_LOCKS } = await import('../../../.claude/skills/verify/scripts/lib/paths.mjs');
 const { runProcesses, stopRun, sweepStale } = await import('../../../.claude/skills/verify/scripts/lib/instance.mjs');
 
 beforeAll(() => expect(SLOT_LOCKS).toBe(path.join(home, '.xr-collector', 'verify-slots')));
@@ -48,6 +48,15 @@ describe('isRunProcess', () => {
     expect(isRunProcess(`${PACKAGED} ${runMarker(`${RUN}-2`)}`, RUN, PACKAGED)).toBe(false);
     const helper = '/work/xr/release/mac-arm64/XR Collector.app/Contents/Frameworks/XR Collector Helper.app/Contents/MacOS/XR Collector Helper';
     expect(isRunProcess(`${helper} --type=renderer`, RUN, helper)).toBe(false);
+  });
+
+  it('tells the user\'s App from the same program that verify started', () => {
+    const installed = '/Applications/XR Collector.app/Contents/MacOS/XR Collector';
+    expect(isUnmarkedAppInstance(installed, installed, 'XR Collector')).toBe(true);
+    expect(isUnmarkedAppInstance(`${PACKAGED} ${runMarker(RUN)}`, PACKAGED, 'XR Collector')).toBe(false);
+    expect(isUnmarkedAppInstance(`${ELECTRON} /work/xr`, ELECTRON, 'XR Collector')).toBe(false);
+    const helper = '/Applications/XR Collector.app/Contents/Frameworks/XR Collector Helper.app/Contents/MacOS/XR Collector Helper';
+    expect(isUnmarkedAppInstance(`${helper} --type=renderer`, helper, 'XR Collector')).toBe(false);
   });
 
   it('matches a run directory with spaces only as a whole', () => {

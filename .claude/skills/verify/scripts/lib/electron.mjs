@@ -12,12 +12,12 @@
 //
 // Electron runs only inside the flow process that launched it: Playwright closes it when that
 // process exits.
-import { createWriteStream, existsSync, readdirSync, rmSync } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, claimEvidence, cleanEnv, commitOf, processStart, runMarker } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, commitOf, dropUnusedEvidence, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
 import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
@@ -138,12 +138,6 @@ export async function launchElectron({
     },
   };
   return handle;
-}
-
-/** Removes an evidence folder a failed launch made and never wrote to. */
-function dropUnusedEvidence({ evidence, created }) {
-  if (!created) return;
-  try { if (readdirSync(evidence).length === 0) rmSync(evidence, { recursive: true }); } catch { /* already gone */ }
 }
 
 /**

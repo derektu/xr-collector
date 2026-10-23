@@ -7,7 +7,9 @@
 // slot is free, and the user's App is untouched: the listeners on 7222 and 7175, the per-user Agent
 // discovery file and everything macOS keeps under ~/Library for the app's bundle id (preferences,
 // caches, saved state; the installed App has the same bundle id) are the same before and after, and
-// the run neither configures an update feed nor changes the login item. Needs the network.
+// the run neither configures an update feed nor changes the login item. While another instance of
+// the same program runs (the installed App), it writes to that ~/Library state itself, so those
+// comparisons are skipped and results.json says so in `userAppRunning`. Needs the network.
 //
 // One command, no interaction; exit code 0 only when every check passed. Run from the worktree whose
 // skill is under test:
@@ -24,8 +26,8 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { recorder } from './lib/drive.mjs';
 import { launchElectron, stubDialogs } from './lib/electron.mjs';
-import { slotHolders } from './lib/instance.mjs';
-import { checkoutRoot, SLOTS } from './lib/paths.mjs';
+import { processTable, slotHolders } from './lib/instance.mjs';
+import { checkoutRoot, isUnmarkedAppInstance, SLOTS } from './lib/paths.mjs';
 import { REAL } from './lib/synthetic.mjs';
 import { desktopTarget, runtimeBin } from './lib/target.mjs';
 import { waitFor } from './lib/wait.mjs';
@@ -135,6 +137,11 @@ const planned = desktopTarget({ checkout, app: o.app });
 // The bundle holding the executable: the packaged .app, or Electron.app for development.
 const bundle = planned.app ?? path.resolve(planned.executable, '..', '..', '..');
 const ownBin = planned.kind === 'packaged' ? path.join(planned.app, 'Contents', 'Resources', 'bin') : runtimeBin(checkout);
+const bundleExecutable = plistValue(bundle, 'CFBundleExecutable');
+/** Instances of the same program that verify did not start, such as the user's installed App. */
+const otherInstances = () => processTable().filter((entry) => isUnmarkedAppInstance(entry.command, entry.executable, bundleExecutable))
+  .map((entry) => `${entry.pid} ${entry.executable}`);
+const othersBefore = otherInstances();
 const before = userApp(bundle);
 const desktop = await launchElectron({
   issue: o.issue, label: o.evidence ? o.label : (o.label ?? (o.app ? 'packaged' : 'development')), evidence: o.evidence, app: o.app, vault: 'none',
@@ -144,11 +151,12 @@ const vault = path.join(desktop.runDir, 'vault');
 // A relaunch opens a new window; the recorder screenshots whichever window is current.
 const record = recorder(desktop, () => desktop.window);
 const consoleErrors = [];
+let userAppRunning = null;
+let closed = false;
 const watchConsole = (window) => {
   window.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   window.on('pageerror', (error) => consoleErrors.push(String(error)));
 };
-watchConsole(desktop.window);
 /** JSON from the runtime the window talks to; its port is chosen at each start. */
 const api = async (pathname) => (await fetch(new URL(pathname, desktop.window.url()))).json();
 const documents = async () => (await api('/api/documents?limit=100')).documents;
@@ -156,10 +164,6 @@ const documents = async () => (await api('/api/documents?limit=100')).documents;
 const systemHooks = () => desktop.app.evaluate(({ app, autoUpdater }) => ({
   openAtLogin: app.getLoginItemSettings().openAtLogin, updateFeed: autoUpdater.getFeedURL(),
 }));
-// Only the first launch runs the collection, so its main process is the root to watch.
-const runtimePrograms = watchRuntimePrograms(desktop.app.process().pid);
-let hooksAtStart = null;
-let closed = false;
 
 /** Quits the app and releases the run, once, from whatever point the smoke reached. */
 async function shutDown(options) {
@@ -169,7 +173,14 @@ async function shutDown(options) {
 }
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { shutDown().finally(() => process.exit(1)); });
 
+// From here on every exit goes through shutDown, so the slot and the run folder are released.
+let runtimePrograms = null;
 try {
+  watchConsole(desktop.window);
+  // Only the first launch runs the collection, so its main process is the root to watch.
+  runtimePrograms = watchRuntimePrograms(desktop.app.process().pid);
+  let hooksAtStart = null;
+
   await record.scenario('DESKTOP-01', '啟動：受測程式與隔離的 profile', async ({ expect, shot, note }) => {
     const main = await desktop.app.evaluate(({ app }) => ({
       packaged: app.isPackaged, appPath: app.getAppPath(), userData: app.getPath('userData'), resources: process.resourcesPath,
@@ -283,6 +294,15 @@ try {
     note('userApp', { before: before.listeners, after: after.listeners, discoveryChanged: JSON.stringify(after.discovery) !== JSON.stringify(before.discovery) });
     expect(JSON.stringify(after.listeners) === JSON.stringify(before.listeners), `7222／7175 的 listener 前後相同：${JSON.stringify(after.listeners)}`);
     expect(JSON.stringify(after.discovery) === JSON.stringify(before.discovery), `使用者的 Agent 連線檔前後相同（${USER_DISCOVERY}）`);
+    const others = [...new Set([...othersBefore, ...otherInstances()])];
+    userAppRunning = others.length > 0;
+    note('otherInstances', others);
+    if (userAppRunning) {
+      const skipped = Object.keys(after.library);
+      note('librarySkipped', skipped);
+      console.log(`  ${bundleExecutable} 另有執行中的程式（${others.join('、')}），~/Library 的 ${before.bundleId} ${skipped.join('、')} 會被它寫入，不比對`);
+      return;
+    }
     for (const [place, state] of Object.entries(after.library)) {
       note(`library.${place}`, state === null ? null : 'present');
       expect(JSON.stringify(state) === JSON.stringify(before.library[place]), `~/Library 的 ${before.bundleId} ${place} 前後相同${place === 'preferences' ? `（${LAUNCH_TIMESTAMP_KEY} 除外）` : ''}`);
@@ -290,14 +310,14 @@ try {
   });
   await rm(desktop.runDir, { recursive: true, force: true });
 
-  const passed = await record.finish({ consoleErrors, video: o.video });
+  const passed = await record.finish({ consoleErrors, video: o.video, userAppRunning });
   console.log(`${passed ? 'PASS' : 'FAIL'} desktop smoke (${desktop.target.kind}), results in ${desktop.evidence}/results.json`);
   process.exitCode = passed ? 0 : 1;
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
-  await record.finish({ consoleErrors, video: o.video, error: String(error.stack ?? error) }).catch(() => undefined);
+  await record.finish({ consoleErrors, video: o.video, userAppRunning, error: String(error.stack ?? error) }).catch(() => undefined);
 } finally {
-  runtimePrograms.stop();
+  runtimePrograms?.stop();
   await shutDown();
 }
