@@ -7,26 +7,30 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
-import { apiState, openPage } from './lib/drive.mjs';
+import { openPage } from './lib/drive.mjs';
 import { attach, launchWeb, portFree, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
 import { checkoutRoot, commitOf, evidenceDir, mainCheckout, SLOTS } from './lib/paths.mjs';
 import { environment, exe, WINDOWS } from './lib/platform.mjs';
 import { BIN_PLATFORM, desktopTarget, runtimeBin } from './lib/target.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
+import { evidenceFreshness } from './lib/freshness.mjs';
+import { apiState, readState } from './lib/state.mjs';
 import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
 
 const USAGE = `verify.mjs <command>
-  doctor   [--run <dir>] [--app <path>] [--electron]
+  doctor   [--run <dir>] [--app <path>] [--electron] [--issue <N>]
            environment, slots, (with --run) one instance and (with --app) a packaged app (a .app on macOS, the .exe
            on Windows); --electron requires the development Electron; with --app or --electron the run is a Desktop
            one and Chromium (Web mode) is not required; read-only; "missing" lists what is not ready, each with its
-           fix; exit code 2 when not healthy
+           fix; exit code 2 when not healthy; --issue lists each results.json of that issue's evidence as current
+           or STALE against its checkout, which leaves the exit code alone
   launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
            evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
            a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
            --evidence <dir> writes it there instead (a missing or empty folder);
            --checkout picks the version under test; --no-build serves the checkout's existing dist/web
+  state    --run <dir>                         the run's data: api, vault, profile and index side by side; read-only
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
@@ -138,6 +142,7 @@ async function doctor() {
     const i = report.instance;
     healthy &&= i.processes.length > 0 && i.health && (instance.vault === 'none' || (i.search === 'ready' && i.vaultInsideRun));
   }
+  if (o.issue) report.evidence = { issue: o.issue, ...evidenceFreshness(evidenceDir(o.issue), { local: checkoutRoot() }) };
   report.healthy = healthy;
   print(report);
   if (!healthy) process.exitCode = 2;
@@ -164,10 +169,11 @@ async function main() {
   if (command === 'launch') {
     if (!['synthetic', 'real'].includes(o.data) || !['selected', 'fixed', 'none'].includes(o.vault)) throw new Error(USAGE);
     const instance = await launchWeb({ issue: need('issue'), label: o.label, evidence: o.evidence, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
-    const { api, catalog, updateCatalog, restart, stop, ...record } = instance;
+    const { api, catalog, updateCatalog, restart, state, stop, ...record } = instance;
     if (o.data === 'real') record.real = REAL;
     return print(record);
   }
+  if (command === 'state') return print(await readState(need('run')));
   if (command === 'seed') {
     const instance = attach(need('run'));
     const submitted = [];

@@ -89,15 +89,3 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
     },
   };
 }
-
-/** The state a proof checks besides the screen: what the same API the UI calls reports. */
-export async function apiState(instance) {
-  const read = (pathname) => instance.api(pathname).catch((error) => ({ error: error.message }));
-  return {
-    vault: await read('/api/vault/status'),
-    subscriptions: await read('/api/subscriptions'),
-    jobs: await read('/api/jobs/overview'),
-    documents: await read('/api/documents?limit=100'),
-    search: await read('/api/search/status'),
-  };
-}

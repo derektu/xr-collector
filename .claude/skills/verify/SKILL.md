@@ -7,8 +7,8 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 驗證層級與證據規則以 [開發驗證流程](../../../docs/development-validation.md#驗證層級) 為準。本 skill 提供兩件事：
 
-- **CLI** `scripts/verify.mjs`：`doctor`、`launch`、`seed`、`snapshot`、`stop`、`sweep`，負責環境與 instance 的生命週期。
-- **函式庫** `scripts/lib/index.mjs`：啟動／接手 instance、`waitFor`、合成資料、經 API 建立前置狀態、headless 頁面、scenario 紀錄與截圖、Electron 啟動與對話框替換。每張票的流程腳本 import 它，只寫該票特有的步驟。
+- **CLI** `scripts/verify.mjs`：`doctor`、`launch`、`seed`、`snapshot`、`state`、`stop`、`sweep`，負責環境與 instance 的生命週期。
+- **函式庫** `scripts/lib/index.mjs`：啟動／接手 instance、`waitFor`、合成資料、經 API 建立前置狀態、headless 頁面、scenario 紀錄與截圖、資料狀態讀取、Electron 啟動與對話框替換。每張票的流程腳本 import 它，只寫該票特有的步驟。
 
 一步一個 CLI 指令適合臨時看一眼；票的驗收寫成一支流程腳本，修改後整條重跑。
 
@@ -66,11 +66,14 @@ node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這
 node .claude/skills/verify/scripts/verify.mjs doctor --app "release/mac-arm64/XR Collector.app"   # 加上受測的打包版
 node .claude/skills/verify/scripts/verify.mjs doctor --electron       # 開發版 Electron 的流程
 node .claude\skills\verify\scripts\verify.mjs doctor --app "release\win-unpacked\XR Collector.exe"   # Windows 的打包版
+node .claude/skills/verify/scripts/verify.mjs doctor --issue 91           # 加上 issue 91 的證據是否對應目前的程式
 ```
 
 唯讀。檢查平台與 Node 架構（Mac arm64 或 Windows x64）、Node ≥ 22.12、`node_modules`（tsx、playwright）、Chromium（Web 模式，Windows 不需要）、`resources/bin/<平台>` 的 Meilisearch／yt-dlp／Deno（Windows 是 `.exe`）、開發版 Electron 的執行檔（Windows 是 `node_modules/electron/dist/electron.exe`）與 `dist/node`，以及每個 slot 是 free、in use 還是 stale lock。`environment` 記錄平台、OS 版本、Node 與機器的架構；Node 以模擬執行時（Windows ARM64 上的 x64 Node、Rosetta 下的 x64 Node）`emulated` 為 true，`platform` 的值寫成 `win32 x64 (emulated on arm64)`。加 `--app` 再檢查受測的打包版：`.app` 或 `.exe` 與它的執行檔、`app.asar`、打包版 resources 內 `bin` 的 Meilisearch／yt-dlp／Deno、執行檔的架構與 Node 相同（Mac 讀 `lipo`，Windows 讀 PE header）、Electron fuses 允許 Playwright 連線（`appFuses`，值是 fuse wire，例如 `101100011`；Mac 在 Electron Framework，Windows 在 `.exe` 內）。加 `--run` 再檢查：PID 存活且命令列屬於這個 run、health、search 狀態、Vault 路徑在 run 目錄內、受測 checkout 的 commit 是否已與啟動時不同。
 
 輸出的 `missing` 列出每個沒通過的項目、路徑與修正方式，`required: true` 的項目讓 `healthy` 為 false、exit code 為 2；開發版 Electron 的項目只有 Electron 流程需要，加 `--electron` 時才列為 required。Chromium 只有 Web 模式需要：加 `--app` 或 `--electron` 時不列為 required（Windows 一律不列）。在另一台機器執行失敗時，先看 `missing`。任何結果看起來不對時，先跑 doctor。
+
+加 `--issue <N>` 再列出執行指令所在 worktree 的 `.local/ticket-artifacts/<N>/` 底下每一份 `results.json`（含 label 子資料夾），以它記錄的 `checkout` 目前的 commit 與 `sourceHash` 比對記錄值：兩者都相同為 `current`，任一不同為 `STALE`，`reasons` 寫出哪一項不同與前後的值（只有 sourceHash 不同表示未提交的內容不同）；無法解析的檔案為 `unreadable`。記錄的 checkout 在這台機器不存在時（例如在另一台機器跑完取回的證據），改以執行 doctor 的 checkout 比對，`comparedWith` 與 `reasons` 註明。輸出在 `evidence`，`stale` 是 STALE 的份數；證據新舊不影響 `healthy` 與 exit code。交付或引用證據前跑一次，STALE 的證據針對目前的程式重跑。
 
 ## Drive
 
@@ -110,6 +113,29 @@ try {
 
 在票的 worktree 執行：`node .local/ticket-artifacts/91/scripts/flow.mjs`。`launchWeb` 預設驗證工作目錄所在的 checkout，證據寫進同一個 worktree；`playwright` 從 import 的 skill 所在 checkout 的 `node_modules` 解析。
 
+### State
+
+`instance.state()`（或 `readState(runDir)`、CLI `state --run <runDir>`）一次讀出 run 的資料狀態，四個來源分開列出。只讀：不建目錄、不寫檔，對 Meilisearch 只送 GET；run 執行中或以 `stop --keep` 停止後都能讀。讀不到的來源是 `{ unavailable: <原因> }`。
+
+| 來源 | 內容 |
+| --- | --- |
+| `api` | `apiState`：`/api/vault/status`、`/api/subscriptions`、`/api/jobs/overview`、`/api/documents`、`/api/search/status`；`documents` 讀完所有分頁，為 `{ documents, total, pages }`。server 沒有回應、或是 Electron run（沒有 HTTP 位址）時 unavailable |
+| `vault` | profile 的 `vault-selection.json` 選的 Vault（流程中搬移或換過時跟著換），沒有時為 run 目錄的 `vault/`。`documents`：每個 `.md` 的 `path`、`bytes`、`frontmatter`（解析後的物件，沒有時為 null）、`contentHash`（frontmatter 之後正文的 sha256）；`files`：每個 `.json` 解析後的內容、`.jsonl` 逐行解析的陣列；`other`：其他檔案的 `path`、`bytes`、`sha256` |
+| `profile` | 與 `vault` 相同的結構，讀 run 的 profile，例如 `jobs/jobs.json`、`vault-selection.json`、工作事件的 `.jsonl`；Meilisearch 自己的檔案（`search*`）不列，由 `index` 讀 |
+| `index` | run 自己的 Meilisearch：`url`、每個 index 的 `uid`、`primaryKey`、`numberOfDocuments`、`isIndexing`、`keys`（所有文件的主鍵，排序），以及 `tasks` 的 `enqueued`／`processing`／`failed` 數 |
+
+路徑一律相對於該來源的根目錄、以 `/` 分隔，依檔名排序。正在被改寫或無法解析的檔案記為 `{ error }`，其他檔案照讀。讀取依檔案格式與 Meilisearch 列出的 index 進行，不分功能，新增功能不需要改 `state`；只有四個來源都讀不到的狀態才擴充它。
+
+Meilisearch 每次啟動用隨機的 master key，只存在它的程序環境變數中。`index` 從 run 自己的 Meilisearch 程序（`--db-path` 在 run 的 profile 內）讀取：Mac 用 `ps -E`，Linux 讀 `/proc/<pid>/environ`。Windows 不讓其他程序讀環境變數，`index` 為 unavailable。run 停止後沒有 Meilisearch 程序，`index` 同樣 unavailable。
+
+**分工**：`apiState` 證明 API 的行為（回傳什麼、UI 會看到什麼）。API 是票會改的程式，它算錯時讀出的狀態跟著錯，所以「真的存下來了」這類資料面斷言優先讀 `vault`、`profile`、`index`，再與 `api` 比對。各來源之間的對應（例如文件 ID 與 Vault 路徑、index 主鍵與文件 ID）屬於該功能的規則，寫在票的流程腳本。
+
+```js
+const state = await instance.state();
+expect(state.vault.documents.length === 5, `Vault 有 ${state.vault.documents.length} 份文件`);
+expect(state.index.indexes[0].numberOfDocuments === state.api.documents.total, '索引筆數與 API 相同');
+```
+
 ### 基準
 
 回歸流程跑兩次，同一支流程：先基準，再本票版本。基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main），從票的 worktree 以 `--checkout` 指定它：
@@ -146,7 +172,8 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `instance.stop({ keep })` | 同 CLI `stop` |
 | `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
 | `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json`。`page` 可以是回傳目前頁面的函式（Electron `relaunch()` 後換了視窗） |
-| `apiState(instance)` | Vault、訂閱、工作、文件、搜尋的 API 快照 |
+| `apiState(instance)` | Vault、訂閱、工作、文件（所有分頁）、搜尋的 API 快照 |
+| `instance.state()`、`readState(runDir)` | `api`、`vault`、`profile`、`index` 的資料狀態（見「State」） |
 | `collect(instance, url)`／`subscribe(instance, url)`／`idle(instance)` | 以辨識網址＋執行動作建立前置狀態；等工作清空 |
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
@@ -158,6 +185,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 V=.claude/skills/verify/scripts/verify.mjs
 node $V seed --run <runDir> --subscribe 'https://www.youtube.com/@verify-a' --collect 'https://www.youtube.com/watch?v=vD000000001' --wait
 node $V snapshot --run <runDir> --name N91-overview --route /documents [--theme light]
+node $V state --run <runDir>
 ```
 
 網址含 `?`，在 zsh 必須加引號。`seed` 走 `POST /api/url-recognitions` 再執行辨識結果提供的 `subscribe`／`collect` 動作，與新增對話框送出的請求相同。`snapshot` 存 `<name>.png` 與 `<name>.state.json`（`apiState`）。
@@ -231,7 +259,7 @@ node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <dir>
 
 - 走使用者的路：經畫面點選與輸入。`seed`／`collect`／`subscribe` 只建立前置狀態，不當作被測功能的證明；不用內部 setter 或測試專用路由。
 - 截動作與結果，不只最後畫面：對話框、進行中狀態、完成狀態各一張。需要淺深色時用 `themed(name)`。
-- 驗證副作用：Vault 內的 Markdown 檔、`settings/*.json`、匯出的 zip、刪除紀錄、API 回應（`apiState`）。`results.json` 的每個 check 寫出實際觀察值。
+- 驗證副作用：Vault 內的 Markdown 檔、`settings/*.json`、profile 的紀錄、搜尋索引（`instance.state()`），匯出的 zip、刪除紀錄、API 回應（`apiState`）。`results.json` 的每個 check 寫出實際觀察值。
 - 合成資料只替代 production 已經隔開的外部系統（yt-dlp、網路上的 feed）。截圖與結果標示資料模式（`results.json` 的 `data`）；需要真實 YouTube 的 scenario 用 `--data real`，合成結果不能代替。
 - Web 模式截圖標示為 Web 模式，不代替原生 Desktop 證據。
 - 看過每張 PNG 再交付：確認不是錯誤頁、過期畫面或空白。
@@ -260,7 +288,7 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
 
 本 skill 的 CLI 與函式庫有兩層測試：
 
-- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉、Windows 程序啟動監看只結束一次且不碰已結束的 PID，以及 summary 的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
+- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉、Windows 程序啟動監看只結束一次且不碰已結束的 PID，summary 的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario，`state` 依格式讀 Vault 與 profile、讀取不寫入、停止的 run 的 `api` 與 `index` 為 unavailable、從程序環境變數讀 Meilisearch 的 key（Mac 與 Linux），以及 `doctor --issue` 的 current／STALE 判斷（commit 不同、只有未提交內容不同、checkout 不在這台機器）與 exit code 不受影響。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
 - **整合 smoke**：`npm run test:verify-skill:mac`（`scripts/smoke.mjs [--issue <N>] [--checkout <dir>]`），只在 Mac 本機執行，需要 Playwright Chromium 與 `npm run download:runtime`。Web 模式合成資料：launch → 訂閱 → `restart()` → `restart({ crash: true })` → `stop({ keep: true })` → `sweep`，斷言狀態保留、中斷的工作完成且 `lastStop` 為 `crash`、`server.log` 的重啟分隔、結束後沒有命令列含有 run 目錄的程序且 slot 已釋放，以及用到的 port 都是 verify slot、7222／7175 的 listener 前後相同。證據在 `.local/ticket-artifacts/<issue>/smoke[-N]/`（預設 issue 為 `verify-smoke`）。改 `scripts/` 時在本機跑一次。
 - **Desktop smoke**：`npm run test:verify-skill:desktop:mac -- [--app <path>]`，Windows 是 `npm run test:verify-skill:desktop:win -- [--app <path>]`（`scripts/smoke-desktop.mjs`，見「打包版」），在本機執行，需要網路。改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或程序辨識時，兩個平台的開發版與打包版各跑一次。
 
