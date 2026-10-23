@@ -119,12 +119,12 @@ try {
 
 | 來源 | 內容 |
 | --- | --- |
-| `api` | `apiState`：`/api/vault/status`、`/api/subscriptions`、`/api/jobs/overview`、`/api/documents`、`/api/search/status`；`documents` 讀完所有分頁，為 `{ documents, total, pages }`。server 沒有回應、或是 Electron run（沒有 HTTP 位址）時 unavailable |
+| `api` | `apiState`：`/api/vault/status`、`/api/subscriptions`、`/api/jobs/overview`、`/api/documents`、`/api/search/status`；`documents` 依 `nextOffset` 讀完所有分頁，為 `{ documents, total, pages }`，`nextOffset` 缺少或沒有往前時停止並附 `error`。只在 run 自己的 server 程序存活時才發請求：run 停止後同一個 port 可能已經是取得這個 slot 的另一個 run。run 停止、或是 Electron run（沒有 HTTP 位址）時 unavailable |
 | `vault` | profile 的 `vault-selection.json` 選的 Vault（流程中搬移或換過時跟著換），沒有時為 run 目錄的 `vault/`。`documents`：每個 `.md` 的 `path`、`bytes`、`frontmatter`（解析後的物件，沒有時為 null）、`contentHash`（frontmatter 之後正文的 sha256）；`files`：每個 `.json` 解析後的內容、`.jsonl` 逐行解析的陣列；`other`：其他檔案的 `path`、`bytes`、`sha256` |
 | `profile` | 與 `vault` 相同的結構，讀 run 的 profile，例如 `jobs/jobs.json`、`vault-selection.json`、工作事件的 `.jsonl`；Meilisearch 自己的檔案（`search*`）不列，由 `index` 讀 |
 | `index` | run 自己的 Meilisearch：`url`、每個 index 的 `uid`、`primaryKey`、`numberOfDocuments`、`isIndexing`、`keys`（所有文件的主鍵，排序），以及 `tasks` 的 `enqueued`／`processing`／`failed` 數 |
 
-路徑一律相對於該來源的根目錄、以 `/` 分隔，依檔名排序。正在被改寫或無法解析的檔案記為 `{ error }`，其他檔案照讀。讀取依檔案格式與 Meilisearch 列出的 index 進行，不分功能，新增功能不需要改 `state`；只有四個來源都讀不到的狀態才擴充它。
+路徑一律相對於該來源的根目錄、以 `/` 分隔，依檔名排序。正在被改寫或無法解析的檔案記為 `{ error }`，列不出內容的資料夾（例如讀取時被 App 刪除或改名）在 `files` 記為 `<資料夾>/: { error }`，其他檔案照讀。讀取依檔案格式與 Meilisearch 列出的 index 進行，不分功能，新增功能不需要改 `state`；只有四個來源都讀不到的狀態才擴充它。
 
 Meilisearch 每次啟動用隨機的 master key，只存在它的程序環境變數中。`index` 從 run 自己的 Meilisearch 程序（`--db-path` 在 run 的 profile 內）讀取：Mac 用 `ps -E`，Linux 讀 `/proc/<pid>/environ`。Windows 不讓其他程序讀環境變數，`index` 為 unavailable。run 停止後沒有 Meilisearch 程序，`index` 同樣 unavailable。
 

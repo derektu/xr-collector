@@ -1,11 +1,14 @@
 // What `state` reads from a run's folders: the Vault's documents with frontmatter and content hash,
 // its other files by format, the profile's records without Meilisearch's own files, and nothing
 // written while reading. A run with no server reports `api` and `index` as unavailable. The
-// Meilisearch master key is read from a real process's environment on macOS and Linux.
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+// Meilisearch master key is read from a real process's environment on macOS and Linux. The API of
+// a stopped run is never read, even when another server answers on its port; document pages stop
+// when nextOffset does not move forward; a folder that cannot be listed does not stop the reading.
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { masterKey, readState } from '../../../.claude/skills/verify/scripts/lib/state.mjs';
+import { apiState, masterKey, readState } from '../../../.claude/skills/verify/scripts/lib/state.mjs';
 import { cleanUp, start, temp, until } from './support.js';
 
 afterEach(cleanUp);
@@ -92,14 +95,75 @@ describe('readState', () => {
   it('reports the API and the index as unavailable when the run is stopped', async () => {
     const { runDir } = stoppedRun();
     const state = await readState(runDir);
-    expect(state.api).toEqual({ unavailable: expect.stringContaining('does not answer') });
+    expect(state.api).toEqual({ unavailable: expect.stringContaining('the run is not running') });
     expect(state.index).toEqual({ unavailable: expect.stringContaining('no Meilisearch process') });
+  });
+
+  it('does not read another run that answers on a stopped run\'s port', async () => {
+    const { runDir } = stoppedRun();
+    const requests: string[] = [];
+    const other = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ documents: [], total: 0, nextOffset: null }));
+    });
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
+    const { port } = other.address() as { port: number };
+    writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ kind: 'web', runDir, url: `http://127.0.0.1:${port}`, ports: { slot: 0 } }));
+    try {
+      const state = await readState(runDir);
+      expect(state.api).toEqual({ unavailable: expect.stringContaining('the run is not running') });
+      expect(requests).toEqual([]);
+    } finally {
+      await new Promise((resolve) => other.close(resolve));
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('records a folder it cannot list and reads the rest', async () => {
+    const { runDir, vault } = stoppedRun();
+    const locked = path.join(vault, 'documents', 'kind');
+    chmodSync(locked, 0o000);
+    try {
+      const state = await readState(runDir);
+      expect(state.vault.files['documents/kind/']).toEqual({ error: expect.stringContaining('EACCES') });
+      expect(state.vault.documents).toEqual([]);
+      expect(Object.keys(state.vault.files)).toContain('xr-collector-vault.json');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 
   it('reads the run folder Vault when the profile selects none', async () => {
     const { runDir, vault, profile } = stoppedRun();
     writeFileSync(path.join(profile, 'vault-selection.json'), '{}');
     expect((await readState(runDir)).vault.path).toBe(vault);
+  });
+});
+
+describe('apiState documents', () => {
+  /** An API whose document pages answer with `nextOffset` from `next(offset)`; it fails after 10 requests. */
+  const api = (next: (offset: number) => unknown) => {
+    let requests = 0;
+    return {
+      async api(pathname: string) {
+        requests += 1;
+        if (requests > 10) throw new Error('more than 10 requests');
+        if (!pathname.startsWith('/api/documents')) return {};
+        const offset = Number(new URL(pathname, 'http://x').searchParams.get('offset'));
+        return { documents: [{ id: `doc-${offset}` }], total: 3, ...(next(offset) === undefined ? {} : { nextOffset: next(offset) }) };
+      },
+    };
+  };
+
+  it('reads every page until nextOffset is null', async () => {
+    const { documents } = await apiState(api((offset) => (offset < 2 ? offset + 1 : null)));
+    expect(documents).toEqual({ documents: [{ id: 'doc-0' }, { id: 'doc-1' }, { id: 'doc-2' }], total: 3, pages: 3 });
+  });
+
+  it('stops with an error when nextOffset is missing or does not move forward', async () => {
+    const missing = (await apiState(api(() => undefined))).documents;
+    const repeated = (await apiState(api((offset) => offset))).documents;
+    expect(missing).toMatchObject({ pages: 1, error: expect.stringContaining('nextOffset did not advance') });
+    expect(repeated).toMatchObject({ pages: 1, error: expect.stringContaining('nextOffset did not advance') });
   });
 });
 

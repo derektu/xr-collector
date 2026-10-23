@@ -31,21 +31,28 @@ export async function apiState(instance) {
   };
 }
 
-/** Every page of /api/documents, as { documents, total, pages }; the failing page's error otherwise. */
+/**
+ * Every page of /api/documents, as { documents, total, pages }; the failing page's error otherwise.
+ * Reading goes on only while `nextOffset` moves forward, so an API that omits or repeats it ends
+ * with { error } beside the pages read so far.
+ */
 async function allDocuments(read) {
   const documents = [];
   let offset = 0;
   let total = 0;
   let pages = 0;
-  while (offset !== null) {
+  for (;;) {
     const page = await read(`/api/documents?limit=100&offset=${offset}`);
     if (page.error) return { ...page, pages };
     documents.push(...page.documents);
     total = page.total;
     pages += 1;
+    if (page.nextOffset === null) return { documents, total, pages };
+    if (!Number.isInteger(page.nextOffset) || page.nextOffset <= offset) {
+      return { documents, total, pages, error: `nextOffset did not advance: ${JSON.stringify(page.nextOffset)} after offset ${offset}` };
+    }
     offset = page.nextOffset;
   }
-  return { documents, total, pages };
 }
 
 /**
@@ -61,15 +68,21 @@ export async function readState(run) {
   const profile = record.profile ?? path.join(runDir, 'profile');
   return {
     runDir, takenAt: new Date().toISOString(), running: processes.length > 0,
-    api: await readApi(record),
+    api: await readApi(record, processes),
     vault: readFolder(vaultPath(runDir, profile)),
     profile: readFolder(profile, { skip: SEARCH_DATA }),
     index: await readIndex(processes),
   };
 }
 
-async function readApi(record) {
+/**
+ * The API of the run's own server. A stopped run's port may already serve another run that took the
+ * slot, so the API is read only while the run's server process is alive.
+ */
+async function readApi(record, processes) {
   if (!record.url) return { unavailable: 'this run has no HTTP API address (an Electron run is checked through its window)' };
+  const server = processes.some((member) => !member.holder && programName(member.executable ?? member.command.split(' ')[0]) !== 'meilisearch');
+  if (!server) return { unavailable: 'the run is not running: no server process of this run' };
   const healthy = await fetch(`${record.url}/api/health`).then((response) => response.ok, () => false);
   if (!healthy) return { unavailable: `${record.url} does not answer; the server is not running` };
   return apiState({
@@ -95,7 +108,8 @@ function vaultPath(runDir, profile) {
  * Every file under `root` by format, paths relative with `/`: Markdown in `documents` as { path,
  * bytes, frontmatter, contentHash } with the hash over the text after the frontmatter; `.json`
  * parsed and `.jsonl` parsed per line in `files`; anything else in `other` with its size and hash.
- * A file that is being rewritten or does not parse is recorded with its `error` and the rest is
+ * A file that is being rewritten or does not parse is recorded with its `error`, and a folder that
+ * cannot be listed (removed or renamed meanwhile) with its `error` under `<folder>/`; the rest is
  * still read. Top-level entries whose name matches `skip` are left out.
  */
 export function readFolder(root, { skip = null } = {}) {
@@ -103,7 +117,7 @@ export function readFolder(root, { skip = null } = {}) {
   const documents = [];
   const files = {};
   const other = [];
-  for (const relative of listFiles(root, skip)) {
+  for (const relative of listFiles(root, skip, files)) {
     const file = path.join(root, relative);
     try {
       if (relative.endsWith('.md')) documents.push(markdown(relative, readFileSync(file, 'utf8')));
@@ -129,10 +143,18 @@ function markdown(relative, text) {
   return { path: relative, bytes: Buffer.byteLength(text), frontmatter, contentHash: sha256(match ? text.slice(match[0].length) : text) };
 }
 
-function listFiles(root, skip) {
+/** Files under `root`, sorted; a folder that cannot be listed goes into `errors` as `<folder>/`. */
+function listFiles(root, skip, errors) {
   const found = [];
   const walk = (relative) => {
-    for (const entry of readdirSync(path.join(root, relative), { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(path.join(root, relative), { withFileTypes: true });
+    } catch (error) {
+      errors[`${relative}/`] = { error: error.message };
+      return;
+    }
+    for (const entry of entries) {
       if (IGNORED.has(entry.name) || (relative === '' && skip?.test(entry.name))) continue;
       const child = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(child);
