@@ -60,16 +60,16 @@ describe('RSS on the shared routes (R11-T9)', () => {
       actions: [{ id: 'subscribe', label: '訂閱網站', request: { method: 'POST', path: '/api/subscriptions', body: { url: feeds.url('/feed.xml') } } }],
     });
     expect((await w.send('POST', '/api/subscription-previews', { url: feeds.url('/') })).body.preview)
-      .toMatchObject({ type: 'rss', subscription: null, settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 } });
+      .toMatchObject({ type: 'rss', subscription: null, settings: { intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30 } });
     expect(await w.send('POST', '/api/items', { url: feeds.url('/1') })).toMatchObject({ status: 400, body: { error: { code: 'invalid_url' } } });
 
     const added = await w.settled((await w.send('POST', '/api/subscriptions', { url: feeds.url('/'), settings: { backfillMaxItems: 5 } })).body.job.id);
     expect(added).toMatchObject({ kind: 'rss.feed-add', result: { outcome: 'created' } });
     expect(await w.settled(added.result.followUpJobId)).toMatchObject({ kind: 'rss.feed', state: 'completed' });
 
-    const patched = await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillWindow: '3m' } });
+    const patched = await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillDays: 45 } });
     expect(patched).toMatchObject({ status: 200 });
-    expect((await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillWindow: '9y' } })).status).toBe(400);
+    expect((await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillDays: 61 } })).status).toBe(400);
     const reads = ['/api/subscriptions?type=rss', `/api/subscriptions/rss/${id}`, '/api/source-types', '/api/documents?sourceType=rss'];
     for (const url of reads) {
       const [fromUi, fromAgent] = [await w.send('GET', url, undefined, w.ui), await w.send('GET', url)];
@@ -78,7 +78,7 @@ describe('RSS on the shared routes (R11-T9)', () => {
     }
     const detail = (await w.send('GET', `/api/subscriptions/rss/${id}`)).body;
     expect(detail).toMatchObject({
-      subscription: { id, type: 'rss', kind: 'feed', kindLabel: 'RSS', settings: { backfillWindow: '3m', backfillMaxItems: 5 } },
+      subscription: { id, type: 'rss', kind: 'feed', kindLabel: 'RSS', settings: { backfillDays: 45, backfillMaxItems: 5 } },
       collection: [{ kind: 'check', created: 1 }, { kind: 'collected', title: '【合成】一' }],
     });
     const documents = (await w.send('GET', '/api/documents?sourceType=rss')).body.documents;
@@ -101,6 +101,6 @@ describe('RSS on the shared routes (R11-T9)', () => {
     const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
     expect(skill).toContain('/api/subscriptions/rss/');
     expect(skill).toContain('`"rss"`');
-    for (const field of ['backfillWindow', 'backfillMaxItems', 'contentExtent']) expect(skill).toContain(field);
+    for (const field of ['backfillDays', 'backfillMaxItems', 'contentExtent']) expect(skill).toContain(field);
   });
 });

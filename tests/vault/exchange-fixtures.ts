@@ -41,7 +41,7 @@ export const video = (videoId: string, overrides: Partial<CapturedTranscript> = 
   ...capture, videoId, sourceUrl: `https://www.youtube.com/watch?v=${videoId}`, title: `影片 ${videoId}`, bodyMarkdown: `${videoId} 的字幕。`, ...overrides,
 });
 
-export const settings = { intervalMinutes: 60, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+export const settings = { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 };
 
 export function channel(id: string, overrides: Partial<SubscriptionRecord> = {}): SubscriptionRecord {
   return {

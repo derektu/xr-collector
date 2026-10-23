@@ -41,7 +41,7 @@ const capture: CapturedTranscript = {
   title: '資料包測試', channelId: 'UC123', channelTitle: '測試頻道', publishedAt: null,
   languageCode: 'zh-Hant', languageName: '中文', subtitleKind: 'manual', bodyMarkdown: '森林觀測資料。'.repeat(200),
 };
-const settings = { intervalMinutes: 60, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+const settings = { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 };
 const deletedId = 'gone0000001';
 async function seed(root: string) {
   const vault = new MarkdownVault(root);

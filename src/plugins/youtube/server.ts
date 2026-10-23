@@ -50,7 +50,7 @@ export const youtubeDefinition: SourceDefinition<CollectionPolicy> = {
   },
   storage: {
     subscriptionsFile: 'settings/youtube-channels.json',
-    version: 2,
+    version: 3,
     listKey: 'channels',
     outOfRangeKeyField: 'videoId',
     description: 'YouTube channel',
