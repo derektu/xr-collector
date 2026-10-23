@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
 import { commandOf, endWindowsTree, processStart, processTable, WINDOWS } from './platform.mjs';
+import { readState } from './state.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -311,6 +312,8 @@ function instance(record) {
       await serverReady(record);
       if (page) await page.goto(`${record.url}${route}`);
     },
+    /** The run's data state from the API, the Vault, the profile and the index (see readState). */
+    state: () => readState(record.runDir),
     stop: (options) => stopRun(record.runDir, options),
   };
   return self;
