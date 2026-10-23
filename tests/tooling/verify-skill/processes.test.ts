@@ -1,5 +1,5 @@
-// Which processes belong to a verify run. Only server.mts under node and Electron carrying the run
-// marker, and Meilisearch with its data in the run, count; stop and sweep end those and nothing else,
+// Which processes belong to a verify run. Only server.mts under node and an app's main executable
+// (development Electron or a packaged app) carrying the run marker, and Meilisearch with its data in the run, count; stop and sweep end those and nothing else,
 // even processes whose command line mentions the marker or the run directory.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -17,11 +17,14 @@ afterAll(() => rmSync(home, { recursive: true, force: true }));
 const RUN = '/work/xr/.local/verify-runs/111-2026-10-22T10-00-00-123';
 const NODE = '/Users/me/.nvm/versions/node/v22.22.3/bin/node';
 const ELECTRON = '/work/xr/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron';
+const PACKAGED = '/work/xr/release/mac-arm64/XR Collector.app/Contents/MacOS/XR Collector';
 
 describe('isRunProcess', () => {
-  it('counts the Web server, Electron and Meilisearch of the run', () => {
+  it('counts the Web server, Electron, the packaged app and Meilisearch of the run', () => {
     expect(isRunProcess(`${NODE} /work/xr/node_modules/.bin/tsx /work/xr/.claude/skills/verify/scripts/server.mts ${runMarker(RUN)}`, RUN, NODE)).toBe(true);
     expect(isRunProcess(`${ELECTRON} /work/xr ${runMarker(RUN)}`, RUN, ELECTRON)).toBe(true);
+    expect(isRunProcess(`${PACKAGED} ${runMarker(RUN)}`, RUN, PACKAGED)).toBe(true);
+    expect(isRunProcess(`/work/xr/release/mac-arm64/XR Collector.app/Contents/Resources/bin/meilisearch --db-path ${RUN}/profile/search/data.ms`, RUN, '/work/xr/release/mac-arm64/XR Collector.app/Contents/Resources/bin/meilisearch')).toBe(true);
     expect(isRunProcess(`/work/xr/resources/bin/mac/meilisearch --http-addr 127.0.0.1:7251 --db-path ${RUN}/profile/search/data.ms`, RUN, '/work/xr/resources/bin/mac/meilisearch')).toBe(true);
   });
 
@@ -41,6 +44,10 @@ describe('isRunProcess', () => {
     expect(isRunProcess(`/opt/meilisearch --db-path ${RUN}-2/profile/search`, RUN, '/opt/meilisearch')).toBe(false);
     expect(isRunProcess(`/opt/meilisearch --db-path /elsewhere/profile/search`, RUN, '/opt/meilisearch')).toBe(false);
     expect(isRunProcess(`/Applications/XR Collector.app/Contents/MacOS/Electron ${runMarker(RUN)}`, RUN, 'Electron')).toBe(false);
+    expect(isRunProcess(PACKAGED, RUN, PACKAGED)).toBe(false);
+    expect(isRunProcess(`${PACKAGED} ${runMarker(`${RUN}-2`)}`, RUN, PACKAGED)).toBe(false);
+    const helper = '/work/xr/release/mac-arm64/XR Collector.app/Contents/Frameworks/XR Collector Helper.app/Contents/MacOS/XR Collector Helper';
+    expect(isRunProcess(`${helper} --type=renderer`, RUN, helper)).toBe(false);
   });
 
   it('matches a run directory with spaces only as a whole', () => {

@@ -32,13 +32,15 @@ export async function openPage(instance, { viewport = { width: 1280, height: 860
  * `expect(ok, text)` records a check, `shot(name)` saves `<id>-<name>.png`, `themed(name)` saves
  * dark and light variants, `note(key, value)` keeps an observation. A throw fails the scenario and
  * saves `<id>-error.png`. `finish(extra)` writes results.json and returns whether every scenario passed.
+ * `page` may be a function returning the page, for a flow whose page changes (a relaunched Electron).
  */
 export function recorder(instance, page, { file = 'results.json' } = {}) {
   const results = [];
   const shots = [];
+  const current = () => (typeof page === 'function' ? page() : page);
   const save = async (name) => {
     const target = path.join(instance.evidence, `${name}.png`);
-    await page.screenshot({ path: target });
+    await current().screenshot({ path: target });
     shots.push(path.basename(target));
     return target;
   };
@@ -54,11 +56,11 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
       const shot = (name) => save(`${id}-${name}`);
       const themed = async (name) => {
         for (const scheme of ['dark', 'light']) {
-          await page.emulateMedia({ colorScheme: scheme });
+          await current().emulateMedia({ colorScheme: scheme });
           await sleep(250);
           await shot(`${name}-${scheme}`);
         }
-        await page.emulateMedia({ colorScheme: 'dark' });
+        await current().emulateMedia({ colorScheme: 'dark' });
       };
       try {
         await body({ expect, shot, themed, note: (key, value) => { observations[key] = value; } });
@@ -76,7 +78,8 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
       await writeFile(path.join(instance.evidence, file), JSON.stringify({
         issue: instance.issue, label: instance.label ?? null, checkout: instance.checkout,
         commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, data: instance.data,
-        layer: 'Web 模式（headless Chromium）', url: instance.url, finishedAt: new Date().toISOString(),
+        layer: instance.layer ?? 'Web 模式（headless Chromium）', ...(instance.target ? { target: instance.target } : { url: instance.url }),
+        finishedAt: new Date().toISOString(),
         passed, results, shots, ...extra,
       }, null, 2));
       return passed;

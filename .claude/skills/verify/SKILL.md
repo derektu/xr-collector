@@ -1,6 +1,6 @@
 ---
 name: verify
-description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 字幕／RSS 收集桌面 App）並留下證據。Web 模式用 headless Playwright 操作隔離的 runtime 與合成資料，需要 Electron 或平台能力時用 Playwright _electron 背景模式。驗證票的 scenario、確認畫面或 API 行為、截圖交付、重現使用者回報的問題時使用。目前只支援 Mac。
+description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 字幕／RSS 收集桌面 App）並留下證據。Web 模式用 headless Playwright 操作隔離的 runtime 與合成資料，需要 Electron 或平台能力時用 Playwright _electron 背景模式，也能啟動 npm run package:mac 打包出的 .app。驗證票的 scenario、確認畫面或 API 行為、驗證打包版、截圖交付、重現使用者回報的問題時使用。目前只支援 Mac。
 ---
 
 # verify：操作 XR Collector 並留證據
@@ -19,7 +19,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 - **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
 - **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>[-<label>]-<本地時間>-<PID>/`（主 checkout 底下，`sweep` 因此看得到每個 worktree 的 run），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
 - **程序**：run 的程序以執行檔加命令列辨識：帶有 `--xr-verify-run=<run 目錄>/` 標記、執行 `server.mts` 的 node 與 Electron，以及 `--db-path` 在 run 目錄 profile 內的 meilisearch。不依賴 `run.json` 記錄的 PID；其他執行檔即使命令列含有標記或目錄（`pgrep -f`、`tail` 它的 log、`verify.mjs stop --run`）也不算。`stop` 只在程序群組的 leader 本身就是 run 的程序時（detached 啟動的 Web server 與 Electron）才對整個群組送訊號；其餘 run 的程序（例如 leader 已死後剩下的 Meilisearch）逐一送訊號，所以不會波及使用者 terminal 的 job 或其他 shell。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
-- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`；一個資料夾名，只含英數、`.`、`-`、`_`，不能是 `.` 或 `..`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放；同一個 label 的資料夾已經存在時，改用下一個空的 `<label>-2/`、`<label>-3/`……，已存在的資料夾一律不覆寫。實際用的資料夾名記在 instance 的 `label`／`evidence`、`launch` 的輸出與 `results.json` 的 `label`（例如 `baseline-2`）；報告引用證據時寫這個實際的資料夾名。沒有 label 的 run 共用 `<issue>/`，重跑時覆寫同名截圖。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。
+- **證據**：預設是執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`；一個資料夾名，只含英數、`.`、`-`、`_`，不能是 `.` 或 `..`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放；同一個 label 的資料夾已經存在時，改用下一個空的 `<label>-2/`、`<label>-3/`……，已存在的資料夾一律不覆寫。實際用的資料夾名記在 instance 的 `label`／`evidence`、`launch` 的輸出與 `results.json` 的 `label`（例如 `baseline-2`）；報告引用證據時寫這個實際的資料夾名。沒有 label 的 run 共用 `<issue>/`，重跑時覆寫同名截圖。在另一台機器跑完再整批取回時，以 `--evidence <dir>`（函式庫的 `evidence` 選項）指定證據目錄：`results.json`、截圖與 log 只寫進該目錄，預設位置不寫入；目錄必須不存在或是空的，已有檔案時拒絕啟動。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。
 - **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
 ## Launch
@@ -33,6 +33,7 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault fixed   
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --vault none         # 尚未選 Vault，從 Onboarding 開始
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --no-build           # 不 build，複製 checkout 現有的 dist/web
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --label baseline --checkout /Users/derektu/projects/km/xr-collector   # 基準
+node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --evidence /tmp/evidence/91       # 證據寫到指定目錄
 ```
 
 `launch` build Web UI、以 `tsx scripts/server.mts` 背景啟動 runtime，等到 `/api/health` 成功且 `/api/search/status` 為 `ready`（`--vault none` 只等 health）才回傳。輸出的 JSON 是 `run.json`：`runDir`、`url`、`ports`、`pid`、`commit`、`sourceHash`、`evidence`，合成模式另有 `synthetic`（可用的頻道、影片、feed 網址）。之後的指令都用 `--run <runDir>`。
@@ -60,9 +61,12 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --label baseline
 ```sh
 node .claude/skills/verify/scripts/verify.mjs doctor                 # 環境與 slot
 node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這個 instance
+node .claude/skills/verify/scripts/verify.mjs doctor --app "release/mac-arm64/XR Collector.app"   # 加上受測的打包版
 ```
 
-唯讀。檢查平台（Mac arm64）、Node ≥ 22.12、`node_modules`（tsx、playwright）、Chromium、`resources/bin/mac` 的 Meilisearch／yt-dlp、Electron 用的 `dist/node`，以及每個 slot 是 free、in use 還是 stale lock。加 `--run` 再檢查：PID 存活且命令列屬於這個 run、health、search 狀態、Vault 路徑在 run 目錄內、受測 checkout 的 commit 是否已與啟動時不同。`healthy: false` 時 exit code 2。任何結果看起來不對時，先跑 doctor。
+唯讀。檢查平台與 Node 架構（Mac arm64）、Node ≥ 22.12、`node_modules`（tsx、playwright）、Chromium、`resources/bin/<平台>` 的 Meilisearch／yt-dlp／Deno、開發版 Electron 的執行檔與 `dist/node`，以及每個 slot 是 free、in use 還是 stale lock。加 `--app` 再檢查受測的打包版：`.app` 與它的執行檔、`app.asar`、`.app` 內 `Resources/bin` 的 Meilisearch／yt-dlp／Deno、執行檔的架構與 Node 相同、Electron fuses 允許 Playwright 連線（`appFuses`，值是 fuse wire，例如 `101100011`）。加 `--run` 再檢查：PID 存活且命令列屬於這個 run、health、search 狀態、Vault 路徑在 run 目錄內、受測 checkout 的 commit 是否已與啟動時不同。
+
+輸出的 `missing` 列出每個沒通過的項目、路徑與修正方式，`required: true` 的項目讓 `healthy` 為 false、exit code 為 2；開發版 Electron 的項目只有 Electron 流程需要，不影響 `healthy`。在另一台機器執行失敗時，先看 `missing`。任何結果看起來不對時，先跑 doctor。
 
 ## Drive
 
@@ -130,19 +134,19 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 
 | 函式 | 用途 |
 | --- | --- |
-| `launchWeb({ issue, label, checkout, data, vault, catalog, build })` | 同 CLI `launch`，回傳 instance |
+| `launchWeb({ issue, label, evidence, checkout, data, vault, catalog, build })` | 同 CLI `launch`，回傳 instance |
 | `attach(runDir)` | 接手已啟動的 instance |
 | `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw；只有帶 `body` 的請求才送 `content-type: application/json` |
 | `instance.catalog()`／`instance.updateCatalog(fn)` | 讀／改合成資料 |
 | `instance.restart({ crash, page })` | 在同一個 run 上重啟 server（見「重啟」） |
 | `instance.stop({ keep })` | 同 CLI `stop` |
 | `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
-| `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json` |
+| `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json`。`page` 可以是回傳目前頁面的函式（Electron `relaunch()` 後換了視窗） |
 | `apiState(instance)` | Vault、訂閱、工作、文件、搜尋的 API 快照 |
 | `collect(instance, url)`／`subscribe(instance, url)`／`idle(instance)` | 以辨識網址＋執行動作建立前置狀態；等工作清空 |
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
-| `launchElectron({ issue, label, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
+| `launchElectron({ issue, label, evidence, app, vault, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
 
 ### CLI 單步操作
 
@@ -174,7 +178,38 @@ await desktop.relaunch();                                  // 同一 profile 重
 await desktop.close();
 ```
 
-Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過。流程 crash 而 Electron 還活著時，`sweep` 也會略過（列在 `live`），`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+`vault` 預設 `selected`：以 checkout 的 `dist/node` 建立 Vault 並寫進 profile，畫面直接進到 App。`vault: 'none'` 不建立 Vault，畫面從 Onboarding 開始，用 `stubDialogs` 回答選擇目錄的對話框，經畫面建立或開啟 Vault。
+
+Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過。流程 crash 而 Electron 還活著時，`sweep` 也會略過（列在 `live`），`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+
+### 打包版
+
+`launchElectron({ app })` 啟動打包好的 App（Mac 是 `npm run package:mac` 產生的 `release/mac-arm64/XR Collector.app`），其餘與開發版相同：同一套隔離的 profile、Vault 與 port，同樣的背景模式、`stubDialogs` 與證據格式。下列行為只有打包版看得到，相關 scenario 用打包版驗證：
+
+- `app.asar` 封裝：載入路徑、讀 asar 內的 Web UI 與 plugin；
+- `Resources/bin` 的 Meilisearch、yt-dlp、Deno 路徑與執行權限；
+- 簽署後的啟動（目前是 ad-hoc 簽署）；
+- `electron-builder.yml` 的打包設定，例如帶進 `.app` 的檔案與 `extraResources`。
+
+畫面、API 與資料流的行為在開發版與打包版相同，平常用 Web 模式或開發版驗證；打包版留給上列項目、發版前的 smoke 與安裝包相關的票。
+
+打包版不需要 checkout 的 build：用 `vault: 'none'` 經 Onboarding 建立 Vault，就只需要 `.app` 與這個 skill 的 `node_modules`（Playwright）。`vault: 'selected'` 仍需要 checkout 的 `dist/node`。
+
+Playwright 以 `_electron.launch` 啟動打包版，靠 Electron fuses 的 `EnableNodeCliInspectArguments` 連線；打包設定沒有關閉任何 fuse，所以驗證用的就是正式的打包產物，不為驗證另做一個放寬安全設定的版本。doctor 的 `appFuses` 讀 `.app` 的 fuse wire，這個 fuse 被關閉時列為缺項，verify 無法驅動那個版本。`results.json` 的 `target.connection` 記錄連線方式（`playwright-electron`）。
+
+打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。產品沒有自動更新、登入項目或網址協定的註冊，profile 與 Vault 之外的路徑都由環境變數導進 run 目錄；macOS 仍會在每次啟動時把 StoreKit 的時間戳 `SKPurchaseIntentUpdatesLastChecked` 寫進 `~/Library/Preferences/<bundle id>.plist`，安裝的 App 啟動時也一樣，這是唯一允許的變動。
+
+**打包版 smoke**：一個指令跑完，不需要互動，全部通過 exit code 為 0，任一項失敗不為 0：
+
+```sh
+npm run package:mac
+node .claude/skills/verify/scripts/smoke-desktop.mjs --app "release/mac-arm64/XR Collector.app" [--evidence <dir>] [--issue <N>] [--label <name>] [--video <url>]
+node .claude/skills/verify/scripts/smoke-desktop.mjs            # 同一支 smoke 跑開發版 Electron
+```
+
+流程：啟動（確認 `isPackaged`、從 `app.asar` 載入、`Resources` 在受測的 `.app` 內、profile 在 run 目錄）→ Onboarding 選擇目錄並建立知識庫 → 經畫面收集一支真實 YouTube 影片（`REAL.video`），斷言閱讀頁有字幕、知識庫有對應的 Markdown 檔，以及 Meilisearch 與 yt-dlp 從受測程式自己的 bin 啟動（打包版是 `.app/Contents/Resources/bin`，開發版是 checkout 的 `resources/bin/mac`；以取樣 App 的程序樹取得執行檔路徑）→ 重啟後文件仍在，登入項目與更新來源不變 → 結束，斷言沒有命令列含有 run 目錄的程序、slot 已釋放、7222／7175 的 listener、使用者的 Agent 連線檔（`~/Library/Application Support/XR Collector/agent-connection.json`），以及 `~/Library` 中屬於這個 bundle id 的 Preferences（時間戳除外）、Caches、HTTPStorages、Saved Application State 與 Application Support 前後相同。需要網路；YouTube 限流時收集的 scenario 失敗。證據預設在 `.local/ticket-artifacts/<issue>/<packaged|development>[-N]/`（issue 預設 `verify-smoke`），`--evidence` 指定時只寫該目錄。
+
+**受測程式的紀錄**：Desktop run 的 `results.json` 以 `target` 記錄受測的程式，開發版與打包版欄位相同：`kind`（`packaged`／`development`）、`app`（打包版的 App 路徑，開發版為 null）、`executable`、`version` 與 `arch`（程式自己回報的 `app.getVersion()` 與 `process.arch`）、`platform`、`connection`。`commit`、`sourceHash` 記錄的是執行 skill 的 checkout，打包版的版本以 `target` 為準。
 
 ## Evidence
 
@@ -187,7 +222,7 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 - Web 模式截圖標示為 Web 模式，不代替原生 Desktop 證據。
 - 看過每張 PNG 再交付：確認不是錯誤頁、過期畫面或空白。
 
-輸出在 `.local/ticket-artifacts/<issue>[/<label>[-N]]/`：`<scenario>-<name>.png`、`results.json`（label、受測 checkout、commit、dirty、未提交內容的雜湊 `sourceHash`、資料模式、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`（runtime 的輸出，另記每個 4xx／5xx 請求的 method、path、status、錯誤碼與訊息；重啟過的 run 依序包含每一段）、`snapshot` 的 `.png`＋`.state.json`。
+輸出在 `.local/ticket-artifacts/<issue>[/<label>[-N]]/` 或 `--evidence` 指定的目錄：`<scenario>-<name>.png`、`results.json`（label、受測 checkout、commit、dirty、未提交內容的雜湊 `sourceHash`、資料模式、驗證層級、Desktop run 的 `target`、每個 scenario 的 checks 與 observations、console error、API 快照）、`<run>-server.log`（runtime 的輸出，另記每個 4xx／5xx 請求的 method、path、status、錯誤碼與訊息；重啟過的 run 依序包含每一段）、`snapshot` 的 `.png`＋`.state.json`。
 
 ## Cleanup
 
@@ -203,10 +238,11 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
 
 本 skill 的 CLI 與函式庫有兩層測試：
 
-- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾與 label、slot lock 的持有者判斷與 `sweep`、程序辨識（以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序），以及 `restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉。測試用暫存的 Git checkout 與暫存的 `HOME`，不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。
+- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序），以及 `restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉。測試用暫存的 Git checkout 與暫存的 `HOME`，不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。
 - **整合 smoke**：`npm run test:verify-skill:mac`（`scripts/smoke.mjs [--issue <N>] [--checkout <dir>]`），只在 Mac 本機執行，需要 Playwright Chromium 與 `npm run download:runtime`。Web 模式合成資料：launch → 訂閱 → `restart()` → `restart({ crash: true })` → `stop({ keep: true })` → `sweep`，斷言狀態保留、中斷的工作完成且 `lastStop` 為 `crash`、`server.log` 的重啟分隔、結束後沒有命令列含有 run 目錄的程序且 slot 已釋放，以及用到的 port 都是 verify slot、7222／7175 的 listener 前後相同。證據在 `.local/ticket-artifacts/<issue>/smoke[-N]/`（預設 issue 為 `verify-smoke`）。改 `scripts/` 時在本機跑一次。
+- **Desktop smoke**：`npm run test:verify-skill:desktop:mac -- [--app <path>]`（`scripts/smoke-desktop.mjs`，見「打包版」），只在 Mac 本機執行，需要網路。改 `lib/electron.mjs`、`lib/target.mjs` 或程序辨識時，開發版與打包版各跑一次。
 
 ## 平台
 
 - **Mac arm64**：已支援並驗證。
-- **Windows**：待補。尚未處理的部分：`resources/bin/win` 與 `.exe` 路徑、Electron 執行檔路徑、以 PID 與命令列辨識程序（`ps` 在 Windows 不可用）、程序群組結束方式、`~/.xr-collector` 路徑。Windows 驗收暫依 [開發驗證流程](../../../docs/development-validation.md) 第 5 節。
+- **Windows**：待補。尚未處理的部分：`resources/bin/win` 與 `.exe` 路徑、開發版 Electron 與打包版的執行檔路徑（`lib/target.mjs`）、以 PID 與命令列辨識程序（`ps` 在 Windows 不可用）、程序群組結束方式、`~/.xr-collector` 路徑。Windows 驗收暫依 [開發驗證流程](../../../docs/development-validation.md) 第 5 節。

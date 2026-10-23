@@ -1,0 +1,94 @@
+// What doctor reports when a run cannot start: each missing prerequisite in `missing` with its fix,
+// and exit code 2. Runs the real CLI on a throwaway checkout that has neither resources/bin nor a
+// build, with a throwaway HOME for the slot locks.
+import { execFile } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { cleanUp, repository, temp } from './support.js';
+
+const CLI = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/verify.mjs');
+// Lives for the whole file; cleanUp after each test removes only what temp() made.
+const home = mkdtempSync(path.join(tmpdir(), 'xr-verify-home-'));
+afterEach(cleanUp);
+afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+interface Missing { check: string; required: boolean; path?: string; fix: string }
+
+/** Runs doctor in `cwd` and returns its exit code and report. */
+async function doctor(cwd: string, ...args: string[]) {
+  const result = await promisify(execFile)(process.execPath, [CLI, 'doctor', ...args], { cwd, env: { ...process.env, HOME: home } })
+    .then((done) => ({ code: 0, stdout: done.stdout }), (failed) => ({ code: failed.code as number, stdout: failed.stdout as string }));
+  const report = JSON.parse(result.stdout) as { healthy: boolean; missing: Missing[] };
+  return { code: result.code, report, required: report.missing.filter((item) => item.required).map((item) => item.check) };
+}
+
+/**
+ * A macOS app bundle whose executable is this Node (thin, this machine's architecture), with no
+ * Resources/bin. `fuses` writes an Electron Framework carrying that fuse wire.
+ */
+function fakeApp(fuses?: string) {
+  const app = path.join(temp('app'), 'Fake.app');
+  mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true });
+  mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true });
+  writeFileSync(path.join(app, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>Fake</string></dict></plist>`);
+  symlinkSync(process.execPath, path.join(app, 'Contents', 'MacOS', 'Fake'));
+  writeFileSync(path.join(app, 'Contents', 'Resources', 'app.asar'), '');
+  if (fuses) {
+    const framework = path.join(app, 'Contents', 'Frameworks', 'Electron Framework.framework');
+    mkdirSync(framework, { recursive: true });
+    const wire = Buffer.concat([Buffer.from('padding dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'), Buffer.from([1, fuses.length]), Buffer.from(fuses), Buffer.from('padding')]);
+    writeFileSync(path.join(framework, 'Electron Framework'), wire);
+  }
+  return app;
+}
+
+describe.skipIf(process.platform !== 'darwin')('doctor', () => {
+  it('lists a checkout without resources/bin and a packaged app that does not exist', async () => {
+    const { worktree } = repository();
+    const app = path.join(worktree, 'release', 'Missing.app');
+    const { code, report, required } = await doctor(worktree, '--app', app);
+
+    expect(code).toBe(2);
+    expect(report.healthy).toBe(false);
+    expect(required).toEqual(expect.arrayContaining(['runtimeBin', 'meilisearch', 'app']));
+    expect(required.filter((check) => check.startsWith('app'))).toEqual(['app']);
+    expect(report.missing.find((item) => item.check === 'runtimeBin')).toMatchObject({ path: path.join(worktree, 'resources', 'bin', 'mac'), fix: expect.stringContaining('download:runtime') });
+    expect(report.missing.find((item) => item.check === 'app')).toMatchObject({ path: app, fix: expect.stringContaining('package:mac') });
+  }, 30_000);
+
+  it('lists the runtime programs a packaged app lacks', async () => {
+    const { worktree } = repository();
+    const app = fakeApp('101100011');
+    const { code, report } = await doctor(worktree, '--app', app);
+    const missingFromApp = report.missing.map((item) => item.check).filter((check) => check.startsWith('app'));
+
+    expect(code).toBe(2);
+    expect(missingFromApp.sort()).toEqual(['appDeno', 'appMeilisearch', 'appYtdlp']);
+    expect(report.missing.find((item) => item.check === 'appMeilisearch')?.path).toBe(path.join(app, 'Contents', 'Resources', 'bin', 'meilisearch'));
+  }, 30_000);
+
+  it('reports an app whose fuses keep Playwright from connecting', async () => {
+    const { worktree } = repository();
+    const open = await doctor(worktree, '--app', fakeApp('101100011'));
+    const closed = await doctor(worktree, '--app', fakeApp('101000011'));
+    const unreadable = await doctor(worktree, '--app', fakeApp());
+
+    expect(open.report.missing.map((item) => item.check)).not.toContain('appFuses');
+    expect(closed.report.missing.find((item) => item.check === 'appFuses')).toMatchObject({ required: true, fix: expect.stringContaining('EnableNodeCliInspectArguments') });
+    expect(unreadable.report.missing.find((item) => item.check === 'appFuses')?.fix).toContain('cannot be read');
+  }, 30_000);
+
+  it('marks Electron prerequisites as not required when no app is given', async () => {
+    const { worktree } = repository();
+    const { report, required } = await doctor(worktree);
+    const optional = report.missing.filter((item) => !item.required).map((item) => item.check);
+
+    expect(optional).toEqual(expect.arrayContaining(['electron', 'electronBuild', 'deno']));
+    expect(required).not.toContain('electron');
+    expect(required.some((check) => check.startsWith('app'))).toBe(false);
+  }, 30_000);
+});

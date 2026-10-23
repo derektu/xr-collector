@@ -20,7 +20,7 @@
 | `server` | HTTP 契約與 Agent 授權；不分類型的收集、訂閱、排程與請求通道路由，以 YouTube 與假來源 plugin 各跑一次，含類型專屬路由回 404 與 UI／Agent 讀到相同結果（`subscription-routes.test.ts`）；核心與來源類型宣告的錯誤碼 HTTP 狀態（`error-status.test.ts`） |
 | `runtime` | 共用服務組裝、斷線後完成與生命週期清理 |
 | `web` | 畫面使用的狀態／呈現邏輯（含工作頁列的標題、副標與等待文字，`jobs-presentation.test.ts`）、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
-| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`），以及 `src/jobs` 不引用訂閱檔讀寫、`src/subscriptions` 不引用工作頁規則、只從 `src/jobs` 引用型別的掃描（`subscription-seam.test.ts`）；verify skill 的函式庫（`verify-skill/`）：證據資料夾與 label、slot lock 的持有者判斷與 `sweep`、程序辨識與 `stop`／`sweep` 只結束 run 自己的程序、`restart` 期間 slot lock 不被 `sweep` 清掉，以暫存 Git checkout、暫存 `HOME` 與真實程序驗證 |
+| `tooling` | 獨立驗證工作區、平台要求與證據彙整，以及核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`），以及 `src/jobs` 不引用訂閱檔讀寫、`src/subscriptions` 不引用工作頁規則、只從 `src/jobs` 引用型別的掃描（`subscription-seam.test.ts`）；verify skill 的函式庫（`verify-skill/`）：證據資料夾、label 與指定的證據目錄、doctor 列出缺少的前置條件（只在 Mac 執行）、slot lock 的持有者判斷與 `sweep`、程序辨識與 `stop`／`sweep` 只結束 run 自己的程序、`restart` 期間 slot lock 不被 `sweep` 清掉，以暫存 Git checkout、暫存 `HOME` 與真實程序驗證 |
 | `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）、假來源 plugin（`fake-source-plugin.ts`）、in-memory 訂閱 port（`subscription-recorder.ts`）與合成 feed 伺服器（`synthetic-feeds.ts`） |
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
@@ -31,7 +31,7 @@
 
 `tooling` 的工作區建立整合案例只在 Mac／Windows 執行，Linux 另 skip 一項。平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 
-verify skill 的整合 smoke（`npm run test:verify-skill:mac`）啟動真的 Web 模式 instance 與 headless Chromium，只在 Mac 本機執行，不在 `npm run verify` 與 CI 中；內容見 [verify skill](../.claude/skills/verify/SKILL.md#自我測試)。
+verify skill 的整合 smoke（`npm run test:verify-skill:mac`）啟動真的 Web 模式 instance 與 headless Chromium，只在 Mac 本機執行，不在 `npm run verify` 與 CI 中；Desktop smoke（`npm run test:verify-skill:desktop:mac`）啟動開發版 Electron 或 `--app` 指定的打包版，收集一支真實影片，同樣只在 Mac 本機執行。內容見 [verify skill](../.claude/skills/verify/SKILL.md#自我測試)。
 
 ## Round 2 修改原則
 
