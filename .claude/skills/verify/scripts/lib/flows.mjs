@@ -1,0 +1,86 @@
+// Recorded regression flows: the flows under ../../flows/ that every ticket touching their features
+// runs. A flow and this library always come from the checkout the command runs in; --checkout picks
+// only the src/ under test, so a baseline on main and the ticket's version run the same assertions,
+// and a checkout without flows/ can still be the baseline.
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { openPage, recorder } from './drive.mjs';
+import { launchWeb } from './instance.mjs';
+import { checkoutRoot, claimEvidence, commitOf } from './paths.mjs';
+import { apiState } from './state.mjs';
+import { sleep, waitFor } from './wait.mjs';
+
+export const FLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'flows');
+
+/** Every recorded flow: { name, title, covers, run, file }, by name. */
+export async function listFlows(dir = FLOWS_DIR) {
+  const files = readdirSync(dir).filter((file) => file.endsWith('.mjs')).sort();
+  return Promise.all(files.map(async (file) => {
+    const flow = await import(pathToFileURL(path.join(dir, file)).href);
+    if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
+      throw new Error(`${file} must export name, title, covers and run`);
+    }
+    return { name: flow.name, title: flow.title, covers: flow.covers, run: flow.run, file: path.join(dir, file) };
+  }));
+}
+
+/**
+ * Runs the named flows (all when `names` is empty) against `checkout`. The label (default `flows`)
+ * names one evidence folder for this whole invocation, `<label>/`, `<label>-2/`… as launch does;
+ * each flow launches its own instance and writes into `<label folder>/<flow>/`. Returns
+ * { evidence, label, flows: [{ name, passed, evidence, error? }] }.
+ */
+export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot() } = {}) {
+  if (!issue) throw new Error('flows run needs --issue for the evidence folder');
+  const all = await listFlows();
+  const unknown = names.filter((name) => !all.some((flow) => flow.name === name));
+  if (unknown.length) throw new Error(`Unknown flow ${unknown.join(', ')}; known: ${all.map((flow) => flow.name).join(', ')}`);
+  const selected = names.length ? all.filter((flow) => names.includes(flow.name)) : all;
+  const claimed = claimEvidence(issue, label);
+  const source = flowSource();
+  const outcomes = [];
+  for (const flow of selected) {
+    console.log(`flow ${flow.name}: ${flow.title}`);
+    outcomes.push(await runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout, source }));
+  }
+  return { evidence: claimed.evidence, label: claimed.label, flows: outcomes };
+}
+
+/** The checkout the flows came from, recorded in each results.json beside the checkout under test. */
+function flowSource() {
+  const checkout = checkoutRoot(path.dirname(FLOWS_DIR));
+  return { checkout, ...commitOf(checkout) };
+}
+
+async function runOne(flow, { issue, label, evidence, checkout, source }) {
+  const instance = await launchWeb({ issue, label, evidence, checkout });
+  const pages = [];
+  const open = async (route = '/') => {
+    const opened = await openPage(instance, { route });
+    pages.push(opened);
+    return opened.page;
+  };
+  let record;
+  let error;
+  try {
+    const page = await open('/');
+    record = recorder(instance, page);
+    await flow.run({ instance, page, openPage: open, record, waitFor, sleep });
+  } catch (caught) {
+    error = caught;
+    console.log(`  flow ${flow.name} stopped: ${caught.message}`);
+  }
+  let passed = false;
+  try {
+    const consoleErrors = pages.flatMap((opened) => opened.consoleErrors);
+    const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
+    passed = record ? await record.finish({ flow: flow.name, flowSource: source, consoleErrors, state, ...(error ? { error: error.message } : {}) }) : false;
+    for (const opened of pages) await opened.close().catch(() => undefined);
+  } finally {
+    // The server and its slot lock never outlive the flow, even when writing results.json fails.
+    await instance.stop();
+  }
+  console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
+  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+}

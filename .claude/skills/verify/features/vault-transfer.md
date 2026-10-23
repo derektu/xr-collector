@@ -43,3 +43,7 @@ Preconditions:
 - 搬移目標必須不存在或是空資料夾；指向 run 目錄外會把資料留在受測範圍之外，`stop` 不會清掉。
 - Web 模式沒有 `xrCollectorDesktop` bridge，「在 Finder 顯示」類按鈕（`export-reveal`、`vault-reveal`）只在 Desktop 驗證。
 - 兩個 instance 同時跑會占兩個 slot；結束時兩個都要 stop。
+
+## Regression flows
+
+沒有已收錄的流程。

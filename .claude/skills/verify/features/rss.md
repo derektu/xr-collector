@@ -40,3 +40,7 @@ Preconditions:
 - 合成 feed 的 port 隨 slot 變動，不要把 7253 寫死在流程裡。
 - RSS 擁有所有 http(s) 網址，無法辨識成其他類型的網址都會落到 RSS；貼一般網頁看到「找不到 feed」是正常結果。
 - 真實 feed（`REAL.feed`）的文章數與內容會變，smoke 只斷言「至少收進一篇」。
+
+## Regression flows
+
+沒有已收錄的流程。
