@@ -148,7 +148,7 @@ describe('per-subscription scheduling (A2)', () => {
     await poll(w);
     expect(w.scheduledChecks(active)).toBe(1);
 
-    // Turning it on counts every enabled subscription's next check from now.
+    // Turning it on counts an overdue next check from now.
     await w.scheduler.updateSchedule({ enabled: true });
     expect(await w.channel(active)).toMatchObject({ nextCheckAt: '2026-10-15T06:30:00.000Z' });
     expect(await w.channel(paused)).toMatchObject({ nextCheckAt: null });
@@ -157,6 +157,28 @@ describe('per-subscription scheduling (A2)', () => {
     expect(w.scheduleStore.saves).toEqual([{ enabled: false }, { enabled: true }]);
     expect(w.events.filter((event) => event === 'schedule.updated')).toHaveLength(2);
     await expect(w.scheduler.updateSchedule({ enabled: 'yes' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    await w.scheduler.close();
+  });
+
+  it('keeps the next checks still ahead when automatic collection is turned back on, and counts the overdue ones from then', async () => {
+    const w = await world();
+    const quarter = await w.subscribe('quarter', { intervalMinutes: 15 });
+    const daily = await w.subscribe('daily', { intervalMinutes: 1440 });
+    const paused = await w.subscribe('paused', { intervalMinutes: 15 });
+    await w.channels.setEnabled(paused, false);
+    await w.scheduler.start();
+    w.advance(15 * MINUTE);
+    await poll(w);
+    expect(await w.channel(daily)).toMatchObject({ nextCheckAt: '2026-10-16T04:00:00.000Z' });
+
+    await w.scheduler.updateSchedule({ enabled: false });
+    w.advance(60 * MINUTE);
+    await w.scheduler.updateSchedule({ enabled: true });
+    expect(await w.channel(quarter)).toMatchObject({ nextCheckAt: '2026-10-15T05:30:00.000Z' });
+    expect(await w.channel(daily)).toMatchObject({ nextCheckAt: '2026-10-16T04:00:00.000Z' });
+    expect(await w.channel(paused)).toMatchObject({ nextCheckAt: null });
+    await poll(w);
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(daily), w.scheduledChecks(paused)]).toEqual([1, 0, 0]);
     await w.scheduler.close();
   });
 

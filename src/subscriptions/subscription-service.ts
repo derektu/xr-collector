@@ -248,13 +248,14 @@ export class SubscriptionService {
   }
 
   /**
-   * Gives every enabled subscription a next check time an interval from now: all of them when
-   * `reset` (automatic collection was turned on), otherwise those without one.
+   * Gives each enabled subscription without a next check time one an interval from now, and with
+   * `overdue` (automatic collection was turned on) also those whose time has passed.
    */
-  async planChecks(options: { reset: boolean }): Promise<void> {
+  async planChecks(options: { overdue: boolean }): Promise<void> {
     const now = this.now();
     await this.store.updateWith((records) => new Map(records
-      .filter((record) => record.enabled && (options.reset || !record.nextCheckAt))
+      .filter((record) => record.enabled && (!record.nextCheckAt
+        || (options.overdue && new Date(record.nextCheckAt).getTime() <= now.getTime())))
       .map((record) => [record.id, { nextCheckAt: addMinutes(now, record.settings.intervalMinutes).toISOString() }] as const)));
   }
 

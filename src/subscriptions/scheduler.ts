@@ -23,7 +23,7 @@ export interface ScheduledRunner {
   readonly type: string;
   list(): Promise<SubscriptionRecord[]>;
   startRun(request: StartRunRequest): Promise<JobSubmission[]>;
-  planChecks(options: { reset: boolean }): Promise<void>;
+  planChecks(options: { overdue: boolean }): Promise<void>;
 }
 
 export interface SchedulerOptions {
@@ -98,8 +98,8 @@ export class CollectionScheduler {
   }
 
   /**
-   * Turns automatic collection on or off. Turning it on counts every enabled subscription's next
-   * check from now, so a long pause never makes them all due at once.
+   * Turns automatic collection on or off. Turning it on keeps each next check time still ahead and
+   * counts the overdue ones from now, so a long pause never makes them all due at once.
    */
   async updateSchedule(input: UpdateSchedule): Promise<CollectionSchedule> {
     if (typeof input?.enabled !== 'boolean') {
@@ -109,7 +109,7 @@ export class CollectionScheduler {
     if (current.enabled !== input.enabled) {
       current.enabled = input.enabled;
       await this.store.save(current);
-      if (current.enabled) for (const runner of this.runners) await runner.planChecks({ reset: true });
+      if (current.enabled) for (const runner of this.runners) await runner.planChecks({ overdue: true });
       this.options.recordEvent?.({
         severity: 'info', eventType: 'schedule.updated', message: current.enabled ? '已開啟自動檢查。' : '已關閉自動檢查。',
       });
@@ -162,7 +162,7 @@ export class CollectionScheduler {
     for (const runner of this.runners) {
       let subscriptions = await runner.list();
       if (subscriptions.some((subscription) => subscription.enabled && !subscription.nextCheckAt)) {
-        await runner.planChecks({ reset: false });
+        await runner.planChecks({ overdue: false });
         subscriptions = await runner.list();
       }
       // Due is decided once the subscriptions are read, by the clock at that moment.
