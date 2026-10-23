@@ -64,12 +64,13 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --evidence /tmp/
 node .claude/skills/verify/scripts/verify.mjs doctor                 # 環境與 slot
 node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這個 instance
 node .claude/skills/verify/scripts/verify.mjs doctor --app "release/mac-arm64/XR Collector.app"   # 加上受測的打包版
+node .claude/skills/verify/scripts/verify.mjs doctor --electron       # 開發版 Electron 的流程
 node .claude\skills\verify\scripts\verify.mjs doctor --app "release\win-unpacked\XR Collector.exe"   # Windows 的打包版
 ```
 
 唯讀。檢查平台與 Node 架構（Mac arm64 或 Windows x64）、Node ≥ 22.12、`node_modules`（tsx、playwright）、Chromium（Web 模式，Windows 不需要）、`resources/bin/<平台>` 的 Meilisearch／yt-dlp／Deno（Windows 是 `.exe`）、開發版 Electron 的執行檔（Windows 是 `node_modules/electron/dist/electron.exe`）與 `dist/node`，以及每個 slot 是 free、in use 還是 stale lock。`environment` 記錄平台、OS 版本、Node 與機器的架構；Node 以模擬執行時（Windows ARM64 上的 x64 Node、Rosetta 下的 x64 Node）`emulated` 為 true，`platform` 的值寫成 `win32 x64 (emulated on arm64)`。加 `--app` 再檢查受測的打包版：`.app` 或 `.exe` 與它的執行檔、`app.asar`、打包版 resources 內 `bin` 的 Meilisearch／yt-dlp／Deno、執行檔的架構與 Node 相同（Mac 讀 `lipo`，Windows 讀 PE header）、Electron fuses 允許 Playwright 連線（`appFuses`，值是 fuse wire，例如 `101100011`；Mac 在 Electron Framework，Windows 在 `.exe` 內）。加 `--run` 再檢查：PID 存活且命令列屬於這個 run、health、search 狀態、Vault 路徑在 run 目錄內、受測 checkout 的 commit 是否已與啟動時不同。
 
-輸出的 `missing` 列出每個沒通過的項目、路徑與修正方式，`required: true` 的項目讓 `healthy` 為 false、exit code 為 2；開發版 Electron 的項目只有 Electron 流程需要，不影響 `healthy`。在另一台機器執行失敗時，先看 `missing`。任何結果看起來不對時，先跑 doctor。
+輸出的 `missing` 列出每個沒通過的項目、路徑與修正方式，`required: true` 的項目讓 `healthy` 為 false、exit code 為 2；開發版 Electron 的項目只有 Electron 流程需要，加 `--electron` 時才列為 required。Chromium 只有 Web 模式需要：加 `--app` 或 `--electron` 時不列為 required（Windows 一律不列）。在另一台機器執行失敗時，先看 `missing`。任何結果看起來不對時，先跑 doctor。
 
 ## Drive
 
