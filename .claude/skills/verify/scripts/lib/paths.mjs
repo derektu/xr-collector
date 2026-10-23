@@ -4,7 +4,7 @@
 // .local/, so sweep sees the runs of every worktree.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -30,11 +30,15 @@ export function evidenceDir(issue, label) {
   return path.join(checkoutRoot(), '.local', 'ticket-artifacts', String(issue), ...(label ? [String(label)] : []));
 }
 
+/** The file that marks an explicit evidence folder as taken by one run. */
+const CLAIM_FILE = '.claimed';
+
 /**
  * Claims the evidence folder of one run and returns { evidence, label, created }. An explicit
  * `evidence` folder (a path from the command line, for a run whose evidence is collected from
  * another machine) is used as given; it must be missing or empty, so a run never mixes with an
- * earlier one. Otherwise the first run of a label gets `<label>/`; when that folder exists, the next
+ * earlier one, and the run marks it with a `.claimed` file, so two runs given the same folder at
+ * once never share it. Otherwise the first run of a label gets `<label>/`; when that folder exists, the next
  * free `<label>-2/`, `<label>-3/`… is created, so an earlier run's results.json and screenshots are
  * never overwritten. `label` is the folder name actually used, or the label as given with an explicit
  * folder. Without either, the evidence is the issue folder itself, shared by every unlabelled run of
@@ -47,6 +51,12 @@ export function claimEvidence(issue, label, { evidence: explicit } = {}) {
     if (existsSync(evidence) && readdirSync(evidence).length) throw new Error(`Evidence folder ${evidence} is not empty; give a new or empty folder`);
     const created = !existsSync(evidence);
     mkdirSync(evidence, { recursive: true });
+    try {
+      closeSync(openSync(path.join(evidence, CLAIM_FILE), 'wx'));
+    } catch (error) {
+      if (error.code === 'EEXIST') throw new Error(`Evidence folder ${evidence} is not empty; give a new or empty folder`);
+      throw error;
+    }
     return { evidence, label: label === undefined ? null : String(label), created };
   }
   if (!label) {
@@ -67,6 +77,14 @@ export function claimEvidence(issue, label, { evidence: explicit } = {}) {
       if (error.code !== 'EEXIST') throw error;
     }
   }
+}
+
+/** Removes an evidence folder a failed launch made and never wrote to; its claim file does not count. */
+export function dropUnusedEvidence({ evidence, created }) {
+  if (!created) return;
+  try {
+    if (readdirSync(evidence).every((file) => file === CLAIM_FILE)) rmSync(evidence, { recursive: true });
+  } catch { /* already gone */ }
 }
 
 /** A label becomes one folder name: letters, digits, dot, dash and underscore, other than `.` and `..`. */
@@ -148,6 +166,14 @@ export function isRunProcess(command, runDir, executable) {
     return (program === 'node' && padded.includes('server.mts ')) || isAppExecutable(executable ?? '');
   }
   return program === 'meilisearch' && padded.includes(` --db-path ${runDir}/profile/`);
+}
+
+/**
+ * Whether a process is an instance of the app whose bundle executable is named `name` that verify did
+ * not start (no run marker): the user's installed App, or any other copy of the same program.
+ */
+export function isUnmarkedAppInstance(command, executable, name) {
+  return (executable ?? '').endsWith(`.app/Contents/MacOS/${name}`) && !` ${command} `.includes(' --xr-verify-run=');
 }
 
 /** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */

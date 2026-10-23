@@ -2,7 +2,7 @@
 // checkout's Electron on its build; packaged runs an app that electron-builder made. Both report the
 // same fields, so results from either compare one to one. Only macOS is supported so far.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 /** The folder name under resources/bin for this platform. */
@@ -82,6 +82,9 @@ export function desktopTarget({ checkout, app }) {
   if (!existsSync(app)) {
     return { kind: 'packaged', app, executable: null, args: [], cwd: path.dirname(app), requires: [need('app', app, `${fix}; ${app} does not exist`)] };
   }
+  // The app reports its resources, and ps its executable, by real path; a path through a link
+  // (such as /tmp, which is /private/tmp) would never match them.
+  app = realpathSync(app);
   const executable = bundleExecutable(app);
   const resources = path.join(app, 'Contents', 'Resources');
   const archs = executable && existsSync(executable) ? executableArchs(executable) : [];

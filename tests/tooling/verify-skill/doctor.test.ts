@@ -82,6 +82,18 @@ describe.skipIf(process.platform !== 'darwin')('doctor', () => {
     expect(unreadable.report.missing.find((item) => item.check === 'appFuses')?.fix).toContain('cannot be read');
   }, 30_000);
 
+  it('names an app reached through a link by its real path', async () => {
+    const { desktopTarget } = await import('../../../.claude/skills/verify/scripts/lib/target.mjs');
+    const { worktree } = repository();
+    const app = fakeApp('101100011');
+    const link = path.join(temp('link'), 'Linked.app');
+    symlinkSync(app, link);
+    const target = desktopTarget({ checkout: worktree, app: link });
+
+    expect(target.app).toBe(app);
+    expect(target.executable).toBe(path.join(app, 'Contents', 'MacOS', 'Fake'));
+  });
+
   it('marks Electron prerequisites as not required when no app is given', async () => {
     const { worktree } = repository();
     const { report, required } = await doctor(worktree);
