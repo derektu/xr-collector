@@ -8,7 +8,9 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import os from 'node:os';
 import path from 'node:path';
 
-const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
+// Git's stderr is captured, so its line-ending warnings on Windows checkouts stay out of a command's
+// output; a failing command still throws with it.
+const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 /** The top of the Git worktree containing `from`. */
 export function checkoutRoot(from = process.cwd()) {
@@ -131,17 +133,7 @@ export function stamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
 }
 
-/**
- * When a process started, as `ps` reports it; null when it is not running. A PID plus its start time
- * names one process even after the PID is reused.
- */
-export function processStart(pid) {
-  try {
-    return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim() || null;
-  } catch {
-    return null;
-  }
-}
+export { processStart } from './platform.mjs';
 
 /**
  * The argument that marks a process the run started (its Web server or Electron). The trailing slash
@@ -153,13 +145,56 @@ export const runMarker = (runDir) => `--xr-verify-run=${runDir}/`;
 const isAppExecutable = (executable) => /\.app\/Contents\/MacOS\/[^/]+$/u.test(executable);
 
 /**
- * Whether a process is one of the run's own programs, by its executable and command line: node
- * running server.mts or an app's main executable (development Electron or the packaged app),
- * carrying the run marker, or meilisearch with its data in the run's profile. Any other program
- * that mentions the marker or the directory (a `pgrep -f` with the whole server command line as its
- * pattern, a `tail` of the log, `verify.mjs stop --run`) does not count.
+ * The arguments of a Windows command line, split the way CommandLineToArgvW splits them: whitespace
+ * outside double quotes separates arguments, quotes group, and backslashes escape only a quote.
  */
-export function isRunProcess(command, runDir, executable) {
+export function windowsArgs(command) {
+  const args = [];
+  let current = '';
+  let quoted = false;
+  let started = false;
+  for (let at = 0; at < command.length; at += 1) {
+    const char = command[at];
+    if (char === '\\') {
+      let count = 0;
+      while (command[at] === '\\') { count += 1; at += 1; }
+      if (command[at] === '"') {
+        current += '\\'.repeat(Math.floor(count / 2));
+        if (count % 2) current += '"'; else quoted = !quoted;
+      } else {
+        current += '\\'.repeat(count);
+        at -= 1;
+      }
+      started = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+      started = true;
+    } else if (!quoted && /\s/u.test(char)) {
+      if (started) args.push(current);
+      current = '';
+      started = false;
+    } else {
+      current += char;
+      started = true;
+    }
+  }
+  if (started) args.push(current);
+  return args;
+}
+
+/**
+ * Whether a process is one of the run's own programs, by its executable and command line: node
+ * running server.mts or the run's app (development Electron or the packaged app), carrying the run
+ * marker, or meilisearch with its data in the run's profile. Any other program that mentions the
+ * marker or the directory (a `pgrep -f` with the whole server command line as its pattern, a `tail`
+ * of the log, `verify.mjs stop --run`) does not count.
+ *
+ * On macOS an app is any app bundle's main executable. A Windows executable says nothing about
+ * being an app, so there the app is the executable the run recorded as its target (`apps`), compared
+ * case-insensitively, and the command line is read as Windows arguments, quotes included.
+ */
+export function isRunProcess(command, runDir, executable, { platform = process.platform, apps = [] } = {}) {
+  if (platform === 'win32') return isWindowsRunProcess(command, runDir, executable, apps);
   const program = path.basename(executable ?? '');
   const padded = ` ${command} `;
   if (padded.includes(` ${runMarker(runDir)} `)) {
@@ -168,11 +203,32 @@ export function isRunProcess(command, runDir, executable) {
   return program === 'meilisearch' && padded.includes(` --db-path ${runDir}/profile/`);
 }
 
+function isWindowsRunProcess(command, runDir, executable, apps) {
+  if (!executable) return false;
+  const fold = (value) => path.win32.resolve(value).toLowerCase();
+  const program = path.win32.basename(executable).toLowerCase();
+  const args = windowsArgs(command ?? '');
+  if (args.includes(runMarker(runDir))) {
+    return (program === 'node.exe' && args.some((arg) => arg.toLowerCase().endsWith('server.mts')))
+      || apps.some((app) => fold(app) === fold(executable));
+  }
+  if (program !== 'meilisearch.exe') return false;
+  const database = args[args.indexOf('--db-path') + 1];
+  return args.includes('--db-path') && Boolean(database) && database.toLowerCase().startsWith(`${path.win32.join(runDir, 'profile').toLowerCase()}\\`);
+}
+
 /**
- * Whether a process is an instance of the app whose bundle executable is named `name` that verify did
- * not start (no run marker): the user's installed App, or any other copy of the same program.
+ * Whether a process is an instance of the app whose main executable is named `name` that verify did
+ * not start (no run marker): the user's installed App, or any other copy of the same program. On
+ * Windows `name` includes `.exe`, and Chromium's helper processes run the same executable with
+ * `--type=…`, so those are left out.
  */
-export function isUnmarkedAppInstance(command, executable, name) {
+export function isUnmarkedAppInstance(command, executable, name, { platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    const args = windowsArgs(command ?? '');
+    return path.win32.basename(executable ?? '').toLowerCase() === name.toLowerCase()
+      && !args.some((arg) => arg.startsWith('--type=') || arg.startsWith('--xr-verify-run='));
+  }
   return (executable ?? '').endsWith(`.app/Contents/MacOS/${name}`) && !` ${command} `.includes(' --xr-verify-run=');
 }
 

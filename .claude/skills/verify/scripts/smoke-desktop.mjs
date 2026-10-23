@@ -2,23 +2,25 @@
 // End-to-end check of a Desktop target, packaged (--app) or the checkout's development Electron:
 // start at Onboarding and create the Vault there, collect one real YouTube video through the screens,
 // relaunch with the same profile and find the document again, quit. The runtime programs (Meilisearch,
-// yt-dlp, Deno) must run from the target's own bin folder: the .app's Resources/bin for a packaged
-// app, the checkout's resources/bin for development. Afterwards no process of the run is left, its
-// slot is free, and the user's App is untouched: the listeners on 7222 and 7175, the per-user Agent
-// discovery file and everything macOS keeps under ~/Library for the app's bundle id (preferences,
-// caches, saved state; the installed App has the same bundle id) are the same before and after, and
-// the run neither configures an update feed nor changes the login item. While another instance of
-// the same program runs (the installed App), it writes to that ~/Library state itself, so those
-// comparisons are skipped and results.json says so in `userAppRunning`. Needs the network.
+// yt-dlp, Deno) must run from the target's own bin folder: the packaged app's resources/bin (inside
+// the .app on macOS, beside the .exe on Windows), the checkout's resources/bin for development.
+// Afterwards no process of the run is left, its slot is free, and the user's App is untouched: the
+// listeners on 7222 and 7175, the per-user Agent discovery file and the app's per-user folders (on
+// macOS everything under ~/Library for the app's bundle id: preferences, caches, saved state, which
+// the installed App shares; on Windows the app's folders under %APPDATA% and %LOCALAPPDATA%) are the
+// same before and after, and the run neither configures an update feed nor changes the login item.
+// While another instance of the same program runs (the installed App), it writes to those folders
+// itself, so those comparisons are skipped and results.json says so in `userAppRunning`. Needs the
+// network.
 //
 // One command, no interaction; exit code 0 only when every check passed. Run from the worktree whose
 // skill is under test:
 //   node .claude/skills/verify/scripts/smoke-desktop.mjs [--app <path>] [--evidence <dir>] [--issue <N>] [--label <name>] [--video <url>]
-// --app picks a packaged app (a .app on macOS); without it the target is the development Electron on
-// the checkout's build. --evidence writes results.json, screenshots and the app's log to that folder
-// (missing or empty); otherwise they go to .local/ticket-artifacts/<issue>/<label>[-N]/, label
-// defaulting to the target kind.
-import { execFile, execFileSync } from 'node:child_process';
+// --app picks a packaged app (a .app on macOS, release/win-unpacked/XR Collector.exe on Windows);
+// without it the target is the development Electron on the checkout's build. --evidence writes
+// results.json, screenshots and the app's log to that folder (missing or empty); otherwise they go to
+// .local/ticket-artifacts/<issue>/<label>[-N]/, label defaulting to the target kind.
+import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -26,10 +28,11 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { recorder } from './lib/drive.mjs';
 import { launchElectron, stubDialogs } from './lib/electron.mjs';
-import { processTable, slotHolders } from './lib/instance.mjs';
+import { slotHolders } from './lib/instance.mjs';
 import { checkoutRoot, isUnmarkedAppInstance, SLOTS } from './lib/paths.mjs';
+import { inside, listeners, processTable, processTableAsync, programName, samePath, watchWindowsStarts, WINDOWS } from './lib/platform.mjs';
 import { REAL } from './lib/synthetic.mjs';
-import { desktopTarget, runtimeBin } from './lib/target.mjs';
+import { desktopTarget, requireTarget, runtimeBin } from './lib/target.mjs';
 import { waitFor } from './lib/wait.mjs';
 
 const { values: o } = parseArgs({ options: {
@@ -42,17 +45,12 @@ const RUNTIME_PROGRAMS = ['meilisearch', 'yt-dlp', 'deno'];
 // with that bundle id, the installed App included; it is the one key a run may change there.
 const LAUNCH_TIMESTAMP_KEY = 'SKPurchaseIntentUpdatesLastChecked';
 // Where an installed app (no XR_COLLECTOR_PROFILE) publishes its Agent connection for this user.
-const USER_DISCOVERY = path.join(os.homedir(), 'Library', 'Application Support', 'XR Collector', 'agent-connection.json');
+const PRODUCT = 'XR Collector';
+const USER_DISCOVERY = WINDOWS
+  ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), PRODUCT, 'agent-connection.json')
+  : path.join(os.homedir(), 'Library', 'Application Support', PRODUCT, 'agent-connection.json');
 
-/** PIDs listening on a TCP port, sorted; empty when nothing listens. */
-function listeners(port) {
-  try {
-    return execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number).sort();
-  } catch {
-    return [];
-  }
-}
-
+/** A value from a macOS bundle's Info.plist. */
 const plistValue = (bundle, key) => execFileSync('plutil', ['-extract', key, 'raw', path.join(bundle, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();
 
 /**
@@ -77,12 +75,22 @@ function preferences(bundleId) {
 
 /**
  * The user's App as this smoke could disturb it: who listens on its ports, its discovery file, and
- * what macOS keeps under ~/Library for the bundle id and the app's name.
+ * the app's per-user folders. On macOS those are what macOS keeps under ~/Library for the bundle id
+ * and the app's name; on Windows the folders named after the product, the package and Electron under
+ * %APPDATA% and %LOCALAPPDATA%, where Electron puts an app's data when no profile is given.
  */
 function userApp(bundle) {
+  const discovery = existsSync(USER_DISCOVERY) ? { mtimeMs: statSync(USER_DISCOVERY).mtimeMs, content: readFileSync(USER_DISCOVERY, 'utf8') } : null;
+  const state = { listeners: Object.fromEntries(USER_APP_PORTS.map((port) => [port, listeners(port)])), discovery };
+  if (WINDOWS) {
+    const library = {};
+    for (const variable of ['APPDATA', 'LOCALAPPDATA']) {
+      for (const name of [PRODUCT, 'xr-collector', 'Electron']) library[`%${variable}%\\${name}`] = fileState(path.join(process.env[variable] ?? '', name));
+    }
+    return { ...state, where: '使用者資料夾', library };
+  }
   const bundleId = plistValue(bundle, 'CFBundleIdentifier');
   const inLibrary = (...parts) => path.join(os.homedir(), 'Library', ...parts);
-  const discovery = existsSync(USER_DISCOVERY) ? { mtimeMs: statSync(USER_DISCOVERY).mtimeMs, content: readFileSync(USER_DISCOVERY, 'utf8') } : null;
   const library = {
     preferences: preferences(bundleId),
     caches: fileState(inLibrary('Caches', bundleId)),
@@ -90,40 +98,49 @@ function userApp(bundle) {
     savedState: fileState(inLibrary('Saved Application State', `${bundleId}.savedState`)),
     applicationSupport: fileState(inLibrary('Application Support', plistValue(bundle, 'CFBundleName'))),
   };
-  return { bundleId, listeners: Object.fromEntries(USER_APP_PORTS.map((port) => [port, listeners(port)])), discovery, library };
+  return { ...state, where: `~/Library 的 ${bundleId}`, library };
 }
 
 /**
- * Samples the process tree under `root` every 150 ms and collects the full path of each runtime
- * program it starts. yt-dlp lives only while it captures, so sampling runs through the collection.
- * A sample still running when stop() is called is dropped.
+ * Collects the full path of each runtime program the process tree under `root` starts. The tree is
+ * sampled every 150 ms or as soon as the previous listing returns. yt-dlp lives only while it
+ * captures, and one Windows listing takes seconds, so on Windows process start events also add to
+ * the tree. A sample still running when stop() is called is dropped. Await `ready` before the
+ * programs to watch can start.
  */
 function watchRuntimePrograms(root) {
   const seen = new Set();
+  const tree = new Set([root]);
+  const consider = (row) => {
+    if (!tree.has(row.ppid) && !tree.has(row.pid)) return false;
+    tree.add(row.pid);
+    if (row.executable && RUNTIME_PROGRAMS.includes(programName(row.executable))) seen.add(row.executable);
+    return true;
+  };
+  const starts = WINDOWS ? watchWindowsStarts(consider) : null;
   let busy = false;
   let stopped = false;
   const timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    execFile('ps', ['-A', '-o', 'pid=,ppid=,comm='], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+    processTableAsync().then((rows) => {
       busy = false;
-      if (error || stopped) return;
-      const rows = stdout.split('\n').map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line)).filter(Boolean)
-        .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), executable: match[3] }));
-      const tree = new Set([root]);
+      if (stopped) return;
       for (let grew = true; grew;) {
         grew = false;
-        for (const row of rows) if (tree.has(row.ppid) && !tree.has(row.pid)) { tree.add(row.pid); grew = true; }
+        for (const row of rows) if (!tree.has(row.pid) && consider(row)) grew = true;
       }
-      for (const row of rows) if (tree.has(row.pid) && RUNTIME_PROGRAMS.includes(path.basename(row.executable))) seen.add(row.executable);
-    });
+      for (const row of rows) if (tree.has(row.pid)) consider(row);
+    }, () => { busy = false; });
   }, 150);
-  return { stop() { stopped = true; clearInterval(timer); return [...seen].sort(); } };
+  return {
+    ready: starts?.ready ?? Promise.resolve(),
+    stop() { stopped = true; clearInterval(timer); starts?.stop(); return [...seen].sort(); },
+  };
 }
 
 /** Every process whose command line mentions the run folder, whichever program it is. */
-const mentioning = (runDir) => execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-  .split('\n').filter((line) => line.includes(runDir)).map((line) => line.trim());
+const mentioning = (runDir) => processTable().filter((entry) => entry.command.includes(runDir)).map((entry) => `${entry.pid} ${entry.command}`);
 
 /** Markdown files under the Vault whose text mentions `needle`, relative to the Vault. */
 function vaultFilesMentioning(vault, needle) {
@@ -134,10 +151,13 @@ function vaultFilesMentioning(vault, needle) {
 const videoId = new URL(o.video).searchParams.get('v');
 const checkout = checkoutRoot();
 const planned = desktopTarget({ checkout, app: o.app });
-// The bundle holding the executable: the packaged .app, or Electron.app for development.
-const bundle = planned.app ?? path.resolve(planned.executable, '..', '..', '..');
-const ownBin = planned.kind === 'packaged' ? path.join(planned.app, 'Contents', 'Resources', 'bin') : runtimeBin(checkout);
-const bundleExecutable = plistValue(bundle, 'CFBundleExecutable');
+requireTarget(planned);
+// macOS: the bundle holding the executable, the packaged .app or Electron.app for development.
+const bundle = WINDOWS ? null : planned.app ?? path.resolve(planned.executable, '..', '..', '..');
+// The folder the packaged app ships in: the .app on macOS, the .exe's folder on Windows.
+const appRoot = planned.kind === 'packaged' ? (WINDOWS ? path.dirname(planned.app) : planned.app) : null;
+const ownBin = planned.kind === 'packaged' ? path.join(planned.resources, 'bin') : runtimeBin(checkout);
+const bundleExecutable = WINDOWS ? path.basename(planned.executable) : plistValue(bundle, 'CFBundleExecutable');
 /** Instances of the same program that verify did not start, such as the user's installed App. */
 const otherInstances = () => processTable().filter((entry) => isUnmarkedAppInstance(entry.command, entry.executable, bundleExecutable))
   .map((entry) => `${entry.pid} ${entry.executable}`);
@@ -153,6 +173,8 @@ const record = recorder(desktop, () => desktop.window);
 const consoleErrors = [];
 let userAppRunning = null;
 let closed = false;
+/** Why the app could not be closed through its own shutdown; null once it closed. */
+let closeFailure = null;
 const watchConsole = (window) => {
   window.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   window.on('pageerror', (error) => consoleErrors.push(String(error)));
@@ -169,7 +191,10 @@ const systemHooks = () => desktop.app.evaluate(({ app, autoUpdater }) => ({
 async function shutDown(options) {
   if (closed) return;
   closed = true;
-  await desktop.close(options).catch((error) => console.error(`close failed: ${error.message}`));
+  await desktop.close(options).catch((error) => {
+    closeFailure = error.message;
+    console.error(`close failed: ${error.message}`);
+  });
 }
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { shutDown().finally(() => process.exit(1)); });
 
@@ -179,6 +204,7 @@ try {
   watchConsole(desktop.window);
   // Only the first launch runs the collection, so its main process is the root to watch.
   runtimePrograms = watchRuntimePrograms(desktop.app.process().pid);
+  await runtimePrograms.ready;
   let hooksAtStart = null;
 
   await record.scenario('DESKTOP-01', '啟動：受測程式與隔離的 profile', async ({ expect, shot, note }) => {
@@ -189,10 +215,10 @@ try {
     note('target', desktop.target);
     expect(main.packaged === (desktop.target.kind === 'packaged'), `app.isPackaged 為 ${main.packaged}，受測的是 ${desktop.target.kind}`);
     if (desktop.target.kind === 'packaged') {
-      expect(main.appPath === path.join(desktop.target.app, 'Contents', 'Resources', 'app.asar'), `從 asar 載入：${main.appPath}`);
-      expect(main.resources.startsWith(`${desktop.target.app}/`), `resources 在受測的 App 內：${main.resources}`);
+      expect(samePath(main.appPath, path.join(planned.resources, 'app.asar')), `從 asar 載入：${main.appPath}`);
+      expect(inside(main.resources, appRoot), `resources 在受測的 App 內：${main.resources}`);
     }
-    expect(main.userData === desktop.profile, `profile 在 run 目錄：${main.userData}`);
+    expect(samePath(main.userData, desktop.profile), `profile 在 run 目錄：${main.userData}`);
     const slot = SLOTS.find((candidate) => candidate.slot === desktop.ports.slot);
     expect(slot?.agent === desktop.ports.agent, `Agent port ${desktop.ports.agent} 是 slot ${desktop.ports.slot}`);
     hooksAtStart = await systemHooks();
@@ -216,7 +242,7 @@ try {
     expect(dialogs.length === 1 && dialogs[0].kind === 'open', `原生選擇目錄對話框呼叫 ${dialogs.length} 次`);
     const status = await api('/api/vault/status');
     note('vaultPath', status.vaultPath);
-    expect(status.vaultPath === vault, `知識庫在 run 目錄：${status.vaultPath}`);
+    expect(samePath(status.vaultPath, vault), `知識庫在 run 目錄：${status.vaultPath}`);
     expect(existsSync(vault) && readdirSync(vault).length > 0, `知識庫目錄已建立：${existsSync(vault) ? readdirSync(vault).join('、') : '不存在'}`);
     await shot('vault-ready');
   });
@@ -255,10 +281,10 @@ try {
     const programs = runtimePrograms.stop();
     note('runtimePrograms', programs);
     for (const name of ['meilisearch', 'yt-dlp']) {
-      const started = programs.filter((program) => path.basename(program) === name);
-      expect(started.length > 0 && started.every((program) => program.startsWith(`${ownBin}/`)), `${name} 從 ${ownBin} 啟動：${started.join('、') || '沒有看到'}`);
+      const started = programs.filter((program) => programName(program) === name);
+      expect(started.length > 0 && started.every((program) => inside(program, ownBin)), `${name} 從 ${ownBin} 啟動：${started.join('、') || '沒有看到'}`);
     }
-    const elsewhere = programs.filter((program) => !program.startsWith(`${ownBin}/`));
+    const elsewhere = programs.filter((program) => !inside(program, ownBin));
     expect(elsewhere.length === 0, `沒有從其他位置啟動的執行檔：${elsewhere.join('、') || '無'}`);
   });
 
@@ -275,7 +301,7 @@ try {
     note('documents', after.map((document) => document.title));
     expect(after.some((document) => document.title === title), `重啟後文件清單仍有「${title}」`);
     const status = await api('/api/vault/status');
-    expect(status.vaultPath === vault, `重啟後開回同一個知識庫：${status.vaultPath}`);
+    expect(samePath(status.vaultPath, vault), `重啟後開回同一個知識庫：${status.vaultPath}`);
     await desktop.window.getByTestId('nav-documents').click();
     await desktop.window.getByTestId('document-list').getByText(title).first().waitFor();
     expect(vaultFilesMentioning(vault, videoId).length === 1, '知識庫的 Markdown 檔仍在');
@@ -286,7 +312,10 @@ try {
   await record.scenario('DESKTOP-05', '結束後沒有殘留，使用者的 App 不受影響', async ({ expect, note }) => {
     const left = mentioning(desktop.runDir);
     note('processesMentioningRun', left);
+    expect(closeFailure === null, `App 經自己的結束流程關閉${closeFailure ? `：${closeFailure}` : ''}`);
     expect(left.length === 0, `命令列含有 run 目錄的程序 ${left.length} 個`);
+    // Meilisearch's PID file beside its database, which the app removes when it stops Meilisearch.
+    note('searchPidFiles', readdirSync(path.join(desktop.runDir, 'profile'), { recursive: true }).map(String).filter((file) => file.endsWith('.pid')));
     const holder = slotHolders().find((lock) => lock.slot === desktop.ports.slot);
     note('slotLock', holder ?? null);
     expect(holder?.runDir !== desktop.runDir, `slot ${desktop.ports.slot} 的 lock 不再指向這個 run`);
@@ -300,12 +329,12 @@ try {
     if (userAppRunning) {
       const skipped = Object.keys(after.library);
       note('librarySkipped', skipped);
-      console.log(`  ${bundleExecutable} 另有執行中的程式（${others.join('、')}），~/Library 的 ${before.bundleId} ${skipped.join('、')} 會被它寫入，不比對`);
+      console.log(`  ${bundleExecutable} 另有執行中的程式（${others.join('、')}），${before.where} ${skipped.join('、')} 會被它寫入，不比對`);
       return;
     }
     for (const [place, state] of Object.entries(after.library)) {
       note(`library.${place}`, state === null ? null : 'present');
-      expect(JSON.stringify(state) === JSON.stringify(before.library[place]), `~/Library 的 ${before.bundleId} ${place} 前後相同${place === 'preferences' ? `（${LAUNCH_TIMESTAMP_KEY} 除外）` : ''}`);
+      expect(JSON.stringify(state) === JSON.stringify(before.library[place]), `${before.where} ${place} 前後相同${place === 'preferences' ? `（${LAUNCH_TIMESTAMP_KEY} 除外）` : ''}`);
     }
   });
   await rm(desktop.runDir, { recursive: true, force: true });

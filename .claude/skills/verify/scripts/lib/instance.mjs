@@ -2,7 +2,8 @@
 // of reserved ports, with its own profile, Vault and Web build under .local/verify-runs/<issue>-<time>-<pid>/.
 // A run's processes are found by their command line (the run marker, or Meilisearch's data path in the
 // run), not by a recorded PID. stop signals a whole process group only when its leader is one of
-// them, so the user's own App, terminals and other agents' runs are never touched.
+// them, so the user's own App, terminals and other agents' runs are never touched. Web mode runs on
+// macOS; the process handling (stop, sweep, slot locks) also serves Desktop runs on Windows.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -10,33 +11,26 @@ import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, processStart, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
+import { commandOf, endWindowsTree, processStart, processTable, WINDOWS } from './platform.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
 const OWN_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mts');
 
 export const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const commandOf = (pid) => { try { return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim(); } catch { return ''; } };
-
-/**
- * Every process on the machine: { pid, pgid, executable, command }. The executable (`ps` comm) comes
- * from a second listing; a process that starts or ends between the two has none.
- */
-export function processTable() {
-  const list = (columns) => execFileSync('ps', ['-A', '-o', columns], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-    .split('\n').map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line)).filter(Boolean);
-  const executables = new Map(list('pid=,pgid=,comm=').map((match) => [Number(match[1]), match[3]]));
-  return list('pid=,pgid=,command=').map((match) => ({
-    pid: Number(match[1]), pgid: Number(match[2]), executable: executables.get(Number(match[1])) ?? null, command: match[3],
-  }));
-}
+export { processTable };
 
 const groupMembers = (pgids) => processTable().filter((entry) => pgids.has(entry.pgid));
 
-/** Processes the run started: its Web server or Electron (run marker) and Meilisearch. */
+/**
+ * Processes the run started: its Web server or Electron (run marker) and Meilisearch. On Windows the
+ * app counts by the executable run.json records as the run's target.
+ */
 function runMembers(runDir) {
-  return processTable().filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable));
+  const record = readRecord(runDir);
+  const apps = record?.target?.executable ? [record.target.executable] : [];
+  return processTable().filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable, { apps }));
 }
 
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
@@ -172,6 +166,7 @@ export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
  */
 export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
+  if (process.platform !== 'darwin') throw new Error(`Web mode runs on macOS; on ${process.platform} use the Desktop runs (launchElectron)`);
   checkout = path.resolve(checkout);
   const claimed = claimEvidence(issue, label, { evidence });
   let run;
@@ -341,10 +336,19 @@ export function runProcesses(record) {
  * process group is signalled as a whole only when its leader is one of the run's processes (the
  * detached Web server or Electron), which takes helpers such as esbuild and Electron's helpers
  * along; any other run process, such as a Meilisearch whose leader died, is signalled on its own.
+ *
+ * Windows has neither process groups nor a shutdown signal, so there each run process is ended with
+ * the processes it started (taskkill /T /F) at once. A Desktop flow quits the app through Electron
+ * before this, so only what a crashed app or flow left behind is ended this way.
  */
 export async function terminateRun(runDir, { kill = false } = {}) {
   const members = runMembers(runDir);
   if (!members.length) return;
+  if (WINDOWS) {
+    for (const member of members) endWindowsTree(member.pid);
+    await waitFor(() => members.every((member) => !alive(member.pid)) && runMembers(runDir).length === 0, 'run kill', { timeout: 10_000 });
+    return;
+  }
   const groups = new Set(members.filter((member) => member.pid === member.pgid).map((member) => member.pgid));
   const loose = members.filter((member) => !groups.has(member.pgid)).map((member) => member.pid);
   const signal = (name) => {

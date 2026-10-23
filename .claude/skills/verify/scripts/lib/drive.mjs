@@ -4,6 +4,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { environment } from './platform.mjs';
 import { sleep } from './wait.mjs';
 
 /** What the UI shows once loaded: a page of the app, or Onboarding while no Vault is ready. */
@@ -78,6 +79,8 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
       await writeFile(path.join(instance.evidence, file), JSON.stringify({
         issue: instance.issue, label: instance.label ?? null, checkout: instance.checkout,
         commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, data: instance.data,
+        // The machine the run executed on: platform, OS, Node's and the machine's architecture.
+        environment: environment(),
         layer: instance.layer ?? 'Web 模式（headless Chromium）', ...(instance.target ? { target: instance.target } : { url: instance.url }),
         finishedAt: new Date().toISOString(),
         passed, results, shots, ...extra,

@@ -45,7 +45,8 @@ function fakeCheckout() {
   return { checkout, tsx };
 }
 
-describe('restart', () => {
+// restart belongs to Web mode, which runs on macOS (and Linux CI); Windows runs only Desktop flows.
+describe.skipIf(process.platform === 'win32')('restart', () => {
   it('keeps the slot and the run folder through a sweep between the old and the new server', async () => {
     const { main } = repository();
     const { checkout, tsx } = fakeCheckout();

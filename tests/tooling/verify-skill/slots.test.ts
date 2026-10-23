@@ -16,12 +16,15 @@ const writeLock = (slot: number, lock: object) => writeFileSync(lockFile(slot), 
 beforeAll(() => expect(SLOT_LOCKS).toBe(path.join(home, '.xr-collector', 'verify-slots')));
 beforeEach(() => mkdirSync(SLOT_LOCKS, { recursive: true }));
 afterEach(() => {
-  if (SLOT_LOCKS.startsWith(`${home}/`)) rmSync(SLOT_LOCKS, { recursive: true, force: true });
+  if (SLOT_LOCKS.startsWith(`${home}${path.sep}`)) rmSync(SLOT_LOCKS, { recursive: true, force: true });
   cleanUp();
 });
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
-describe('lockLive', () => {
+// Windows answers each processStart through PowerShell, which takes seconds.
+const SLOW = { timeout: 60_000 };
+
+describe('lockLive', SLOW, () => {
   it('holds while the process with that PID and start time runs', () => {
     expect(lockLive({ pid: process.pid, start: processStart(process.pid) })).toBe(true);
   });
@@ -51,7 +54,7 @@ describe('lockLive', () => {
   });
 });
 
-describe('sweep', () => {
+describe('sweep', SLOW, () => {
   it('removes locks whose holder is gone or whose PID was reused, and keeps live ones', async () => {
     const { main } = repository();
     writeLock(0, { pid: process.pid, start: processStart(process.pid) });

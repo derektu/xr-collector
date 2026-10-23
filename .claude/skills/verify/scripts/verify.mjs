@@ -10,13 +10,16 @@ import { chromium } from 'playwright';
 import { apiState, openPage } from './lib/drive.mjs';
 import { attach, launchWeb, portFree, runProcesses, slotHolders, stopRun, sweepStale } from './lib/instance.mjs';
 import { checkoutRoot, commitOf, evidenceDir, mainCheckout, SLOTS } from './lib/paths.mjs';
+import { environment, exe, WINDOWS } from './lib/platform.mjs';
 import { BIN_PLATFORM, desktopTarget, runtimeBin } from './lib/target.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
+import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
 
 const USAGE = `verify.mjs <command>
-  doctor   [--run <dir>] [--app <path>]      environment, slots, (with --run) one instance and (with --app) a packaged app;
-           read-only; "missing" lists what is not ready, each with its fix; exit code 2 when not healthy
+  doctor   [--run <dir>] [--app <path>]      environment, slots, (with --run) one instance and (with --app) a packaged app
+           (a .app on macOS, the .exe on Windows); read-only; "missing" lists what is not ready, each with its fix;
+           exit code 2 when not healthy
   launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
            evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
            a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
@@ -25,13 +28,17 @@ const USAGE = `verify.mjs <command>
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
-  sweep                                        remove stale slot locks and scratch folders of runs with no live process`;
+  sweep                                        remove stale slot locks and scratch folders of runs with no live process
+  summary  --commit <SHA> [--platform darwin|win32]... <results.json>...
+           whether every scenario passed on every given platform (any one platform without --platform), counting
+           only results of that commit from a clean checkout; exit code 2 when not complete`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
   issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
   checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
+  commit: { type: 'string' }, platform: { type: 'string', multiple: true },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -49,18 +56,28 @@ function builtAfterSources(checkout) {
 async function doctor() {
   const checkout = path.resolve(o.checkout ?? checkoutRoot());
   const bin = runtimeBin(checkout);
+  const download = WINDOWS ? 'npm run download:runtime:win' : 'npm run download:runtime';
   const [major, minor] = process.versions.node.split('.').map(Number);
   const item = (ok, fields) => ({ ok, ...fields });
+  const machine = environment();
+  // The runtime programs and packages are Mac arm64 and Windows x64. On Windows ARM64 the x64 Node
+  // runs under emulation, which the value says, so results are never taken for native x64 ones.
+  const supported = (process.platform === 'darwin' && process.arch === 'arm64') || (WINDOWS && process.arch === 'x64');
   const checks = {
-    platform: item(process.platform === 'darwin' && process.arch === 'arm64', { value: `${process.platform} ${process.arch}`, fix: 'Mac arm64 Node (an x64 Node runs under Rosetta and tests another architecture); Windows is pending in SKILL.md' }),
+    platform: item(supported, {
+      value: `${process.platform} ${process.arch}${machine.emulated ? ` (emulated on ${machine.hostArch})` : ''}`,
+      fix: WINDOWS ? 'Windows x64 Node (the runtime programs and npm run package:win are x64; on Windows ARM64 use x64 Node under emulation)'
+        : 'Mac arm64 Node (an x64 Node runs under Rosetta and tests another architecture)',
+    }),
     node: item(major > 22 || (major === 22 && minor >= 12), { value: process.version, fix: 'Node >= 22.12 (.nvmrc)' }),
     dependencies: item(existsSync(path.join(checkout, 'node_modules', '.bin', 'tsx')) && existsSync(path.join(checkout, 'node_modules', 'playwright')), { fix: 'npm ci in the checkout' }),
-    chromium: item(existsSync(chromium.executablePath()), { path: chromium.executablePath(), fix: 'npx playwright install chromium' }),
-    runtimeBin: item(existsSync(bin), { path: bin, fix: `npm run download:runtime (resources/bin/${BIN_PLATFORM})` }),
-    meilisearch: item(existsSync(path.join(bin, 'meilisearch')), { path: path.join(bin, 'meilisearch'), fix: 'npm run download:runtime' }),
-    ytdlp: item(existsSync(path.join(bin, 'yt-dlp', 'yt-dlp')), { path: path.join(bin, 'yt-dlp', 'yt-dlp'), fix: 'npm run download:runtime (needed by --data real and Electron)' }),
+    chromium: item(existsSync(chromium.executablePath()), { path: chromium.executablePath(), fix: `npx playwright install chromium${WINDOWS ? ' (Web mode, which runs on macOS only)' : ''}` }),
+    runtimeBin: item(existsSync(bin), { path: bin, fix: `${download} (resources/bin/${BIN_PLATFORM})` }),
+    meilisearch: item(existsSync(path.join(bin, exe('meilisearch'))), { path: path.join(bin, exe('meilisearch')), fix: download }),
+    ytdlp: item(existsSync(path.join(bin, 'yt-dlp', exe('yt-dlp'))), { path: path.join(bin, 'yt-dlp', exe('yt-dlp')), fix: `${download} (needed by --data real and Electron)` }),
   };
-  const required = ['platform', 'node', 'dependencies', 'chromium', 'runtimeBin', 'meilisearch'];
+  // Chromium serves Web mode only, which Windows does not run.
+  const required = ['platform', 'node', 'dependencies', ...(WINDOWS ? [] : ['chromium']), 'runtimeBin', 'meilisearch'];
   /** The prerequisites of a Desktop target, or one failed check on a platform Desktop runs do not support. */
   const desktopNeeds = (app) => {
     try {
@@ -92,7 +109,7 @@ async function doctor() {
   }));
   const missing = Object.entries(checks).filter(([, check]) => !check.ok)
     .map(([check, { path: file, fix }]) => ({ check, required: required.includes(check), ...(file ? { path: file } : {}), fix }));
-  const report = { checkout, ...commitOf(checkout), ...(o.app ? { app: path.resolve(o.app) } : {}), missing, checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
+  const report = { checkout, ...commitOf(checkout), environment: machine, ...(o.app ? { app: path.resolve(o.app) } : {}), missing, checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
   let healthy = required.every((key) => checks[key].ok);
   if (o.run) {
     const instance = attach(o.run);
@@ -155,6 +172,15 @@ async function main() {
   if (command === 'snapshot') return snapshot();
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
   if (command === 'sweep') return print(sweepStale(mainCheckout()));
+  if (command === 'summary') {
+    const platforms = o.platform ?? [];
+    if (platforms.some((platform) => !['darwin', 'win32'].includes(platform))) throw new Error(`--platform is darwin or win32\n${USAGE}`);
+    if (positionals.length < 2) throw new Error(`summary needs results.json files\n${USAGE}`);
+    const summary = summarize(readResults(positionals.slice(1)), { commit: need('commit'), platforms });
+    print(summary);
+    if (!summary.complete) process.exitCode = 2;
+    return;
+  }
   throw new Error(`Unknown command ${command}\n${USAGE}`);
 }
 main().catch((error) => { console.error(error.message); process.exitCode = 1; });
