@@ -130,6 +130,21 @@ export interface HttpAppOptions {
   allowedHosts?: string[];
 }
 
+/** The 4xx status Fastify gave an error about the request itself, or null for any other error. */
+function requestErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object' || !('statusCode' in error) || typeof error.statusCode !== 'number') return null;
+  return error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : null;
+}
+
+function requestErrorMessage(status: number, error: unknown): string {
+  if (status === 413) return '請求內容過大。';
+  if (status === 415) return '請以 JSON 送出請求；檔案以本機的完整路徑指定。';
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  if (code === 'FST_ERR_CTP_EMPTY_JSON_BODY') return '請求宣告為 JSON，但內容是空的。';
+  if (code === 'FST_ERR_CTP_INVALID_JSON_BODY') return '請求內容不是有效的 JSON。';
+  return '請求格式不正確。';
+}
+
 const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
 
 export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
@@ -319,12 +334,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       });
       return;
     }
-    if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 413) {
-      void reply.status(413).send({ error: { code: 'invalid_request', message: '請求內容過大。' } });
-      return;
-    }
-    if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 415) {
-      void reply.status(415).send({ error: { code: 'invalid_request', message: '請以 JSON 送出請求；檔案以本機的完整路徑指定。' } });
+    const requestStatus = requestErrorStatus(error);
+    if (requestStatus !== null) {
+      void reply.status(requestStatus).send({ error: { code: 'invalid_request', message: requestErrorMessage(requestStatus, error) } });
       return;
     }
     app.log.error(error);

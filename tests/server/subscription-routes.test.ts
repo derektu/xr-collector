@@ -126,7 +126,7 @@ async function world() {
     await agent.close();
     await jobs.close();
   };
-  return { root, clock, ui, agent, send, settled, subscribe, cases, close, fake };
+  return { root, clock, ui, agent, scheduler, send, settled, subscribe, cases, close, fake };
 }
 
 const caseOf = (type: 'youtube' | 'fake') => (w: Awaited<ReturnType<typeof world>>) => w.cases.find((entry) => entry.type === type)!;
@@ -403,6 +403,26 @@ describe('the shared routes for UI and Agents (B-T3)', () => {
     // Subscription rows also carry the stored record's own fields, which the Skill explains by meaning.
     expect(unnamed.filter((field) => !['title', 'url', 'id', 'addedAt', 'updatedAt'].includes(field))).toEqual([]);
     await vi.waitFor(async () => expect((await w.send('GET', '/api/jobs?state=active')).body.jobs).toEqual([]));
+    await w.close();
+  });
+});
+
+describe('requests the server cannot read', () => {
+  it('answers 400 invalid_request to an empty or unparsable JSON body, and 500 only to a server error', async () => {
+    const w = await world();
+    const routes = [['POST', '/api/subscription-checks'], ['POST', '/api/subscriptions'], ['PUT', '/api/schedule']] as const;
+    const answer = async (method: 'POST' | 'PUT', url: string, payload: string) => {
+      const response = await w.agent.inject({
+        method, url, payload, headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      });
+      return [response.statusCode, response.json().error];
+    };
+    for (const [method, url] of routes) {
+      expect(await answer(method, url, '')).toEqual([400, { code: 'invalid_request', message: '請求宣告為 JSON，但內容是空的。' }]);
+      expect(await answer(method, url, '{"enabled":')).toEqual([400, { code: 'invalid_request', message: '請求內容不是有效的 JSON。' }]);
+    }
+    vi.spyOn(w.scheduler, 'runNow').mockRejectedValueOnce(new Error('disk failure'));
+    expect(await answer('POST', '/api/subscription-checks', '{}')).toEqual([500, { code: 'internal_error', message: '發生未預期的錯誤。' }]);
     await w.close();
   });
 });

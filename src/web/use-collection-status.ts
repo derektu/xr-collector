@@ -4,7 +4,7 @@ import { api } from './api-client.js';
 import { activeJobs } from './source-presentation.js';
 
 export const ACTIVE_POLL_MS = 1500;
-export const IDLE_POLL_MS = 10_000;
+export const IDLE_POLL_MS = 2000;
 
 export interface CollectionStatus {
   /** Top-level jobs still queued or running; null until the first load. */

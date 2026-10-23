@@ -896,7 +896,7 @@ export class VaultWorkspace {
   /** Restarts the schedule after an import; imported subscriptions arrive without a next check time and get one first. */
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
-    for (const service of this.current.subscriptions.all()) await service.planChecks({ reset: false });
+    for (const service of this.current.subscriptions.all()) await service.planChecks({ overdue: false });
     this.current.schedule = makeScheduler(this.current);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
