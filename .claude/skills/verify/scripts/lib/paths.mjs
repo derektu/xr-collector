@@ -38,6 +38,7 @@ export function evidenceDir(issue, label) {
  * every unlabelled run of the issue.
  */
 export function claimEvidence(issue, label) {
+  checkLabel(label);
   if (!label) {
     const evidence = evidenceDir(issue);
     mkdirSync(evidence, { recursive: true });
@@ -58,9 +59,11 @@ export function claimEvidence(issue, label) {
   }
 }
 
-/** A label becomes one folder name: letters, digits, dot, dash and underscore. */
+/** A label becomes one folder name: letters, digits, dot, dash and underscore, other than `.` and `..`. */
 export function checkLabel(label) {
-  if (label !== undefined && !/^[\w.-]+$/.test(String(label))) throw new Error(`Label ${label} must be one folder name: letters, digits, ., - or _`);
+  if (label === undefined) return;
+  const name = String(label);
+  if (!/^[\w.-]+$/.test(name) || name === '.' || name === '..') throw new Error(`Label ${label} must be one folder name: letters, digits, ., - or _`);
 }
 
 /** Scratch folders of runs: profile, Vault, the run's Web build, run.json. Removed by stop. */

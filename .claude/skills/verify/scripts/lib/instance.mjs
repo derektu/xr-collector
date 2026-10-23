@@ -301,11 +301,19 @@ function instance(record) {
      * `crash: true` SIGKILLs the run's processes, so the runtime sees an unclean stop on its next
      * start. Resolves once the restarted server is ready. A `page` given here waits on about:blank
      * meanwhile and loads its route again afterwards. server.log keeps growing: a line
-     * `--- verify restart (graceful|crash) <time> ---` separates the runs of the server.
+     * `--- verify restart (graceful|crash) <time> ---` separates the runs of the server. A slot whose
+     * lock names another run (taken after this run's server died) is refused.
      */
     async restart({ crash = false, page } = {}) {
+      const lock = readLock(record.ports.slot);
+      if (lock && !lock.unreadable && lock.runDir !== record.runDir) {
+        throw new Error(`Slot ${record.ports.slot} is held by another run (${lock.runDir}); launch a new run instead of restarting ${record.runDir}`);
+      }
       const route = page ? new URL(page.url()).pathname : null;
       if (page) await page.goto('about:blank');
+      // Between the old server's exit and the new server's start, the lock names this flow, so a
+      // sweep from another session sees a live holder and leaves the slot and the run folder alone.
+      holdSlot(record.ports.slot, record.runDir, process.pid);
       await terminateRun(record.runDir, { kill: crash });
       appendFileSync(path.join(record.runDir, 'server.log'), `\n--- verify restart (${crash ? 'crash' : 'graceful'}) ${new Date().toISOString()} ---\n`);
       record.pid = spawnServer(record);

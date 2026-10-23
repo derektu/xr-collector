@@ -19,7 +19,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 - **Port**：port registry 為本 skill 預留 4 個 slot（7250–7265），每個 slot 依序是 UI/API、Meilisearch、Agent API、合成 feed。`launch` 取第一個沒有存活 lock、四個 port 都空著的 slot；lock 在 `~/.xr-collector/verify-slots/<slot>.json`，跨 worktree 共用，以 PID 加程序啟動時間辨識持有者，PID 被重用不會讓 slot 卡住。4 個都忙時 `launch` 失敗，不擠進別人的 slot。
 - **資料**：每次 `launch` 建立新的 `.local/verify-runs/<issue>[-<label>]-<本地時間>-<PID>/`（主 checkout 底下，`sweep` 因此看得到每個 worktree 的 run），內含 profile、Vault、這次的 Web UI、`catalog.json`、`server.log`、`run.json`。同一 issue 同時啟動也各有自己的目錄。匯出與備份的預設目錄（產品的「XR Collector 匯出／備份」）也在 run 目錄的 `documents/` 內，不碰 `~/Documents`。啟動的程序不繼承 shell 的 `XR_COLLECTOR_*` 設定。
 - **程序**：run 的程序以執行檔加命令列辨識：帶有 `--xr-verify-run=<run 目錄>/` 標記、執行 `server.mts` 的 node 與 Electron，以及 `--db-path` 在 run 目錄 profile 內的 meilisearch。不依賴 `run.json` 記錄的 PID；其他執行檔即使命令列含有標記或目錄（`pgrep -f`、`tail` 它的 log、`verify.mjs stop --run`）也不算。`stop` 只在程序群組的 leader 本身就是 run 的程序時（detached 啟動的 Web server 與 Electron）才對整個群組送訊號；其餘 run 的程序（例如 leader 已死後剩下的 Meilisearch）逐一送訊號，所以不會波及使用者 terminal 的 job 或其他 shell。永遠不按程序名稱結束程序，不碰使用者正在用的 App（它用自己的 profile 與 7222／7175 等 port）。
-- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放；同一個 label 的資料夾已經存在時，改用下一個空的 `<label>-2/`、`<label>-3/`……，已存在的資料夾一律不覆寫。實際用的資料夾名記在 instance 的 `label`／`evidence`、`launch` 的輸出與 `results.json` 的 `label`（例如 `baseline-2`）；報告引用證據時寫這個實際的資料夾名。沒有 label 的 run 共用 `<issue>/`，重跑時覆寫同名截圖。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。
+- **證據**：執行指令所在 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored，不 commit），與票的流程腳本放在一起；`--checkout` 只決定受測版本，不影響證據位置。加 label（CLI `--label baseline`、`launchWeb({ label })`；一個資料夾名，只含英數、`.`、`-`、`_`，不能是 `.` 或 `..`）時寫進 `<issue>/<label>/`，基準與本票版本分開存放；同一個 label 的資料夾已經存在時，改用下一個空的 `<label>-2/`、`<label>-3/`……，已存在的資料夾一律不覆寫。實際用的資料夾名記在 instance 的 `label`／`evidence`、`launch` 的輸出與 `results.json` 的 `label`（例如 `baseline-2`）；報告引用證據時寫這個實際的資料夾名。沒有 label 的 run 共用 `<issue>/`，重跑時覆寫同名截圖。`stop` 把 `server.log` 複製進去後才刪 scratch；清理永遠不刪證據。
 - **受測版本**：預設是執行指令所在的 Git worktree，可用 `--checkout` 指定。`run.json` 記錄啟動時的 commit 與未提交內容的雜湊；Web UI 在 `launch` 時從受測 checkout build 進 run 目錄，伺服器用受測 checkout 自己的 `server.mts` 載入它的 `src/`。程式改了（commit 或未提交都算）就重新 `launch`，`doctor --run` 會指出。
 
 ## Launch
@@ -124,7 +124,7 @@ await instance.restart({ crash: true, page });   // 非正常結束：SIGKILL ru
 const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例如 crash 後 recovery.lastStop 為 crash
 ```
 
-`restart` 等到重啟的 server ready（health 成功、search 為 `ready`）才回傳，之後 `api`、`openPage`、`snapshot` 照常可用；傳入 `page` 時，重啟期間它停在 `about:blank`，完成後回到原本的路由，沒傳的頁面自己 `reload()`。Vault 只在 run 第一次啟動時建立，重啟時從 profile 的 `vault-selection.json` 開回同一個 Vault（流程中搬移或換過 Vault 時開的是換過的那個）。`run.json` 與 slot lock 換成新的 server PID。server.log 是同一個檔案，往後附加，兩段之間以一行 `--- verify restart (graceful|crash) <時間> ---` 分隔。
+`restart` 等到重啟的 server ready（health 成功、search 為 `ready`）才回傳，之後 `api`、`openPage`、`snapshot` 照常可用；傳入 `page` 時，重啟期間它停在 `about:blank`，完成後回到原本的路由，沒傳的頁面自己 `reload()`。Vault 只在 run 第一次啟動時建立，重啟時從 profile 的 `vault-selection.json` 開回同一個 Vault（流程中搬移或換過 Vault 時開的是換過的那個）。重啟期間 slot lock 由流程程序持有，其他 session 這時執行的 `sweep` 不會清掉這個 run；新的 server 起來後，`run.json` 與 slot lock 換成它的 PID。server 已經死掉、slot 被其他 run 取得時，`restart` 拒絕並報錯，改用新的 `launch`。server.log 是同一個檔案，往後附加，兩段之間以一行 `--- verify restart (graceful|crash) <時間> ---` 分隔。
 
 函式庫：
 
@@ -198,6 +198,13 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
 ```
 
 `stop` 對 run 的程序群組送 SIGTERM，讓 runtime 正常關閉（含 Meilisearch），等到群組內沒有程序；30 秒內沒結束才送 SIGKILL。`sweep` 輸出 `removed`（已刪）、`live`（還有程序，略過）、`unreadable`（`run.json` 無法解析，略過，需手動檢查）；`doctor` 的 slot 狀態與 `launch` 用同一個判斷，`ports busy` 表示沒有 lock 但 port 被占用。流程腳本中途 crash 時，server 仍在跑：用 `doctor` 看哪個 slot 被占、拿 `runDir` 跑 `stop`。`launch` 失敗時會結束自己的 server 並釋放 slot，run 目錄留著供診斷，之後由 `sweep` 清掉。每次失敗的嘗試之後都要 stop，避免留下程序與 port。清理不刪 `.local/ticket-artifacts/`。
+
+## 自我測試
+
+本 skill 的 CLI 與函式庫有兩層測試：
+
+- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾與 label、slot lock 的持有者判斷與 `sweep`、程序辨識（以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序），以及 `restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉。測試用暫存的 Git checkout 與暫存的 `HOME`，不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。
+- **整合 smoke**：`npm run test:verify-skill:mac`（`scripts/smoke.mjs [--issue <N>] [--checkout <dir>]`），只在 Mac 本機執行，需要 Playwright Chromium 與 `npm run download:runtime`。Web 模式合成資料：launch → 訂閱 → `restart()` → `restart({ crash: true })` → `stop({ keep: true })` → `sweep`，斷言狀態保留、中斷的工作完成且 `lastStop` 為 `crash`、`server.log` 的重啟分隔、結束後沒有命令列含有 run 目錄的程序且 slot 已釋放，以及用到的 port 都是 verify slot、7222／7175 的 listener 前後相同。證據在 `.local/ticket-artifacts/<issue>/smoke[-N]/`（預設 issue 為 `verify-smoke`）。改 `scripts/` 時在本機跑一次。
 
 ## 平台
 
