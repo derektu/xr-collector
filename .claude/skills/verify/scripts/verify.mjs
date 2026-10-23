@@ -29,16 +29,17 @@ const USAGE = `verify.mjs <command>
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process
-  summary  --commit <SHA> [--platform darwin|win32]... <results.json>...
+  summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
            whether every scenario passed on every given platform (any one platform without --platform), counting
-           only results of that commit from a clean checkout; exit code 2 when not complete`;
+           only results of that commit from a clean checkout; --scenario names a scenario the flow must record;
+           exit code 2 when not complete`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
   issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
   checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
-  commit: { type: 'string' }, platform: { type: 'string', multiple: true },
+  commit: { type: 'string' }, platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -176,7 +177,7 @@ async function main() {
     const platforms = o.platform ?? [];
     if (platforms.some((platform) => !['darwin', 'win32'].includes(platform))) throw new Error(`--platform is darwin or win32\n${USAGE}`);
     if (positionals.length < 2) throw new Error(`summary needs results.json files\n${USAGE}`);
-    const summary = summarize(readResults(positionals.slice(1)), { commit: need('commit'), platforms });
+    const summary = summarize(readResults(positionals.slice(1)), { commit: need('commit'), platforms, scenarios: o.scenario ?? [] });
     print(summary);
     if (!summary.complete) process.exitCode = 2;
     return;

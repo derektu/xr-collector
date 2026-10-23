@@ -135,7 +135,10 @@ function watchRuntimePrograms(root) {
   }, 150);
   return {
     ready: starts?.ready ?? Promise.resolve(),
-    stop() { stopped = true; clearInterval(timer); starts?.stop(); return [...seen].sort(); },
+    stop() {
+      if (!stopped) { stopped = true; clearInterval(timer); starts?.stop(); }
+      return [...seen].sort();
+    },
   };
 }
 
