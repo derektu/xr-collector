@@ -81,11 +81,14 @@ describe('Agent Skill', () => {
 
   it('documents the subscription contract the server enforces', async () => {
     const skill = await readFile(skillPath, 'utf8');
-    const { INTERVAL_OPTIONS, BACKFILL_WINDOWS, BACKFILL_LIMITS } = await import('../../src/plugins/youtube/settings.js');
+    const { INTERVAL_OPTIONS, BACKFILL_DAYS, BACKFILL_MAX_ITEMS } = await import('../../src/core/collection-settings.js');
     expect(skill).toContain(`只接受 ${INTERVAL_OPTIONS.join('、')}`);
-    expect(skill).toContain(BACKFILL_WINDOWS.map((window) => `\`${window}\``).join('、'));
-    expect(skill).toContain(`（${BACKFILL_LIMITS.join('、')}）`);
-    for (const term of ['backfillWindow', 'backfillMaxItems', 'subscription_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_not_found', '每次檢查']) {
+    expect(skill).toContain(`\`backfillDays\`（${BACKFILL_DAYS.min}–${BACKFILL_DAYS.max} 的整數）`);
+    expect(skill).toContain(`\`backfillMaxItems\`（${BACKFILL_MAX_ITEMS.min}–${BACKFILL_MAX_ITEMS.max} 的整數）`);
+    expect(skill).toContain('YouTube 30 分、30 天、10 支');
+    expect(skill).toContain('60 分、7 天、30 篇');
+    for (const retired of ['backfillWindow', '日曆月']) expect(skill).not.toContain(retired);
+    for (const term of ['backfillDays', 'backfillMaxItems', 'subscription_paused', 'documentsKept', 'skipReason', 'out_of_range', 'subscription_not_found', '每次檢查']) {
       expect(skill).toContain(term);
     }
     expect(skill).not.toContain('1–10080');

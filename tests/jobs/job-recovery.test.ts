@@ -218,7 +218,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
 /** Subscribes to the channel in the recorder every generation shares. */
 function subscribe(subs: SubscriptionRecorder, id: string): RecordedSubscription {
   return subs.add('youtube', { id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos` }, {
-    settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
+    settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
   });
 }
 
@@ -359,7 +359,7 @@ describe('channel-add jobs across restarts (R-T3)', () => {
 describe('channel-add jobs with chosen settings across restarts (A3)', () => {
   it('subscribes with the settings chosen when the job was accepted after a stop while resolving', async () => {
     const w = await world();
-    const chosen = { intervalMinutes: 180, backfillWindow: '2w' as const, backfillMaxItems: 5 };
+    const chosen = { intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@chosen', chosen);
     // Its activity events are labelled as a first collection.
@@ -381,7 +381,7 @@ describe('channel-add jobs whose record carries no settings (A3)', () => {
   it('subscribes with the default settings', async () => {
     const w = await world();
     const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@nosettings', { intervalMinutes: 180, backfillWindow: '3m', backfillMaxItems: 20 });
+    const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@nosettings', { intervalMinutes: 180, backfillDays: 45, backfillMaxItems: 20 });
     await vi.waitFor(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
     await g1.store.flush();
     const file = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
@@ -497,7 +497,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('discover'));
 
     // While the service is down the limit is lowered and time moves on.
-    subscribed.settings = { ...subscribed.settings, backfillWindow: '1w', backfillMaxItems: 5 };
+    subscribed.settings = { ...subscribed.settings, backfillDays: 7, backfillMaxItems: 5 };
     w.script.channelVideos.set(subscribed.id, [...listed(6, 'e'), ...videos]);
     w.clock.now = new Date(T0.getTime() + 3 * 24 * 60 * 60_000);
     const g2 = await w.crash(g1);

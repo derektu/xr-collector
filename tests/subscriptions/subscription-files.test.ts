@@ -46,7 +46,13 @@ describe('subscription file versions', () => {
   });
 
   it('rejects files it cannot read instead of guessing', async () => {
-    for (const channels of [{}, { version: 3, channels: [] }, { version: 2, channels: [{ ...row('UCa'), settings: { intervalMinutes: 45, backfillWindow: '1m', backfillMaxItems: 10 } }] }]) {
+    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    for (const channels of [
+      {}, { version: 2, channels: [] }, { version: 4, channels: [] },
+      { version: 3, channels: [{ ...row('UCa'), settings: { ...valid, intervalMinutes: 45 } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: valid }, { ...row('UCb'), settings: { ...valid, backfillDays: 61 } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } }] },
+    ]) {
       const root = await vault({ channels });
       await expect(new JsonSubscriptionStore(root, 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
     }
@@ -56,10 +62,10 @@ describe('subscription file versions', () => {
 });
 
 describe('JsonSubscriptionStore', () => {
-  it('persists subscriptions with their settings as version 2 across instances', async () => {
+  it('persists subscriptions with their settings as version 3 across instances', async () => {
     const root = await vault({});
     const first = new JsonSubscriptionStore(root, 'youtube');
-    const settings = { intervalMinutes: 15, backfillWindow: '1w' as const, backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 15, backfillDays: 7, backfillMaxItems: 5 };
     await first.add({ ...row('UCa'), settings });
     await first.add({ ...row('UCb'), settings });
     await first.setEnabled('UCa', false);
@@ -70,14 +76,14 @@ describe('JsonSubscriptionStore', () => {
       expect.objectContaining({ id: 'UCa', enabled: false, settings, nextCheckAt: null }),
       expect.objectContaining({ id: 'UCb', enabled: true, settings }),
     ]);
-    expect(await read(root, 'youtube-channels.json')).toMatchObject({ version: 2 });
+    expect(await read(root, 'youtube-channels.json')).toMatchObject({ version: 3 });
     await restarted.remove('UCa');
     expect((await new JsonSubscriptionStore(root, 'youtube').list()).map((channel) => channel.id)).toEqual(['UCb']);
   });
 
   it('keeps fields a subscription no longer uses, such as a discovery cursor, through reads and saves (R-10)', async () => {
-    const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
-    const root = await vault({ channels: { version: 2, channels: [{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }] } });
+    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const root = await vault({ channels: { version: 3, channels: [{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }] } });
     const store = new JsonSubscriptionStore(root, 'youtube');
     expect(await store.list()).toEqual([{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }]);
     await store.update('UCa', { enabled: false });
@@ -86,22 +92,22 @@ describe('JsonSubscriptionStore', () => {
   });
 
   it('reads and writes failed items with a subscription, as collection progress that is not a change of it (N69-T1)', async () => {
-    const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
     const failure = { videoId: 'aaaaaaaaaaa', title: '影片', attempts: 2, errorCode: 'no_subtitles', failedAt: '2026-10-15T03:30:00.000Z', skipped: false };
     // A file written before failures were recorded reads as a subscription without failures.
-    const root = await vault({ channels: { version: 2, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
+    const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
     const store = new JsonSubscriptionStore(root, 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));
     expect((await store.list())[0]!.failures).toBeUndefined();
     await store.update('UCa', { failures: [failure] });
     const saved = await read(root, 'youtube-channels.json') as { version: number; channels: Array<Record<string, unknown>> };
-    expect(saved.version).toBe(2);
+    expect(saved.version).toBe(3);
     expect(saved.channels[0]).toMatchObject({ failures: [failure], updatedAt: '2026-09-01T00:00:00.000Z' });
     expect((await new JsonSubscriptionStore(root, 'youtube').list())[0]!.failures).toEqual([failure]);
     await store.update('UCa', { failures: undefined });
     expect((await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> }).channels[0]).not.toHaveProperty('failures');
 
     for (const broken of [{ ...failure, attempts: 0 }, { ...failure, skipped: 'no' }, { title: '影片', attempts: 1, errorCode: 'x', failedAt: 'y', skipped: false }]) {
-      const invalid = await vault({ channels: { version: 2, channels: [{ ...row('UCa'), settings, failures: [broken] }] } });
+      const invalid = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, failures: [broken] }] } });
       await expect(new JsonSubscriptionStore(invalid, 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
     }
   });

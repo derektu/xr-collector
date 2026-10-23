@@ -11,7 +11,7 @@ function setup() {
   const id = source.addChannel('discovery');
   const channel: SubscriptionRecord = {
     id, title: '合成頻道', url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: NOW.toISOString(),
-    settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 },
+    settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
   };
   return { source, id, channel };
 }

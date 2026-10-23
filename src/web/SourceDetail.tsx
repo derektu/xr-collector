@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { settingsErrors } from '../core/collection-settings.js';
 import type { CollectionSchedule, SubscriptionDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
@@ -19,10 +20,14 @@ import { subscriptionStatusText, subscriptionStatusTone } from './subscription-p
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
 
+/** How long a typed number waits before it saves, so a number typed digit by digit saves once. */
+const TYPED_SAVE_DELAY_MS = 600;
+
 /**
  * One subscription: its state, counts, collection settings and collection record (collected,
- * failed and skipped items and check summaries), with pause, resume and remove. A settings change
- * saves at once.
+ * failed and skipped items and check summaries), with pause, resume and remove. A chosen option
+ * saves at once and a typed number once typing pauses; settings with an invalid value are not
+ * saved, and applying them to the other subscriptions waits until they are.
  */
 export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onChanged, onRemoved }: {
   type: string;
@@ -42,6 +47,9 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   const [saving, setSaving] = useState<Saving>({ kind: 'idle' });
   /** Settings shown while a save is in flight; the saved detail replaces them. */
   const [pending, setPending] = useState<SubscriptionSettings | null>(null);
+  /** Settings edited and not sent yet: invalid ones, or a typed number waiting for typing to pause. */
+  const [draft, setDraft] = useState<SubscriptionSettings | null>(null);
+  const typedSave = useRef<{ timer: ReturnType<typeof setTimeout>; send: () => void } | null>(null);
   const [reload, setReload] = useState(0);
   const saveSequence = useRef(0);
   const saveInFlight = useRef(false);
@@ -62,6 +70,15 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     return () => controller.abort();
   }, [type, id, revision, reload]);
 
+  // Leaving the page sends a typed number that is still waiting.
+  useEffect(() => () => {
+    const waiting = typedSave.current;
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      waiting.send();
+    }
+  }, []);
+
   const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />訂閱</button>;
   if (state.kind === 'loading') return <>{back}<p className="loading" role="status">正在讀取…</p></>;
   if (state.kind === 'error') return <>{back}<p className="load-error" role="alert">{state.message}</p></>;
@@ -74,6 +91,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   const { subscription: source, collection } = state.detail;
   const paused = source.status === 'paused';
   const typeInfo = sourceTypes.find((candidate) => candidate.id === source.type);
+  const fields = typeInfo?.settings ?? [];
 
   async function toggle(): Promise<void> {
     setBusy(true);
@@ -85,6 +103,28 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
     } finally {
       setBusy(false);
     }
+  }
+
+  function editSettings(patch: Partial<SubscriptionSettings>): void {
+    const next = { ...(draft ?? pending ?? source.settings), ...patch } as SubscriptionSettings;
+    if (typedSave.current) clearTimeout(typedSave.current.timer);
+    typedSave.current = null;
+    if (settingsErrors(fields, next).length > 0) {
+      setDraft(next);
+      setSaving({ kind: 'idle' });
+      return;
+    }
+    const send = () => {
+      typedSave.current = null;
+      setDraft(null);
+      saveSettings(next);
+    };
+    if (!Object.keys(patch).some((key) => fields.find((field) => field.key === key)?.input === 'number')) {
+      send();
+      return;
+    }
+    setDraft(next);
+    typedSave.current = { timer: setTimeout(send, TYPED_SAVE_DELAY_MS), send };
   }
 
   function saveSettings(patch: Partial<SubscriptionSettings>): void {
@@ -153,11 +193,12 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
         {saving.kind === 'saving' ? <span className="save-state" role="status">儲存中…</span> : null}
         {saving.kind === 'saved' ? <span className="save-state saved" role="status" data-testid="settings-saved">已儲存</span> : null}
         <span className="panel-spacer" />
-        <button type="button" className="button small" onClick={() => setApplying(true)} data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
+        <button type="button" className="button small" disabled={draft !== null} onClick={() => setApplying(true)}
+          data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
       </div>
       <div className="panel-body">
-        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={typeInfo?.settings ?? []} value={pending ?? source.settings}
-          onChange={saveSettings} />
+        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={draft ?? pending ?? source.settings}
+          onChange={editSettings} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
       </div>

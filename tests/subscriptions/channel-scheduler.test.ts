@@ -190,9 +190,9 @@ describe('per-subscription scheduling (A2)', () => {
     w.advance(30 * MINUTE);
     expect(await w.channels.updateSettings(id, { intervalMinutes: 15 })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
     // Backfill settings move nothing and start nothing.
-    expect(await w.channels.updateSettings(id, { backfillWindow: '6m' })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
+    expect(await w.channels.updateSettings(id, { backfillDays: 60 })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(2);
-    await expect(w.channels.updateSettings(id, { backfillMaxItems: 7 })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(w.channels.updateSettings(id, { backfillMaxItems: 101 })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(w.jobEvents().filter((event) => event === 'subscription.settings_updated')).toHaveLength(3);
   });
 
@@ -264,11 +264,11 @@ describe('concurrent changes of one subscription (A5)', () => {
     w.advance(10 * MINUTE);
     await Promise.all([
       w.channels.updateSettings(id, { intervalMinutes: 180 }),
-      w.channels.updateSettings(id, { backfillWindow: '6m' }),
+      w.channels.updateSettings(id, { backfillDays: 60 }),
       w.channels.updateSettings(id, { backfillMaxItems: 50 }),
       w.channels.applySettingsToAll(id),
     ]);
-    const settings = { intervalMinutes: 180, backfillWindow: '6m', backfillMaxItems: 50 };
+    const settings = { intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50 };
     expect(await w.channel(id)).toMatchObject({ settings });
     // Applying ran after the three changes it was queued behind.
     expect(await w.channel(other)).toMatchObject({ settings });
@@ -286,7 +286,7 @@ describe('concurrent changes of one subscription (A5)', () => {
 describe('apply settings to the same type (A5)', () => {
   it('gives every other subscription the settings, keeps paused ones paused and starts nothing', async () => {
     const w = await world();
-    const source = await w.subscribe('source', { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 });
+    const source = await w.subscribe('source', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 });
     const other = await w.subscribe('other', {});
     const paused = await w.subscribe('resting', {});
     await w.channels.setEnabled(paused, false);
@@ -294,7 +294,7 @@ describe('apply settings to the same type (A5)', () => {
     w.advance(10 * MINUTE);
 
     expect(await w.channels.applySettingsToAll(source)).toEqual({ updated: 2, paused: 1 });
-    const settings = { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
     expect(await w.channel(other)).toMatchObject({ settings, enabled: true, nextCheckAt: '2026-10-15T05:00:00.000Z' });
     expect(await w.channel(paused)).toMatchObject({ settings, enabled: false, nextCheckAt: null });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);

@@ -385,14 +385,14 @@ describe('CollectorRuntime', () => {
     expect((await (await agent('/api/subscriptions?type=youtube')).json()).subscriptions).toEqual(uiChannels);
     const preview = await agent('/api/subscription-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
     expect((await preview.json()).preview).toMatchObject({
-      type: 'youtube', target: { id: 'UC-runtime' }, subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } },
-      settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 }, autoCollection: true,
+      type: 'youtube', target: { id: 'UC-runtime' }, subscription: { enabled: true, settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 } },
+      settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, autoCollection: true,
     });
     expect((await agent('/api/subscriptions/youtube/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ settings: { intervalMinutes: 60 } }),
     })).status).toBe(200);
     expect((await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions[0].settings).toEqual({
-      intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10,
+      intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10,
     });
     expect((await agent('/api/subscriptions/youtube/UC-runtime', {
       method: 'PATCH', body: JSON.stringify({ enabled: false }),

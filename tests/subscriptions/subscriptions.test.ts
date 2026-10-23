@@ -105,16 +105,25 @@ describe('first subscription (S-T3)', () => {
   });
 
   it.each([
-    ['1w', 50, 3],
-    ['1m', 5, 5],
-    ['3m', 50, 30],
-  ] as const)('applies range %s with at most %i videos', async (window, maxItems, expected) => {
+    [7, 50, 3],
+    [30, 5, 5],
+    [60, 50, 20],
+  ] as const)('applies a range of %i days with at most %i videos', async (days, maxItems, expected) => {
     const w = await world();
-    Object.assign(w.policy, { backfillWindow: window, backfillMaxItems: maxItems });
+    Object.assign(w.policy, { backfillDays: days, backfillMaxItems: maxItems });
     const id = w.source.addChannel('ranges');
     const ids = w.source.publish(id, 'r', w.clock.now, Array.from({ length: 30 }, (_, index) => 1 + 3 * index));
     const first = await subscribe(w, 'ranges');
     expect(first.items!.map((item) => item.sourceId)).toEqual(ids.slice(0, expected));
+  });
+
+  it('takes the newest 100 of more videos within the range at the largest limit', async () => {
+    const w = await world();
+    Object.assign(w.policy, { backfillDays: 60, backfillMaxItems: 100 });
+    const id = w.source.addChannel('many');
+    const ids = w.source.publish(id, 'm', w.clock.now, Array.from({ length: 120 }, (_, index) => 0.25 * (index + 1)));
+    const first = await subscribe(w, 'many');
+    expect(first.items!.map((item) => item.sourceId)).toEqual(ids.slice(0, 100));
   });
 
   it('skips before downloading subtitles a video whose listing age is in range but whose exact date is not', async () => {
@@ -140,7 +149,7 @@ describe('first subscription (S-T3)', () => {
     expect(w.jobs.list({ state: 'all', limit: 100 }).jobs.filter((job) => job.kind === 'youtube.video')).toHaveLength(0);
 
     // A wider range starts before the recorded one, so the video is checked again and now collected.
-    await w.channels.updateSettings(id, { backfillWindow: '3m' });
+    await w.channels.updateSettings(id, { backfillDays: 60 });
     w.advance(HOUR);
     const [wider] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     expect(wider!.items).toEqual([expect.objectContaining({ sourceId: borderline, outcome: 'created' })]);
@@ -321,7 +330,7 @@ describe('settings when discovery starts (S-T7, A3)', () => {
     const [queued] = await w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] });
     expect(queued!.job.state).toBe('queued');
 
-    await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
+    await w.channels.updateSettings(id, { backfillDays: 7, backfillMaxItems: 5 });
     w.source.holdDiscovery = null;
     release();
     const check = await w.jobs.whenSettled(queued!.job.id);
@@ -334,13 +343,13 @@ describe('settings when discovery starts (S-T7, A3)', () => {
     const w = await world();
     const id = w.source.addChannel('chosen');
     w.source.publish(id, 'c', w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
-    const added = await w.jobs.whenSettled((await w.channels.add('@chosen', { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 })).job.id);
+    const added = await w.jobs.whenSettled((await w.channels.add('@chosen', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 })).job.id);
     const first = await w.jobs.whenSettled(added.result!.followUpJobId!);
     expect(first.scope).toEqual({ trigger: 'subscribe' });
     expect(first.progress).toMatchObject({ total: 5 });
     expect(w.jobs.get(first.items![0]!.jobId!).publishedNotBefore).toBe('2026-10-01T04:00:00.000Z');
     expect((await w.channelStore.list())[0]).toMatchObject({
-      settings: { intervalMinutes: 60, backfillWindow: '2w', backfillMaxItems: 5 },
+      settings: { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 },
       lastDispatchedAt: '2026-10-15T04:00:00.000Z', nextCheckAt: '2026-10-15T05:00:00.000Z',
     });
     await expect(w.channels.add('@chosen', { intervalMinutes: 7 })).rejects.toMatchObject({ code: 'invalid_request' });
@@ -392,9 +401,9 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
 
     // Resuming checks with the subscription's settings; the collected video stays a candidate that is not collected.
     w.source.holdCaptures = false;
-    await w.channels.updateSettings(id, { backfillWindow: '1w', backfillMaxItems: 5 });
+    await w.channels.updateSettings(id, { backfillDays: 7, backfillMaxItems: 5 });
     const resumed = await w.channels.setEnabled(id, true);
-    expect(resumed.subscription).toMatchObject({ enabled: true, settings: { backfillWindow: '1w', backfillMaxItems: 5 } });
+    expect(resumed.subscription).toMatchObject({ enabled: true, settings: { backfillDays: 7, backfillMaxItems: 5 } });
     const check = await w.jobs.whenSettled(resumed.submission!.job.id);
     expect(check).toMatchObject({ scope: { trigger: 'resume' } });
     expect(check.items!.map((item) => item.sourceId)).toEqual([ids[1], ids[2]]);

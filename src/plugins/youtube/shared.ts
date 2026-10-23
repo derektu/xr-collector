@@ -1,18 +1,6 @@
-import { intervalLabel } from '../../core/check-interval.js';
 import type { SourcePluginDeclaration } from '../types.js';
 import type { SubtitleKind } from './adapter.js';
-import {
-  BACKFILL_LIMITS,
-  BACKFILL_WINDOWS,
-  backfillPhrase,
-  backfillWindowStart,
-  type CollectionPolicy,
-  DEFAULT_POLICY,
-  INTERVAL_OPTIONS,
-  isCollectionPolicy,
-  parsePolicyPatch,
-  windowLabel,
-} from './settings.js';
+import { type CollectionPolicy, YOUTUBE_SETTINGS } from './settings.js';
 import { classifyYouTubeInput, ownsYouTubeInput, parseYouTubeVideoUrl, VIDEO_ID_PATTERN, videoUrl } from './url.js';
 
 /** Subtitle details that only YouTube transcripts carry. */
@@ -49,20 +37,7 @@ export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
     { id: 'channel', label: 'YouTube 頻道', capability: 'subscription', itemNoun: '影片' },
   ],
   requiresLogin: false,
-  settings: [
-    {
-      key: 'intervalMinutes', label: '檢查頻率', default: DEFAULT_POLICY.intervalMinutes,
-      options: INTERVAL_OPTIONS.map((value) => ({ value, label: intervalLabel(value) })),
-    },
-    {
-      key: 'backfillWindow', label: '時間範圍', default: DEFAULT_POLICY.backfillWindow,
-      options: BACKFILL_WINDOWS.map((value) => ({ value, label: windowLabel(value) })),
-    },
-    {
-      key: 'backfillMaxItems', label: '數量上限', default: DEFAULT_POLICY.backfillMaxItems,
-      options: BACKFILL_LIMITS.map((value) => ({ value, label: `${value} 支影片` })),
-    },
-  ],
+  settings: YOUTUBE_SETTINGS.fields,
   item: {
     noun: '影片',
     measure: '支',
@@ -73,12 +48,7 @@ export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
   },
   subscription: {
     targetNoun: '頻道',
-    defaults: DEFAULT_POLICY,
-    isValidSettings: isCollectionPolicy,
-    parseSettingsPatch: parsePolicyPatch,
-    describeSettings: backfillPhrase,
-    checkRange: (settings, now) => ({ since: backfillWindowStart(now, settings.backfillWindow), maxItems: settings.backfillMaxItems }),
-    sentence: ['收集最近', { field: 'backfillWindow' }, '內最新的', { field: 'backfillMaxItems' }],
+    ...YOUTUBE_SETTINGS.subscription,
   },
   jobKindNames: { item: 'video', check: 'channel', add: 'channel-add' },
   phaseLabels: { capture: '擷取字幕' },
