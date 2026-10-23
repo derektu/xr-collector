@@ -64,7 +64,7 @@ PATCH /api/subscriptions/rss/<subscription-id>
 Authorization: Bearer <token>
 Content-Type: application/json
 
-{"settings":{"backfillWindow":"3m","backfillMaxItems":20}}
+{"settings":{"backfillDays":14,"backfillMaxItems":60}}
 ```
 
 文件 ID 僅為格式範例；實際操作請使用 browse/search 回傳的 ID。
@@ -121,13 +121,13 @@ Content-Type: application/json
 
 ## 訂閱與自動檢查
 
-- 每個訂閱有自己的收集設定 `settings`：`intervalMinutes`（只接受 15、30、60、180、360、720、1440）是檢查頻率的分鐘數，`backfillWindow`（`1w`、`2w`、`1m`、`3m`、`6m`）是每次檢查往前涵蓋的時間範圍，`backfillMaxItems`（5、10、20、50）是每次檢查的數量上限。新訂閱的預設值是 30 分、`1m`、10 則，即 `GET /api/source-types` 各設定欄位的 `default`。其他值或未知欄位回 400 `invalid_request`。
+- 每個訂閱有自己的收集設定 `settings`：`intervalMinutes`（只接受 15、30、60、180、360、720、1440）是檢查頻率的分鐘數，`backfillDays`（1–60 的整數）是每次檢查往前涵蓋的天數，`backfillMaxItems`（1–100 的整數）是每次檢查的數量上限；所有類型的上下限相同。新訂閱的預設值依類型而定：YouTube 30 分、30 天、10 支，RSS 60 分、7 天、30 篇，即 `GET /api/source-types` 各設定欄位的 `default`。其他值或未知欄位回 400 `invalid_request`，`message` 寫出允許的範圍，例如「時間範圍必須是 1–60 的整數。」。
 - 訂閱前先以 `POST /api/subscription-previews` `{"url":"..."}` 同步解析訂閱目標（最多約 60 秒），回傳 `preview`：`type`（類型）、`target`（`id`、`title`、`url`；`id` 即訂閱 ID）、`subscription`（未訂閱為 null，否則 `{"enabled":...,"settings":...}`）、`settings`（既有訂閱的設定，或新訂閱的預設值）與 `autoCollection`（自動檢查總開關）。單篇網址回 400 `invalid_subscription`。向使用者說明每次檢查的收集範圍與檢查頻率，需要時讓使用者調整，再以 `POST /api/subscriptions` `{"url":"<preview.target.url>","settings":{...}}` 訂閱；`settings` 可省略、為空物件或只帶要改的欄位，其餘用預設值。已訂閱的目標保留自己的設定；暫停中的訂閱改用 PATCH 恢復。
 - 訂閱以類型與類型內的 ID 識別，路徑為 `/api/subscriptions/:type/:id`（ID URL encode）。修改一個訂閱的設定：`PATCH /api/subscriptions/:type/:id` `{"settings":{...}}`，只帶要改的欄位，回傳 `{"subscription":...,"submission":null}`。修改頻率會從該訂閱上次派工時間重算下一次檢查，已過時立即到期；修改時間範圍或數量上限，從之後開始探索的檢查生效，包含已排隊、尚未開始探索的工作；已列出影片的工作照原本的影片完成。修改不開始工作。不存在的類型或訂閱回 404 `subscription_not_found`。
 - 套用到同類：`POST /api/subscriptions/:type/:id/apply-settings` 把這個訂閱的設定套用到同一類型的其他所有訂閱，回傳 `{"updated":N,"paused":M}`。暫停中的訂閱也會套用並保持暫停，恢復後的檢查使用這組設定；套用不開始工作。這會覆蓋其他訂閱的設定，先向使用者確認。
 - 自動檢查總開關涵蓋所有類型的訂閱：`GET /api/schedule` 回傳 `schedule`：`enabled`、`status`（`scheduled` 或 `paused`）、`lastCheck`（`lastCheckedAt` 最新的訂閱：`type`、`subscriptionId`、`title`、`at`）與 `nextCheck`（啟用中最早到期的訂閱，欄位相同；總開關關閉時為 null）。`PUT /api/schedule` 只接受 `{"enabled":true|false}`；帶頻率或收集範圍欄位回 400 `invalid_request`。開啟時，下次檢查還沒到的訂閱保留原時間，已過期的從此刻起算各自的頻率。從匯出檔建立的 Vault 自動檢查為關閉，需使用者確認後才開啟；匯入合併或取代保留目前 Vault 的開關。
 - **排程**：每個訂閱依自己的頻率檢查，`nextCheckAt` 是下一次檢查時間，`lastDispatchedAt` 是上次派工時間。定時檢查派工後，下一次檢查是原本的下一次檢查時間之後、第一個晚於現在的整數倍頻率時間；立即檢查、首次訂閱與恢復後是派工時間加上該訂閱的頻率；同時到期的訂閱一起派工，每個訂閱一個工作。暫停中的訂閱 `nextCheckAt` 為 null。
-- **每次檢查的收集規則**：首次訂閱、定時檢查、立即檢查、恢復訂閱、長時間未檢查、服務重啟後的接續，以及上次檢查失敗之後，都用同一條規則。頻道工作開始探索時，以當下時間往前算 `backfillWindow`，讀取該訂閱當時的設定；頻道清單中這段範圍內最新的 `backfillMaxItems` 支影片（直播預告不算）是候選，候選中已收集或已刪除的影片不收，其餘收集。不會往更早的影片找替代，所以一次檢查期間新影片超過上限時，較早的那些不會收集。月份依這台電腦的時區以日曆月計算。
+- **每次檢查的收集規則**：首次訂閱、定時檢查、立即檢查、恢復訂閱、長時間未檢查、服務重啟後的接續，以及上次檢查失敗之後，都用同一條規則。頻道工作開始探索時，以當下時間往前推 `backfillDays` 天（每天 24 小時），讀取該訂閱當時的設定；頻道清單中這段範圍內最新的 `backfillMaxItems` 支影片（直播預告不算）是候選，候選中已收集或已刪除的影片不收，其餘收集。不會往更早的影片找替代，所以一次檢查期間新影片超過上限時，較早的那些不會收集。
 - 頻道清單的發布時間是約略值，沒有時間的影片視為在範圍內；擷取時以影片本身的發布時間確認，早於範圍起點的影片以 `skipReason: out_of_range` 略過，仍佔候選名額；訂閱的 `outOfRange`（`videoId`、`before`）記下這些影片與當時的範圍起點，之後範圍起點不早於 `before` 的檢查不再為它派工，影片不再是候選時移除該筆。範圍外或超出上限的影片可用單支影片網址收集。
 - 候選中收集失敗的影片記在訂閱的 `failures`（每筆 `videoId`、`title`、`attempts`（已失敗的檢查次數）、`errorCode`、`failedAt`、`skipped`）。之後的檢查若影片仍是候選就再試一次，跨檢查最多 3 次。錯誤分類：`network_error` 先在同一次檢查內自動重試，用完算 1 次；`no_subtitles`、`capture_failed` 每次檢查算 1 次；`rate_limited` 等冷卻不計次；`video_unavailable` 與其他錯誤碼直接略過。達 3 次或直接略過的影片 `skipped: true`，之後的檢查不再嘗試，它仍佔候選名額，不會改收更舊的影片補足。影片收集成功、已有文件或不再是候選時移除該筆。使用者仍想取得已略過的影片時，可經使用者確認後以單支影片網址收集。這些紀錄屬於 Vault 的收集進度，隨匯出、還原、合併與搬移帶走；合併時既有訂閱保留本機的紀錄。影片失敗不改變訂閱狀態，頻道工作以 `partial` 完成，事件為 `subscription.item_failed`（warning）與 `subscription.item_skipped`（info，`outcome: skipped`）。同一頻道已有排隊或執行中的工作時，新的檢查併入該工作（`deduplicated: true`），不重複收集。頻道工作的 `scope.trigger` 是 `subscribe`、`resume`、`scheduled` 或 `manual`。
 - `GET /api/subscriptions` 的 `subscriptions` 每筆含 `type`、`kind`、`kindLabel`、`settings`、`nextCheckAt`、`lastDispatchedAt`、`status`（`tracking`、`collecting`、`paused`、`error`）、`lastError`、`activeJob`（`id`、`done`、`total`）、`documentCount`、`lastCollectedAt`、`lastCheckedAt`、`outOfRange`（可省略）、`failures`（可省略）、`checkStatus` 與 `capturing`（還有這個頻道的影片在擷取，包括已暫停的檢查）。`error` 表示訂閱啟用中、沒有進行中的工作，且最近一次完成或失敗（`completed`／`failed`）的頻道工作是失敗（列出頻道本身失敗；影片失敗不算），原因在 `lastError`（`code`、`message`），下一次成功即回到 `tracking`；`interrupted` 與接續中的工作不改變錯誤狀態。這個狀態由工作紀錄推算、不寫進 Vault；工作紀錄只保留最近 1000 筆已結束工作，更早的失敗不再顯示。
@@ -138,13 +138,13 @@ Content-Type: application/json
 ### RSS
 
 - RSS 只有訂閱，沒有單篇收集。訂閱網址可以是 RSS 2.0、RSS 1.0 或 Atom feed 的網址，也可以是以 `<link rel="alternate">` 宣告 feed 的網站網址；沒有其他類型接受的 http(s) 網址都交給 RSS 辨識，預覽時連線查詢，找不到 feed 時辨識結果為 `unsupported`，訂閱回 400 `invalid_subscription`（「這個網址沒有 RSS feed。」）。`POST /api/items` 對 RSS 網址回 400 `invalid_url`。
-- 訂閱的 `type` 為 `"rss"`，`id` 由 feed 網址算出；`preview.target.url` 是實際的 feed 網址，以它訂閱。設定欄位與 YouTube 相同：`intervalMinutes`、`backfillWindow`、`backfillMaxItems`，新訂閱預設 60 分、`1m`、10 篇。每次檢查讀一次 feed，依發布時間取範圍內最新的文章；沒有發布時間的文章視為最新。文章內容取自 feed，HTML 轉為 Markdown，圖片保留為遠端連結。
+- 訂閱的 `type` 為 `"rss"`，`id` 由 feed 網址算出；`preview.target.url` 是實際的 feed 網址，以它訂閱。設定欄位與上下限與 YouTube 相同：`intervalMinutes`、`backfillDays`、`backfillMaxItems`，新訂閱預設 60 分、7 天、30 篇。每次檢查讀一次 feed，依發布時間取範圍內最新的文章；沒有發布時間的文章視為最新。文章內容取自 feed，HTML 轉為 Markdown，圖片保留為遠端連結。
 - 文章以 feed 內的 guid（Atom 為 `id`）識別，沒有時依序用文章網址、標題加發布時間；同一篇文章出現在兩個 RSS 訂閱時各存一份。文件 ID 為 `rss:<16 位十六進位>`，`publisher` 是 feed 名稱與訂閱 ID。訂閱的 `outOfRange`、`failures` 以 `articleKey` 記文章，`failures` 另帶 `url`。
 - 錯誤碼：`network_error`（連線失敗、逾時或網站 5xx，自動重試）、`rate_limited`（網站回 429，所有 RSS 訂閱共用的 `rss` 請求通道冷卻，`GET /api/pacing` 的 `group` 為 `rss`）、`feed_not_found`（404、410）、`feed_unavailable`（其他拒絕或內容超過 5 MB）、`feed_invalid`（不是可讀的 feed）、`article_missing`（文章已不在 feed）。後四者讓該次檢查失敗或該篇文章留到下次檢查再試。
 
 ## 訂閱清單與網址辨識
 
-- `GET /api/source-types` 回傳 `sourceTypes`：每種類型的 `id`（`youtube`、`rss`）、`label`、`icon`、`kinds`（`id`、`label`、`capability`：`single` 單篇收集或 `subscription` 訂閱、`itemNoun`）、`requiresLogin` 與每個訂閱的收集設定欄位 `settings`（`key`、`label`、`options`、`default`）。
+- `GET /api/source-types` 回傳 `sourceTypes`：每種類型的 `id`（`youtube`、`rss`）、`label`、`icon`、`kinds`（`id`、`label`、`capability`：`single` 單篇收集或 `subscription` 訂閱、`itemNoun`）、`requiresLogin` 與每個訂閱的收集設定欄位 `settings`：每欄有 `input`、`key`、`label`、`default`；`input` 為 `choice` 的欄位以 `options`（`value`、`label`）列出可用值，為 `number` 的欄位接受 `min` 到 `max` 的整數，`unit` 是數字的單位（例如 `天`、`支影片`）。
 - 使用者貼上網址而不確定要做什麼時，先呼叫 `POST /api/url-recognitions` `{"url":"..."}`。只有缺少或空白的 `url` 回 400 `invalid_request`；其他情況一律回 200 的 `recognition`。沒有 scheme 的 YouTube 網址（`youtube.com/watch?v=…`、`youtu.be/…`、`www.youtube.com/@…`）視為 https://，`recognition.url` 是補上 scheme 後的網址；其他沒有 scheme、但形如網域加路徑的字串（`example.com/blog`）同樣補上 https:// 交給 RSS；其餘為 `unsupported`。以 `status` 判讀：
   - `ready`：可操作。`kind` 為 `video` 或 `channel`，`target` 是影片或頻道（影片不連線查詢，`title` 為 null）。頻道會同步解析（最多約 60 秒），`subscription` 是既有訂閱（`id`、`enabled`、`settings`），`settings` 是新訂閱的預設設定，`autoCollection` 是自動檢查總開關。
   - `login_required`：該類型需要登入，`login` 說明要登入的服務；目前沒有這類網址。

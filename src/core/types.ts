@@ -279,13 +279,30 @@ export interface SourceKindInfo {
   itemNoun: string;
 }
 
-export interface SourceSettingField {
+/** A collection setting chosen from a list of values. */
+export interface ChoiceSettingField {
+  input: 'choice';
   key: string;
   label: string;
   options: Array<{ value: string | number; label: string }>;
   /** The value a new subscription starts with. */
   default: string | number;
 }
+
+/** A collection setting typed as a whole number from `min` to `max`. */
+export interface NumberSettingField {
+  input: 'number';
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  /** What the number counts, shown after the input, e.g. "天" or "支影片". */
+  unit: string;
+  /** The value a new subscription starts with. */
+  default: number;
+}
+
+export type SourceSettingField = ChoiceSettingField | NumberSettingField;
 
 /** The public part of a source type declaration; the UI builds entry, filters and icons from it. */
 export interface SourceTypeInfo {

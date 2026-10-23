@@ -33,7 +33,7 @@ Preconditions:
 - **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停的列顯示「自動檢查已關閉」，已暫停的維持「已暫停」。再點一次恢復「下次 HH:MM」。
 - **移除並保留。** `getByRole('button', { name: '<頻道標題> 的更多動作' })` → `getByRole('menuitem', { name: '移除' })`。`confirm-remove` 中 `remove-keep` 預設勾選；點 `confirm-remove-button`。列消失，`GET /api/documents` 仍有該頻道的文件；文件頁 `documents-source` 選項顯示「<標題>・已移除（n）」。
 - **移除並刪除。** 同上但勾 `remove-delete`。文件從列表與搜尋消失，記錄頁 `activity-log` 有「已移除「<標題>」，並刪除 n 份文件。」，`vault/settings/deleted-documents.json` 有 n 筆該頻道的紀錄。
-- **詳情。** `getByRole('link', { name: /<標題>/ })` → `source-detail`。內容含「新增時間」「下次檢查」（`detail-next-check`）；`detail-settings` 改設定後 `apply-settings`，出現 `settings-saved`。
+- **詳情。** `getByRole('link', { name: /<標題>/ })` → `source-detail`。內容含「新增時間」「下次檢查」（`detail-next-check`）。`detail-settings` 內檢查頻率是下拉 `detail-settings-intervalMinutes`，選了立即儲存；時間範圍與數量上限是數字輸入框 `detail-settings-backfillDays`、`detail-settings-backfillMaxItems`，停止輸入約 0.6 秒後儲存。儲存後出現 `settings-saved`。不合法的值（超出 1–60 天、1–100 則或不是整數）在欄位下方顯示 `detail-settings-<key>-error`，輸入框 `aria-invalid`，不儲存，`apply-settings`（「套用到所有」）停用。新增訂閱卡片的欄位相同，前綴是 `add-settings-`，不合法時 `add-confirm` 停用。
 - **列出失敗。** `updateCatalog(c => { c.youtube.failListing = '<channelId>'; })` 後按 `check-all`，工作頁「失敗」區出現該檢查。
 
 ## Gotchas

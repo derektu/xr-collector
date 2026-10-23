@@ -205,7 +205,7 @@ describe('manual retry (A-T9)', () => {
   it('subscribes again with the settings a failed subscription request was accepted with', async () => {
     const { manager, source, subs } = setup();
     source.resolveFailures.push(new CollectorError('invalid_subscription', '無法辨認這個 YouTube 頻道。'));
-    const settings = { intervalMinutes: 120, backfillWindow: '1w' as const, backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 120, backfillDays: 7, backfillMaxItems: 5 };
     const failed = await manager.whenSettled((await manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@retry', settings)).job.id);
     expect(failed.state).toBe('failed');
     const retried = await manager.retry(failed.id);

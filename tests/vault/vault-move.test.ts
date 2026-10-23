@@ -50,7 +50,7 @@ async function seed(root: string): Promise<void> {
   await new MarkdownVault(root).add(transcriptDocument(video('seed0000001')));
   await new JsonSubscriptionStore(root, 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
-    settings: { intervalMinutes: 60, backfillWindow: '1m', backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
+    settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
   await mkdir(path.join(root, 'attachments'), { recursive: true });
   await writeFile(path.join(root, 'attachments/sample.bin'), Buffer.from([0, 1, 128, 255]));

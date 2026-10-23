@@ -104,7 +104,7 @@ async function world() {
   const cases: TypeCase[] = [
     {
       type: 'youtube', kindLabel: 'YouTube 頻道', itemKind: 'youtube.video', addKind: 'youtube.channel-add',
-      defaults: { ...DEFAULT_POLICY }, patch: { backfillWindow: '3m' }, badPatch: { backfillWindow: '9y' },
+      defaults: { ...DEFAULT_POLICY }, patch: { backfillDays: 45 }, badPatch: { backfillDays: 61 },
       addTarget(name) {
         const id = youtube.addChannel(name);
         const [video] = youtube.publish(id, name.slice(0, 1), clock.now, [1]);

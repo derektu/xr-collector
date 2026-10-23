@@ -167,12 +167,12 @@ describe('portable subscription settings (S-T10, A4)', () => {
   it('carries each subscription with its settings and progress, and the collection switch, into a new Vault', async () => {
     const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
     await seed(a.vault);
-    const settings = { intervalMinutes: 180, backfillWindow: '3m' as const, backfillMaxItems: 20 };
+    const settings = { intervalMinutes: 180, backfillDays: 45, backfillMaxItems: 20 };
     const outOfRange = [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }];
     await new JsonSubscriptionStore(a.vault, 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
     const exported = await packageBytes(a.vault);
     expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()))
-      .toMatchObject({ version: 2, channels: [{ id: 'UC123', settings, outOfRange }] });
+      .toMatchObject({ version: 3, channels: [{ id: 'UC123', settings, outOfRange }] });
     await importAsNew(b, await fileOf(a.exports, 'a.zip', exported));
     const workspace = await open(b);
     expect(await workspace.subscriptions.of('youtube')!.list())

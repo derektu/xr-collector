@@ -41,7 +41,7 @@ export const rssDefinition: SourceDefinition<RssSettings> = {
   },
   storage: {
     subscriptionsFile: 'settings/rss-subscriptions.json',
-    version: 1,
+    version: 2,
     listKey: 'subscriptions',
     outOfRangeKeyField: 'articleKey',
     description: 'RSS subscription',

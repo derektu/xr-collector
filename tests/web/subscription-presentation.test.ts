@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Subscription } from '../../src/core/types.js';
 import { asksAboutDocuments, backfillPhrase, removeChoices, removedMessage, resumeSummary, subscribeSummary, subscriptionStatusText, subscriptionStatusTone } from '../../src/web/subscription-presentation.js';
 
-const settings = { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 };
+const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
 
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {
@@ -14,17 +14,17 @@ function subscription(overrides: Partial<Subscription> = {}): Subscription {
 describe('subscription presentation (A6)', () => {
   it('summarizes subscribing with the settings chosen on the card', () => {
     expect(subscribeSummary(settings, true, 'youtube'))
-      .toBe('訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 1 個月內最新的 10 支影片，已收集或刪除的不再收集。');
-    expect(subscribeSummary({ intervalMinutes: 180, backfillWindow: '2w', backfillMaxItems: 5 }, true, 'youtube'))
-      .toBe('訂閱後立即檢查，之後每 3 小時檢查一次；每次檢查收集最近 2 週內最新的 5 支影片，已收集或刪除的不再收集。');
+      .toBe('訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 30 天內最新的 10 支影片，已收集或刪除的不再收集。');
+    expect(subscribeSummary({ intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 }, true, 'youtube'))
+      .toBe('訂閱後立即檢查，之後每 3 小時檢查一次；每次檢查收集最近 14 天內最新的 5 支影片，已收集或刪除的不再收集。');
     expect(subscribeSummary({ ...settings, intervalMinutes: 1440 }, true, 'youtube')).toContain('之後每天檢查一次；');
-    expect(subscribeSummary(settings, false, 'youtube')).toBe('訂閱後立即檢查，收集最近 1 個月內最新的 10 支影片。自動檢查已關閉，開啟後才會定時檢查。');
+    expect(subscribeSummary(settings, false, 'youtube')).toBe('訂閱後立即檢查，收集最近 30 天內最新的 10 支影片。自動檢查已關閉，開啟後才會定時檢查。');
   });
 
   it('words the range of every check, a resume and the removal choices', () => {
-    expect(backfillPhrase({ backfillWindow: '1w', backfillMaxItems: 5 }, 'youtube')).toBe('最近 1 週內最新的 5 支影片');
-    expect(resumeSummary({ intervalMinutes: 60, backfillWindow: '3m', backfillMaxItems: 20 }, 'youtube'))
-      .toBe('這個訂閱已暫停。恢復後立即檢查，之後每 1 小時檢查一次；每次檢查收集最近 3 個月內最新的 20 支影片，已收集或刪除的不再收集。');
+    expect(backfillPhrase({ backfillDays: 7, backfillMaxItems: 5 }, 'youtube')).toBe('最近 7 天內最新的 5 支影片');
+    expect(resumeSummary({ intervalMinutes: 60, backfillDays: 45, backfillMaxItems: 20 }, 'youtube'))
+      .toBe('這個訂閱已暫停。恢復後立即檢查，之後每 1 小時檢查一次；每次檢查收集最近 45 天內最新的 20 支影片，已收集或刪除的不再收集。');
     expect(removeChoices(subscription())).toEqual([
       { value: 'keep', label: '保留 12 份文件' },
       { value: 'delete', label: '一併刪除 12 份文件' },

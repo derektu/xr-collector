@@ -100,7 +100,7 @@ describe('HTTP app', () => {
     const read = await app.inject({ method: 'GET', url: '/api/schedule' });
     const updated = await app.inject({ method: 'PUT', url: '/api/schedule', payload: { enabled: false } });
     const rejected = await Promise.all([
-      { enabled: false, intervalMinutes: 60 }, { backfillWindow: '1w' }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
+      { enabled: false, intervalMinutes: 60 }, { backfillDays: 7 }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
     ].map((payload) => app.inject({ method: 'PUT', url: '/api/schedule', payload })));
 
     expect(read.json()).toEqual({ schedule: scheduleValue });
@@ -120,7 +120,7 @@ describe('HTTP app', () => {
       url: 'https://www.youtube.com/channel/UC-channel-one/videos',
       enabled: true,
       addedAt: '2026-09-17T00:00:00.000Z',
-      settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
+      settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
     };
     const run = {
       id: 'run-1',
@@ -155,8 +155,8 @@ describe('HTTP app', () => {
         return {
           type: 'youtube',
           target: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
-          subscription: { enabled: true, settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 } },
-          settings: { intervalMinutes: 30, backfillWindow: '1m' as const, backfillMaxItems: 10 },
+          subscription: { enabled: true, settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 } },
+          settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
           autoCollection: true,
         };
       },

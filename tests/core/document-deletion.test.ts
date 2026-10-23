@@ -47,7 +47,7 @@ function captured(id: string): CapturedTranscript {
 
 const SUBSCRIPTION: SubscriptionRecord = {
   id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
-  settings: { intervalMinutes: 30, backfillWindow: '6m', backfillMaxItems: 50 },
+  settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
 };
 
 /** Lists the channel's videos newest first; captures wait while held and fail as told. */

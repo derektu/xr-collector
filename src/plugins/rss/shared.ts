@@ -1,15 +1,7 @@
 import { sourceDeclarations } from '../../core/source-registry.js';
 import { CollectorError } from '../../core/types.js';
 import type { SourcePluginDeclaration } from '../types.js';
-import {
-  DEFAULT_SETTINGS,
-  describeSettings,
-  isRssSettings,
-  parseSettingsPatch,
-  type RssSettings,
-  SETTING_FIELDS,
-  windowStart,
-} from './settings.js';
+import { RSS_SETTINGS, type RssSettings } from './settings.js';
 
 /** An article key: 16 hexadecimal digits of a hash of the subscription and the article's identity. */
 export const ARTICLE_KEY_PATTERN = /^[0-9a-f]{16}$/u;
@@ -31,7 +23,7 @@ export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
   icon: 'rss',
   kinds: [{ id: 'feed', label: 'RSS', capability: 'subscription', itemNoun: '文章' }],
   requiresLogin: false,
-  settings: SETTING_FIELDS,
+  settings: RSS_SETTINGS.fields,
   item: {
     noun: '文章',
     measure: '篇',
@@ -41,12 +33,7 @@ export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
   },
   subscription: {
     targetNoun: '網站',
-    defaults: DEFAULT_SETTINGS,
-    isValidSettings: isRssSettings,
-    parseSettingsPatch,
-    describeSettings,
-    checkRange: (settings, now) => ({ since: windowStart(now, settings.backfillWindow), maxItems: settings.backfillMaxItems }),
-    sentence: ['收集最近', { field: 'backfillWindow' }, '內最新的', { field: 'backfillMaxItems' }],
+    ...RSS_SETTINGS.subscription,
   },
   jobKindNames: { item: 'article', check: 'feed', add: 'feed-add' },
   phaseLabels: { capture: '讀取文章' },

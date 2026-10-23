@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { settingsErrors } from '../core/collection-settings.js';
 import { sourceDeclaration } from '../core/source-registry.js';
 import type { RecognitionAction, SourceSettingField, SourceTypeInfo, SubscriptionSettings, UrlRecognition } from '../core/types.js';
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
@@ -96,10 +97,12 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const fields = sourceTypes.find((type) => type.id === found?.sourceType)?.settings ?? [];
   const settings = found && chosen?.recognition === found ? chosen.settings : found?.settings ?? null;
   const primaryLabel = mode === 'url' ? '加入' : primary?.id === 'resume' ? '恢復訂閱' : '訂閱';
+  /** A new subscription's settings with a value its fields do not accept; subscribing waits until they are fixed. */
+  const invalidSettings = primary?.id === 'subscribe' && settings !== null && settingsErrors(fields, settings).length > 0;
 
   function submit(event: FormEvent): void {
     event.preventDefault();
-    if (primary && found && !busy) void perform(primary, found);
+    if (primary && found && !busy && !invalidSettings) void perform(primary, found);
   }
 
   return <dialog ref={dialog} className="add-dialog" aria-labelledby="add-dialog-title" data-testid="add-dialog"
@@ -127,7 +130,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
 
       <div className="dialog-actions">
         <button type="button" className="button" onClick={onClose}>取消</button>
-        <button type="submit" className="button primary" disabled={busy || !primary} data-testid="add-confirm">{busy ? '處理中…' : primaryLabel}</button>
+        <button type="submit" className="button primary" disabled={busy || !primary || invalidSettings} data-testid="add-confirm">{busy ? '處理中…' : primaryLabel}</button>
       </div>
     </form>
   </dialog>;
@@ -175,7 +178,8 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
       <p className="card-kind"><Icon name={declaration?.icon ?? 'file'} size={14} />{recognition.kindLabel}</p>
       <p className="card-title">{target.title}{subscription ? <span className={`status-chip ${subscription.enabled ? 'tracking' : 'paused'}`}>{subscription.enabled ? '已訂閱' : '已暫停'}</span> : null}</p>
       {!subscription && settings ? <>
-        <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false, recognition.sourceType)}</p>
+        {settingsErrors(fields, settings).length === 0
+          ? <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false, recognition.sourceType)}</p> : null}
         <div className="card-settings">
           <CollectionSettingsFields idPrefix="add-settings" type={recognition.sourceType} fields={fields} value={settings} onChange={onSettings}
             disabled={disabled} />
