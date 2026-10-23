@@ -208,7 +208,9 @@ function isWindowsRunProcess(command, runDir, executable, apps) {
   const fold = (value) => path.win32.resolve(value).toLowerCase();
   const program = path.win32.basename(executable).toLowerCase();
   const args = windowsArgs(command ?? '');
-  if (args.includes(runMarker(runDir))) {
+  // Windows paths ignore case, so the marker naming the run folder does too.
+  const marker = runMarker(runDir).toLowerCase();
+  if (args.some((arg) => arg.toLowerCase() === marker)) {
     return (program === 'node.exe' && args.some((arg) => arg.toLowerCase().endsWith('server.mts')))
       || apps.some((app) => fold(app) === fold(executable));
   }

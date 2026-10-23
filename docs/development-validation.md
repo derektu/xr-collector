@@ -108,7 +108,7 @@ node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked
 node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 <mac>/results.json <windows>/results.json
 ```
 
-summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 provisional，不計入。每個 scenario 在每個需要的平台都有 pass、同一平台沒有 fail，才算完整，否則 exit code 為 2，缺少的平台標為 pending。
+summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 provisional，不計入。每個 scenario 在每個需要的平台都有 pass、同一平台沒有 fail、計入的 run 本身沒有失敗（`results.json` 沒有 `error`），才算完整；`--scenario` 列出的 scenario 沒有結果時標為 pending，缺少的平台也標為 pending。不完整時 exit code 為 2。
 
 從沒有桌面的入口執行也能完成開發版與打包版的驗證，例如 SSH 登入的 Windows session 0：背景模式不顯示視窗，Playwright 照常操作頁面與截圖；螢幕大小依該入口而定（Windows session 0 是 1024x768），截圖的視窗大小可能與開發機不同。需要使用者桌面的能力，例如視窗聚焦、系統匣、通知、原生對話框本身、整個螢幕的截圖，在這種入口無法驗證；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
 

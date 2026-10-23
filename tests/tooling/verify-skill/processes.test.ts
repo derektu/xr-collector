@@ -95,6 +95,13 @@ describe('isRunProcess on Windows', () => {
     expect(isRunProcess(`"${MEILI_W}" --db-path "${RUN_W}\\profile\\search"`, RUN_W, MEILI_W, WIN)).toBe(true);
   });
 
+  it('matches the run marker without case, as `stop --run` may name the folder in another case', () => {
+    const lower = RUN_W.toLowerCase();
+    expect(isRunProcess(`"${PACKAGED_W}" "${marker}"`, lower, PACKAGED_W, { ...WIN, apps: [PACKAGED_W] })).toBe(true);
+    expect(isRunProcess(`"${NODE_W}" server.mts ${marker}`, lower, NODE_W, WIN)).toBe(true);
+    expect(isRunProcess(`"${PACKAGED_W}" "${runMarker(`${lower}-2`)}"`, RUN_W, PACKAGED_W, { ...WIN, apps: [PACKAGED_W] })).toBe(false);
+  });
+
   it('does not count other programs that mention the marker or the run directory', () => {
     expect(isRunProcess(`cmd.exe /c ping -n 60 127.0.0.1 & rem ${marker} server.mts`, RUN_W, 'C:\\Windows\\System32\\cmd.exe', { ...WIN, apps: [ELECTRON_W] })).toBe(false);
     expect(isRunProcess(`powershell.exe -Command "Get-Content -Wait ${RUN_W}\\server.log"`, RUN_W, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', WIN)).toBe(false);

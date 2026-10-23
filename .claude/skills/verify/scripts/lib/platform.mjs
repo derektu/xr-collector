@@ -115,9 +115,11 @@ export function listeners(port) {
  * Windows: reports each process that starts from now on as { pid, ppid, executable }, through a
  * WMI creation event that PowerShell polls every 0.2 s. A short-lived program such as yt-dlp is seen
  * even though one listing of the whole process table takes seconds. Returns { ready, stop() }; ready
- * resolves once the subscription is in place.
+ * resolves once the subscription is in place. stop() ends the watcher once, and only while it is
+ * still running: after it exits, its PID may belong to another program, whose tree taskkill would
+ * end. `start` and `endTree` replace spawning PowerShell and taskkill in tests.
  */
-export function watchWindowsStarts(onStart) {
+export function watchWindowsStarts(onStart, { start = startWatcher, endTree = endWindowsTree } = {}) {
   const script = [
     "$query = \"SELECT * FROM __InstanceCreationEvent WITHIN 0.2 WHERE TargetInstance ISA 'Win32_Process'\"",
     'Register-CimIndicationEvent -Query $query -SourceIdentifier xrVerifyStarts | Out-Null',
@@ -129,7 +131,7 @@ export function watchWindowsStarts(onStart) {
     '  Remove-Event -EventIdentifier $arrival.EventIdentifier',
     '}',
   ].join('\n');
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  const child = start(script);
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
   let buffer = '';
@@ -144,8 +146,19 @@ export function watchWindowsStarts(onStart) {
     }
   });
   child.once('exit', () => resolveReady());
-  return { ready, stop() { endWindowsTree(child.pid); } };
+  let stopped = false;
+  return {
+    ready,
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      if (child.exitCode === null && child.signalCode === null) endTree(child.pid);
+    },
+  };
 }
+
+/** Runs a PowerShell script in the background with its standard output piped. */
+const startWatcher = (script) => spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
 
 export function endWindowsTree(pid) {
   try {

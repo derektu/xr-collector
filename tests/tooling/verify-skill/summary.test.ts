@@ -54,6 +54,30 @@ describe('summarize', () => {
     expect(summarize(files(desktop), { commit: COMMIT, platforms: ['win32'] }).complete).toBe(true);
     expect(() => summarize(files(desktop), { commit: 'abc' })).toThrow('40-character');
   });
+
+  it('keeps a run that failed as a whole incomplete even when each of its scenarios passed', () => {
+    const errored = { ...results('darwin', ['A']), error: 'Error: EBUSY: resource busy or locked, rmdir\n    at rm' };
+    const summary = summarize(files(errored), { commit: COMMIT });
+    expect(summary.complete).toBe(false);
+    expect(summary.failedRuns).toEqual([{ file: 'r0.json', reason: 'Error: EBUSY: resource busy or locked, rmdir' }]);
+    const notPassed = summarize(files({ ...results('darwin', ['A']), passed: false }), { commit: COMMIT });
+    expect(notPassed.complete).toBe(false);
+    expect(notPassed.failedRuns).toEqual([{ file: 'r0.json', reason: 'the run did not pass' }]);
+  });
+
+  it('reports an expected scenario that no run recorded as pending', () => {
+    const partial = summarize(files(results('win32', ['A'])), { commit: COMMIT, scenarios: ['A', 'B'] });
+    expect(partial.complete).toBe(false);
+    expect(status(partial, 'B')).toEqual([{ platform: 'any', status: 'pending' }]);
+    expect(summarize(files(results('win32', ['A', 'B'])), { commit: COMMIT, scenarios: ['A', 'B'] }).complete).toBe(true);
+  });
+
+  it('ignores a file with no scenario results instead of failing to read it', () => {
+    const empty = { commit: COMMIT, dirty: false, environment: { platform: 'darwin' } };
+    const summary = summarize(files(empty, results('darwin', ['A'])), { commit: COMMIT });
+    expect(summary.ignored).toEqual([{ file: 'r0.json', reason: 'no scenario results recorded' }]);
+    expect(summary.complete).toBe(true);
+  });
 });
 
 describe('verify.mjs summary', () => {

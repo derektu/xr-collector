@@ -240,10 +240,10 @@ node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <dir>
 **跨平台彙整**：需要 Mac 與 Windows 的票，兩台機器各自產生 `results.json`，以 summary 檢查是否完整：
 
 ```sh
-node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 <dir>/results.json...
+node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 [--scenario <ID>]... <dir>/results.json...
 ```
 
-只計入 `commit` 等於 `--commit` 的結果；`dirty` 為 true 的 run 是 provisional，不計入。每個 scenario 在每個 `--platform` 都要有 pass，同一平台的 fail 不會被另一次 pass 蓋掉；不給 `--platform` 時任一平台通過即可。輸出每個 scenario 每個平台的 `pass`／`fail`／`pending` 與不計入的檔案及原因，不完整時 exit code 為 2。
+只計入 `commit` 等於 `--commit` 的結果；`dirty` 為 true 的 run 是 provisional，沒有 `results` 的檔案也不計入。每個 scenario 在每個 `--platform` 都要有 pass，同一平台的 fail 不會被另一次 pass 蓋掉；不給 `--platform` 時任一平台通過即可。`--scenario` 列出流程應有的 scenario，沒有任何結果記錄的列為 pending，中途停止的 run 因此不會被當成完整。計入的 run 本身失敗（`results.json` 有 `error`，例如 scenario 全部通過後收尾出錯，或 `passed` 為 false）時也不完整，列在 `failedRuns`。輸出每個 scenario 每個平台的 `pass`／`fail`／`pending`、`failedRuns` 與不計入的檔案及原因，不完整時 exit code 為 2。
 
 ## Cleanup
 
@@ -259,7 +259,7 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
 
 本 skill 的 CLI 與函式庫有兩層測試：
 
-- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉，以及 summary 的平台完整性與 commit 一致。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
+- **單元測試**：`tests/tooling/verify-skill/`，在 `npm run verify` 與 CI 中執行。涵蓋證據資料夾、label 與 `--evidence`、doctor 對缺少前置條件的 `missing` 與 exit code（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含打包版的執行檔與 Windows 的命令列；以真實程序驗證 `stop`／`sweep` 不結束命令列提到 run 的其他程序，Mac／Linux 與 Windows 各一組）、`restart` 期間 slot lock 不被其他 session 的 `sweep` 清掉、Windows 程序啟動監看只結束一次且不碰已結束的 PID，以及 summary 的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario。測試用暫存的 Git checkout 與暫存的家目錄（`HOME` 與 `USERPROFILE`），不碰真正的 `~/.xr-collector/verify-slots` 與 `.local/`。在 Windows 執行：`npx vitest run --config vitest.config.ts tests/tooling/verify-skill`。
 - **整合 smoke**：`npm run test:verify-skill:mac`（`scripts/smoke.mjs [--issue <N>] [--checkout <dir>]`），只在 Mac 本機執行，需要 Playwright Chromium 與 `npm run download:runtime`。Web 模式合成資料：launch → 訂閱 → `restart()` → `restart({ crash: true })` → `stop({ keep: true })` → `sweep`，斷言狀態保留、中斷的工作完成且 `lastStop` 為 `crash`、`server.log` 的重啟分隔、結束後沒有命令列含有 run 目錄的程序且 slot 已釋放，以及用到的 port 都是 verify slot、7222／7175 的 listener 前後相同。證據在 `.local/ticket-artifacts/<issue>/smoke[-N]/`（預設 issue 為 `verify-smoke`）。改 `scripts/` 時在本機跑一次。
 - **Desktop smoke**：`npm run test:verify-skill:desktop:mac -- [--app <path>]`，Windows 是 `npm run test:verify-skill:desktop:win -- [--app <path>]`（`scripts/smoke-desktop.mjs`，見「打包版」），在本機執行，需要網路。改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或程序辨識時，兩個平台的開發版與打包版各跑一次。
 
