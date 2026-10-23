@@ -5,22 +5,96 @@
 // screenshots the page.
 //
 // The target is the checkout's development Electron on its build (npm run build), or with `app` a
-// packaged app (npm run package:mac). Playwright starts either one the same way, so a packaged run
-// keeps the app's Electron fuses as shipped. The Electron main process assembles the product's real
+// packaged app (the .app of npm run package:mac, the .exe npm run package:win leaves in
+// release/win-unpacked/). Playwright starts either one the same way on both platforms, so a packaged
+// run keeps the app's Electron fuses as shipped. On Windows this works over SSH as well, in session 0
+// with no desktop: the window is never shown, and Playwright renders and screenshots the page. The Electron main process assembles the product's real
 // plugins, so YouTube here is real yt-dlp; synthetic YouTube exists only in Web mode. Synthetic feeds
 // work when a Web instance of the same flow serves them, or any local HTTP server does.
 //
 // Electron runs only inside the flow process that launched it: Playwright closes it when that
 // process exits.
+//
+// Three Windows behaviours, seen in session 0, shape how a run screenshots and quits there:
+// - Playwright's page screenshot of a window that is never shown times out on every other call, so
+//   on Windows the window's screenshot comes from Electron's own webContents.capturePage(). A window
+//   that is never shown draws no new frames, and capturePage then returns whatever it drew last, so
+//   the run subscribes to the window's frames (beginFrameSubscription), which keeps it drawing.
+// - When the app quits with its window still open, its main process stops answering and its own
+//   shutdown never finishes (Meilisearch keeps running). With the window destroyed first, the same
+//   quit runs the app's whole shutdown, so on Windows the run destroys the windows before quitting.
+//   Meilisearch of the run must be gone by the time the process is ended, which shows that the app
+//   stopped it itself.
+// - When the app quits, Node keeps the process alive while the inspector Playwright attached is
+//   still connected and prints "Debugger ending on …"; on Windows Playwright's close() never
+//   disconnects it, so the app has finished its own shutdown but the process stays. That line is
+//   the signal to end the process tree.
 import { createWriteStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { checkoutRoot, claimEvidence, cleanEnv, commitOf, dropUnusedEvidence, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
 import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
+import { endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
+import { sleep } from './wait.mjs';
+
+/** Node's output once the app has quit and only an attached inspector keeps the process alive. */
+const DEBUGGER_WAIT = /Debugger ending on|Waiting for the debugger to disconnect/u;
+/** How long an app may take to quit through its own shutdown before the run reports it. */
+const QUIT_TIMEOUT = 60_000;
+
+/**
+ * Replaces the page's screenshot with Electron's capturePage of the app's window (see the top of
+ * this file). Each screenshot waits two animation frames, so the image shows the page as the flow
+ * left it. It writes `path` when given and returns the PNG, as Playwright does; the image is the
+ * window's content area, so clip and fullPage do not apply.
+ */
+async function captureThroughElectron(app, window) {
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const each of BrowserWindow.getAllWindows()) each.webContents.beginFrameSubscription(() => undefined);
+  });
+  window.screenshot = async ({ path: file } = {}) => {
+    await window.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+      setTimeout(resolve, 1_000);
+    }));
+    const png = Buffer.from(await app.evaluate(async ({ BrowserWindow }) => {
+      const [each] = BrowserWindow.getAllWindows();
+      if (!each) throw new Error('the app has no window to capture');
+      return (await each.webContents.capturePage()).toPNG().toString('base64');
+    }), 'base64');
+    if (file) await writeFile(file, png);
+    return png;
+  };
+}
+
+/**
+ * Quits the app through Playwright's close(), which runs the app's own shutdown. On Windows the
+ * windows are destroyed first, and once the app reports that only the inspector keeps it alive, its
+ * process tree is ended (see the top of this file). An app that neither quits nor reaches that point
+ * within QUIT_TIMEOUT, or reaches it with the run's Meilisearch still running, is an error marked
+ * `quitFailure`.
+ */
+async function quit({ app, debuggerWait }, runDir) {
+  if (!WINDOWS) return app.close();
+  await app.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.destroy(); });
+  const closing = app.close();
+  const outcome = await Promise.race([
+    closing.then(() => 'closed'), debuggerWait.then(() => 'debugger'), sleep(QUIT_TIMEOUT).then(() => 'timeout'),
+  ]);
+  if (outcome === 'timeout') throw Object.assign(new Error(`The app did not quit within ${QUIT_TIMEOUT / 1000} seconds`), { quitFailure: true });
+  if (outcome === 'debugger') {
+    const search = processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(runDir));
+    endWindowsTree(app.process().pid);
+    await closing.catch(() => undefined);
+    if (search.length) {
+      throw Object.assign(new Error(`The app exited with Meilisearch still running (PID ${search.map((entry) => entry.pid).join(', ')})`), { quitFailure: true });
+    }
+  }
+}
 
 /** How a Desktop run's page and main process are reached; recorded in results.json as target.connection. */
 const CONNECTION = 'playwright-electron';
@@ -95,9 +169,19 @@ export async function launchElectron({
     const output = createWriteStream(log, { flags: 'a' });
     app.process().stdout?.pipe(output);
     app.process().stderr?.pipe(output);
+    let tail = '';
+    const debuggerWait = new Promise((resolve) => {
+      const watch = (chunk) => {
+        tail = (tail + chunk).slice(-400);
+        if (DEBUGGER_WAIT.test(tail)) resolve();
+      };
+      app.process().stdout?.on('data', watch);
+      app.process().stderr?.on('data', watch);
+    });
     const window = await app.firstWindow({ timeout: 90_000 });
+    if (WINDOWS) await captureThroughElectron(app, window);
     await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
-    return { app, window };
+    return { app, window, debuggerWait };
   };
   let current;
   try {
@@ -113,7 +197,7 @@ export async function launchElectron({
     Object.assign(record.target, await current.app.evaluate(({ app }) => ({ version: app.getVersion(), arch: process.arch })));
     writeJsonAtomic(path.join(runDir, 'run.json'), record);
   } catch (error) {
-    try { await current?.app.close(); } catch { /* already closed */ }
+    try { if (current) await quit(current, runDir); } catch { /* already closed */ }
     await terminateRun(runDir);
     releaseSlot(ports.slot, runDir);
     dropUnusedEvidence(claimed);
@@ -124,17 +208,20 @@ export async function launchElectron({
     get app() { return current.app; },
     get window() { return current.window; },
     /** Quits through the app's own shutdown path and starts again with the same profile. */
-    async relaunch() { await current.app.close(); await terminateRun(runDir); current = await start(); return current; },
+    async relaunch() { await quit(current, runDir); await terminateRun(runDir); current = await start(); return current; },
     /**
      * Quits, ends whatever the app left running (a Meilisearch after an Electron crash), copies the
-     * app's output into the evidence folder, releases the slot.
+     * app's output into the evidence folder, releases the slot. An app that did not quit in time is
+     * ended all the same, and close then throws, so the flow reports it.
      */
     async close({ keep = false } = {}) {
-      try { await current.app.close(); } catch { /* already closed */ }
+      let failure = null;
+      try { await quit(current, runDir); } catch (error) { if (error.quitFailure) failure = error; }
       await terminateRun(runDir);
       if (existsSync(log)) await copyFile(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
       releaseSlot(ports.slot, runDir);
       if (!keep) await rm(runDir, { recursive: true, force: true });
+      if (failure) throw failure;
     },
   };
   return handle;

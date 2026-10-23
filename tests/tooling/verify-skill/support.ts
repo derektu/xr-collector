@@ -4,6 +4,7 @@ import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { processTable } from '../../../.claude/skills/verify/scripts/lib/platform.mjs';
 
 export const LIB = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/lib');
 
@@ -33,13 +34,15 @@ export function repository() {
 }
 
 /**
- * Points HOME at a new directory, so `SLOT_LOCKS` (~/.xr-collector/verify-slots) of a library
- * imported afterwards never names the machine's real slot locks. Call before importing the library;
- * the directory lives for the whole test file, so remove it in afterAll.
+ * Points the home directory (HOME, and USERPROFILE, which Windows reads) at a new directory, so
+ * `SLOT_LOCKS` (~/.xr-collector/verify-slots) of a library imported afterwards never names the
+ * machine's real slot locks. Call before importing the library; the directory lives for the whole
+ * test file, so remove it in afterAll.
  */
 export function isolateHome() {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'xr-verify-home-')));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   return home;
 }
 
@@ -59,9 +62,9 @@ export async function until(check: () => boolean, timeout = 5_000) {
   }
 }
 
-/** Command lines of every process that mentions `text`, as `ps` reports them. */
-export const mentioning = (text: string) => execFileSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-  .split('\n').filter((line) => line.includes(text));
+/** Command lines of every process that mentions `text`, as the process table reports them. */
+export const mentioning = (text: string) => (processTable() as { command: string }[])
+  .map((entry) => entry.command).filter((command) => command.includes(text));
 
 /** The PID of a process that has already exited. */
 export async function deadPid() {
@@ -72,12 +75,19 @@ export async function deadPid() {
 
 export const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-/** Ends every process `start` spawned and removes every directory `temp` made. */
+/**
+ * Ends every process `start` spawned, with the processes it started (its process group, or on
+ * Windows its process tree), and removes every directory `temp` made.
+ */
 export function cleanUp() {
   for (const child of children.splice(0)) {
     if (!child.pid) continue;
+    if (process.platform === 'win32') {
+      try { execFileSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
+    }
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* not a group leader, or gone */ }
     try { process.kill(child.pid, 'SIGKILL'); } catch { /* gone */ }
   }
-  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // Windows keeps a program's file locked for a moment after taskkill returns, so removal retries.
+  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }

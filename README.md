@@ -83,7 +83,7 @@ npm run build
 
 單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址或加入頻道操作。
 
-畫面與原生行為的驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。Mac 以 [verify skill](.claude/skills/verify/SKILL.md) 啟動隔離的 instance 操作 App，Windows 使用 `npm run validation` 工作區工具。層級與交付規則見 [開發驗證流程](docs/development-validation.md)。
+畫面與原生行為的驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。Mac 與 Windows 都以 [verify skill](.claude/skills/verify/SKILL.md) 啟動隔離的 instance 操作 App；Windows 執行原生 Desktop 模式，Web 模式在 Mac 執行。層級與交付規則見 [開發驗證流程](docs/development-validation.md)。
 
 macOS arm64／Windows x64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno 與 Meilisearch：
 
@@ -155,23 +155,11 @@ Vault 位置由使用者在第一次啟動的 Onboarding 選擇，建議位置�
 
 開發與驗收用 `XR_COLLECTOR_EXPORT_DIR` 指定預設匯出資料夾、`XR_COLLECTOR_BACKUP_DIR` 指定匯入前備份的資料夾、`XR_COLLECTOR_MACHINE_NAME` 指定匯出檔記錄的機器名稱，避免寫入真實的「文件」資料夾。
 
-### 匯出與匯入的合成資料
+### 匯出與匯入的驗收
 
-```sh
-npm run prepare:exchange-demo -- --output <新的資料目錄>
-```
+兩台電腦之間的匯出與匯入，以 verify skill 在同一台機器啟動兩個隔離的 instance 模擬：各自有自己的 profile、Vault、匯出與備份目錄，一邊收集或訂閱後匯出，另一邊匯入，合併、完全取代與沒有需要匯入的情形各走一次。操作方式見功能地圖的 [Vault 匯出、匯入與搬移](.claude/skills/verify/features/vault-transfer.md)。
 
-命令產生 `home/vault`（五份合成字幕、兩個訂閱、自動檢查開啟）與 `other/vault`（另外建立、從未與 `home` 交換過的知識庫，其中一份文件與一個訂閱的設定和 `home` 不同）。輸出目錄必須不存在；省略 `--output` 時使用新的 `.data/exchange-demo/<時間>`。命令不啟動程式、不存取 YouTube，也不產生匯出檔：匯出檔由程式匯出。
-
-依 [開發驗證流程](docs/development-validation.md) 準備兩個隔離的 run 當作兩台電腦，各自設定 `XR_COLLECTOR_MACHINE_NAME`，並共用同一個隔離的 `XR_COLLECTOR_EXPORT_DIR`，各自設定隔離的 `XR_COLLECTOR_BACKUP_DIR`：
-
-1. 第一台以 `XR_COLLECTOR_VAULT=<輸出>/home/vault` 啟動，從設定頁匯出。
-2. 第二台使用新的 profile，在 Onboarding 選「從匯出檔匯入…」，選擇剛才的匯出檔；確認文件數相同、自動檢查開關與第一台相同。
-3. 第二台刪除一份文件後匯出；第一台先新增一份文件再匯入，確認合併後保留第一台新增的文件、刪除第二台刪掉的文件，完全取代則與第二台一致。
-4. 再匯入一次同一份檔案，確認沒有需要匯入的內容與本機較新的數量。
-5. 以 `other/vault` 啟動第三個 run 匯出，第一台匯入，確認兩邊的文件合在一起、沒有刪除紀錄的文件不移除。
-
-同機的多個 run 是隔離環境模擬，不能替代實體雙機驗收。這些資料供 UI 操作驗收使用；自動化的資料完整性、中斷恢復與搜尋測試仍須執行，見 [測試說明](tests/README.md)。
+同機的多個 instance 是隔離環境模擬，不能替代實體雙機驗收。自動化的資料完整性、中斷恢復與搜尋測試仍須執行，見 [測試說明](tests/README.md)。
 
 ## 收集工作
 

@@ -10,7 +10,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 | --- | --- | --- |
 | 自動檢查 | 每次修改 | `npm run verify`：單元、HTTP 與檔案系統整合測試、typecheck、build |
 | Web 畫面 | 有畫面或 API 行為變更時，以及改到畫面依賴的狀態或資料流時 | verify skill 的 Web 模式：隔離的 instance 與 headless Playwright，依 scenario 操作、斷言並截圖 |
-| 原生 Desktop | 票的結尾，只針對依賴 Electron 或平台能力的 scenario | Mac 用 verify skill 的 Electron 背景模式；Windows 依第 5 節 |
+| 原生 Desktop | 票的結尾，只針對依賴 Electron 或平台能力的 scenario | verify skill 的 Electron 背景模式，Mac 與 Windows 用同一支流程腳本；Windows 見第 5 節 |
 
 依賴 Electron 或平台能力的 scenario 包括：原生對話框、preload bridge、路徑與權限、程序生命週期、視窗行為、Tray／選單列、登入自啟、安裝與更新。其餘 scenario 以 Web 畫面截圖作為執行證據，截圖說明標示為 Web 模式。Web 畫面證據不替代原生 UI 證據。
 
@@ -28,7 +28,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`，只寫該票特有的步驟。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 
-開發主力機器是 Mac；Windows 透過另一台電腦或 Parallels VM 執行。需要 Windows 驗收時，先確認 VM 正在執行且桌面可操作。VM 未啟動或無法操作時，暫停並通知使用者，由使用者決定啟動 VM 補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
+開發主力機器是 Mac；Windows 由另一台機器補驗，見第 5 節。需要 Windows 驗收而那台機器無法使用時（例如 VM 沒有開），暫停並通知使用者，由使用者決定補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
 
 ## 1. 先定驗收計畫
 
@@ -69,7 +69,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 - scenario 驗證的是視窗顯示、聚焦、Dock、Tray／選單列本身。
 - scenario 驗證的是原生對話框本身。
-- Windows 依第 5 節以原生工具擷取應用程式視窗，需要可見視窗。
+- scenario 要截的是作業系統的畫面，例如系統匣、通知、安裝程式；這類 scenario 需要使用者的桌面，見第 5 節。
 
 ## 4. 交付
 
@@ -90,35 +90,29 @@ PR merge 後刪除票的 worktree，證據隨之刪除。
 
 ## 5. Windows
 
-verify skill 目前只支援 Mac，Windows 驗收使用 repo 的 `npm run validation` 工作區工具。工作區建立指定 commit 的獨立 worktree、隔離 profile／Vault，並記錄 OS、架構、commit 與來源雜湊：
+Windows 驗收用 verify skill 的原生 Desktop 模式，與 Mac 用同一支流程腳本與同一套證據格式。受測程式是開發版 Electron，或 `npm run package:win` 打包時留在 `release/win-unpacked/` 的 `XR Collector.exe`（`launchElectron({ app })`、`--app`）。Web 模式只在 Mac 執行；共用 UI 的 Web 畫面驗證在 Mac 完成。
+
+在 Windows 上受測的 checkout 先執行 `npm ci`、`npm run download:runtime:win` 與 `npm run build`，打包版另執行 `npm run package:win`，再以 doctor 確認前置條件。doctor 的 `missing` 列出缺少的項目與修正方式，例如 `resources/bin/win`、Electron 執行檔、受測的 `.exe`：
 
 ```powershell
-npm run validation -- doctor
-npm run validation -- prepare --commit <完整 SHA> --plan <plan.json>
-npm run validation -- start --workspace <workspace>
-npm run validation -- capture --workspace <workspace> --scenario <ID>
-npm run validation -- record --workspace <workspace> --scenario <ID> --result pass --note "實際觀察" --screenshot <capture 回傳的檔名>
-npm run validation -- stop --workspace <workspace>
+node .claude\skills\verify\scripts\verify.mjs doctor --app "release\win-unpacked\XR Collector.exe"
+node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <證據目錄>
+node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <證據目錄>
 ```
 
-`prepare` 需要 JSON 格式的計畫，依 [計畫範例](validation-plan.example.json) 由 issue 的驗收計畫轉寫，只列 Windows 的 scenario；可加 `--pr <編號>` 核對 PR HEAD。每個工作區同時只交給一個 agent，重驗時用新的 `--run` 保留舊成果。`--allow-dirty` 的結果標為 provisional，不能滿足正式驗收。`record` 的 pass 須有已檢視的本 scenario 截圖與觀察說明。
+票的流程腳本與 smoke 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。
 
-從 SSH、Parallels exec 等入口執行時，不保證具有可截圖的使用者桌面。此時使用 repo 提供的輔助入口，在已登入的使用者桌面排程：
+另一個平台的實機驗證是選擇性的：開發機沒有的平台，由另一台機器、另一位開發者或 VM 補驗。怎麼連到那台機器、怎麼把程式碼送過去、怎麼取回證據，由開發者自選工具，不屬於共同前置條件。補驗的機器 checkout 受驗的 commit，不放未提交修改。兩個平台的結果以 summary 彙整：
 
-```powershell
-.\scripts\validation\windows-session.ps1 -Action start -Workspace <workspace>
-.\scripts\validation\windows-session.ps1 -Action status -Workspace <workspace>
-.\scripts\validation\windows-session.ps1 -Action capture -Workspace <workspace> -Scenario <ID>
-.\scripts\validation\windows-session.ps1 -Action stop -Workspace <workspace>
+```sh
+node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 <mac>/results.json <windows>/results.json
 ```
 
-Node 預設從 PATH 找到，也可傳 `-NodePath <node.exe>`。排程成功不等於命令成功：檢查 `state/launcher-logs`、status 和預期截圖；stop 成功會移除本工作區的臨時排程。若啟動失敗，依輸出的精確 task name 核對與清理，保留診斷檔案。直接在互動桌面執行時不用建立排程。
+summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 provisional，不計入。每個 scenario 在每個需要的平台都有 pass、同一平台沒有 fail，才算完整，否則 exit code 為 2，缺少的平台標為 pending。
 
-使用 Parallels 的人可從 Mac 用 `prlctl exec <VM名稱> --current-user powershell.exe ... -File <repo內windows-session.ps1> ...` 呼叫同一入口。VM 名稱、repo、workspace 及 Node 路徑都是該機配置；Parallels 不屬於共同前置條件。也可使用 `prlctl capture` 後以 capture 的 `--file` 匯入。
+從沒有桌面的入口執行也能完成開發版與打包版的驗證，例如 SSH 登入的 Windows session 0：背景模式不顯示視窗，Playwright 照常操作頁面與截圖；螢幕大小依該入口而定（Windows session 0 是 1024x768），截圖的視窗大小可能與開發機不同。需要使用者桌面的能力，例如視窗聚焦、系統匣、通知、原生對話框本身、整個螢幕的截圖，在這種入口無法驗證；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
 
-Windows 驗證機只保留兩個目錄：`C:\projects\xr-collector` 是追蹤 `origin/main` 的 repo，不放未提交修改；`C:\projects\xr-collector-verify` 是從它建立的唯一 detached worktree，供每次驗證切換版本。驗證時在 verify worktree fetch 並切到受驗的分支或 PR HEAD，執行 `npm ci`、`npm run download:runtime:win` 與 build；`resources/bin/win` 與 node_modules 在不同版本間重用。profile、Vault 與 fixture 放在 `C:\projects\xr-collector-verify-data`，每次驗證前清空；截圖與結果存回 Mac 上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。尚未 push 的版本可從 Mac 共享磁碟上的 repo（例如 `Y:\projects\km\xr-collector`）fetch，不經 GitHub。用 `prepare` 建立的工作區在驗收結束、證據存回 Mac 後移除，不在驗證機累積。
-
-Windows ARM／x64 模擬執行須如實標示，不代替 Intel／AMD 原生驗收。桌面鎖定、Mac 休眠或 VM 停止時，標為 blocked，恢復可用桌面後再驗證。避免透過 Mac 掛載磁碟同步 node_modules；若傳未提交檔案產生 AppleDouble `._*`，僅清除此批傳輸產生的檔案再驗證。
+Windows ARM 上的 x64 Node 以模擬執行，doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）會標出來；回報時如實標示，不代替 Intel／AMD 原生驗收。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
 
 ## 6. 平台打包
 
