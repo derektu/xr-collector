@@ -66,7 +66,9 @@ export function removedMessage(title: string, deleted: { documentsDeleted: numbe
 
 /**
  * A subscription's status column: "排隊中", "新增中", "檢查中", "下載中 3/10", "錯誤・14:02 重試",
- * "下次 18:52", "下次 明天 08:00", "下次 10-24 08:00", "已暫停", "自動檢查已關閉" or "需要重新登入".
+ * "下次 18:52", "下次 明天 08:00", "下次 10-24 08:00", "錯誤（連續 3 次）・19:44 重試",
+ * "錯誤（連續 3 次）" while automatic checks are off, "已暫停", "已暫停・連續失敗 5 次",
+ * "自動檢查已關閉" or "需要重新登入".
  */
 export function subscriptionStatusText(status: SubscriptionCheckStatus, now: Date = new Date()): string {
   switch (status.state) {
@@ -76,7 +78,12 @@ export function subscriptionStatusText(status: SubscriptionCheckStatus, now: Dat
     case 'downloading': return `下載中 ${status.done}/${status.total}`;
     case 'retrying': return retryingText(status.at);
     case 'scheduled': return `下次 ${nextTimeLabel(status.nextCheckAt, now)}`;
+    case 'failing': {
+      const failing = `錯誤（連續 ${status.failures} 次）`;
+      return status.nextCheckAt ? `${failing}・${nextTimeLabel(status.nextCheckAt, now)} 重試` : failing;
+    }
     case 'paused': return '已暫停';
+    case 'auto_paused': return `已暫停・連續失敗 ${status.failures} 次`;
     case 'auto_check_off': return '自動檢查已關閉';
     case 'login_required': return '需要重新登入';
   }
@@ -88,14 +95,14 @@ export function retryingText(at: string): string {
   return `錯誤・${pad(date.getHours())}:${pad(date.getMinutes())} 重試`;
 }
 
-/** The status chip's color class for a subscription status; queued and paused chips stay gray. */
+/** The status chip's color class for a subscription status; queued and paused chips stay gray, failures are red. */
 export function subscriptionStatusTone(status: SubscriptionCheckStatus): 'queued' | 'collecting' | 'retrying' | 'tracking' | 'paused' | 'error' {
   switch (status.state) {
     case 'queued': return 'queued';
     case 'adding': case 'checking': case 'downloading': return 'collecting';
     case 'retrying': return 'retrying';
     case 'scheduled': return 'tracking';
-    case 'login_required': return 'error';
+    case 'failing': case 'auto_paused': case 'login_required': return 'error';
     default: return 'paused';
   }
 }

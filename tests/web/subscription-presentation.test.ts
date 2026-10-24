@@ -59,12 +59,16 @@ describe('subscription status text (N75-T4)', () => {
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, now)).toBe('下次 18:52');
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T00:05:00.000Z' }, now)).toBe('下次 明天 08:05');
     expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T16:30:00.000Z' }, now)).toBe('下次 10-17 00:30');
+    expect(subscriptionStatusText({ state: 'failing', failures: 3, nextCheckAt: '2026-10-15T11:44:00.000Z' }, now)).toBe('錯誤（連續 3 次）・19:44 重試');
+    expect(subscriptionStatusText({ state: 'failing', failures: 3, nextCheckAt: '2026-10-16T00:05:00.000Z' }, now)).toBe('錯誤（連續 3 次）・明天 08:05 重試');
+    expect(subscriptionStatusText({ state: 'failing', failures: 1, nextCheckAt: null }, now)).toBe('錯誤（連續 1 次）');
     expect(subscriptionStatusText({ state: 'paused' }, now)).toBe('已暫停');
+    expect(subscriptionStatusText({ state: 'auto_paused', failures: 5 }, now)).toBe('已暫停・連續失敗 5 次');
     expect(subscriptionStatusText({ state: 'auto_check_off' }, now)).toBe('自動檢查已關閉');
     expect(subscriptionStatusText({ state: 'login_required' }, now)).toBe('需要重新登入');
   });
 
-  it('colors working, retrying, scheduled, waiting, stopped and sign-in states apart', () => {
+  it('colors working, retrying, scheduled, waiting, stopped, failing and sign-in states apart', () => {
     expect(subscriptionStatusTone({ state: 'adding' })).toBe('collecting');
     expect(subscriptionStatusTone({ state: 'checking' })).toBe('collecting');
     expect(subscriptionStatusTone({ state: 'downloading', done: 0, total: 3 })).toBe('collecting');
@@ -74,5 +78,7 @@ describe('subscription status text (N75-T4)', () => {
     expect(subscriptionStatusTone({ state: 'paused' })).toBe('paused');
     expect(subscriptionStatusTone({ state: 'auto_check_off' })).toBe('paused');
     expect(subscriptionStatusTone({ state: 'login_required' })).toBe('error');
+    expect(subscriptionStatusTone({ state: 'failing', failures: 1, nextCheckAt: null })).toBe('error');
+    expect(subscriptionStatusTone({ state: 'auto_paused', failures: 5 })).toBe('error');
   });
 });

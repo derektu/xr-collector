@@ -310,13 +310,26 @@ describe('subscriptions (X77-A08)', () => {
   it('keeps the local progress and collection switch when replacing', async () => {
     const { a, b } = await pair();
     await changeB(b);
-    await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
+    const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
+    await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
     await new JsonScheduleStore(b.vault).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
     expect(await items(a.vault)).toEqual(await items(b.vault));
-    expect((await channels(a.vault)).find((row) => row.id === 'UC123')!.lastCheckedAt).toBe('2026-10-18T00:00:00.000Z');
+    expect((await channels(a.vault)).find((row) => row.id === 'UC123')).toMatchObject({ lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
     expect(await scheduleOn(a.vault)).toBe(true);
+  });
+
+  it('keeps an automatic pause only with the local failures that caused it', async () => {
+    const { a, b } = await pair();
+    const checkFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
+    await store(b.vault).update('UC123', { enabled: false, autoPausedAt: '2026-10-17T00:00:00.000Z', checkFailures });
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
+    const row = (await channels(a.vault)).find((candidate) => candidate.id === 'UC123')!;
+    expect(row.enabled).toBe(false);
+    expect(row.autoPausedAt).toBeUndefined();
+    expect(row.checkFailures).toBeUndefined();
   });
 });
 

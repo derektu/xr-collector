@@ -1,10 +1,12 @@
 import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
 import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
-import type { CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
+import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
 import { requireDefinition, subscriptionKindLabel } from '../core/source-registry.js';
 import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../plugins/types.js';
 import {
+  AUTO_PAUSE_AFTER_MS,
+  AUTO_PAUSE_FAILURES,
   CollectorError,
   type ChannelJobTrigger,
   type CollectionJob,
@@ -134,19 +136,20 @@ export class SubscriptionService {
     const work = this.jobs.subscriptionWork(this.type).subscriptions;
     const now = this.now();
     return records.map((record) => {
-      const { check = null, capturing = false, lastCheck = null } = work.get(record.id) ?? {};
+      const { check = null, capturing = false } = work.get(record.id) ?? {};
       const totals = counts.get(record.id);
-      // An interrupted check says nothing about the source, so only a completed or failed one decides the error.
-      const failed = record.enabled && !check && lastCheck?.state === 'failed';
+      const failed = record.enabled && !check && record.checkFailures !== undefined;
       return {
         ...record,
         lastCheckedAt: record.lastCheckedAt ?? null,
+        checkFailures: record.checkFailures ?? null,
+        autoPausedAt: record.autoPausedAt ?? null,
         nextCheckAt: record.nextCheckAt ?? null,
         lastDispatchedAt: record.lastDispatchedAt ?? null,
         status: !record.enabled ? 'paused' : check ? 'collecting' : failed ? 'error' : 'tracking',
         checkStatus: checkStatus(record, check, { autoCheck, now, loginRequired: this.options.loginRequired?.(record) ?? false }),
         capturing,
-        lastError: failed ? lastCheck.error ?? { code: 'capture_failed', message: '收集失敗。' } : null,
+        lastError: failed ? record.checkFailures!.error : null,
         activeJob: check ? { id: check.jobId, done: check.done, total: check.total } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,
@@ -260,15 +263,15 @@ export class SubscriptionService {
   }
 
   /**
-   * Pausing stops the subscription's queued work; resuming starts a check. Setting the state it
-   * already has changes nothing.
+   * Pausing stops the subscription's queued work; resuming starts a check and clears the failures
+   * that paused it or that it had when it was paused. Setting the state it already has changes nothing.
    */
   async setEnabled(id: string, enabled: boolean): Promise<EnabledResult> {
     const current = (await this.store.list()).find((record) => record.id === id);
     if (!current) throw this.notFound();
     if (current.enabled === enabled) return { subscription: current, submission: null };
     if (!enabled) {
-      const record = await this.store.update(id, { enabled: false, nextCheckAt: null });
+      const record = await this.store.update(id, { enabled: false, nextCheckAt: null, autoPausedAt: undefined });
       if (!record) throw this.notFound();
       this.jobs.stopSubscription(this.type, id, 'subscription_paused');
       this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${record.title}」。`, ...this.subject(id, record.title) });
@@ -276,7 +279,7 @@ export class SubscriptionService {
     }
     const now = this.now();
     const record = await this.store.update(id, {
-      enabled: true,
+      enabled: true, checkFailures: undefined, autoPausedAt: undefined,
       lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, current.settings.intervalMinutes).toISOString(),
     });
     if (!record) throw this.notFound();
@@ -448,9 +451,8 @@ export class SubscriptionService {
   }
 
   /**
-   * Port entry: records a check that started at `at`, keeping a later check time already recorded;
-   * recording the same check again changes nothing. With the check's candidates, out-of-range items
-   * that are no longer candidates are forgotten, and so are failed items that are no longer
+   * Port entry: records what a check's listing found. With the check's candidates, out-of-range
+   * items that are no longer candidates are forgotten, and so are failed items that are no longer
    * candidates or already have a document: a failure stays only while the item is skipped or among
    * the items the check collects. Returns why the subscription's work stops, if it does.
    */
@@ -471,12 +473,50 @@ export class SubscriptionService {
           patch.failures = failures.length > 0 ? failures : undefined;
         }
       }
-      if (!current.lastCheckedAt || current.lastCheckedAt < report.at) patch.lastCheckedAt = report.at;
       return Object.keys(patch).length > 0 ? new Map([[id, patch]]) : new Map();
     });
     const current = record ?? (await this.store.list()).find((candidate) => candidate.id === id);
     if (!current) return 'subscription_removed';
     return current.enabled ? null : 'subscription_paused';
+  }
+
+  /**
+   * Port entry: records when a check ended, keeping a later time already recorded. A counted success
+   * clears the failures in a row; a counted failure adds one, and the subscription pauses itself
+   * once AUTO_PAUSE_FAILURES of them span AUTO_PAUSE_AFTER_MS. An end that does not count, such as a
+   * source that needs a new sign-in, leaves the count as it is.
+   */
+  async checkEnded(id: string, end: CheckEnd): Promise<void> {
+    let paused: SubscriptionRecord | undefined;
+    const [record] = await this.store.updateWith((records) => {
+      const current = records.find((candidate) => candidate.id === id);
+      if (!current) return new Map();
+      const patch: Partial<SubscriptionRecord> = {};
+      if (!current.lastCheckedAt || current.lastCheckedAt < end.at) patch.lastCheckedAt = end.at;
+      if (!end.counted) {
+        // The time alone.
+      } else if (!end.error) {
+        if (current.checkFailures) patch.checkFailures = undefined;
+      } else {
+        const failures = {
+          count: (current.checkFailures?.count ?? 0) + 1, since: current.checkFailures?.since ?? end.at, error: end.error,
+        };
+        patch.checkFailures = failures;
+        if (current.enabled && failures.count >= AUTO_PAUSE_FAILURES
+          && new Date(end.at).getTime() - new Date(failures.since).getTime() >= AUTO_PAUSE_AFTER_MS) {
+          Object.assign(patch, { enabled: false, nextCheckAt: null, autoPausedAt: end.at });
+          paused = current;
+        }
+      }
+      return Object.keys(patch).length > 0 ? new Map([[id, patch]]) : new Map();
+    });
+    if (!paused || !record) return;
+    this.jobs.stopSubscription(this.type, id, 'subscription_paused');
+    this.jobs.recordEvent({
+      severity: 'warning', eventType: 'subscription.auto_paused',
+      message: `「${record.title}」連續 ${record.checkFailures!.count} 次檢查失敗，已自動暫停：${record.checkFailures!.error.message}`,
+      errorCode: record.checkFailures!.error.code, ...this.subject(id, record.title),
+    });
   }
 
   /** Port entry: a collected item no longer counts as failed. */
@@ -599,25 +639,30 @@ interface StatusContext {
 }
 
 /**
- * What a subscription is doing now. Its own state comes first: paused, then a source that needs a
- * new sign-in. An active check shows what it is doing, with its item progress while it downloads.
- * Without a check, automatic checks being off comes next;
- * a check that came due and was not dispatched yet, or has no time yet, is queued; otherwise the
- * next check time shows. A failed last check does not change the status.
+ * What a subscription is doing now. Its own state comes first: paused, by the person or by itself
+ * after its checks kept failing, then a source that needs a new sign-in. An active check shows what
+ * it is doing, with its item progress while it downloads. Without a check, a check that came due
+ * and was not dispatched yet, or has no time yet, is queued while automatic checks are on; failures
+ * in a row show otherwise, with the next automatic check that tries again; then automatic checks
+ * being off; otherwise the next check time shows.
  */
 export function checkStatus(
-  record: Pick<SubscriptionRecord, 'enabled' | 'nextCheckAt'>,
+  record: Pick<SubscriptionRecord, 'enabled' | 'nextCheckAt' | 'checkFailures' | 'autoPausedAt'>,
   check: CheckActivity | null,
   context: StatusContext,
 ): SubscriptionCheckStatus {
-  if (!record.enabled) return { state: 'paused' };
+  if (!record.enabled) {
+    return record.autoPausedAt && record.checkFailures ? { state: 'auto_paused', failures: record.checkFailures.count } : { state: 'paused' };
+  }
   if (context.loginRequired) return { state: 'login_required' };
   if (check) return check.status.state === 'downloading' ? { state: 'downloading', done: check.done, total: check.total } : check.status;
-  if (!context.autoCheck) return { state: 'auto_check_off' };
   const next = record.nextCheckAt ?? null;
   // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
-  if (!next || new Date(next).getTime() <= context.now.getTime()) return { state: 'queued' };
-  return { state: 'scheduled', nextCheckAt: next };
+  const due = !next || new Date(next).getTime() <= context.now.getTime();
+  if (context.autoCheck && due) return { state: 'queued' };
+  if (record.checkFailures) return { state: 'failing', failures: record.checkFailures.count, nextCheckAt: context.autoCheck ? next : null };
+  if (!context.autoCheck) return { state: 'auto_check_off' };
+  return { state: 'scheduled', nextCheckAt: next! };
 }
 
 /** Deletes one document; one deleted meanwhile, such as by an Agent, counts as gone, and any other failure is logged. */
@@ -693,6 +738,10 @@ export class SubscriptionServices implements SubscriptionPort {
 
   checked(type: string, id: string, report: CheckReport): Promise<SkipReason | null> {
     return this.require(type).checked(id, report);
+  }
+
+  checkEnded(type: string, id: string, end: CheckEnd): Promise<void> {
+    return this.require(type).checkEnded(id, end);
   }
 
   itemCollected(type: string, id: string, key: string): Promise<void> {

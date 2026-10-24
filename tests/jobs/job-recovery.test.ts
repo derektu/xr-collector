@@ -448,15 +448,15 @@ describe('channel jobs across restarts (R-T4)', () => {
     expect(w.script.discoveries).toBe(1);
     expect(w.script.captures.filter((id) => id === videoId(0, 'c'))).toHaveLength(1);
     expect(w.script.captures.filter((id) => id === videoId(1, 'c'))).toHaveLength(1);
-    // Resuming reports the check's own discovery time again, with nothing new found.
+    // The listing is reported once; the check ends once, when its last video ends after the restart.
     const keys = listed(6, 'c').map((video) => video.id);
-    expect(w.subs.of('checked')).toEqual([
-      { kind: 'checked', type: 'youtube', id: subscribed.id, at: T0.toISOString(), candidates: keys, collecting: keys },
-      { kind: 'checked', type: 'youtube', id: subscribed.id, at: T0.toISOString() },
+    expect(w.subs.of('checked')).toEqual([{ kind: 'checked', type: 'youtube', id: subscribed.id, candidates: keys, collecting: keys }]);
+    expect(w.subs.of('ended')).toEqual([
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, counted: true },
     ]);
   });
 
-  it('records the check time a restart cut short', async () => {
+  it('records the end of a check a restart cut short, at the time it ends', async () => {
     const w = await world();
     const subscribed = subscribe(w.subs, 'UC-owed-check');
     w.script.channelVideos.set(subscribed.id, listed(2, 'o'));
@@ -465,30 +465,16 @@ describe('channel jobs across restarts (R-T4)', () => {
     const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
     expect(w.subs.of('checked')).toEqual([]);
+    w.clock.now = new Date('2026-10-15T07:00:00.000Z');
 
     const g2 = await w.crash(g1);
     const done = await g2.manager.whenSettled(accepted.job.id);
 
     expect(done).toMatchObject({ state: 'completed', progress: { total: 2, created: 2 } });
     expect(w.script.discoveries).toBe(1);
-    expect(w.subs.of('checked')).toEqual([{ kind: 'checked', type: 'youtube', id: subscribed.id, at: T0.toISOString() }]);
-  });
-
-  it('reports the discovery time of the check cut short, not the time of the restart', async () => {
-    const w = await world();
-    const subscribed = subscribe(w.subs, 'UC-later-check');
-    w.script.channelVideos.set(subscribed.id, listed(1, 'l'));
-    w.subs.hangOnChecked = true;
-    const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
-    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
-    await vi.waitFor(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
-    w.clock.now = new Date('2026-10-15T07:00:00.000Z');
-
-    const g2 = await w.crash(g1);
-    await g2.manager.whenSettled(accepted.job.id);
-
-    // The subscriptions keep a later check time they already hold; the job only says when its check was.
-    expect(w.subs.of('checked')).toEqual([{ kind: 'checked', type: 'youtube', id: subscribed.id, at: T0.toISOString() }]);
+    expect(w.subs.of('ended')).toEqual([
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: '2026-10-15T07:00:00.000Z', errorCode: null, counted: true },
+    ]);
   });
 
   it('discovers with the settings and time of the restart when stopped before recording videos (R-06)', async () => {
@@ -511,7 +497,8 @@ describe('channel jobs across restarts (R-T4)', () => {
     expect(done.items!.map((item) => item.sourceId)).toEqual(listed(5, 'e').map((video) => video.id));
     const child = g2.manager.get(done.items![0]!.jobId!);
     expect(child.publishedNotBefore).toBe(new Date(w.clock.now.getTime() - 7 * 24 * 60 * 60_000).toISOString());
-    expect(w.subs.of('checked')).toEqual([expect.objectContaining({ at: w.clock.now.toISOString() })]);
+    expect(w.subs.of('checked')).toHaveLength(1);
+    expect(w.subs.of('ended')).toEqual([expect.objectContaining({ at: w.clock.now.toISOString(), errorCode: null })]);
   });
 });
 
@@ -642,6 +629,28 @@ describe('lost network (#128)', () => {
     const types = (await w.events()).map((event) => event.eventType);
     expect(types).not.toContain('job.retry_scheduled');
     expect(types).not.toContain('job.failed');
+    net.connectivity.close();
+  });
+
+  it('ends a check that failed for lack of a network only once it lists after the network returns', async () => {
+    const net = offlineWorld(false);
+    const w = await world({ pause: net.pause, connectivity: net.connectivity });
+    const subscribed = subscribe(w.subs, 'UC-offline-check');
+    w.script.channelVideos.set(subscribed.id, []);
+    w.script.discoverFailures.push(network());
+    const g = await w.boot();
+    const accepted = await g.manager.submitCheck('youtube', subscribed, 'manual');
+    await vi.waitFor(() => expect(net.pause.has('offline')).toBe(true));
+    expect(g.manager.get(accepted.job.id).state).toBe('queued');
+    expect(w.subs.of('ended')).toEqual([]);
+
+    net.state.online = true;
+    expect(await net.connectivity.check()).toBe('online');
+    const done = await g.manager.whenSettled(accepted.job.id);
+    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
+    expect(w.subs.of('ended')).toEqual([
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, counted: true },
+    ]);
     net.connectivity.close();
   });
 

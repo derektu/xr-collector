@@ -295,8 +295,14 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
       if (!ours || !other) throw new Error(`Not a subscription key: ${key}`);
       const row = other.rows.get(id);
       const before = ours.rows.get(id);
-      if (row) ours.rows.set(id, { ...(before ? withoutProgress(row) : row), ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null });
-      else ours.rows.delete(id);
+      if (row) {
+        const merged: SubscriptionRecord = {
+          ...(before ? withoutProgress(row) : row), ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null,
+        };
+        // A subscription paused itself only while it is paused and has the failures that paused it.
+        if (merged.enabled || !merged.checkFailures) delete merged.autoPausedAt;
+        ours.rows.set(id, merged);
+      } else ours.rows.delete(id);
       const removal = other.removals.get(id);
       if (removal) ours.removals.set(id, removal);
       else ours.removals.delete(id);
@@ -317,17 +323,17 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
   return { changes, displaced };
 }
 
-/** A subscription without the item progress an import never takes over for a subscription this Vault has. */
+/** A subscription without the collection progress an import never takes over for a subscription this Vault has. */
 function withoutProgress(row: SubscriptionRecord): SubscriptionRecord {
-  const { outOfRange: _outOfRange, failures: _failures, ...rest } = row;
+  const { outOfRange: _outOfRange, failures: _failures, checkFailures: _checkFailures, ...rest } = row;
   return rest;
 }
 
 /** The collection progress of a subscription, which an import never replaces. */
 function collectionProgress(row: SubscriptionRecord): Partial<SubscriptionRecord> {
-  const { addedAt, lastCheckedAt, outOfRange, failures } = row;
+  const { addedAt, lastCheckedAt, outOfRange, failures, checkFailures } = row;
   return {
     addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}),
-    ...(failures !== undefined ? { failures } : {}),
+    ...(failures !== undefined ? { failures } : {}), ...(checkFailures !== undefined ? { checkFailures } : {}),
   };
 }

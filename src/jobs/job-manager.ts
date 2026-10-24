@@ -33,7 +33,7 @@ import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '..
 import { limitText, redact } from '../activity/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
-import type { SubscriptionPort } from './subscription-port.js';
+import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
 
 export interface JobLimits {
   /** Subscription resolution and discovery running at once. */
@@ -70,6 +70,11 @@ export const MAX_UNCLEAN_STOPS = 3;
 
 /** A limit reported without a cooldown end (no request channel) waits this long. */
 const FALLBACK_COOLDOWN_MS = 5 * 60_000;
+
+const INTERRUPTED_REPEATEDLY = 'interrupted_repeatedly';
+
+/** Why a check stops without ending: its subscription was paused or removed, or a later job took over. */
+const STOP_REASONS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed', 'superseded']);
 
 export interface JobManagerOptions {
   /** The Vault every job of this manager writes to. */
@@ -125,8 +130,6 @@ export interface SubscriptionWork {
   check: CheckActivity | null;
   /** Whether an item a check of the subscription queued is still capturing, a stopped check's included. */
   capturing: boolean;
-  /** How the latest check that completed or failed ended; an interrupted check says nothing about the source. */
-  lastCheck: { state: 'completed' } | { state: 'failed'; error: JobError | null } | null;
 }
 
 /** A subscription request still resolving its address or subscribing. */
@@ -199,6 +202,8 @@ export class JobManager {
   private readonly stoppedJobs = new Map<string, SkipReason>();
   /** Items a check job queued that the user then submitted directly; pausing never skips them. */
   private readonly manualClaims = new Set<string>();
+  /** Finished check jobs whose end the subscription has not recorded yet; their waiters wait for it. */
+  private readonly endingChecks = new Set<string>();
   private closed = false;
   private resuming = false;
   /** Number of holds in force; while any is, no queued step starts. */
@@ -461,27 +466,21 @@ export class JobManager {
 
   /**
    * What the jobs of one source type are doing for its subscriptions: per subscription, the check in
-   * progress, whether any of its items is capturing and how its latest check ended; and the
-   * subscription requests still resolving or subscribing, oldest first.
+   * progress and whether any of its items is capturing; and the subscription requests still
+   * resolving or subscribing, oldest first.
    */
   subscriptionWork(type: string): SubscriptionWorkReport {
     const subscriptions = new Map<string, SubscriptionWork>();
     const entry = (id: string): SubscriptionWork => {
       let work = subscriptions.get(id);
-      if (!work) subscriptions.set(id, work = { check: null, capturing: false, lastCheck: null });
+      if (!work) subscriptions.set(id, work = { check: null, capturing: false });
       return work;
     };
-    // The store lists newest first, so the first completed or failed check of a subscription is its latest.
-    for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
-      if (!isRole(job, type, 'check') || !job.source.id) continue;
-      const work = entry(job.source.id);
-      if (!work.lastCheck && (job.state === 'completed' || job.state === 'failed')) {
-        work.lastCheck = job.state === 'completed' ? { state: 'completed' } : { state: 'failed', error: job.error };
-      }
-    }
     for (const job of this.jobs.values()) {
       if (!isRole(job, type, 'check') || !job.source.id) continue;
-      if (!this.stoppedJobs.has(job.id) && !entry(job.source.id).check) entry(job.source.id).check = checkActivity(this.withLiveItems(job));
+      // A stopped check is no check in progress, but its items may still be capturing.
+      const work = entry(job.source.id);
+      if (!this.stoppedJobs.has(job.id) && !work.check) work.check = checkActivity(this.withLiveItems(job));
     }
     for (const [id, work] of subscriptions) work.capturing = this.pendingCaptures(type, id).checkItems.length > 0;
     const adds = [...this.jobs.values()]
@@ -747,7 +746,7 @@ export class JobManager {
 
   /** Resolves when the job finishes, fails or is interrupted. */
   whenSettled(id: string): Promise<CollectionJob> {
-    if (!this.jobs.has(id)) return Promise.resolve(this.get(id));
+    if (!this.jobs.has(id) && !this.endingChecks.has(id)) return Promise.resolve(this.get(id));
     return new Promise((resolve) => {
       const waiters = this.settleWaiters.get(id) ?? [];
       waiters.push(resolve);
@@ -821,7 +820,7 @@ export class JobManager {
       settle(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
     };
     const tooManyStops = (job: CollectionJob) => (job.recovery?.uncleanStops ?? 0) >= MAX_UNCLEAN_STOPS;
-    const repeated: JobError = { code: 'interrupted_repeatedly', message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
+    const repeated: JobError = { code: INTERRUPTED_REPEATEDLY, message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
 
     for (const job of superseded) {
       if (roleOf(job) === 'check') skipCheck(job, 'superseded');
@@ -859,7 +858,7 @@ export class JobManager {
       if (tooManyStops(job)) settle(job, 'failed', { outcome: 'failed' }, repeated);
       else this.restore(job);
     }
-    // Check jobs past discovery wait for their items again and record their check time.
+    // Check jobs past discovery wait for their items again.
     for (const stored of checkJobs) {
       const job = this.jobs.get(stored.id);
       if (!job?.items) continue;
@@ -872,9 +871,6 @@ export class JobManager {
         return { ...item, state: child.state, ...(child.retry ? { retry: child.retry } : {}) };
       });
       this.update(job, { items, progress: progressOf(items) });
-      const discovered = job.checkpoint?.discovered;
-      // The check's own discovery time, in case the stop came before it was recorded; resuming is no new check.
-      if (discovered && !job.checkpoint?.retryItems) await this.subscriptions.checked(job.source.type, job.source.id!, { at: discovered.at });
       if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
     }
     await store.flush();
@@ -1421,8 +1417,7 @@ export class JobManager {
       }
       return item;
     });
-    const discovered = { at: this.now().toISOString() };
-    this.update(job, { phase: 'capture', items, progress: progressOf(items), checkpoint: { ...job.checkpoint, discovered } });
+    this.update(job, { phase: 'capture', items, progress: progressOf(items) });
     this.event(job, {
       severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
     });
@@ -1435,7 +1430,7 @@ export class JobManager {
       return;
     }
     const stopped = await this.subscriptions.checked(type, id, {
-      at: discovered.at, candidates: new Set(discovery.candidates ?? []), collecting: new Set(discovery.items.map((item) => item.key)),
+      candidates: new Set(discovery.candidates ?? []), collecting: new Set(discovery.items.map((item) => item.key)),
     });
     if (stopped) this.stopSubscription(type, id, stopped);
     if (this.jobs.has(job.id)) this.completeCheckIfDone(job);
@@ -1526,7 +1521,6 @@ export class JobManager {
     const items = job.items ?? [];
     if (items.some((item) => ACTIVE.has(item.state))) return;
     const progress = progressOf(items);
-    this.stoppedJobs.delete(job.id);
     if (items.length === 0) {
       this.finish(job, 'completed', { outcome: 'empty' }, null);
     } else {
@@ -1563,10 +1557,38 @@ export class JobManager {
         severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
         ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });
+    const end = this.checkEnd(job);
     this.release(job);
     const settled = this.options.store.get(job.id)!;
     this.onItemSettled(settled);
-    this.notifySettled(settled);
+    if (!end) {
+      this.notifySettled(settled);
+      return;
+    }
+    // Whoever waits for the check reads its subscription with the end recorded.
+    this.endingChecks.add(job.id);
+    this.track(Promise.resolve()
+      .then(() => this.subscriptions.checkEnded(job.source.type, job.source.id!, end))
+      .catch((reason: unknown) => console.error('Subscription check record update failed', reason))
+      .then(() => {
+        this.endingChecks.delete(job.id);
+        this.notifySettled(settled);
+      }));
+  }
+
+  /**
+   * How a finished check ended for its subscription; null for a check a pause, a removal or a later
+   * job skipped before it collected anything, and for a retry of earlier items, which lists nothing.
+   */
+  private checkEnd(job: CollectionJob): CheckEnd | null {
+    if (roleOf(job) !== 'check' || !job.source.id || !job.finishedAt || job.checkpoint?.retryItems) return null;
+    if (job.state !== 'completed' && job.state !== 'failed') return null;
+    if (job.result?.skipReason && STOP_REASONS.has(job.result.skipReason)) return null;
+    const error = job.state === 'failed' ? job.error ?? null : null;
+    const counted = !this.stoppedJobs.has(job.id)
+      && (job.state === 'completed'
+        || (error !== null && error.code !== INTERRUPTED_REPEATEDLY && this.classify(job, error) !== 'login_required'));
+    return { at: job.finishedAt, error, counted };
   }
 
   private release(job: CollectionJob): void {

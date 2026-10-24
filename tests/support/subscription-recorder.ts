@@ -1,7 +1,7 @@
 import { requireDefinition } from '../../src/core/source-registry.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../../src/core/types.js';
 import type { JobManager } from '../../src/jobs/job-manager.js';
-import type { CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
+import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
 import type { FailureClass, SubscriptionTarget } from '../../src/plugins/types.js';
 
 /** A subscription as the recorder holds it. */
@@ -15,7 +15,8 @@ export interface RecordedSubscription extends SubscriptionTarget {
 
 /** One call a job manager made to the port, in call order. */
 export type PortReport =
-  | { kind: 'checked'; type: string; id: string; at: string; candidates?: string[]; collecting?: string[] }
+  | { kind: 'checked'; type: string; id: string; candidates?: string[]; collecting?: string[] }
+  | { kind: 'ended'; type: string; id: string; at: string; errorCode: string | null; counted: boolean }
   | { kind: 'collected'; type: string; id: string; key: string }
   | { kind: 'failed'; type: string; id: string; key: string; title: string | null; errorCode: string; failureClass: FailureClass }
   | { kind: 'outOfRange'; type: string; id: string; key: string; before: string }
@@ -83,11 +84,17 @@ export class SubscriptionRecorder implements SubscriptionPort {
       await never();
     }
     this.reports.push({
-      kind: 'checked', type, id, at: report.at,
+      kind: 'checked', type, id,
       ...(report.candidates ? { candidates: [...report.candidates] } : {}),
       ...(report.collecting ? { collecting: [...report.collecting] } : {}),
     });
     return this.stopped(type, id);
+  }
+
+  async checkEnded(type: string, id: string, end: CheckEnd): Promise<void> {
+    this.reports.push({
+      kind: 'ended', type, id, at: end.at, errorCode: end.error?.code ?? null, counted: end.counted,
+    });
   }
 
   async itemCollected(type: string, id: string, itemKey: string): Promise<void> {

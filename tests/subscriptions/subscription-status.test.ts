@@ -163,7 +163,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect((await w.status(alpha)).state).toBe('scheduled');
   });
 
-  it('shows queued when a check came due and was not dispatched, and the next check after a failed check', async () => {
+  it('shows queued when a check came due and was not dispatched, and the failures with the next check after a failed check', async () => {
     const w = await world();
     const alpha = w.source.addChannel('alpha');
     await w.subscribe('alpha');
@@ -171,7 +171,11 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual', subscriptionIds: [alpha] }))[0]!.job.id);
     expect(failed.state).toBe('failed');
     const subscription = (await w.channels.listSubscriptions())[0]!;
-    expect(subscription).toMatchObject({ status: 'error', checkStatus: { state: 'scheduled', nextCheckAt: subscription.nextCheckAt } });
+    expect(subscription).toMatchObject({
+      status: 'error', lastError: { code: 'network_error' },
+      checkFailures: { count: 1, since: failed.finishedAt, error: { code: 'network_error' } },
+      checkStatus: { state: 'failing', failures: 1, nextCheckAt: subscription.nextCheckAt },
+    });
 
     w.advance(31 * MINUTE);
     expect(await w.status(alpha)).toEqual({ state: 'queued' });
@@ -198,5 +202,14 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect(checkStatus(enabled, null, context)).toEqual({ state: 'scheduled', nextCheckAt: later });
     // A subscription without a next check time yet, such as after an import, waits for the scheduler to plan one.
     expect(checkStatus({ enabled: true, nextCheckAt: null }, null, context)).toEqual({ state: 'queued' });
+    // Failures in a row: a pause the subscription made itself names them; a running or due check shows as it is.
+    const failures = { count: 3, since: now.toISOString(), error: { code: 'network_error', message: '無法連線。' } };
+    expect(checkStatus({ enabled: false, nextCheckAt: null, checkFailures: failures, autoPausedAt: now.toISOString() }, null, context))
+      .toEqual({ state: 'auto_paused', failures: 3 });
+    expect(checkStatus({ enabled: false, nextCheckAt: null, checkFailures: failures }, null, context)).toEqual({ state: 'paused' });
+    expect(checkStatus({ ...enabled, checkFailures: failures }, checking, context)).toEqual({ state: 'checking' });
+    expect(checkStatus({ ...enabled, checkFailures: failures }, null, context)).toEqual({ state: 'failing', failures: 3, nextCheckAt: later });
+    expect(checkStatus({ ...enabled, checkFailures: failures }, null, { ...context, autoCheck: false })).toEqual({ state: 'failing', failures: 3, nextCheckAt: null });
+    expect(checkStatus({ enabled: true, nextCheckAt: now.toISOString(), checkFailures: failures }, null, context)).toEqual({ state: 'queued' });
   });
 });

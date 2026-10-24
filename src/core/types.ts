@@ -135,8 +135,18 @@ export interface SubscriptionRecord {
   nextCheckAt?: string | null;
   /** The last time a check of this subscription was submitted. */
   lastDispatchedAt?: string | null;
-  /** The last discovery that finished listing the subscription target. */
+  /**
+   * When the latest check ended, with its items or with a failure; a check stopped by a pause, a
+   * removal or a later job does not count.
+   */
   lastCheckedAt?: string | null;
+  /** The checks in a row that failed; absent once a check succeeds. */
+  checkFailures?: CheckFailures | undefined;
+  /**
+   * When the subscription paused itself because its checks kept failing; absent while it is
+   * enabled and after a pause by the person.
+   */
+  autoPausedAt?: string | undefined;
   /**
    * Candidates whose exact publish time a capture found earlier than that check's range start,
    * `before`. Publish times do not change, so a check whose range starts no earlier than `before`
@@ -152,6 +162,27 @@ export interface SubscriptionRecord {
    */
   failures?: ItemFailureEntry[] | undefined;
 }
+
+/**
+ * Checks of one subscription that failed in a row. A failure the device's network or a source's
+ * limit caused is not the subscription's own and is not counted; nor is a source that needs a new
+ * sign-in, which concerns every subscription of its type.
+ */
+export interface CheckFailures {
+  count: number;
+  /** When the first of them ended. */
+  since: string;
+  /** Why the latest of them failed. */
+  error: JobError;
+}
+
+/**
+ * A subscription pauses itself once this many checks in a row failed and the first of them ended
+ * at least AUTO_PAUSE_AFTER_MS earlier, so neither a burst of failures nor a long but rare outage
+ * pauses it.
+ */
+export const AUTO_PAUSE_FAILURES = 5;
+export const AUTO_PAUSE_AFTER_MS = 24 * 60 * 60_000;
 
 /** Checks that may each try a failed item of a subscription before it is skipped. */
 export const MAX_CHECK_ATTEMPTS = 3;
@@ -186,8 +217,8 @@ export interface OutOfRangeEntry {
 }
 
 /**
- * `error` marks an enabled subscription whose latest finished check job failed and that has no
- * job running; the next successful job returns it to `tracking`.
+ * `error` marks an enabled subscription whose latest check failed in a way that counts and that
+ * has no check running; the next successful check returns it to `tracking`.
  */
 export type SubscriptionStatus = 'tracking' | 'collecting' | 'paused' | 'error';
 
@@ -218,7 +249,9 @@ export type WorkStatus =
  * `queued` before it starts, `checking` while it lists, `downloading` with `done` of `total` items
  * once it knows them, `retrying` while it cannot go on. A subscription request still resolving its
  * address is `adding`. Without a check: `queued` when a check is due and not dispatched yet,
- * `scheduled` with the next automatic check, `paused` when the user paused it, `auto_check_off`
+ * `scheduled` with the next automatic check, `failing` with the checks in a row that failed and
+ * the next automatic check (null while automatic checks are off), `paused` when the user paused it,
+ * `auto_paused` when it paused itself after `failures` checks in a row failed, `auto_check_off`
  * when automatic checks are off for every subscription, `login_required` when the source needs the
  * user to sign in again.
  */
@@ -229,19 +262,23 @@ export type SubscriptionCheckStatus =
   | { state: 'downloading'; done: number; total: number }
   | { state: 'retrying'; at: string; cause: RetryCause }
   | { state: 'scheduled'; nextCheckAt: string }
+  | { state: 'failing'; failures: number; nextCheckAt: string | null }
   | { state: 'paused' }
+  | { state: 'auto_paused'; failures: number }
   | { state: 'auto_check_off' }
   | { state: 'login_required' };
 
 /** A subscription as the Subscriptions page and Agents read it. */
-export interface Subscription extends SubscriptionRecord {
+export interface Subscription extends Omit<SubscriptionRecord, 'checkFailures' | 'autoPausedAt'> {
   status: SubscriptionStatus;
   /** The status UI and Agents show; computed by the service. */
   checkStatus: SubscriptionCheckStatus;
   /** Whether an item of this subscription is still capturing, also after a pause; it may still save a document. */
   capturing: boolean;
-  /** Why the latest check job failed; set only while `status` is `error`. */
+  /** Why the latest check failed; set only while `status` is `error`. */
   lastError: JobError | null;
+  checkFailures: CheckFailures | null;
+  autoPausedAt: string | null;
   /** The check job still queued or running, with its item progress. */
   activeJob: { id: string; done: number; total: number } | null;
   documentCount: number;
@@ -493,8 +530,6 @@ export interface JobCheckpoint {
   target?: { id: string; title: string; url: string };
   /** An add job resolved this target and is subscribing to it; `subscriptionId` is the target's ID. */
   subscribing?: { subscriptionId: string; title: string; url: string };
-  /** A check job recorded its discovered items at this time; the subscription's last check time follows it. */
-  discovered?: { at: string };
   /**
    * A check job retrying the failed items of an earlier one collects exactly these items: it
    * runs no discovery, leaves the subscription's last check time alone and applies no range bound.
