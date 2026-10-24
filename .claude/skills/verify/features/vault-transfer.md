@@ -46,4 +46,4 @@ Preconditions:
 
 ## Regression flows
 
-沒有已收錄的流程。
+- `vault-transfer`：`vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換到不同內容的 Vault、收集中匯入比對與固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
