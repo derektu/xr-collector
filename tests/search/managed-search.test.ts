@@ -100,6 +100,33 @@ describe('ManagedTranscriptSearch', () => {
     expect(search.status()).toMatchObject({ state: 'ready', lastRebuiltAt: '2026-10-01T00:00:00.000Z' });
   });
 
+  it('forces a full replacement for a new semantic profile and records it only after success', async () => {
+    const rebuilt: SavedDocument[][] = [];
+    const recorded: string[] = [];
+    const search = new ManagedTranscriptSearch(
+      fakeBackend(true, rebuilt),
+      async () => documents,
+      undefined,
+      () => new Date('2026-10-24T00:00:00.000Z'),
+      { forceRebuild: true, afterRebuild: async () => { recorded.push('profile'); } },
+    );
+    await search.start();
+    expect(rebuilt).toEqual([documents]);
+    expect(recorded).toEqual(['profile']);
+  });
+
+  it('enters the error state when committing the semantic profile fails', async () => {
+    const search = new ManagedTranscriptSearch(
+      fakeBackend(false, []),
+      async () => documents,
+      undefined,
+      () => new Date(),
+      { afterRebuild: async () => { throw new Error('marker disk full'); } },
+    );
+    await expect(search.start()).rejects.toThrow('marker disk full');
+    expect(search.status()).toMatchObject({ state: 'error', message: '無法啟動搜尋索引。' });
+  });
+
   it('reports a failed rebuild with its reason and keeps the previous rebuild time', async () => {
     const store = memoryStateStore('2026-10-01T00:00:00.000Z');
     const backend = { ...fakeBackend(true, []), replaceAll: async () => { throw new Error('engine down'); } };
@@ -177,6 +204,14 @@ describe('ManagedTranscriptSearch', () => {
     });
     const search = new ManagedTranscriptSearch(backend, async () => documents);
     await search.start();
+
+    const settings = requests.find(({ url, method }) => url.endsWith('/settings') && method === 'PATCH')?.body as Record<string, unknown>;
+    expect(settings).toEqual({
+      searchableAttributes: ['title', 'publisherName', 'bodyMarkdown'],
+      filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
+      pagination: { maxTotalHits: 10_000 },
+    });
+    expect(settings).not.toHaveProperty('localizedAttributes');
 
     const indexed = requests.find(({ url, method }) => url.endsWith('/documents') && method === 'PUT')?.body as Array<{ key: string }>;
     expect(indexed.map(({ key }) => key)).toEqual(documents.map(({ id }) => indexKey(id)));

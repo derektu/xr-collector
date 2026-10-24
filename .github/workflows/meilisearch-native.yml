@@ -1,0 +1,64 @@
+name: Meilisearch native runtimes
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/build-meilisearch.mjs
+      - scripts/meilisearch-build-recipe.json
+      - scripts/meilisearch-api-smoke.mjs
+      - .github/workflows/meilisearch-native.yml
+      - package.json
+  push:
+    paths:
+      - scripts/build-meilisearch.mjs
+      - scripts/meilisearch-build-recipe.json
+      - scripts/meilisearch-api-smoke.mjs
+      - .github/workflows/meilisearch-native.yml
+      - package.json
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            binary: resources/bin/mac/meilisearch
+            manifest: resources/bin/mac/meilisearch-build.json
+          - runner: macos-15-intel
+            target: darwin-x64
+            rust_target: x86_64-apple-darwin
+            binary: resources/bin/mac/meilisearch
+            manifest: resources/bin/mac/meilisearch-build.json
+          - runner: windows-2022
+            target: win32-x64
+            rust_target: x86_64-pc-windows-msvc
+            binary: resources/bin/win/meilisearch.exe
+            manifest: resources/bin/win/meilisearch-build.json
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.91.1
+          targets: ${{ matrix.rust_target }}
+      - run: npm ci
+      - run: npm run build:meilisearch -- --target ${{ matrix.target }} --require-native
+      - run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: meilisearch-${{ matrix.target }}
+          path: |
+            ${{ matrix.binary }}
+            ${{ matrix.manifest }}
+          if-no-files-found: error

@@ -22,6 +22,7 @@ import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
 import { pidFilePath } from '../search/meilisearch-process.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
+import { prepareOwnedSearchProjection, searchDatabasePath, searchProfilePath } from '../search/search-projection.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
 import { changeTotal, chosenKeys, compareItems, itemStates, planChanges, type Comparison, type ImportPlan, type ItemStates } from './vault-merge.js';
@@ -932,7 +933,7 @@ export class VaultWorkspace {
 
   /** Each Vault path gets its own rebuildable search database on this device. */
   private searchPath(root: string): string {
-    return `${this.options.searchData}-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
+    return searchDatabasePath(this.options.searchData, root);
   }
 
   /** Removes the search database of a Vault path, its state record and its process record; used when the path stops being a Vault. */
@@ -942,6 +943,7 @@ export class VaultWorkspace {
     await rm(database, { recursive: true, force: true });
     await rm(`${database}-state.json`, { force: true });
     await rm(pidFilePath(database), { force: true });
+    await rm(searchProfilePath(database), { force: true });
   }
 
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
@@ -950,8 +952,14 @@ export class VaultWorkspace {
     const vault = new MarkdownVault(root);
     // Deletions a stop left unfinished are settled before the search index is compared with the Vault.
     const recovery = await vault.recoverDeletions();
+    const databasePath = this.searchPath(root);
     const runtime = this.options.createSearch ? await this.options.createSearch(root) : await startSearchRuntime({
-      vault, binaryPath: this.options.searchBinary, databasePath: this.searchPath(root),
+      vault, binaryPath: this.options.searchBinary, databasePath,
+      prepareProjection: () => prepareOwnedSearchProjection({
+        searchData: this.options.searchData,
+        vaultRoot: root,
+        binaryPath: this.options.searchBinary,
+      }),
       ...(port ? { port } : {}),
     });
     const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry) });

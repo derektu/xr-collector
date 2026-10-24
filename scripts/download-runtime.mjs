@@ -19,7 +19,6 @@ const outputDir = path.join(projectRoot, 'resources', 'bin', target);
 const downloads = target === 'win' ? {
   ytDlp: { url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_win.zip', sha256: '30b4c14aafab6082becff7881e41b76df46dc43ea7633479410a91e29da492bf' },
   deno: { url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-pc-windows-msvc.zip', sha256: '15e5300b0ba3c3695a7621d90160a746ec9e710228cee639afa9d580f6e3cd11' },
-  meilisearch: { url: 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-windows-amd64.exe', sha256: 'edb04f8288565e413a318069600954e38574714e5a2559777f8f4e8cc16d1bf3' },
 } : {
   ytDlp: {
     url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos.zip',
@@ -28,10 +27,6 @@ const downloads = target === 'win' ? {
   deno: {
     url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-aarch64-apple-darwin.zip',
     sha256: '213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb8f35807a472',
-  },
-  meilisearch: {
-    url: 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-macos-apple-silicon',
-    sha256: '7fa492746343c1dd7217ead82fc6d42e74c1304593e4604f52ca71cf44d61b28',
   },
 };
 
@@ -47,15 +42,6 @@ async function download(url, expectedSha256, destination) {
   if (actual !== expectedSha256) {
     await rm(destination, { force: true });
     throw new Error(`Checksum mismatch for ${url}: expected ${expectedSha256}, got ${actual}`);
-  }
-}
-
-async function matchesChecksum(filePath, expectedSha256) {
-  try {
-    return await fileSha256(filePath) === expectedSha256;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw error;
   }
 }
 
@@ -151,22 +137,7 @@ try {
     await rename(denoTemp, denoPath);
   }
 
-  const meilisearchPath = path.join(outputDir, target === 'win' ? 'meilisearch.exe' : 'meilisearch');
-  if (await matchesChecksum(meilisearchPath, downloads.meilisearch.sha256)) {
-    console.log('Pinned Meilisearch 1.53.2 is already available.');
-  } else {
-    const meilisearchTemp = path.join(workDir, 'meilisearch');
-    console.log('Downloading pinned Meilisearch 1.53.2…');
-    await download(
-      downloads.meilisearch.url,
-      downloads.meilisearch.sha256,
-      meilisearchTemp,
-    );
-    await chmod(meilisearchTemp, 0o755);
-    await rm(meilisearchPath, { force: true });
-    await rename(meilisearchTemp, meilisearchPath);
-  }
-  console.log(`Runtime binaries ready in ${outputDir}`);
+  console.log(`Downloaded runtime dependencies ready in ${outputDir}`);
 } finally {
   await rm(workDir, { recursive: true, force: true });
 }

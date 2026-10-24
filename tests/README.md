@@ -22,13 +22,16 @@
 | `electron` | Desktop 殼層的純邏輯：主題偏好檔、選單列／系統匣的選單內容與圖示狀態（`tray-menu.test.ts`），以及第一次關閉提示的紀錄 |
 | `web` | 畫面使用的狀態／呈現邏輯（含工作頁列的標題、副標與等待文字，`jobs-presentation.test.ts`）、新增選單（含以相同 ID 登錄的 plugin 取代尚未支援的訂閱類型，`add-menu-planned.test.ts`），以及 UI、伺服器訊息與 Skill 的用語掃描（`terminology.test.ts`） |
 | `tooling` | 核心檔案與 plugin 契約不提及 YouTube／yt-dlp／RSS、核心不引用 `src/plugins` 下契約與組裝清單以外檔案的掃描（`core-type-agnostic.test.ts`），以及程式與 Skill 只用不分類型的路由、訂閱欄位與錯誤碼的掃描（`api-names.test.ts`），以及 `src/jobs` 不引用訂閱檔讀寫、`src/subscriptions` 不引用工作頁規則、只從 `src/jobs` 引用型別的掃描（`subscription-seam.test.ts`）；verify skill 的函式庫（`verify-skill/`）：證據資料夾、label 與指定的證據目錄、doctor 列出缺少的前置條件（Mac 與 Windows 的案例各自只在該平台執行）、slot lock 的持有者判斷與 `sweep`、程序辨識（含 Windows 命令列的判斷）與 `stop`／`sweep` 只結束 run 自己的程序（真實程序的案例分 Mac／Linux 與 Windows 兩組）、`restart` 期間 slot lock 不被 `sweep` 清掉（Web 模式，不在 Windows 執行）、Windows 程序啟動監看只結束一次且不碰已結束的 PID（`watch-starts.test.ts`，以假的監看程序在各平台執行），多台機器的 `results.json` 以 summary 彙整時的平台完整性、commit 一致、整個 run 失敗與缺少的 scenario（`summary.test.ts`），run 資料狀態的讀取：Vault 與 profile 依檔案格式讀出、讀取不寫入、停止的 run 的 API 與索引標為讀不到、Meilisearch key 從程序環境變數讀取（Mac 與 Linux，`state.test.ts`），證據是否對應目前程式的判斷（`freshness.test.ts`），以及已收錄流程的狀態序列與工作頁分區判斷、recorder 的 check 格式、功能地圖的 `Regression flows` 與流程涵蓋的子功能一致（`flows.test.ts`），以暫存 Git checkout、暫存 `HOME` 與真實程序驗證 |
+| `runtime` | pinned Meilisearch source build 的 target/toolchain/source/lock/output 驗證、cache identity、乾淨 checkout、原子 binary+manifest 替換與 failure preservation；測試用假的原生 executable，不執行長時間 Cargo build |
 | `support` | 共用 fixture：來源 plugin 登錄、YouTube plugin 組裝（`youtube-sources.ts`）、YouTube 文件轉換（`youtube-documents.ts`）、頻道探索的測試輔助（`youtube-discovery.ts`）、假來源 plugin（`fake-source-plugin.ts`）、in-memory 訂閱 port（`subscription-recorder.ts`）與合成 feed 伺服器（`synthetic-feeds.ts`） |
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 
 ## 真實搜尋與平台邊界
 
-`npm run test:meilisearch:mac` 下載 Mac runtime，再執行 search、殘留引擎清理、Agent、匯出入、合併匯入與搬移六個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少 binary 時會 skip。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這六項真實引擎驗收。
+`npm run test:meilisearch:mac` 下載固定的 yt-dlp／Deno 並從固定 source build Mac Meilisearch runtime，再執行 search、殘留引擎清理、Agent、匯出入、合併匯入與搬移六個相關檔案，包含其中的非引擎案例。這些檔案的真實引擎案例目前使用 `resources/bin/mac/meilisearch`，缺少合法 binary/manifest pair 時會 skip 或在 runtime 啟動時 fail closed。此命令供 Mac arm64 執行；Windows／Linux 的綠燈不能視為已通過這六項真實引擎驗收。
+
+`.github/workflows/meilisearch-native.yml` 在 Mac arm64、Mac x64 與 Windows x64 native runner 執行同一個 source build 指令，再用臨時 database 驗證 canonical settings、中文／英文索引、filter、page、highlight/crop 與 restart persistence。輸出的 runtime artifact 必須包含 binary 與 build manifest；這組 native smoke 與一般 Vitest 分開，不能用模擬 runner 或單元測試取代。
 
 平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 

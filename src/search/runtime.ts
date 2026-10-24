@@ -9,12 +9,15 @@ import {
 } from './managed-transcript-search.js';
 import { MeilisearchBackend } from './meilisearch-backend.js';
 import { startMeilisearchProcess } from './meilisearch-process.js';
+import { validateMeilisearchRuntime } from './meilisearch-runtime.js';
+import type { PreparedSearchProjection } from './search-projection.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
   binaryPath: string;
   databasePath: string;
   port?: number;
+  prepareProjection(): Promise<PreparedSearchProjection>;
 }
 
 export interface SearchRuntime {
@@ -26,6 +29,11 @@ export async function startSearchRuntime(
   options: StartSearchRuntimeOptions,
 ): Promise<SearchRuntime> {
   try {
+    await validateMeilisearchRuntime(options.binaryPath);
+    const projection = await options.prepareProjection();
+    if (path.resolve(projection.databasePath) !== path.resolve(options.databasePath)) {
+      throw new Error('Prepared search projection does not match the owned database path.');
+    }
     const process = await startMeilisearchProcess({
       binaryPath: options.binaryPath,
       databasePath: options.databasePath,
@@ -38,11 +46,19 @@ export async function startSearchRuntime(
       }),
       () => loadAllDocuments(options.vault),
       fileSearchStateStore(`${options.databasePath}-state.json`),
+      () => new Date(),
+      { forceRebuild: projection.forceRebuild, afterRebuild: projection.recordRebuild },
     );
-    void search.start().catch(() => undefined);
+    const initialization = search.start();
+    // The search object records the failure state; attach a handler now so a later close can await
+    // the same operation without an unhandled rejection in the meantime.
+    void initialization.catch(() => undefined);
     return {
       search,
-      close: () => process.close(),
+      async close() {
+        await initialization.catch(() => undefined);
+        await process.close();
+      },
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,8 +28,8 @@ async function healthy(engine: RunningMeilisearch): Promise<boolean> {
 }
 
 /** Runs the fixture that starts an engine, kills the fixture with SIGKILL, and returns the engine it left behind. */
-async function leaveEngineBehind(databasePath: string): Promise<number> {
-  const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('tests/search/fixtures/killed-engine.ts'), bundledBinary, databasePath], {
+async function leaveEngineBehind(databasePath: string, binaryPath = bundledBinary): Promise<number> {
+  const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('tests/search/fixtures/killed-engine.ts'), binaryPath, databasePath], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   let output = '';
@@ -65,15 +65,27 @@ describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app'
     expect(existsSync(pidFilePath(databasePath))).toBe(false);
   });
 
-  it('leaves a recorded process alone when its command line does not name this engine and database', async () => {
+  it('fails closed when a live recorded process cannot be proven to own this database', async () => {
     const databasePath = await tempDatabase();
     const other = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
     cleanups.push(async () => { other.kill('SIGKILL'); });
     await writeFile(pidFilePath(databasePath), JSON.stringify({ pid: other.pid }));
 
+    await expect(startMeilisearchProcess({ binaryPath: bundledBinary, databasePath })).rejects.toThrow(/Cannot prove process/u);
+    expect(alive(other.pid!)).toBe(true);
+    expect(existsSync(pidFilePath(databasePath))).toBe(true);
+  });
+
+  it('stops a proven leftover even when the installed binary path changed', async () => {
+    const databasePath = await tempDatabase();
+    const previousBinary = path.join(path.dirname(databasePath), 'previous-meilisearch');
+    await copyFile(bundledBinary, previousBinary);
+    await chmod(previousBinary, 0o755);
+    const leftover = await leaveEngineBehind(databasePath, previousBinary);
+
     const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
     cleanups.push(() => engine.close());
-    expect(alive(other.pid!)).toBe(true);
+    expect(alive(leftover)).toBe(false);
     expect(await healthy(engine)).toBe(true);
   });
 });

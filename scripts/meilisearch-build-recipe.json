@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "recipeRevision": 1,
+  "repository": "https://github.com/meilisearch/meilisearch.git",
+  "tag": "v1.53.2",
+  "sourceCommit": "ec006cecec6f684b1dcaee093a45ab4c05707127",
+  "cargoLockSha256": "f884034e00ae026ecc9a3c15999b11857dff4a99ba8d7c0528626571627cefbf",
+  "rustVersion": "1.91.1",
+  "package": "meilisearch",
+  "profile": "release",
+  "features": ["chinese"],
+  "defaultFeatures": false,
+  "meilisearchVersion": "1.53.2"
+}

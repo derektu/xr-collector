@@ -32,6 +32,13 @@ export interface SearchStateStore {
   save(state: { lastRebuiltAt: string | null }): Promise<void>;
 }
 
+export interface SearchProjectionLifecycle {
+  /** An engine/schema profile change removed the old projection, so even an empty Vault is rebuilt. */
+  forceRebuild?: boolean;
+  /** Commits the semantic profile only after a complete replacement succeeds. */
+  afterRebuild?: () => Promise<void>;
+}
+
 export class ManagedTranscriptSearch implements TranscriptSearch {
   private currentStatus: SearchStatus = {
     state: 'starting',
@@ -48,6 +55,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
     private readonly loadDocuments: () => Promise<SavedDocument[]>,
     private readonly stateStore?: SearchStateStore,
     private readonly now: () => Date = () => new Date(),
+    private readonly lifecycle: SearchProjectionLifecycle = {},
   ) {}
 
   status(): SearchStatus {
@@ -63,7 +71,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
       const removed = [...this.pendingRemovals];
       const documents = await this.loadDocuments();
       // Equal counts do not prove freshness; compare every document's content fingerprint.
-      if (!(await this.backend.isCurrent(documents))) await this.replaceAll(documents);
+      if (this.lifecycle.forceRebuild || !(await this.backend.isCurrent(documents))) await this.replaceAll(documents);
       for (const id of removed) this.pendingRemovals.delete(id);
       this.currentStatus = {
         state: 'ready',
@@ -168,6 +176,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
     await this.stateStore?.save({ lastRebuiltAt }).catch((error: unknown) => {
       console.warn('Unable to record the search rebuild time', error);
     });
+    await this.lifecycle.afterRebuild?.();
   }
 
   private enqueue(work: () => Promise<void>, errorMessage: string): Promise<void> {
