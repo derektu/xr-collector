@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionSchedule, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
+import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { trayMenu } from '../../src/electron/tray-menu.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';
@@ -13,8 +13,8 @@ const entry = (overrides: Partial<JobOverviewEntry>): JobOverviewEntry => ({
   progress: null, status: { state: 'queued' }, error: null, failedAt: null, ...overrides,
 });
 const overview = (overrides: Partial<JobOverview> = {}): JobOverview => ({ running: [], queued: [], failed: [], ...overrides });
-const schedule = (overrides: Partial<CollectionSchedule> = {}): CollectionSchedule => ({
-  enabled: true, status: 'scheduled', lastCheck: null,
+const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionScheduleView => ({
+  enabled: true, status: 'scheduled', lastCheck: null, connectivity: { state: 'online', checkedAt: null },
   nextCheck: { type: 'youtube', subscriptionId: 's', title: 'Acquired', at: '2026-10-24T18:52:00+08:00' }, ...overrides,
 });
 
@@ -67,6 +67,16 @@ describe('tray menu (#32 T1)', () => {
     const queuedOnly = trayMenu({ overview: overview({ queued: [entry({})] }), schedule: schedule() }, now);
     expect(queuedOnly).toMatchObject({ icon: 'collecting', tooltip: 'XR Collector・收集中' });
     expect(status(queuedOnly)).toEqual(['排隊中 1 項']);
+  });
+
+  it('says the device has no network above the work and the next check (#128)', () => {
+    const offline = { state: 'offline' as const, checkedAt: '2026-10-24T02:20:00.000Z' };
+    expect(status(trayMenu({ overview: overview(), schedule: schedule({ connectivity: offline }) }, now)))
+      .toEqual(['目前沒有網路', '沒有進行中的工作', '下次檢查 18:52']);
+    const running = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
+    const menu = trayMenu({ overview: overview({ running: [running] }), schedule: schedule({ connectivity: offline }) }, now);
+    expect(status(menu)).toEqual(['目前沒有網路', '正在收集：Acquired　3/10']);
+    expect(actions(menu)).toContain('立即檢查所有訂閱');
   });
 
   it('counts failed work on the jobs item', () => {

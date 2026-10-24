@@ -20,6 +20,18 @@ export const navigation: readonly NavigationItem[] = [
 ];
 export const settingsNavigation: NavigationItem = { page: 'settings', label: '設定', icon: 'settings' };
 
+/** Tooltip of the controls that need a network while the device has none. */
+export const OFFLINE_UNAVAILABLE = '沒有網路時無法使用';
+
+/** When the network was last confirmed, for the offline message: "14:32" today, "10-23 14:32" before. */
+export function offlineCheckedLabel(checkedAt: string, now: Date = new Date()): string {
+  const date = new Date(checkedAt);
+  const two = (value: number) => String(value).padStart(2, '0');
+  const time = `${two(date.getHours())}:${two(date.getMinutes())}`;
+  const today = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  return today ? time : `${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`;
+}
+
 /** The count next to 工作 in the sidebar: work running or queued, shown only when there is some. */
 export function jobsBadge(unfinished: number): string | null {
   return unfinished > 0 ? String(unfinished) : null;

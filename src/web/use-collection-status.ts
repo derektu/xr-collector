@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CollectionSchedule, JobView } from '../core/types.js';
+import type { CollectionScheduleView, JobView } from '../core/types.js';
 import { api } from './api-client.js';
 import { activeJobs } from './source-presentation.js';
 
@@ -9,7 +9,7 @@ export const IDLE_POLL_MS = 2000;
 export interface CollectionStatus {
   /** Top-level jobs still queued or running; null until the first load. */
   active: JobView[] | null;
-  schedule: CollectionSchedule | null;
+  schedule: CollectionScheduleView | null;
   /** Increases whenever the active jobs change or a change is announced, so pages know to reload. */
   revision: number;
   /** Increases when a job ends or a channel job finishes one of its videos: the moments documents can appear. */
@@ -46,7 +46,7 @@ export function useCollectionStatus(enabled: boolean): CollectionStatus & { anno
           active.map((job) => [job.id, job.state, job.progress?.done, job.wait?.until, job.retry?.nextAttemptAt,
             job.items?.filter((item) => item.wait || item.retry?.nextAttemptAt).length,
             job.items?.filter((item) => item.state === 'running').length]),
-          schedule.lastCheck?.at, schedule.nextCheck?.at, schedule.enabled,
+          schedule.lastCheck?.at, schedule.nextCheck?.at, schedule.enabled, schedule.connectivity.state,
         ]);
         const changed = key !== lastKey;
         lastKey = key;

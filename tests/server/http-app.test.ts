@@ -103,8 +103,10 @@ describe('HTTP app', () => {
       { enabled: false, intervalMinutes: 60 }, { backfillDays: 7 }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
     ].map((payload) => app.inject({ method: 'PUT', url: '/api/schedule', payload })));
 
-    expect(read.json()).toEqual({ schedule: scheduleValue });
-    expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null } });
+    // Without a connectivity service the device counts as online and never confirmed.
+    const connectivity = { state: 'online', checkedAt: null };
+    expect(read.json()).toEqual({ schedule: { ...scheduleValue, connectivity } });
+    expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null, connectivity } });
     for (const response of rejected) {
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe('invalid_request');

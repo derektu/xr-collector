@@ -9,13 +9,15 @@ import { Icon } from './icons.js';
  * and choosing an item close the menu; focus returns to the button whenever the menu or the
  * unsupported dialog closes from the keyboard or a dialog button.
  */
-export function AddMenu({ label, items, onChoose, primary, align = 'end', testId }: {
+export function AddMenu({ label, items, onChoose, primary, align = 'end', disabledReason, testId }: {
   label: string;
   items: readonly AddMenuItem[];
   onChoose: (mode: AddMode) => void;
   primary?: boolean;
   /** Which edge of the button the menu lines up with. */
   align?: 'start' | 'end';
+  /** Why adding is unavailable now; the button is disabled and shows it as its tooltip. */
+  disabledReason?: string | null;
   testId: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -25,6 +27,7 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', testId
   const entries = useRef<Array<HTMLButtonElement | null>>([]);
   const list = useRef<HTMLDivElement>(null);
   useFloatingMenu(open, button, list, align);
+  useEffect(() => { if (disabledReason) setOpen(false); }, [disabledReason]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -47,6 +50,7 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', testId
 
   return <div className={`menu-anchor add-menu ${align}`} ref={anchor}>
     <button ref={button} type="button" className={primary ? 'button primary' : 'button'} aria-haspopup="menu" aria-expanded={open}
+      disabled={Boolean(disabledReason)} title={disabledReason ?? undefined}
       onClick={() => setOpen((value) => !value)}
       onKeyDown={(event) => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }} data-testid={testId}><Icon name="plus" size={15} />{label}</button>
     {open ? <div ref={list} className="menu" role="menu" aria-label={label} data-testid={`${testId}-menu`} onKeyDown={(event) => {

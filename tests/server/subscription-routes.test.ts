@@ -11,7 +11,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING, youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
-import { createHttpApp } from '../../src/server/app.js';
+import { createHttpApp, type ConnectivityAccess } from '../../src/server/app.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
 import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
@@ -52,7 +52,7 @@ interface TypeCase {
   addTarget(name: string): { id: string; url: string; itemUrl: string };
 }
 
-async function world() {
+async function world(connectivity?: ConnectivityAccess) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-routes-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
@@ -81,7 +81,7 @@ async function world() {
   });
   const services = [service('youtube'), service('fake')];
   scheduler = new CollectionScheduler(services, new MemoryScheduleStore(), { now, pollIntervalMs: 24 * 60 * 60_000 });
-  const options = { collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates };
+  const options = { collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates, ...(connectivity ? { connectivity } : {}) };
   const ui = await createHttpApp(options);
   const agent = await createHttpApp({ ...options, agentToken: TOKEN });
   const send = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown, app: FastifyInstance = agent) => {
@@ -126,7 +126,7 @@ async function world() {
     await agent.close();
     await jobs.close();
   };
-  return { root, clock, ui, agent, scheduler, send, settled, subscribe, cases, close, fake };
+  return { root, clock, ui, agent, scheduler, send, settled, subscribe, cases, close, fake, youtube };
 }
 
 const caseOf = (type: 'youtube' | 'fake') => (w: Awaited<ReturnType<typeof world>>) => w.cases.find((entry) => entry.type === type)!;
@@ -338,7 +338,7 @@ describe('the jobs page routes (N69-T9)', () => {
     const w = await world();
     w.fake.fail('broken-1', new CollectorError('video_unavailable', '文章不存在。'));
     const failed = await w.settled((await w.send('POST', '/api/items', { url: 'https://fake.example/item/broken-1' })).body.job.id);
-    expect(failed.state).toBe('failed');
+    expect(failed).toMatchObject({ state: 'failed' });
     const [fromUi, fromAgent] = [await w.send('GET', '/api/jobs/overview', undefined, w.ui), await w.send('GET', '/api/jobs/overview')];
     expect(fromAgent).toEqual(fromUi);
     expect(fromAgent).toMatchObject({ status: 200, body: { overview: { running: [], queued: [], failed: [{
@@ -423,6 +423,112 @@ describe('requests the server cannot read', () => {
     }
     vi.spyOn(w.scheduler, 'runNow').mockRejectedValueOnce(new Error('disk failure'));
     expect(await answer('POST', '/api/subscription-checks', '{}')).toEqual([500, { code: 'internal_error', message: '發生未預期的錯誤。' }]);
+    await w.close();
+  });
+});
+
+/** A device network the test switches; checking it answers the switch and is counted. */
+function switchableNetwork() {
+  const network = {
+    state: 'online' as 'online' | 'offline',
+    reachable: true,
+    checks: 0,
+    checkedAt: null as string | null,
+    status: () => ({ state: network.state, checkedAt: network.checkedAt }),
+    check: async () => {
+      network.checks += 1;
+      network.checkedAt = '2026-10-15T04:05:00.000Z';
+      network.state = network.reachable ? 'online' : 'offline';
+      return network.state;
+    },
+    confirm: () => network.check(),
+  };
+  return network;
+}
+
+describe('without a network (#128)', () => {
+  it('refuses work that needs the network with offline, and starts no job', async () => {
+    const network = switchableNetwork();
+    const w = await world(network);
+    const c = caseOf('youtube')(w);
+    const kept = c.addTarget('kept');
+    await w.subscribe(kept.url);
+    const broken = c.addTarget('broken');
+    w.youtube.failures.set(new URL(broken.itemUrl).searchParams.get('v')!, new CollectorError('video_unavailable', '影片不存在。'));
+    const failed = await w.settled((await w.send('POST', '/api/items', { url: broken.itemUrl })).body.job.id);
+    expect(failed).toMatchObject({ state: 'failed' });
+    const fresh = c.addTarget('new');
+    const jobCount = async () => (await w.send('GET', '/api/jobs?state=all&limit=100')).body.jobs.length;
+    const before = await jobCount();
+
+    network.state = 'offline';
+    network.reachable = false;
+    network.checkedAt = '2026-10-15T04:01:00.000Z';
+    const refused = [
+      ['/api/submissions', { url: fresh.itemUrl }],
+      ['/api/items', { url: fresh.itemUrl }],
+      ['/api/subscriptions', { url: fresh.url }],
+      ['/api/subscription-previews', { url: fresh.url }],
+      ['/api/url-recognitions', { url: fresh.url }],
+      [`/api/jobs/${failed.id}/retry`, undefined],
+    ] as const;
+    for (const [route, body] of refused) {
+      for (const app of [w.agent, w.ui]) {
+        expect({ route, ...(await w.send('POST', route, body, app)) }).toEqual({
+          route, status: 503, body: { error: { code: 'offline', message: '目前沒有網路，恢復後再試。' } },
+        });
+      }
+    }
+    expect(network.checks).toBe(0);
+    expect(await jobCount()).toBe(before);
+
+    // Checking subscriptions confirms the network first and is refused only while it is still gone.
+    expect(await w.send('POST', '/api/subscription-checks')).toMatchObject({ status: 503, body: { error: { code: 'offline' } } });
+    expect(await w.send('POST', '/api/subscription-checks', { subscriptions: [{ type: 'youtube', id: kept.id }] }))
+      .toMatchObject({ status: 503, body: { error: { code: 'offline' } } });
+    expect(network.checks).toBe(2);
+    expect(await jobCount()).toBe(before);
+
+    network.reachable = true;
+    expect(await w.send('POST', '/api/subscription-checks')).toMatchObject({ status: 202, body: { submissions: [{ job: { kind: 'youtube.channel' } }] } });
+    expect(network.checks).toBe(3);
+    expect((await w.send('POST', '/api/items', { url: fresh.itemUrl })).status).toBe(202);
+    await w.close();
+  });
+
+  it('confirms the network when a preview cannot reach the source, and answers offline when it is gone', async () => {
+    const network = switchableNetwork();
+    const w = await world(network);
+    const c = caseOf('youtube')(w);
+    const target = c.addTarget('preview');
+    const resolve = vi.spyOn(w.youtube, 'resolveChannel');
+    resolve.mockRejectedValueOnce(new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。'));
+    network.reachable = false;
+    expect(await w.send('POST', '/api/subscription-previews', { url: target.url }))
+      .toMatchObject({ status: 503, body: { error: { code: 'offline', message: '目前沒有網路，恢復後再試。' } } });
+    expect(network.status().state).toBe('offline');
+
+    // With the network there, the failure is the source's own.
+    network.state = 'online';
+    network.reachable = true;
+    resolve.mockRejectedValueOnce(new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。'));
+    expect(await w.send('POST', '/api/subscription-previews', { url: target.url }))
+      .toMatchObject({ status: 503, body: { error: { code: 'network_error' } } });
+    expect(network.checks).toBe(2);
+    await w.close();
+  });
+
+  it('reports the network in health and the schedule to the UI and Agents alike', async () => {
+    const network = switchableNetwork();
+    const w = await world(network);
+    expect((await w.send('GET', '/api/health')).body.connectivity).toEqual({ state: 'online', checkedAt: null });
+    network.state = 'offline';
+    network.checkedAt = '2026-10-15T04:01:00.000Z';
+    for (const app of [w.agent, w.ui]) {
+      expect((await w.send('GET', '/api/health', undefined, app)).body.connectivity).toEqual({ state: 'offline', checkedAt: '2026-10-15T04:01:00.000Z' });
+      expect((await w.send('GET', '/api/schedule', undefined, app)).body.schedule.connectivity).toEqual({ state: 'offline', checkedAt: '2026-10-15T04:01:00.000Z' });
+    }
+    expect((await w.send('PUT', '/api/schedule', { enabled: false })).body.schedule).toMatchObject({ enabled: false, connectivity: { state: 'offline' } });
     await w.close();
   });
 });

@@ -440,3 +440,5 @@ span.reader-publisher { color:var(--text-muted); }
 .source-detail .back-link { margin-bottom:-6px; }
 .vault-background { margin-top:12px; color:var(--secondary); font-size:13px; }
 .confirm-dialog p.move-leftover { color:var(--warning); }
+.offline-banner { display:flex; align-items:center; gap:10px; margin:0 0 16px; padding:10px 14px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); color:var(--primary); font-size:13px; line-height:1.5; }
+.offline-banner svg { flex:none; }

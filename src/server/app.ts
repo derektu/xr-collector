@@ -27,6 +27,9 @@ import {
   type JobSubmissionView,
   type JobView,
   type CollectionSchedule,
+  type CollectionScheduleView,
+  type ConnectivityState,
+  type ConnectivityStatus,
   type DocumentFilter,
   type SearchStatusReport,
   type TranscriptSearch,
@@ -91,6 +94,17 @@ export interface ScheduleManagement {
 
 const SCHEDULE_FIELDS = new Set(['enabled']);
 
+/** The device's network as collection depends on it. */
+export interface ConnectivityAccess {
+  status(): ConnectivityStatus;
+  /** Confirms the network now. */
+  check(): Promise<ConnectivityState>;
+  /** Confirms the network after a request failed for lack of it. */
+  confirm(): Promise<ConnectivityState>;
+}
+
+const OFFLINE_MESSAGE = '目前沒有網路，恢復後再試。';
+
 /** Vault location operations that stay available before a Vault is active. */
 export interface VaultSetup {
   status(): VaultSetupStatus;
@@ -114,6 +128,11 @@ export interface HttpAppOptions {
   search?: TranscriptSearch;
   /** The device's request channels, one per pacing group; readable whatever state the Vault is in. */
   pacing?: readonly Pacing[];
+  /**
+   * The device's network. While it is offline, requests that start collection right away are
+   * refused with `offline`; checking subscriptions confirms the network first.
+   */
+  connectivity?: ConnectivityAccess;
   webRoot?: string;
   agentToken?: string;
   agentInfo?: { connectionFile: string; skillPath: string; url: string };
@@ -176,6 +195,7 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   insufficient_space: 507,
   capture_failed: 502,
   network_error: 503,
+  offline: 503,
   rate_limited: 503,
 };
 
@@ -193,6 +213,30 @@ export function errorStatus(code: string): number {
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
   const subscriptions = options.subscriptions ?? [];
+  const connectivity = options.connectivity;
+  const connectivityStatus = (): ConnectivityStatus => connectivity?.status() ?? { state: 'online', checkedAt: null };
+  /** Refuses work that would only fail without a network. */
+  const requireOnline = (): void => {
+    if (connectivityStatus().state === 'offline') throw new CollectorError('offline', OFFLINE_MESSAGE);
+  };
+  /** Checking subscriptions is how a person asks for the network to be confirmed again. */
+  const confirmOnline = async (): Promise<void> => {
+    if (connectivity && connectivityStatus().state === 'offline' && await connectivity.check() === 'offline') {
+      throw new CollectorError('offline', OFFLINE_MESSAGE);
+    }
+  };
+  /** A preview that found no network confirms it, and answers `offline` when the device has none. */
+  const confirmingNetwork = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      if (connectivity && error instanceof CollectorError && error.code === 'network_error' && await connectivity.confirm() === 'offline') {
+        throw new CollectorError('offline', OFFLINE_MESSAGE, { cause: error });
+      }
+      throw error;
+    }
+  };
+  const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -350,6 +394,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return {
       status: runtime && runtime.state !== 'ready' ? 'unavailable' : 'ok',
       ...(runtime ? { runtime } : {}),
+      connectivity: connectivityStatus(),
       ...(options.activity ? { activityLog: options.activity.health() } : {}),
     };
   });
@@ -437,11 +482,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const jobs = options.jobs;
     app.post<{ Body: { url?: unknown } }>('/api/submissions', async (request, reply) => {
       const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要加入的網址。'));
+      requireOnline();
       return reply.code(202).send(submissionView(await jobs.submit(type, input)));
     });
 
     app.post<{ Body: { url?: unknown } }>('/api/items', async (request, reply) => {
       const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要收集的網址。'));
+      requireOnline();
       return reply.code(202).send(submissionView(await jobs.submitItem(type, input)));
     });
 
@@ -470,8 +517,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       job: jobView(jobs.get(request.params.id)),
     }));
 
-    app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) =>
-      reply.code(202).send(submissionView(await jobs.retry(request.params.id))));
+    app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) => {
+      requireOnline();
+      return reply.code(202).send(submissionView(await jobs.retry(request.params.id)));
+    });
 
     app.post<{ Params: { id: string } }>('/api/jobs/:id/dismiss', async (request) => ({
       job: jobView(await jobs.dismiss(request.params.id)),
@@ -489,7 +538,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const schedule = options.schedule;
     // One switch covers the subscriptions of every source type.
     app.get('/api/schedule', async () => ({
-      schedule: await schedule.getSchedule(),
+      schedule: scheduleView(await schedule.getSchedule()),
     }));
 
     app.put<{ Body: Record<string, unknown> | null }>('/api/schedule', async (request) => {
@@ -501,7 +550,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
       if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
       if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
-      return { schedule: await schedule.updateSchedule({ enabled: body.enabled }) };
+      return { schedule: scheduleView(await schedule.updateSchedule({ enabled: body.enabled })) };
     });
   }
 
@@ -525,12 +574,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (subscriptions.length > 0) {
     app.post<{ Body: { url?: unknown } }>('/api/subscription-previews', async (request) => {
       const { collection, input } = subscriptionAddress(request.body?.url);
-      return { preview: await collection.preview(input) };
+      requireOnline();
+      return { preview: await confirmingNetwork(() => collection.preview(input)) };
     });
 
     app.post<{ Body: { url?: unknown; settings?: unknown } }>('/api/subscriptions', async (request, reply) => {
       const { collection, subscription, input } = subscriptionAddress(request.body?.url);
       const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
+      requireOnline();
       return reply.code(202).send(submissionView(await collection.add(input, settings)));
     });
 
@@ -571,14 +622,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const unknown = Object.keys(body).find((key) => key !== 'subscriptions');
       if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
       const listed = body.subscriptions;
+      if (listed !== undefined && (!Array.isArray(listed) || listed.length === 0 || !listed.every(isSubscriptionKey))) {
+        throw new CollectorError('invalid_request', 'subscriptions 必須是非空的 {type, id} 清單。');
+      }
+      await confirmOnline();
       if (listed === undefined) {
         // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
         if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
         const submissions = await options.schedule.runNow();
         return reply.code(202).send({ submissions: submissions.map(submissionView) });
-      }
-      if (!Array.isArray(listed) || listed.length === 0 || !listed.every(isSubscriptionKey)) {
-        throw new CollectorError('invalid_request', 'subscriptions 必須是非空的 {type, id} 清單。');
       }
       const submissions = await startChecks((type) => collectionOf(type).collection, listed);
       return reply.code(202).send({ submissions: submissions.map(submissionView) });
@@ -590,13 +642,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (subscriptions.length > 0) {
     const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? []);
-    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => collectionOf(type).collection.preview(url);
+    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => confirmingNetwork(() => collectionOf(type).collection.preview(url));
 
     // Every address answers 200 with a status; only a missing address is a malformed request.
     app.post<{ Body: { url?: unknown } }>('/api/url-recognitions', async (request) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請貼上要加入的網址。');
       }
+      requireOnline();
       return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewSubscription }) };
     });
 

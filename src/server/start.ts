@@ -1,7 +1,7 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
-import type { ActivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup } from './app.js';
+import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -16,6 +16,7 @@ export interface StartServerOptions {
   schedule?: ScheduleManagement;
   search?: TranscriptSearch;
   pacing?: readonly Pacing[];
+  connectivity?: ConnectivityAccess;
   port: number;
   host?: string;
   webRoot?: string;
@@ -41,6 +42,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.transfer ? { transfer: options.transfer } : {}),
     ...(options.subscriptions ? { subscriptions: options.subscriptions } : {}),
     ...(options.pacing ? { pacing: options.pacing } : {}),
+    ...(options.connectivity ? { connectivity: options.connectivity } : {}),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),

@@ -1,4 +1,4 @@
-import type { CollectionSchedule, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../core/types.js';
 
 /** The three tray icons: nothing to do, work queued or running, automatic checks off. */
 export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off';
@@ -23,7 +23,7 @@ export interface TrayMenu {
  */
 export interface TrayState {
   overview: JobOverview;
-  schedule: CollectionSchedule;
+  schedule: CollectionScheduleView;
 }
 
 const separator: TrayMenuItem = { kind: 'separator' };
@@ -37,6 +37,7 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
   const [current] = overview.running;
   const busy = overview.running.length > 0 || overview.queued.length > 0;
   const status: string[] = [];
+  if (schedule.connectivity.state === 'offline') status.push('目前沒有網路');
   if (current) status.push(runningLine(current));
   if (overview.queued.length > 0) status.push(`排隊中 ${overview.queued.length} 項`);
   if (!busy) {

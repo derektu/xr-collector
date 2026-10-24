@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type { JobOverview, JobOverviewEntry } from '../core/types.js';
 import { api } from './api-client.js';
+import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { jobEntryLabel } from './jobs-presentation.js';
 import { ACTIVE_POLL_MS, IDLE_POLL_MS } from './use-collection-status.js';
@@ -9,8 +10,10 @@ import { ACTIVE_POLL_MS, IDLE_POLL_MS } from './use-collection-status.js';
  * Everything the app is doing now: work that started with what it is doing, work queued in the
  * order it starts, and failed single items with retry and remove. It refreshes itself, quickly while any work is unfinished.
  */
-export function Jobs({ revision, onChanged }: {
+export function Jobs({ revision, offline, onChanged }: {
   revision: number;
+  /** The device has no network, so a failed item cannot be retried now. */
+  offline: boolean;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const [overview, setOverview] = useState<JobOverview | null>(null);
@@ -71,7 +74,7 @@ export function Jobs({ revision, onChanged }: {
       </span>
       {label.status ? <span className={`status-chip ${label.status.tone}`} data-testid="job-status">{label.status.text}</span> : null}
       {extra.failed ? <span className="job-actions">
-        <button type="button" className="button small" disabled={acting === entry.jobId} onClick={() => void act(entry, 'retry')} data-testid="job-retry">
+        <button type="button" className="button small" disabled={acting === entry.jobId || offline} title={offline ? OFFLINE_UNAVAILABLE : undefined} onClick={() => void act(entry, 'retry')} data-testid="job-retry">
           <Icon name="refresh" size={14} />重試</button>
         <button type="button" className="button small" disabled={acting === entry.jobId} onClick={() => void act(entry, 'dismiss')} data-testid="job-dismiss">移除</button>
       </span> : null}

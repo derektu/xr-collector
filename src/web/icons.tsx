@@ -20,6 +20,7 @@ const PATHS: Record<string, ReactNode> = {
   link: <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
   file: <><path d="M6 3h9l5 5v13H6z" /><path d="M14 3v6h6" /><path d="M9 14h6M9 17h4" /></>,
   close: <path d="M6 6l12 12M18 6L6 18" />,
+  offline: <><path d="M2 8.8a15 15 0 0 1 20 0" /><path d="M5 12.5a10 10 0 0 1 14 0" /><path d="M8.5 16.4a5 5 0 0 1 7 0" /><path d="M12 20h.01" /><path d="M3 3l18 18" /></>,
 };
 
 /** Adds icons by name, such as the icon each source type is drawn with; the web assembly registers them. */

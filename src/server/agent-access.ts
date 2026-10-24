@@ -18,6 +18,7 @@ export async function startAgentAccess(options: {
   schedule?: StartServerOptions['schedule'];
   search?: StartServerOptions['search'];
   pacing?: StartServerOptions['pacing'];
+  connectivity?: StartServerOptions['connectivity'];
   instanceId: string;
   /** Tried first, then the following ports up to AGENT_PORT_RANGE, then any free port; any free port when omitted. */
   preferredPort?: number;
@@ -42,6 +43,7 @@ export async function startAgentAccess(options: {
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.pacing ? { pacing: options.pacing } : {}),
+    ...(options.connectivity ? { connectivity: options.connectivity } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),

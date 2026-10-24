@@ -1,5 +1,8 @@
-/** Why collection is paused. `sleep`: the system is suspending or asleep, dark wakes included. */
-export type PauseReason = 'sleep';
+/**
+ * Why collection is paused. `sleep`: the system is suspending or asleep, dark wakes included.
+ * `offline`: the device has no network, as `Connectivity` confirmed it.
+ */
+export type PauseReason = 'sleep' | 'offline';
 
 /** One reason coming into force or lifting, and whether collection as a whole is paused after it. */
 export interface PauseChange {
@@ -11,6 +14,7 @@ export interface PauseChange {
 /** What the activity log says when a reason comes into force and when it lifts. */
 export const PAUSE_MESSAGES: Record<PauseReason, { paused: string; resumed: string }> = {
   sleep: { paused: '系統進入睡眠，暫停收集。', resumed: '系統已喚醒，恢復收集。' },
+  offline: { paused: '網路中斷，暫停收集。', resumed: '網路已恢復，恢復收集。' },
 };
 
 /**
@@ -24,6 +28,10 @@ export class CollectionPause {
 
   get paused(): boolean {
     return this.reasons.size > 0;
+  }
+
+  has(reason: PauseReason): boolean {
+    return this.reasons.has(reason);
   }
 
   /** Puts `reason` in force or lifts it; listeners hear only a reason that actually changes. */

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { selectCandidates } from '../subscriptions/candidates.js';
 import type { Collector } from '../core/collector.js';
 import type { CollectionPause } from '../core/collection-pause.js';
+import type { Connectivity } from '../core/connectivity.js';
 import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
@@ -97,6 +98,11 @@ export interface JobManagerOptions {
    * attempt; everything continues once collection does.
    */
   pause?: CollectionPause;
+  /**
+   * Confirms the device's network after a step fails with `network_error`. When the device is
+   * offline the pause above is in force, so the failure returns the job to the queue.
+   */
+  connectivity?: Pick<Connectivity, 'confirm'>;
 }
 
 export interface JobListQuery {
@@ -1087,14 +1093,21 @@ export class JobManager {
   }
 
   /** How a step that threw ended when the throw was not its own failure; true when handled. */
-  private handledInterruption(job: CollectionJob, error: unknown, signal: AbortSignal): boolean {
+  private async handledInterruption(job: CollectionJob, error: unknown, signal: AbortSignal): Promise<boolean> {
+    // A failure for lack of a network confirms the device's network first, unless collection is
+    // already paused and the failure returns to the queue anyway. A close while it waits leaves the
+    // job for close() to record as interrupted.
+    if (error instanceof CollectorError && error.code === 'network_error' && !this.options.pause?.paused && !(signal.aborted && error === signal.reason)) {
+      await this.options.connectivity?.confirm();
+      if (this.closed) return true;
+    }
     if (signal.aborted && error === signal.reason) {
       // A close records the job as interrupted; a hold or the collection pause puts it back in line.
       if (!this.closed) this.returnToQueue(job);
       return true;
     }
-    // A transient failure while collection is paused, such as a lost network in a dark wake, is the
-    // pause's doing, not the source's.
+    // A transient failure while collection is paused, such as a lost network, is the pause's doing,
+    // not the source's.
     if (this.options.pause?.paused && error instanceof CollectorError && this.classify(job, error) === 'retry_now') {
       if (!this.closed) this.returnToQueue(job);
       return true;
@@ -1228,7 +1241,7 @@ export class JobManager {
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: error.code === 'out_of_range' ? 'out_of_range' : 'deleted' }, null);
         return;
       }
-      if (this.handledInterruption(job, error, signal)) return;
+      if (await this.handledInterruption(job, error, signal)) return;
       await this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
@@ -1243,7 +1256,7 @@ export class JobManager {
     } catch (error) {
       // A step cut short by shutdown is left for close() to record as interrupted.
       if (this.closed) return;
-      if (this.handledInterruption(job, error, signal)) return;
+      if (await this.handledInterruption(job, error, signal)) return;
       await this.failOrRetry(job, errorDetails(error), diagnosticDetail(error));
     }
   }
