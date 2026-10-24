@@ -167,9 +167,10 @@ node $V flows run --issue 91 --label ticket                          # 不給名
 
 **收錄規則**：
 
-1. 票自己的流程先放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
-2. 同一個流程被第二張票用到時，那張票把它收進 `flows/`：斷言改成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能。
+1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑時，同一張票把它收進 `flows/`，隨 PR 一起 commit：斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
+2. 只對本票有意義的步驟，例如重現特定 bug 的資料、一次性的資料檢查，留在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
 3. 票改變了已收錄流程所檢查的行為時，同一張票更新該流程與功能地圖；改過的斷言在基準上失敗、在本票版本通過。
+4. 已收錄流程涵蓋的功能，票不另寫重複的 `.local` 流程；需要多檢查的項目加進已收錄流程。
 
 ### 重啟
 
