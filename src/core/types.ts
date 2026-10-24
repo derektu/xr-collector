@@ -788,6 +788,20 @@ export interface CollectionSchedule {
   nextCheck: ScheduledCheck | null;
 }
 
+/** Whether the device has a network, as collection needs to know it. */
+export type ConnectivityState = 'online' | 'offline';
+
+export interface ConnectivityStatus {
+  state: ConnectivityState;
+  /** The last confirmation of the device's network; null before the first one. */
+  checkedAt: string | null;
+}
+
+/** The automatic collection schedule as the API returns it, with the network collection depends on. */
+export interface CollectionScheduleView extends CollectionSchedule {
+  connectivity: ConnectivityStatus;
+}
+
 export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
 
 export interface SearchStatus {
@@ -840,6 +854,7 @@ export type CoreErrorCode =
   | 'invalid_url'
   | 'invalid_subscription'
   | 'network_error'
+  | 'offline'
   | 'rate_limited'
   | 'capture_failed'
   | 'document_not_found'

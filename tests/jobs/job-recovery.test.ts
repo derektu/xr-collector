@@ -17,6 +17,7 @@ import {
 import { JobManager, type JobLimits, type RetryPolicy } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { CollectionPause } from '../../src/core/collection-pause.js';
+import { Connectivity } from '../../src/core/connectivity.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type {
@@ -149,7 +150,7 @@ afterEach(async () => {
   stores = [];
 });
 
-async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy>; pause?: CollectionPause } = {}) {
+async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy>; pause?: CollectionPause; connectivity?: Connectivity } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'xr-recovery-'));
   directories.push(directory);
   const vault = new MemoryVault();
@@ -174,6 +175,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
       ...(options.pause ? { pause: options.pause } : {}),
+      ...(options.connectivity ? { connectivity: options.connectivity } : {}),
       now: () => clock.now,
       createId: () => `job-${++sequence}`,
       setTimer: (run, ms) => {
@@ -606,6 +608,98 @@ describe('system sleep (#97)', () => {
     expect([doneFirst.state, doneSecond.state]).toEqual(['completed', 'completed']);
     expect(doneFirst.retry).toMatchObject({ attempts: 1 });
     expect(w.script.captures.sort()).toEqual([retried, retried, queued].sort());
+  });
+});
+
+describe('lost network (#128)', () => {
+  /** A connectivity service whose probe answers `state.online`, once `state.gate` (when set) opens. */
+  function offlineWorld(online: boolean) {
+    const pause = new CollectionPause();
+    const state = { online, probes: 0, gate: null as Promise<void> | null };
+    const connectivity = new Connectivity({ pause, probe: async () => { state.probes += 1; if (state.gate) await state.gate; return state.online; } });
+    return { pause, state, connectivity };
+  }
+
+  it('returns a step that fails for lack of a network to the queue without spending an attempt, and finishes it once online', async () => {
+    const net = offlineWorld(false);
+    const w = await world({ pause: net.pause, connectivity: net.connectivity });
+    const id = videoId(10, 'o');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot();
+    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
+    await vi.waitFor(() => expect(g.manager.get(accepted.job.id).state).toBe('queued'));
+    await vi.waitFor(() => expect(net.pause.has('offline')).toBe(true));
+    expect(net.state.probes).toBe(1);
+    expect(g.manager.get(accepted.job.id)).not.toHaveProperty('retry');
+    expect(g.timers).toEqual([]);
+
+    net.state.online = true;
+    expect(await net.connectivity.check()).toBe('online');
+    const done = await g.manager.whenSettled(accepted.job.id);
+    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(done).not.toHaveProperty('retry');
+    expect(w.script.captures).toEqual([id, id]);
+    const types = (await w.events()).map((event) => event.eventType);
+    expect(types).not.toContain('job.retry_scheduled');
+    expect(types).not.toContain('job.failed');
+    net.connectivity.close();
+  });
+
+  it('spends an attempt when the network is there, so one unreachable source fails on its own', async () => {
+    const net = offlineWorld(true);
+    const w = await world({ pause: net.pause, connectivity: net.connectivity });
+    const id = videoId(11, 'o');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot();
+    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
+    await vi.waitFor(() => expect(g.manager.get(accepted.job.id).retry?.attempts).toBe(1));
+    expect(net.state.probes).toBe(1);
+    expect(net.pause.paused).toBe(false);
+    expect((await w.events()).map((event) => event.eventType)).toContain('job.retry_scheduled');
+    g.fireTimers();
+    expect(await g.manager.whenSettled(accepted.job.id)).toMatchObject({ state: 'completed', retry: { attempts: 1 } });
+    net.connectivity.close();
+  });
+});
+
+describe('lost network while collection is paused or closing (#128)', () => {
+  it('returns a late failure while collection is already paused without confirming the network again', async () => {
+    const pause = new CollectionPause();
+    const state = { probes: 0 };
+    const connectivity = new Connectivity({ pause, probe: async () => { state.probes += 1; return false; } });
+    const w = await world({ pause, connectivity });
+    const id = videoId(12, 'o');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
+    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
+    await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
+    pause.set('sleep', true);
+    g.source.holdCaptures.clear();
+    g.source.release(id);
+    await vi.waitFor(() => expect(g.manager.get(accepted.job.id).state).toBe('queued'));
+    expect(state.probes).toBe(0);
+    expect(pause.has('offline')).toBe(false);
+    connectivity.close();
+  });
+
+  it('leaves a step that was confirming the network when the manager closed for close() to record as interrupted', async () => {
+    const pause = new CollectionPause();
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const connectivity = new Connectivity({ pause, probe: async () => { await gate; return true; } });
+    const w = await world({ pause, connectivity });
+    const id = videoId(13, 'o');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot();
+    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
+    await vi.waitFor(() => expect(w.script.captures).toEqual([id]));
+    const closing = g.manager.close();
+    open();
+    await closing;
+    expect(g.manager.get(accepted.job.id)).toMatchObject({ state: 'interrupted' });
+    expect(g.manager.get(accepted.job.id)).not.toHaveProperty('retry');
+    expect((await w.events()).map((event) => event.eventType)).not.toContain('job.retry_scheduled');
+    connectivity.close();
   });
 });
 

@@ -9,6 +9,8 @@ import {
   type VaultSetupResult,
   type VaultSetupStatus,
 } from '../core/types.js';
+import { CollectionPause } from '../core/collection-pause.js';
+import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
@@ -30,12 +32,16 @@ export interface CollectorRuntimeStatus {
 }
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */
-export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath'>;
+export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity'>;
 
 export interface CollectorRuntimeOptions {
   profilePath: string;
   /** Null runs only health and Agent identity, without any Vault services. */
   workspace: VaultServiceOptions | null;
+  /** How the device's network is confirmed; the internet probe and its intervals by default. */
+  connectivity?: Omit<ConnectivityOptions, 'pause'>;
+  /** The device's collection pause, when the caller sets reasons on it before the runtime starts; a new one otherwise. */
+  pause?: CollectionPause;
   /** Uses this Vault instead of the device selection; an empty directory becomes a new Vault. */
   explicitVaultPath?: string;
   /** Location Onboarding proposes for a new Vault. */
@@ -59,6 +65,9 @@ export class CollectorRuntime {
   readonly profilePath: string;
   readonly server: RunningServer;
   readonly agentAccess: AgentAccess;
+  /** The device's collection pause, followed by the scheduler and jobs of whichever Vault is open. */
+  readonly pause: CollectionPause;
+  readonly connectivity: Connectivity;
   private workspaceValue: VaultWorkspace | null;
   private failure: { path: string; reason: string } | null;
   private stateValue: CollectorRuntimeState;
@@ -68,14 +77,18 @@ export class CollectorRuntime {
 
   private constructor(
     private readonly options: CollectorRuntimeOptions,
-    private readonly services: VaultServiceOptions | null,
+    private readonly services: WorkspaceServices | null,
     private readonly selection: VaultSelection,
     instanceId: string,
     initial: Opening,
     agentAccess: AgentAccess,
     server: RunningServer,
     private readonly jobStore: JobStore | null,
+    pause: CollectionPause,
+    connectivity: Connectivity,
   ) {
+    this.pause = pause;
+    this.connectivity = connectivity;
     this.instanceId = instanceId;
     this.profilePath = path.resolve(options.profilePath);
     this.workspaceValue = initial.workspace;
@@ -105,7 +118,9 @@ export class CollectorRuntime {
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
     const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs')) : null;
-    const workspaceServices: VaultServiceOptions | null = options.workspace && jobStore ? { ...options.workspace, jobStore } : null;
+    const pause = options.pause ?? new CollectionPause();
+    const connectivity = new Connectivity({ ...options.connectivity, pause });
+    const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? { ...options.workspace, jobStore, pause, connectivity } : null;
     // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
     const activity: ActivityAccess | undefined = jobStore ? {
       query: (query) => jobStore.activity.query(query,
@@ -121,6 +136,7 @@ export class CollectorRuntime {
       search: forwarding<TranscriptSearch>(() => current().search),
       ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),
     } : {};
+    const shared = { ...services, connectivity };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),
@@ -134,7 +150,7 @@ export class CollectorRuntime {
         initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       }
       agentAccess = await startAgentAccess({
-        ...services, instanceId,
+        ...shared, instanceId,
         ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
         ...(options.agentPort ? { preferredPort: options.agentPort } : {}),
         connectionFile: options.connectionFile,
@@ -142,7 +158,7 @@ export class CollectorRuntime {
         runtimeStatus, notReady, vaultSetup,
       });
       const server = await startServer({
-        ...services,
+        ...shared,
         ...(activity ? { activity } : {}),
         port: options.uiPort,
         ...(options.uiHost ? { host: options.uiHost } : {}),
@@ -150,12 +166,13 @@ export class CollectorRuntime {
         agentInfo: agentAccess.info,
         runtimeStatus, notReady, vaultSetup,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore);
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity);
       return runtime;
     } catch (error) {
       await agentAccess?.close().catch(() => undefined);
       await initial.workspace?.close().catch(() => undefined);
       await jobStore?.close().catch(() => undefined);
+      connectivity.close();
       throw error;
     }
   }
@@ -163,7 +180,7 @@ export class CollectorRuntime {
   /** Opens the explicit or previously selected Vault; an unusable one leaves the runtime Not Ready. */
   private static async openInitial(
     options: CollectorRuntimeOptions,
-    services: VaultServiceOptions,
+    services: WorkspaceServices,
     selection: VaultSelection,
   ): Promise<Opening> {
     const createdBy = options.createdBy ?? 'XR Collector';
@@ -291,6 +308,8 @@ export class CollectorRuntime {
   private async closeOnce(): Promise<void> {
     // Each listener stops accepting requests and waits for accepted handlers,
     // including work whose client disconnected, before the workspace stops.
+    // A confirmation under way is given up, so no job waits on it while the workspace stops.
+    this.connectivity.close();
     const listeners = await Promise.allSettled([this.server.close(), this.agentAccess.close()]);
     const workspace = this.workspaceValue ? await Promise.allSettled([this.workspaceValue.close()]) : [];
     // Jobs and activity close last; the workspace records interrupted jobs into them while it stops.
@@ -307,6 +326,9 @@ export class CollectorRuntime {
     throw failed.reason;
   }
 }
+
+/** The services every Vault this runtime opens shares: the caller's, with the device's job record, pause and network. */
+type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'jobStore' | 'pause' | 'connectivity'>>;
 
 interface Opening {
   workspace: VaultWorkspace | null;

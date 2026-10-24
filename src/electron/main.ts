@@ -1,7 +1,8 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../core/collection-pause.js';
+import { internetProbe } from '../core/connectivity.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
@@ -18,6 +19,9 @@ let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
+let networkWatch: ReturnType<typeof setInterval> | null = null;
+/** How often the system's own view of the network is read; reading it sends nothing. */
+const NETWORK_WATCH_MS = 5_000;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 const hasExplicitProfile = Boolean(explicitProfile);
@@ -228,8 +232,11 @@ app.whenReady().then(async () => {
   });
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
+    pause: collectionPause,
+    // Electron's client follows the system's proxy settings, as the person's other apps do.
+    connectivity: { probe: internetProbe((input, init) => net.fetch(input instanceof URL ? input.href : input, init)) },
     workspace: {
-      plugins: sources.plugins, pacing: sources.pacing, pause: collectionPause,
+      plugins: sources.plugins, pacing: sources.pacing,
       searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
@@ -251,6 +258,7 @@ app.whenReady().then(async () => {
     uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
+  watchNetwork();
   await createWindow();
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
@@ -282,6 +290,21 @@ function continueAfterSleep(): void {
   collectionPause.set('sleep', false);
 }
 
+/**
+ * The system's view of the network changing (Wi-Fi lost or joined) has the runtime confirm the
+ * network at once. The system's view alone decides nothing: it still reports a connection on a
+ * hotel network before sign-in or behind a router that lost its uplink.
+ */
+function watchNetwork(): void {
+  let online = net.isOnline();
+  networkWatch = setInterval(() => {
+    const now = net.isOnline();
+    if (now === online) return;
+    online = now;
+    void runtime?.connectivity.check();
+  }, NETWORK_WATCH_MS);
+}
+
 app.on('before-quit', (event) => {
   if (!runtime) return;
   event.preventDefault();
@@ -290,6 +313,8 @@ app.on('before-quit', (event) => {
   powerMonitor.removeListener('resume', continueAfterSleep);
   powerMonitor.removeListener('unlock-screen', continueAfterSleep);
   powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
+  if (networkWatch) clearInterval(networkWatch);
+  networkWatch = null;
   tray?.destroy();
   tray = null;
   mainWindow?.destroy();

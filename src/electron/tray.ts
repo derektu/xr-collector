@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
-import type { CollectionSchedule, JobOverview } from '../core/types.js';
+import type { CollectionScheduleView, JobOverview } from '../core/types.js';
 import { trayMenu } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayState } from './tray-menu.js';
 
@@ -91,7 +91,7 @@ export class AppTray {
     try {
       const [overview, schedule] = await Promise.all([
         this.get<{ overview: JobOverview }>('/api/jobs/overview'),
-        this.get<{ schedule: CollectionSchedule }>('/api/schedule'),
+        this.get<{ schedule: CollectionScheduleView }>('/api/schedule'),
       ]);
       return { overview: overview.overview, schedule: schedule.schedule };
     } catch {

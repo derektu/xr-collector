@@ -17,6 +17,7 @@ import { RecentTargets } from '../subscriptions/recent-targets.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { CollectionPause } from '../core/collection-pause.js';
+import type { Connectivity } from '../core/connectivity.js';
 import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
 import { pidFilePath } from '../search/meilisearch-process.js';
@@ -82,6 +83,8 @@ export interface WorkspaceOptions {
   pacing?: readonly Pacing[];
   /** The device's collection pause, followed by the scheduler and jobs of every Vault this workspace opens. */
   pause?: CollectionPause;
+  /** The device's network, confirmed by the jobs of every Vault this workspace opens after a request fails for lack of it. */
+  connectivity?: Connectivity;
   jobRetry?: Partial<RetryPolicy>;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
@@ -971,6 +974,7 @@ export class VaultWorkspace {
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
       ...(this.options.pause ? { pause: this.options.pause } : {}),
+      ...(this.options.connectivity ? { connectivity: this.options.connectivity } : {}),
       recentTarget: (type, url) => recentTargets.get(type, url),
     });
     const subscriptions = new SubscriptionServices(plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>

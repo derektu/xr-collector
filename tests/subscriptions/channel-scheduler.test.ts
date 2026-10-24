@@ -9,6 +9,8 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { CollectionPause } from '../../src/core/collection-pause.js';
+import { Connectivity } from '../../src/core/connectivity.js';
+import { CollectorError } from '../../src/core/types.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
@@ -35,7 +37,7 @@ class MemoryScheduleStore implements ScheduleStore {
  * Subscriptions over synthetic channels with a controllable clock, and a scheduler whose polls the
  * test runs by hand.
  */
-async function world(schedule: StoredSchedule = { enabled: true }, pause?: CollectionPause) {
+async function world(schedule: StoredSchedule = { enabled: true }, pause?: CollectionPause, connectivity?: Connectivity) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-scheduler-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
@@ -46,7 +48,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const collector = new Collector(documents);
   const jobs: JobManager = new JobManager({
     vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
-    limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}),
+    limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}), ...(connectivity ? { connectivity } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
   const events: string[] = [];
@@ -317,6 +319,54 @@ describe('system sleep (#97)', () => {
       await poll(w);
     }
     expect(w.scheduledChecks(id)).toBe(3);
+    await w.scheduler.close();
+  });
+});
+
+describe('lost network (#128)', () => {
+  it('pauses on a check that finds no network, dispatches nothing while offline, then checks each due subscription once', async () => {
+    const pause = new CollectionPause();
+    const network = { online: true };
+    const connectivity = new Connectivity({ pause, probe: async () => network.online });
+    const w = await world({ enabled: true }, pause, connectivity);
+    const quarter = await w.subscribe('net-quarter', { intervalMinutes: 15 });
+    const hourly = await w.subscribe('net-hourly', { intervalMinutes: 60 });
+    await w.scheduler.start();
+    w.runs.mockClear();
+    w.events.splice(0);
+
+    // The network drops; the next scheduled check fails to list and finds no network.
+    network.online = false;
+    w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。');
+    w.advance(15 * MINUTE);
+    await w.scheduler.checkNow();
+    await vi.waitFor(() => expect(pause.has('offline')).toBe(true));
+    const [stalled] = w.jobs.list({ limit: 100 }).jobs.filter((job) => job.scope?.trigger === 'scheduled');
+    await vi.waitFor(() => expect(w.jobs.get(stalled!.id).state).toBe('queued'));
+    expect(w.jobs.get(stalled!.id)).not.toHaveProperty('retry');
+    expect(w.runs).toHaveBeenCalledTimes(1);
+
+    // Four more periods pass offline; the poll dispatches nothing and nothing fails.
+    w.runs.mockClear();
+    for (let step = 0; step < 4; step += 1) {
+      w.advance(15 * MINUTE);
+      await w.scheduler.checkNow();
+    }
+    expect(w.runs).not.toHaveBeenCalled();
+    expect(w.events).toEqual(['schedule.dispatched', 'collection.paused']);
+    expect(w.jobEvents()).not.toContain('job.failed');
+    expect(w.jobEvents()).not.toContain('job.retry_scheduled');
+
+    network.online = true;
+    w.source.discoveryFailure = null;
+    expect(await connectivity.check()).toBe('online');
+    await vi.waitFor(() => expect(w.events).toEqual(['schedule.dispatched', 'collection.paused', 'collection.resumed', 'schedule.dispatched']));
+    await w.idle();
+    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
+    // The stalled check finishes and takes the due check of its subscription; each subscription has one scheduled check.
+    expect(w.jobs.get(stalled!.id)).toMatchObject({ state: 'completed' });
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
+    connectivity.close();
     await w.scheduler.close();
   });
 });

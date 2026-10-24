@@ -16,7 +16,7 @@ import type {
   SearchQuery,
   SearchResponse,
   SearchStatusReport,
-  CollectionSchedule,
+  CollectionScheduleView,
   SubscriptionRecord,
   SubscriptionSettings,
   RecognitionAction,
@@ -97,14 +97,14 @@ export const api = {
     return request('/api/agent/connection');
   },
   /** The automatic collection switch; one switch covers the subscriptions of every type. */
-  async getSchedule(): Promise<CollectionSchedule> {
-    const result = await request<{ schedule: CollectionSchedule }>('/api/schedule');
+  async getSchedule(): Promise<CollectionScheduleView> {
+    const result = await request<{ schedule: CollectionScheduleView }>('/api/schedule');
     return result.schedule;
   },
 
   /** Turns automatic collection on or off. */
-  async setAutoCollection(enabled: boolean): Promise<CollectionSchedule> {
-    const result = await request<{ schedule: CollectionSchedule }>('/api/schedule', {
+  async setAutoCollection(enabled: boolean): Promise<CollectionScheduleView> {
+    const result = await request<{ schedule: CollectionScheduleView }>('/api/schedule', {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     });

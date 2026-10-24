@@ -4,6 +4,7 @@ import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import type { DocumentMetadata, DocumentSources } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
+import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import {
   DOCUMENTS_PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
@@ -41,10 +42,12 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, revision, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
+export function Documents({ state, revision, offline, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
   state: DocumentListState;
   /** Changes when a job ends or saves a document, so documents collected meanwhile show up. */
   revision: number;
+  /** The device has no network, so adding is unavailable. */
+  offline: boolean;
   /** The scrolling element whose position is saved before opening the Reader. */
   scroller: () => HTMLElement | null;
   onState: (state: DocumentListState) => void;
@@ -151,14 +154,14 @@ export function Documents({ state, revision, scroller, onState, onOpen, onNaviga
 
   const heading = <div className="page-header">
     <h1 className="page-title" tabIndex={-1} data-page-heading>文件</h1>
-    <div className="header-actions"><AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} testId="add-document" /></div>
+    <div className="header-actions"><AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-document" /></div>
   </div>;
   if (emptyVault) {
     return <>
       {heading}
       <section className="empty-state" data-testid="documents-empty-vault">
         <h2>知識庫裡還沒有文件</h2>
-        <AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} primary align="start" testId="add-document-empty" />
+        <AddMenu label="新增" items={DOCUMENT_ADD_ITEMS} onChoose={onAdd} primary align="start" disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-document-empty" />
       </section>
     </>;
   }

@@ -3,6 +3,7 @@ import type { CollectionSchedule, PendingSubscription, SubscriptionEntry, Subscr
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
+import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
 import { useFloatingMenu } from './floating-menu.js';
 import { Icon, SourceTypeBadge } from './icons.js';
@@ -24,6 +25,8 @@ export interface SourcesProps {
   schedule: CollectionSchedule | null;
   /** Changes whenever background work changes, so the list reloads. */
   revision: number;
+  /** The device has no network: adding is unavailable, and checking confirms the network first. */
+  offline: boolean;
   /** Opens the add dialog the menu item names. */
   onAdd: (mode: AddMode) => void;
   onOpenSource: (type: string, id: string) => void;
@@ -35,7 +38,7 @@ export interface SourcesProps {
  * Every subscription in one list, with type and name filters and per-row pause, resume and more
  * actions. A subscription request appears at once and becomes its subscription row when resolved.
  */
-export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd, onOpenSource, onChanged }: SourcesProps) {
+export function Sources({ state, onState, sourceTypes, schedule, revision, offline, onAdd, onOpenSource, onChanged }: SourcesProps) {
   const [list, setList] = useState<SubscriptionList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -97,7 +100,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
         <button type="button" className="button" disabled={checking || enabledCount === 0} onClick={() => void checkAll()} data-testid="check-all">
           <Icon name="refresh" size={15} />{checking ? '檢查中…' : '立即檢查'}
         </button>
-        <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} testId="add-subscription" />
+        <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription" />
       </div>
     </div>
 
@@ -106,7 +109,7 @@ export function Sources({ state, onState, sourceTypes, schedule, revision, onAdd
 
     {empty ? <section className="empty-state" data-testid="sources-empty">
       <h2>還沒有訂閱</h2>
-      <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} primary align="start" testId="add-subscription-empty" />
+      <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} primary align="start" disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription-empty" />
     </section> : null}
 
     {list && !empty ? <>

@@ -13,6 +13,9 @@
 //   youtube.rateLimitNext  true makes the next capture fail with rate_limited, then clears itself
 //   feeds["/path"]       { kind: 'rss2' | 'atom' | 'page', title, articles?, feeds?, status?, delayMs? }
 //                        or { status, body, contentType } for a literal answer
+//   network              'offline' cuts the device off: synthetic YouTube requests fail with network_error,
+//                        and the feeds port, which also answers the runtime's network probe at /connectivity,
+//                        drops every connection. 'online' or absent restores it.
 // Synthetic titles carry 【合成】 so a screenshot never passes for a real source.
 //
 // Environment: XR_VERIFY_CHECKOUT, XR_VERIFY_RUN, XR_VERIFY_DATA, XR_VERIFY_VAULT_MODE (selected | fixed | none),
@@ -47,12 +50,16 @@ const vaultPath = path.join(run, 'vault');
 const catalogPath = path.join(run, 'catalog.json');
 const catalog = () => JSON.parse(readFileSync(catalogPath, 'utf8'));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const offline = () => catalog().network === 'offline';
+const cutOff = () => { if (offline()) throw new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。（合成斷網）'); };
 const createdBy = `XR Collector (verify skill, ${data} data)`;
 const program = (name: string, environmentName: string) => process.env[environmentName]
   ?? path.join(checkout, 'resources', 'bin', 'mac', name);
 
 function syntheticFeedServer() {
   const server = createServer((request, response) => {
+    if (offline()) { request.socket.destroy(); return; }
+    if (new URL(request.url ?? '/', 'http://127.0.0.1').pathname === '/connectivity') { response.writeHead(204).end(); return; }
     const route = catalog().feeds?.[new URL(request.url ?? '/', 'http://127.0.0.1').pathname];
     const answer = () => {
       if (!route) { response.writeHead(404).end('not found'); return; }
@@ -84,6 +91,7 @@ async function syntheticSources() {
     resolve: (inputUrl: string, options: { priority?: string; signal?: AbortSignal } = {}) =>
       youtubeGate.run(options.priority ?? 'interactive', async () => {
         await sleep(400);
+        cutOff();
         const url = new URL(inputUrl.startsWith('@') ? `https://www.youtube.com/${inputUrl}` : inputUrl);
         const parts = url.pathname.split('/').filter(Boolean);
         const found = youtube().channels.find((channel: { id: string; handle: string }) =>
@@ -94,6 +102,7 @@ async function syntheticSources() {
     listVideos: (channel: { id: string }, listing: { offset: number; limit: number }, options: { priority?: string; signal?: AbortSignal } = {}) =>
       youtubeGate.run(options.priority ?? 'background', async () => {
         await sleep(200);
+        cutOff();
         const current = youtube();
         if (current.failListing === channel.id) throw new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。（合成錯誤）');
         const videos = current.channels.find((candidate: { id: string }) => candidate.id === channel.id)?.videos ?? [];
@@ -105,6 +114,7 @@ async function syntheticSources() {
   const capture = {
     capture: (video: { videoId: string; canonicalUrl: string }, options: { publishedNotBefore?: string; signal?: AbortSignal } = {}) =>
       youtubeGate.run('background', async () => {
+        cutOff();
         const current = catalog();
         if (current.youtube?.rateLimitNext) {
           writeFileSync(catalogPath, JSON.stringify({ ...current, youtube: { ...current.youtube, rateLimitNext: false } }, null, 2));
@@ -117,6 +127,8 @@ async function syntheticSources() {
           throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
         }
         await sleep(Number(current.youtube?.captureDelayMs ?? 600));
+        // The network can drop while a capture is under way.
+        cutOff();
         return {
           videoId: video.videoId, sourceUrl: video.canonicalUrl, title: found.title, channelId: owner.id, channelTitle: owner.title,
           publishedAt: found.publishedAt, languageCode: 'zh-Hant', languageName: '中文（合成）', subtitleKind: 'manual',
@@ -146,8 +158,16 @@ if (vaultMode === 'selected' && !existsSync(selectionFile)) {
   await createVaultDirectory(vaultPath, createdBy);
   await new VaultSelection(selectionFile).write(vaultPath);
 }
+// Synthetic data confirms the network against the feeds port, so `network: 'offline'` in the catalog
+// reads as a lost network; an offline device is confirmed again every 2 s instead of 30 s.
+const syntheticConnectivity = {
+  probe: (signal: AbortSignal) => fetch(`http://127.0.0.1:${port('FEEDS')}/connectivity`, { signal, cache: 'no-store' })
+    .then((response) => response.status === 204, () => false),
+  offlineRecheckMs: 2_000,
+};
 const runtime = await CollectorRuntime.start({
   profilePath,
+  ...(data === 'synthetic' ? { connectivity: syntheticConnectivity } : {}),
   workspace: {
     plugins: sources.plugins,
     pacing: sources.pacing,

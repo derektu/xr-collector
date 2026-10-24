@@ -8,7 +8,7 @@ import { AddContent } from './AddContent.js';
 import type { AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import {
-  createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, navigation, pathForRoute, resolveTheme, routeForPath, settingsNavigation, jobsBadge,
+  createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, navigation, offlineCheckedLabel, pathForRoute, resolveTheme, routeForPath, settingsNavigation, jobsBadge,
   type NavigationItem, type ShellPage, type ThemePreference, type ThemeStore,
 } from './app-shell.js';
 import { Documents } from './Documents.js';
@@ -169,6 +169,8 @@ export default function App() {
   if (vault.state === 'not_ready') return <div data-theme={themeName}><VaultOnboarding status={vault} onStatus={setVault} onReady={enterVault} /></div>;
 
   const active = status.active ?? [];
+  const connectivity = status.schedule?.connectivity;
+  const offline = connectivity?.state === 'offline';
   const badge = jobsBadge(active.length);
   const navItem = (item: NavigationItem) => <button key={item.page} type="button" className={page === item.page ? 'nav-item active' : 'nav-item'}
     aria-current={page === item.page ? 'page' : undefined} title={item.label} onClick={() => navigate(item.page)} data-testid={`nav-${item.page}`}>
@@ -187,11 +189,11 @@ export default function App() {
       onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
-      onAdd={setAdding} onOpenSource={openSource} onChanged={announce} />;
+      offline={offline} onAdd={setAdding} onOpenSource={openSource} onChanged={announce} />;
   } else if (page === 'documents') {
-    body = <Documents state={listState} revision={status.documentsRevision} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onChanged={announce} />;
+    body = <Documents state={listState} revision={status.documentsRevision} offline={offline} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onChanged={announce} />;
   } else if (page === 'jobs') {
-    body = <Jobs revision={status.revision} onChanged={announce} />;
+    body = <Jobs revision={status.revision} offline={offline} onChanged={announce} />;
   } else if (page === 'activity') {
     body = <Activity revision={status.revision} busy={active.length > 0} search={location.search} onState={onActivityState}
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
@@ -209,6 +211,10 @@ export default function App() {
       </nav>
     </aside>
     <main className="content" ref={content}>
+      {offline && !readerId ? <p className="offline-banner" role="status" data-testid="offline-banner">
+        <Icon name="offline" size={16} />
+        <span><strong>目前沒有網路</strong>，恢復後自動檢查。{connectivity.checkedAt ? <span className="muted">（{offlineCheckedLabel(connectivity.checkedAt)} 確認）</span> : null}</span>
+      </p> : null}
       <div className={readerId ? 'page reader-page' : 'page'} data-testid={`page-${readerId ? 'reader' : sourceRoute ? 'source-detail' : page}`}>{body}</div>
       {notice ? <p key={notice.key} className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="notice">{notice.text}</p> : null}
     </main>
