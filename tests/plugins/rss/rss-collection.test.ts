@@ -4,7 +4,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { fetchText } from '../../../src/plugins/rss/http.js';
-import { rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
+import { JobStore } from '../../../src/jobs/job-store.js';
+import { PacingGate, type PacingEvent } from '../../../src/pacing/pacing-gate.js';
+import { createRssPlugin, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
+import type { PluginRuntime } from '../../../src/plugins/types.js';
 import type { SourcePlugin } from '../../../src/plugins/types.js';
 import { MarkdownVault } from '../../../src/vault/markdown-vault.js';
 import { VAULT_MARKER } from '../../../src/vault/vault-directory.js';
@@ -137,6 +140,50 @@ describe('subscribing to a feed through the core (R11-T5)', () => {
     feeds.set('/feed.xml', { body: rss2('【合成】站', [{ title: '【合成】恢復後', guid: 'back', publishedAt: ago(0.2), summary: '回來了' }, ...BLOG.slice(0, 1)]) });
     const [next] = await service.startRun({ trigger: 'manual', subscriptionIds: [id] });
     expect(await workspace.jobs.whenSettled(next!.job.id)).toMatchObject({ state: 'completed', progress: { created: 1 } });
+  });
+});
+
+describe('a site that limits requests', () => {
+  it('fails that feed\'s check and counts it, while another feed checked at the same time completes and RSS never cools down', async () => {
+    feeds.set('/a.xml', { body: rss2('【合成】A 站', BLOG.slice(0, 1)) });
+    feeds.set('/b.xml', { body: rss2('【合成】B 站', BLOG.slice(1, 2)) });
+    // The RSS plugin as the product assembles it: every feed request goes through the `rss` channel.
+    const gate = await PacingGate.open(rssDefinition.pacing!, { waitRangeMs: { min: 0, max: 0 }, statePath: null });
+    const events: PacingEvent[] = [];
+    gate.subscribe((event) => events.push(event));
+    const rss = createRssPlugin({ gate: () => gate } as unknown as PluginRuntime) as unknown as SourcePlugin;
+    const jobStore = JobStore.memory();
+    const a = await machine('A', await temp());
+    await seed(a.vault);
+    const workspace = await open(a, { plugins: [...youtubePlugins(), rss], pacing: [gate], jobStore });
+    const idA = subscriptionId(feeds.url('/a.xml'));
+    const idB = subscriptionId(feeds.url('/b.xml'));
+    await subscribe(workspace, feeds.url('/a.xml'));
+    await subscribe(workspace, feeds.url('/b.xml'));
+    const service = workspace.subscriptions.of('rss')!;
+    const stored = async (id: string) => (JSON.parse(await readFile(path.join(a.vault, 'settings', 'rss-subscriptions.json'), 'utf8'))
+      .subscriptions as Array<Record<string, any>>).find((entry) => entry.id === id)!;
+
+    feeds.set('/a.xml', { status: 429, body: 'slow down' });
+    feeds.set('/b.xml', { body: rss2('【合成】B 站', [{ title: '【合成】B 新文章', guid: 'b-new', publishedAt: ago(0.2), summary: '新' }, ...BLOG.slice(1, 2)]) });
+    const [checkA, checkB] = await service.startRun({ trigger: 'manual', subscriptionIds: [idA, idB] });
+    const [endedA, endedB] = await Promise.all([workspace.jobs.whenSettled(checkA!.job.id), workspace.jobs.whenSettled(checkB!.job.id)]);
+    expect(endedA).toMatchObject({ state: 'failed', error: { code: 'rate_limited' } });
+    expect(endedA).not.toHaveProperty('retry');
+    expect(endedB).toMatchObject({ state: 'completed', progress: { created: 1 } });
+    expect(await stored(idA)).toMatchObject({ checkFailures: { count: 1, since: endedA.finishedAt, error: { code: 'rate_limited' } } });
+    expect((await stored(idB)).checkFailures).toBeUndefined();
+    expect(events).toEqual([]);
+    expect(gate.status()).toMatchObject({ cooldownUntil: null, level: 0 });
+    await jobStore.flush();
+    const types = (await jobStore.activity.query({ limit: 200 }, workspace.activityScope())).events.map((event) => event.eventType);
+    expect(types).not.toContain('rss.rate_limited');
+    expect(types).not.toContain('job.deferred');
+
+    feeds.set('/a.xml', { body: rss2('【合成】A 站', BLOG.slice(0, 1)) });
+    const [next] = await service.startRun({ trigger: 'manual', subscriptionIds: [idA] });
+    expect(await workspace.jobs.whenSettled(next!.job.id)).toMatchObject({ state: 'completed' });
+    expect((await stored(idA)).checkFailures).toBeUndefined();
   });
 });
 
