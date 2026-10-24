@@ -1,4 +1,5 @@
 import { jobRole } from './source-registry.js';
+import type { PauseReason } from './collection-pause.js';
 
 /** ID of a source type whose documents the Vault can hold: the ID of a registered source plugin. */
 export type DocumentSourceType = string;
@@ -702,6 +703,8 @@ export interface JobEvent {
   trigger?: ChannelJobTrigger;
   /** The failed job a manual retry follows. */
   retryOf?: string;
+  /** `collection.paused` and `collection.resumed`: the reason that came into force or lifted. */
+  pauseReason?: PauseReason;
 }
 
 /** Filters of an activity query; every filter given must match. */

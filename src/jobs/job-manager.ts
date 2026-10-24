@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { selectCandidates } from '../subscriptions/candidates.js';
 import type { Collector } from '../core/collector.js';
+import type { CollectionPause } from '../core/collection-pause.js';
 import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
@@ -90,6 +91,12 @@ export interface JobManagerOptions {
   pacing?: readonly Pacing[];
   /** A target a preview recently resolved for a classified subscription address; a subscription request accepted for it resolves no more. */
   recentTarget?: (type: string, url: string) => SubscriptionTarget | undefined;
+  /**
+   * While collection is paused no queued step starts, steps waiting for their turn at a source
+   * return to the queue, and a transient failure returns its job to the queue without spending an
+   * attempt; everything continues once collection does.
+   */
+  pause?: CollectionPause;
 }
 
 export interface JobListQuery {
@@ -200,6 +207,7 @@ export class JobManager {
   /** The cooldown in force per pacing group; no step of the group starts before it ends. */
   private readonly cooldowns = new Map<string, { until: string; cancel: () => void }>();
   private readonly unsubscribePacing: Array<() => void> = [];
+  private readonly unsubscribePause: (() => void) | undefined;
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
@@ -217,6 +225,10 @@ export class JobManager {
       const until = gate.status().cooldownUntil;
       if (until) this.enterCooldown(gate.group, until);
     }
+    this.unsubscribePause = options.pause?.subscribe(({ paused }) => {
+      if (paused) this.stopWaitingSteps('收集已暫停。');
+      else this.continueSteps();
+    });
   }
 
   /** Records a pacing group's cooldowns in this Vault's activity and follows them. */
@@ -664,16 +676,13 @@ export class JobManager {
   async hold(timeoutMs = HOLD_TIMEOUT_MS, signal?: AbortSignal): Promise<() => void> {
     this.holds += 1;
     // Steps waiting for their turn at a source go back to the queue instead of holding this up.
-    this.stepAbort.abort(new CollectorError('vault_busy', '收集步驟已暫停。'));
+    this.stopWaitingSteps('收集步驟已暫停。');
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
       this.holds -= 1;
-      if (this.holds === 0) {
-        this.stepAbort = new AbortController();
-        this.pump();
-      }
+      this.continueSteps();
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
@@ -699,6 +708,23 @@ export class JobManager {
       if (onAbort) signal?.removeEventListener('abort', onAbort);
     }
     return release;
+  }
+
+  /** True while a hold or the collection pause keeps queued steps from starting. */
+  private get blocked(): boolean {
+    return this.holds > 0 || this.options.pause?.paused === true;
+  }
+
+  /** Steps waiting for their turn at a source give it up and return to the queue. */
+  private stopWaitingSteps(message: string): void {
+    if (!this.stepAbort.signal.aborted) this.stepAbort.abort(new CollectorError('vault_busy', message));
+  }
+
+  /** Once nothing blocks them, queued steps start again. */
+  private continueSteps(): void {
+    if (this.blocked) return;
+    if (this.stepAbort.signal.aborted) this.stepAbort = new AbortController();
+    this.pump();
   }
 
   /** Number of top-level jobs that are queued, running or waiting for their items. */
@@ -921,6 +947,7 @@ export class JobManager {
     this.closed = true;
     this.stepAbort.abort(new CollectorError('vault_busy', '服務正在停止。'));
     for (const unsubscribe of this.unsubscribePacing) unsubscribe();
+    this.unsubscribePause?.();
     for (const cooldown of this.cooldowns.values()) cooldown.cancel();
     this.cooldowns.clear();
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
@@ -1033,7 +1060,7 @@ export class JobManager {
     }
   }
 
-  /** A step stopped by a hold before its source request returns to the queue without spending an attempt. */
+  /** A step stopped by a hold or the collection pause returns to the queue without spending an attempt. */
   private returnToQueue(job: CollectionJob): void {
     this.update(job, { state: 'queued' });
     this.syncItemWait(job);
@@ -1062,7 +1089,13 @@ export class JobManager {
   /** How a step that threw ended when the throw was not its own failure; true when handled. */
   private handledInterruption(job: CollectionJob, error: unknown, signal: AbortSignal): boolean {
     if (signal.aborted && error === signal.reason) {
-      // A close records the job as interrupted; a hold puts it back in line.
+      // A close records the job as interrupted; a hold or the collection pause puts it back in line.
+      if (!this.closed) this.returnToQueue(job);
+      return true;
+    }
+    // A transient failure while collection is paused, such as a lost network in a dark wake, is the
+    // pause's doing, not the source's.
+    if (this.options.pause?.paused && error instanceof CollectorError && this.classify(job, error) === 'retry_now') {
       if (!this.closed) this.returnToQueue(job);
       return true;
     }
@@ -1080,7 +1113,7 @@ export class JobManager {
   }
 
   private pump(): void {
-    if (this.closed || this.holds > 0 || this.resuming) return;
+    if (this.closed || this.blocked || this.resuming) return;
     // Every step reads from its source, so no step of a cooling pacing group starts; other groups go on.
     while (this.runningDiscovery < this.limits.discovery) {
       const index = this.discoveryQueue.findIndex((id) => {

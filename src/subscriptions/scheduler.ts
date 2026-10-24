@@ -1,5 +1,6 @@
 import type { StartRunRequest } from './subscription-service.js';
 import type { NewJobEvent } from '../jobs/job-store.js';
+import { PAUSE_MESSAGES, type CollectionPause } from '../core/collection-pause.js';
 import {
   CollectorError,
   type CollectionSchedule,
@@ -30,6 +31,11 @@ export interface SchedulerOptions {
   now?: () => Date;
   pollIntervalMs?: number;
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
+  /**
+   * No check is dispatched while collection is paused; the due subscriptions are checked once it
+   * continues. Each pause reason coming into force or lifting is recorded in the activity log.
+   */
+  pause?: CollectionPause;
 }
 
 export interface UpdateSchedule {
@@ -49,6 +55,7 @@ export class CollectionScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking: Promise<void> | null = null;
   private suspended = false;
+  private unsubscribePause: (() => void) | null = null;
 
   constructor(
     private readonly runners: readonly ScheduledRunner[],
@@ -61,6 +68,13 @@ export class CollectionScheduler {
 
   async start(): Promise<void> {
     await this.ensureLoaded();
+    this.unsubscribePause ??= this.options.pause?.subscribe(({ reason, inForce, paused }) => {
+      this.options.recordEvent?.({
+        severity: 'info', eventType: inForce ? 'collection.paused' : 'collection.resumed', pauseReason: reason,
+        message: inForce ? PAUSE_MESSAGES[reason].paused : PAUSE_MESSAGES[reason].resumed,
+      });
+      if (!paused) void this.checkNow().catch(reportScheduleError);
+    }) ?? null;
     if (!this.timer) {
       this.timer = setInterval(() => {
         void this.checkNow().catch(reportScheduleError);
@@ -72,6 +86,8 @@ export class CollectionScheduler {
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.unsubscribePause?.();
+    this.unsubscribePause = null;
     await this.checking;
   }
 
@@ -143,7 +159,7 @@ export class CollectionScheduler {
   }
 
   checkNow(): Promise<void> {
-    if (this.suspended) return Promise.resolve();
+    if (this.suspended || this.options.pause?.paused) return Promise.resolve();
     if (this.checking) return this.checking;
     const operation = this.runDueChecks();
     this.checking = operation;

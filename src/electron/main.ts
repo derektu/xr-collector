@@ -1,6 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
+import { CollectionPause } from '../core/collection-pause.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
@@ -11,6 +12,7 @@ let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
 let themePreference: FileThemePreference | null = null;
 let isQuitting = false;
+const collectionPause = new CollectionPause();
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 const hasExplicitProfile = Boolean(explicitProfile);
@@ -163,6 +165,14 @@ app.whenReady().then(async () => {
     const exportPath = status?.operation === 'export' && status.state === 'completed' ? status.result?.exportPath : undefined;
     if (exportPath) shell.showItemInFolder(exportPath);
   });
+  // Collection pauses from suspend to resume. macOS sends neither event during the dark wakes of a
+  // sleeping Mac (Power Nap, maintenance), so nothing is checked until the person wakes it. The
+  // person unlocking or returning to the session also ends the pause, so a resume the system never
+  // sends cannot hold collection back.
+  powerMonitor.on('suspend', pauseForSleep);
+  powerMonitor.on('resume', continueAfterSleep);
+  powerMonitor.on('unlock-screen', continueAfterSleep);
+  powerMonitor.on('user-did-become-active', continueAfterSleep);
   // One request channel per pacing group for every source request this process makes.
   const sources = await createSourcePlugins({
     profilePath: app.getPath('userData'),
@@ -172,7 +182,7 @@ app.whenReady().then(async () => {
   runtime = await CollectorRuntime.start({
     profilePath: app.getPath('userData'),
     workspace: {
-      plugins: sources.plugins, pacing: sources.pacing,
+      plugins: sources.plugins, pacing: sources.pacing, pause: collectionPause,
       searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
@@ -196,8 +206,6 @@ app.whenReady().then(async () => {
   });
   await createWindow();
 
-  powerMonitor.on('resume', checkScheduleAfterResume);
-
   app.on('activate', () => {
     if (!mainWindow && runtime && !isQuitting) {
       void createWindow().catch((error) => console.error(error));
@@ -212,15 +220,22 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-function checkScheduleAfterResume(): void {
-  void runtime?.workspace?.schedule.checkNow().catch((error) => console.error(error));
+function pauseForSleep(): void {
+  collectionPause.set('sleep', true);
+}
+
+function continueAfterSleep(): void {
+  collectionPause.set('sleep', false);
 }
 
 app.on('before-quit', (event) => {
   if (!runtime) return;
   event.preventDefault();
   isQuitting = true;
-  powerMonitor.removeListener('resume', checkScheduleAfterResume);
+  powerMonitor.removeListener('suspend', pauseForSleep);
+  powerMonitor.removeListener('resume', continueAfterSleep);
+  powerMonitor.removeListener('unlock-screen', continueAfterSleep);
+  powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
   mainWindow?.destroy();
   mainWindow = null;
   const activeRuntime = runtime;

@@ -16,6 +16,7 @@ import {
 } from '../../src/core/types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
+import { CollectionPause } from '../../src/core/collection-pause.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type {
@@ -148,7 +149,7 @@ afterEach(async () => {
   stores = [];
 });
 
-async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy> } = {}) {
+async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<RetryPolicy>; pause?: CollectionPause } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'xr-recovery-'));
   directories.push(directory);
   const vault = new MemoryVault();
@@ -172,6 +173,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
+      ...(options.pause ? { pause: options.pause } : {}),
       now: () => clock.now,
       createId: () => `job-${++sequence}`,
       setTimer: (run, ms) => {
@@ -552,6 +554,87 @@ describe('subscriptions that stopped (R-T5)', () => {
     expect(video).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(video).not.toHaveProperty('claimedByUser');
     expect(g2.store.get(claimed.job.id)).toMatchObject({ claimedByUser: true });
+  });
+});
+
+describe('system sleep (#97)', () => {
+  it('returns a step that fails while the system sleeps to the queue without spending an attempt', async () => {
+    const pause = new CollectionPause();
+    const w = await world({ pause });
+    const id = videoId(5, 's');
+    w.script.captureFailures.set(id, [network()]);
+    const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
+    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
+    await vi.waitFor(() => expect(g.source.held.has(id)).toBe(true));
+    pause.set('sleep', true);
+    // The request in flight at suspend loses the network in a dark wake.
+    g.source.holdCaptures.clear();
+    g.source.release(id);
+    await vi.waitFor(() => expect(g.manager.get(accepted.job.id).state).toBe('queued'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(g.manager.get(accepted.job.id)).not.toHaveProperty('retry');
+    expect(g.timers).toEqual([]);
+    expect(w.script.captures).toEqual([id]);
+
+    pause.set('sleep', false);
+    const done = await g.manager.whenSettled(accepted.job.id);
+    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(done).not.toHaveProperty('retry');
+    expect(w.script.captures).toEqual([id, id]);
+    expect((await w.events()).map((event) => event.eventType)).not.toContain('job.retry_scheduled');
+  });
+
+  it('starts no queued step and no retry while the system sleeps, and runs them after resume', async () => {
+    const pause = new CollectionPause();
+    const w = await world({ pause });
+    const retried = videoId(6, 's');
+    const queued = videoId(7, 's');
+    w.script.captureFailures.set(retried, [network()]);
+    const g = await w.boot();
+    const first = await g.manager.submitItem('youtube', watchUrl(retried));
+    await vi.waitFor(() => expect(g.manager.get(first.job.id).retry?.nextAttemptAt).toBeTruthy());
+    pause.set('sleep', true);
+    const second = await g.manager.submitItem('youtube', watchUrl(queued));
+    // The retry wait ends while the system sleeps.
+    g.fireTimers();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.script.captures).toEqual([retried]);
+    expect([g.manager.get(first.job.id).state, g.manager.get(second.job.id).state]).toEqual(['queued', 'queued']);
+
+    pause.set('sleep', false);
+    const [doneFirst, doneSecond] = await Promise.all([g.manager.whenSettled(first.job.id), g.manager.whenSettled(second.job.id)]);
+    expect([doneFirst.state, doneSecond.state]).toEqual(['completed', 'completed']);
+    expect(doneFirst.retry).toMatchObject({ attempts: 1 });
+    expect(w.script.captures.sort()).toEqual([retried, retried, queued].sort());
+  });
+});
+
+describe('system sleep and Vault holds together (#97)', () => {
+  it('starts queued work only once both the hold and the sleep pause are over, whichever ends first', async () => {
+    const pause = new CollectionPause();
+    const w = await world({ pause });
+    const g = await w.boot();
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The hold ends while the system still sleeps.
+    pause.set('sleep', true);
+    const releaseFirst = await g.manager.hold();
+    const first = await g.manager.submitItem('youtube', watchUrl(videoId(8, 's')));
+    releaseFirst();
+    await settle();
+    expect(w.script.captures).toEqual([]);
+    pause.set('sleep', false);
+    expect(await g.manager.whenSettled(first.job.id)).toMatchObject({ state: 'completed' });
+
+    // The system wakes while the hold is still in force.
+    const releaseSecond = await g.manager.hold();
+    pause.set('sleep', true);
+    const second = await g.manager.submitItem('youtube', watchUrl(videoId(9, 's')));
+    pause.set('sleep', false);
+    await settle();
+    expect(w.script.captures).toEqual([videoId(8, 's')]);
+    releaseSecond();
+    expect(await g.manager.whenSettled(second.job.id)).toMatchObject({ state: 'completed' });
   });
 });
 

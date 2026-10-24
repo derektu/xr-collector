@@ -16,6 +16,7 @@ import { canonicalJson } from '../subscriptions/subscription-files.js';
 import { RecentTargets } from '../subscriptions/recent-targets.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
+import type { CollectionPause } from '../core/collection-pause.js';
 import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
 import { pidFilePath } from '../search/meilisearch-process.js';
@@ -79,6 +80,8 @@ export interface WorkspaceOptions {
   jobLimits?: Partial<JobLimits>;
   /** The device's request channels, one per pacing group, that the plugins above share. */
   pacing?: readonly Pacing[];
+  /** The device's collection pause, followed by the scheduler and jobs of every Vault this workspace opens. */
+  pause?: CollectionPause;
   jobRetry?: Partial<RetryPolicy>;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
@@ -206,12 +209,9 @@ export class VaultWorkspace {
     // An import a stop interrupted after its commit point is finished before anything reads the Vault.
     const finished = await finishInPlaceImports(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
-    workspace.previousPaths = await previousLocations(options.profilePath, workspace.current.vaultId);
-    if (finished) {
-      try { await workspace.current.runtime.search.rebuild(); }
-      catch (error) { await workspace.current.runtime.close(); throw error; }
-    }
     try {
+      workspace.previousPaths = await previousLocations(options.profilePath, workspace.current.vaultId);
+      if (finished) await workspace.current.runtime.search.rebuild();
       // Interrupted jobs continue before the scheduler can submit a check of the same subscription.
       await workspace.current.jobs.resume();
       await workspace.current.schedule.start();
@@ -897,7 +897,7 @@ export class VaultWorkspace {
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
     for (const service of this.current.subscriptions.all()) await service.planChecks({ overdue: false });
-    this.current.schedule = makeScheduler(this.current);
+    this.current.schedule = makeScheduler(this.current, this.options.pause);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
   }
@@ -970,6 +970,7 @@ export class VaultWorkspace {
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
+      ...(this.options.pause ? { pause: this.options.pause } : {}),
       recentTarget: (type, url) => recentTargets.get(type, url),
     });
     const subscriptions = new SubscriptionServices(plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>
@@ -1011,7 +1012,7 @@ export class VaultWorkspace {
       });
     }
     const partial = { root, vaultId, runtime, collector, subscriptions, jobs };
-    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial) };
+    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options.pause) };
     return bundle;
   }
 
@@ -1046,9 +1047,10 @@ function changeSummary(counts: ChangeCounts): string {
 /** Free space that never runs out, for a check that has already reserved its space. */
 const unlimitedSpace: StatFs = async () => ({ bavail: Number.MAX_SAFE_INTEGER, bsize: 1 });
 
-function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>): CollectionScheduler {
+function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined): CollectionScheduler {
   return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
+    ...(pause ? { pause } : {}),
   });
 }
 

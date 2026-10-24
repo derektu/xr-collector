@@ -8,6 +8,7 @@ import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '..
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
+import { CollectionPause } from '../../src/core/collection-pause.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
@@ -34,7 +35,7 @@ class MemoryScheduleStore implements ScheduleStore {
  * Subscriptions over synthetic channels with a controllable clock, and a scheduler whose polls the
  * test runs by hand.
  */
-async function world(schedule: StoredSchedule = { enabled: true }) {
+async function world(schedule: StoredSchedule = { enabled: true }, pause?: CollectionPause) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-scheduler-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
@@ -45,7 +46,7 @@ async function world(schedule: StoredSchedule = { enabled: true }) {
   const collector = new Collector(documents);
   const jobs: JobManager = new JobManager({
     vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
-    limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 },
+    limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
   const events: string[] = [];
@@ -53,7 +54,9 @@ async function world(schedule: StoredSchedule = { enabled: true }) {
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
     autoCollection: () => scheduler.isEnabled(), resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
-  scheduler = new CollectionScheduler([channels], scheduleStore, { now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => events.push(entry.eventType) });
+  scheduler = new CollectionScheduler([channels], scheduleStore, {
+    now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => events.push(entry.eventType), ...(pause ? { pause } : {}),
+  });
   const runs = vi.spyOn(channels, 'startRun');
   const jobEvents = vi.spyOn(jobs, 'recordEvent');
   return {
@@ -253,6 +256,68 @@ describe('per-subscription scheduling (A2)', () => {
     expect((await w.scheduler.getSchedule()).nextCheck).toEqual({ type: 'youtube', subscriptionId: first, title: '合成頻道 first', at: '2026-10-15T05:00:00.000Z' });
     await w.scheduler.updateSchedule({ enabled: false });
     expect(await w.scheduler.getSchedule()).toMatchObject({ status: 'paused', nextCheck: null, lastCheck: { type: 'youtube', subscriptionId: second } });
+  });
+});
+
+describe('system sleep (#97)', () => {
+  it('dispatches nothing from suspend to resume, then checks each due subscription once', async () => {
+    const pause = new CollectionPause();
+    const w = await world({ enabled: true }, pause);
+    const quarter = await w.subscribe('sleep-quarter', { intervalMinutes: 15 });
+    const hourly = await w.subscribe('sleep-hourly', { intervalMinutes: 60 });
+    await w.scheduler.start();
+    w.runs.mockClear();
+    pause.set('sleep', true);
+    // Dark wakes run the poll timer while the system sleeps; four periods of the quarter subscription pass.
+    for (let step = 0; step < 4; step += 1) {
+      w.advance(15 * MINUTE + 7_000);
+      await poll(w);
+    }
+    expect(w.runs).not.toHaveBeenCalled();
+    expect(w.events).toEqual(['collection.paused']);
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([0, 0]);
+
+    pause.set('sleep', false);
+    await vi.waitFor(() => expect(w.events).toContain('schedule.dispatched'));
+    await w.idle();
+    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
+    expect(await w.channel(quarter)).toMatchObject({ nextCheckAt: '2026-10-15T05:15:00.000Z' });
+    await poll(w);
+    expect(w.events).toEqual(['collection.paused', 'collection.resumed', 'schedule.dispatched']);
+    await w.scheduler.close();
+  });
+
+  it('records each pause reason that comes into force or lifts, and nothing when it is already so', async () => {
+    const pause = new CollectionPause();
+    const entries: Array<{ eventType: string; pauseReason?: string; message: string }> = [];
+    const w = await world({ enabled: true }, pause);
+    const scheduler = new CollectionScheduler([w.channels], w.scheduleStore, {
+      now: () => w.clock.now, pollIntervalMs: 24 * 60 * MINUTE, pause, recordEvent: (entry) => entries.push(entry),
+    });
+    await scheduler.start();
+    pause.set('sleep', true);
+    pause.set('sleep', true);
+    pause.set('sleep', false);
+    pause.set('sleep', false);
+    await scheduler.close();
+    pause.set('sleep', true);
+    expect(entries.map(({ eventType, pauseReason, message }) => ({ eventType, pauseReason, message }))).toEqual([
+      { eventType: 'collection.paused', pauseReason: 'sleep', message: '系統進入睡眠，暫停收集。' },
+      { eventType: 'collection.resumed', pauseReason: 'sleep', message: '系統已喚醒，恢復收集。' },
+    ]);
+  });
+
+  it('keeps checking on schedule when the system never suspends', async () => {
+    const w = await world({ enabled: true }, new CollectionPause());
+    const id = await w.subscribe('awake', { intervalMinutes: 15 });
+    await w.scheduler.start();
+    for (let step = 0; step < 3; step += 1) {
+      w.advance(15 * MINUTE);
+      await poll(w);
+    }
+    expect(w.scheduledChecks(id)).toBe(3);
+    await w.scheduler.close();
   });
 });
 
