@@ -75,6 +75,8 @@ export default function App() {
   useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setThemePreference(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { void loadVault(); }, []);
+  // The tray menu opens the window on a page; navigating only touches the history and location state.
+  useEffect(() => { window.xrCollectorDesktop?.onNavigate((next) => navigate(next)); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
   // Focus the page heading after navigation so keyboard and screen reader users start at the new page.
   useEffect(() => {

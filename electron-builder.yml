@@ -20,6 +20,8 @@ mac:
   extraResources:
     - from: skills
       to: skills
+    - from: resources/tray
+      to: tray
     - from: resources/bin/mac/yt-dlp
       to: bin/yt-dlp
     - from: resources/bin/mac/deno
@@ -34,6 +36,8 @@ win:
   extraResources:
     - from: skills
       to: skills
+    - from: resources/tray
+      to: tray
     - from: resources/bin/win
       to: bin
       filter: ['*.exe', 'yt-dlp/**/*']

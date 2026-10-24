@@ -10,6 +10,7 @@
 | 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | — |
 | RSS | [rss.md](rss.md) | Web | — |
 | Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | — |
+| 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray` |
 
 已收錄流程在 [`../flows/`](../flows/)，以 `verify.mjs flows run` 執行，見 [SKILL.md](../SKILL.md#已收錄流程)。
 
@@ -45,4 +46,5 @@
 | Electron 啟動（`launchElectron`） | 2026-10-22，Mac：背景模式不顯示、不取得焦點、沒有 Dock 圖示；Vault 在 run 目錄內；`relaunch()`、`close()` 正常，沒有留下程序。尚未用來驗證任何功能 |
 | 工作頁、RSS | 2026-10-22，Mac，依功能檔實際操作：工作頁 5 步、RSS 的訂閱、閱讀、新文章、503 與 404 都與檔案相符 |
 | 訂閱與檢查 | 2026-10-23，Mac，`flows/subscribe-a-b.mjs`：訂閱、狀態序列、兩個訂閱同時收集與完成後的文件數，四個 scenario 通過 |
+| 選單列／系統匣 | 2026-10-24，`flows/tray.mjs`：Mac 與 Windows（互動桌面，x64-on-ARM64）TRAY-D1～D8 通過 |
 | 文件／閱讀／搜尋、Vault 匯出匯入與搬移 | 尚未以本 skill 執行；把手取自原始碼與 #75／#82 的 Web 驗收流程。第一次執行時修正本檔與功能檔 |

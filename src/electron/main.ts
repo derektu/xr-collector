@@ -1,16 +1,21 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../core/collection-pause.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
+import { CloseHintRecord } from './close-hint.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
+import { AppTray } from './tray.js';
+import type { TrayAction } from './tray-menu.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
 let themePreference: FileThemePreference | null = null;
+let tray: AppTray | null = null;
+let closeHint: CloseHintRecord | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
 
@@ -24,6 +29,14 @@ if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
 // never appears during launch.
 const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
 if (validationHidden) app.dock?.hide();
+// Validation control channel, for native acceptance runs only: Playwright reads and drives the tray
+// and the window through globalThis.__xrCollectorValidation in this process.
+const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
+const validationNotifications: { title: string; content: string }[] = [];
+
+// Windows shows the app's notifications only for an app identity that matches the installer's Start
+// menu shortcut (electron-builder's appId).
+if (process.platform === 'win32') app.setAppUserModelId('com.moneydj.xrcollector');
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
@@ -86,6 +99,15 @@ async function createWindow(): Promise<void> {
   window.webContents.on('will-navigate', (event, url) => {
     if (!url.startsWith(serverUrl)) event.preventDefault();
   });
+  // Closing the window hides it and collection goes on; quitting is the tray menu's (or ⌘Q on macOS).
+  window.on('close', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    window.hide();
+    void hintStillRunning();
+  });
+  // Windows ending the session (shut down, sign out) closes the window without a quit request.
+  window.on('session-end', () => { isQuitting = true; });
   window.on('closed', () => {
     mainWindow = null;
   });
@@ -93,10 +115,35 @@ async function createWindow(): Promise<void> {
   mainWindow = window;
 }
 
-app.on('second-instance', () => {
-  if (!mainWindow || validationHidden) return;
+/** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
+function showWindow(page?: 'jobs' | 'activity'): void {
+  if (!mainWindow) {
+    if (runtime && !isQuitting) void createWindow().then(() => showWindow(page)).catch((error) => console.error(error));
+    return;
+  }
+  if (page) mainWindow.webContents.send('xrCollector:navigate', page);
+  if (validationHidden) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  if (process.platform === 'darwin') app.focus({ steal: true });
   mainWindow.focus();
+}
+
+/**
+ * The first time the window closes on Windows, says the app keeps running in the notification area;
+ * a window closing there otherwise looks like the app quitting. macOS keeps the Dock icon, so it
+ * needs no hint.
+ */
+async function hintStillRunning(): Promise<void> {
+  if (process.platform !== 'win32' || !closeHint || await closeHint.shown()) return;
+  const hint = { title: 'XR Collector 仍在系統匣執行', content: '收集會繼續。要結束，在系統匣圖示按右鍵選「結束」。' };
+  new Notification({ title: hint.title, body: hint.content }).show();
+  if (validationControl) validationNotifications.push(hint);
+  await closeHint.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
+}
+
+app.on('second-instance', () => {
+  showWindow();
 });
 
 app.whenReady().then(async () => {
@@ -205,20 +252,27 @@ app.whenReady().then(async () => {
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
   });
   await createWindow();
+  closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
+  tray = new AppTray({
+    serverUrl: runtime.server.url,
+    iconFolder: path.join(app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'), 'tray'),
+    show: showWindow,
+    quit: () => app.quit(),
+  });
+  if (validationControl) exposeValidationControl(tray);
 
   app.on('activate', () => {
-    if (!mainWindow && runtime && !isQuitting) {
-      void createWindow().catch((error) => console.error(error));
-    }
+    if (!isQuitting) showWindow();
   });
 }).catch((error) => {
   console.error(error);
   app.quit();
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+// Closing the window only hides it, so the window goes away only while quitting, and before-quit
+// finishes that quit itself once the runtime has closed. Quitting again here, inside that quit,
+// leaves the app hanging on Windows. The listener stays so Electron does not quit on its own.
+app.on('window-all-closed', () => undefined);
 
 function pauseForSleep(): void {
   collectionPause.set('sleep', true);
@@ -236,6 +290,8 @@ app.on('before-quit', (event) => {
   powerMonitor.removeListener('resume', continueAfterSleep);
   powerMonitor.removeListener('unlock-screen', continueAfterSleep);
   powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
+  tray?.destroy();
+  tray = null;
   mainWindow?.destroy();
   mainWindow = null;
   const activeRuntime = runtime;
@@ -243,3 +299,18 @@ app.on('before-quit', (event) => {
   void activeRuntime.close()
     .finally(() => app.quit());
 });
+
+function exposeValidationControl(appTray: AppTray): void {
+  (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
+    tray: async () => { await appTray.refresh(); return appTray.current(); },
+    click: (action: TrayAction) => appTray.run(action),
+    window: () => ({
+      exists: Boolean(mainWindow),
+      visible: mainWindow?.isVisible() ?? false,
+      focused: mainWindow?.isFocused() ?? false,
+      url: mainWindow?.webContents.getURL() ?? null,
+    }),
+    closeWindow: () => mainWindow?.close(),
+    notifications: () => [...validationNotifications],
+  };
+}

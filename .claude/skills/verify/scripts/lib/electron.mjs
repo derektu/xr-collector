@@ -15,20 +15,17 @@
 // Electron runs only inside the flow process that launched it: Playwright closes it when that
 // process exits.
 //
-// Three Windows behaviours, seen in session 0, shape how a run screenshots and quits there:
+// Two Windows behaviours, seen in session 0, shape how a run screenshots and quits there:
 // - Playwright's page screenshot of a window that is never shown times out on every other call, so
 //   on Windows the window's screenshot comes from Electron's own webContents.capturePage(). A window
 //   that is never shown draws no new frames, and capturePage then returns whatever it drew last, so
 //   the run subscribes to the window's frames (beginFrameSubscription), which keeps it drawing.
-// - When the app quits with its window still open, its main process stops answering and its own
-//   shutdown never finishes (Meilisearch keeps running). With the window destroyed first, the same
-//   quit runs the app's whole shutdown, so on Windows the run destroys the windows before quitting.
-//   Meilisearch of the run must be gone by the time the process is ended, which shows that the app
-//   stopped it itself.
 // - When the app quits, Node keeps the process alive while the inspector Playwright attached is
 //   still connected and prints "Debugger ending on …"; on Windows Playwright's close() never
 //   disconnects it, so the app has finished its own shutdown but the process stays. That line is
-//   the signal to end the process tree.
+//   the signal to end the process tree. Meilisearch of the run must be gone by then, which shows
+//   that the app stopped it itself.
+import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -72,15 +69,17 @@ async function captureThroughElectron(app, window) {
 }
 
 /**
- * Quits the app through Playwright's close(), which runs the app's own shutdown. On Windows the
- * windows are destroyed first, and once the app reports that only the inspector keeps it alive, its
- * process tree is ended (see the top of this file). An app that neither quits nor reaches that point
+ * Quits the app through Playwright's close(), which runs the app's own shutdown with its window
+ * still open. On Windows, once the app reports that only the inspector keeps it alive, its process
+ * tree is ended (see the top of this file). An app that neither quits nor reaches that point
  * within QUIT_TIMEOUT, or reaches it with the run's Meilisearch still running, is an error marked
  * `quitFailure`.
  */
-async function quit({ app, debuggerWait }, runDir) {
+async function quit({ app, child, debuggerWait }, runDir) {
+  // An app that already quit on its own (the tray menu's 結束) has nothing left to close; Playwright
+  // has released its handle by then, so the process is the one kept from the launch.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (!WINDOWS) return app.close();
-  await app.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.destroy(); });
   const closing = app.close();
   const outcome = await Promise.race([
     closing.then(() => 'closed'), debuggerWait.then(() => 'debugger'), sleep(QUIT_TIMEOUT).then(() => 'timeout'),
@@ -147,6 +146,7 @@ export async function launchElectron({
     XR_COLLECTOR_EXPORT_DIR: path.join(documents, 'XR Collector 匯出'),
     XR_COLLECTOR_BACKUP_DIR: path.join(documents, 'XR Collector 備份'),
     XR_COLLECTOR_VALIDATION_WINDOW_SIZE: size,
+    XR_COLLECTOR_VALIDATION_CONTROL: '1',
     ...(hidden ? { XR_COLLECTOR_VALIDATION_HIDDEN: '1' } : {}),
   };
   // run.json names this flow process as the holder, so sweep and stop leave a live run alone. The
@@ -181,7 +181,7 @@ export async function launchElectron({
     const window = await app.firstWindow({ timeout: 90_000 });
     if (WINDOWS) await captureThroughElectron(app, window);
     await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
-    return { app, window, debuggerWait };
+    return { app, child: app.process(), window, debuggerWait };
   };
   let current;
   try {
@@ -207,6 +207,47 @@ export async function launchElectron({
     ...record,
     get app() { return current.app; },
     get window() { return current.window; },
+    /** The app's own UI origin, which serves the same API the page uses. */
+    get url() { return new URL(current.window.url()).origin; },
+    async api(pathname, init = {}) {
+      const response = await fetch(`${handle.url}${pathname}`, {
+        ...init, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(`${pathname} answered ${response.status}: ${JSON.stringify(body)}`);
+      return body;
+    },
+    /**
+     * Starts the same program again with the same profile, as a person opening the app a second
+     * time would; the single-instance lock makes it hand over to the running app and exit. Resolves
+     * with its exit code.
+     */
+    async launchAgain() {
+      const second = spawn(target.executable, [...target.args, runMarker(runDir)], { cwd: target.cwd, env, stdio: 'ignore' });
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { second.kill(); reject(new Error('The second launch did not exit within 30 seconds')); }, 30_000);
+        second.once('exit', (code) => { clearTimeout(timer); resolve(code); });
+        second.once('error', (error) => { clearTimeout(timer); reject(error); });
+      });
+    },
+    /**
+     * Resolves once the app has quit on its own. On Windows an app that finished its shutdown can
+     * stay alive only for Playwright's inspector (see the top of this file); its process tree is
+     * then ended, as quit() does.
+     */
+    async exited(timeout = QUIT_TIMEOUT) {
+      const { child, debuggerWait } = current;
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exit = new Promise((resolve) => child.once('exit', resolve));
+      const outcome = await Promise.race([
+        exit.then(() => 'exited'), debuggerWait.then(() => 'debugger'), sleep(timeout).then(() => 'timeout'),
+      ]);
+      if (outcome === 'timeout') throw new Error(`The app did not exit within ${timeout / 1000} seconds`);
+      if (outcome === 'debugger') {
+        if (WINDOWS) endWindowsTree(child.pid);
+        await exit;
+      }
+    },
     /** Quits through the app's own shutdown path and starts again with the same profile. */
     async relaunch() { await quit(current, runDir); await terminateRun(runDir); current = await start(); return current; },
     /**
@@ -252,4 +293,32 @@ export async function recordOpenExternal(app) {
     shell.openExternal = async (url) => { globalThis.__openedExternal.push(url); };
   });
   return () => app.evaluate(() => globalThis.__openedExternal);
+}
+
+// The app's validation control channel (XR_COLLECTOR_VALIDATION_CONTROL=1, set by launchElectron):
+// the main process exposes the tray and the window on globalThis.__xrCollectorValidation.
+
+/** The tray as last drawn after a fresh read: { icon, tooltip, items: [{ kind, label, action?, checked? }] }. */
+export function trayMenu(app) {
+  return app.evaluate(() => globalThis.__xrCollectorValidation.tray());
+}
+
+/** Runs a tray menu item by its action: open, check_now, toggle_auto_check, jobs, activity, quit. */
+export function clickTray(app, action) {
+  return app.evaluate((_electron, name) => { void globalThis.__xrCollectorValidation.click(name); }, action);
+}
+
+/** The main window: { exists, visible, focused, url }. */
+export function windowState(app) {
+  return app.evaluate(() => globalThis.__xrCollectorValidation.window());
+}
+
+/** Closes the main window as its close button does. */
+export function closeWindow(app) {
+  return app.evaluate(() => globalThis.__xrCollectorValidation.closeWindow());
+}
+
+/** The notifications the app has shown in this run: [{ title, content }]. */
+export function notifications(app) {
+  return app.evaluate(() => globalThis.__xrCollectorValidation.notifications());
 }
