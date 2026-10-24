@@ -6,7 +6,7 @@ import { parse } from 'yaml';
 import { fetchText } from '../../../src/plugins/rss/http.js';
 import { JobStore } from '../../../src/jobs/job-store.js';
 import { PacingGate, type PacingEvent } from '../../../src/pacing/pacing-gate.js';
-import { createRssPlugin, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
+import { createRssPlugin, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
 import type { PluginRuntime } from '../../../src/plugins/types.js';
 import type { SourcePlugin } from '../../../src/plugins/types.js';
 import { MarkdownVault } from '../../../src/vault/markdown-vault.js';
@@ -184,6 +184,65 @@ describe('a site that limits requests', () => {
     const [next] = await service.startRun({ trigger: 'manual', subscriptionIds: [idA] });
     expect(await workspace.jobs.whenSettled(next!.job.id)).toMatchObject({ state: 'completed' });
     expect((await stored(idA)).checkFailures).toBeUndefined();
+  });
+  it('counts an article whose capture meets a limit once per check and skips it after three checks, without failing the checks', async () => {
+    const body = rss2('【合成】A 站', BLOG.slice(0, 1));
+    feeds.set('/a.xml', { body });
+    let clock = Date.now();
+    let ageRead = false;
+    let limited = false;
+    let reads = 0;
+    // While limited, each check lists the feed, then the article's capture finds that read too old,
+    // reads the feed again and meets a 429. The clock moves on once the listing's read is timed.
+    const now = () => {
+      const value = clock;
+      if (ageRead) {
+        ageRead = false;
+        clock += FEED_CACHE_MS + 1;
+      }
+      return value;
+    };
+    const source = rssPlugin(async (url, context) => {
+      if (!limited || !url.endsWith('/a.xml')) return fetchText(url, context.signal);
+      reads += 1;
+      if (reads % 2 === 1) {
+        ageRead = true;
+        return fetchText(url, context.signal);
+      }
+      feeds.set('/a.xml', { status: 429, body: 'slow down' });
+      try {
+        return await fetchText(url, context.signal);
+      } finally {
+        feeds.set('/a.xml', { body: limitedBody });
+      }
+    }, { now }) as unknown as SourcePlugin;
+    const a = await machine('A', await temp());
+    await seed(a.vault);
+    const workspace = await open(a, { plugins: [...youtubePlugins(), source] });
+    const id = subscriptionId(feeds.url('/a.xml'));
+    await subscribe(workspace, feeds.url('/a.xml'));
+    const service = workspace.subscriptions.of('rss')!;
+    const stored = async () => (JSON.parse(await readFile(path.join(a.vault, 'settings', 'rss-subscriptions.json'), 'utf8'))
+      .subscriptions as Array<Record<string, any>>).find((entry) => entry.id === id)!;
+
+    const limitedBody = rss2('【合成】A 站', [{ title: '【合成】被限制的文章', guid: 'limited', publishedAt: ago(0.2), summary: '限' }, ...BLOG.slice(0, 1)]);
+    feeds.set('/a.xml', { body: limitedBody });
+    limited = true;
+    for (const attempts of [1, 2, 3]) {
+      const [check] = await service.startRun({ trigger: 'manual', subscriptionIds: [id] });
+      const ended = await workspace.jobs.whenSettled(check!.job.id);
+      expect(ended).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { total: 1, failed: 1 } });
+      expect(ended.items![0]).toMatchObject({ state: 'failed', error: { code: 'rate_limited' } });
+      expect(ended.items![0]).not.toHaveProperty('retry');
+      const record = await stored();
+      expect(record.failures).toEqual([expect.objectContaining({ attempts, errorCode: 'rate_limited', skipped: attempts === 3 })]);
+      expect(record.checkFailures).toBeUndefined();
+    }
+    expect(reads).toBe(6);
+
+    const [after] = await service.startRun({ trigger: 'manual', subscriptionIds: [id] });
+    expect(await workspace.jobs.whenSettled(after!.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
+    expect(reads).toBe(7);
   });
 });
 

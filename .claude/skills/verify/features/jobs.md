@@ -42,3 +42,4 @@ Preconditions:
 ## Regression flows
 
 - `subscribe-a-b`：斷言 `jobs-sections`、`jobs-empty`、`jobs-badge`。A、B 開始後在進行中且不回到排隊中、沒有失敗區、結束後顯示空狀態，以及工作全部結束、畫面穩定後沒有徽章。
+- `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中並以「YouTube 限制連線」說明等待原因，冷卻期間送出的單支影片在排隊中。

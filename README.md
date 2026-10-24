@@ -15,6 +15,7 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 | 現在做到哪裡、接下來做什麼 | [Round 2 開發計畫與進度](docs/round-2-plan.md) |
 | 產品目標、本輪包含與排除的範圍 | [產品範圍](docs/product-brief.md) |
 | 目前程式如何組成 | [架構](docs/architecture.md) |
+| 收集工作的排程、佇列、等待與錯誤處理 | [收集流程](docs/collection-flow.md) |
 | 文件格式、Vault 與搜尋資料責任 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
 | 如何開發、測試與交付 PR 證據 | 本頁下方操作、[開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
 | 畫面設計參考 | [UI Design Spec](docs/ui-design/README.md)，wireframe 的行為差異依 Round 2 計畫 |

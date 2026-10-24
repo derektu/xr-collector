@@ -29,7 +29,7 @@ Preconditions:
 - **訂閱。** `getByTestId('nav-sources')` → `add-subscription` → `add-item-youtube-channel`，`add-url` 填頻道網址，等 `add-confirm` 為「訂閱」且 enabled 後點擊。對話框關閉，留在 `page-sources`。
 - **狀態變化。** 記錄 `source-row-<channelId>` 內 `subscription-status` 每個不同的值（頁內 MutationObserver，見 `flows/lib/watch.mjs`）。預期依序為「排隊中 → 檢查中 → 下載中 0/5 … 4/5 → 下次 HH:MM」，可省略排隊中與檢查中（檢查中只持續約 200 ms，取樣不一定拍到）；開始後不再回到排隊中，k 只增不減。完成後列的文件欄為 5。
 - **兩個訂閱同時收集。** A 下載中時訂閱 B：B 開始前顯示「排隊中」，開始後為「檢查中」「下載中 k/3」，兩者輪流擷取時都維持下載中，不回到排隊中。
-- **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；更新中的訂閱轉為「排隊中」，冷卻 30 秒後完成。
+- **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；下載中的訂閱轉為「錯誤・HH:MM 重試」（時間是冷卻結束），還沒開始的檢查維持「排隊中」；冷卻 30 秒後自動繼續並完成。
 - **暫停。** `getByRole('button', { name: '暫停 <頻道標題>' })`，狀態變「已暫停」。
 - **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停的列顯示「自動檢查已關閉」，已暫停的維持「已暫停」。再點一次恢復「下次 HH:MM」。
 - **移除並保留。** `getByRole('button', { name: '<頻道標題> 的更多動作' })` → `getByRole('menuitem', { name: '移除' })`。`confirm-remove` 中 `remove-keep` 預設勾選；點 `confirm-remove-button`。列消失，`GET /api/documents` 仍有該頻道的文件；文件頁 `documents-source` 選項顯示「<標題>・已移除（n）」。
@@ -53,4 +53,5 @@ Preconditions:
 
 - `offline-recover`：斷言 `sub-status`、`sub-check`、`sub-offline`。A 下載中、B 在斷網期間到期：訊息與停用的按鈕、立即檢查被拒絕、斷網期間沒有派工、失敗與重試、列上從未出現「錯誤」；恢復後訊息消失、定時派工一次、B 一個檢查、A 文件數正確。
 - `subscription-failures`：斷言 `sub-status`、`sub-failure`。A 的列出失敗：重試期間與失敗後的列文字與顏色、API 的連續失敗次數、詳情頁紅條、「上次檢查」與收集紀錄最新一筆檢查一致、失敗的檢查不在工作頁失敗區；第 5 次失敗自動暫停（列、Vault 檔、API、事件、詳情頁）；恢復後歸零並檢查一次。
+- `youtube-cooldown`：斷言 `sub-status`。A 下載中時 YouTube 限流：通道冷卻、A 的列與 API 為等冷卻結束的重試、影片帶冷卻的等待且嘗試次數未用掉、冷卻期間送出的單支影片排隊等待；冷卻結束後自動完成，限流、延後與冷卻結束的事件各一次，沒有重試與失敗。
 - `subscribe-a-b`：斷言 `sub-add`、`sub-status`。經畫面訂閱 A，A 下載中時訂閱 B；A、B 的狀態序列、完成後的文件數，以及 Vault、API 與索引的文件一一對應。不斷言 pending-row、頁尾的上次檢查與失敗的檢查。
