@@ -15,12 +15,22 @@ export interface CheckPlan {
 
 /** What a check found, reported once the item jobs it queued are recorded. */
 export interface CheckReport {
-  /** When the check's discovery started. */
-  at: string;
   /** Keys of every candidate the listing gave, collected or not; absent when the check did not list. */
   candidates?: ReadonlySet<string>;
   /** Keys of the items the check collects. */
   collecting?: ReadonlySet<string>;
+}
+
+/**
+ * How a check ended: with its items (`error` null), or failing. `counted` says whether the end
+ * tells how the subscription's own listing went, so a success clears its failures in a row and a
+ * failure adds one. It does not for a check a pause or removal stopped while its items finished, a
+ * check the service gave up after repeated interruptions, or a source that needs a new sign-in.
+ */
+export interface CheckEnd {
+  at: string;
+  error: JobError | null;
+  counted: boolean;
 }
 
 /** The subscription a request resolved to and the check that follows it. */
@@ -45,6 +55,8 @@ export interface SubscriptionPort {
    * or removed meanwhile, otherwise null.
    */
   checked(type: string, id: string, report: CheckReport): Promise<SkipReason | null>;
+  /** A check ended: its items all ended, or the check itself failed. */
+  checkEnded(type: string, id: string, end: CheckEnd): Promise<void>;
   /** A check's item was collected. */
   itemCollected(type: string, id: string, key: string): Promise<void>;
   /**
@@ -75,6 +87,7 @@ export function forwardingPort(resolve: () => SubscriptionPort): SubscriptionPor
   return {
     planCheck: (...args) => resolve().planCheck(...args),
     checked: (...args) => resolve().checked(...args),
+    checkEnded: (...args) => resolve().checkEnded(...args),
     itemCollected: (...args) => resolve().itemCollected(...args),
     itemFailed: (...args) => resolve().itemFailed(...args),
     itemOutOfRange: (...args) => resolve().itemOutOfRange(...args),

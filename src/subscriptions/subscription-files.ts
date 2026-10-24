@@ -1,5 +1,5 @@
 import { scheduleFileDescription } from '../core/source-registry.js';
-import type { ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
+import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
 import type { SourceDefinition } from '../plugins/types.js';
 
 /**
@@ -11,8 +11,9 @@ import type { SourceDefinition } from '../plugins/types.js';
  * from another machine that still has the subscription does not bring it back. A file without
  * `removed` has no records.
  *
- * A subscription's collection progress, `outOfRange` and `failures`, lives in its record next to its
- * settings; both key items by the field the storage declaration names.
+ * A subscription's collection progress lives in its record next to its settings: `outOfRange` and
+ * `failures`, both keying items by the field the storage declaration names, and `checkFailures`, the
+ * checks in a row that failed. `autoPausedAt` marks a pause the subscription made itself.
  *
  * The schedule file the assembly names is `{ version: 2, enabled }`, the automatic collection
  * switch of every type. Fields a subscription or file does not define are kept as they are, so a
@@ -99,10 +100,20 @@ function isRecord(value: unknown, keyField: string, isValidSettings: (value: unk
     && typeof record.addedAt === 'string'
     && isOptionalTime(record.updatedAt)
     && isOptionalTime(record.lastCheckedAt)
+    && (record.checkFailures === undefined || isCheckFailures(record.checkFailures))
+    && (record.autoPausedAt === undefined || typeof record.autoPausedAt === 'string')
     && isValidSettings(record.settings) && isOptionalTime(record.nextCheckAt) && isOptionalTime(record.lastDispatchedAt)
     && (record.outOfRange === undefined || (Array.isArray(record.outOfRange)
       && record.outOfRange.every((entry) => typeof entry?.[keyField] === 'string' && typeof entry.before === 'string')))
     && (record.failures === undefined || (Array.isArray(record.failures) && record.failures.every((entry) => isFailure(entry, keyField))));
+}
+
+function isCheckFailures(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const failures = value as Partial<CheckFailures>;
+  return typeof failures.count === 'number' && Number.isInteger(failures.count) && failures.count >= 1
+    && typeof failures.since === 'string'
+    && typeof failures.error?.code === 'string' && typeof failures.error.message === 'string';
 }
 
 function isFailure(value: unknown, keyField: string): boolean {

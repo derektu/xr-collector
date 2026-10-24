@@ -52,6 +52,9 @@ describe('subscription file versions', () => {
       { version: 3, channels: [{ ...row('UCa'), settings: { ...valid, intervalMinutes: 45 } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: valid }, { ...row('UCb'), settings: { ...valid, backfillDays: 61 } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: valid, checkFailures: { count: 0, since: '2026-10-15T03:30:00.000Z', error: { code: 'x', message: 'x' } } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: valid, checkFailures: { count: 2, since: '2026-10-15T03:30:00.000Z' } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: valid, autoPausedAt: 1 }] },
     ]) {
       const root = await vault({ channels });
       await expect(new JsonSubscriptionStore(root, 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');

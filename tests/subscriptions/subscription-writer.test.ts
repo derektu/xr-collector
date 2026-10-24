@@ -13,10 +13,12 @@ import { SubscriptionService, SubscriptionServices } from '../../src/subscriptio
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE2, FakeSource } from '../support/fake-source-plugin.js';
+import { readEventFiles } from '../activity/event-files.js';
 
 // The subscription rules hold through SubscriptionService, the only writer of subscriptions, with a
 // real job manager running checks of fake source types: failure counts, out-of-range items,
-// dispatch times and the check time, and refusing a check request as a whole.
+// dispatch times and the check time, failed checks in a row and the pause they lead to, and
+// refusing a check request as a whole.
 
 registerSourceDefinitions([FAKE, FAKE2]);
 
@@ -72,6 +74,10 @@ async function world() {
   let current = await build();
   return {
     clock, sources,
+    async events() {
+      await current.store.flush();
+      return readEventFiles(jobsDirectory);
+    },
     get jobs() { return current.jobs; },
     get services() { return current.services; },
     get scheduler() { return current.scheduler; },
@@ -203,16 +209,16 @@ describe('dispatch times', () => {
     expect(after.failures).toBeUndefined();
   });
 
-  it('keeps them and the check time when a check interrupted by a restart continues', async () => {
+  it('keeps them when a check interrupted by a restart continues, and records the check time when it ends', async () => {
     const w = await world();
     const [held, queued] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
     w.sources.fake.held.add(held!);
     const added = await w.jobs.whenSettled((await w.services.of('fake')!.add('https://fake.example/feed/f')).job.id);
     const check = added.result!.followUpJobId!;
     await vi.waitFor(() => expect(w.sources.fake.running()).toEqual([held]));
-    // The check's own discovery is recorded before the restart.
-    await vi.waitFor(async () => expect((await w.record('fake', 'f')).lastCheckedAt).not.toBeNull());
+    // Listed, with an item still collecting: the first check has not ended.
     const before = dispatchTimes(await w.record('fake', 'f'));
+    expect(before.lastCheckedAt).toBeNull();
 
     w.sources.fake.held.delete(held!);
     w.advance(10 * MINUTE);
@@ -220,26 +226,157 @@ describe('dispatch times', () => {
     const resumed = await w.jobs.whenSettled(check);
     expect(resumed.result).toMatchObject({ outcome: 'created' });
     expect(resumed.items?.map((item) => item.sourceId)).toEqual([held, queued]);
-    expect(dispatchTimes(await w.record('fake', 'f'))).toEqual(before);
+    expect(dispatchTimes(await w.record('fake', 'f'))).toEqual({ ...before, lastCheckedAt: resumed.finishedAt });
   });
 
-  it('keeps a later check time when a check interrupted by a restart reports its earlier discovery', async () => {
+  it('records the check time when the last item ends, and keeps a later one', async () => {
     const w = await world();
-    const [held] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
-    w.sources.fake.held.add(held!);
-    const added = await w.jobs.whenSettled((await w.services.of('fake')!.add('https://fake.example/feed/f')).job.id);
-    const check = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual([held]));
-    const discoveredAt = w.clock.now.toISOString();
-    await vi.waitFor(async () => expect((await w.record('fake', 'f')).lastCheckedAt).toBe(discoveredAt));
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    const first = await w.subscribe('fake', 'f');
+    expect((await w.record('fake', 'f')).lastCheckedAt).toBe(first.finishedAt);
 
-    w.advance(3 * 60 * MINUTE);
-    const later = w.clock.now.toISOString();
+    // The feed gains a second item; the next check lists it and collects it while the test holds it.
+    const [, held] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
+    w.sources.fake.held.add(held!);
+    w.advance(10 * MINUTE);
+    const accepted = await w.services.of('fake')!.checkNow('f');
+    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual([held]));
+    expect((await w.record('fake', 'f')).lastCheckedAt).toBe(first.finishedAt);
+    w.advance(5 * MINUTE);
+    w.sources.fake.release(held!);
+    const second = await w.jobs.whenSettled(accepted.job.id);
+    expect(second.finishedAt).toBe(w.clock.now.toISOString());
+    expect((await w.record('fake', 'f')).lastCheckedAt).toBe(second.finishedAt);
+
+    const later = new Date(w.clock.now.getTime() + 60 * MINUTE).toISOString();
     await w.patch('fake', 'f', { lastCheckedAt: later });
-    w.sources.fake.held.delete(held!);
-    await w.crash();
-    expect(await w.jobs.whenSettled(check)).toMatchObject({ state: 'completed' });
+    await w.checkNow('fake', 'f');
     expect((await w.record('fake', 'f')).lastCheckedAt).toBe(later);
+  });
+});
+
+describe('failed checks in a row', () => {
+  const gone = () => new CollectorError('feed_gone', '這個動態已不存在。');
+
+  it('records the check time of a failed check, counts failures in a row and clears them on a success', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    await w.subscribe('fake', 'f');
+    const service = w.services.of('fake')!;
+
+    w.advance(10 * MINUTE);
+    w.sources.fake.listFailures.push(gone());
+    const first = await w.checkNow('fake', 'f');
+    expect(first.state).toBe('failed');
+    expect(await w.record('fake', 'f')).toMatchObject({
+      lastCheckedAt: first.finishedAt, checkFailures: { count: 1, since: first.finishedAt, error: { code: 'feed_gone' } },
+    });
+    w.advance(10 * MINUTE);
+    w.sources.fake.listFailures.push(new CollectorError('network_error', '無法連線。'), gone());
+    await w.checkNow('fake', 'f');
+    w.advance(10 * MINUTE);
+    const third = await w.checkNow('fake', 'f');
+    expect(await w.record('fake', 'f')).toMatchObject({
+      lastCheckedAt: third.finishedAt, checkFailures: { count: 3, since: first.finishedAt, error: { code: 'feed_gone' } },
+    });
+    expect((await service.listSubscriptions())[0]).toMatchObject({
+      status: 'error', lastError: { code: 'feed_gone' }, checkFailures: { count: 3 }, autoPausedAt: null,
+      checkStatus: { state: 'failing', failures: 3 },
+    });
+    // A failed check never enters the failed section of the jobs page.
+    expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).not.toContain(third.id);
+
+    w.advance(10 * MINUTE);
+    const success = await w.checkNow('fake', 'f');
+    expect(success.state).toBe('completed');
+    const record = await w.record('fake', 'f');
+    expect(record.checkFailures).toBeUndefined();
+    expect(record.lastCheckedAt).toBe(success.finishedAt);
+    expect((await service.listSubscriptions())[0]).toMatchObject({ status: 'tracking', lastError: null, checkFailures: null });
+  });
+
+  it('does not count a source that needs a new sign-in, a check a pause stopped, or a source that limits requests', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
+    await w.subscribe('fake', 'f');
+    w.advance(10 * MINUTE);
+    w.sources.fake.listFailures.push(gone());
+    const failed = await w.checkNow('fake', 'f');
+
+    // A sign-in failure ends the check without counting it.
+    w.advance(10 * MINUTE);
+    w.sources.fake.listFailures.push(new CollectorError('login_needed', '需要重新登入。'));
+    const signIn = await w.checkNow('fake', 'f');
+    expect(signIn.state).toBe('failed');
+    expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: signIn.finishedAt, checkFailures: { count: 1, since: failed.finishedAt } });
+
+    // A check a pause stopped while its item finished records its time and leaves the count.
+    w.advance(10 * MINUTE);
+    // The feed gains a third item, which the check collects.
+    const [, , added] = w.sources.fake.addFeed('f', w.clock.now, [0, 1, 2]);
+    w.sources.fake.held.add(added!);
+    const accepted = await w.services.of('fake')!.checkNow('f');
+    await vi.waitFor(() => expect(w.sources.fake.running()).toHaveLength(1));
+    await w.services.of('fake')!.setEnabled('f', false);
+    w.sources.fake.release(added!);
+    const stopped = await w.jobs.whenSettled(accepted.job.id);
+    expect(stopped.state).toBe('completed');
+    expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: stopped.finishedAt, checkFailures: { count: 1 } });
+
+    // A limit leaves the check waiting for the cooldown; it neither ends nor counts.
+    w.sources.fake.listFailures.push(gone());
+    const resumed = await w.services.of('fake')!.setEnabled('f', true);
+    expect(await w.jobs.whenSettled(resumed.submission!.job.id)).toMatchObject({ state: 'failed' });
+    const settled = await w.record('fake', 'f');
+    expect(settled.checkFailures).toMatchObject({ count: 1 });
+    w.advance(10 * MINUTE);
+    w.sources.fake.listFailures.push(new CollectorError('rate_limited', '限制連線。'));
+    const limited = await w.services.of('fake')!.checkNow('f');
+    await vi.waitFor(() => expect(w.jobs.get(limited.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
+    const after = await w.record('fake', 'f');
+    expect({ lastCheckedAt: after.lastCheckedAt, checkFailures: after.checkFailures })
+      .toEqual({ lastCheckedAt: settled.lastCheckedAt, checkFailures: settled.checkFailures });
+  });
+
+  it('pauses the subscription once five failures in a row span a day, and a resume clears them and checks', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    await w.subscribe('fake', 'f');
+    const service = w.services.of('fake')!;
+    const failNext = async () => {
+      w.advance(10 * MINUTE);
+      w.sources.fake.listFailures.push(gone());
+      return w.checkNow('fake', 'f');
+    };
+
+    // Five in an hour: too short a span.
+    const first = await failNext();
+    for (let attempt = 0; attempt < 4; attempt += 1) await failNext();
+    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 5, since: first.finishedAt } });
+
+    // A day of failures, but only four of them.
+    await w.patch('fake', 'f', { checkFailures: { count: 3, since: new Date(w.clock.now.getTime() - DAY).toISOString(), error: { code: 'feed_gone', message: '這個動態已不存在。' } } });
+    await failNext();
+    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 4 } });
+    expect((await w.record('fake', 'f')).autoPausedAt).toBeUndefined();
+
+    // The fifth, a day after the first.
+    const fifth = await failNext();
+    const paused = await w.record('fake', 'f');
+    expect(paused).toMatchObject({ enabled: false, nextCheckAt: null, autoPausedAt: fifth.finishedAt, checkFailures: { count: 5 } });
+    expect((await service.listSubscriptions())[0]).toMatchObject({
+      status: 'paused', autoPausedAt: fifth.finishedAt, checkStatus: { state: 'auto_paused', failures: 5 },
+    });
+    expect((await w.events()).filter((event) => event.eventType === 'subscription.auto_paused'))
+      .toEqual([expect.objectContaining({ severity: 'warning', subscriptionId: 'f', errorCode: 'feed_gone' })]);
+    await expect(service.checkNow('f')).rejects.toMatchObject({ code: 'subscription_paused' });
+
+    const resumed = await service.setEnabled('f', true);
+    expect(resumed.subscription.checkFailures).toBeUndefined();
+    expect(resumed.subscription.autoPausedAt).toBeUndefined();
+    const check = await w.jobs.whenSettled(resumed.submission!.job.id);
+    expect(check).toMatchObject({ state: 'completed', scope: { trigger: 'resume' } });
+    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, lastCheckedAt: check.finishedAt });
   });
 });
 

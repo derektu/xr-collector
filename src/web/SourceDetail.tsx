@@ -176,7 +176,11 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
       </div>
     </header>
 
-    {source.status === 'error' && source.lastError ? <p className="detail-problem" role="alert">最近一次檢查失敗：{source.lastError.message}</p> : null}
+    {source.checkFailures && (source.autoPausedAt || source.status === 'error')
+      ? <p className="detail-problem" role="alert" data-testid="detail-problem">{source.autoPausedAt
+        ? `連續失敗 ${source.checkFailures.count} 次，${shortTimeLabel(source.autoPausedAt)} 自動暫停：`
+        : `最近一次檢查失敗（連續 ${source.checkFailures.count} 次）：`}{source.checkFailures.error.message}</p>
+      : null}
     {source.checkStatus.state === 'retrying'
       ? <p className="detail-retry" data-testid="detail-retry-reason">{retryCauseLabel(source.type, source.checkStatus.cause)}</p> : null}
 
