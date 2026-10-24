@@ -34,7 +34,7 @@ package script 呼叫一支專用 Node script。預設從 `process.platform/proc
 
 ### build cache 與 runtime replacement
 
-build fingerprint 至少包含完整 source SHA、Cargo.lock SHA-256、recipe revision、features、release profile、Rust/rustc host、Rust target。每個 target 有獨立 cache entry；manifest 記錄 fingerprint、build command、target、runner/host arch、binary version、bytes、output SHA-256 與完成時間。
+build fingerprint 至少包含完整 source SHA、Cargo.lock SHA-256、recipe revision、features、release profile、Rust/rustc host、Rust target。每個 target 有獨立 source/artifact cache entry；Cargo object cache 則在相同 ignored cache root 的 `t/<recipe-target-fingerprint-prefix>/` 短路徑，避免 MSVC object file 超過路徑上限，完整 fingerprint 與 target 仍逐次校驗。source repo-local 設 `core.longpaths=true`，不改使用者 Git／Windows registry。manifest 記錄 fingerprint、build command、target、runner/host arch、binary version、bytes、output SHA-256 與完成時間。
 
 cache hit 必須同時滿足 manifest 全欄位、來源 pin、output checksum、`--version` 與 architecture；任何一項不符即重建，不能靜默使用 stale binary、其他架構或舊官方版。編譯使用受控 Cargo 設定：清除外部 compiler／wrapper／rustflags／profile 環境覆寫，拒絕 verified source 外會被 Cargo 讀取的 config；source 內 config 必須為 pinned tracked file。不宣稱不同 runner／OS 的 bit-for-bit 重現。build 在 staging 目錄完成，先驗證 version、檔案格式／架構與 checksum，再將 binary 和 manifest 安裝至該 target 的 owned runtime 位置。驗證失敗時不得動現有 runtime；replace 使用同檔案系統的 sibling staging/backup，swap 失敗 rollback，成功才刪 backup。
 

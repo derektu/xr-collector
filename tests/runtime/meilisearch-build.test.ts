@@ -163,6 +163,25 @@ describe('pinned Meilisearch build', () => {
     expect(fake.builds()).toBe(1);
   });
 
+  it('leaves room for native compiler object filenames in a deeply nested cache', async () => {
+    const at = await root();
+    const fake = harness();
+    const objectSuffix = path.join('x86_64-pc-windows-msvc', 'release', 'build', 'zstd-sys-0123456789abcdef', 'out', '88f362f13b0528ed-zstd_decompress_block.obj');
+    const cacheLength = 260 - objectSuffix.length - 24;
+    const cacheRoot = path.join(at, 'p'.repeat(cacheLength - at.length - 1));
+    const run: typeof fake.run = vi.fn(async (command, args, options) => {
+      if (command === 'cargo' && !args.includes('-V') && path.join(options!.env!.CARGO_TARGET_DIR!, objectSuffix).length >= 260) {
+        throw new Error('cl C1083: Cannot open compiler generated file: Invalid argument');
+      }
+      return fake.run(command, args, options);
+    });
+    await expect(buildMeilisearch({
+      target: 'darwin-arm64', cacheRoot, runtimeRoot: path.join(at, 'runtime'),
+      environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' },
+    }, { run, fileSha256: fake.hashFile })).resolves.toMatchObject({ cacheHit: false });
+    expect(fake.builds()).toBe(1);
+  });
+
   it('refuses a dirty source checkout without running Cargo or replacing runtime', async () => {
     const at = await root();
     const fake = harness();

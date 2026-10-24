@@ -218,7 +218,9 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
   const cacheRoot = options.cacheRoot ?? path.join(projectRoot, '.local', 'runtime-builds', 'meilisearch');
   const entry = path.join(cacheRoot, recipeDirectory, target.id);
   const sourceDir = path.join(entry, 'source');
-  const cargoTargetDir = path.join(entry, 'cargo-target');
+  // cc/MSVC still limits object paths even when Git can check out long snapshot filenames.
+  // The fingerprint includes recipe and Rust target, so shortening the directory keeps isolation.
+  const cargoTargetDir = path.join(cacheRoot, 't', fingerprint.slice(0, 16));
   const cachedBinary = path.join(entry, 'artifact', target.executable);
   const cachedManifestPath = path.join(entry, 'artifact', 'meilisearch-build.json');
   await mkdir(entry, { recursive: true });
