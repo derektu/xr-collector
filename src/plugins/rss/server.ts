@@ -16,9 +16,11 @@ import { fetchText, type FetchedText } from './http.js';
 import type { RssSettings } from './settings.js';
 import { rssDeclaration } from './shared.js';
 
+// A site's limit fails the check like any refusal of that site, so a feed that keeps limiting
+// counts toward its subscription's failures and other feeds go on.
 const FAILURES: Readonly<Record<string, FailureClass>> = {
   network_error: 'retry_now',
-  rate_limited: 'rate_limited',
+  rate_limited: 'retry_next_check',
   feed_not_found: 'retry_next_check',
   feed_invalid: 'retry_next_check',
   feed_unavailable: 'retry_next_check',
@@ -27,8 +29,9 @@ const FAILURES: Readonly<Record<string, FailureClass>> = {
 
 /**
  * The server definition of RSS: the declaration, how its failures are treated, the request pacing
- * every feed shares, where its subscriptions live and its documents' frontmatter, which has no
- * RSS-specific fields. RSS needs version 2 of the Vault and package formats.
+ * every feed shares (spacing only: each feed is a different site, so a limit cools nothing down),
+ * where its subscriptions live and its documents' frontmatter, which has no RSS-specific fields. RSS
+ * needs version 2 of the Vault and package formats.
  */
 export const rssDefinition: SourceDefinition<RssSettings> = {
   ...rssDeclaration,
@@ -38,6 +41,7 @@ export const rssDefinition: SourceDefinition<RssSettings> = {
     label: 'RSS',
     waitRangeMs: { min: 1_000, max: 3_000 },
     envVar: 'XR_COLLECTOR_RSS_WAIT_MS',
+    cooldown: false,
   },
   storage: {
     subscriptionsFile: 'settings/rss-subscriptions.json',
