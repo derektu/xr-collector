@@ -18,7 +18,7 @@ Mac x64 在本票完成的是 Meilisearch 原生 x64 build 與 API 驗證。完�
 
 ### `npm run build:meilisearch`
 
-package script 呼叫一支專用 Node script。預設從 `process.platform/process.arch` 選出目前 target；可提供明確 `--target darwin-arm64|darwin-x64|win32-x64`，但 target 必須與 Node OS/arch 與所選 Rust toolchain host 相符，不符立即失敗。Windows ARM 的 x64 Node＋x64 toolchain 可以模擬編譯，manifest 明列實際 host 與 emulated；CI 則另外斷言原生 runner，不把模擬結果算原生證據。這個 option 用來讓 package/CI 明確聲明目標，不開放任意 Rust target，也不做 cross compile。
+package script 呼叫一支專用 Node script。預設從 `process.platform/process.arch` 選出目前 target；可提供明確 `--target darwin-arm64|darwin-x64|win32-x64`，但 target 必須與 Node OS/arch 與所選 Rust toolchain host 相符，不符立即失敗。Windows ARM 的 x64 Node＋x64 toolchain 可以模擬編譯，manifest 明列實際 host 與 emulated；Windows physical host 必須以原生 CIM CPU architecture 判斷（Node、os.machine、vcvars 環境可能都回 x64），probe 失敗不宣稱 native；CI 則另外斷言原生 runner，不把模擬結果算原生證據。這個 option 用來讓 package/CI 明確聲明目標，不開放任意 Rust target，也不做 cross compile。
 
 指令固定並核對：
 
@@ -26,6 +26,7 @@ package script 呼叫一支專用 Node script。預設從 `process.platform/proc
 - Rust `1.91.1`；透過 rustup 明確使用這個工具鏈，執行前解析該工具鏈的 `rustc -Vv` 與 `cargo -V`，版本不符就提供安裝提示並停止，不自行改動使用者的 global toolchain。
 - 上游 `Cargo.lock` 隨固定 commit 取得；核對 SHA-256 `f884034e00ae026ecc9a3c15999b11857dff4a99ba8d7c0528626571627cefbf`。
 - build 命令為 `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target <rust-target>`，其中 target 只映射到 `aarch64-apple-darwin`、`x86_64-apple-darwin`、`x86_64-pc-windows-msvc`。
+- Windows x64 recipe 額外固定 `RUSTFLAGS=-C target-feature=+crt-static`，讓 CRT 靜態連結；Mac flags 維持空。這個 target flag 進入 build fingerprint／manifest，但不改 index 語意 profile。產物必須用 PE imports 證明無 VCRUNTIME／MSVCP DLL 依賴，不以 build 機預裝 VS 掩蓋。
 - 不含 `mini-dashboard` 與其他預設斷詞；任何 source、lock、toolchain、recipe 或 target 改變，都產生不同 fingerprint。
 
 原始碼抓取到 gitignored 的 `.local/runtime-builds/meilisearch/<recipe>/<target>/` build cache，不加入產品 source tree。首次執行取得固定 commit；之後可以重用已驗證的 source checkout 與 Cargo cache，但每次仍核對 HEAD、Cargo.lock、tracked/untracked source checkout 是否乾淨與所選 toolchain；source checkout 不得容納其他使用者的修改，髒掉時拒絕並提示清除本指令的 cache。無法取得固定 source 且 cache 不完整時直接失敗，不 fallback 到官方 Meilisearch binary、不同 commit 或既有其他架構產物。

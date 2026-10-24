@@ -63,6 +63,7 @@ export async function validateMeilisearchRuntime(
   const expectedRustTarget = expectedTarget === 'darwin-arm64' ? 'aarch64-apple-darwin'
     : expectedTarget === 'darwin-x64' ? 'x86_64-apple-darwin'
       : expectedTarget === 'win32-x64' ? 'x86_64-pc-windows-msvc' : null;
+  const expectedRustflags = expectedTarget === 'win32-x64' ? '-C target-feature=+crt-static' : '';
   const expectedArch = environment.arch;
   const expectedFingerprint = createHash('sha256').update(JSON.stringify({
     schemaVersion: 1,
@@ -77,7 +78,7 @@ export async function validateMeilisearchRuntime(
     target: expectedRustTarget,
     rustcHost: expectedRustTarget,
     rustcRelease: '1.91.1',
-    rustflags: '',
+    rustflags: expectedRustflags,
     cargoProfileOverrides: {},
   })).digest('hex');
   if (!expectedTarget || manifest.schemaVersion !== 1 || manifest.recipeRevision !== SEARCH_INDEX_PROFILE.buildRecipeRevision
@@ -86,7 +87,7 @@ export async function validateMeilisearchRuntime(
     || manifest.rustVersion !== '1.91.1' || manifest.target !== expectedTarget || manifest.rustTarget !== expectedRustTarget
     || manifest.rustcHost !== expectedRustTarget || typeof manifest.cargoVersion !== 'string' || !manifest.cargoVersion.startsWith('cargo 1.91.1 ')
     || JSON.stringify(manifest.features) !== JSON.stringify(['chinese']) || manifest.defaultFeatures !== false
-    || manifest.profile !== 'release' || manifest.buildEnvironment?.rustflags !== ''
+    || manifest.profile !== 'release' || manifest.buildEnvironment?.rustflags !== expectedRustflags
     || manifest.buildCommand !== `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target ${expectedRustTarget}`
     || JSON.stringify(manifest.buildEnvironment?.cargoProfileOverrides) !== JSON.stringify({})
     || manifest.runner?.platform !== environment.platform || manifest.runner?.processArch !== expectedArch

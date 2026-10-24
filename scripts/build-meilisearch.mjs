@@ -3,19 +3,20 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { arch as nodeArch, homedir, machine as hostMachine, platform as nodePlatform } from 'node:os';
+import { arch as nodeArch, homedir, platform as nodePlatform } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { normalizeArch, probePhysicalHost } from './physical-host.mjs';
 
 const exec = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const recipePath = path.join(projectRoot, 'scripts', 'meilisearch-build-recipe.json');
 
 export const TARGETS = {
-  'darwin-arm64': { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', rustTarget: 'aarch64-apple-darwin', directory: 'mac', executable: 'meilisearch' },
-  'darwin-x64': { platform: 'darwin', processArch: 'x64', hostArch: 'x64', rustTarget: 'x86_64-apple-darwin', directory: 'mac', executable: 'meilisearch' },
-  'win32-x64': { platform: 'win32', processArch: 'x64', hostArch: 'x64', rustTarget: 'x86_64-pc-windows-msvc', directory: 'win', executable: 'meilisearch.exe' },
+  'darwin-arm64': { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', rustTarget: 'aarch64-apple-darwin', rustflags: '', directory: 'mac', executable: 'meilisearch' },
+  'darwin-x64': { platform: 'darwin', processArch: 'x64', hostArch: 'x64', rustTarget: 'x86_64-apple-darwin', rustflags: '', directory: 'mac', executable: 'meilisearch' },
+  'win32-x64': { platform: 'win32', processArch: 'x64', hostArch: 'x64', rustTarget: 'x86_64-pc-windows-msvc', rustflags: '-C target-feature=+crt-static', directory: 'win', executable: 'meilisearch.exe' },
 };
 
 export async function readRecipe(filePath = recipePath) {
@@ -36,12 +37,13 @@ export function recipeFingerprint(recipe, target, rustc) {
     target: target.rustTarget,
     rustcHost: rustc.host,
     rustcRelease: rustc.release,
-    rustflags: '',
+    rustflags: target.rustflags,
     cargoProfileOverrides: {},
   })));
 }
 
-export function selectTarget(requested, environment = currentEnvironment()) {
+export function selectTarget(requested, environment) {
+  if (!environment) throw new Error('A probed physical host environment is required to select a Meilisearch target.');
   const inferred = environment.platform === 'darwin' && environment.processArch === 'arm64' ? 'darwin-arm64'
     : environment.platform === 'darwin' && environment.processArch === 'x64' ? 'darwin-x64'
       : environment.platform === 'win32' && environment.processArch === 'x64' ? 'win32-x64' : null;
@@ -115,7 +117,7 @@ export function expectedManifestFields({ recipe, target, fingerprint, rustc, car
     defaultFeatures: recipe.defaultFeatures,
     profile: recipe.profile,
     buildCommand: `cargo +${recipe.rustVersion} ${cargoArguments(recipe, target).join(' ')}`,
-    buildEnvironment: { rustflags: '', cargoProfileOverrides: {} },
+    buildEnvironment: { rustflags: target.rustflags, cargoProfileOverrides: {} },
     runner: {
       platform: environment.platform,
       processArch: environment.processArch,
@@ -204,7 +206,11 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
   const run = dependencies.run ?? runCommand;
   const hashFile = dependencies.fileSha256 ?? fileSha256;
   const inheritedEnvironment = dependencies.inheritedEnvironment ?? process.env;
-  const environment = { ...currentEnvironment(), hostArch: await detectHostArch(run), ...(options.environment ?? {}), requireNative: options.requireNative ?? false };
+  const environmentOverride = options.environment ?? {};
+  const physical = environmentOverride.hostArch
+    ? { platform: nodePlatform(), processArch: nodeArch(), ...environmentOverride }
+    : await probePhysicalHost({ run });
+  const environment = { ...physical, ...environmentOverride, requireNative: options.requireNative ?? false };
   const recipe = await readRecipe(options.recipePath ?? recipePath);
   const target = selectTarget(options.target, environment);
   const rustcOutput = await run('rustc', [`+${recipe.rustVersion}`, '-Vv']).catch((error) => {
@@ -243,7 +249,7 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
       await mkdir(cargoTargetDir, { recursive: true });
       await run('cargo', [`+${recipe.rustVersion}`, ...cargoArguments(recipe, target)], {
         cwd: sourceDir,
-        env: cleanBuildEnvironment(cargoTargetDir, inheritedEnvironment),
+        env: cleanBuildEnvironment(cargoTargetDir, inheritedEnvironment, target.rustflags),
         stdio: 'inherit',
       });
       await verifySource({ sourceDir, recipe, run, hashFile });
@@ -335,23 +341,7 @@ export async function runCommand(command, args, options = {}) {
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
-function currentEnvironment() {
-  return { platform: nodePlatform(), processArch: nodeArch(), hostArch: normalizeArch(hostMachine()) };
-}
-
-async function detectHostArch(run) {
-  if (nodePlatform() === 'darwin') {
-    const translated = await run('sysctl', ['-in', 'sysctl.proc_translated']).then(({ stdout }) => stdout.trim() === '1').catch(() => false);
-    if (translated) return 'arm64';
-  }
-  if (nodePlatform() === 'win32') {
-    const host = process.env.PROCESSOR_ARCHITEW6432 ?? process.env.PROCESSOR_ARCHITECTURE;
-    if (host) return normalizeArch(host);
-  }
-  return normalizeArch(hostMachine());
-}
-
-export function cleanBuildEnvironment(cargoTargetDir, inherited = process.env) {
+export function cleanBuildEnvironment(cargoTargetDir, inherited = process.env, rustflags = '') {
   const environment = { ...inherited };
   for (const key of Object.keys(environment)) {
     const normalized = key.toUpperCase();
@@ -363,7 +353,7 @@ export function cleanBuildEnvironment(cargoTargetDir, inherited = process.env) {
       || /^CARGO_TARGET_.+_RUSTFLAGS$/u.test(normalized)) delete environment[key];
   }
   environment.CARGO_TARGET_DIR = cargoTargetDir;
-  environment.RUSTFLAGS = '';
+  environment.RUSTFLAGS = rustflags;
   return environment;
 }
 
@@ -407,13 +397,6 @@ async function withBuildLock(lockPath, work) {
   }
   try { return await work(); }
   finally { await rm(lockPath, { force: true }); }
-}
-
-function normalizeArch(value) {
-  const normalized = value.toLowerCase();
-  if (normalized === 'x86_64' || normalized === 'amd64') return 'x64';
-  if (normalized === 'aarch64') return 'arm64';
-  return normalized;
 }
 
 async function exists(target) {

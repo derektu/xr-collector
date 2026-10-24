@@ -35,8 +35,8 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 - Node.js 22.12 或更新版本
 - npm
 - Git，以及 rustup 安裝的 Rust 1.91.1（只在從原始碼準備 Meilisearch runtime 或建置安裝包時需要；安裝後的 App 不需要 Rust）
-- source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 MSVC Build Tools；第一次執行需連線抓取固定 source 與 Cargo dependencies
-- 下列 Web 開發範例以 macOS arm64 為準；原生驗證／打包支援 Mac arm64 與 Windows x64 Node（含 Windows ARM 上的 x64 模擬執行）
+- source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 MSVC Build Tools 與可用的本機 PowerShell/CIM；第一次執行需連線抓取固定 source 與 Cargo dependencies
+- 下列 Web 開發範例以 macOS arm64 為準；原生驗證／打包支援 Mac arm64 與 Windows x64 Node。Windows ARM 上的 x64 模擬執行可建置，但不算原生證據
 
 安裝套件：
 
@@ -87,14 +87,14 @@ npm run build
 
 畫面與原生行為的驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。Mac 與 Windows 都以 [verify skill](.claude/skills/verify/SKILL.md) 啟動隔離的 instance 操作 App；Windows 執行原生 Desktop 模式，Web 模式在 Mac 執行。層級與交付規則見 [開發驗證流程](docs/development-validation.md)。
 
-macOS arm64／Windows x64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno，以及從固定 upstream commit、Cargo.lock 與 Rust 1.91.1 建置的 Chinese Meilisearch runtime。安裝包同時攜帶 runtime build manifest；終端使用者不需安裝 Rust：
+macOS arm64／Windows x64 安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno，以及從固定 upstream commit、Cargo.lock 與 Rust 1.91.1 建置的 Chinese Meilisearch runtime。Windows runtime 固定使用 Rust static CRT；安裝包同時攜帶 runtime build manifest，終端使用者不需安裝 Rust 或另外準備 MSVC runtime。Windows 產物仍須通過計畫中的 PE imports 與目標機驗證；只設定 static CRT flag 不算完成驗收：
 
 ```bash
 npm run package:mac  # 在 Mac 執行
 npm run package:win  # 在 Windows 執行
 ```
 
-`npm run build:meilisearch` 只支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。原生 CI 另外以三個 native runner 執行同一指令及 API smoke；Windows ARM 上用 x64 Node 建置會如實標為 emulated，不算原生證據。
+`npm run build:meilisearch` 只支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；原生 CI 另外以三個 native runner 執行同一指令及 API smoke，Windows ARM 上用 x64 Node 建置會如實標為 emulated，不算原生證據。
 
 產物輸出至 `release/`，不自動發布。MVP 安裝包未簽章，並使用預設 Electron 圖示。兩平台從同一個版本 commit 建置，驗收後再上傳至同一個 GitHub Release；詳細責任分工見開發驗證流程。
 

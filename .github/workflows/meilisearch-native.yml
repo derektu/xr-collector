@@ -7,6 +7,7 @@ on:
       - scripts/build-meilisearch.mjs
       - scripts/meilisearch-build-recipe.json
       - scripts/meilisearch-api-smoke.mjs
+      - scripts/physical-host.mjs
       - .github/workflows/meilisearch-native.yml
       - package.json
   push:
@@ -14,6 +15,7 @@ on:
       - scripts/build-meilisearch.mjs
       - scripts/meilisearch-build-recipe.json
       - scripts/meilisearch-api-smoke.mjs
+      - scripts/physical-host.mjs
       - .github/workflows/meilisearch-native.yml
       - package.json
 
@@ -55,6 +57,19 @@ jobs:
       - run: npm ci
       - run: npm run build:meilisearch -- --target ${{ matrix.target }} --require-native
       - run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
+      - name: Check Windows runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $dumpbin = & $vswhere -latest -products '*' -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'MSVC dumpbin is required to inspect the Windows artifact.' }
+          $imports = & $dumpbin /dependents '${{ matrix.binary }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the Windows artifact dependencies.' }
+          $imports | Write-Output
+          if ($imports -match '(?i)\b(?:VCRUNTIME|MSVCP|MSVCR)\d[^\s]*\.dll\b') {
+            throw 'The Windows artifact still requires an external Visual C++ runtime.'
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: meilisearch-${{ matrix.target }}

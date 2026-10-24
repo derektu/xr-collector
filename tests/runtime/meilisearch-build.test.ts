@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The production build entry point is intentionally executable JavaScript.
-import { assertControlledCargoConfiguration, buildMeilisearch, cleanBuildEnvironment, inspectExecutable, runCommand, selectTarget, transactionalReplacePair } from '../../scripts/build-meilisearch.mjs';
+import { assertControlledCargoConfiguration, buildMeilisearch, cleanBuildEnvironment, expectedManifestFields, inspectExecutable, recipeFingerprint, runCommand, selectTarget, TARGETS, transactionalReplacePair } from '../../scripts/build-meilisearch.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -74,6 +74,7 @@ function harness() {
 
 describe('pinned Meilisearch build', () => {
   it('rejects cross-target and emulated native claims', () => {
+    expect(() => selectTarget()).toThrow(/probed physical host/u);
     expect(() => selectTarget('win32-x64', { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' })).toThrow(/cross compilation/u);
     expect(() => selectTarget('win32-x64', { platform: 'win32', processArch: 'x64', hostArch: 'arm64', requireNative: true })).toThrow(/native x64 runner/u);
     expect(selectTarget('win32-x64', { platform: 'win32', processArch: 'x64', hostArch: 'arm64' }).emulated).toBe(true);
@@ -94,6 +95,27 @@ describe('pinned Meilisearch build', () => {
       cargo_build_rustc: '/wrong/cargo-rustc', CARGO_BUILD_RUSTC_WRAPPER: '/wrong/cargo-wrapper',
       cargo_build_rustc_workspace_wrapper: '/wrong/cargo-workspace-wrapper',
     })).toEqual({ KEEP: 'yes', RUSTFLAGS: '', CARGO_TARGET_DIR: '/target' });
+  });
+
+  it('keeps macOS recipe identity unchanged and pins the Windows static CRT flags', async () => {
+    const recipe = JSON.parse(await readFile(path.resolve('scripts/meilisearch-build-recipe.json'), 'utf8'));
+    expect(TARGETS['darwin-arm64'].rustflags).toBe('');
+    expect(recipeFingerprint(recipe, TARGETS['darwin-arm64'], { host: 'aarch64-apple-darwin', release: '1.91.1' }))
+      .toBe('07a9ec2aabee095eb5aea410722a643e6c215f985711dd47b21bc64fa175f128');
+    expect(TARGETS['win32-x64'].rustflags).toBe('-C target-feature=+crt-static');
+    expect(recipeFingerprint(recipe, TARGETS['win32-x64'], { host: 'x86_64-pc-windows-msvc', release: '1.91.1' }))
+      .toBe('01476c07e95bece701f6d58ddba293d97aa909d00f115e601ad96a4662747f32');
+    expect(cleanBuildEnvironment('/target', { RUSTFLAGS: '-C inherited' }, TARGETS['win32-x64'].rustflags))
+      .toEqual({ RUSTFLAGS: '-C target-feature=+crt-static', CARGO_TARGET_DIR: '/target' });
+    const windows = selectTarget('win32-x64', { platform: 'win32', processArch: 'x64', hostArch: 'arm64' });
+    expect(expectedManifestFields({
+      recipe, target: windows, fingerprint: 'fingerprint',
+      rustc: { host: 'x86_64-pc-windows-msvc' }, cargoVersion: 'cargo 1.91.1 (fixture)',
+      environment: { platform: 'win32', processArch: 'x64', hostArch: 'arm64' }, binary: {},
+    })).toMatchObject({
+      buildEnvironment: { rustflags: '-C target-feature=+crt-static' },
+      runner: { platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true },
+    });
   });
 
   it('propagates a streamed build command failure', async () => {

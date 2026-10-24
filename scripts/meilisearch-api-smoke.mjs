@@ -3,9 +3,10 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { arch, machine, platform, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileSha256, inspectExecutable } from './build-meilisearch.mjs';
+import { probePhysicalHost } from './physical-host.mjs';
 
 const options = parseArguments(process.argv.slice(2));
 if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--require-native]');
@@ -22,8 +23,11 @@ if (options.requireNative) {
   const expected = manifest.target === 'darwin-arm64' ? ['darwin', 'arm64']
     : manifest.target === 'darwin-x64' ? ['darwin', 'x64']
       : manifest.target === 'win32-x64' ? ['win32', 'x64'] : [];
-  if (platform() !== expected[0] || arch() !== expected[1] || manifest.runner?.emulated === true || normalizeArch(machine()) !== expected[1]) {
-    throw new Error(`Native smoke for ${manifest.target} cannot run on ${platform()}/${arch()} host ${machine()}.`);
+  const host = await probePhysicalHost();
+  if (host.platform !== expected[0] || host.processArch !== expected[1] || host.hostArch !== expected[1]
+    || host.emulated || manifest.runner?.platform !== host.platform || manifest.runner?.processArch !== host.processArch
+    || manifest.runner?.hostArch !== host.hostArch || manifest.runner?.emulated !== false) {
+    throw new Error(`Native smoke for ${manifest.target} cannot run on ${host.platform}/${host.processArch} physical ${host.hostArch}.`);
   }
 }
 
@@ -138,11 +142,6 @@ async function availablePort() {
       server.close((error) => error ? reject(error) : resolve(selected));
     });
   });
-}
-
-function normalizeArch(value) {
-  const normalized = value.toLowerCase();
-  return normalized === 'x86_64' || normalized === 'amd64' ? 'x64' : normalized === 'aarch64' ? 'arm64' : normalized;
 }
 
 function parseArguments(argv) {
