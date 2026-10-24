@@ -12,4 +12,7 @@ contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),
   revealExport: () => ipcRenderer.invoke('xrCollector:desktop:revealExport'),
   platform: process.platform,
+  onNavigate: (listener: (page: 'jobs' | 'activity') => void) => {
+    ipcRenderer.on('xrCollector:navigate', (_event: unknown, page: 'jobs' | 'activity') => listener(page));
+  },
 });

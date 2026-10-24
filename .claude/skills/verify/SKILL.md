@@ -161,7 +161,7 @@ node $V flows run --issue 91 --label ticket                          # 不給名
 
 - **版本**：流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 只決定受測的 `src/`：Web UI 從受測 checkout build，伺服器是受測 checkout 自己的 `server.mts`。基準與本票版本因此跑同一份斷言，受測 checkout 沒有這支流程也能當基準。票自己的 `.local` 流程則從受測 checkout import 函式庫（見「基準」）。
 - **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
-- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop；`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
+- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
 
@@ -202,6 +202,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
 | `launchElectron({ issue, label, evidence, app, vault, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
+| `trayMenu(app)`、`clickTray(app, action)`、`windowState(app)`、`closeWindow(app)`、`notifications(app)`；handle 的 `api()`、`launchAgain()`、`exited()` | 選單列／系統匣與視窗（驗證通道，見 [features/tray.md](features/tray.md)） |
 
 ### CLI 單步操作
 
@@ -237,6 +238,8 @@ await desktop.close();
 `vault` 預設 `selected`：以 checkout 的 `dist/node` 建立 Vault 並寫進 profile，畫面直接進到 App。`vault: 'none'` 不建立 Vault，畫面從 Onboarding 開始，用 `stubDialogs` 回答選擇目錄的對話框，經畫面建立或開啟 Vault。
 
 Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕、`sweep` 會略過。流程 crash 而 Electron 還活著時，`sweep` 也會略過（列在 `live`），`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+
+`launchElectron` 開啟 App 的驗證通道（`XR_COLLECTOR_VALIDATION_CONTROL=1`）：主程序在 `globalThis.__xrCollectorValidation` 提供選單列／系統匣的選單、點選單項目、視窗狀態、關閉視窗與已發出的提示，函式庫的 `trayMenu`、`clickTray`、`windowState`、`closeWindow`、`notifications` 經 Playwright 在主程序呼叫它。正式使用時不設這個變數，通道不存在。
 
 ### 打包版
 
@@ -325,5 +328,5 @@ node .claude/skills/verify/scripts/verify.mjs sweep                        # 清
     - 從未顯示的視窗，Playwright 的頁面截圖每隔一次逾時，所以 Windows 的 `window.screenshot()` 由 Electron 的 `webContents.capturePage()` 產生，只寫 `path`、回傳 PNG，`clip`、`fullPage` 不適用。從未顯示的視窗不會畫新的畫面，capturePage 會拿到它上一次畫的內容，所以 verify 訂閱視窗的畫面（`beginFrameSubscription`）讓它持續繪製，每次截圖前再等兩個 animation frame。
     - 螢幕是 1024x768，視窗被限制在螢幕內（內容約 1008x717），截圖比 Mac 的 1280x900 小，窄寬度的版面因此出現在 Windows 的截圖中。
     - log 會出現 GPU process 的錯誤（`GPU process exited unexpectedly`），不影響操作與截圖。
-    - 視窗開著時 App 收到 quit，主程序不再回應，自己的結束流程不會完成（Meilisearch 不停止）；先關閉視窗再 quit 時，結束流程完整執行。所以 Windows 的 `close()`／`relaunch()` 先 destroy 視窗再經 Playwright 結束 App。App 結束後 Node 因 Playwright 連著 inspector 印出 `Debugger ending on …` 而不退出，verify 看到這一行才以 `taskkill /T` 結束程序樹。這時 run 的 Meilisearch 必須已經停止，證明是 App 自己停止了它；Meilisearch 還在，或 60 秒內沒有走到這一步，`close()`／`relaunch()` 都算失敗，smoke 的 DESKTOP-05（或重啟的 DESKTOP-04）因此不通過。需要使用者桌面的能力在 session 0 無法驗證：視窗顯示與聚焦（`hidden: false`）、系統匣、通知、原生對話框本身、整個螢幕的截圖；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
+    - Windows 的 `close()`／`relaunch()` 在視窗開著時經 Playwright 結束 App，走 App 自己的結束流程（與系統匣的「結束」相同）。App 結束後 Node 因 Playwright 連著 inspector 印出 `Debugger ending on …` 而不退出，verify 看到這一行才以 `taskkill /T` 結束程序樹。這時 run 的 Meilisearch 必須已經停止，證明是 App 自己停止了它；Meilisearch 還在，或 60 秒內沒有走到這一步，`close()`／`relaunch()` 都算失敗，smoke 的 DESKTOP-05（或重啟的 DESKTOP-04）因此不通過。需要使用者桌面的能力在 session 0 無法驗證：視窗顯示與聚焦（`hidden: false`）、系統匣、通知、原生對話框本身、整個螢幕的截圖；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
   - `stop` 以 `taskkill /T /F` 結束 run 的程序，沒有給 runtime 正常關閉的機會（見「Cleanup」）。

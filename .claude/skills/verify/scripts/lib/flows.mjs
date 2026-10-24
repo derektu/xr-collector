@@ -6,6 +6,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openPage, recorder } from './drive.mjs';
+import { launchElectron } from './electron.mjs';
 import { launchWeb } from './instance.mjs';
 import { checkoutRoot, claimEvidence, commitOf } from './paths.mjs';
 import { apiState } from './state.mjs';
@@ -21,7 +22,7 @@ export async function listFlows(dir = FLOWS_DIR) {
     if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
       throw new Error(`${file} must export name, title, covers and run`);
     }
-    return { name: flow.name, title: flow.title, covers: flow.covers, run: flow.run, file: path.join(dir, file) };
+    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true, run: flow.run, file: path.join(dir, file) };
   }));
 }
 
@@ -53,7 +54,9 @@ function flowSource() {
   return { checkout, ...commitOf(checkout) };
 }
 
-async function runOne(flow, { issue, label, evidence, checkout, source }) {
+async function runOne(flow, options) {
+  if (flow.desktop) return runDesktop(flow, options);
+  const { issue, label, evidence, checkout, source } = options;
   const instance = await launchWeb({ issue, label, evidence, checkout });
   const pages = [];
   const open = async (route = '/') => {
@@ -80,6 +83,32 @@ async function runOne(flow, { issue, label, evidence, checkout, source }) {
   } finally {
     // The server and its slot lock never outlive the flow, even when writing results.json fails.
     await instance.stop();
+  }
+  console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
+  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+}
+
+/**
+ * A Desktop flow (`export const desktop = true`) drives the development Electron of `checkout` with
+ * its window shown, because it tests the window and the tray themselves. It gets the app handle as
+ * `instance`, whose `api()` reaches the app's own API, and the window as `page`.
+ */
+async function runDesktop(flow, { issue, label, evidence, checkout, source }) {
+  const instance = await launchElectron({ issue, label, evidence, checkout, hidden: false });
+  const record = recorder(instance, () => instance.window);
+  let error;
+  try {
+    await flow.run({ instance, page: instance.window, record, waitFor, sleep });
+  } catch (caught) {
+    error = caught;
+    console.log(`  flow ${flow.name} stopped: ${caught.message}`);
+  }
+  let passed = false;
+  try {
+    const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
+    passed = await record.finish({ flow: flow.name, flowSource: source, state, ...(error ? { error: error.message } : {}) });
+  } finally {
+    await instance.close({ keep: false }).catch((caught) => { error ??= caught; });
   }
   console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
   return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
