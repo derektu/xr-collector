@@ -280,6 +280,7 @@ async function ensureSource({ sourceDir, recipe, run }) {
   if (await exists(sourceDir)) {
     if (!await exists(path.join(sourceDir, '.git'))) throw new Error(`Incomplete source cache at ${sourceDir}; remove this target cache directory and retry.`);
     await run('git', ['config', '--local', 'core.autocrlf', 'false'], { cwd: sourceDir });
+    await run('git', ['config', '--local', 'core.longpaths', 'true'], { cwd: sourceDir });
     return;
   }
   await mkdir(sourceDir, { recursive: true });
@@ -287,6 +288,8 @@ async function ensureSource({ sourceDir, recipe, run }) {
   // Windows Git commonly defaults to CRLF checkout. This cache must preserve the pinned upstream
   // bytes so Cargo.lock has the same identity on every platform; never change the user's global config.
   await run('git', ['config', '--local', 'core.autocrlf', 'false'], { cwd: sourceDir });
+  // Upstream snapshot filenames can exceed Windows MAX_PATH inside a nested project cache.
+  await run('git', ['config', '--local', 'core.longpaths', 'true'], { cwd: sourceDir });
   await run('git', ['remote', 'add', 'origin', recipe.repository], { cwd: sourceDir });
   await run('git', ['fetch', '--depth', '1', '--filter=blob:none', 'origin', recipe.sourceCommit], { cwd: sourceDir });
   await run('git', ['checkout', '--detach', recipe.sourceCommit], { cwd: sourceDir });

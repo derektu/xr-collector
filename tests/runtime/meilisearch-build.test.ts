@@ -145,6 +145,24 @@ describe('pinned Meilisearch build', () => {
     expect(JSON.parse(await readFile(first.manifestPath, 'utf8'))).toMatchObject({ target: 'darwin-arm64', sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127', features: ['chinese'] });
   });
 
+  it('enables repository-local long paths before upstream checkout and on cache reuse', async () => {
+    const at = await root();
+    const fake = harness();
+    let longPaths = false;
+    const run: typeof fake.run = vi.fn(async (command, args, options) => {
+      if (command === 'git' && args.join(' ') === 'config --local core.longpaths true') longPaths = true;
+      if (command === 'git' && args[0] === 'checkout' && !longPaths) throw new Error('Filename too long');
+      return fake.run(command, args, options);
+    });
+    const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'nested', 'project', 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
+    const dependencies = { run, fileSha256: fake.hashFile };
+    await expect(buildMeilisearch(options, dependencies)).resolves.toMatchObject({ cacheHit: false });
+    longPaths = false;
+    await expect(buildMeilisearch(options, dependencies)).resolves.toMatchObject({ cacheHit: true });
+    expect(longPaths).toBe(true);
+    expect(fake.builds()).toBe(1);
+  });
+
   it('refuses a dirty source checkout without running Cargo or replacing runtime', async () => {
     const at = await root();
     const fake = harness();
