@@ -136,11 +136,6 @@ export async function run({ instance, page, record, waitFor }) {
     expect(retainedQuery === targetQuery, '刪除後回文件頁並保留搜尋詞', { id: 'delete.redirect.query', expected: targetQuery, actual: retainedQuery });
     expect(new URL(page.url()).pathname === '/documents', '刪除後目前實作導向文件頁',
       { id: 'delete.redirect.path', expected: '/documents', actual: new URL(page.url()).pathname });
-    note('featureMapMismatch', {
-      expectedInFeatureMap: '刪除後的閱讀頁顯示 reader-deleted',
-      actualInBaseline: 'App.tsx onDeleted 導向 /documents 並保留 query',
-      disposition: '保留產品期待；流程先觀察目前導向，再直接開 deleted URL 驗 reader-deleted',
-    });
     await shot('delete-returned-to-documents');
 
     await page.goto(`${instance.url}/documents/${encodeURIComponent(targetId)}`);
