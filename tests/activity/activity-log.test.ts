@@ -96,6 +96,20 @@ describe('activity log files and compatibility (A-T1)', () => {
     expect((await readdir(path.join(directory, 'events'))).sort()).toEqual(['2026-10-15.jsonl', '2026-10-16.jsonl']);
     await log.close();
   });
+
+  it('persists DEBUG unchanged and returns it only when the query includes it (L1, L4)', async () => {
+    const directory = await tempDirectory();
+    const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
+    let log = await ActivityLog.open(directory, { now: () => clock.now });
+    log.record(event('2026-10-15T05:00:00.000Z', { severity: 'debug', eventType: 'job.accepted' }));
+    log.record(event('2026-10-15T05:01:00.000Z', { severity: 'info', eventType: 'job.started' }));
+    await log.close();
+    log = await ActivityLog.open(directory, { now: () => clock.now });
+    expect((await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info', 'debug']);
+    expect((await log.query({ severity: ['info', 'warning', 'error'] }, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info']);
+    expect(JSON.stringify(await readEventFiles(directory))).toContain('"severity":"debug"');
+    await log.close();
+  });
 });
 
 describe('retention (A-T2)', () => {
@@ -216,7 +230,7 @@ describe('filters (A-T5)', () => {
       child: { id: 'child', kind: 'youtube.video', parentId: 'channel', source: { type: 'youtube', id: 'v1', url: 'u', title: '影片一' } } as CollectionJob,
     };
     const log = ActivityLog.memory({ now: () => clock.now, lookupJob: (id) => jobs[id] });
-    log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', eventType: 'job.accepted', subscriptionId: 'UC1' }));
+    log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', severity: 'debug', eventType: 'job.accepted', subscriptionId: 'UC1' }));
     // Written before subscriptions and parents were recorded; the job record fills them in.
     log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', eventType: 'document.saved', documentId: 'youtube:v1' }));
     log.record(event('2026-10-15T01:02:00.000Z', { jobId: 'child', severity: 'warning', eventType: 'job.retry_scheduled' }));
@@ -231,6 +245,10 @@ describe('filters (A-T5)', () => {
     expect(await types({})).toEqual(['job.accepted', 'document.saved', 'job.retry_scheduled', 'job.failed', 'job.retry_requested', 'subscription.paused', 'vault.imported']);
     expect(await types({}, null)).toHaveLength(8);
     expect(await types({ severity: ['warning', 'error'] })).toEqual(['job.retry_scheduled', 'job.failed']);
+    expect(await types({ severity: ['info', 'warning', 'error'] })).toEqual([
+      'document.saved', 'job.retry_scheduled', 'job.failed', 'job.retry_requested', 'subscription.paused', 'vault.imported',
+    ]);
+    expect(await types({ severity: ['error'] })).toEqual(['job.failed']);
     expect(await types({ eventType: ['document.saved'] })).toEqual(['document.saved']);
     expect(await types({ jobId: 'channel' })).toEqual(['job.accepted', 'document.saved', 'job.retry_scheduled']);
     expect(await types({ jobId: 'other' })).toEqual(['job.failed', 'job.retry_requested']);

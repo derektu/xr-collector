@@ -52,17 +52,18 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
   const events: string[] = [];
+  const eventRecords: Array<{ eventType: string; severity: string }> = [];
   let scheduler!: CollectionScheduler;
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
     autoCollection: () => scheduler.isEnabled(), resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   scheduler = new CollectionScheduler([channels], scheduleStore, {
-    now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => events.push(entry.eventType), ...(pause ? { pause } : {}),
+    now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => { events.push(entry.eventType); eventRecords.push(entry); }, ...(pause ? { pause } : {}),
   });
   const runs = vi.spyOn(channels, 'startRun');
   const jobEvents = vi.spyOn(jobs, 'recordEvent');
   return {
-    root, clock, source, jobs, channels, channelStore, scheduler, scheduleStore, events, runs,
+    root, clock, source, jobs, channels, channelStore, scheduler, scheduleStore, events, eventRecords, runs,
     jobEvents: () => jobEvents.mock.calls.map(([entry]) => entry.eventType),
     advance(ms: number) { clock.now = new Date(clock.now.getTime() + ms); },
     async idle() { await vi.waitFor(() => expect(jobs.isBusy()).toBe(false)); },
@@ -287,12 +288,13 @@ describe('system sleep (#97)', () => {
     expect(await w.channel(quarter)).toMatchObject({ nextCheckAt: '2026-10-15T05:15:00.000Z' });
     await poll(w);
     expect(w.events).toEqual(['collection.paused', 'collection.resumed', 'schedule.dispatched']);
+    expect(w.eventRecords.find((event) => event.eventType === 'schedule.dispatched')).toMatchObject({ severity: 'debug' });
     await w.scheduler.close();
   });
 
   it('records each pause reason that comes into force or lifts, and nothing when it is already so', async () => {
     const pause = new CollectionPause();
-    const entries: Array<{ eventType: string; pauseReason?: string; message: string }> = [];
+    const entries: Array<{ severity: string; eventType: string; pauseReason?: string; message: string }> = [];
     const w = await world({ enabled: true }, pause);
     const scheduler = new CollectionScheduler([w.channels], w.scheduleStore, {
       now: () => w.clock.now, pollIntervalMs: 24 * 60 * MINUTE, pause, recordEvent: (entry) => entries.push(entry),
@@ -304,9 +306,9 @@ describe('system sleep (#97)', () => {
     pause.set('sleep', false);
     await scheduler.close();
     pause.set('sleep', true);
-    expect(entries.map(({ eventType, pauseReason, message }) => ({ eventType, pauseReason, message }))).toEqual([
-      { eventType: 'collection.paused', pauseReason: 'sleep', message: '系統進入睡眠，暫停收集。' },
-      { eventType: 'collection.resumed', pauseReason: 'sleep', message: '系統已喚醒，恢復收集。' },
+    expect(entries.map(({ severity, eventType, pauseReason, message }) => ({ severity, eventType, pauseReason, message }))).toEqual([
+      { severity: 'info', eventType: 'collection.paused', pauseReason: 'sleep', message: '系統進入睡眠，暫停收集。' },
+      { severity: 'info', eventType: 'collection.resumed', pauseReason: 'sleep', message: '系統已喚醒，恢復收集。' },
     ]);
   });
 

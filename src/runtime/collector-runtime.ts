@@ -139,6 +139,10 @@ export class CollectorRuntime {
     const activity: ActivityAccess | undefined = jobStore ? {
       query: (query) => jobStore.activity.query(query,
         (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
+      summary: (query) => jobStore.activity.summary(query,
+        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
+      group: (groupId, limit, cursor, severity) => jobStore.activity.group(groupId,
+        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }, limit, cursor, severity),
       health: () => jobStore.activity.health(),
     } : undefined;
     const services = options.workspace ? {

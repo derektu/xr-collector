@@ -30,6 +30,8 @@ describe('Vault access declared by routes', () => {
       } as never,
       activity: {
         query: async () => ({ events: [], nextCursor: null }),
+        summary: async () => ({ entries: [], nextCursor: null }),
+        group: async () => ({ group: { groupId: 'locked-group', count: 1 }, checks: [], nextCursor: null }),
         health: () => ({ state: 'ready' }),
       } as never,
     });
@@ -39,6 +41,8 @@ describe('Vault access declared by routes', () => {
     await app.inject({ method: 'POST', url: '/api/search/rebuild' });
     await app.inject({ method: 'GET', url: '/api/jobs' });
     await app.inject({ method: 'GET', url: '/api/activity' });
+    await app.inject({ method: 'GET', url: '/api/activity?view=summary' });
+    await app.inject({ method: 'GET', url: '/api/activity/groups/locked-group' });
     await app.inject({ method: 'GET', url: '/api/vault/status' });
     await app.inject({ method: 'POST', url: '/api/vault/move/check', payload: { targetPath: '/tmp/next' } });
 
@@ -75,6 +79,8 @@ describe('Vault access declared by routes', () => {
       jobs: { list: () => ({ jobs: [], nextCursor: null }) } as never,
       activity: {
         query: async () => ({ events: [], nextCursor: null }),
+        summary: async () => ({ entries: [], nextCursor: null }),
+        group: async () => ({ group: { groupId: 'locked-group', count: 1 }, checks: [], nextCursor: null }),
         health: () => ({ state: 'ready' }),
       } as never,
     });
@@ -100,7 +106,7 @@ describe('Vault access declared by routes', () => {
       expect(response.statusCode, url).toBe(409);
       expect(response.json().error.code, url).toBe('vault_busy');
     }
-    for (const url of ['/api/jobs', '/api/activity', '/api/vault/status', '/api/health', '/api/device/login-startup']) {
+    for (const url of ['/api/jobs', '/api/activity', '/api/activity?view=summary', '/api/activity/groups/locked-group', '/api/vault/status', '/api/health', '/api/device/login-startup']) {
       expect((await app.inject({ method: 'GET', url, headers })).statusCode, url).toBe(200);
     }
     const loginStartup = await app.inject({ method: 'PUT', url: '/api/device/login-startup', headers, payload: { enabled: true } });

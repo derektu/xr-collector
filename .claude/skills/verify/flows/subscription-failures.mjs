@@ -22,6 +22,8 @@ const subscriptionStatuses = () => Object.fromEntries([...document.querySelector
 
 const DAY = 24 * 60 * 60_000;
 const CHECK_TIMEOUT = 5 * 60_000;
+const NEXT_TIME = String.raw`(?:\d{2}:\d{2}|明天 \d{2}:\d{2}|\d{2}-\d{2} \d{2}:\d{2})`;
+const ONE_FAILURE = new RegExp(`^錯誤（連續 1 次）・${NEXT_TIME} 重試$`, 'u');
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const catalog = await instance.catalog();
@@ -86,10 +88,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
     const shown = await waitFor(async () => {
       const value = await chip();
-      return /^錯誤（連續 1 次）・\d{2}:\d{2} 重試$/u.test(value.text) ? value : null;
+      return ONE_FAILURE.test(value.text) ? value : null;
     }, 'A row failing', { timeout: 15_000 }).catch(chip);
-    expect(/^錯誤（連續 1 次）・\d{2}:\d{2} 重試$/u.test(shown.text) && shown.error, '列為紅色「錯誤（連續 1 次）・HH:MM 重試」',
-      { id: 'w1.row', expected: '錯誤（連續 1 次）・HH:MM 重試（紅色）', actual: shown });
+    expect(ONE_FAILURE.test(shown.text) && shown.error, '列為紅色「錯誤（連續 1 次）・<下次時間> 重試」',
+      { id: 'w1.row', expected: '錯誤（連續 1 次）・<HH:MM／明天 HH:MM／MM-DD HH:MM> 重試（紅色）', actual: shown });
     const samples = ((await watched(page, 'status'))[`source-row-${a.id}`] ?? []).map((sample) => sample.value.split('|')[0]);
     note('rowSequence', samples);
     const afterRetrying = samples.slice(samples.findIndex((value) => value.startsWith('錯誤・')));

@@ -191,7 +191,7 @@ export class CollectionScheduler {
     const count = due.reduce((sum, entry) => sum + entry.ids.length, 0);
     if (count === 0) return;
     this.options.recordEvent?.({
-      severity: 'info', eventType: 'schedule.dispatched', message: `定時檢查開始：${count} 個訂閱到了檢查時間。`,
+      severity: 'debug', eventType: 'schedule.dispatched', message: `定時檢查開始：${count} 個訂閱到了檢查時間。`,
     });
     for (const { runner, ids } of due) {
       await runner.startRun({ trigger: 'scheduled', subscriptionIds: ids }).catch((error: unknown) => {

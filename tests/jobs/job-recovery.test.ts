@@ -303,7 +303,9 @@ describe('video jobs across restarts (R-T2)', () => {
       'job.accepted', 'job.started', 'job.interrupted', 'job.resumed', 'document.saved', 'job.completed',
     ]));
     expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.resumed'))
-      .toMatchObject({ stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
+      .toMatchObject({ severity: 'info', stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
+    expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.interrupted'))
+      .toMatchObject({ severity: 'warning' });
   });
 
   it('only updates the index of a document saved before the restart', async () => {
@@ -870,7 +872,9 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(g2.manager.get(failing.job.id)).toMatchObject({ state: 'queued', retry: { attempts: 2 }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(g2.timers.map((timer) => timer.ms)).toEqual([60_000]);
     expect((await w.events()).find((event) => event.jobId === failing.job.id && event.eventType === 'job.resumed'))
-      .toMatchObject({ stopReason: 'shutdown', message: '服務正常關閉後重新啟動，接續收集工作。' });
+      .toMatchObject({ severity: 'info', stopReason: 'shutdown', message: '服務正常關閉後重新啟動，接續收集工作。' });
+    expect((await w.events()).find((event) => event.jobId === failing.job.id && event.eventType === 'job.interrupted'))
+      .toMatchObject({ severity: 'debug' });
     g2.fireTimers();
     const done = await g2.manager.whenSettled(failing.job.id);
 

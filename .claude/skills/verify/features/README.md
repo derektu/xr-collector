@@ -5,7 +5,8 @@
 | 功能 | 檔案 | 主要層級 | 已收錄流程 |
 | --- | --- | --- | --- |
 | 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | — |
-| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures` |
+| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary` |
+| 記錄 | [activity.md](activity.md) | Web | `check-history-summary` |
 | 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b` |
 | 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | — |
 | RSS | [rss.md](rss.md) | Web | — |

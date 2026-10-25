@@ -30,6 +30,7 @@ export type JobActivityOptions = Pick<ActivityLogOptions, 'setTimer' | 'append'>
  */
 export class JobStore {
   private readonly jobs = new Map<string, CollectionJob>();
+  private eventSequence = 0;
   private flushing: Promise<void> | null = null;
   private dirty = false;
   private activityLog!: ActivityLog;
@@ -75,6 +76,9 @@ export class JobStore {
         console.error(`Collection jobs file is unreadable; moved it to ${corrupt} and started with no job history`);
       }
     }
+    const latestEvent = (await store.activityLog.query({ limit: 1 }, { vaultPath: null })).events[0];
+    const latestSequence = latestEvent?.eventId.match(/^(\d{12})-/u)?.[1];
+    if (latestSequence) store.eventSequence = Number(latestSequence);
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
       store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inStep(job) });
@@ -138,18 +142,25 @@ export class JobStore {
         ? { ...item, state: 'interrupted' } : item) ?? null,
     };
     this.jobs.set(job.id, interrupted);
-    // A move or a switch of Vaults pauses jobs on purpose; only an unplanned stop is a warning.
-    const planned = options.stop === 'vault_move' || options.stop === 'vault_switch';
+    // A crash is the only unexpected interruption. Shutdowns and Vault operations resume normally.
+    const planned = options.stop !== 'crash';
+    const role = jobRole(job.kind)?.role;
     this.event({
-      severity: planned ? 'info' : 'warning', eventType: 'job.interrupted', message,
+      severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message,
       vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id, ...(job.phase ? { phase: job.phase } : {}),
+      ...(role ? { jobRole: role } : {}), sourceType: job.source.type,
       ...(job.source.id ? { sourceId: job.source.id } : {}),
+      ...(job.source.title ? { sourceTitle: job.source.title } : {}),
+      ...(job.parentId ? { parentJobId: job.parentId } : {}),
+      ...(job.scope ? { trigger: job.scope.trigger } : {}),
+      ...(job.scope && role === 'check' && job.source.id ? { subscriptionId: job.source.id } : {}),
     });
     this.scheduleFlush();
   }
 
   event(entry: NewJobEvent): void {
-    this.activityLog.record({ eventId: randomUUID(), timestamp: this.now().toISOString(), ...entry });
+    const eventId = `${String(++this.eventSequence).padStart(12, '0')}-${randomUUID()}`;
+    this.activityLog.record({ eventId, timestamp: this.now().toISOString(), ...entry });
   }
 
   /** Resolves once every change so far is on disk, or the activity log reported why it is not. */

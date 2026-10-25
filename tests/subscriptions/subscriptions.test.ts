@@ -140,6 +140,9 @@ describe('first subscription (S-T3)', () => {
     ]);
     expect(first.progress).toMatchObject({ created: 1, skipped: 1, failed: 0 });
     expect(collectedIds(w)).toEqual([inside]);
+    const skippedJobId = first.items!.find((item) => item.sourceId === borderline)!.jobId!;
+    expect((await w.store.activity.query({ jobId: skippedJobId, eventType: ['job.completed'] }, { vaultPath: w.root })).events[0])
+      .toMatchObject({ severity: 'debug', outcome: 'skipped' });
 
     // The next check keeps it as a candidate without asking YouTube again.
     expect((await w.channelStore.list())[0]!.outOfRange).toEqual([{ videoId: borderline, before: '2026-09-15T04:00:00.000Z' }]);
@@ -241,6 +244,20 @@ describe('checks after the first (R-02, R-03, R-07, R-09)', () => {
     w.advance(30 * 60_000);
     const [next] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     expect(next!.items!.map((item) => [item.sourceId, item.outcome])).toEqual([[fresh, 'created']]);
+  });
+
+  it('warns when a repeatedly failed subscription item is finally skipped', async () => {
+    const w = await world();
+    const id = w.source.addChannel('stopped-item');
+    const [fresh] = w.source.publish(id, 's', w.clock.now, [0.1]);
+    w.source.failures.set(fresh!, new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。'));
+    await subscribe(w, 'stopped-item');
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      w.advance(30 * 60_000);
+      await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
+    }
+    expect((await w.store.activity.query({ eventType: ['subscription.item_skipped'] }, { vaultPath: w.root })).events[0])
+      .toMatchObject({ severity: 'warning', errorCode: 'no_subtitles', outcome: 'skipped', attempt: 3 });
   });
 });
 
@@ -590,10 +607,10 @@ describe('subscription events (S-T12)', () => {
     await w.store.flush();
     const events = await readEventFiles(directory);
     expect(events.filter((event) => event.eventType.startsWith('subscription.'))).toEqual([
-      expect.objectContaining({ eventType: 'subscription.added', sourceId: syntheticChannelId('events'), jobId: null }),
-      expect.objectContaining({ eventType: 'subscription.paused' }),
-      expect.objectContaining({ eventType: 'subscription.resumed' }),
-      expect.objectContaining({ eventType: 'subscription.removed' }),
+      expect.objectContaining({ eventType: 'subscription.added', sourceId: syntheticChannelId('events'), jobId: null, severity: 'info' }),
+      expect.objectContaining({ eventType: 'subscription.paused', severity: 'info' }),
+      expect.objectContaining({ eventType: 'subscription.resumed', severity: 'info' }),
+      expect.objectContaining({ eventType: 'subscription.removed', severity: 'info' }),
     ]);
   });
 });

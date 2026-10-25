@@ -897,7 +897,7 @@ export class JobManager {
     this.options.store.put(job);
     const stopReason = job.recovery?.lastStop ?? 'unknown';
     this.event(job, {
-      severity: 'info', eventType: 'job.resumed', stopReason,
+      severity: job.parentId ? 'debug' : 'info', eventType: 'job.resumed', stopReason,
       message: stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
         : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。'
           : stopReason === 'vault_move' ? '知識庫搬移完成，接續收集工作。'
@@ -1019,7 +1019,7 @@ export class JobManager {
     this.requeue(job);
     this.markWaiting(job);
     this.options.store.put(job);
-    this.event(job, { severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
+    this.event(job, { severity: 'debug', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
     return { job: structuredClone(job), deduplicated: false };
   }
 
@@ -1087,7 +1087,7 @@ export class JobManager {
     if (group) this.enterCooldown(group, until);
     this.update(job, { state: 'queued', wait: { reason: 'rate_limited', until } });
     this.event(job, {
-      severity: 'info', eventType: 'job.deferred',
+      severity: 'debug', eventType: 'job.deferred',
       message: `${group ? this.pacingLabel(group) : this.plugin(job.source.type)?.label ?? job.source.type} 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
       until, ...(job.phase ? { phase: job.phase } : {}),
     });
@@ -1392,6 +1392,9 @@ export class JobManager {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       return;
     }
+    this.event(job, {
+      severity: 'debug', eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
+    });
     const items: JobItem[] = discovery.items.map((found) => {
       const title = found.title ?? '';
       const item: JobItem = {
@@ -1413,9 +1416,6 @@ export class JobManager {
       return item;
     });
     this.update(job, { phase: 'capture', items, progress: progressOf(items) });
-    this.event(job, {
-      severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
-    });
     // The check is reported only after the accepted items are recorded, so a stop in between finds them again.
     await this.options.store.flush();
     if (this.stoppedJobs.has(job.id) || retryItems) {
@@ -1482,7 +1482,7 @@ export class JobManager {
     const name = item.source.title ? `「${item.source.title}」` : item.source.url;
     this.event(item, recorded.skipped
       ? {
-        severity: 'info', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
+        severity: 'warning', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
         message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`,
       }
       : {
@@ -1529,6 +1529,7 @@ export class JobManager {
 
   private start(job: CollectionJob, phase: JobPhase): void {
     const timestamp = this.now().toISOString();
+    const firstStart = job.startedAt === null;
     if (job.wait) delete job.wait;
     this.update(job, {
       state: 'running', phase, startedAt: job.startedAt ?? timestamp,
@@ -1537,19 +1538,37 @@ export class JobManager {
     // Check items stop showing the wait once the next attempt starts.
     this.notifyItemRetry(job);
     this.syncItemWait(job);
-    this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
+    const role = roleOf(job);
+    const majorStart = firstStart && role !== 'add' && !(role === 'item' && job.parentId !== null);
+    this.event(job, { severity: majorStart ? 'info' : 'debug', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
 
   private finish(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, detail?: string): void {
     this.update(job, { state, result, error, finishedAt: this.now().toISOString() });
+    const progress = job.progress ?? { total: 0, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
+    const check = roleOf(job) === 'check' && job.scope ? {
+      trigger: job.scope.trigger,
+      result: (state === 'failed' && error?.code === 'network_error' ? 'network_error'
+        : state === 'completed' && result.outcome !== 'skipped'
+          && progress.created === 0 && progress.failed === 0 && (progress.skipped ?? 0) === 0
+          ? 'empty' : 'other') as 'empty' | 'network_error' | 'other',
+      created: progress.created, existing: progress.existing, failed: progress.failed, skipped: progress.skipped ?? 0,
+    } : undefined;
+    const role = roleOf(job);
+    const completedSeverity = role === 'check'
+      ? (result.outcome === 'partial' || progress.failed > 0 ? 'warning' : result.outcome === 'skipped' ? 'debug' : 'info')
+      : role === 'add' || job.parentId !== null || result.outcome === 'created' || result.outcome === 'skipped'
+        ? 'debug' : 'info';
     this.event(job, state === 'completed'
       ? {
-        severity: 'info', eventType: 'job.completed', message: this.completionMessage(job, result), outcome: result.outcome,
+        severity: completedSeverity, eventType: 'job.completed', message: this.completionMessage(job, result), outcome: result.outcome,
+        ...(check ? { check } : {}),
         ...(result.skipReason ? { skipReason: result.skipReason } : {}),
         ...(result.documentId ? { documentId: result.documentId } : {}),
       }
       : {
         severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
+        ...(check ? { check } : {}),
         ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });
     const end = this.checkEnd(job);
@@ -1614,8 +1633,10 @@ export class JobManager {
    */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     const subscriptionId = this.subscriptionOf(job);
+    const role = roleOf(job);
     this.options.store.event({
       ...entry, vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
+      ...(role ? { jobRole: role } : {}),
       sourceType: job.source.type,
       ...(job.source.id ? { sourceId: job.source.id } : {}),
       ...(job.source.title ? { sourceTitle: job.source.title } : {}),
@@ -1646,18 +1667,21 @@ export class JobManager {
     const role = roleOf(job);
     const plugin = this.plugin(job.source.type);
     if (role === 'item') {
-      const stored = result.outcome === 'created' ? '收集完成，文件已保存' : '文件已存在';
+      const stored = result.outcome === 'created' ? '收集完成' : '文件已存在';
       return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
     }
     if (role === 'add') {
-      return result.outcome === 'created' ? '已訂閱，開始首次收集。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
+      return result.outcome === 'created' ? '已新增訂閱。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
     }
     if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
     const progress = job.progress;
     if (!progress) return '收集完成。';
-    const parts = [`新增 ${progress.created}`, `已存在 ${progress.existing}`];
-    if (progress.skipped) parts.push(`略過 ${progress.skipped}`);
-    if (progress.failed) parts.push(`失敗 ${progress.failed}`);
+    const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measure}${plugin.item.noun}` : ''}`;
+    const parts = progress.created ? [`新增 ${count(progress.created)}`] : [];
+    if (progress.existing) parts.push(`已存在 ${count(progress.existing)}`);
+    if (progress.skipped) parts.push(`略過 ${count(progress.skipped)}`);
+    if (progress.failed) parts.push(`失敗 ${count(progress.failed)}`);
+    if (parts.length === 0) return '收集完成。';
     return `收集完成：${parts.join('・')}。`;
   }
 }

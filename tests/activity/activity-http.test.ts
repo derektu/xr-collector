@@ -59,6 +59,8 @@ function services(failures: CollectorError[] = []) {
   });
   const activity: ActivityAccess = {
     query: (query) => store.activity.query(query, { vaultPath: VAULT }),
+    summary: (query) => store.activity.summary(query, { vaultPath: VAULT }),
+    group: (groupId, limit, cursor, severity) => store.activity.group(groupId, { vaultPath: VAULT }, limit, cursor, severity),
     health: () => store.activity.health(),
   };
   return { collector, jobs, store, activity };
@@ -73,6 +75,53 @@ async function settled(app: Awaited<ReturnType<typeof createHttpApp>>, id: strin
 }
 
 describe('activity and job routes (A-T8, A-T10)', () => {
+  it('serves the same summary and exact group detail to UI and authorized Agents (A4-A5)', async () => {
+    const { collector, jobs, store, activity } = services();
+    for (let index = 0; index < 2; index += 1) {
+      store.event({
+        severity: 'debug', eventType: 'job.started', message: '開始。', vaultPath: VAULT, jobId: `check-${index}`,
+        sourceType: 'youtube', sourceId: 'UC-summary', subscriptionId: 'UC-summary', sourceTitle: '摘要頻道', trigger: 'scheduled',
+      });
+      store.event({
+        severity: 'info', eventType: 'job.completed', message: '沒有新影片。', vaultPath: VAULT, jobId: `check-${index}`,
+        sourceType: 'youtube', sourceId: 'UC-summary', subscriptionId: 'UC-summary', sourceTitle: '摘要頻道', trigger: 'scheduled', outcome: 'empty',
+        check: { trigger: 'scheduled', result: 'empty', created: 0, existing: 5, failed: 0, skipped: 0 },
+      });
+    }
+    const ui = await createHttpApp({ collector, jobs, activity });
+    const agent = await createHttpApp({ collector, jobs, activity, agentToken: 'summary-token' });
+    cleanups.push(() => ui.close(), () => agent.close());
+    const headers = { authorization: 'Bearer summary-token' };
+    const query = '/api/activity?view=summary&sourceType=youtube&subscriptionId=UC-summary&limit=1';
+    const uiPage = (await ui.inject({ method: 'GET', url: query })).json();
+    const agentPage = (await agent.inject({ method: 'GET', url: query, headers })).json();
+    expect(uiPage.entries[0]).toMatchObject({ kind: 'check', count: 2, existing: 5, result: 'empty' });
+    expect({ ...agentPage.entries[0], groupId: undefined }).toEqual({ ...uiPage.entries[0], groupId: undefined });
+    for (const [app, groupId, auth] of [[ui, uiPage.entries[0].groupId, {}], [agent, agentPage.entries[0].groupId, headers]] as const) {
+      const detail = await app.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1`, headers: auth });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json()).toMatchObject({ checks: [{ events: expect.any(Array) }], nextCursor: expect.any(String) });
+      expect(detail.json().checks[0].events.map((event: { eventType: string }) => event.eventType).sort()).toEqual(['job.completed', 'job.started']);
+      const next = await app.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1&cursor=${encodeURIComponent(detail.json().nextCursor)}`, headers: auth });
+      expect(next.json().checks).toHaveLength(1);
+    }
+    expect((await agent.inject({ method: 'GET', url: '/api/activity?view=summary', headers: {} })).statusCode).toBe(401);
+    expect((await ui.inject({ method: 'GET', url: '/api/activity?view=bogus' })).statusCode).toBe(400);
+    expect((await ui.inject({ method: 'GET', url: '/api/activity?view=summary&cursor=bogus' })).statusCode).toBe(400);
+    expect((await ui.inject({ method: 'GET', url: '/api/activity/groups/unknown' })).statusCode).toBe(410);
+    const filteredSummary = (await ui.inject({ method: 'GET', url: '/api/activity?view=summary&eventType=job.completed' })).json();
+    expect(filteredSummary.entries).toEqual([]);
+    expect(filteredSummary.events).toBeUndefined();
+    const debugDetail = (await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(uiPage.entries[0].groupId)}?severity=debug` })).json();
+    expect(debugDetail.group.count).toBe(2);
+    expect(debugDetail.checks).toHaveLength(2);
+    expect(debugDetail.checks.every((check: { events: Array<{ eventType: string }> }) => check.events.map((event) => event.eventType).join() === 'job.started')).toBe(true);
+    const rawAll = (await ui.inject({ method: 'GET', url: '/api/activity?limit=10' })).json();
+    expect(rawAll.events.map((event: { severity: string }) => event.severity)).toContain('debug');
+    const infoUp = (await ui.inject({ method: 'GET', url: '/api/activity?severity=info,warning,error&limit=10' })).json();
+    expect(infoUp.events.every((event: { severity: string }) => event.severity !== 'debug')).toBe(true);
+  });
+
   it('stays readable while an import holds the Vault, and before a Vault is chosen', async () => {
     const { collector, jobs, activity } = services();
     const transfer = {

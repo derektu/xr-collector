@@ -1,12 +1,17 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { jobRole } from '../core/source-registry.js';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   CollectorError,
+  type ActivityCheckDetail,
+  type ActivityCheckSummary,
+  type ActivityGroupPage,
   type ActivityLogHealth,
   type ActivityPage,
   type ActivityQuery,
+  type ActivitySummaryEntry,
+  type ActivitySummaryPage,
   type CollectionJob,
   type JobEvent,
 } from '../core/types.js';
@@ -24,6 +29,8 @@ const MESSAGE_LIMIT = 500;
 const DETAIL_LIMIT = 2000;
 const TITLE_LIMIT = 300;
 const DEFAULT_LIMIT = 50;
+const SNAPSHOT_TTL_MS = 30 * 60_000;
+const SNAPSHOT_LIMIT = 50;
 
 const SEGMENT_DIRECTORY = 'events';
 /** The single log file of earlier versions; read with the segments and pruned the same way. */
@@ -61,12 +68,25 @@ function inScope(event: JobEvent, scope: ActivityScope): boolean {
   return event.vaultPath === scope.vaultPath || (scope.previousPaths ?? []).includes(event.vaultPath);
 }
 
+function scopeKey(scope: ActivityScope): string {
+  return JSON.stringify({ vaultPath: scope.vaultPath, vaultId: scope.vaultId ?? null, previousPaths: [...(scope.previousPaths ?? [])].sort() });
+}
+
 interface CachedFile {
   size: number;
   events: JobEvent[];
   /** Bytes after the last newline; the rest of a line still being written. */
   rest: Buffer;
   skipped: number;
+}
+
+interface SummarySnapshot {
+  createdAt: number;
+  oldestAt: string | null;
+  filter: string;
+  scope: string;
+  entries: ActivitySummaryEntry[];
+  groups: Map<string, { summary: ActivityCheckSummary; checks: ActivityCheckDetail[] }>;
 }
 
 /**
@@ -84,6 +104,7 @@ export class ActivityLog {
   private pending: JobEvent[] = [];
   private writeTail: Promise<void> = Promise.resolve();
   private readonly cache = new Map<string, CachedFile>();
+  private readonly snapshots = new Map<string, SummarySnapshot>();
   private cancelPurge: (() => void) | null = null;
   private cancelRetry: (() => void) | null = null;
   private closed = false;
@@ -179,6 +200,194 @@ export class ActivityLog {
       retentionDays: RETENTION_DAYS,
       log: this.health(),
     };
+  }
+
+  /** Completed checks folded before pagination; the snapshot freezes rows and group membership. */
+  async summary(request: ActivityQuery, scope: ActivityScope): Promise<ActivitySummaryPage> {
+    const query: ActivityQuery = {
+      ...request, view: 'summary',
+      ...(request.since ? { since: new Date(request.since).toISOString() } : {}),
+      ...(request.until ? { until: new Date(request.until).toISOString() } : {}),
+    };
+    const limit = query.limit ?? DEFAULT_LIMIT;
+    const filter = filterHash(query);
+    let snapshotId: string;
+    let offset = 0;
+    let snapshot: SummarySnapshot | undefined;
+    if (query.cursor) {
+      ({ snapshotId, offset } = decodeSummaryCursor(query.cursor, filter));
+      snapshot = this.snapshots.get(snapshotId);
+      if (!snapshot || snapshot.filter !== filter || snapshot.scope !== scopeKey(scope)
+        || this.now().getTime() - snapshot.createdAt > SNAPSHOT_TTL_MS
+        || (snapshot.oldestAt !== null && snapshot.oldestAt < this.cutoff().toISOString())) {
+        this.snapshots.delete(snapshotId);
+        throw new CollectorError('activity_snapshot_expired', '記錄摘要已更新，請重新讀取第一頁。');
+      }
+    } else {
+      snapshotId = randomUUID();
+      snapshot = await this.buildSummary(query, scope, snapshotId);
+      this.keepSnapshot(snapshotId, snapshot);
+    }
+    const entries = snapshot.entries.slice(offset, offset + limit);
+    const next = offset + entries.length;
+    return {
+      entries,
+      nextCursor: next < snapshot.entries.length ? encodeSummaryCursor(snapshotId, next, filter) : null,
+      retentionDays: RETENTION_DAYS,
+      log: this.health(),
+    };
+  }
+
+  async group(groupId: string, scope: ActivityScope, limit = DEFAULT_LIMIT, cursor?: string, severity?: ActivityQuery['severity']): Promise<ActivityGroupPage> {
+    const snapshotId = groupId.split(':')[0];
+    const snapshot = snapshotId ? this.snapshots.get(snapshotId) : undefined;
+    if (!snapshot || snapshot.scope !== scopeKey(scope)) {
+      if (snapshotId) this.snapshots.delete(snapshotId);
+      throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
+    }
+    const group = snapshot.groups.get(groupId);
+    if (!group) throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
+    const oldestDetailAt = group.checks.reduce((oldest, check) => check.events.reduce(
+      (value, event) => event.timestamp < value ? event.timestamp : value, oldest), group.summary.firstFinishedAt);
+    if (oldestDetailAt < this.cutoff().toISOString()) {
+      throw new CollectorError('activity_group_expired', '檢查細節已超過 30 天保留期限。');
+    }
+    if (this.now().getTime() - snapshot.createdAt > SNAPSHOT_TTL_MS) {
+      this.snapshots.delete(snapshotId!);
+      throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
+    }
+    const offset = cursor ? decodeGroupCursor(cursor, groupId) : 0;
+    const checks = group.checks.slice(offset, offset + limit).map((check) => ({
+      ...check,
+      events: severity ? check.events.filter((event) => severity.includes(event.severity)) : check.events,
+    }));
+    const next = offset + checks.length;
+    return {
+      group: group.summary, checks,
+      nextCursor: next < group.checks.length ? encodeGroupCursor(groupId, next) : null,
+      retentionDays: RETENTION_DAYS,
+    };
+  }
+
+  private async buildSummary(query: ActivityQuery, scope: ActivityScope, snapshotId: string): Promise<SummarySnapshot> {
+    const cutoff = this.cutoff().toISOString();
+    const jobLinks = new Map<string, CollectionJob | undefined>();
+    const lookup = (id: string) => {
+      if (!jobLinks.has(id)) jobLinks.set(id, this.options.lookupJob?.(id));
+      return jobLinks.get(id);
+    };
+    const all = (await this.readAll()).filter((event) => event.timestamp >= cutoff && inScope(event, scope))
+      .map((event) => this.enrich(event, lookup));
+    const base = all.filter((event) => (!query.since || event.timestamp >= query.since)
+      && (!query.until || event.timestamp < query.until)
+      && (!query.subscriptionId || event.subscriptionId === query.subscriptionId)
+      && (!query.sourceType || event.sourceType === query.sourceType));
+    const eventsByRoot = new Map<string, JobEvent[]>();
+    for (const event of all) {
+      const root = event.parentJobId ?? event.jobId;
+      if (!root) continue;
+      const list = eventsByRoot.get(root) ?? [];
+      list.push(event);
+      eventsByRoot.set(root, list);
+    }
+    const terminals = new Map<string, { event: JobEvent; detail: ActivityCheckDetail; hidden: boolean }>();
+    for (const event of base) {
+      if (!event.jobId || (event.eventType !== 'job.completed' && event.eventType !== 'job.failed')) continue;
+      const check = event.check;
+      if (!check || !event.subscriptionId || !event.sourceType) continue;
+      terminals.set(event.jobId, {
+        event: { ...event, check },
+        hidden: event.outcome === 'skipped' && event.skipReason !== undefined
+          && new Set(['subscription_paused', 'subscription_removed', 'superseded']).has(event.skipReason),
+        detail: {
+          jobId: event.jobId, finishedAt: event.timestamp, result: check.result,
+          created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
+          ...(event.errorCode ? { errorCode: event.errorCode } : {}), message: event.message,
+          events: (eventsByRoot.get(event.jobId) ?? [])
+            .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.eventId.localeCompare(b.eventId)),
+        },
+      });
+    }
+    const bySubscription = new Map<string, Array<{ event: JobEvent; detail: ActivityCheckDetail; hidden: boolean }>>();
+    for (const terminal of terminals.values()) {
+      const key = `${terminal.event.sourceType}\u0000${terminal.event.subscriptionId}`;
+      const list = bySubscription.get(key) ?? [];
+      list.push(terminal);
+      bySubscription.set(key, list);
+    }
+    const groups = new Map<string, { summary: ActivityCheckSummary; checks: ActivityCheckDetail[] }>();
+    const checkEntries: ActivityCheckSummary[] = [];
+    const checkEntryEventIds = new Map<string, string>();
+    let groupIndex = 0;
+    for (const checks of bySubscription.values()) {
+      checks.sort((a, b) => a.event.timestamp.localeCompare(b.event.timestamp) || a.event.eventId.localeCompare(b.event.eventId));
+      let run: typeof checks = [];
+      const flush = () => {
+        if (run.length === 0) return;
+        const first = run[0]!;
+        const last = run[run.length - 1]!;
+        const check = last.event.check!;
+        const groupId = `${snapshotId}:${groupIndex++}`;
+        const summary: ActivityCheckSummary = {
+          kind: 'check', groupId, jobId: last.event.jobId!, sourceType: last.event.sourceType!, subscriptionId: last.event.subscriptionId!,
+          sourceTitle: last.event.sourceTitle ?? null, trigger: check.trigger, result: check.result,
+          created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
+          count: run.length, firstFinishedAt: first.event.timestamp, lastFinishedAt: last.event.timestamp,
+          severity: last.event.severity, ...(last.event.errorCode ? { errorCode: last.event.errorCode } : {}), message: last.event.message,
+        };
+        checkEntries.push(summary);
+        checkEntryEventIds.set(groupId, last.event.eventId);
+        groups.set(groupId, { summary, checks: run.map((entry) => entry.detail).reverse() });
+        run = [];
+      };
+      for (const item of checks) {
+        if (item.hidden) { flush(); continue; }
+        const check = item.event.check!;
+        const eligible = eligibleRoutineCheck(item.event);
+        if (!eligible) { flush(); run = [item]; flush(); continue; }
+        if (run.length > 0 && run[run.length - 1]!.event.check!.result !== check.result) flush();
+        run.push(item);
+      }
+      flush();
+    }
+    const checkJobIds = new Set(terminals.keys());
+    const meaningfulStartJobIds = new Set([...terminals]
+      .filter(([, terminal]) => !terminal.hidden && !eligibleRoutineCheck(terminal.event))
+      .map(([jobId]) => jobId));
+    const visibleChild = (event: JobEvent) => event.eventType.startsWith('document.') || event.eventType.startsWith('subscription.item_')
+      || event.eventType === 'job.failed';
+    const independent = base.filter((event) => {
+      if (event.eventType === 'schedule.dispatched') return false;
+      if (event.jobId && checkJobIds.has(event.jobId)) {
+        return event.eventType === 'job.started' && meaningfulStartJobIds.has(event.jobId);
+      }
+      if (event.parentJobId) return visibleChild(event);
+      if (event.jobRole === 'add') return event.eventType === 'job.failed';
+      if (event.jobRole === 'check') return event.eventType === 'job.failed'
+        || (event.eventType === 'job.started' && event.trigger !== undefined && event.trigger !== 'scheduled');
+      if (event.eventType === 'job.accepted') return false;
+      if (event.jobRole === 'item' && event.eventType === 'job.completed' && event.outcome === 'created'
+        && event.jobId && eventsByRoot.get(event.jobId)?.some((related) => related.eventType === 'document.saved')) return false;
+      return true;
+    })
+      .filter((event) => !query.severity || query.severity.includes(event.severity))
+      .filter((event) => !query.eventType || query.eventType.includes(event.eventType))
+      .map((event): ActivitySummaryEntry => ({ kind: 'event', event }));
+    const summaries = query.eventType ? [] : checkEntries.filter((entry) => !query.severity || query.severity.includes(entry.severity));
+    const entries: ActivitySummaryEntry[] = [...independent, ...summaries]
+      .sort((a, b) => summaryTime(b).localeCompare(summaryTime(a))
+        || summaryEventId(b, checkEntryEventIds).localeCompare(summaryEventId(a, checkEntryEventIds)));
+    const oldestAt = entries.reduce<string | null>((oldest, entry) => {
+      const value = entry.kind === 'event' ? entry.event.timestamp : entry.firstFinishedAt;
+      return oldest === null || value < oldest ? value : oldest;
+    }, null);
+    return { createdAt: this.now().getTime(), oldestAt, filter: filterHash(query), scope: scopeKey(scope), entries, groups };
+  }
+
+  private keepSnapshot(id: string, snapshot: SummarySnapshot): void {
+    for (const [key, value] of this.snapshots) if (this.now().getTime() - value.createdAt > SNAPSHOT_TTL_MS) this.snapshots.delete(key);
+    this.snapshots.set(id, snapshot);
+    while (this.snapshots.size > SNAPSHOT_LIMIT) this.snapshots.delete(this.snapshots.keys().next().value!);
   }
 
   /** Removes activity older than the retention period. Days are UTC; the boundary day is cut at query time. */
@@ -379,6 +588,8 @@ export class ActivityLog {
     const job = lookup(event.jobId);
     if (!job) return event;
     if (!event.sourceTitle && job.source.title) event.sourceTitle = job.source.title;
+    const role = jobRole(job.kind)?.role;
+    if (!event.jobRole && role) event.jobRole = role;
     if (!event.parentJobId && job.parentId) event.parentJobId = job.parentId;
     if (!event.sourceType) event.sourceType = job.source.type;
     if (!event.subscriptionId) {
@@ -398,7 +609,7 @@ function parseEvent(line: string): JobEvent | null {
       || typeof value.eventType !== 'string' || typeof value.message !== 'string' || Number.isNaN(Date.parse(value.timestamp))) return null;
     return {
       ...value,
-      severity: value.severity === 'warning' || value.severity === 'error' ? value.severity : 'info',
+      severity: value.severity === 'debug' || value.severity === 'warning' || value.severity === 'error' ? value.severity : 'info',
       vaultPath: typeof value.vaultPath === 'string' ? value.vaultPath : null,
       ...(typeof value.vaultId === 'string' ? { vaultId: value.vaultId } : { vaultId: undefined }),
       jobId: typeof value.jobId === 'string' ? value.jobId : null,
@@ -410,10 +621,18 @@ function parseEvent(line: string): JobEvent | null {
   }
 }
 
+/** Routine checks whose process noise is represented by one durable summary row. */
+function eligibleRoutineCheck(event: JobEvent): boolean {
+  const check = event.check;
+  return check !== undefined && check.trigger === 'scheduled' && (check.result === 'empty' || check.result === 'network_error')
+    && check.created === 0 && check.failed === 0 && check.skipped === 0;
+}
+
 function matchesQuery(event: JobEvent, query: ActivityQuery, lookup: (id: string) => CollectionJob | undefined): boolean {
   if (query.severity && !query.severity.includes(event.severity)) return false;
   if (query.eventType && !query.eventType.includes(event.eventType)) return false;
   if (query.subscriptionId && event.subscriptionId !== query.subscriptionId) return false;
+  if (query.sourceType && event.sourceType !== query.sourceType) return false;
   if (query.since && event.timestamp < query.since) return false;
   if (query.until && event.timestamp >= query.until) return false;
   if (query.jobId) {
@@ -434,14 +653,56 @@ function compareEvents(a: Pick<JobEvent, 'timestamp' | 'eventId'>, b: Pick<JobEv
 
 function filterHash(query: ActivityQuery): string {
   const normalized = {
+    view: query.view ?? 'raw',
     severity: query.severity ? [...query.severity].sort() : null,
     eventType: query.eventType ? [...query.eventType].sort() : null,
     jobId: query.jobId ?? null,
     subscriptionId: query.subscriptionId ?? null,
+    sourceType: query.sourceType ?? null,
     since: query.since ?? null,
     until: query.until ?? null,
   };
   return createHash('sha256').update(JSON.stringify(normalized)).digest('base64url').slice(0, 12);
+}
+
+function summaryTime(entry: ActivitySummaryEntry): string {
+  return entry.kind === 'event' ? entry.event.timestamp : entry.lastFinishedAt;
+}
+
+function summaryEventId(entry: ActivitySummaryEntry, checks: ReadonlyMap<string, string>): string {
+  return entry.kind === 'event' ? entry.event.eventId : checks.get(entry.groupId) ?? '';
+}
+
+function encodeSummaryCursor(snapshotId: string, offset: number, filter: string): string {
+  return Buffer.from(JSON.stringify({ s: snapshotId, o: offset, f: filter })).toString('base64url');
+}
+
+function decodeSummaryCursor(cursor: string, filter: string): { snapshotId: string; offset: number } {
+  const invalid = () => new CollectorError('invalid_request', '記錄摘要的分頁位置無效，請重新讀取第一頁。');
+  try {
+    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: unknown; o?: unknown; f?: unknown };
+    if (typeof value.s !== 'string' || !Number.isSafeInteger(value.o) || (value.o as number) < 0 || value.f !== filter) throw invalid();
+    return { snapshotId: value.s, offset: value.o as number };
+  } catch (error) {
+    if (error instanceof CollectorError) throw error;
+    throw invalid();
+  }
+}
+
+function encodeGroupCursor(groupId: string, offset: number): string {
+  return Buffer.from(JSON.stringify({ g: groupId, o: offset })).toString('base64url');
+}
+
+function decodeGroupCursor(cursor: string, groupId: string): number {
+  const invalid = () => new CollectorError('invalid_request', '檢查細節的分頁位置無效，請重新讀取。');
+  try {
+    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { g?: unknown; o?: unknown };
+    if (value.g !== groupId || !Number.isSafeInteger(value.o) || (value.o as number) < 0) throw invalid();
+    return value.o as number;
+  } catch (error) {
+    if (error instanceof CollectorError) throw error;
+    throw invalid();
+  }
 }
 
 function encodeCursor(event: JobEvent, filter: string): string {
