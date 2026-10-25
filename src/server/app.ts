@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
+import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
@@ -17,6 +18,7 @@ import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, typ
 import {
   CollectorError,
   type CoreErrorCode,
+  type BuildInfo,
   type ActivityLogHealth,
   type ActivityPage,
   type ActivitySummaryPage,
@@ -122,10 +124,11 @@ export interface VaultSetup {
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
   '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
-  '/api/device/login-startup',
+  '/api/device/login-startup', '/api/device/build-info',
 ]);
 
 export interface HttpAppOptions {
+  buildInfo?: BuildInfo;
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
@@ -226,6 +229,7 @@ export function errorStatus(code: string): number {
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+  const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
   const connectivity = options.connectivity;
   const connectivityStatus = (): ConnectivityStatus => connectivity?.status() ?? { state: 'online', checkedAt: null };
@@ -414,6 +418,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   const loginStartup = options.loginStartup ?? unavailableLoginStartup;
+  app.get('/api/device/build-info', deviceData(), async () => ({ buildInfo }));
+
   app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));
   app.put<{ Body: { enabled?: unknown } }>('/api/device/login-startup', deviceData(), async (request) => {
     const body = request.body ?? {};

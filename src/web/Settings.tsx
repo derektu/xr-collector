@@ -3,6 +3,7 @@ import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
 import { VaultLocationSection } from './VaultLocation.js';
+import { BuildInfoCard } from './BuildInfoCard.js';
 import { LoginStartup } from './LoginStartup.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
@@ -50,6 +51,7 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
             onClick={() => onThemePreference(value)}>{themeLabels[value]}</button>)}
         </div>
       </section>
+      <BuildInfoCard />
     </div>
   </>;
 }

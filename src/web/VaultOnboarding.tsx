@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VaultSetupResult, VaultSetupStatus } from '../core/types.js';
+import { BuildInfoCard } from './BuildInfoCard.js';
 import { api, ApiError } from './api-client.js';
 import { ImportDone, ImportOnboarding, Onboarding, type VaultAction, type VaultInspection } from './Onboarding.js';
 
@@ -107,12 +108,11 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     }
   }
 
+  let screen;
   if (imported) {
-    return <ImportDone vaultPath={imported.vault.vaultPath ?? ''} documentCount={imported.documentCount} onEnter={() => onReady(imported)} />;
-  }
-
-  if (mode === 'import') {
-    return <ImportOnboarding
+    screen = <ImportDone vaultPath={imported.vault.vaultPath ?? ''} documentCount={imported.documentCount} onEnter={() => onReady(imported)} />;
+  } else if (mode === 'import') {
+    screen = <ImportOnboarding
       packagePath={packagePath}
       inspection={inspection}
       suggestedPath={status.suggestedPath}
@@ -126,18 +126,19 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
       onImport={(file, folder) => void importFrom(file, folder)}
       onBack={() => { setMode('choose'); setError(undefined); }}
     />;
+  } else {
+    screen = <Onboarding
+      inspection={inspection}
+      suggestedPath={status.suggestedPath}
+      {...(status.failure ? { originalFailure: status.failure } : {})}
+      busy={busy}
+      {...(error ? { error } : {})}
+      pathEntry={desktop ? 'dialog' : 'manual'}
+      onChooseDirectory={() => void chooseDirectory()}
+      onSubmitPath={(path) => void inspect(path)}
+      onContinue={(action, path) => void continueWith(action, path)}
+      onImport={() => { setMode('import'); setError(undefined); }}
+    />;
   }
-
-  return <Onboarding
-    inspection={inspection}
-    suggestedPath={status.suggestedPath}
-    {...(status.failure ? { originalFailure: status.failure } : {})}
-    busy={busy}
-    {...(error ? { error } : {})}
-    pathEntry={desktop ? 'dialog' : 'manual'}
-    onChooseDirectory={() => void chooseDirectory()}
-    onSubmitPath={(path) => void inspect(path)}
-    onContinue={(action, path) => void continueWith(action, path)}
-    onImport={() => { setMode('import'); setError(undefined); }}
-  />;
+  return <div className="onboarding-with-build-info">{screen}<BuildInfoCard compact /></div>;
 }

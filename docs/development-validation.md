@@ -122,6 +122,6 @@ Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolch
 
 交付平台固定為 Mac arm64 與 Windows x64。Mac 在使用者的 Apple Silicon Mac 執行 `npm run package:mac`；Windows 在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 執行 `npm run package:win`。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
 
-正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。#34 記錄版本、建置日期、完整 commit、產物 SHA256、架構、實際 host／process 架構及 updater metadata，並完成適用的安裝與操作驗收；未提交預演產物不視為正式版本。未簽章產物可以通過 #34，簽署、公證與憑證整合留待後續工作，驗收不讀取或修改使用者的簽署憑證。
+正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。未簽章產物可以通過 #34，簽署、公證與憑證整合留待後續工作，驗收不讀取或修改使用者的簽署憑證。
 
 #35 在使用者的 Mac 核對兩平台附件後上傳並發布；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata；#35 在正式發布前確認 repository 已公開，並以無 GitHub 登入／token 的客戶端驗證。工作順序為 #139 review／merge、#34 本機封裝、#35 發布，具體契約見 [本機安裝包計畫](local-packaging-plan.md)。

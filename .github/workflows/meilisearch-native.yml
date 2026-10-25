@@ -11,6 +11,8 @@ on:
       - src/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
       - scripts/physical-host.mjs
+      - scripts/runtime-dependencies.mjs
+      - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
       - package.json
   push:
@@ -22,6 +24,8 @@ on:
       - src/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
       - scripts/physical-host.mjs
+      - scripts/runtime-dependencies.mjs
+      - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
       - package.json
 
@@ -40,12 +44,6 @@ jobs:
             binary: resources/bin/mac/meilisearch
             manifest: resources/bin/mac/meilisearch-build.json
             official: true
-          - runner: macos-15-intel
-            target: darwin-x64
-            rust_target: x86_64-apple-darwin
-            binary: resources/bin/mac/meilisearch
-            manifest: resources/bin/mac/meilisearch-build.json
-            official: false
           - runner: windows-2022
             target: win32-x64
             rust_target: x86_64-pc-windows-msvc

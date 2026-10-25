@@ -1,4 +1,5 @@
 import type {
+  BuildInfo,
   ActivityPage,
   ActivitySummaryPage,
   ActivityGroupPage,
@@ -78,6 +79,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async buildInfo(signal?: AbortSignal): Promise<BuildInfo> {
+    return (await request<{ buildInfo: BuildInfo }>('/api/device/build-info', signal ? { signal } : undefined)).buildInfo;
+  },
+
   async getLoginStartup(signal?: AbortSignal): Promise<LoginStartupStatus> {
     return (await request<{ loginStartup: LoginStartupStatus }>('/api/device/login-startup', signal ? { signal } : undefined)).loginStartup;
   },

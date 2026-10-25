@@ -161,17 +161,26 @@ describe('Meilisearch runtime preparation', () => {
     })).rejects.toThrow(/Microsoft Visual C\+\+ v14 x64 runtime/u);
   });
 
-  it('wires distinct default and official package outputs without changing the default package commands', async () => {
+  it('wires all package commands through the guarded wrapper and keeps variant outputs distinct', async () => {
     const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8')) as { scripts: Record<string, string> };
-    expect(packageJson.scripts['package:mac']).toBe('npm run download:runtime && npm run build && electron-builder --mac --publish never');
-    expect(packageJson.scripts['package:win']).toBe('npm run download:runtime:win && npm run build && electron-builder --win --x64 --publish never');
-    expect(packageJson.scripts['package:mac:official']).toContain('--variant official --target darwin-arm64');
-    expect(packageJson.scripts['package:win:official']).toContain('--variant official --target win32-x64');
+    expect(packageJson.scripts['package:mac']).toBe('node scripts/package-app.mjs --target darwin-arm64 --variant chinese');
+    expect(packageJson.scripts['package:win']).toBe('node scripts/package-app.mjs --target win32-x64 --variant chinese');
+    expect(packageJson.scripts['package:mac:official']).toBe('node scripts/package-app.mjs --target darwin-arm64 --variant official');
+    expect(packageJson.scripts['package:win:official']).toBe('node scripts/package-app.mjs --target win32-x64 --variant official');
     const { getConfig } = await import('app-builder-lib/out/util/config/config.js');
     const config = await getConfig(process.cwd(), 'electron-builder.official.yml');
     expect(config.directories?.output).toBe('release/official');
-    expect(config.artifactName).toBe('XR-Collector-${version}-official-${os}-${arch}.${ext}');
+    expect(config.mac?.artifactName).toBe('XR-Collector-${version}-official-mac-${arch}.${ext}');
     expect(config.win?.artifactName).toBe('XR-Collector-${version}-official-win-${arch}-setup.${ext}');
+    expect(config.win?.extraResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['*.dll', 'runtime-dependencies.json']) }),
+    ]));
+    const chineseConfig = await getConfig(process.cwd(), 'electron-builder.yml');
+    expect(chineseConfig.mac?.artifactName).toBe('XR-Collector-${version}-chinese-mac-${arch}.${ext}');
+    expect(chineseConfig.win?.artifactName).toBe('XR-Collector-${version}-chinese-win-${arch}-setup.${ext}');
+    expect(chineseConfig.win?.extraResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['!vcruntime140.dll', 'runtime-dependencies.json']) }),
+    ]));
   });
 
   it('rejects unknown variants at the CLI boundary', () => {

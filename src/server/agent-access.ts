@@ -9,6 +9,7 @@ export const AGENT_CONNECTION_SCHEMA_VERSION = 1;
 /** A separate authenticated listener exposes the same business services as the UI listener. */
 export async function startAgentAccess(options: {
   collector?: StartServerOptions['collector'];
+  buildInfo?: StartServerOptions['buildInfo'];
   jobs?: StartServerOptions['jobs'];
   activity?: StartServerOptions['activity'];
   /** Receives the Agent token so the activity log can mask it wherever it appears. */
@@ -36,6 +37,7 @@ export async function startAgentAccess(options: {
     ? [...Array.from({ length: AGENT_PORT_RANGE }, (_, offset) => options.preferredPort! + offset), 0]
     : [0];
   const server = await firstFreePort(candidates, (port) => startServer({
+    ...(options.buildInfo ? { buildInfo: options.buildInfo } : {}),
     ...(options.collector ? { collector: options.collector } : {}),
     ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.activity ? { activity: options.activity } : {}),

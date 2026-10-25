@@ -10,6 +10,7 @@ files:
   - node_modules/**
 asar: true
 mac:
+  artifactName: XR-Collector-${version}-chinese-mac-${arch}.${ext}
   target:
     - target: dmg
       arch: [arm64]
@@ -26,6 +27,8 @@ mac:
       to: bin/yt-dlp
     - from: resources/bin/mac/deno
       to: bin/deno
+    - from: resources/bin/mac/runtime-dependencies.json
+      to: bin/runtime-dependencies.json
     - from: resources/bin/mac/meilisearch
       to: bin/meilisearch
     - from: resources/bin/mac/meilisearch-build.json
@@ -34,7 +37,7 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: XR-Collector-${version}-win-${arch}-setup.${ext}
+  artifactName: XR-Collector-${version}-chinese-win-${arch}-setup.${ext}
   extraResources:
     - from: skills
       to: skills
@@ -42,7 +45,7 @@ win:
       to: tray
     - from: resources/bin/win
       to: bin
-      filter: ['*.exe', 'meilisearch-build.json', 'yt-dlp/**/*']
+      filter: ['*.exe', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*', '!vcruntime140.dll']
 nsis:
   oneClick: false
   perMachine: false

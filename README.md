@@ -105,7 +105,7 @@ npm run package:win:official  # Windows x64
 
 official variant 的交付 target 為 `darwin-arm64` 與 `win32-x64`；要求 `darwin-x64` 會在下載或替換 runtime 前失敗。兩種 variant 的 runtime manifest 與索引語意 profile 分開；換 variant 時只重建目前 Vault 的可重建搜尋索引，同 variant 重啟沿用索引。
 
-官方 Windows x64 binary 的實物 PE imports 包含 `VCRUNTIME140.dll`，因此選用 official Windows bundle 的電腦需要 Microsoft 支援的 Visual C++ v14 x64 runtime。#139 不自行下載、安裝或重分發該 runtime；安裝包的 redistributable 流程由 #34 處理。預設 Chinese Windows runtime 仍為 static CRT，不需要額外 VC runtime。開發／驗收機若已由 Visual Studio 提供該 runtime，須如實記錄，不能當作 fresh-no-CRT 環境證據。
+官方 Windows x64 binary 的實物 PE imports 包含 `VCRUNTIME140.dll`。official Windows 安裝包從本機 Visual Studio Redistributable 目錄選取 repo 釘住的 Microsoft 簽署檔，核對版本、bytes、SHA-256、簽署者與憑證 thumbprint 後，將 DLL app-local 放在 Meilisearch 旁；不提高權限，也不修改全域 CRT。預設 Chinese Windows runtime 使用 static CRT，安裝包不含該 DLL。現有 VM 的成功只能證明 app-local 載入；無 CRT 客戶端驗收另行保留，不將已安裝 Visual Studio 的環境描述為乾淨客戶端。
 
 `npm run prepare:meilisearch -- --variant chinese|official --target <target>` 是共同準備入口；省略 variant 時仍是 `chinese`。Chinese 會沿用 `npm run build:meilisearch` 的 source builder；official 只接受 repo 釘住的官方 release URL、大小、SHA-256、header、架構與 `--version`。兩者共用 destination install lock 與原子 binary/manifest replacement，下載或驗證失敗不會替換既有 runtime。
 
@@ -113,7 +113,7 @@ Package 可以未簽章；簽署、公證與憑證整合不構成 #34 的完成�
 
 `npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
 
-正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。安裝包使用預設 Electron 圖示。#34 記錄版本、建置日期、完整 commit、產物 checksum、架構與 updater metadata；未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
+正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、準備固定 runtime、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
 
 ## 資料保存
 
