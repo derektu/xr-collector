@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent, Subscription } from '../core/types.js';
+import type { ActivityGroupPage, ActivityLogHealth, ActivityQuery, ActivitySummaryEntry, JobView, JobEvent, Subscription } from '../core/types.js';
 import {
   activityQuery,
   activityStateSearch,
@@ -7,12 +7,14 @@ import {
   eventLevel,
   eventText,
   jobBadge,
-  LEVEL_OPTIONS,
+  MIN_LEVEL_OPTIONS,
+  RECORD_TYPE_OPTIONS,
   logTime,
   logWarning,
   mergeNewest,
   parseActivityState,
   RANGE_OPTIONS,
+  summaryRange,
   type ActivityViewState,
 } from './activity-presentation.js';
 import { api } from './api-client.js';
@@ -21,13 +23,15 @@ import { Icon } from './icons.js';
 import { ACTIVE_POLL_MS } from './use-collection-status.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
-import { sourcePath } from './source-presentation.js';
+import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
+import { itemCount, itemNoun } from './subscription-presentation.js';
 
 const LOG_PAGE = 50;
 
 interface LogState {
   filter: string;
   events: JobEvent[];
+  entries: ActivitySummaryEntry[];
   nextCursor: string | null;
   health: ActivityLogHealth;
 }
@@ -47,12 +51,15 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const state = parseActivityState(search);
-  const filter = activityStateSearch(state);
+  const effectiveMode = state.job ? 'raw' : state.mode;
+  const filter = activityStateSearch({ ...state, mode: effectiveMode });
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [log, setLog] = useState<LogState | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
+  const summaryLocked = useRef(false);
+  const logGeneration = useRef(0);
   // The shell's status poll can miss a job that starts and ends between two polls, such as one an
   // Agent submitted; while this page shows work in progress, it refreshes itself as well.
   const [tick, setTick] = useState(0);
@@ -70,7 +77,9 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
     return () => controller.abort();
   }, [revision]);
 
-  // A changed filter starts over; a refresh with the same filter adds new entries above the loaded ones.
+  // A changed filter starts over. Raw refreshes add new entries above loaded history. Summary refreshes
+  // replace the whole snapshot until an older page is requested; pagination then keeps that snapshot
+  // fixed until a filter/mode change or page reload, so rows and cursors can never cross snapshots.
   // Refreshes never cancel a request in flight, so frequent progress updates cannot keep the log empty.
   // The time bounds of a filter are fixed when it is first loaded, so "today" keeps meaning the same
   // day and cursors stay valid when the page stays open past midnight.
@@ -78,23 +87,35 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
   currentFilter.current = filter;
   const filterQuery = useRef<{ filter: string; query: ActivityQuery } | null>(null);
   useEffect(() => {
+    summaryLocked.current = false;
+    logGeneration.current += 1;
     setLog(null);
     setLogError(null);
+    setLoadingOlder(false);
   }, [filter]);
 
   useEffect(() => {
     const requested = filter;
+    if (effectiveMode === 'summary' && summaryLocked.current) return;
     if (filterQuery.current?.filter !== requested) filterQuery.current = { filter: requested, query: activityQuery(state, new Date()) };
-    api.activity({ ...filterQuery.current.query, limit: LOG_PAGE }).then((page) => {
+    const request = effectiveMode === 'summary'
+      ? api.activitySummary({ ...filterQuery.current.query, limit: LOG_PAGE })
+      : api.activity({ ...filterQuery.current.query, limit: LOG_PAGE });
+    request.then((page) => {
       if (currentFilter.current !== requested) return;
-      setLog((previous) => previous && previous.filter === requested
-        ? { ...previous, events: mergeNewest(previous.events, page.events), health: page.log }
-        : { filter: requested, events: page.events, nextCursor: page.nextCursor, health: page.log });
+      if (effectiveMode === 'summary' && summaryLocked.current) return;
+      const events = 'events' in page ? page.events : [];
+      const entries = 'entries' in page ? page.entries : [];
+      setLog((previous) => previous && previous.filter === requested && effectiveMode === 'raw'
+        ? { ...previous, events: mergeNewest(previous.events, events), entries: [], health: page.log }
+        : { filter: requested, events, entries, nextCursor: page.nextCursor, health: page.log });
       setLogError(null);
     }).catch((error: unknown) => {
-      if (currentFilter.current === requested) setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
+      if (currentFilter.current === requested && !(effectiveMode === 'summary' && summaryLocked.current)) {
+        setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
+      }
     });
-  }, [filter, refresh]);
+  }, [filter, refresh, effectiveMode]);
 
   useEffect(() => {
     if (!state.job) { setFilteredJob(null); return undefined; }
@@ -109,17 +130,29 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
 
   async function loadOlder(): Promise<void> {
     if (!log?.nextCursor) return;
+    const requestedFilter = filter;
+    const requestedCursor = log.nextCursor;
+    const requestedGeneration = logGeneration.current;
+    if (effectiveMode === 'summary') summaryLocked.current = true;
     setLoadingOlder(true);
     try {
       const query = filterQuery.current?.filter === filter ? filterQuery.current.query : activityQuery(state, new Date());
-      const page = await api.activity({ ...query, limit: LOG_PAGE, cursor: log.nextCursor });
-      setLog((previous) => previous && previous.filter === filter
-        ? { ...previous, events: [...previous.events, ...page.events], nextCursor: page.nextCursor, health: page.log }
+      const page = effectiveMode === 'summary'
+        ? await api.activitySummary({ ...query, limit: LOG_PAGE, cursor: requestedCursor })
+        : await api.activity({ ...query, limit: LOG_PAGE, cursor: requestedCursor });
+      setLog((previous) => requestedGeneration === logGeneration.current
+        && previous?.filter === requestedFilter && previous.nextCursor === requestedCursor
+        ? { ...previous,
+          events: [...previous.events, ...('events' in page ? page.events : [])],
+          entries: [...previous.entries, ...('entries' in page ? page.entries : [])],
+          nextCursor: page.nextCursor, health: page.log }
         : previous);
     } catch (error) {
-      setLogError(error instanceof Error ? error.message : '無法讀取更早的記錄。');
+      if (requestedGeneration === logGeneration.current && currentFilter.current === requestedFilter) {
+        setLogError(error instanceof Error ? error.message : '無法讀取更早的記錄。');
+      }
     } finally {
-      setLoadingOlder(false);
+      if (requestedGeneration === logGeneration.current && currentFilter.current === requestedFilter) setLoadingOlder(false);
     }
   }
 
@@ -143,26 +176,52 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
   const warning = logWarning(log?.health ?? null);
   const sourceKnown = !state.source || subscriptions.some((subscription) => subscription.id === state.source);
 
+  if (state.group) return <ActivityGroup groupId={state.group} returnTo={state.returnTo} state={state} onState={onState} />;
+
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>記錄</h1></div>
 
     <section className="activity-card log-card" aria-labelledby="activity-log" data-testid="activity-log">
       <div className="log-toolbar">
         <h2 id="activity-log">記錄</h2>
-        <div className="chips" role="group" aria-label="等級">
-          {LEVEL_OPTIONS.map((option) => <button key={option.value} type="button" className={state.level === option.value ? 'chip active' : 'chip'}
-            aria-pressed={state.level === option.value} onClick={() => change({ level: option.value })} data-testid={`level-${option.value}`}>{option.label}</button>)}
+        <div className="segmented" role="group" aria-label="記錄呈現">
+          <button type="button" className={effectiveMode === 'summary' ? 'active' : ''} aria-pressed={effectiveMode === 'summary'}
+            onClick={() => change({ mode: 'summary' })} data-testid="activity-summary">摘要</button>
+          <button type="button" className={effectiveMode === 'raw' ? 'active' : ''} aria-pressed={effectiveMode === 'raw'}
+            onClick={() => change({ mode: 'raw' })} data-testid="activity-raw">完整事件</button>
         </div>
         <span className="panel-spacer" />
+        <label className="source-select"><span className="visually-hidden">紀錄類型</span>
+          <select value={state.recordType} onChange={(event) => change({ recordType: event.target.value as ActivityViewState['recordType'] })}
+            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
+            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
+            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-type">
+            {RECORD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label className="source-select"><span className="visually-hidden">最低等級</span>
+          <select value={state.minLevel} onChange={(event) => change({ minLevel: event.target.value as ActivityViewState['minLevel'] })}
+            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
+            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
+            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-level">
+            {MIN_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
         <label className="source-select"><span className="visually-hidden">訂閱</span>
-          <select value={state.source ?? ''} onChange={(event) => change({ source: event.target.value || null })} data-testid="log-source">
+          <select value={state.source ?? ''} onChange={(event) => change({ source: event.target.value || null })}
+            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
+            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
+            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-source">
             <option value="">所有訂閱</option>
             {subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.title}</option>)}
             {sourceKnown ? null : <option value={state.source!}>{state.source}</option>}
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">時間</span>
-          <select value={state.range} onChange={(event) => change({ range: event.target.value as ActivityViewState['range'] })} data-testid="log-range">
+          <select value={state.range} onChange={(event) => change({ range: event.target.value as ActivityViewState['range'] })}
+            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
+            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
+            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-range">
             {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
@@ -175,7 +234,14 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
       {warning ? <p className="log-warning" role="alert" data-testid="log-warning">{warning}</p> : null}
       {logError ? <p className="load-error activity-pad" role="alert">{logError}</p> : null}
       {log === null ? <p className="job-empty activity-pad">正在讀取…</p>
-        : log.events.length === 0 ? <p className="job-empty activity-pad">這段期間沒有符合的記錄。</p>
+        : (effectiveMode === 'summary' ? log.entries.length : log.events.length) === 0 ? <p className="job-empty activity-pad">這段期間沒有符合的記錄。</p>
+          : effectiveMode === 'summary' ? <ol className="summary-rows">{log.entries.map((entry) => entry.kind === 'event'
+            ? <SummaryEvent key={entry.event.eventId} event={entry.event} />
+            : <li key={entry.groupId} className={`summary-row level-${eventLevel(entry)}`} data-testid="summary-check">
+              <Icon name={entry.severity === 'error' ? 'error' : 'jobs'} size={16} />
+              <span><strong>{summaryCheckTitle(entry)}</strong><small>{summaryRange(entry.firstFinishedAt, entry.lastFinishedAt)}{entry.sourceTitle ? ` · ${entry.sourceTitle}` : ''}</small></span>
+              <button type="button" className="inline-link" onClick={() => change({ group: entry.groupId, returnTo: '/activity' })}>查看細節</button>
+            </li>)}</ol>
           : <ol className="log-rows">{log.events.map((event) => {
             const level = eventLevel(event);
             const text = eventText(event);
@@ -200,5 +266,126 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
       {log?.nextCursor ? <div className="activity-more"><button type="button" className="button small" disabled={loadingOlder} onClick={() => void loadOlder()} data-testid="load-older">
         {loadingOlder ? '正在讀取…' : '載入更早的記錄'}</button></div> : null}
     </section>
+    <p className="activity-retention">保留最近 30 天{effectiveMode === 'summary' ? ' · 相同的定時檢查結果合併顯示' : ''}</p>
   </>;
+}
+
+function SummaryEvent({ event }: { event: JobEvent }) {
+  const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id;
+  return <li className="summary-row" data-testid="summary-event"><Icon name="activity" size={16} />
+    <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(event)}</a>
+      : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(event)}</a>
+        : eventText(event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
+}
+
+function summaryCheckTitle(entry: Extract<ActivitySummaryEntry, { kind: 'check' }>): string {
+  const base = entry.result === 'empty' ? `完成檢查：沒有新${itemNoun(entry.sourceType)}`
+    : entry.result === 'network_error' ? '發生錯誤：網路錯誤'
+      : entry.severity === 'error' ? `發生錯誤：${entry.errorCode ? failureLabel(entry.sourceType, { code: entry.errorCode, message: entry.message }) : entry.message}`
+        : entry.created || entry.existing || entry.failed || entry.skipped
+          ? `完成收集：${[
+            ...(entry.created ? [`新增 ${itemCount(entry.sourceType, entry.created)}`] : []),
+            ...(entry.existing ? [`已存在 ${itemCount(entry.sourceType, entry.existing)}`] : []),
+            ...(entry.failed ? [`失敗 ${itemCount(entry.sourceType, entry.failed)}`] : []),
+            ...(entry.skipped ? [`略過 ${itemCount(entry.sourceType, entry.skipped)}`] : []),
+          ].join('・')}`
+          : '完成收集';
+  return `${base}${entry.count > 1 ? `・${entry.count} 次` : ''}`;
+}
+
+function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string; returnTo: string | null; state: ActivityViewState; onState: (next: ActivityViewState) => void }) {
+  const [page, setPage] = useState<ActivityGroupPage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loadedCount = useRef(10);
+  const loadedGroup = useRef(groupId);
+  const requestGeneration = useRef(0);
+  const severity = activityQuery(state, new Date()).severity;
+  const severityKey = severity?.join(',') ?? '';
+  async function filteredChecks(target: number): Promise<ActivityGroupPage> {
+    let answer = await api.activityGroup(groupId, { limit: Math.min(100, target), severity });
+    while (answer.checks.length < target && answer.nextCursor) {
+      const next = await api.activityGroup(groupId, {
+        limit: Math.min(100, target - answer.checks.length), cursor: answer.nextCursor, severity,
+      });
+      answer = { ...next, checks: [...answer.checks, ...next.checks] };
+    }
+    return answer;
+  }
+  useEffect(() => {
+    let alive = true;
+    const generation = ++requestGeneration.current;
+    if (loadedGroup.current !== groupId) { loadedGroup.current = groupId; loadedCount.current = 10; }
+    setPage(null); setError(null); setLoading(false);
+    filteredChecks(loadedCount.current).then((answer) => { if (alive && generation === requestGeneration.current) setPage(answer); })
+      .catch((reason: unknown) => { if (alive && generation === requestGeneration.current) setError(reason instanceof Error ? reason.message : '無法讀取檢查細節。'); });
+    return () => { alive = false; };
+  }, [groupId, severityKey]);
+  async function older() {
+    if (!page?.nextCursor) return;
+    const generation = requestGeneration.current;
+    const requestedSeverity = severityKey;
+    const requestedCursor = page.nextCursor;
+    setLoading(true);
+    try {
+      const next = await api.activityGroup(groupId, { limit: 10, cursor: requestedCursor, severity });
+      setPage((previous) => generation === requestGeneration.current && requestedSeverity === severityKey
+        && previous?.group.groupId === groupId && previous.nextCursor === requestedCursor
+        ? { ...next, checks: [...previous.checks, ...next.checks] } : previous);
+      if (generation === requestGeneration.current && requestedSeverity === severityKey) loadedCount.current += next.checks.length;
+    } catch (reason) {
+      if (generation === requestGeneration.current && requestedSeverity === severityKey) {
+        setError(reason instanceof Error ? reason.message : '無法讀取更早的檢查。');
+      }
+    } finally {
+      if (generation === requestGeneration.current && requestedSeverity === severityKey) setLoading(false);
+    }
+  }
+  const back = () => {
+    if (returnTo && sourceRouteForPath(returnTo)) { location.href = returnTo; return; }
+    onState({ ...state, group: null, returnTo: null });
+  };
+  return <>
+    <button type="button" className="back-link" onClick={back}><Icon name="back" size={15} />返回</button>
+    <div className="page-header"><h1 className="page-title">記錄</h1></div>
+    {error ? <p className="load-error" role="alert">{error}</p> : null}
+    {!page ? (error ? null : <p className="loading">正在讀取…</p>) : <>
+      <section className="activity-context" data-testid="activity-group-context"><strong>{summaryCheckTitle(page.group)}</strong>
+        <span>{page.group.sourceTitle ? `${page.group.sourceTitle} · ` : ''}{summaryRange(page.group.firstFinishedAt, page.group.lastFinishedAt)} · 完整事件</span></section>
+      <section className="activity-card"><div className="log-toolbar"><h2>每次收集</h2><span className="panel-spacer" />
+        <label className="source-select"><span className="visually-hidden">最低等級</span><select value={state.minLevel}
+          onChange={(event) => onState({ ...state, minLevel: event.target.value as ActivityViewState['minLevel'] })}
+          onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
+          onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
+          onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="group-level">
+          {MIN_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <span className="activity-group-count">{page.checks.length === page.group.count
+          ? `共 ${page.group.count} 次收集` : `已顯示 ${page.checks.length} 次，共 ${page.group.count} 次收集`}</span></div>
+        {page.checks.map((check, index) => <details key={check.jobId} open={index === 0} className="check-detail" data-testid="activity-group-check">
+          <summary>{logTime(check.finishedAt)}　{checkResultTitle(check, page.group.sourceType)}</summary>
+          {check.events.length === 0 ? <p className="job-empty activity-detail-empty">這次收集沒有符合等級的事件。</p> : <ol className="log-rows">{[...check.events].reverse().map((event) => {
+            const level = eventLevel(event);
+            const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
+            return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"><time>{logTime(event.timestamp)}</time>
+              <span className="log-level">{level}</span><span className={type ? `log-type type-${type.icon}` : 'log-type'}>
+                {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}</span><span>{eventText(event)}</span></li>;
+          })}</ol>}
+        </details>)}
+        {page.nextCursor ? <div className="activity-more"><button className="button small" disabled={loading} onClick={() => void older()}>{loading ? '正在讀取…' : '載入更早的檢查'}</button></div> : null}
+      </section>
+    </>}
+  </>;
+}
+
+function checkResultTitle(check: ActivityGroupPage['checks'][number], sourceType: string): string {
+  if (check.result === 'network_error') return '發生錯誤：網路錯誤';
+  if (check.result === 'empty') return `完成檢查：沒有新${itemNoun(sourceType)}`;
+  if (check.errorCode) return `發生錯誤：${failureLabel(sourceType, { code: check.errorCode, message: check.message })}`;
+  const parts = [
+    ...(check.created ? [`新增 ${itemCount(sourceType, check.created)}`] : []),
+    ...(check.existing ? [`已存在 ${itemCount(sourceType, check.existing)}`] : []),
+    ...(check.failed ? [`失敗 ${itemCount(sourceType, check.failed)}`] : []),
+    ...(check.skipped ? [`略過 ${itemCount(sourceType, check.skipped)}`] : []),
+  ];
+  return parts.length ? `完成收集：${parts.join('・')}` : '完成收集';
 }

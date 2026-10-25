@@ -1,0 +1,37 @@
+# 記錄
+
+記錄頁預設把同一訂閱連續且結果相同的例行檢查合併，讓文件、需要處理的失敗與系統狀態維持醒目；使用者仍能查看群組中的每次檢查及完整原始事件。
+
+## Sub-features
+
+- `activity-summary`：預設「摘要」、「全部」、「INFO 以上」，同訂閱連續的定時無新內容或網路錯誤依結果分組，顯示次數與起訖；新增訂閱、開始收集、文件新增與完成結果使用面向使用者的生命週期。紀錄類型、最低等級、訂閱與時間在完整分組邊界建立後篩選，不改呈現模式。
+- `activity-detail`：摘要列的「查看細節」限定該組，逐次展開完整事件、載入更早檢查；最低等級只篩內部事件，不改成員、總次數或已載入的檢查數。返回保留先前的類型、等級、訂閱、時間與模式。
+- `activity-raw`：「完整事件」顯示每筆原始事件，等級只有 `DEBUG`／`INFO`／`WARN`／`ERROR`；新增文件、完成收集與略過原因放在事件文字。選 DEBUG 以上才顯示已持久化的內部診斷事件。
+
+## How to get to it (user POV)
+
+- 側欄「記錄」（`/activity`）預設開啟摘要。
+- 訂閱詳情「收集紀錄」的合併檢查列 →「查看細節」。
+- 記錄摘要列 →「查看細節」；頁首「完整事件」切換原始記錄。
+
+## Driving it with verify
+
+Preconditions:
+
+- 基準狀態；訂閱合成頻道 A，完成首次收集，再讓同一訂閱發生多次定時檢查。
+
+- **摘要。** 開啟 `nav-activity`，`activity-summary` 為按下且與 `log-type`、`log-level` 垂直置中；預設為全部與 INFO 以上。`summary-check` 的無新內容與 `network_error` 各依連續結果顯示次數。
+- **篩選。** 選 `log-type`、`log-level`、`log-source`、`log-range`；中間被篩掉的不同檢查結果仍切斷前後同結果群組。重新整理、進出細節與返回保留所有條件；新增文件＋ERROR 顯示空狀態且不改模式。
+- **細節。** `summary-check` 的「查看細節」→ `activity-group-context`；`activity-group-check` 數量等於摘要次數，每列可展開原始事件。多於一頁時按「載入更早的檢查」。按「返回」後原本等級、訂閱與時間篩選仍在。
+- **完整事件。** 按 `activity-raw`，預設 INFO 以上不顯示 DEBUG；切 DEBUG 以上可看到先前已記錄的內部事件。`log-row` 等級只出現 `DEBUG`／`INFO`／`WARN`／`ERROR`。
+- **訂閱詳情。** `/sources/<type>/<id>` 的 `collection-check-group` 顯示結果、次數與時間範圍；點「查看細節」進相同群組，返回訂閱詳情。
+
+## Gotchas
+
+- 摘要與細節的分頁屬於同一固定快照；重新整理才取得後來完成的檢查。
+- 細節連結在服務重啟或快照失效後要求返回重新整理，這不代表 30 天原始事件已刪除；超過保留期則明說細節已超過 30 天。
+- 「新增文件」可在摘要或完整事件中使用，不會自動切換呈現模式。
+
+## Regression flows
+
+- `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。建立無新內容、網路錯誤與恢復三段，檢查等級與類型篩選、空交集、模式與 URL 保留、DEBUG 原始事件、群組限定與載入數不變。

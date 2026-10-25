@@ -12,6 +12,7 @@ import {
   sourceListSearch,
   sourcePath,
   sourceRouteForPath,
+  summaryTimeRange,
   checkTimesLine,
   nextCheckLabel,
 } from '../../src/web/source-presentation.js';
@@ -84,11 +85,23 @@ describe('source presentation (T-09)', () => {
     expect(collectionEntryLabel({ kind: 'skipped', ...item, reason: '影片不存在', attempts: 1, skippedBy: 'failure' }, 'youtube').detail).toBe('已略過・影片不存在');
     expect(collectionEntryLabel({ kind: 'failed', ...item, title: '', maxAttempts: 3 }, 'youtube').title).toBe('youtube.com/watch?v=v1');
     const check = { kind: 'check' as const, at, jobId: 'j', trigger: 'scheduled' as const, created: 0, failed: 0, error: null };
-    expect(collectionEntryLabel(check, 'youtube').title).toBe('定時檢查・沒有新影片');
-    expect(collectionEntryLabel({ ...check, created: 2 }, 'youtube').title).toBe('定時檢查・收集 2 支');
-    expect(collectionEntryLabel({ ...check, trigger: 'manual', created: 1, failed: 1 }, 'youtube').title).toBe('立即檢查・收集 1 支・失敗 1 支');
+    expect(collectionEntryLabel(check, 'youtube').title).toBe('完成檢查：沒有新影片');
+    expect(collectionEntryLabel({ ...check, created: 2 }, 'youtube').title).toBe('完成收集：新增 2 支影片');
+    expect(collectionEntryLabel({ ...check, trigger: 'manual', created: 1, failed: 1 }, 'youtube').title).toBe('完成收集：新增 1 支影片・失敗 1 支影片');
     expect(collectionEntryLabel({ ...check, trigger: 'subscribe', error: { code: 'network_error', message: '無法連線到 YouTube。' } }, 'youtube').title)
-      .toBe('首次收集・檢查失敗・網路錯誤');
+      .toBe('發生錯誤：網路錯誤');
+    expect(collectionEntryLabel({ kind: 'check-group', at, firstAt: '2026-10-14T05:30:00.000Z', groupId: 'g', trigger: 'scheduled', result: 'empty', count: 12, message: '完成。' }, 'youtube'))
+      .toMatchObject({ title: '完成檢查：沒有新影片・12 次' });
+    expect(collectionEntryLabel({ kind: 'check-group', at, firstAt: at, groupId: 'g2', trigger: 'scheduled', result: 'network_error', count: 5, errorCode: 'network_error', message: '逾時。' }, 'youtube').title)
+      .toBe('發生錯誤：網路錯誤・5 次');
+  });
+
+  it('compacts same-day ranges and keeps both dates and crossing years', () => {
+    const now = new Date(2026, 9, 24, 12);
+    const iso = (year: number, month: number, day: number, hour: number) => new Date(year, month, day, hour).toISOString();
+    expect(summaryTimeRange(iso(2026, 9, 24, 8), iso(2026, 9, 24, 14), now)).toBe('今天 08:00–14:00');
+    expect(summaryTimeRange(iso(2026, 9, 23, 23), iso(2026, 9, 24, 1), now)).toBe('昨天 23:00–今天 01:00');
+    expect(summaryTimeRange(iso(2025, 11, 31, 23), iso(2026, 0, 1, 1), now)).toBe('2025-12-31 23:00–2026-01-01 01:00');
   });
 
   it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {

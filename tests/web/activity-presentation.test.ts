@@ -7,9 +7,11 @@ import {
   eventLevel,
   eventText,
   localDayStart,
+  logTime,
   logWarning,
   mergeNewest,
   parseActivityState,
+  summaryRange,
 } from '../../src/web/activity-presentation.js';
 
 // Activity page wording and filters (A-T11).
@@ -27,35 +29,41 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 
 describe('activity presentation', () => {
   it('derives level labels from severity, type and outcome', () => {
-    expect(eventLevel({ severity: 'error', eventType: 'job.failed' })).toBe('ERR');
-    expect(eventLevel({ severity: 'warning', eventType: 'job.retry_scheduled' })).toBe('WARN');
-    expect(eventLevel({ severity: 'info', eventType: 'document.saved' })).toBe('OK');
-    expect(eventLevel({ severity: 'info', eventType: 'job.completed', outcome: 'created' })).toBe('DONE');
-    expect(eventLevel({ severity: 'info', eventType: 'job.completed', outcome: 'skipped' })).toBe('SKIP');
-    expect(eventLevel({ severity: 'info', eventType: 'job.started' })).toBe('INFO');
+    expect(eventLevel({ severity: 'debug' })).toBe('DEBUG');
+    expect(eventLevel({ severity: 'info' })).toBe('INFO');
+    expect(eventLevel({ severity: 'warning' })).toBe('WARN');
+    expect(eventLevel({ severity: 'error' })).toBe('ERROR');
   });
 
-  it('prefixes the source title and the reason a channel job started', () => {
-    expect(eventText({ ...base, eventType: 'job.accepted', sourceTitle: '3Blue1Brown', trigger: 'scheduled', message: '已接受收集工作。' }))
-      .toBe('3Blue1Brown：定時檢查・已接受收集工作。');
-    expect(eventText({ ...base, eventType: 'document.saved', sourceTitle: '影片', trigger: 'scheduled', parentJobId: 'p', message: '文件已保存。' }))
-      .toBe('影片：文件已保存。');
+  it('uses explicit lifecycle wording without trigger noise, including subscription requests', () => {
+    expect(eventText({ ...base, eventType: 'job.accepted', sourceTitle: '3Blue1Brown', jobRole: 'check', message: '已接受收集工作。' }))
+      .toBe('3Blue1Brown：加入收集佇列。');
+    expect(eventText({ ...base, eventType: 'job.started', sourceTitle: '3Blue1Brown', jobRole: 'check', message: '開始執行收集工作。' }))
+      .toBe('3Blue1Brown：開始收集。');
+    expect(eventText({ ...base, eventType: 'job.accepted', sourceTitle: '3Blue1Brown', jobRole: 'add', message: '已接受收集工作。' }))
+      .toBe('3Blue1Brown：訂閱請求已排入佇列。');
+    expect(eventText({ ...base, eventType: 'job.started', sourceTitle: '3Blue1Brown', jobRole: 'add', message: '開始執行收集工作。' }))
+      .toBe('3Blue1Brown：開始新增訂閱。');
+    expect(eventText({ ...base, eventType: 'document.saved', sourceTitle: '影片', message: '文件已保存。' }))
+      .toBe('影片：已新增文件。');
+    expect(eventText({ ...base, eventType: 'job.completed', sourceTitle: '影片', jobRole: 'item', message: '收集完成，文件已保存。' }))
+      .toBe('影片：完成收集。');
     expect(eventText({ ...base, eventType: 'schedule.updated', message: '已暫停自動收集。' })).toBe('已暫停自動收集。');
     expect(eventText({ ...base, eventType: 'subscription.paused', sourceTitle: '3Blue1Brown', message: '已暫停「3Blue1Brown」。' }))
       .toBe('已暫停「3Blue1Brown」。');
   });
 
   it('keeps filters in the address and turns them into a query with local day bounds', () => {
-    const state = parseActivityState('?level=errors&source=UC1&range=today&job=job-9');
-    expect(state).toEqual({ level: 'errors', source: 'UC1', range: 'today', job: 'job-9' });
-    expect(activityStateSearch(state)).toBe('?level=errors&source=UC1&range=today&job=job-9');
-    expect(parseActivityState('?level=bogus&range=year')).toEqual({ level: 'all', source: null, range: '30d', job: null });
+    const state = parseActivityState('?mode=raw&type=documents&minLevel=warning&source=UC1&range=today&job=job-9&group=g1&return=%2Factivity');
+    expect(state).toEqual({ mode: 'raw', recordType: 'documents', minLevel: 'warning', source: 'UC1', range: 'today', job: 'job-9', group: 'g1', returnTo: '/activity' });
+    expect(activityStateSearch(state)).toBe('?mode=raw&type=documents&minLevel=warning&source=UC1&range=today&job=job-9&group=g1&return=%2Factivity');
+    expect(parseActivityState('?type=bogus&minLevel=fatal&range=year')).toEqual({ mode: 'summary', recordType: 'all', minLevel: 'info', source: null, range: '30d', job: null, group: null, returnTo: null });
     expect(activityStateSearch(parseActivityState(''))).toBe('');
 
     const now = new Date(2026, 9, 15, 0, 30);
-    expect(activityQuery(state, now)).toEqual({ severity: ['warning', 'error'], subscriptionId: 'UC1', jobId: 'job-9', since: new Date(2026, 9, 15).toISOString() });
-    expect(activityQuery({ level: 'added', source: null, range: '7d', job: null }, now)).toEqual({ eventType: ['document.saved'], since: new Date(2026, 9, 9).toISOString() });
-    expect(activityQuery({ level: 'all', source: null, range: '30d', job: null }, now)).toEqual({});
+    expect(activityQuery(state, now)).toEqual({ severity: ['warning', 'error'], eventType: ['document.saved'], subscriptionId: 'UC1', jobId: 'job-9', since: new Date(2026, 9, 15).toISOString() });
+    expect(activityQuery({ mode: 'summary', recordType: 'documents', minLevel: 'error', source: null, range: '7d', job: null, group: null, returnTo: null }, now)).toEqual({ severity: ['error'], eventType: ['document.saved'], since: new Date(2026, 9, 9).toISOString() });
+    expect(activityQuery({ mode: 'summary', recordType: 'all', minLevel: 'debug', source: null, range: '30d', job: null, group: null, returnTo: null }, now)).toEqual({ severity: ['debug', 'info', 'warning', 'error'] });
     expect(localDayStart(now).getHours()).toBe(0);
     expect(localDayStart(now).getDate()).toBe(15);
   });
@@ -67,6 +75,13 @@ describe('activity presentation', () => {
       .toBe('記錄暫時無法寫入，4 筆記錄等待補寫。');
     expect(logWarning({ state: 'ok', pending: 0, dropped: 2, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))
       .toBe('有 2 筆記錄未能寫入而遺失。');
+  });
+
+  it('shows both dates for a summary spanning local midnight and one time for a singleton', () => {
+    const first = '2026-10-20T15:59:00.000Z';
+    const last = '2026-10-20T16:01:00.000Z';
+    expect(summaryRange(first, last)).toBe(`${logTime(first)}–${logTime(last)}`);
+    expect(summaryRange(last, last)).toBe(logTime(last));
   });
 
   it('builds diagnostics in time order with error codes and masked detail', () => {

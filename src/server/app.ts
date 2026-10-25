@@ -17,6 +17,9 @@ import {
   type CoreErrorCode,
   type ActivityLogHealth,
   type ActivityPage,
+  type ActivitySummaryPage,
+  type ActivityGroupPage,
+  type ActivityCheckSummary,
   type ActivityQuery,
   type EventSeverity,
   type JobSummary,
@@ -82,6 +85,8 @@ export interface CollectionJobs {
 /** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
 export interface ActivityAccess {
   query(query: ActivityQuery): Promise<ActivityPage>;
+  summary?(query: ActivityQuery): Promise<ActivitySummaryPage>;
+  group?(groupId: string, limit?: number, cursor?: string, severity?: EventSeverity[]): Promise<ActivityGroupPage>;
   health(): ActivityLogHealth;
 }
 
@@ -197,6 +202,8 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   network_error: 503,
   offline: 503,
   rate_limited: 503,
+  activity_snapshot_expired: 410,
+  activity_group_expired: 410,
 };
 
 /** The HTTP status of an error code: the core's own, else the one a registered source type declares, else 500. */
@@ -529,9 +536,23 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.activity) {
     const activity = options.activity;
-    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', async (request) => ({
-      ...(await activity.query(activityQuery(singleValues(request.query)))),
-    }));
+    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', async (request) => {
+      const query = activityQuery(singleValues(request.query));
+      return query.view === 'summary' && !query.jobId && activity.summary
+        ? activity.summary(query) : activity.query({ ...query, view: 'raw' });
+    });
+    app.get<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>('/api/activity/groups/:groupId', async (request) => {
+      const query = singleValues(request.query);
+      const unknown = Object.keys(query).find((key) => key !== 'limit' && key !== 'cursor' && key !== 'severity');
+      if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
+      const { limit } = pagination({ limit: query.limit ?? '50' });
+      const severity = query.severity?.split(',').map((item) => item.trim()).filter(Boolean);
+      if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
+        throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
+      }
+      if (!activity.group) throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
+      return activity.group(request.params.groupId, limit, query.cursor, severity as EventSeverity[] | undefined);
+    });
   }
 
   if (options.schedule) {
@@ -641,7 +662,17 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   app.get('/api/source-types', async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
 
   if (subscriptions.length > 0) {
-    const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? []);
+    const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
+      options.activity?.summary ? async (type, id) => {
+        const summaries: ActivityCheckSummary[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await options.activity!.summary!({ view: 'summary', sourceType: type, subscriptionId: id, limit: 100, ...(cursor ? { cursor } : {}) });
+          summaries.push(...page.entries.filter((entry) => entry.kind === 'check'));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor && summaries.length < 30);
+        return summaries.slice(0, 30);
+      } : undefined);
     const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => confirmingNetwork(() => collectionOf(type).collection.preview(url));
 
     // Every address answers 200 with a status; only a missing address is a malformed request.
@@ -729,22 +760,25 @@ function pacingLabel(group: string): string {
   return sourceDefinitions().find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
 }
 
-const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['info', 'warning', 'error']);
-const ACTIVITY_PARAMETERS = new Set(['severity', 'eventType', 'jobId', 'subscriptionId', 'since', 'until', 'limit', 'cursor']);
+const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['debug', 'info', 'warning', 'error']);
+const ACTIVITY_PARAMETERS = new Set(['view', 'severity', 'eventType', 'jobId', 'subscriptionId', 'sourceType', 'since', 'until', 'limit', 'cursor']);
 
 function activityQuery(query: Record<string, string | undefined>): ActivityQuery {
   const unknown = Object.keys(query).find((key) => !ACTIVITY_PARAMETERS.has(key));
   if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
+  if (query.view !== undefined && query.view !== 'raw' && query.view !== 'summary') {
+    throw new CollectorError('invalid_request', 'view 只能是 raw 或 summary。');
+  }
   const list = (value: string | undefined) => value?.split(',').map((item) => item.trim()).filter(Boolean);
   const severity = list(query.severity);
   if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
-    throw new CollectorError('invalid_request', 'severity 只能是 info、warning、error，以逗號分隔。');
+    throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
   }
   const eventType = list(query.eventType);
   if (eventType && (eventType.length === 0 || !eventType.every((value) => /^[a-z_.]{1,60}$/u.test(value)))) {
     throw new CollectorError('invalid_request', 'eventType 格式無效。');
   }
-  for (const key of ['jobId', 'subscriptionId'] as const) {
+  for (const key of ['jobId', 'subscriptionId', 'sourceType'] as const) {
     const value = query[key];
     if (value !== undefined && (value === '' || value.length > 200)) throw new CollectorError('invalid_request', `${key} 長度須在 1 到 200 之間。`);
   }
@@ -757,10 +791,12 @@ function activityQuery(query: Record<string, string | undefined>): ActivityQuery
   }
   const { limit } = pagination({ limit: query.limit ?? '50' });
   return {
+    ...(query.view ? { view: query.view as 'raw' | 'summary' } : {}),
     ...(severity ? { severity: severity as EventSeverity[] } : {}),
     ...(eventType ? { eventType } : {}),
     ...(query.jobId ? { jobId: query.jobId } : {}),
     ...(query.subscriptionId ? { subscriptionId: query.subscriptionId } : {}),
+    ...(query.sourceType ? { sourceType: query.sourceType } : {}),
     ...(query.since ? { since: query.since } : {}),
     ...(query.until ? { until: query.until } : {}),
     ...(query.cursor ? { cursor: query.cursor } : {}),

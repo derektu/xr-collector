@@ -1,5 +1,7 @@
 import type {
   ActivityPage,
+  ActivitySummaryPage,
+  ActivityGroupPage,
   ActivityQuery,
   JobOverview,
   JobSummary,
@@ -187,13 +189,35 @@ export const api = {
     const parameters = new URLSearchParams();
     if (query.severity) parameters.set('severity', query.severity.join(','));
     if (query.eventType) parameters.set('eventType', query.eventType.join(','));
-    for (const key of ['jobId', 'subscriptionId', 'since', 'until', 'cursor'] as const) {
+    if (query.view) parameters.set('view', query.view);
+    for (const key of ['jobId', 'subscriptionId', 'sourceType', 'since', 'until', 'cursor'] as const) {
       const value = query[key];
       if (value) parameters.set(key, value);
     }
     if (query.limit) parameters.set('limit', String(query.limit));
     const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
     return request<ActivityPage>(`/api/activity${suffix}`, signal ? { signal } : undefined);
+  },
+
+  activitySummary(query: ActivityQuery, signal?: AbortSignal): Promise<ActivitySummaryPage> {
+    const parameters = new URLSearchParams({ view: 'summary' });
+    if (query.severity) parameters.set('severity', query.severity.join(','));
+    if (query.eventType) parameters.set('eventType', query.eventType.join(','));
+    for (const key of ['subscriptionId', 'sourceType', 'since', 'until', 'cursor'] as const) {
+      const value = query[key];
+      if (value) parameters.set(key, value);
+    }
+    if (query.limit) parameters.set('limit', String(query.limit));
+    return request<ActivitySummaryPage>(`/api/activity?${parameters.toString()}`, signal ? { signal } : undefined);
+  },
+
+  activityGroup(groupId: string, query: { limit?: number; cursor?: string; severity?: ActivityQuery['severity'] } = {}): Promise<ActivityGroupPage> {
+    const parameters = new URLSearchParams();
+    if (query.limit) parameters.set('limit', String(query.limit));
+    if (query.cursor) parameters.set('cursor', query.cursor);
+    if (query.severity) parameters.set('severity', query.severity.join(','));
+    const suffix = parameters.size ? `?${parameters.toString()}` : '';
+    return request<ActivityGroupPage>(`/api/activity/groups/${encodeURIComponent(groupId)}${suffix}`);
   },
 
   listDocuments(query: DocumentFilter & { offset: number; limit: number }, signal?: AbortSignal): Promise<DocumentPage> {

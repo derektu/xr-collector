@@ -1,7 +1,7 @@
 import type { CollectionSchedule, JobView, PendingSubscription, RecognitionAction, RetryCause, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
-import { itemNoun, triggerLabel } from './subscription-presentation.js';
+import { itemCount, itemNoun } from './subscription-presentation.js';
 
 /** A compact local time: "今天 13:30", "昨天 21:05", "10-14 08:00" this year, "2025-12-31" before. */
 export function shortTimeLabel(value: string, now: Date = new Date()): string {
@@ -15,6 +15,27 @@ export function shortTimeLabel(value: string, now: Date = new Date()): string {
   if (day(-1)) return `昨天 ${time}`;
   if (date.getFullYear() === now.getFullYear()) return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** A compact inclusive range: one date on the same day, both dates across days, years across years. */
+export function summaryTimeRange(first: string, last: string, now: Date = new Date()): string {
+  const start = new Date(first);
+  const end = new Date(last);
+  const sameDay = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth() && start.getDate() === end.getDate();
+  const time = (date: Date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const relativeDay = (date: Date, offset: number) => {
+    const reference = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+    return date.getFullYear() === reference.getFullYear() && date.getMonth() === reference.getMonth() && date.getDate() === reference.getDate();
+  };
+  const prefix = (date: Date, forceYear = false) => {
+    if (!forceYear && relativeDay(date, 0)) return '今天';
+    if (!forceYear && relativeDay(date, -1)) return '昨天';
+    const monthDay = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return forceYear || date.getFullYear() !== now.getFullYear() ? `${date.getFullYear()}-${monthDay}` : monthDay;
+  };
+  if (sameDay) return `${prefix(start)} ${time(start)}–${time(end)}`;
+  const crossYear = start.getFullYear() !== end.getFullYear();
+  return `${prefix(start, crossYear)} ${time(start)}–${prefix(end, crossYear)} ${time(end)}`;
 }
 
 export function calendarDate(value: string): string {
@@ -116,11 +137,21 @@ export function collectionEntryLabel(entry: SubscriptionCollectionEntry, type: s
       detail: entry.skippedBy === 'failure' ? `已略過・${entry.reason}` : `已略過・已試 ${entry.attempts} 次`,
     };
     case 'check': {
-      const measure = sourceDeclaration(type)?.item.measure ?? '';
-      const parts = entry.error ? [`檢查失敗・${failureLabel(type, entry.error)}`]
-        : entry.created === 0 && entry.failed === 0 ? [`沒有新${itemNoun(type)}`]
-          : [...(entry.created > 0 ? [`收集 ${entry.created} ${measure}`] : []), ...(entry.failed > 0 ? [`失敗 ${entry.failed} ${measure}`] : [])];
-      return { title: [triggerLabel(entry.trigger, type), ...parts].join('・'), detail: '' };
+      const title = entry.error ? `發生錯誤：${failureLabel(type, entry.error)}`
+        : entry.created === 0 && entry.failed === 0 ? `完成檢查：沒有新${itemNoun(type)}`
+          : `完成收集：${[
+            ...(entry.created > 0 ? [`新增 ${itemCount(type, entry.created)}`] : []),
+            ...(entry.failed > 0 ? [`失敗 ${itemCount(type, entry.failed)}`] : []),
+          ].join('・')}`;
+      return { title, detail: '' };
+    }
+    case 'check-group': {
+      const result = entry.result === 'empty' ? `完成檢查：沒有新${itemNoun(type)}`
+        : entry.result === 'network_error' ? '發生錯誤：網路錯誤' : `完成收集：${entry.message}`;
+      return {
+        title: `${result}${entry.count > 1 ? `・${entry.count} 次` : ''}`,
+        detail: entry.count > 1 ? summaryTimeRange(entry.firstAt, entry.at) : '',
+      };
     }
   }
 }

@@ -1,6 +1,7 @@
 import { sourceDefinition } from '../core/source-registry.js';
 import {
   CollectorError,
+  type ActivityCheckSummary,
   type CollectionJob,
   type DocumentMetadata,
   MAX_CHECK_ATTEMPTS,
@@ -39,6 +40,7 @@ export class SourceCatalog {
     private readonly declarations: SourceTypeDeclaration[],
     private readonly subscriptions: readonly CatalogSubscriptions[],
     private readonly documents: () => Promise<DocumentMetadata[]>,
+    private readonly checkSummaries?: (type: string, id: string) => Promise<ActivityCheckSummary[]>,
   ) {}
 
   /** Every type's subscriptions, or with `type` only that type's, with the documents and counts of the same scope. */
@@ -80,9 +82,10 @@ export class SourceCatalog {
     if (!subscription) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
     const documents = (await this.documents())
       .filter((document) => document.sourceType === type && document.publisher.id === id);
+    const summaries = await this.checkSummaries?.(type, id);
     return {
       subscription: this.entry(type, subscription),
-      collection: collectionRecord(type, subscription, documents, collection.checkJobs(id)),
+      collection: collectionRecord(type, subscription, documents, collection.checkJobs(id), summaries),
     };
   }
 
@@ -100,6 +103,7 @@ export class SourceCatalog {
  */
 export function collectionRecord(
   type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly CollectionJob[],
+  summaries?: readonly ActivityCheckSummary[],
 ): SubscriptionCollectionEntry[] {
   const definition = sourceDefinition(type);
   const keyField = definition?.storage?.outOfRangeKeyField;
@@ -119,7 +123,21 @@ export function collectionRecord(
       ? { kind: 'skipped', ...common, skippedBy: definition?.classifyFailure({ code: failure.errorCode }) === 'skip' ? 'failure' : 'limit' }
       : { kind: 'failed', ...common, maxAttempts: MAX_CHECK_ATTEMPTS });
   }
-  for (const job of checks) {
+  for (const summary of summaries ?? []) {
+    if (summary.count === 1) {
+      entries.push({
+        kind: 'check', at: summary.lastFinishedAt, jobId: summary.jobId, groupId: summary.groupId,
+        trigger: summary.trigger, created: summary.created, failed: summary.failed,
+        error: summary.severity === 'error' || summary.errorCode
+          ? { code: summary.errorCode ?? 'collection_failed', message: summary.message } : null,
+      });
+    } else entries.push({
+      kind: 'check-group', at: summary.lastFinishedAt, firstAt: summary.firstFinishedAt, groupId: summary.groupId,
+      trigger: summary.trigger, result: summary.result, count: summary.count,
+      ...(summary.errorCode ? { errorCode: summary.errorCode } : {}), message: summary.message,
+    });
+  }
+  for (const job of summaries === undefined ? checks : []) {
     if (!job.finishedAt || (job.state !== 'completed' && job.state !== 'failed')) continue;
     if (job.result?.skipReason && UNLISTED_SKIPS.has(job.result.skipReason)) continue;
     entries.push({
@@ -130,6 +148,6 @@ export function collectionRecord(
   }
   // A check finishes after the items it collected, so at the same instant it comes first.
   return entries
-    .sort((left, right) => right.at.localeCompare(left.at) || Number(right.kind === 'check') - Number(left.kind === 'check'))
+    .sort((left, right) => right.at.localeCompare(left.at) || Number(right.kind === 'check' || right.kind === 'check-group') - Number(left.kind === 'check' || left.kind === 'check-group'))
     .slice(0, COLLECTION_LIMIT);
 }

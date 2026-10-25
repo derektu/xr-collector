@@ -375,7 +375,7 @@ describe('moving a Vault', () => {
       const events = (await jobStore.activity.query({ limit: 200 }, workspace.activityScope())).events;
       const types = events.map((event) => event.eventType);
       for (const type of ['test.legacy', 'job.accepted', 'vault.move_started', 'vault.moved', 'job.resumed']) expect(types).toContain(type);
-      expect(events.filter((event) => event.eventType === 'job.interrupted').every((event) => event.severity === 'info')).toBe(true);
+      expect(events.filter((event) => event.eventType === 'job.interrupted').every((event) => event.severity === 'debug')).toBe(true);
       expect(events.find((event) => event.eventType === 'job.resumed')!.message).toContain('搬移完成');
       expect(await previousLocations(context.profile, await readVaultId(target))).toEqual([source]);
     } finally { await app.close(); }
