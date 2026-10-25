@@ -45,4 +45,5 @@ Preconditions:
 
 ## Regression flows
 
+- `documents-reader-search`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-view`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁、來源篩選、搜尋與無結果、閱讀；刪除後先記錄目前回文件頁且保留搜尋詞的行為，再直接開已刪文件網址驗已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集並在重啟後再次搜尋。
 - `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回、取消與確認刪除、YouTube 重新收集與 RSS 無此操作、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支。

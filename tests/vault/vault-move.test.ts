@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CollectionJob, SavedDocument, TranscriptSearch } from '../../src/core/types.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
+import { searchDatabasePath, searchProfilePath } from '../../src/search/search-projection.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createVaultDirectory, readVaultId, VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { checkMoveTarget, MOVE_JOURNAL, previousLocations, recordPreviousLocation } from '../../src/vault/vault-move.js';
@@ -877,12 +878,21 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('moves wit
   const workspace = await open(context, { createSearch: undefined, searchBinary: path.resolve('resources/bin/mac/meilisearch'), searchData });
   await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
   const before = (await readdir(context.profile)).filter((name) => name.startsWith('search-') && !name.endsWith('.pid'));
-  expect(before).toHaveLength(2);
+  const sourceDatabase = searchDatabasePath(searchData, context.source);
+  expect(before.sort()).toEqual([
+    path.basename(sourceDatabase),
+    path.basename(`${sourceDatabase}-state.json`),
+    path.basename(searchProfilePath(sourceDatabase)),
+  ].sort());
   await workspace.move(target);
   await expect.poll(() => workspace.status().state, { timeout: 30_000 }).toMatch(/^(completed|error)$/u);
   expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target });
   expect((await workspace.search.search({ query: '森林觀測' })).hits[0]?.id).toBe('youtube:seed0000001');
   const after = (await readdir(context.profile)).filter((name) => name.startsWith('search-') && !name.endsWith('.pid'));
-  expect(after).toHaveLength(2);
-  expect(after).not.toEqual(before);
+  const targetDatabase = searchDatabasePath(searchData, target);
+  expect(after.sort()).toEqual([
+    path.basename(targetDatabase),
+    path.basename(`${targetDatabase}-state.json`),
+    path.basename(searchProfilePath(targetDatabase)),
+  ].sort());
 }, 60_000);

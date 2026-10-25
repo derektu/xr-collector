@@ -28,6 +28,8 @@ mac:
       to: bin/deno
     - from: resources/bin/mac/meilisearch
       to: bin/meilisearch
+    - from: resources/bin/mac/meilisearch-build.json
+      to: bin/meilisearch-build.json
 win:
   target:
     - target: nsis
@@ -40,7 +42,7 @@ win:
       to: tray
     - from: resources/bin/win
       to: bin
-      filter: ['*.exe', 'yt-dlp/**/*']
+      filter: ['*.exe', 'meilisearch-build.json', 'yt-dlp/**/*']
 nsis:
   oneClick: false
   perMachine: false

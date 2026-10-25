@@ -37,7 +37,9 @@ Scheduler 涵蓋所有來源類型的訂閱，到期時經 `SubscriptionService`
 
 ## Runtime 與資料
 
-搜尋採完整 Meilisearch binary，由程式管理獨立子程序，監聽 loopback 上隨機分配的 port 並使用隨機 key。啟動前會結束同一 database 上一次執行被強制結束時留下的引擎程序，以 database 旁的 pid 檔辨識，並核對命令列中的執行檔與 database 路徑。yt-dlp、Deno 與 Meilisearch 由下載腳本固定版本；安裝包內附所需工具。yt-dlp 採官方資料夾版（執行檔與 `_internal`），放在 runtime 目錄的 `yt-dlp/` 下：單一執行檔版每次執行都要先解壓到新的暫存目錄，系統又會檢查這些新檔案，每次呼叫因此多花數秒。沒有嵌入 milli library 或要求安裝完整 Agent-Reach／summarize。
+搜尋採從固定 upstream commit 建置的 Chinese Meilisearch binary，由程式管理獨立子程序，監聽 loopback 上隨機分配的 port 並使用隨機 key。建置 manifest 記錄 source、Cargo.lock、Rust、target 與 build 前 binary identity；build cache、安裝替換與 native smoke 以該 raw SHA/bytes 驗證完整 pair。App 啟動時以已內附 manifest 作為 bundle 信任邊界，核對固定 recipe/target、實際 executable header 架構及 `--version`，不以 build 前 raw SHA 認證簽章後的來源 bits；驗證失敗不啟動、也不清除搜尋資料。啟動前會結束同一 database 上一次執行被強制結束時留下的引擎程序，以 database 旁的 pid 檔辨識，並核對紀錄與命令列中的執行檔及 database 路徑；無法證明 ownership 或無法確認退出時 fail closed。每個 Vault 的可重建 database 另有只描述 engine/index 語意的 profile marker，與 binary SHA、簽章、建置時間及 runner 分離；profile 不符才清除該 Vault 的 database/state/pid/marker，完整重建成功後才原子寫入新 marker。搜尋 settings 與 query contract 不因 build profile 改變。
+
+yt-dlp 與 Deno 由下載腳本固定版本；Meilisearch 則由專用 source build 指令固定版本、commit、lockfile、toolchain 與 Chinese feature。安裝包內附 runtime 及 Meilisearch build manifest，終端使用者不需 Rust。yt-dlp 採官方資料夾版（執行檔與 `_internal`），放在 runtime 目錄的 `yt-dlp/` 下：單一執行檔版每次執行都要先解壓到新的暫存目錄，系統又會檢查這些新檔案，每次呼叫因此多花數秒。沒有嵌入 milli library 或要求安裝完整 Agent-Reach／summarize。
 
 文件、搜尋與 UI 使用來源無關的文件欄位（文件 ID、來源類型與來源內 ID、publisher、日期），來源專屬資訊放在各自的欄位區塊，例如 YouTube 的字幕語言；篩選以來源類型與 publisher ID 進行，不依賴顯示名稱。
 

@@ -120,6 +120,6 @@ Windows ARM 上的 x64 Node 以模擬執行，doctor 的 `platform` 與 `results
 
 ## 6. 平台打包
 
-Mac 執行 `npm run package:mac`，Windows 執行 `npm run package:win`；兩者產物都在 `release/`，使用 `--publish never`。目前是 Mac arm64 DMG／ZIP 與 Windows x64 NSIS，Windows ARM 可用 x64 Node 建置。
+Mac 執行 `npm run package:mac`，Windows 執行 `npm run package:win`；預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。目前是 Mac arm64 DMG／ZIP 與 Windows x64 NSIS，Windows ARM 可用 x64 Node 建置；官方 v1.53.2 沒有 community Mac x64 asset，因此不提供 official Mac x64 package。
 
 發版時，各機器從相同乾淨 commit／版本建置，完成適用的安裝與操作驗收，記錄產物 SHA256、架構與簽章，再上傳同一個 GitHub draft Release，核對完整附件後發布。未提交預演產物不視為正式版本。簽署／公證、Mac Intel 與 updater metadata 由 #34，發布與下載來源由 #35 負責。

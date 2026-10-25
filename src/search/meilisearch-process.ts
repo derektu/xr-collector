@@ -25,7 +25,7 @@ export async function startMeilisearchProcess(
   const binaryPath = path.resolve(options.binaryPath);
   const databasePath = path.resolve(options.databasePath);
   const pidFile = pidFilePath(databasePath);
-  await stopLeftoverProcess(pidFile, binaryPath, databasePath);
+  await stopLeftoverMeilisearchProcess({ binaryPath, databasePath });
   const port = options.port ?? await availableLoopbackPort();
   const url = `http://127.0.0.1:${port}`;
   const apiKey = randomBytes(32).toString('hex');
@@ -62,7 +62,7 @@ export async function startMeilisearchProcess(
   });
 
   try {
-    if (child.pid) await writeFile(pidFile, `${JSON.stringify({ pid: child.pid } satisfies PidRecord)}\n`);
+    if (child.pid) await writeFile(pidFile, `${JSON.stringify({ pid: child.pid, binaryPath, databasePath } satisfies PidRecord)}\n`);
     await waitUntilHealthy(child, url, apiKey, () => processError, () => stderr);
   } catch (error) {
     await stopChild(child);
@@ -83,7 +83,7 @@ export async function startMeilisearchProcess(
   };
 }
 
-interface PidRecord { pid: number }
+interface PidRecord { pid: number; binaryPath: string; databasePath: string }
 
 /** The engine's process ID, kept beside its database so a later start can find an engine the app left behind. */
 export function pidFilePath(databasePath: string): string {
@@ -95,18 +95,46 @@ export function pidFilePath(databasePath: string): string {
  * it. The recorded process is stopped only while its command line still names this binary and this
  * database, so a process that has since reused the ID is left alone.
  */
-async function stopLeftoverProcess(pidFile: string, binaryPath: string, databasePath: string): Promise<void> {
-  let record: PidRecord;
+export async function stopLeftoverMeilisearchProcess(options: StartMeilisearchOptions): Promise<void> {
+  const databasePath = path.resolve(options.databasePath);
+  const pidFile = pidFilePath(databasePath);
+  let parsed: unknown;
   try {
-    record = JSON.parse(await readFile(pidFile, 'utf8')) as PidRecord;
-  } catch {
+    parsed = JSON.parse(await readFile(pidFile, 'utf8')) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error(`Cannot verify the Meilisearch process record ${pidFile}.`, { cause: error });
+  }
+  if (!isPidRecord(parsed)) throw new Error(`Cannot verify the Meilisearch process record ${pidFile}.`);
+  const record = parsed;
+  if (!isAlive(record.pid)) {
+    await rm(pidFile, { force: true });
     return;
   }
-  if (Number.isInteger(record.pid) && record.pid > 0 && isAlive(record.pid)) {
-    const commandLine = await processCommandLine(record.pid);
-    if (commandLine !== null && namesEngine(commandLine, binaryPath, databasePath)) await stopProcess(record.pid);
+  const recordedDatabase = path.resolve(record.databasePath);
+  const recordedBinary = path.resolve(record.binaryPath);
+  if (recordedDatabase !== databasePath) throw new Error(`Meilisearch process record ${pidFile} names another database.`);
+  const commandLine = await processCommandLine(record.pid);
+  if (commandLine === null || !namesEngine(commandLine, recordedBinary, databasePath)) {
+    throw new Error(`Cannot prove process ${record.pid} owns Meilisearch database ${databasePath}; refusing to start or clear it.`);
   }
+  await stopProcess(record.pid);
+  if (isAlive(record.pid)) throw new Error(`Meilisearch process ${record.pid} did not exit; refusing to start or clear ${databasePath}.`);
   await rm(pidFile, { force: true });
+}
+
+function isPidRecord(value: unknown): value is PidRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.pid === 'number'
+    && Number.isInteger(record.pid)
+    && record.pid > 0
+    && typeof record.binaryPath === 'string'
+    && record.binaryPath.length > 0
+    && path.isAbsolute(record.binaryPath)
+    && typeof record.databasePath === 'string'
+    && record.databasePath.length > 0
+    && path.isAbsolute(record.databasePath);
 }
 
 function namesEngine(commandLine: string, binaryPath: string, databasePath: string): boolean {
@@ -150,7 +178,7 @@ async function stopProcess(pid: number): Promise<void> {
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
   if (await exited(5_000)) return;
   try { process.kill(pid, 'SIGKILL'); } catch { return; }
-  await exited(5_000);
+  if (!await exited(5_000)) throw new Error(`Process ${pid} did not exit after SIGKILL.`);
 }
 
 async function removePidFile(pidFile: string, pid: number | undefined): Promise<void> {
