@@ -6,6 +6,7 @@ import type { Collector } from '../core/collector.js';
 import type { BuildInfo, TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
+import type { AgentConnectionAccess } from './agent-access.js';
 
 export interface StartServerOptions {
   buildInfo?: BuildInfo;
@@ -22,7 +23,8 @@ export interface StartServerOptions {
   host?: string;
   webRoot?: string;
   agentToken?: string;
-  agentInfo?: { connectionFile: string; skillPath: string; url: string };
+  agentAuthorize?: (header: string | undefined) => boolean;
+  agentConnection?: AgentConnectionAccess;
   runtimeStatus?: () => CollectorRuntimeStatus;
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
@@ -50,7 +52,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
     ...(options.agentToken !== undefined ? { agentToken: options.agentToken } : {}),
-    ...(options.agentInfo ? { agentInfo: options.agentInfo } : {}),
+    ...(options.agentAuthorize ? { agentAuthorize: options.agentAuthorize } : {}),
+    ...(options.agentConnection ? { agentConnection: options.agentConnection } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),

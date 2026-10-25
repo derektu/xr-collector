@@ -98,6 +98,12 @@ async function quit({ app, child, debuggerWait }, runDir) {
 /** How a Desktop run's page and main process are reached; recorded in results.json as target.connection. */
 const CONNECTION = 'playwright-electron';
 
+/** Records only the current UI origin; credentials are exported from that UI when they are needed. */
+export function recordElectronUiOrigin(record, window) {
+  record.uiUrl = new URL(window.url()).origin;
+  writeJsonAtomic(path.join(record.runDir, 'run.json'), record);
+}
+
 /**
  * Prepares an isolated profile and launches the Desktop app hidden. Options: issue (required), label,
  * evidence (an explicit evidence folder, missing or empty; see claimEvidence), app (a packaged app;
@@ -195,7 +201,9 @@ export async function launchElectron({
     current = await start();
     // The program reports its own version and architecture, the same way for both kinds of target.
     Object.assign(record.target, await current.app.evaluate(({ app }) => ({ version: app.getVersion(), arch: process.arch })));
-    writeJsonAtomic(path.join(runDir, 'run.json'), record);
+    // The UI origin identifies this isolated profile without persisting an Agent key. Doctor asks
+    // that UI for a fresh active connection, so a key reset or port change cannot leave a snapshot.
+    recordElectronUiOrigin(record, current.window);
   } catch (error) {
     try { if (current) await quit(current, runDir); } catch { /* already closed */ }
     await terminateRun(runDir);
@@ -249,7 +257,11 @@ export async function launchElectron({
       }
     },
     /** Quits through the app's own shutdown path and starts again with the same profile. */
-    async relaunch() { await quit(current, runDir); await terminateRun(runDir); current = await start(); return current; },
+    async relaunch() {
+      await quit(current, runDir); await terminateRun(runDir); current = await start();
+      recordElectronUiOrigin(record, current.window);
+      return current;
+    },
     /**
      * Quits, ends whatever the app left running (a Meilisearch after an Electron crash), copies the
      * app's output into the evidence folder, releases the slot. An app that did not quit in time is

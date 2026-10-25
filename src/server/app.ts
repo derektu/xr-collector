@@ -10,6 +10,7 @@ import type { Collector } from '../core/collector.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../plugins/types.js';
@@ -123,8 +124,9 @@ export interface VaultSetup {
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
-  '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
-  '/api/device/login-startup', '/api/device/build-info',
+  '/api/health', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+  '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
+  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
 ]);
 
 export interface HttpAppOptions {
@@ -146,7 +148,8 @@ export interface HttpAppOptions {
   connectivity?: ConnectivityAccess;
   webRoot?: string;
   agentToken?: string;
-  agentInfo?: { connectionFile: string; skillPath: string; url: string };
+  agentAuthorize?: (header: string | undefined) => boolean;
+  agentConnection?: AgentConnectionAccess;
   runtimeStatus?: () => CollectorRuntimeStatus;
   /** Returns why business routes are unavailable, or null once a Vault is active. */
   notReady?: () => string | null;
@@ -208,6 +211,7 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   login_startup_unavailable: 409,
   login_startup_requires_approval: 409,
   login_startup_failed: 500,
+  agent_connection_unavailable: 409,
   capture_failed: 502,
   network_error: 503,
   offline: 503,
@@ -293,7 +297,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   }
 
-  if (options.agentToken !== undefined) {
+  if (options.agentAuthorize) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (!options.agentAuthorize!(request.headers.authorization)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
+        error: { code: 'unauthorized', message: '請使用目前的 Agent 連線金鑰。' },
+      });
+    });
+  } else if (options.agentToken !== undefined) {
     if (!options.agentToken) throw new Error('Agent token must not be empty');
     const expected = Buffer.from(`Bearer ${options.agentToken}`);
     app.addHook('onRequest', async (request, reply) => {
@@ -434,8 +444,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(gate.group), ...gate.status() })),
   }));
 
-  if (options.agentInfo && options.agentToken === undefined) {
-    app.get('/api/agent/connection', deviceData(), async () => options.agentInfo);
+  if (options.agentConnection) {
+    const agent = options.agentConnection;
+    app.get('/api/device/agent', deviceData(), async () => ({ agent: agent.status() }));
+    app.get('/api/device/agent/connection', deviceData(), async () => ({ connection: agent.connection() }));
+    app.put<{ Body: AgentPortSetting }>('/api/device/agent/port', deviceData(), async (request) => ({ agent: await agent.configure(request.body) }));
+    app.post('/api/device/agent/key/reset', deviceData(), async () => ({ connection: await agent.resetKey(), agent: agent.status() }));
+    app.get('/api/device/agent/skill', deviceData(), async (_request, reply) => reply.type('application/zip')
+      .header('Content-Disposition', 'attachment; filename="xr-collector-agent.zip"').send(await agent.download()));
   }
 
   app.get<{ Querystring: Record<string, unknown> }>('/api/documents', async (request) => {

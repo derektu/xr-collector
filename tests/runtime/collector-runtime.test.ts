@@ -10,7 +10,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
-import { manifestOf, packageBytes } from '../vault/package-fixtures.js';
+import { manifestOf, packageBytes, zipEntries } from '../vault/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -23,6 +23,12 @@ afterEach(async () => {
 });
 
 const runtimeChannel = { id: 'UC-runtime', title: 'Runtime', url: 'https://www.youtube.com/channel/UC-runtime' };
+
+async function connectionOf(runtime: CollectorRuntime): Promise<{ url: string; token: string }> {
+  const response = await fetch(`${runtime.server.url}/api/device/agent/connection`);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { connection: { url: string; token: string } }).connection;
+}
 
 async function options(
   capture: NonNullable<YouTubeTestSources['capture']>,
@@ -48,7 +54,7 @@ async function options(
         searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: search ?? new UnavailableTranscriptSearch('test'), close: closeSearch }),
       }),
-      connectionFile: path.join(root, 'agent-connection.json'),
+      agentSettingsFile: path.join(root, 'agent-settings.json'),
       skillPath: path.resolve('skills/xr-collector-agent'),
       uiPort: 0,
     } satisfies CollectorRuntimeOptions,
@@ -59,14 +65,14 @@ describe('CollectorRuntime', () => {
   it('serves authenticated Not Ready status without creating Vault services', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-not-ready-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
-    const connectionFile = path.join(root, 'agent-connection.json');
+    const agentSettingsFile = path.join(root, 'agent-settings.json');
     let loginEnabled = false;
     const loginStartup = {
       status: async () => ({ supported: true, enabled: loginEnabled, state: loginEnabled ? 'enabled' as const : 'disabled' as const, message: 'test' }),
       update: async (enabled: boolean) => { loginEnabled = enabled; return loginStartup.status(); },
     };
     const runtime = await CollectorRuntime.start({
-      profilePath: root, workspace: null, connectionFile,
+      profilePath: root, workspace: null, agentSettingsFile,
       skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0, loginStartup,
     });
     cleanups.push(() => runtime.close());
@@ -78,23 +84,19 @@ describe('CollectorRuntime', () => {
     expect(uiHealth.status).toBe(200);
     expect(await uiHealth.json()).toMatchObject({ status: 'unavailable', runtime: { state: 'not_ready', vaultPath: null } });
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(503);
-    expect((await fetch(`${runtime.server.url}/api/agent/connection`)).status).toBe(200);
+    expect((await fetch(`${runtime.server.url}/api/device/agent/connection`)).status).toBe(200);
     // Pacing reads without a Vault; no source type has loaded yet, so there is no request channel.
     const pacing = await fetch(`${runtime.server.url}/api/pacing`);
     expect(pacing.status).toBe(200);
     expect(await pacing.json()).toEqual({ groups: [] });
 
-    const connection = JSON.parse(await readFile(connectionFile, 'utf8')) as {
-      schemaVersion: number; instanceId: string; url: string; token: string;
-    };
-    expect(connection.schemaVersion).toBe(1);
-    expect(connection.instanceId).toBe(runtime.instanceId);
+    const connection = await connectionOf(runtime);
     expect((await fetch(`${connection.url}/api/health`)).status).toBe(401);
     expect((await fetch(`${connection.url}/api/health`, { headers: { authorization: 'Bearer wrong' } })).status).toBe(401);
     const agentHealth = await fetch(`${connection.url}/api/health`, { headers: { authorization: `Bearer ${connection.token}` } });
     expect(agentHealth.status).toBe(200);
     expect(await agentHealth.json()).toMatchObject({
-      status: 'unavailable', runtime: { instanceId: connection.instanceId },
+      status: 'unavailable', runtime: { instanceId: runtime.instanceId },
     });
     const uiLogin = await fetch(`${runtime.server.url}/api/device/login-startup`);
     expect(await uiLogin.json()).toMatchObject({ loginStartup: { enabled: false, state: 'disabled' } });
@@ -110,7 +112,7 @@ describe('CollectorRuntime', () => {
     });
     expect(blocked.status).toBe(503);
     expect(await blocked.json()).toMatchObject({ error: { code: 'vault_not_ready', message: expect.stringContaining('Onboarding') } });
-    expect(await readdir(root)).toEqual(['agent-connection.json']);
+    expect(await readdir(root)).toEqual(['agent-settings.json']);
   });
 
   it('reports a missing selected Vault as Not Ready without falling back', async () => {
@@ -162,7 +164,7 @@ describe('CollectorRuntime', () => {
     cleanups.push(() => runtime.close());
     expect(runtime.status()).toMatchObject({ state: 'ready', profilePath: setup.value.profilePath, vaultPath: setup.vaultPath });
 
-    const connection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as { url: string; token: string };
+    const connection = await connectionOf(runtime);
     const client = spawn(process.execPath, ['-e', `
       const target = new URL(${JSON.stringify(`${connection.url}/api/items`)});
       const body = JSON.stringify({url:'https://www.youtube.com/watch?v=runtime0001'});
@@ -297,29 +299,25 @@ describe('CollectorRuntime', () => {
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });
 
-  it('publishes a new authenticated runtime identity when the same profile restarts', async () => {
+  it('keeps its private Agent credential when the same profile restarts', async () => {
     const setup = await options({ capture: vi.fn() });
     const first = await CollectorRuntime.start(setup.value);
-    const firstConnection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as {
-      schemaVersion: number; instanceId: string; url: string; token: string;
-    };
+    const firstConnection = await connectionOf(first);
     await first.close();
 
     const second = await CollectorRuntime.start(setup.value);
     cleanups.push(() => second.close());
-    const secondConnection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as typeof firstConnection;
-    expect(secondConnection).toMatchObject({ schemaVersion: 1, instanceId: second.instanceId });
-    expect(secondConnection.instanceId).not.toBe(firstConnection.instanceId);
-    expect(secondConnection.token).not.toBe(firstConnection.token);
+    const secondConnection = await connectionOf(second);
+    expect(secondConnection.token).toBe(firstConnection.token);
 
     const health = await fetch(`${secondConnection.url}/api/health`, {
       headers: { authorization: `Bearer ${secondConnection.token}` },
     });
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ runtime: { instanceId: secondConnection.instanceId } });
+    expect(await health.json()).toMatchObject({ runtime: { instanceId: second.instanceId } });
     expect((await fetch(`${secondConnection.url}/api/health`, {
       headers: { authorization: `Bearer ${firstConnection.token}` },
-    })).status).toBe(401);
+    })).status).toBe(200);
   });
 
   it('adds a previewed channel with the target its preview resolved, and resolves an address nobody previewed', async () => {
@@ -394,7 +392,7 @@ describe('CollectorRuntime', () => {
     const setup = await options({ capture: vi.fn() });
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
-    const connection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as { url: string; token: string };
+    const connection = await connectionOf(runtime);
     const agent = async (route: string, init?: RequestInit) => fetch(`${connection.url}${route}`, {
       ...init,
       headers: {
@@ -470,7 +468,7 @@ describe('CollectorRuntime', () => {
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });
 
-  it('waits for an accepted rebuild after its Agent client disconnects', async () => {
+  it('keeps an accepted rebuild running after its Agent disconnects and its key is reset', async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const rebuild = vi.fn(async () => held);
@@ -483,7 +481,7 @@ describe('CollectorRuntime', () => {
     const setup = await options({ capture: vi.fn() }, search);
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
-    const connection = JSON.parse(await readFile(setup.value.connectionFile, 'utf8')) as { url: string; token: string };
+    const connection = await connectionOf(runtime);
     const client = spawn(process.execPath, ['-e', `
       const request = require('node:http').request(${JSON.stringify(`${connection.url}/api/search/rebuild`)}, {method:'POST', headers:{authorization:${JSON.stringify(`Bearer ${connection.token}`)}}});
       request.on('finish', () => setTimeout(() => process.exit(0), 10));
@@ -496,6 +494,12 @@ describe('CollectorRuntime', () => {
     try {
       await vi.waitFor(() => expect(rebuild).toHaveBeenCalledOnce());
       await clientExited;
+      const reset = await fetch(`${runtime.server.url}/api/device/agent/key/reset`, { method: 'POST' });
+      expect(reset.status).toBe(200);
+      const next = (await reset.json()).connection as { url: string; token: string };
+      expect(next.token).not.toBe(connection.token);
+      expect((await fetch(`${connection.url}/api/health`, { headers: { authorization: `Bearer ${connection.token}` } })).status).toBe(401);
+      expect((await fetch(`${next.url}/api/health`, { headers: { authorization: `Bearer ${next.token}` } })).status).toBe(200);
       let closed = false;
       const closing = runtime.close().then(() => { closed = true; });
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -515,8 +519,8 @@ describe('CollectorRuntime Vault setup', () => {
     const { explicitVaultPath: _explicit, ...value } = setup.value;
     return { ...setup, value, suggested: path.join(setup.value.profilePath, 'Suggested') };
   }
-  async function agentClient(connectionFile: string) {
-    const connection = JSON.parse(await readFile(connectionFile, 'utf8')) as { url: string; token: string };
+  async function agentClient(runtime: CollectorRuntime) {
+    const connection = await connectionOf(runtime);
     return (route: string, body?: unknown) => fetch(`${connection.url}${route}`, {
       method: body === undefined ? 'GET' : 'POST',
       headers: { authorization: `Bearer ${connection.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -524,7 +528,7 @@ describe('CollectorRuntime Vault setup', () => {
     });
   }
 
-  it('keeps login startup outside Vault export, switch and import (L33-A2)', async () => {
+  it('keeps device-only login and Agent settings outside Vault export, switch and import (L33-A2)', async () => {
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
       rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
@@ -548,7 +552,15 @@ describe('CollectorRuntime Vault setup', () => {
     const runtime = await CollectorRuntime.start({ ...setup.value, loginStartup });
     cleanups.push(() => runtime.close());
     const loginStatus = async () => (await (await fetch(`${runtime.server.url}/api/device/login-startup`)).json()).loginStartup;
+    const agentStatus = async () => (await (await fetch(`${runtime.server.url}/api/device/agent`)).json()).agent;
     expect(await loginStatus()).toMatchObject({ enabled: true });
+    const originalAgent = await connectionOf(runtime);
+    const configured = await fetch(`${runtime.server.url}/api/device/agent/port`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'fixed', port: 65431 }),
+    });
+    expect(configured.status).toBe(200);
+    expect(await agentStatus()).toMatchObject({ configured: { mode: 'fixed', port: 65431 }, restartRequired: true });
+    const savedAgentSettings = await readFile(setup.value.agentSettingsFile, 'utf8');
 
     const exported = path.join(path.dirname(setup.value.profilePath), `${path.basename(setup.value.profilePath)}-vault-export.zip`);
     cleanups.push(() => rm(exported, { force: true }));
@@ -556,9 +568,23 @@ describe('CollectorRuntime Vault setup', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: exported, overwrite: false }),
     });
     expect(exportResponse.status).toBe(200);
-    const manifest = await manifestOf(await readFile(exported));
+    const exportedBytes = await readFile(exported);
+    const entries = await zipEntries(exportedBytes);
+    const manifest = await manifestOf(exportedBytes);
+    const payload = Buffer.concat([...entries.values()]);
+    const names = [...entries.keys()];
+    const packageLeaks = {
+      loginSettingsName: names.some((name) => name.includes('login-startup.json')),
+      agentSettingsName: names.some((name) => name.includes('agent-settings.json')),
+      loginSettingValue: payload.includes(Buffer.from('deviceOnly')),
+      agentToken: payload.includes(Buffer.from(originalAgent.token)),
+      agentPort: payload.includes(Buffer.from('65431')),
+    };
     expect(manifest.files.map((file) => file.path)).not.toContain('login-startup.json');
-    expect(JSON.stringify(manifest)).not.toContain('deviceOnly');
+    expect(manifest.files.map((file) => file.path)).not.toContain('agent-settings.json');
+    expect(packageLeaks).toEqual({
+      loginSettingsName: false, agentSettingsName: false, loginSettingValue: false, agentToken: false, agentPort: false,
+    });
     expect(await loginStatus()).toMatchObject({ enabled: true });
 
     const other = path.join(path.dirname(setup.value.profilePath), `${path.basename(setup.value.profilePath)}-other-vault`);
@@ -570,6 +596,9 @@ describe('CollectorRuntime Vault setup', () => {
     expect(opened.status).toBe(202);
     await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
     expect(await loginStatus()).toMatchObject({ enabled: true });
+    expect(await agentStatus()).toMatchObject({ configured: { mode: 'fixed', port: 65431 }, restartRequired: true });
+    expect((await connectionOf(runtime)).token).toBe(originalAgent.token);
+    expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
 
     const preview = await fetch(`${runtime.server.url}/api/vault/import/preview`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: exported }),
@@ -582,17 +611,21 @@ describe('CollectorRuntime Vault setup', () => {
     expect(applied.status).toBe(202);
     await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
     expect(await loginStatus()).toMatchObject({ enabled: true });
+    expect(await agentStatus()).toMatchObject({ configured: { mode: 'fixed', port: 65431 }, restartRequired: true });
+    expect((await connectionOf(runtime)).token).toBe(originalAgent.token);
+    expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
   }, 20_000);
 
   it('lets an Agent create a Vault while Not Ready, serves the UI immediately and reopens it after restart', async () => {
     const setup = await selected();
     const runtime = await CollectorRuntime.start({ ...setup.value, suggestedVaultPath: setup.suggested });
-    const agent = await agentClient(setup.value.connectionFile);
+    const agent = await agentClient(runtime);
     expect((await (await agent('/api/vault/setup')).json()).vault).toEqual({
       state: 'not_ready', vaultPath: null, suggestedPath: setup.suggested, failure: null,
     });
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(503);
-    expect((await fetch(`${new URL(runtime.agentAccess.info.url)}api/vault/setup`, { method: 'POST' })).status).toBe(401);
+    const activeConnection = await connectionOf(runtime);
+    expect((await fetch(`${activeConnection.url}/api/vault/setup`, { method: 'POST' })).status).toBe(401);
 
     expect((await (await agent('/api/vault/inspect', { path: setup.vaultPath })).json()).inspection)
       .toEqual({ kind: 'empty', path: setup.vaultPath, exists: false });
@@ -791,20 +824,32 @@ describe('CollectorRuntime Vault setup', () => {
     await writeVaultMarker(await mkdir(setup.vaultPath, { recursive: true }).then(() => setup.vaultPath), 'XR Collector test');
     await writeFile(path.join(setup.value.profilePath, 'vault-selection.json'), JSON.stringify({ path: setup.vaultPath }));
     const first = await CollectorRuntime.start(setup.value);
-    const agent = await agentClient(setup.value.connectionFile);
+    const agent = await agentClient(first);
+    const firstConnection = await connectionOf(first);
+    const fixedPort = Number(new URL(firstConnection.url).port);
+    const configured = await fetch(`${first.server.url}/api/device/agent/port`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'fixed', port: fixedPort }),
+    });
+    expect(configured.status).toBe(200);
+    const savedAgentSettings = await readFile(setup.value.agentSettingsFile, 'utf8');
     const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-moved`);
     cleanups.push(() => rm(target, { recursive: true, force: true }));
     const moved = await agent('/api/vault/move', { targetPath: target });
     expect(moved.status).toBe(202);
     await expect.poll(async () => (await (await agent('/api/vault/status')).json()).state, { timeout: 10_000 }).toBe('completed');
     expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));
+    expect((await connectionOf(first)).token).toBe(firstConnection.token);
+    expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
     await first.close();
 
     const second = await CollectorRuntime.start(setup.value);
     cleanups.push(() => second.close());
     expect(second.status()).toMatchObject({ state: 'ready', vaultPath: path.resolve(target) });
-    const again = await agentClient(setup.value.connectionFile);
+    const again = await agentClient(second);
     expect((await (await again('/api/health')).json()).runtime).toMatchObject({ instanceId: second.instanceId, vaultPath: path.resolve(target) });
+    const secondConnection = await connectionOf(second);
+    expect(secondConnection).toEqual({ url: `http://127.0.0.1:${fixedPort}`, token: firstConnection.token });
+    expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 20_000);
 

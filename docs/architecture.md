@@ -21,7 +21,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client；來源類型的文字、設定句與文件細節取自 `src/web/plugins.tsx` 組裝的宣告 |
 
-UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及每次啟動產生的 Bearer token，可操作所有現有業務 routes；跨程序服務依下述固定裝置入口發現 active runtime。
+UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及 profile 持久保存的 Bearer token，可操作所有現有業務 routes；人或 Agent 從設定頁下載 Skill 與目前 active 連線資料，不掃描裝置入口。
 
 收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
 
@@ -49,10 +49,10 @@ Vault 保存正式文件與可攜設定；搜尋 database 是裝置上的可重�
 
 Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工作與資料能力。Sources、Documents、Jobs、Activity、Search、VaultWorkspace 的責任及遷移順序以 [Round 2 第 5 節](round-2-plan.md#5-建議模組分工) 為準；來源類型以上述 plugin 介面加入。
 
-`CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都由同一個 runtime factory 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。關閉時先停止 listeners 並等待已接受的 handler，再等待資料交換與執行中的收集步驟，把尚未開始的工作記為已中斷，最後關閉搜尋 process。開啟 Vault 時，workspace 先接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`，保留 health、Agent 授權與 Vault 設定 API，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程，連線檔的 instance 與 token 不變。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
+`CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都由同一個 runtime factory 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。關閉時先停止 listeners 並等待已接受的 handler，再等待資料交換與執行中的收集步驟，把尚未開始的工作記為已中斷，最後關閉搜尋 process。開啟 Vault 時，workspace 先接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`，保留 health、Agent 授權與 Vault 設定 API，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
 
 `VaultWorkspace` 持有一個知識庫操作鎖，匯出、匯入、搬移與開啟其他知識庫都經同一個生命週期執行：停止派工、等待進行中的收集、執行操作、恢復收集，再發布完成或錯誤狀態。套用匯入時鎖會升級為連讀取也拒絕；如果匯入無法收尾，鎖進入停止狀態並維持寫入與排程停止，等待重新啟動恢復。HTTP route config 把路由分為知識庫讀取、知識庫寫入、裝置資料與知識庫操作；沒有宣告時依 method 推定，鎖依分類決定是否接受請求。
 
-安裝版將目前 active runtime 的 Agent 連線資訊發布到每位使用者固定的裝置入口：macOS Application Support 或 Windows LocalAppData 下的 `XR Collector/agent-connection.json`。此入口與安裝目錄及 Vault 分離；未打包執行與明確指定 profile 的執行只寫 profile-local 連線檔，因而不覆蓋正式入口。連線檔包含 schema version、instance ID、loopback URL 與每次啟動重建的 token。Agent listener 優先使用固定 port，讓 Agent 的連線位址保持不變；被佔用時才往後改用可用的 port。Agent 先以 authenticated health 比對 instance ID，才使用業務 API；保留的舊連線檔只表示曾啟動，不表示服務仍存活。
+`AgentConnectionService` 在 profile 內保存私有金鑰與連線埠模式；金鑰跨重啟維持，只有使用者重設後才更新。自動模式由平台起始埠往後找十個候選，再交由作業系統配置可用埠；固定模式只嘗試指定埠，失敗只讓 Agent listener 顯示無法連線，不阻止 UI、Vault 與已接受工作啟動。設定修改先持久化，於下次啟動套用，現有 listener 不熱換。App 只透過設定頁輸出目前 active URL 與金鑰；下載包包含通用 Skill 與同層 `connection.json`，產品不發布作業系統固定 discovery file，也不以安裝目錄、Vault 或 instance ID 配對。
 
 改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／匯入（修改時間與刪除紀錄的比較）及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。

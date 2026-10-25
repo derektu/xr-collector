@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createSourcePlugins } from '../plugins/index.js';
-import { DEVELOPMENT_AGENT_PORT } from '../runtime/agent-discovery.js';
+import { DEVELOPMENT_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFolder } from '../vault/transfer-files.js';
@@ -40,7 +40,7 @@ const runtime = await CollectorRuntime.start({
   },
   ...(explicitVaultPath ? { explicitVaultPath: path.resolve(explicitVaultPath) } : {}),
   createdBy: 'XR Collector (development server)',
-  connectionFile: path.join(profilePath, 'agent-connection.json'),
+  agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
   skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
   agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DEVELOPMENT_AGENT_PORT,
   uiPort: port,

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
@@ -58,12 +58,11 @@ describe('build information HTTP contract', () => {
 
   it('forwards one identity through the real UI and Agent listeners with existing Host and token guards', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-build-http-'));
-    const connectionFile = path.join(root, 'agent-connection.json');
     const runtime = await CollectorRuntime.start({ buildInfo: info, profilePath: root, workspace: null,
-      connectionFile, skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
+      agentSettingsFile: path.join(root, 'agent-settings.json'), skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     try {
-      const connection = JSON.parse(await readFile(connectionFile, 'utf8'));
+      const connection = runtime.agentAccess.connection();
       const read = (base: string, headers: Record<string, string> = {}) => fetch(`${base}/api/device/build-info`, { headers: { connection: 'close', ...headers } });
       const ui = await read(runtime.server.url);
       const agent = await read(connection.url, { authorization: `Bearer ${connection.token}` });

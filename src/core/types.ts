@@ -992,6 +992,7 @@ export type CoreErrorCode =
   | 'login_startup_unavailable'
   | 'login_startup_requires_approval'
   | 'login_startup_failed'
+  | 'agent_connection_unavailable'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */

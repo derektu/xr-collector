@@ -6,6 +6,8 @@ XR Collector 是 macOS／Windows 的本機資料收集與存取工具。使用�
 
 使用者能選擇自己的 Vault、設定來源並持續收集、搜尋與閱讀文件、移除不要的內容、查明失敗原因，以及備份或搬移資料。UI 與 Agent 共用完整服務能力，桌面整合支援常駐、登入自啟、安裝交付與使用者觸發更新。
 
+本機 Agent 從首次 Onboarding 或設定頁下載通用 Skill 與當下的連線資料，安裝後透過帶私有金鑰的 loopback HTTP 使用同一個 Collector。連線 port 預設自動尋找，也能由使用者固定；金鑰與 port 模式屬於裝置 profile，不納入 Vault 或資料交換。產品不在固定作業系統路徑發布 discovery file，避免 Agent 掃描到其他 profile 或同網路的 Collector。
+
 這些是 Round 2 目標；已實作能力、未完成項目與執行順序集中於 [開發計畫與進度](round-2-plan.md)，本文件不另外維護一份完成度清單。[README](../README.md) 提供目前版本的操作入口。
 
 ## 本輪邊界

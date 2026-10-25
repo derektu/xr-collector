@@ -22,7 +22,8 @@ export async function listFlows(dir = FLOWS_DIR) {
     if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
       throw new Error(`${file} must export name, title, covers and run`);
     }
-    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true, run: flow.run, file: path.join(dir, file) };
+    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true,
+      vault: flow.vault === 'none' ? 'none' : 'selected', run: flow.run, file: path.join(dir, file) };
   }));
 }
 
@@ -57,7 +58,7 @@ function flowSource() {
 async function runOne(flow, options) {
   if (flow.desktop) return runDesktop(flow, options);
   const { issue, label, evidence, checkout, source } = options;
-  const instance = await launchWeb({ issue, label, evidence, checkout });
+  const instance = await launchWeb({ issue, label, evidence, checkout, vault: flow.vault });
   const pages = [];
   const open = async (route = '/') => {
     const opened = await openPage(instance, { route });

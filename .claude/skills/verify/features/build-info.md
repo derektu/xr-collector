@@ -18,7 +18,7 @@
 Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none' })`，兩個 instance 都使用同一受測 checkout。
 
 1. 點「設定」，讀取 `build-info` 區塊；`build-info-version`、`build-info-time`、`build-info-commit`、`build-info-id`、`build-info-target`、`build-info-kind`、`build-info-variant` 與 `GET /api/device/build-info` 相同。版本及 commit 再和受測 checkout 比對。
-2. 用這個 run 的 `agent-connection.json` token 讀 Agent listener 同一路徑，回應與 UI API 相同；無 token 回 401。重新整理設定頁，畫面 buildId 與原本相同。
+2. 由這個 run 的 UI `GET /api/device/agent/connection` 取得目前連線資料，再以 Bearer token 讀 Agent listener 同一路徑，回應與 UI API 相同；無 token 回 401。重新整理設定頁，畫面 buildId 與原本相同。
 3. 在 `vault: 'none'` instance 開啟 Onboarding，先確認 Vault API 為 `not_ready`，再比對建置資訊 DOM 與裝置 API，截深／淺色畫面。
 4. 打包版從實際安裝位置啟動，將 API／DOM 與 App 內 `dist/node/build-info.json`、產物清單比對；記錄 buildId、完整 commit、架構與 variant。此步另由本票原生流程完成，Web 不替代安裝驗收。
 

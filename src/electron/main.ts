@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, s
 import { CollectionPause } from '../core/collection-pause.js';
 import { internetProbe } from '../core/connectivity.js';
 import { createSourcePlugins } from '../plugins/index.js';
-import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
+import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
@@ -30,7 +30,6 @@ let startupWindowState: { startedAtLogin: boolean; finished: boolean } | null = 
 const NETWORK_WATCH_MS = 5_000;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
-const hasExplicitProfile = Boolean(explicitProfile);
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
 
 // Background validation mode, for native acceptance runs only: the window is never shown or
@@ -292,14 +291,7 @@ app.whenReady().then(async () => {
     ...(process.env.XR_COLLECTOR_VAULT ? { explicitVaultPath: path.resolve(process.env.XR_COLLECTOR_VAULT) } : {}),
     suggestedVaultPath,
     createdBy: `XR Collector ${app.getVersion()}`,
-    connectionFile: agentConnectionFile({
-      platform: process.platform,
-      isPackaged: app.isPackaged,
-      profilePath: app.getPath('userData'),
-      appDataPath: app.getPath('appData'),
-      ...(process.env.LOCALAPPDATA ? { localAppDataPath: process.env.LOCALAPPDATA } : {}),
-      hasExplicitProfile,
-    }),
+    agentSettingsFile: path.join(app.getPath('userData'), 'agent-settings.json'),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
     agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DESKTOP_AGENT_PORT,
     uiPort: 0,

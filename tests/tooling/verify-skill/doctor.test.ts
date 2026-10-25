@@ -2,14 +2,17 @@
 // and exit code 2. Runs the real CLI on a throwaway checkout that has neither resources/bin nor a
 // build, with a throwaway HOME for the slot locks.
 import { execFile } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { cleanUp, repository, temp } from './support.js';
+import { cleanUp, repository, start, temp, until } from './support.js';
 
 const CLI = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/verify.mjs');
+const { runProcesses } = await import('../../../.claude/skills/verify/scripts/lib/instance.mjs');
 // Lives for the whole file; cleanUp after each test removes only what temp() made.
 const home = mkdtempSync(path.join(tmpdir(), 'xr-verify-home-'));
 afterEach(cleanUp);
@@ -29,6 +32,7 @@ async function doctorWith(env: Record<string, string>, cwd: string, ...args: str
   const report = JSON.parse(result.stdout) as {
     healthy: boolean; missing: Missing[]; checks: Record<string, { value?: string }>;
     environment: { platform: string; nodeArch: string; hostArch: string; emulated: boolean };
+    instance?: { url: string; uiUrl: string; connection: string; health: boolean };
   };
   return { code: result.code, report, required: report.missing.filter((item) => item.required).map((item) => item.check) };
 }
@@ -55,6 +59,97 @@ function fakeApp(fuses?: string) {
 }
 
 describe.skipIf(process.platform !== 'darwin')('doctor', () => {
+  it('exports the current Agent connection from an Electron run UI after reset and diagnoses the UI when Agent is unavailable', async () => {
+    const runDir = temp('doctor-electron-agent');
+    const checkout = path.resolve('.');
+    mkdirSync(runDir, { recursive: true });
+    let token = 'first-key';
+    let unavailable = false;
+    let agentUrl = '';
+    const agent = createServer((request, response) => {
+      const accepted = request.headers.authorization === `Bearer ${token}`;
+      response.writeHead(accepted ? 200 : 401, { 'content-type': 'application/json' }).end(JSON.stringify(accepted ? {
+        status: 'ok', runtime: { state: 'ready' }, vaultPath: path.join(runDir, 'vault'),
+      } : { error: { code: 'unauthorized' } }));
+    });
+    await listen(agent); agentUrl = serverUrl(agent);
+    const profile = path.join(runDir, 'profile');
+    const ui = createServer((request, response) => {
+      if (request.url === '/api/device/agent/connection') {
+        response.writeHead(unavailable ? 409 : 200, { 'content-type': 'application/json' })
+          .end(JSON.stringify(unavailable ? { error: { code: 'agent_connection_unavailable' } } : { connection: { url: agentUrl, token } }));
+        return;
+      }
+      const body = request.url === '/api/vault/setup' ? { vault: { state: 'not_ready' } }
+        : request.url === '/api/vault/status' ? { state: 'not_ready', vaultPath: null }
+          : request.url === '/api/search/status' ? { status: { state: 'unavailable' } }
+            : request.url === '/api/health' ? { status: 'unavailable', runtime: { state: 'not_ready', profilePath: profile } } : null;
+      response.writeHead(body ? 200 : 404, { 'content-type': 'application/json' }).end(JSON.stringify(body ?? {}));
+    });
+    await listen(ui);
+    try {
+      writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
+        kind: 'electron', runDir, checkout, profile, data: 'real', vault: null, pid: process.pid,
+        uiUrl: serverUrl(ui), target: {}, ports: { slot: 0 },
+      }));
+      await startRunMember(runDir);
+      token = 'reset-key';
+      const reset = await doctor(checkout, '--run', runDir);
+      expect(reset.report.instance).toMatchObject({ url: agentUrl, connection: 'authenticated-agent-api', health: true });
+
+      unavailable = true;
+      const down = await doctor(checkout, '--run', runDir);
+      expect(down.report.instance).toMatchObject({ url: serverUrl(ui), uiUrl: serverUrl(ui), connection: 'ui-api-agent-unavailable', health: true });
+    } finally {
+      agent.close(); ui.close();
+    }
+  }, 30_000);
+
+  it('does not contact a reused Electron UI origin after this run App stopped', async () => {
+    const runDir = temp('doctor-electron-stopped');
+    const checkout = path.resolve('.');
+    const requests: string[] = [];
+    const other = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        status: 'ok', runtime: { profilePath: path.join(runDir, 'other-profile') },
+      }));
+    });
+    await listen(other);
+    try {
+      writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
+        kind: 'electron', runDir, checkout, profile: path.join(runDir, 'profile'), data: 'real', vault: null,
+        pid: process.pid, uiUrl: serverUrl(other), target: {}, ports: { slot: 0 },
+      }));
+      const checked = await doctor(checkout, '--run', runDir);
+      expect(checked.report.instance).toMatchObject({ connection: 'app-not-running', health: false });
+      expect(requests).toEqual([]);
+    } finally { other.close(); }
+  }, 30_000);
+
+  it('checks the UI profile before exporting a connection or reading business data', async () => {
+    const runDir = temp('doctor-electron-other-profile');
+    const checkout = path.resolve('.');
+    const requests: string[] = [];
+    const other = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        status: 'ok', runtime: { profilePath: path.join(runDir, 'other-profile') },
+      }));
+    });
+    await listen(other);
+    try {
+      writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
+        kind: 'electron', runDir, checkout, profile: path.join(runDir, 'profile'), data: 'real', vault: null,
+        pid: process.pid, uiUrl: serverUrl(other), target: {}, ports: { slot: 0 },
+      }));
+      await startRunMember(runDir);
+      const checked = await doctor(checkout, '--run', runDir);
+      expect(checked.report.instance).toMatchObject({ connection: 'ui-profile-mismatch', health: false });
+      expect(requests).toEqual(['/api/health']);
+    } finally { other.close(); }
+  }, 30_000);
+
   it('lists a checkout without resources/bin and a packaged app that does not exist', async () => {
     const { worktree } = repository();
     const app = path.join(worktree, 'release', 'Missing.app');
@@ -127,6 +222,21 @@ describe.skipIf(process.platform !== 'darwin')('doctor', () => {
     expect(electron.required).toEqual(expect.arrayContaining(['electron', 'electronBuild']));
   }, 60_000);
 });
+
+function listen(server: Server): Promise<void> {
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+}
+
+function serverUrl(server: Server): string { return `http://127.0.0.1:${(server.address() as AddressInfo).port}`; }
+
+async function startRunMember(runDir: string) {
+  const server = path.join(runDir, 'server.mts');
+  writeFileSync(server, 'setTimeout(() => {}, 30000);\n');
+  const child = start(process.execPath, [server, `--xr-verify-run=${runDir}/`]);
+  await until(() => runProcesses(JSON.parse(readFileSync(path.join(runDir, 'run.json'), 'utf8')))
+    .some((member: { holder?: boolean }) => !member.holder));
+  return child;
+}
 
 /**
  * A Windows app folder as electron-builder unpacks it: `Fake.exe` (a copy of this Node, so its PE
