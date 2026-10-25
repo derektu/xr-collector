@@ -94,12 +94,10 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
 
   await record.scenario('SUBAB-3', '兩者完成：狀態序列、文件數、工作頁與徽章', async ({ expect, shot, note }) => {
     await waitFor(async () => (await apiStatus(a))?.state === 'scheduled' && (await apiStatus(b))?.state === 'scheduled', 'A and B scheduled', { timeout: 120_000 });
-    // The screen polls more slowly than the API. Wait for the terminal text itself so a stale
-    // progress sample cannot look stable between two screen polls.
-    await waitFor(async () => {
-      const terminal = /^\u4e0b\u6b21 \d{2}:\d{2}$/u;
-      return terminal.test(await statusOf(a) ?? '') && terminal.test(await statusOf(b) ?? '');
-    }, 'rows show next check', { timeout: 30_000 });
+    // An unchanged row can still be waiting for the next poll. Wait for the terminal render,
+    // retaining the checks below on timeout so stale rows fail with their observed text.
+    await waitFor(async () => [await statusOf(a), await statusOf(b)].every((text) => /^下次 /u.test(text ?? '')),
+      'rows show the completed checks', { timeout: 30_000 }).catch(() => undefined);
     const statuses = await watched(page, 'status');
     for (const [source, label] of [[a, 'A'], [b, 'B']]) {
       const sequence = distinct(statuses[rowOf(source)] ?? []);

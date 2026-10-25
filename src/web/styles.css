@@ -191,6 +191,8 @@ dialog::backdrop { background:var(--overlay); }
 .settings-section p { margin:10px 0 0; color:var(--secondary); font-size:13px; line-height:1.6; }
 .settings-section .hint { color:var(--text-muted); font-size:12px; }
 .settings-section .button { margin-top:14px; }
+.login-startup-control { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; font-size:14px; }
+.setting-message.error { color:var(--error-fg); }
 .setting-path { display:block; margin-top:10px; overflow-wrap:anywhere; color:var(--primary); font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
 
 /* Export and import */

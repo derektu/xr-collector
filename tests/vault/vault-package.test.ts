@@ -101,10 +101,6 @@ async function open(root: string, overrides: Partial<Parameters<typeof VaultWork
   workspaces.push(workspace);
   return workspace;
 }
-async function settled(workspace: VaultWorkspace) {
-  await expect.poll(() => workspace.status().state, { timeout: 5000 }).toMatch(/^(completed|error)$/u);
-}
-
 describe('package format (PKG-01)', () => {
   it('is a zip of the registered files at their Vault paths, compressed, with a manifest of sizes and digests', async () => {
     const root = path.join(await temp(), 'Vault'); await seed(root);
@@ -378,7 +374,7 @@ describe('Vaults of an earlier format (CMP-01)', () => {
     await writeFile(file, await packageBytes(incoming));
     const preview = await workspace.previewImport(file);
     expect(preview.merge.documents.added).toBe(1);
-    workspace.applyImport(preview.id, 'merge'); await settled(workspace);
+    workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
     const backup = workspace.status().result!.backupPath!;
     expect(path.dirname(backup)).toBe(`${local}.backups`);
     expect(path.basename(backup)).toMatch(/^匯入前備份 \d{4}-\d{2}-\d{2} \d{6}\.zip$/u);

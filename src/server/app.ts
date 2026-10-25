@@ -1,4 +1,5 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
+import type { VaultAccess } from '../vault/operation-lock.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
@@ -120,6 +122,7 @@ export interface VaultSetup {
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
   '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+  '/api/device/login-startup',
 ]);
 
 export interface HttpAppOptions {
@@ -145,6 +148,7 @@ export interface HttpAppOptions {
   /** Returns why business routes are unavailable, or null once a Vault is active. */
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
+  loginStartup?: LoginStartupAccess;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
   /**
@@ -198,6 +202,9 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   transfer_cancelled: 409,
   vault_location_fixed: 409,
   insufficient_space: 507,
+  login_startup_unavailable: 409,
+  login_startup_requires_approval: 409,
+  login_startup_failed: 500,
   capture_failed: 502,
   network_error: 503,
   offline: 503,
@@ -244,6 +251,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
   };
   const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
+  // Fastify normalizes route options in place, so every route receives a fresh object.
+  const deviceData = () => ({ config: { vaultAccess: 'device-data' as const } });
+  const vaultOperation = () => ({ config: { vaultAccess: 'vault-operation' as const } });
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -295,7 +305,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (options.notReady) {
     const notReady = options.notReady;
     app.addHook('onRequest', async (request, reply) => {
-      if (!request.url.startsWith('/api/') || NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) return;
+      const access = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
+      const pathname = request.url.split('?', 1)[0] ?? request.url;
+      if (!request.url.startsWith('/api/') || access === 'device-data' || NOT_READY_ROUTES.has(pathname)) return;
       const message = notReady();
       if (message) {
         return reply.code(503).send({ error: { code: 'vault_not_ready', message } });
@@ -305,14 +317,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.vaultSetup) {
     const vaultSetup = options.vaultSetup;
-    app.get('/api/vault/setup', async () => ({ vault: vaultSetup.status() }));
-    app.post<{ Body: { path?: unknown } }>('/api/vault/inspect', async (request) => {
+    app.get('/api/vault/setup', deviceData(), async () => ({ vault: vaultSetup.status() }));
+    app.post<{ Body: { path?: unknown } }>('/api/vault/inspect', deviceData(), async (request) => {
       if (typeof request.body?.path !== 'string' || request.body.path.trim() === '') {
         throw new CollectorError('invalid_request', '請提供要檢查的目錄路徑。');
       }
       return { inspection: await vaultSetup.inspect(request.body.path) };
     });
-    app.post<{ Body: { action?: unknown; path?: unknown; packagePath?: unknown } }>('/api/vault/setup', async (request) => {
+    app.post<{ Body: { action?: unknown; path?: unknown; packagePath?: unknown } }>('/api/vault/setup', deviceData(), async (request) => {
       const { action, path: vaultPath, packagePath } = request.body ?? {};
       if ((action !== 'create' && action !== 'open' && action !== 'import') || typeof vaultPath !== 'string' || vaultPath.trim() === '') {
         throw new CollectorError('invalid_request', '請提供 action（create、open 或 import）與知識庫目錄路徑。');
@@ -328,41 +340,36 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const transfer = options.transfer;
     const writes = new WeakMap<object, () => void>();
     app.addHook('preHandler', async (request) => {
-      if (['GET', 'HEAD'].includes(request.method) && request.url.startsWith('/api/')
-        && request.routeOptions.url !== '/api/vault/status'
-        // Jobs and activity are device data and stay readable while a merge holds the Vault.
-        && !request.routeOptions.url?.startsWith('/api/jobs')
-        && request.routeOptions.url !== '/api/activity'
-        && !NOT_READY_ROUTES.has(request.routeOptions.url ?? '')) transfer.assertReadable();
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
-        && !request.routeOptions.url?.startsWith('/api/vault/')) {
-        writes.set(request, transfer.enterWrite());
-      }
+      if (!request.url.startsWith('/api/')) return;
+      const declared = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
+      if (declared === 'device-data') return;
+      const inferred: VaultAccess = ['GET', 'HEAD', 'OPTIONS'].includes(request.method) ? 'vault-read' : 'vault-write';
+      writes.set(request, transfer.enterRequest(declared ?? inferred));
     });
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
-    app.get('/api/vault/status', async () => transfer.status());
+    app.get('/api/vault/status', deviceData(), async () => transfer.status());
     // Export and import name local files by absolute path. JSON requests need a CORS preflight,
     // which this server never grants, so only the app's own pages and authorized Agents can name files.
-    app.get('/api/vault/export/suggestion', async () => transfer.exportSuggestion());
-    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', async (request) => {
+    app.get('/api/vault/export/suggestion', vaultOperation(), async () => transfer.exportSuggestion());
+    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', vaultOperation(), async (request) => {
       return transfer.exportTo(request.body?.path, request.body?.overwrite === true);
     });
-    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/import/preview', async (request) => transfer.previewImport(request.body?.path));
-    app.post<{ Body: { id?: unknown; mode?: unknown } | undefined }>('/api/vault/import/apply', async (request, reply) => {
+    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/import/preview', vaultOperation(), async (request) => transfer.previewImport(request.body?.path));
+    app.post<{ Body: { id?: unknown; mode?: unknown } | undefined }>('/api/vault/import/apply', vaultOperation(), async (request, reply) => {
       return reply.code(202).send(transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode));
     });
-    app.post<{ Body: { id?: unknown } | undefined }>('/api/vault/import/cancel', async (request) => {
+    app.post<{ Body: { id?: unknown } | undefined }>('/api/vault/import/cancel', vaultOperation(), async (request) => {
       transfer.cancelImport(String(request.body?.id ?? ''));
       return { cancelled: true };
     });
-    app.post('/api/vault/cancel', async () => transfer.cancelWait());
-    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move/check', async (request) => transfer.checkMove(request.body?.targetPath));
-    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move', async (request, reply) => {
+    app.post('/api/vault/cancel', vaultOperation(), async () => transfer.cancelWait());
+    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move/check', vaultOperation(), async (request) => transfer.checkMove(request.body?.targetPath));
+    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move', vaultOperation(), async (request, reply) => {
       return reply.code(202).send(await transfer.move(request.body?.targetPath));
     });
-    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', async (request, reply) => {
+    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', vaultOperation(), async (request, reply) => {
       return reply.code(202).send(await transfer.openOther(request.body?.path));
     });
   }
@@ -396,7 +403,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   });
 
-  app.get('/api/health', async () => {
+  app.get('/api/health', deviceData(), async () => {
     const runtime = options.runtimeStatus?.();
     return {
       status: runtime && runtime.state !== 'ready' ? 'unavailable' : 'ok',
@@ -406,13 +413,23 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     };
   });
 
+  const loginStartup = options.loginStartup ?? unavailableLoginStartup;
+  app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));
+  app.put<{ Body: { enabled?: unknown } }>('/api/device/login-startup', deviceData(), async (request) => {
+    const body = request.body ?? {};
+    if (typeof body.enabled !== 'boolean' || Object.keys(body).some((field) => field !== 'enabled')) {
+      throw new CollectorError('invalid_request', '請只提供 enabled，值必須是布林值。');
+    }
+    return { loginStartup: await loginStartup.update(body.enabled) };
+  });
+
   // Each pacing group is labelled with the name its source type declares for it.
-  app.get('/api/pacing', async () => ({
+  app.get('/api/pacing', deviceData(), async () => ({
     groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(gate.group), ...gate.status() })),
   }));
 
   if (options.agentInfo && options.agentToken === undefined) {
-    app.get('/api/agent/connection', async () => options.agentInfo);
+    app.get('/api/agent/connection', deviceData(), async () => options.agentInfo);
   }
 
   app.get<{ Querystring: Record<string, unknown> }>('/api/documents', async (request) => {
@@ -499,7 +516,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return reply.code(202).send(submissionView(await jobs.submitItem(type, input)));
     });
 
-    app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', async (request) => {
+    app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', deviceData(), async (request) => {
       const { state, cursor } = request.query;
       if (state !== undefined && state !== 'active' && state !== 'all') {
         throw new CollectorError('invalid_request', 'state 只能是 active 或 all。');
@@ -512,15 +529,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { jobs: page.jobs.map(jobView), nextCursor: page.nextCursor };
     });
 
-    app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', async (request) => {
+    app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', deviceData(), async (request) => {
       const { since } = singleValues(request.query);
       if (since !== undefined && !isInstant(since)) throw new CollectorError('invalid_request', 'since 必須是 ISO 時間。');
       return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
     });
 
-    app.get('/api/jobs/overview', async () => ({ overview: await jobs.overview() }));
+    app.get('/api/jobs/overview', deviceData(), async () => ({ overview: await jobs.overview() }));
 
-    app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request) => ({
+    app.get<{ Params: { id: string } }>('/api/jobs/:id', deviceData(), async (request) => ({
       job: jobView(jobs.get(request.params.id)),
     }));
 
@@ -536,12 +553,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.activity) {
     const activity = options.activity;
-    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', async (request) => {
+    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', deviceData(), async (request) => {
       const query = activityQuery(singleValues(request.query));
       return query.view === 'summary' && !query.jobId && activity.summary
         ? activity.summary(query) : activity.query({ ...query, view: 'raw' });
     });
-    app.get<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>('/api/activity/groups/:groupId', async (request) => {
+    app.get<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>('/api/activity/groups/:groupId', deviceData(), async (request) => {
       const query = singleValues(request.query);
       const unknown = Object.keys(query).find((key) => key !== 'limit' && key !== 'cursor' && key !== 'severity');
       if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);

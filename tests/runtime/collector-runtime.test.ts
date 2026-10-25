@@ -10,7 +10,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
-import { packageBytes } from '../vault/package-fixtures.js';
+import { manifestOf, packageBytes } from '../vault/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -60,9 +60,14 @@ describe('CollectorRuntime', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-not-ready-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const connectionFile = path.join(root, 'agent-connection.json');
+    let loginEnabled = false;
+    const loginStartup = {
+      status: async () => ({ supported: true, enabled: loginEnabled, state: loginEnabled ? 'enabled' as const : 'disabled' as const, message: 'test' }),
+      update: async (enabled: boolean) => { loginEnabled = enabled; return loginStartup.status(); },
+    };
     const runtime = await CollectorRuntime.start({
       profilePath: root, workspace: null, connectionFile,
-      skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
+      skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0, loginStartup,
     });
     cleanups.push(() => runtime.close());
     expect(runtime.status()).toMatchObject({
@@ -91,6 +96,14 @@ describe('CollectorRuntime', () => {
     expect(await agentHealth.json()).toMatchObject({
       status: 'unavailable', runtime: { instanceId: connection.instanceId },
     });
+    const uiLogin = await fetch(`${runtime.server.url}/api/device/login-startup`);
+    expect(await uiLogin.json()).toMatchObject({ loginStartup: { enabled: false, state: 'disabled' } });
+    const agentLogin = await fetch(`${connection.url}/api/device/login-startup`, {
+      method: 'PUT', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(await agentLogin.json()).toMatchObject({ loginStartup: { enabled: true, state: 'enabled' } });
+    expect(await (await fetch(`${runtime.server.url}/api/device/login-startup`)).json()).toMatchObject({ loginStartup: { enabled: true } });
     const blocked = await fetch(`${connection.url}/api/items`, {
       method: 'POST', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=runtime0001' }),
@@ -115,6 +128,29 @@ describe('CollectorRuntime', () => {
     expect(entries).toContain('vault-selection.json');
     expect(entries).not.toContain('vault');
     expect(entries.some((entry) => entry.startsWith('search'))).toBe(false);
+  });
+
+  it('records login launch and setting changes as device-wide activity', async () => {
+    const setup = await options({ capture: vi.fn() });
+    let enabled = false;
+    const loginStartup = {
+      status: async () => ({ supported: true, enabled, state: enabled ? 'enabled' as const : 'disabled' as const, message: 'test' }),
+      update: async (next: boolean) => { enabled = next; return loginStartup.status(); },
+    };
+    const runtime = await CollectorRuntime.start({ ...setup.value, loginStartup, startedAtLogin: true });
+    cleanups.push(() => runtime.close());
+    const changed = await fetch(`${runtime.server.url}/api/device/login-startup`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(changed.status).toBe(200);
+    await vi.waitFor(async () => {
+      const activity = await (await fetch(`${runtime.server.url}/api/activity?limit=20`)).json() as { events: Array<{ eventType: string; vaultPath: string | null; jobId: string | null }> };
+      const deviceEvents = activity.events.filter((event) => event.eventType.startsWith('device.login_startup'));
+      expect(deviceEvents.map((event) => event.eventType)).toEqual(expect.arrayContaining([
+        'device.login_startup_launched', 'device.login_startup_enabled',
+      ]));
+      expect(deviceEvents.every((event) => event.vaultPath === null && event.jobId === null)).toBe(true);
+    });
   });
 
   it('shares one workspace with UI and Agent and keeps accepted collection alive after client disconnect', async () => {
@@ -487,6 +523,66 @@ describe('CollectorRuntime Vault setup', () => {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   }
+
+  it('keeps login startup outside Vault export, switch and import (L33-A2)', async () => {
+    const search: TranscriptSearch = {
+      status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
+      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
+    };
+    const base = await options({ capture: vi.fn() }, search);
+    const { explicitVaultPath: _explicit, ...value } = base.value;
+    const setup = { ...base, value };
+    await new MarkdownVault(setup.vaultPath).add(transcriptDocument({
+      videoId: 'loginstart1', sourceUrl: 'https://www.youtube.com/watch?v=loginstart1', title: 'Device setting boundary',
+      channelId: 'UC-runtime', channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
+      subtitleKind: 'manual', bodyMarkdown: 'Body.',
+    }));
+    await writeVaultMarker(setup.vaultPath, 'XR Collector test');
+    await new VaultSelection(path.join(setup.value.profilePath, 'vault-selection.json')).write(setup.vaultPath);
+    await writeFile(path.join(setup.value.profilePath, 'login-startup.json'), '{"deviceOnly":true}\n');
+    let enabled = true;
+    const loginStartup = {
+      status: async () => ({ supported: true, enabled, state: enabled ? 'enabled' as const : 'disabled' as const, message: 'test' }),
+      update: async (next: boolean) => { enabled = next; return loginStartup.status(); },
+    };
+    const runtime = await CollectorRuntime.start({ ...setup.value, loginStartup });
+    cleanups.push(() => runtime.close());
+    const loginStatus = async () => (await (await fetch(`${runtime.server.url}/api/device/login-startup`)).json()).loginStartup;
+    expect(await loginStatus()).toMatchObject({ enabled: true });
+
+    const exported = path.join(path.dirname(setup.value.profilePath), `${path.basename(setup.value.profilePath)}-vault-export.zip`);
+    cleanups.push(() => rm(exported, { force: true }));
+    const exportResponse = await fetch(`${runtime.server.url}/api/vault/export`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: exported, overwrite: false }),
+    });
+    expect(exportResponse.status).toBe(200);
+    const manifest = await manifestOf(await readFile(exported));
+    expect(manifest.files.map((file) => file.path)).not.toContain('login-startup.json');
+    expect(JSON.stringify(manifest)).not.toContain('deviceOnly');
+    expect(await loginStatus()).toMatchObject({ enabled: true });
+
+    const other = path.join(path.dirname(setup.value.profilePath), `${path.basename(setup.value.profilePath)}-other-vault`);
+    cleanups.push(() => rm(other, { recursive: true, force: true }));
+    await writeVaultMarker(await mkdir(other, { recursive: true }).then(() => other), 'XR Collector test');
+    const opened = await fetch(`${runtime.server.url}/api/vault/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: other }),
+    });
+    expect(opened.status).toBe(202);
+    await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
+    expect(await loginStatus()).toMatchObject({ enabled: true });
+
+    const preview = await fetch(`${runtime.server.url}/api/vault/import/preview`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: exported }),
+    });
+    expect(preview.status).toBe(200);
+    const comparison = await preview.json() as { id: string };
+    const applied = await fetch(`${runtime.server.url}/api/vault/import/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: comparison.id, mode: 'replace' }),
+    });
+    expect(applied.status).toBe(202);
+    await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
+    expect(await loginStatus()).toMatchObject({ enabled: true });
+  }, 20_000);
 
   it('lets an Agent create a Vault while Not Ready, serves the UI immediately and reopens it after restart', async () => {
     const setup = await selected();
