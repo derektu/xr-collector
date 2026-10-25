@@ -99,7 +99,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     ? path.join(outputDir, 'mac-arm64/XR Collector.app/Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
   const asarPath = path.join(resources, 'app.asar');
-  const buildInfo = JSON.parse(extractFile(asarPath, 'dist/node/build-info.json').toString('utf8'));
+  const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
   const required = { schemaVersion: 1, kind: 'packaged', version, commit, target, variant, sourceDirty: false };
   for (const [key, value] of Object.entries(required)) if (buildInfo[key] !== value) throw new Error(`Packaged BuildInfo ${key} does not match the packaging request.`);
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');

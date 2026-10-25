@@ -24,8 +24,8 @@ async function cardMatches(page, info, expect, prefix) {
     expect(actual === expected, `畫面 ${field} 與裝置 API 相同`, { id: `${prefix}.${field}`, expected, actual });
   }
   const text = await card.innerText();
-  const sourceMessage = info.sourceDirty === true ? '有未提交修改' : info.sourceDirty === null ? '來源狀態未知' : null;
-  expect(sourceMessage ? text.includes(sourceMessage) : !text.includes('有未提交修改') && !text.includes('來源狀態未知'), '來源狀態如實顯示',
+  const sourceMessage = info.sourceDirty === true ? '有未提交修改' : info.sourceDirty === null ? '原始碼狀態未知' : null;
+  expect(sourceMessage ? text.includes(sourceMessage) : !text.includes('有未提交修改') && !text.includes('原始碼狀態未知'), '原始碼狀態如實顯示',
     { id: `${prefix}.source`, expected: sourceMessage, actual: text });
 }
 
@@ -37,7 +37,7 @@ export async function run({ instance, page, record }) {
     if (response.status !== 200) { await shot('missing-build-info'); return; }
     const info = response.body.buildInfo;
     const pkg = JSON.parse(await readFile(path.join(instance.checkout, 'package.json'), 'utf8'));
-    expect(info.version === pkg.version && info.commit === instance.commit && info.kind === 'development', '來源版本與受測 checkout 相同',
+    expect(info.version === pkg.version && info.commit === instance.commit && info.kind === 'development', '原始碼版本與受測 checkout 相同',
       { id: 'settings.source-identity', expected: { version: pkg.version, commit: instance.commit, kind: 'development' },
         actual: { version: info.version, commit: info.commit, kind: info.kind } });
     await cardMatches(page, info, expect, 'settings');
