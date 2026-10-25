@@ -132,21 +132,32 @@ async function doctor() {
   if (o.run) {
     const stored = JSON.parse(await readFile(path.join(o.run, 'run.json'), 'utf8'));
     const native = stored.kind === 'electron';
-    // Native UI driving stays with its owner. Doctor only reads the authenticated Agent API.
+    // Native UI driving stays with its owner. Its known UI origin exports the current Agent
+    // connection on demand; run.json never acts as a credential snapshot or product discovery file.
     const instance = native ? stored : attach(o.run);
-    const connection = native ? JSON.parse(await readFile(path.join(instance.profile, 'agent-connection.json'), 'utf8')) : null;
-    const url = connection?.url ?? instance.url;
+    const uiUrl = native ? instance.uiUrl : instance.url;
+    const processes = runProcesses(instance);
+    const appRunning = !native || processes.some((member) => !member.holder);
+    const uiHealth = native && appRunning && uiUrl ? await fetch(`${uiUrl}/api/health`)
+      .then(async (response) => response.ok ? await response.json() : null, () => null) : null;
+    const ownsUi = !native || (typeof uiHealth?.runtime?.profilePath === 'string' && typeof instance.profile === 'string'
+      && path.resolve(uiHealth.runtime.profilePath) === path.resolve(instance.profile));
+    const fresh = native && ownsUi && uiUrl ? await fetch(`${uiUrl}/api/device/agent/connection`)
+      .then(async (response) => response.ok ? (await response.json()).connection : null, () => null) : null;
+    const connection = native ? fresh : null;
+    const url = native && !ownsUi ? null : connection?.url ?? uiUrl;
     const headers = connection ? { authorization: `Bearer ${connection.token}` } : {};
-    const get = (route) => fetch(`${url}${route}`, { headers }).then((response) => response.ok ? response.json() : null, () => null);
+    const get = (route) => url ? fetch(`${url}${route}`, { headers }).then((response) => response.ok ? response.json() : null, () => null) : null;
     const vault = await get('/api/vault/status');
     const search = await get('/api/search/status');
     const setup = native ? await get('/api/vault/setup') : null;
     const now = commitOf(instance.checkout);
     report.instance = {
       runDir: instance.runDir, url, data: instance.data, vault: instance.vault, pid: instance.pid,
-      ...(native ? { connection: 'authenticated-agent-api', vaultSetupState: setup?.vault?.state ?? null } : {}),
-      processes: runProcesses(instance).map((member) => member.pid),
-      health: await fetch(`${url}/api/health`, { headers }).then((response) => response.ok, () => false),
+      ...(native ? { uiUrl, connection: !appRunning ? 'app-not-running' : !ownsUi ? 'ui-profile-mismatch'
+        : connection ? 'authenticated-agent-api' : 'ui-api-agent-unavailable', vaultSetupState: setup?.vault?.state ?? null } : {}),
+      processes: processes.map((member) => member.pid),
+      health: url ? await fetch(`${url}/api/health`, { headers }).then((response) => response.ok, () => false) : false,
       search: search?.status?.state ?? null,
       vaultPath: vault?.vaultPath ?? null,
       vaultInsideRun: Boolean(vault?.vaultPath?.startsWith(instance.runDir)),

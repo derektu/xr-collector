@@ -34,6 +34,13 @@ describe('Vault access declared by routes', () => {
         group: async () => ({ group: { groupId: 'locked-group', count: 1 }, checks: [], nextCursor: null }),
         health: () => ({ state: 'ready' }),
       } as never,
+      agentConnection: {
+        status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
+        connection: () => ({ url: 'http://127.0.0.1:7222', token: 'device-key' }),
+        configure: async () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
+        resetKey: async () => ({ url: 'http://127.0.0.1:7222', token: 'next-key' }),
+        download: async () => Buffer.from('zip'), authorize: () => true,
+      },
     });
     apps.push(app);
 
@@ -83,6 +90,13 @@ describe('Vault access declared by routes', () => {
         group: async () => ({ group: { groupId: 'locked-group', count: 1 }, checks: [], nextCursor: null }),
         health: () => ({ state: 'ready' }),
       } as never,
+      agentConnection: {
+        status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
+        connection: () => ({ url: 'http://127.0.0.1:7222', token: 'device-key' }),
+        configure: async () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
+        resetKey: async () => ({ url: 'http://127.0.0.1:7222', token: 'next-key' }),
+        download: async () => Buffer.from('zip'), authorize: () => true,
+      },
     });
     apps.push(app);
     const headers = agentToken ? { authorization: `Bearer ${agentToken}` } : {};
@@ -106,12 +120,15 @@ describe('Vault access declared by routes', () => {
       expect(response.statusCode, url).toBe(409);
       expect(response.json().error.code, url).toBe('vault_busy');
     }
-    for (const url of ['/api/jobs', '/api/activity', '/api/activity?view=summary', '/api/activity/groups/locked-group', '/api/vault/status', '/api/health', '/api/device/login-startup']) {
+    for (const url of ['/api/jobs', '/api/activity', '/api/activity?view=summary', '/api/activity/groups/locked-group', '/api/vault/status', '/api/health', '/api/device/login-startup',
+      '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/skill']) {
       expect((await app.inject({ method: 'GET', url, headers })).statusCode, url).toBe(200);
     }
     const loginStartup = await app.inject({ method: 'PUT', url: '/api/device/login-startup', headers, payload: { enabled: true } });
     expect(loginStartup.statusCode).toBe(200);
     expect(loginStartup.json()).toMatchObject({ loginStartup: { enabled: true } });
+    expect((await app.inject({ method: 'PUT', url: '/api/device/agent/port', headers, payload: { mode: 'auto' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/device/agent/key/reset', headers })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/api/search/rebuild', headers })).statusCode).toBe(409);
 
     release();

@@ -26,11 +26,33 @@ function contractRoutes(skill: string): Array<{ method: string; url: string }> {
 }
 
 describe('Agent Skill', () => {
+  it('updates stale connection data after a refused or unauthorized health check without scanning ports', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    const connection = skill.slice(skill.indexOf('## 連線'), skill.indexOf('## 操作範例'));
+    const healthStep = connection.split('\n').find((line) => line.startsWith('4. ')) ?? '';
+
+    expect(healthStep).toContain('無法連線或逾時');
+    expect(healthStep).toContain('XR Collector 已開啟');
+    expect(healthStep).toContain('若 App 已開啟');
+    expect(healthStep).toContain('重新下載 Skill');
+    expect(healthStep).toContain('複製目前連線資料');
+    expect(healthStep).toContain('`connection.json`');
+    expect(healthStep).toContain('401 表示金鑰已失效');
+    expect(healthStep).toContain('不要掃描其他 port');
+    expect(connection).toContain('不自行啟動 XR Collector');
+  });
+
   it('lists only routes the server registers, including the document and search contract', async () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
       collector: stub, jobs: stub, activity: stub, transfer: stub, subscriptions: [{ type: 'youtube' } as never], schedule: stub, search: stub, vaultSetup: stub,
       pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test',
+      agentConnection: {
+        status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:1', activePort: 1, configured: { mode: 'auto' }, restartRequired: false, message: 'test' }),
+        connection: () => ({ url: 'http://127.0.0.1:1', token: 'test' }), authorize: () => true,
+        configure: async () => ({ state: 'available', activeUrl: 'http://127.0.0.1:1', activePort: 1, configured: { mode: 'auto' }, restartRequired: false, message: 'test' }),
+        resetKey: async () => ({ url: 'http://127.0.0.1:1', token: 'test' }), download: async () => Buffer.from('zip'),
+      },
     };
     const app = await createHttpApp(options);
     await app.ready();

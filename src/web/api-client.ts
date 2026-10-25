@@ -43,6 +43,13 @@ interface ErrorResponse {
   };
 }
 
+export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
+export interface AgentConnection { url: string; token: string }
+export interface AgentConnectionStatus {
+  state: 'available' | 'unavailable'; activeUrl: string | null; activePort: number | null;
+  configured: AgentPortSetting; restartRequired: boolean; message: string;
+}
+
 /** The route of one subscription, named by its source type and its ID within the type. */
 function subscriptionPath(type: string, id: string): string {
   return `/api/subscriptions/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
@@ -106,8 +113,25 @@ export const api = {
     });
   },
 
-  agentConnection(): Promise<{ url: string; connectionFile: string; skillPath: string }> {
-    return request('/api/agent/connection');
+  async getAgentConnectionStatus(): Promise<AgentConnectionStatus> {
+    return (await request<{ agent: AgentConnectionStatus }>('/api/device/agent')).agent;
+  },
+  async agentConnection(): Promise<AgentConnection> {
+    return (await request<{ connection: AgentConnection }>('/api/device/agent/connection')).connection;
+  },
+  async setAgentPort(port: AgentPortSetting): Promise<AgentConnectionStatus> {
+    return (await request<{ agent: AgentConnectionStatus }>('/api/device/agent/port', { method: 'PUT', body: JSON.stringify(port) })).agent;
+  },
+  async resetAgentKey(): Promise<AgentConnection> {
+    return (await request<{ connection: AgentConnection }>('/api/device/agent/key/reset', { method: 'POST' })).connection;
+  },
+  async downloadAgentSkill(): Promise<Blob> {
+    const response = await fetch('/api/device/agent/skill');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as ErrorResponse;
+      throw new ApiError(body.error?.message ?? `HTTP ${response.status}`, body.error?.code ?? 'unknown_error');
+    }
+    return response.blob();
   },
   /** The automatic collection switch; one switch covers the subscriptions of every type. */
   async getSchedule(): Promise<CollectionScheduleView> {

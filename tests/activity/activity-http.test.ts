@@ -194,11 +194,11 @@ describe('activity and job routes (A-T8, A-T10)', () => {
         searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       }),
-      connectionFile: path.join(root, 'agent-connection.json'),
+      agentSettingsFile: path.join(root, 'agent-settings.json'),
       skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     cleanups.push(() => runtime.close());
-    const { token, url } = JSON.parse(await readFile(path.join(root, 'agent-connection.json'), 'utf8')) as { token: string; url: string };
+    const { connection: { token, url } } = await (await fetch(`${runtime.server.url}/api/device/agent/connection`)).json() as { connection: { token: string; url: string } };
     const today = new Date().toISOString();
     await mkdir(path.join(root, 'jobs', 'events'), { recursive: true });
     await writeFile(path.join(root, 'jobs', 'events', `${today.slice(0, 10)}.jsonl`), `${JSON.stringify({

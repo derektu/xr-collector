@@ -37,7 +37,9 @@ function runMembers(runDir) {
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
 export function writeJsonAtomic(file, value) {
   const temporary = `${file}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value, null, 2));
+  // Run metadata can contain profile-local credentials. The renamed destination keeps this mode
+  // on POSIX; Windows continues to rely on the containing user's ACL.
+  writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600, flag: 'wx' });
   renameSync(temporary, file);
 }
 

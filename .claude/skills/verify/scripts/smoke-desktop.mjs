@@ -44,11 +44,7 @@ const RUNTIME_PROGRAMS = ['meilisearch', 'yt-dlp', 'deno'];
 // AppKit records this StoreKit timestamp in the bundle id's preferences at every launch of any app
 // with that bundle id, the installed App included; it is the one key a run may change there.
 const LAUNCH_TIMESTAMP_KEY = 'SKPurchaseIntentUpdatesLastChecked';
-// Where an installed app (no XR_COLLECTOR_PROFILE) publishes its Agent connection for this user.
 const PRODUCT = 'XR Collector';
-const USER_DISCOVERY = WINDOWS
-  ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), PRODUCT, 'agent-connection.json')
-  : path.join(os.homedir(), 'Library', 'Application Support', PRODUCT, 'agent-connection.json');
 
 /** A value from a macOS bundle's Info.plist. */
 const plistValue = (bundle, key) => execFileSync('plutil', ['-extract', key, 'raw', path.join(bundle, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();
@@ -74,14 +70,13 @@ function preferences(bundleId) {
 }
 
 /**
- * The user's App as this smoke could disturb it: who listens on its ports, its discovery file, and
+ * The user's App as this smoke could disturb it: who listens on its ports and
  * the app's per-user folders. On macOS those are what macOS keeps under ~/Library for the bundle id
  * and the app's name; on Windows the folders named after the product, the package and Electron under
  * %APPDATA% and %LOCALAPPDATA%, where Electron puts an app's data when no profile is given.
  */
 function userApp(bundle) {
-  const discovery = existsSync(USER_DISCOVERY) ? { mtimeMs: statSync(USER_DISCOVERY).mtimeMs, content: readFileSync(USER_DISCOVERY, 'utf8') } : null;
-  const state = { listeners: Object.fromEntries(USER_APP_PORTS.map((port) => [port, listeners(port)])), discovery };
+  const state = { listeners: Object.fromEntries(USER_APP_PORTS.map((port) => [port, listeners(port)])) };
   if (WINDOWS) {
     const library = {};
     for (const variable of ['APPDATA', 'LOCALAPPDATA']) {
@@ -323,9 +318,8 @@ try {
     note('slotLock', holder ?? null);
     expect(holder?.runDir !== desktop.runDir, `slot ${desktop.ports.slot} 的 lock 不再指向這個 run`);
     const after = userApp(bundle);
-    note('userApp', { before: before.listeners, after: after.listeners, discoveryChanged: JSON.stringify(after.discovery) !== JSON.stringify(before.discovery) });
+    note('userApp', { before: before.listeners, after: after.listeners });
     expect(JSON.stringify(after.listeners) === JSON.stringify(before.listeners), `7222／7175 的 listener 前後相同：${JSON.stringify(after.listeners)}`);
-    expect(JSON.stringify(after.discovery) === JSON.stringify(before.discovery), `使用者的 Agent 連線檔前後相同（${USER_DISCOVERY}）`);
     const others = [...new Set([...othersBefore, ...otherInstances()])];
     userAppRunning = others.length > 0;
     note('otherInstances', others);

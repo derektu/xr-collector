@@ -48,7 +48,7 @@ export async function run({ instance, page, record, waitFor }) {
     expect(ui.status === 409 && ui.body?.error?.code === 'login_startup_unavailable', 'UI API 拒絕開發版註冊',
       { id: 'w1.ui-api', expected: { status: 409, code: 'login_startup_unavailable' }, actual: ui });
 
-    const connection = JSON.parse(await readFile(path.join(instance.runDir, 'profile', 'agent-connection.json'), 'utf8'));
+    const connection = (await instance.api('/api/device/agent/connection')).connection;
     const response = await fetch(`${connection.url}/api/device/login-startup`, {
       method: 'PUT', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: true }),

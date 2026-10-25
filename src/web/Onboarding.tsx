@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import './onboarding.css';
+import { AgentConnectionHelp } from './AgentConnectionHelp.js';
+import { AgentConnection } from './AgentConnection.js';
 
 export type VaultInspection =
   | { kind: 'none' }
@@ -44,6 +46,7 @@ function inspectionPresentation(inspection: VaultInspection): { label: string; d
 
 export function Onboarding({ inspection, suggestedPath, originalFailure, busy = false, error, pathEntry = 'dialog', onChooseDirectory, onSubmitPath, onContinue, onImport }: OnboardingProps) {
   const [typedPath, setTypedPath] = useState('');
+  const [agentOpen, setAgentOpen] = useState(false);
   const presentation = inspectionPresentation(inspection);
   const selectedPath = inspection.kind === 'none' ? null : inspection.path;
   const disabled = busy || !presentation.action;
@@ -56,8 +59,11 @@ export function Onboarding({ inspection, suggestedPath, originalFailure, busy = 
     <main className="onboarding-main">
       <section className="onboarding-card" aria-labelledby="onboarding-title">
         <p className="eyebrow">開始使用</p>
-        <h1 id="onboarding-title">選擇知識庫位置</h1>
+        <div className="onboarding-title-line"><h1 id="onboarding-title">選擇知識庫位置</h1><span className="onboarding-agent-label">
+          <button type="button" aria-expanded={agentOpen} aria-controls="onboarding-agent-panel" onClick={() => setAgentOpen((value) => !value)}>AI 助理連線</button>
+          <AgentConnectionHelp onboarding /></span></div>
         <p className="onboarding-intro">收集的文件會保存在所選的目錄中，方便你自行備份與管理。</p>
+        {agentOpen ? <div id="onboarding-agent-panel" data-testid="onboarding-agent-panel"><AgentConnection /></div> : null}
 
         {originalFailure ? <div className="vault-warning" role="alert">
           <span className="vault-warning-icon" aria-hidden="true">!</span>

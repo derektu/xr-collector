@@ -54,7 +54,7 @@ export async function run({ instance, record, waitFor, sleep }) {
   const instanceId = async () => (await instance.api('/api/health')).runtime?.instanceId;
   /** The Agent API's view of the runtime, through the connection file an Agent reads. */
   const agentHealth = async () => {
-    const connection = JSON.parse(readFileSync(path.join(instance.profile, 'agent-connection.json'), 'utf8'));
+    const connection = (await instance.api('/api/device/agent/connection')).connection;
     const response = await fetch(`${connection.url}/api/health`, { headers: { authorization: `Bearer ${connection.token}` } });
     return response.ok ? (await response.json()).runtime?.instanceId ?? null : `HTTP ${response.status}`;
   };

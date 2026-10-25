@@ -15,6 +15,7 @@ import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js'
 import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
+import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
 import { startServer, type RunningServer } from '../server/start.js';
 import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
 import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-directory.js';
@@ -49,7 +50,7 @@ export interface CollectorRuntimeOptions {
   suggestedVaultPath?: string;
   /** Application name and version recorded in Vaults this runtime creates. */
   createdBy?: string;
-  connectionFile: string;
+  agentSettingsFile: string;
   skillPath: string;
   /** Preferred Agent API port; the Agent API takes any free port when omitted. */
   agentPort?: number;
@@ -184,12 +185,12 @@ export class CollectorRuntime {
         initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       }
       agentAccess = await startAgentAccess({
-        ...shared, instanceId,
+        ...shared,
         ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
-        ...(options.agentPort ? { preferredPort: options.agentPort } : {}),
-        connectionFile: options.connectionFile,
+        preferredPort: options.agentPort ?? DEVELOPMENT_AGENT_PORT,
+        settingsFile: options.agentSettingsFile,
         skillPath: options.skillPath,
-        runtimeStatus, notReady, vaultSetup,
+        runtimeStatus, notReady, vaultSetup, event: deviceEvent,
       });
       const server = await startServer({
         ...shared,
@@ -197,7 +198,7 @@ export class CollectorRuntime {
         port: options.uiPort,
         ...(options.uiHost ? { host: options.uiHost } : {}),
         ...(options.webRoot ? { webRoot: options.webRoot } : {}),
-        agentInfo: agentAccess.info,
+        agentConnection: agentAccess,
         runtimeStatus, notReady, vaultSetup,
       });
       runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity);

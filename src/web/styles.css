@@ -194,6 +194,33 @@ dialog::backdrop { background:var(--overlay); }
 .login-startup-control { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; font-size:14px; }
 .setting-message.error { color:var(--error-fg); }
 .setting-path { display:block; margin-top:10px; overflow-wrap:anywhere; color:var(--primary); font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
+.agent-summary { display:flex; align-items:center; justify-content:space-between; gap:14px 24px; }
+.agent-info { min-width:0; }
+.agent-heading { position:relative; display:flex; align-items:center; gap:8px; }
+.agent-state { padding:2px 8px; border-radius:999px; color:var(--error-fg); background:var(--error-bg); font-size:11px; font-weight:650; white-space:nowrap; }
+.agent-state.ready { color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent); }
+.agent-actions { flex:none; margin-top:0; }
+.agent-connection .setting-path { margin-top:7px; color:var(--text-muted); }
+.agent-help { position:relative; display:inline-flex; }
+.agent-help-button { width:20px; height:20px; padding:0; border:1px solid var(--control-border); border-radius:50%; color:var(--secondary); background:var(--control); font-size:12px; font-weight:700; }
+.agent-help-card { z-index:30; box-sizing:border-box; padding:14px 16px; border:1px solid var(--control-border); border-radius:10px; color:var(--primary); background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); font-size:13px; line-height:1.55; }
+.agent-help-card strong,.agent-help-card span { display:block; }
+.agent-help-card ol { margin:8px 0; padding-left:20px; }
+.agent-help-note { color:var(--text-muted); font-size:12px; }
+.agent-restart { color:var(--warning)!important; }
+.agent-port-input { width:90px; margin-left:auto; padding:6px 8px; border:1px solid var(--control-border); border-radius:6px; color:var(--primary); background:var(--control); }
+.danger-button { color:var(--error-fg); }
+.agent-reset-confirm { margin-top:14px; padding:12px 14px; border:1px solid color-mix(in srgb, var(--error) 45%, var(--border)); border-radius:10px; background:var(--error-bg); }
+.agent-reset-confirm h3 { margin:0; font-size:14px; }
+.agent-reset-confirm p { margin-top:6px; }
+.onboarding-title-line { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.onboarding-title-line h1 { margin:0; }
+.onboarding-agent-label { display:inline-flex; align-items:center; gap:6px; color:var(--secondary); font-size:12px; white-space:nowrap; }
+.onboarding-agent-label > button { padding:3px 5px; border:0; color:var(--accent); background:transparent; font:inherit; }
+.onboarding-agent-help .agent-help-card { white-space:normal; text-align:left; }
+#onboarding-agent-panel { margin:14px 0; }
+#onboarding-agent-panel .settings-section { padding:16px; }
+@media (max-width:760px) { .agent-summary { align-items:flex-start; flex-direction:column; } .agent-actions { width:100%; } }
 
 /* Export and import */
 .settings-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }

@@ -70,7 +70,7 @@ export async function readState(run) {
     runDir, takenAt: new Date().toISOString(), running: processes.length > 0,
     api: await readApi(record, processes),
     vault: readFolder(vaultPath(runDir, profile)),
-    profile: readFolder(profile, { skip: SEARCH_DATA }),
+    profile: readFolder(profile, { skip: SEARCH_DATA, redact: redactProfileSecrets }),
     index: await readIndex(processes),
   };
 }
@@ -112,7 +112,7 @@ function vaultPath(runDir, profile) {
  * cannot be listed (removed or renamed meanwhile) with its `error` under `<folder>/`; the rest is
  * still read. Top-level entries whose name matches `skip` are left out.
  */
-export function readFolder(root, { skip = null } = {}) {
+export function readFolder(root, { skip = null, redact = null } = {}) {
   if (!existsSync(root)) return { path: root, unavailable: `${root} does not exist` };
   const documents = [];
   const files = {};
@@ -121,8 +121,13 @@ export function readFolder(root, { skip = null } = {}) {
     const file = path.join(root, relative);
     try {
       if (relative.endsWith('.md')) documents.push(markdown(relative, readFileSync(file, 'utf8')));
-      else if (relative.endsWith('.json')) files[relative] = JSON.parse(readFileSync(file, 'utf8'));
-      else if (relative.endsWith('.jsonl')) files[relative] = readFileSync(file, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+      else if (relative.endsWith('.json')) {
+        const parsed = JSON.parse(readFileSync(file, 'utf8'));
+        files[relative] = redact ? redact(parsed) : parsed;
+      } else if (relative.endsWith('.jsonl')) {
+        const parsed = readFileSync(file, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+        files[relative] = redact ? redact(parsed) : parsed;
+      }
       else {
         const data = readFileSync(file);
         other.push({ path: relative, bytes: data.length, sha256: sha256(data) });
@@ -132,6 +137,28 @@ export function readFolder(root, { skip = null } = {}) {
     }
   }
   return { path: root, documents, files, other };
+}
+
+/**
+ * Profile state is diagnostic output and may be printed or saved as evidence. Keep non-secret
+ * settings available for comparison, but replace credentials recursively with a stable hash so a
+ * key rotation remains observable without copying a usable credential into the terminal or JSON.
+ */
+function redactProfileSecrets(value) {
+  if (Array.isArray(value)) return value.map(redactProfileSecrets);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    secretField(key)
+      ? { redacted: true, sha256: sha256(typeof child === 'string' ? child : JSON.stringify(child)) }
+      : redactProfileSecrets(child),
+  ]));
+}
+
+function secretField(key) {
+  const normalized = key.replaceAll(/[-_]/gu, '').toLowerCase();
+  return normalized === 'key' || normalized.endsWith('apikey') || ['token', 'secret', 'password', 'credential', 'authorization']
+    .some((suffix) => normalized.endsWith(suffix));
 }
 
 function markdown(relative, text) {

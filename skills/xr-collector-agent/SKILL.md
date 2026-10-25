@@ -9,19 +9,19 @@ description: 操作本機 XR Collector 的訂閱、網址辨識、收集工作�
 
 ## 連線
 
-1. 若使用者或驗收環境明確提供連線檔路徑，使用該路徑。否則依目前作業系統讀取正式安裝版的固定入口：macOS 為 `~/Library/Application Support/XR Collector/agent-connection.json`；Windows 為 `%LOCALAPPDATA%\XR Collector\agent-connection.json`。展開目前使用者的 home 或 `LOCALAPPDATA`，不依安裝目錄、Vault、目前工作目錄或猜測的 port 尋址。開發／驗收 profile 的連線檔位於該 profile，必須明確指定，不能覆蓋一般自動發現結果。
-2. 使用 Agent 現有的本機檔案工具讀取並解析 JSON。有效檔案的欄位為 `schemaVersion: 1`、非空字串 `instanceId`、`url`（例如 `http://127.0.0.1:<port>`）及非空字串 `token`。每次開始操作及重連時重新讀取，因為程式重啟會更新 instance、port 及 token。將 token 保留於工具的授權參數，不回覆給使用者或另行寫入 log。
+1. 讀取此 Skill 同一資料夾內的 `connection.json`。若使用者明確提供另一份連線資料或驗收環境明確指定連線檔，才改用那一份；不掃描作業系統資料夾、不猜測 port，也不自行啟動 XR Collector。
+2. 使用 Agent 現有的本機檔案工具讀取並解析 JSON。有效檔案的欄位為 `schemaVersion: 1`、`url`（例如 `http://127.0.0.1:<port>`）及非空字串 `token`。將 token 保留於工具的授權參數，不回覆給使用者或另行寫入 log。
 3. 確認 `url` 使用 `http`、hostname 恰為 `127.0.0.1`，含有效 port，且沒有使用者密碼、query、fragment 或非根路徑。只向此位址附加下列 API path；略過代理且不跟隨 redirect，避免把 token 送往其他位置。
-4. 以該 token 先呼叫 `GET /api/health`，確認回應的 `runtime.instanceId` 與連線檔完全相同。只有身分相符才執行其他 API。無法連線、逾時、401 或身分不符時，重新讀取同一路徑並再驗證一次；仍不相符便停止，不向該 runtime 發送業務請求。
+4. 以該 token 先呼叫 `GET /api/health`。只有 health 成功才執行其他 API。無法連線或逾時時，請使用者先確認 XR Collector 已開啟；若 App 已開啟，連線資料可能已過期，請使用者從「設定 → AI 助理連線」重新下載 Skill，或複製目前連線資料並更新此 Skill 資料夾內的 `connection.json`，再重試 health。401 表示金鑰已失效，也要求使用者以同樣方式更新連線資料後重試。不要掃描其他 port 或嘗試連到其他電腦。
 5. 選用 Agent 已有、能滿足上述條件的 HTTP 工具，設置 `Authorization: Bearer <token>`，發送所需 HTTP method，讀取 HTTP status 與 JSON body。一般查詢逾時設為 15 秒。寫入逾時或斷線時，先查文件、收集工作、schedule、搜尋或 Vault 狀態判斷結果，再決定是否重試；斷線不代表已接受的工作取消。可以使用環境已提供的原生 HTTP 工具或 HTTP 用戶端，具體工具名稱不構成契約；不要求使用者安裝 Python、Node.js、curl 或其他工具。
 
-正式入口的連線檔不存在代表目前沒有可發現的 Collector，請使用者啟動安裝版；明確指定的開發／驗收連線檔不存在時，則請使用者確認該環境及路徑。檔案存在但 endpoint 無法連線代表資訊已過期或服務已停止。JSON／欄位無效代表連線檔損壞或版本不支援，讀取遭拒則回報權限不足。分別說明原因，不把任何情況解讀成空 Vault，也不在錯誤內容中帶出 token。health 的 `status: "unavailable"` 且 `runtime.state: "not_ready"` 表示已找到正確服務但 Vault 尚未就緒，依下方「Vault 設定」處理。
+`connection.json` 不存在時，請使用者從 XR Collector「設定 → AI 助理連線」重新下載 Skill，或複製連線資料供 Agent 明確使用。檔案存在但 endpoint 無法連線代表程式尚未開啟或連線資訊已過期，依步驟 4 處理。JSON／欄位無效代表連線檔損壞或版本不支援，讀取遭拒則回報權限不足。分別說明原因，不把任何情況解讀成空 Vault，也不在錯誤內容中帶出 token。health 的 `status: "unavailable"` 且 `runtime.state: "not_ready"` 表示已找到正確服務但 Vault 尚未就緒，依下方「Vault 設定」處理。
 
 若 Agent 只有雲端瀏覽／搜尋工具，不能存取使用者電腦上的 localhost，或其 HTTP 工具無法設定授權 header，請說明缺少的能力並停止連線。不要把本機 token 交給雲端抓取服務，也不要把 Collector 改成對外監聽。
 
 ## 操作範例
 
-以下是與作業系統及 shell 無關的 HTTP 請求；`<token>` 取自目前連線檔，base URL 為檔案中的 `url`。query 值與文件 ID 分別 URL encode，不把 token 放進 URL。
+以下是與作業系統及 shell 無關的 HTTP 請求；`<token>` 取自 `connection.json`，base URL 為檔案中的 `url`。query 值與文件 ID 分別 URL encode，不把 token 放進 URL。
 
 ```http
 GET /api/documents?offset=0&limit=20
@@ -117,7 +117,7 @@ Content-Type: application/json
 - 進行中的匯出、匯入比對、匯入套用、搬移或開啟其他知識庫會先等待執行中的收集步驟（最多 2 分鐘），排隊工作留在佇列，結束後接續；status 的 `state: waiting` 表示正在等待，此時 `POST /api/vault/cancel` 可取消，不寫入資料、status 回到 `idle`，被取消的 export 或 import preview 回 409 `transfer_cancelled`。等待逾時時，export 與 import preview 直接回 409 `vault_busy`；import apply 已先回 202，逾時後 status 為 `state: error`、`errorCode: "vault_busy"`。兩種情況都稍後重試。期間收集與設定寫入也回 `vault_busy`。
 - 匯入必須先比對：`POST /api/vault/import/preview` `{"path":"<絕對路徑>.zip"}`，只接受 `.zip` 匯出檔，檔案留在原處。回傳 `id`、`package`（`fileName`、`exportedAt`，以及供查問題的 `machine`，不需要告知使用者）、`merge`、`replace`、`localNewer` 與 `mergeRecords`。`merge` 與 `replace` 是合併與完全取代各自會做的變更，分 `documents`、`subscriptions` 兩類，各有 `added`、`updated`、`removed`；`replace.removed` 包含只有本機有的項目。`localNewer` 是本機較新、合併時保留本機的項目數（含只有本機有的項目）。`merge` 全為 0 時沒有需要匯入的內容；`localNewer` 大於 0 時仍可完全取代，用來回到這份匯出檔的內容。本機沒有、匯入檔帶來的刪除紀錄隨合併一併記錄，不計入數量；`mergeRecords` 為 true 表示合併仍有這類紀錄要寫入，即使 `merge` 全為 0 也應套用合併，否則那些影片之後可能再被收集。
 - 套用：`POST /api/vault/import/apply` `{"id":"...","mode":"merge"}` 依合併規則逐項處理；`{"id":"...","mode":"replace"}` 讓文件、訂閱、刪除紀錄與移除紀錄都與匯入檔一致。先把數量與方式告知使用者並取得同意。沒有變更的方式回 400 `invalid_request`。回 202 後以 `GET /api/vault/status` 追蹤到 `completed` 或 `error`。套用前會先在「文件」資料夾的 `XR Collector 備份` 寫出目前內容 `匯入前備份 YYYY-MM-DD HHmmss.zip`（`result.backupPath`），寫不出來時匯入中止、Vault 不變；匯入錯了時以 `"mode":"replace"` 匯入這份檔案即可回到匯入前。完成時 `result` 有 `importMode`、`imported`（同 `merge` 的格式）、`writtenFiles`；`searchRebuildNeeded: true` 表示匯入已完成但搜尋索引需要重建，告知使用者並以 `POST /api/search/rebuild` 重建。合併與取代都保留本機的自動檢查開關與既有訂閱的收集進度。比對之後本機文件、刪除紀錄或訂閱設定有變更時，apply 以 status `state: error` 要求重新比對；`POST /api/vault/import/cancel` `{"id":"..."}` 放棄比對且不寫入。套用期間文件與搜尋讀取回 409 `vault_busy`，工作與記錄仍可讀；中途停止時下次開啟會把套用完成。
-- 搬移 Vault：只用使用者明確指定的絕對路徑，經使用者同意後才搬移。先 `POST /api/vault/move/check` `{"targetPath":"..."}` 檢查，回傳 `targetPath`、`requiredBytes`（Vault 大小加 5%、至少 16 MiB 的安全餘量）、`availableBytes`，不改動任何資料。目標須不存在（上層存在且可寫入）或為空資料夾，不能是符號連結、目前 Vault 本身或其內外層、程式資料目錄內或另一個 Vault 內；不合法回 400 `invalid_request`，`message` 說明原因，空間不足回 507 `insufficient_space`，此時收集照常。再以 `POST /api/vault/move` 送出同一 body，回 202 後以 `GET /api/vault/status` 追蹤：`state` 依序為 `waiting`、`validating`、`copying`（`completedFiles`／`totalFiles`）、`verifying`、`indexing`、`cleaning`，最後 `completed` 或 `error`。搬移期間文件、搜尋、工作與記錄可讀，收集與設定寫入回 409 `vault_busy`；排隊工作在新位置依原順序接續，job ID 不變。`error` 表示資料仍在原位置未變更。`completed` 時 `result.previousVaultPath` 是原位置、`result.resumedJobs` 是接續的工作數；`result.leftoverPath` 存在時原位置未能清除，告知使用者確認後手動刪除該資料夾，新位置照常使用。搬移後連線檔路徑不變，health 與 status 的 `vaultPath` 為新位置。
+- 搬移 Vault：只用使用者明確指定的絕對路徑，經使用者同意後才搬移。先 `POST /api/vault/move/check` `{"targetPath":"..."}` 檢查，回傳 `targetPath`、`requiredBytes`（Vault 大小加 5%、至少 16 MiB 的安全餘量）、`availableBytes`，不改動任何資料。目標須不存在（上層存在且可寫入）或為空資料夾，不能是符號連結、目前 Vault 本身或其內外層、程式資料目錄內或另一個 Vault 內；不合法回 400 `invalid_request`，`message` 說明原因，空間不足回 507 `insufficient_space`，此時收集照常。再以 `POST /api/vault/move` 送出同一 body，回 202 後以 `GET /api/vault/status` 追蹤：`state` 依序為 `waiting`、`validating`、`copying`（`completedFiles`／`totalFiles`）、`verifying`、`indexing`、`cleaning`，最後 `completed` 或 `error`。搬移期間文件、搜尋、工作與記錄可讀，收集與設定寫入回 409 `vault_busy`；排隊工作在新位置依原順序接續，job ID 不變。`error` 表示資料仍在原位置未變更。`completed` 時 `result.previousVaultPath` 是原位置、`result.resumedJobs` 是接續的工作數；`result.leftoverPath` 存在時原位置未能清除，告知使用者確認後手動刪除該資料夾，新位置照常使用。搬移不改變 Agent 金鑰或連線埠設定；health 與 status 的 `vaultPath` 為新位置。
 - 開啟其他 Vault：`POST /api/vault/open` `{"path":"<既有 Vault 的絕對路徑>"}`，先以 `POST /api/vault/inspect` 確認是 `existing`，並經使用者同意。回 202 後追蹤 status 到 `completed`：`result.previousVaultPath`、`result.interruptedJobs`（原 Vault 暫停、回到原 Vault 時接續的工作）、`result.resumedJobs`（新 Vault 接續的工作）。目前的 Vault、其中的資料夾、程式資料目錄內的資料夾，以及名稱為 `.moving-<UUID>`／`.moved-<UUID>`／`.importing-<UUID>` 的暫存資料夾回 400，空或無法辨識的資料夾回 422 `vault_invalid`。
 - Vault status 的 `relocationUnavailable` 不為 null 時，搬移與開啟其他 Vault 都不可用，`code` 與 `message` 說明原因：`vault_location_fixed` 表示服務以固定的 Vault 位置啟動。
 - GET 無法連線、逾時或 401 `unauthorized`：依連線流程重新讀取及驗證一次。寫入送出後斷線或逾時時先依第 5 步查狀態，避免重複操作。這些是本機工具錯誤，不是 API 回傳碼。
@@ -202,6 +202,11 @@ Content-Type: application/json
 | Method 與 path | 輸入／結果 |
 | --- | --- |
 | `GET /api/health` | runtime state、instance、profile、active Vault、Not Ready 原因、`connectivity` 與 `activityLog` |
+| `GET /api/device/agent` | 目前 listener 狀態、active URL／port、已保存的連線埠模式及是否要重啟套用 |
+| `GET /api/device/agent/connection` | 目前 active `url` 與 `token`；listener 不可用時回 409 |
+| `PUT /api/device/agent/port` | 只在使用者明確要求時保存 `{"mode":"auto"}` 或 `{"mode":"fixed","port":1..65535}`，下次啟動套用 |
+| `POST /api/device/agent/key/reset` | 只在使用者明確確認後重設金鑰；舊金鑰立即失效，已接受工作不停 |
+| `GET /api/device/agent/skill` | 下載包含通用 Skill 與目前 active `connection.json` 的 ZIP |
 | `GET`／`PUT /api/device/login-startup` | GET 回傳安裝版支援、OS read-back 與狀態；PUT 只接受 `{"enabled":true|false}`，只在已安裝的 macOS／Windows App 可改 |
 | `GET /api/documents`、`GET /api/documents/:id` | 列表 query：`sourceType`、`publisherId`、`offset`、`limit`；ID URL encode |
 | `DELETE /api/documents/:id` | 刪除文件並保存刪除紀錄；回傳 `deleted`、`indexed`；已刪除回 404 `document_deleted`；ID URL encode |
@@ -241,4 +246,4 @@ Content-Type: application/json
 | `POST /api/vault/import/apply` | `{"id":"...","mode":"merge"}` 或 `{"id":"...","mode":"replace"}`；202 後查 Vault status |
 | `POST /api/vault/import/cancel` | `{"id":"<比對 id>"}`；放棄比對且不寫入 |
 
-`/api/agent/connection` 與 Web 靜態檔只由 UI listener 提供。limit 為 1–100，offset 為 0–1000000；錯誤為 `{"error":{"code":"...","message":"..."}}`。後續 ticket 新增或修改業務 API 時，同步更新本 Skill 的操作、狀態與錯誤契約。
+AI 助理連線設定與金鑰管理使用 `/api/device/agent/*`；除非使用者明確要求，不由 Agent 自行修改或重設。Web 靜態檔只由 UI listener 提供。limit 為 1–100，offset 為 0–1000000；錯誤為 `{"error":{"code":"...","message":"..."}}`。後續 ticket 新增或修改業務 API 時，同步更新本 Skill 的操作、狀態與錯誤契約。

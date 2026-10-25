@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
@@ -16,6 +16,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { zipEntries } from '../vault/package-fixtures.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -160,28 +161,26 @@ describe('Agent authenticated HTTP access', () => {
     expect(backend.search).not.toHaveBeenCalled();
   });
 
-  it.skipIf(!existsSync('resources/bin/mac/meilisearch'))('serves the platform-neutral HTTP contract, rotates credentials, and closes the listener', async () => {
+  it.skipIf(!existsSync('resources/bin/mac/meilisearch'))('serves the platform-neutral HTTP contract and keeps credentials across restart', async () => {
     const { root, vault, collector } = await fixture();
     const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search') });
     cleanup.push(() => engine.close());
     const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey }),
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));
     await search.start();
-    const connectionFile = path.join(root, 'agent-connection.json');
+    const settingsFile = path.join(root, 'agent-settings.json');
     const options = {
-      collector, search, connectionFile,
-      instanceId: 'agent-access-test-runtime',
+      collector, search, settingsFile, preferredPort: 7232,
       skillPath: path.resolve('skills/xr-collector-agent'),
     };
     const access = await startAgentAccess(options);
     cleanup.push(() => access.close());
-    const config = JSON.parse(await readFile(connectionFile, 'utf8'));
-    expect(config).toMatchObject({ schemaVersion: 1, instanceId: 'agent-access-test-runtime' });
-    expect((await stat(connectionFile)).mode & 0o777).toBe(0o600);
+    const config = access.connection();
+    expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
     expect(new URL(config.url).hostname).toBe('127.0.0.1');
     // The development test runner is the HTTP client; no client-side helper is distributed.
     const get = async (route: string) => {
-      const current = JSON.parse(await readFile(connectionFile, 'utf8'));
+      const current = access.connection();
       const response = await fetch(`${current.url}${route}`, {
         headers: { Authorization: `Bearer ${current.token}` },
         redirect: 'error',
@@ -211,38 +210,137 @@ describe('Agent authenticated HTTP access', () => {
     expect((await get('/api/search/status')).status).toMatchObject({ state: 'ready', indexedDocuments: 3, vaultDocuments: 3 });
     expect((await get('/api/documents/sources')).sources).toEqual((await ui.inject('/api/documents/sources')).json().sources);
     await access.close();
-    await expect(get('/api/documents')).rejects.toThrow('fetch failed');
-    await chmod(connectionFile, 0o644);
+    await expect(get('/api/documents')).rejects.toThrow();
     const restarted = await startAgentAccess(options);
     cleanup.push(() => restarted.close());
-    const nextConfig = JSON.parse(await readFile(connectionFile, 'utf8'));
-    expect(nextConfig.token).not.toBe(config.token);
-    expect((await stat(connectionFile)).mode & 0o777).toBe(0o600);
-    expect((await fetch(`${nextConfig.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(401);
-    expect((await get('/api/documents')).total).toBe(3);
+    const nextConfig = restarted.connection();
+    expect(nextConfig.token).toBe(config.token);
+    expect((await fetch(`${nextConfig.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(200);
   }, 30_000);
 
   it('listens on the preferred port, or the next free one when it is taken, and records the port it uses', async () => {
     const { root, collector } = await fixture();
-    const connectionFile = path.join(root, 'agent-connection.json');
-    const options = { collector, connectionFile, instanceId: 'agent-port-test-runtime', skillPath: path.resolve('skills/xr-collector-agent') };
+    const settingsFile = path.join(root, 'agent-settings.json');
+    const options = { collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') };
     const blocker = await listenOnFreePort();
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
     const taken = (blocker.address() as { port: number }).port;
 
     const moved = await startAgentAccess({ ...options, preferredPort: taken });
-    const movedPort = Number(new URL(JSON.parse(await readFile(connectionFile, 'utf8')).url).port);
+    const movedPort = Number(new URL(moved.connection().url).port);
     expect(movedPort).toBeGreaterThan(taken);
     expect(movedPort).toBeLessThan(taken + 10);
-    expect(new URL(moved.info.url).port).toBe(String(movedPort));
+    expect(new URL(moved.connection().url).port).toBe(String(movedPort));
+    const originalToken = moved.connection().token;
+    for (const port of [0, 65_536]) {
+      const invalid = await fetch(`${moved.connection().url}/api/device/agent/port`, { method: 'PUT',
+        headers: { authorization: `Bearer ${originalToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'fixed', port }) });
+      expect(invalid.status).toBe(400);
+    }
+    expect(moved.status()).toMatchObject({ configured: { mode: 'auto' }, restartRequired: false });
+    const configured = await fetch(`${moved.connection().url}/api/device/agent/port`, { method: 'PUT',
+      headers: { authorization: `Bearer ${originalToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'fixed', port: taken }) });
+    expect(configured.status).toBe(200);
+    const pending = (await configured.json()).agent;
+    expect(pending).toMatchObject({ activePort: movedPort, configured: { mode: 'fixed', port: taken }, restartRequired: true });
     await moved.close();
 
     await new Promise((resolve) => blocker.close(resolve));
     const preferred = await startAgentAccess({ ...options, preferredPort: taken });
     cleanup.push(() => preferred.close());
-    const config = JSON.parse(await readFile(connectionFile, 'utf8'));
+    const config = preferred.connection();
     expect(new URL(config.url).port).toBe(String(taken));
+    expect(config.token).toBe(originalToken);
+    expect(preferred.status()).toMatchObject({ configured: { mode: 'fixed', port: taken }, restartRequired: false });
     expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(200);
+    const before = config.token;
+    const reset = await fetch(`${config.url}/api/device/agent/key/reset`, { method: 'POST', headers: { authorization: `Bearer ${before}` } });
+    expect(reset.status).toBe(200);
+    const rotated = (await reset.json()).connection;
+    expect(rotated.token).not.toBe(before);
+    expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${before}` } })).status).toBe(401);
+    expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${rotated.token}` } })).status).toBe(200);
+    expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
+    const files = await zipEntries(await preferred.download());
+    expect([...files.keys()]).toEqual(['xr-collector-agent/SKILL.md', 'xr-collector-agent/connection.json']);
+    const bundled = JSON.parse(files.get('xr-collector-agent/connection.json')!.toString());
+    expect(bundled).toEqual({ schemaVersion: 1, ...rotated });
+    expect(JSON.stringify(bundled)).not.toContain(root);
+    expect(bundled).not.toHaveProperty('runtimeId');
+    const skill = files.get('xr-collector-agent/SKILL.md')!.toString();
+    expect(skill).toContain('同一資料夾內的 `connection.json`');
+    expect(skill).not.toContain('agent-connection.json');
+  });
+
+  it('serializes a port update and key reset without losing either saved field', async () => {
+    const { root, collector } = await fixture();
+    const settingsFile = path.join(root, 'agent-settings.json');
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    cleanup.push(() => access.close());
+    const before = access.connection();
+
+    const [configured, reset] = await Promise.all([access.configure({ mode: 'fixed', port: 65431 }), access.resetKey()]);
+
+    expect(configured.configured).toEqual({ mode: 'fixed', port: 65431 });
+    expect(reset.token).not.toBe(before.token);
+    expect(JSON.parse(await readFile(settingsFile, 'utf8'))).toEqual({
+      schemaVersion: 1, token: reset.token, port: { mode: 'fixed', port: 65431 },
+    });
+    expect((await fetch(`${before.url}/api/health`, { headers: { authorization: `Bearer ${before.token}` } })).status).toBe(401);
+    expect((await fetch(`${before.url}/api/health`, { headers: { authorization: `Bearer ${reset.token}` } })).status).toBe(200);
+  });
+
+  it('keeps the app usable when its configured fixed port cannot bind', async () => {
+    const { root, collector } = await fixture();
+    const blocker = await listenOnFreePort();
+    cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
+    const fixed = (blocker.address() as { port: number }).port;
+    const settingsFile = path.join(root, 'agent-settings.json');
+    await writeFile(settingsFile, JSON.stringify({ schemaVersion: 1, token: 'persistent-test-key', port: { mode: 'fixed', port: fixed } }));
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    cleanup.push(() => access.close());
+    expect(access.status()).toMatchObject({ state: 'unavailable', activeUrl: null, configured: { mode: 'fixed', port: fixed } });
+    expect(() => access.connection()).toThrow('無法使用');
+    await expect(access.resetKey()).rejects.toThrow('無法使用');
+    expect(JSON.parse(await readFile(settingsFile, 'utf8')).token).toBe('persistent-test-key');
+    await access.configure({ mode: 'auto' });
+    expect(access.status()).toMatchObject({ state: 'unavailable', configured: { mode: 'auto' }, restartRequired: true });
+    expect((await collector.listDocuments({}, { offset: 0, limit: 1 })).total).toBe(3);
+  });
+
+  it('keeps the current key when saving a reset fails', async () => {
+    const { root, collector } = await fixture();
+    const settingsFile = path.join(root, 'agent-settings.json');
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    cleanup.push(() => access.close());
+    const current = access.connection();
+    await rm(settingsFile);
+    await mkdir(settingsFile);
+    await expect(access.resetKey()).rejects.toThrow();
+    expect(access.connection().token).toBe(current.token);
+    expect((await fetch(`${current.url}/api/health`, { headers: { authorization: `Bearer ${current.token}` } })).status).toBe(200);
+  });
+
+  it('keeps the UI API usable when the first private key cannot be saved', async () => {
+    const { root, collector } = await fixture();
+    // A trailing separator makes the initial read report ENOENT, then makes the first temporary
+    // write target a missing directory. This reaches the save failure rather than a read failure.
+    const missingParent = path.join(root, 'missing-settings-parent');
+    const settingsFile = `${missingParent}${path.sep}`;
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    cleanup.push(() => access.close());
+    const ui = await createHttpApp({ collector, agentConnection: access });
+    cleanup.push(() => ui.close());
+
+    expect((await ui.inject('/api/health')).statusCode).toBe(200);
+    const status = await ui.inject('/api/device/agent');
+    expect(status.statusCode).toBe(200);
+    expect(status.json().agent).toMatchObject({ state: 'unavailable', activeUrl: null, message: expect.stringContaining('無法讀取或保存') });
+    expect((await ui.inject('/api/documents')).json().total).toBe(3);
+    expect((await ui.inject('/api/device/agent/connection')).statusCode).toBe(409);
+    expect(existsSync(missingParent)).toBe(false);
   });
 });
 

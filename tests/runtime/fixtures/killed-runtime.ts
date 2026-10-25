@@ -38,7 +38,7 @@ const runtime = await CollectorRuntime.start({
     backupFolder: path.join(profilePath, 'backups'),
     createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
   }),
-  connectionFile: path.join(profilePath, 'agent-connection.json'),
+  agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
   skillPath: path.resolve('skills/xr-collector-agent'),
   uiPort: 0,
 });

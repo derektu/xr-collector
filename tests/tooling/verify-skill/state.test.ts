@@ -4,12 +4,15 @@
 // Meilisearch master key is read from a real process's environment on macOS and Linux. The API of
 // a stopped run is never read, even when another server answers on its port; document pages stop
 // when nextOffset does not move forward; a folder that cannot be listed does not stop the reading.
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiState, masterKey, readState } from '../../../.claude/skills/verify/scripts/lib/state.mjs';
 import { cleanUp, start, temp, until } from './support.js';
+
+const VERIFY = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/verify.mjs');
 
 afterEach(cleanUp);
 
@@ -90,6 +93,28 @@ describe('readState', () => {
     const before = snapshot(runDir);
     await readState(runDir);
     expect(snapshot(runDir)).toEqual(before);
+  });
+
+  it('redacts persistent profile credentials from readState and CLI state output', async () => {
+    const { runDir, profile } = stoppedRun();
+    const token = 'persistent-agent-token-must-not-leak';
+    write(path.join(profile, 'agent-settings.json'), JSON.stringify({
+      schemaVersion: 1,
+      token,
+      port: { mode: 'fixed', port: 65431 },
+    }));
+
+    const state = await readState(runDir);
+    expect(state.profile.files['agent-settings.json']).toEqual({
+      schemaVersion: 1,
+      token: { redacted: true, sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) },
+      port: { mode: 'fixed', port: 65431 },
+    });
+    expect(JSON.stringify(state)).not.toContain(token);
+
+    const cli = execFileSync(process.execPath, [VERIFY, 'state', '--run', runDir], { encoding: 'utf8' });
+    expect(cli).not.toContain(token);
+    expect(JSON.parse(cli).profile.files['agent-settings.json']).toEqual(state.profile.files['agent-settings.json']);
   });
 
   it('reports the API and the index as unavailable when the run is stopped', async () => {

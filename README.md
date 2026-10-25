@@ -54,7 +54,7 @@ npm run download:runtime
 npm run dev
 ```
 
-瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`，Agent API 使用 `127.0.0.1:7232`（被佔用時往後找，見 [Agent 存取](#agent-存取)），開發用 Meilisearch 只監聽 `127.0.0.1` 上隨機分配的 port，需要固定時以 `XR_COLLECTOR_MEILISEARCH_PORT` 指定。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
+瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`；Agent API 的自動模式從 `127.0.0.1:7232` 開始尋找可用 port，實際位址顯示在設定頁（見 [Agent 存取](#agent-存取)）。開發用 Meilisearch 只監聽 `127.0.0.1` 上隨機分配的 port，需要固定時以 `XR_COLLECTOR_MEILISEARCH_PORT` 指定。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
 
 已完成 production build 時，也可以只啟動單一 Web Server：
 
@@ -294,19 +294,15 @@ Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追
 
 尚未設定 Vault 或已記錄的 Vault 不存在時，health 顯示 runtime `not_ready` 與原因；業務 API 回傳 503 `vault_not_ready`，且不自動建立替代 Vault。使用者需透過 #20 的 Onboarding 設定 Vault。Agent token 驗證在 Not Ready 狀態仍然生效。
 
-每次啟動重新產生 Agent runtime instance 與 token，連線檔原子更新。Agent listener 使用固定 port：安裝版與 Electron 為 `7222`，Web 開發模式為 `7232`；該 port 被佔用時改用其後 10 個 port 中第一個可用的，全部被佔用時改用系統分配的 port，實際位址以連線檔為準。開發與驗收可用 `XR_COLLECTOR_AGENT_PORT` 指定首選 port。macOS／其他 POSIX 環境將檔案 mode 設為 0600；Windows 不把 POSIX mode 視為權限保證，連線檔放在目前使用者的 LocalAppData 並使用該目錄繼承的 ACL，仍需 Windows 原生驗證。連線檔位於裝置資料、vault 之外，不應分享或納入資料搬移；程式關閉後保留最後的連線資訊，Agent 會以 health 回應核對 instance，連線失敗時重新讀取一次並區分未啟動、過期、損壞及權限問題。
+Agent 金鑰與 port 模式保存在 profile 的 `agent-settings.json`，不屬於 Vault，也不隨匯出、匯入、搬移或切換 Vault 改變。金鑰跨重啟維持，只有使用者在設定頁確認重設時才更新。macOS／其他 POSIX 環境將設定檔 mode 設為 0600；Windows 依應用程式資料目錄繼承的 ACL 保護。
 
-- Web 開發／standalone：`.data/agent-connection.json`；Skill 位於 repository 的 `skills/xr-collector-agent`。
-- 未打包 Electron 且未指定 profile：Electron userData 下的 `agent-connection.development.json`。
-- macOS 安裝版：`~/Library/Application Support/XR Collector/agent-connection.json`。
-- Windows 安裝版：`%LOCALAPPDATA%\XR Collector\agent-connection.json`。
-- 明確指定 `XR_COLLECTOR_PROFILE` 的開發／驗收執行：該 profile 下的 `agent-connection.json`，不更新正式安裝版入口。
+port 預設為自動模式：安裝版與 Electron 從 `7222` 開始，Web 開發模式從 `7232` 開始；起始 port 被佔用時依序嘗試十個候選，仍無可用位置時交由作業系統配置。使用者也可以在設定頁指定 `1` 到 `65535` 的固定 port。port 模式的修改先保存，於下次啟動套用，不會中斷目前 listener 或已接受的工作。固定 port 無法綁定時，Agent 連線顯示無法使用，但 UI、Vault 與背景工作照常啟動，使用者可改回自動模式後重新啟動。
 
-正式安裝版位置只跟目前作業系統使用者有關，不跟程式安裝位置或 Vault 位置連動。未打包 Electron 與 standalone server 也保持 profile-local，避免開發服務覆蓋正式入口。Skill 隨安裝包放在應用程式 resources 的 `skills/xr-collector-agent`。
+設定頁與首次 Onboarding 都能開啟「AI 助理連線」面板。面板顯示目前 active URL，並提供下載 Skill、複製連線資料及修改連線設定；固定 port 尚待重新啟動時，active URL 仍代表目前真正監聽的位置。Skill 下載包是 `xr-collector-agent.zip`，內含通用的 `xr-collector-agent/SKILL.md` 與同層 `connection.json`；連線資料只包含目前 active URL 與金鑰。產品不發布作業系統固定 discovery file，也不以安裝位置、Vault 路徑或 runtime instance ID 尋址。
 
-Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。Agent 使用自身已有的工具讀取本機連線檔、解析 JSON，並向 loopback HTTP 發送帶 Authorization header 的請求。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
+Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。使用者把 `xr-collector-agent` 目錄安裝到本機 Agent 支援的 Skill 位置，開啟新的 Agent session，再要求 Agent 依 Skill 使用同層 `connection.json` 連線；Agent 先以 authenticated health 確認服務，再呼叫業務 API。`connection.json` 已在下載當下包含連線資料，因此一般使用不必在每個 session 重新貼上 port 或金鑰；「複製連線資料」供手動設定與診斷使用。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
 
-可以直接請本機 Agent 讀取 Skill 目錄中的 `SKILL.md`；也可以把整個 `xr-collector-agent` 目錄複製到該 Agent 的 Skill 安裝目錄。一般使用不必提供 port、Vault 或連線檔路徑；測試 profile 才明確提供其連線檔。操作與 HTTP 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約；路徑規則的自動化測試不代表兩平台安裝版都已完成原生驗證。
+repository 內的通用 Skill 位於 `skills/xr-collector-agent`；操作與 HTTP 契約見該目錄的 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約；平台安裝版仍需各自完成原生驗證。
 
 Skill 已安裝到 Agent 時可直接交付以下要求；從 repository 試用時，將 `<Skill 目錄>` 換成此 checkout 的 `skills/xr-collector-agent`：
 

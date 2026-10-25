@@ -217,7 +217,7 @@ const runtime = await CollectorRuntime.start({
   // Onboarding suggests this folder; inside the run, so accepting the suggestion stays isolated.
   suggestedVaultPath: vaultPath,
   createdBy,
-  connectionFile: path.join(profilePath, 'agent-connection.json'),
+  agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
   skillPath: path.join(checkout, 'skills', 'xr-collector-agent'),
   agentPort: port('AGENT'),
   uiPort: port('UI'),
