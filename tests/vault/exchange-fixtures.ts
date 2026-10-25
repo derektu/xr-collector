@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { expect } from 'vitest';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import type { ImportMode, SavedDocument, TranscriptSearch, SubscriptionRecord } from '../../src/core/types.js';
@@ -101,10 +100,6 @@ export async function open(at: Machine, overrides: Partial<WorkspaceOptions> & Y
   return workspace;
 }
 
-export async function settled(workspace: VaultWorkspace): Promise<void> {
-  await expect.poll(() => workspace.status().state, { timeout: 10_000 }).toMatch(/^(completed|error)$/u);
-}
-
 /** Writes package bytes to a file and returns its path. */
 export async function fileOf(folder: string, name: string, bytes: Buffer): Promise<string> {
   await mkdir(folder, { recursive: true });
@@ -117,6 +112,6 @@ export async function fileOf(folder: string, name: string, bytes: Buffer): Promi
 export async function importFile(workspace: VaultWorkspace, file: string, mode: ImportMode = 'merge') {
   const preview = await workspace.previewImport(file);
   workspace.applyImport(preview.id, mode);
-  await settled(workspace);
+  await workspace.operationFinished();
   return { preview, status: workspace.status() };
 }

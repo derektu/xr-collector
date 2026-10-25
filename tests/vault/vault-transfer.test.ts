@@ -13,7 +13,7 @@ import { Collector } from '../../src/core/collector.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import type { SavedDocument } from '../../src/core/types.js';
-import { capture, cleanUp, fileOf, machine, open, seed, settled, temp, type Machine } from './exchange-fixtures.js';
+import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from './exchange-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 
@@ -264,7 +264,7 @@ it('refuses a document deletion while an import holds the Vault (A7)', async () 
     workspace.applyImport(preview.id, 'merge', {});
     const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
     await expect.poll(async () => (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409);
-    release(); await settled(workspace);
+    release(); await workspace.operationFinished();
     expect(workspace.status().state).toBe('completed');
   } finally { await app.close(); }
 });

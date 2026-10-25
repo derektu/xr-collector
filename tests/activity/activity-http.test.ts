@@ -76,8 +76,10 @@ describe('activity and job routes (A-T8, A-T10)', () => {
   it('stays readable while an import holds the Vault, and before a Vault is chosen', async () => {
     const { collector, jobs, activity } = services();
     const transfer = {
-      assertReadable: () => { throw new CollectorError('vault_busy', '正在合併或復原資料，請稍後再讀取。'); },
-      enterWrite: () => () => undefined,
+      enterRequest: (access: string) => {
+        if (access === 'vault-read') throw new CollectorError('vault_busy', '正在合併或復原資料，請稍後再讀取。');
+        return () => undefined;
+      },
     } as unknown as HttpAppOptions['transfer'];
     const merging = await createHttpApp({ collector, jobs, activity, ...(transfer ? { transfer } : {}) });
     cleanups.push(() => merging.close());
