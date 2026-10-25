@@ -18,6 +18,7 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 | 收集工作的排程、佇列、等待與錯誤處理 | [收集流程](docs/collection-flow.md) |
 | 文件格式、Vault 與搜尋資料責任 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
 | 如何開發、測試與交付 PR 證據 | 本頁下方操作、[開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
+| 如何從指定本機環境建立正式候選安裝包 | [本機安裝包計畫](docs/local-packaging-plan.md) |
 | 畫面設計參考 | [UI Design Spec](docs/ui-design/README.md)，wireframe 的行為差異依 Round 2 計畫 |
 | App Shell 的路由、新增選單、類型與外觀擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |
 
@@ -37,7 +38,7 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 - npm
 - Git，以及 rustup 安裝的 Rust 1.91.1（準備預設的中文精簡 Meilisearch 或建置預設安裝包時需要；官方完整引擎安裝包不從 source build；安裝後的 App 都不需要 Rust）
 - source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 MSVC Build Tools 與可用的本機 PowerShell/CIM；第一次執行需連線抓取固定 source 與 Cargo dependencies
-- 下列 Web 開發範例以 macOS arm64 為準；原生驗證／打包支援 Mac arm64 與 Windows x64 Node。Windows ARM 上的 x64 模擬執行可建置，但不算原生證據
+- 下列 Web 開發範例以 macOS arm64 為準；交付平台為 Mac arm64 與 Windows x64。Mac 安裝包在使用者的 Apple Silicon Mac 建置；Windows 安裝包在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置，產物與驗證證據如實標示 ARM64 host 及 emulated x64 process
 
 安裝套件：
 
@@ -74,7 +75,7 @@ npm ci
 npm run verify
 ```
 
-`verify` 執行 Vitest（含 JUnit 報告）、typecheck 與 Node／Web build。CI 以 commit SHA 標示報告與 build artifacts，保留 7 天。缺少 macOS bundled Meilisearch binary 的平台會跳過對應的整合測試；JUnit 的 skipped 數量是驗證邊界，不能視為跨平台 runtime 已通過。CI 不包含 Desktop E2E、畫面截圖或 Release 打包。
+`verify` 執行 Vitest（含 JUnit 報告）、typecheck 與 Node／Web build。CI 以 commit SHA 標示報告與 build artifacts，保留 7 天。缺少 macOS bundled Meilisearch binary 的平台會跳過對應的整合測試；JUnit 的 skipped 數量是驗證邊界，不能視為跨平台 runtime 已通過。CI 不包含 Desktop E2E、畫面截圖或正式 Release 打包；CI artifact 只作補充檢查證據，不是正式安裝包的來源。
 
 測試分類與條件式 skip 見 [測試說明](tests/README.md)。各檢查亦可單獨執行：
 
@@ -102,17 +103,17 @@ npm run package:mac:official  # Mac arm64
 npm run package:win:official  # Windows x64
 ```
 
-官方 v1.53.2 沒有 community Mac x64 asset，因此 official variant 明確只支援 `darwin-arm64` 與 `win32-x64`；要求 `darwin-x64` 會在下載或替換 runtime 前失敗。Mac x64 仍只由 source builder 產生中文精簡引擎，完整 Intel App 依 #34。兩種 variant 的 runtime manifest 與索引語意 profile 分開；換 variant 時只重建目前 Vault 的可重建搜尋索引，同 variant 重啟沿用索引。
+official variant 的交付 target 為 `darwin-arm64` 與 `win32-x64`；要求 `darwin-x64` 會在下載或替換 runtime 前失敗。兩種 variant 的 runtime manifest 與索引語意 profile 分開；換 variant 時只重建目前 Vault 的可重建搜尋索引，同 variant 重啟沿用索引。
 
 官方 Windows x64 binary 的實物 PE imports 包含 `VCRUNTIME140.dll`，因此選用 official Windows bundle 的電腦需要 Microsoft 支援的 Visual C++ v14 x64 runtime。#139 不自行下載、安裝或重分發該 runtime；安裝包的 redistributable 流程由 #34 處理。預設 Chinese Windows runtime 仍為 static CRT，不需要額外 VC runtime。開發／驗收機若已由 Visual Studio 提供該 runtime，須如實記錄，不能當作 fresh-no-CRT 環境證據。
 
 `npm run prepare:meilisearch -- --variant chinese|official --target <target>` 是共同準備入口；省略 variant 時仍是 `chinese`。Chinese 會沿用 `npm run build:meilisearch` 的 source builder；official 只接受 repo 釘住的官方 release URL、大小、SHA-256、header、架構與 `--version`。兩者共用 destination install lock 與原子 binary/manifest replacement，下載或驗證失敗不會替換既有 runtime。
 
-目前 MVP package 未簽章，App 啟動時要求內含 Meilisearch 的實際 bytes 與 manifest 的大小、SHA-256 完全一致，再決定索引 profile；相同版本、架構但不同 variant 的 binary 也會拒絕。#34 日後加入正式簽章時，必須同時提供可測的簽章後 artifact identity 更新流程，不能只放寬成接受任意同版本執行檔。
+Package 可以未簽章；簽署、公證與憑證整合不構成 #34 的完成門檻。App 啟動時要求內含 Meilisearch 的實際 bytes 與 manifest 的大小、SHA-256 完全一致，再決定索引 profile；相同版本、架構但不同 variant 的 binary 也會拒絕。正式簽章的導入需同時提供可測的簽章後 artifact identity 更新流程，不能只放寬成接受任意同版本執行檔。
 
-`npm run build:meilisearch` 只支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；原生 CI 另外以三個 native runner 執行同一指令及 API smoke，Windows ARM 上用 x64 Node 建置會如實標為 emulated，不算原生證據。
+`npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
 
-產物不自動發布。MVP 安裝包未簽章，並使用預設 Electron 圖示。兩平台從同一個版本 commit 建置，驗收後再上傳至同一個 GitHub Release；詳細責任分工見開發驗證流程。
+正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。安裝包使用預設 Electron 圖示。#34 記錄版本、建置日期、完整 commit、產物 checksum、架構與 updater metadata；未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
 
 ## 資料保存
 

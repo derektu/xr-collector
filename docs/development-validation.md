@@ -116,10 +116,12 @@ summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 p
 
 從沒有桌面的入口執行也能完成開發版與打包版的驗證，例如 SSH 登入的 Windows session 0：背景模式不顯示視窗，Playwright 照常操作頁面與截圖；螢幕大小依該入口而定（Windows session 0 是 1024x768），截圖的視窗大小可能與開發機不同。需要使用者桌面的能力，例如視窗聚焦、系統匣、通知、原生對話框本身、整個螢幕的截圖，在這種入口無法驗證；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
 
-Windows ARM 上的 x64 Node 以模擬執行，doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）會標出來；回報時如實標示，不代替 Intel／AMD 原生驗收。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
+Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置及驗收。doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）如實標示 ARM64 host 與 x64 process，不把結果描述成 Intel／AMD host 原生執行。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
 
 ## 6. 平台打包
 
-Mac 執行 `npm run package:mac`，Windows 執行 `npm run package:win`；預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。目前是 Mac arm64 DMG／ZIP 與 Windows x64 NSIS，Windows ARM 可用 x64 Node 建置；官方 v1.53.2 沒有 community Mac x64 asset，因此不提供 official Mac x64 package。
+交付平台固定為 Mac arm64 與 Windows x64。Mac 在使用者的 Apple Silicon Mac 執行 `npm run package:mac`；Windows 在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 執行 `npm run package:win`。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
 
-發版時，各機器從相同乾淨 commit／版本建置，完成適用的安裝與操作驗收，記錄產物 SHA256、架構與簽章，再上傳同一個 GitHub draft Release，核對完整附件後發布。未提交預演產物不視為正式版本。簽署／公證、Mac Intel 與 updater metadata 由 #34，發布與下載來源由 #35 負責。
+正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。#34 記錄版本、建置日期、完整 commit、產物 SHA256、架構、實際 host／process 架構及 updater metadata，並完成適用的安裝與操作驗收；未提交預演產物不視為正式版本。未簽章產物可以通過 #34，簽署、公證與憑證整合留待後續工作，驗收不讀取或修改使用者的簽署憑證。
+
+#35 在使用者的 Mac 核對兩平台附件後上傳並發布；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata；#35 在正式發布前確認 repository 已公開，並以無 GitHub 登入／token 的客戶端驗證。工作順序為 #139 review／merge、#34 本機封裝、#35 發布，具體契約見 [本機安裝包計畫](local-packaging-plan.md)。
