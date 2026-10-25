@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { open, readFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { open, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import runtimePins from './meilisearch-runtime-pins.json' with { type: 'json' };
 
 const run = promisify(execFile);
 
@@ -17,7 +19,18 @@ export const SEARCH_INDEX_PROFILE = {
   indexSchema: 'documents_v2',
 } as const;
 
+export const OFFICIAL_SEARCH_INDEX_PROFILE = {
+  schemaVersion: 1,
+  engine: { version: '1.53.2', distribution: 'official' },
+  tokenizationFeatures: ['all-tokenizations'],
+  indexSchema: 'documents_v2',
+} as const;
+
+export type SearchIndexProfile = typeof SEARCH_INDEX_PROFILE | typeof OFFICIAL_SEARCH_INDEX_PROFILE;
+export type MeilisearchVariant = 'chinese' | 'official';
+
 export interface MeilisearchBuildManifest {
+  distribution?: never;
   schemaVersion: number;
   recipeRevision: number;
   recipeFingerprint: string;
@@ -37,9 +50,27 @@ export interface MeilisearchBuildManifest {
   buildEnvironment?: { rustflags?: unknown; cargoProfileOverrides?: unknown };
   runner: { platform: string; processArch: string; hostArch: string; emulated: boolean };
   completedAt: string;
-  binary: { version: string; bytes: number; sha256: string; format: string; arch: string };
+  binary: { version: string; versionOutput: string; bytes: number; sha256: string; format: string; arch: string };
   [key: string]: unknown;
 }
+
+export interface MeilisearchOfficialManifest {
+  schemaVersion: number;
+  distribution: 'official';
+  releaseRepository: string;
+  releaseTag: string;
+  releaseAsset: string;
+  releaseUrl: string;
+  target: 'darwin-arm64' | 'win32-x64';
+  binary: { version: string; versionOutput: string; bytes: number; sha256: string; format: string; arch: string };
+  [key: string]: unknown;
+}
+
+export type MeilisearchRuntimeManifest = MeilisearchBuildManifest | MeilisearchOfficialManifest;
+export type ValidatedMeilisearchRuntime = MeilisearchRuntimeManifest & {
+  variant: MeilisearchVariant;
+  searchProfile: SearchIndexProfile;
+};
 
 export function meilisearchBuildManifestPath(binaryPath: string): string {
   return path.join(path.dirname(path.resolve(binaryPath)), 'meilisearch-build.json');
@@ -49,13 +80,21 @@ export async function validateMeilisearchRuntime(
   binaryPath: string,
   environment: { platform: NodeJS.Platform; arch: string } = { platform: process.platform, arch: process.arch },
   readVersion: (executable: string) => Promise<string> = executeVersion,
-): Promise<MeilisearchBuildManifest> {
+  readIdentity: (filePath: string) => Promise<{ bytes: number; sha256: string }> = runtimeBinaryIdentity,
+): Promise<ValidatedMeilisearchRuntime> {
   const manifestPath = meilisearchBuildManifestPath(binaryPath);
-  let manifest: MeilisearchBuildManifest;
+  let manifest: MeilisearchRuntimeManifest;
   try {
-    manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as MeilisearchBuildManifest;
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as MeilisearchRuntimeManifest;
   } catch (error) {
     throw new Error(`Meilisearch build manifest is missing or invalid: ${manifestPath}.`, { cause: error });
+  }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`Meilisearch build manifest is missing or invalid: ${manifestPath}.`);
+  }
+  const distribution = (manifest as { distribution?: unknown }).distribution;
+  if (distribution !== undefined && distribution !== 'official') {
+    throw new Error(`Unsupported Meilisearch runtime distribution: ${String(distribution)}.`);
   }
   const expectedTarget = environment.platform === 'darwin' && environment.arch === 'arm64' ? 'darwin-arm64'
     : environment.platform === 'darwin' && environment.arch === 'x64' ? 'darwin-x64'
@@ -65,6 +104,19 @@ export async function validateMeilisearchRuntime(
       : expectedTarget === 'win32-x64' ? 'x86_64-pc-windows-msvc' : null;
   const expectedRustflags = expectedTarget === 'win32-x64' ? '-C target-feature=+crt-static' : '';
   const expectedArch = environment.arch;
+  if (isOfficialManifest(manifest)) {
+    const officialTarget = expectedTarget === 'darwin-arm64' || expectedTarget === 'win32-x64' ? expectedTarget : null;
+    const pin = officialTarget ? runtimePins.official[officialTarget] : undefined;
+    if (!officialTarget || !pin || manifest.schemaVersion !== runtimePins.schemaVersion
+      || manifest.releaseRepository !== runtimePins.releaseRepository || manifest.releaseTag !== runtimePins.releaseTag
+      || manifest.releaseAsset !== pin.asset || manifest.releaseUrl !== pin.url || manifest.target !== officialTarget
+      || manifest.binary?.version !== runtimePins.version || manifest.binary.versionOutput !== `meilisearch ${runtimePins.version}` || manifest.binary.bytes !== pin.bytes
+      || manifest.binary.sha256 !== pin.sha256 || manifest.binary.format !== pin.format || manifest.binary.arch !== pin.arch) {
+      throw new Error(`Meilisearch official runtime manifest does not match the pinned ${expectedTarget ?? 'unsupported'} release asset.`);
+    }
+    await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity);
+    return { ...manifest, variant: 'official', searchProfile: OFFICIAL_SEARCH_INDEX_PROFILE };
+  }
   const expectedFingerprint = createHash('sha256').update(JSON.stringify({
     schemaVersion: 1,
     recipeRevision: SEARCH_INDEX_PROFILE.buildRecipeRevision,
@@ -99,15 +151,41 @@ export async function validateMeilisearchRuntime(
     || !Number.isInteger(manifest.binary?.bytes) || manifest.binary.bytes <= 0 || !/^[a-f0-9]{64}$/u.test(manifest.binary?.sha256 ?? '')) {
     throw new Error(`Meilisearch build manifest does not match the required ${expectedTarget} Chinese runtime.`);
   }
+  await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity);
+  return { ...manifest, variant: 'chinese', searchProfile: SEARCH_INDEX_PROFILE };
+}
+
+function isOfficialManifest(manifest: MeilisearchRuntimeManifest): manifest is MeilisearchOfficialManifest {
+  return manifest !== null && typeof manifest === 'object' && manifest.distribution === 'official';
+}
+
+async function validateExecutable(
+  binaryPath: string,
+  binary: { bytes: number; sha256: string; format: string; arch: string },
+  readVersion: (executable: string) => Promise<string>,
+  readIdentity: (filePath: string) => Promise<{ bytes: number; sha256: string }>,
+): Promise<void> {
+  const identity = await readIdentity(binaryPath).catch((error) => {
+    throw new Error('Meilisearch binary bytes do not match its runtime manifest.', { cause: error });
+  });
+  if (identity.bytes !== binary.bytes || identity.sha256 !== binary.sha256) {
+    throw new Error('Meilisearch binary bytes do not match its runtime manifest.');
+  }
   const actual = await executableIdentity(binaryPath).catch((error) => {
     throw new Error('Meilisearch binary does not match its build manifest; the runtime pair may be incomplete or interrupted.', { cause: error });
   });
-  if (actual.arch !== manifest.binary.arch || actual.format !== manifest.binary.format) {
+  if (actual.arch !== binary.arch || actual.format !== binary.format) {
     throw new Error('Meilisearch binary does not match its build manifest; the runtime pair may be incomplete or interrupted.');
   }
   const version = (await readVersion(binaryPath)).trim();
   if (version !== 'meilisearch 1.53.2') throw new Error(`Meilisearch runtime version is ${version || 'unknown'}, expected meilisearch 1.53.2.`);
-  return manifest;
+}
+
+async function runtimeBinaryIdentity(filePath: string): Promise<{ bytes: number; sha256: string }> {
+  const size = (await stat(filePath)).size;
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  return { bytes: size, sha256: hash.digest('hex') };
 }
 
 async function executableIdentity(filePath: string): Promise<{ format: string; arch: string }> {

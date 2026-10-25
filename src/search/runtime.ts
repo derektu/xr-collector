@@ -9,7 +9,7 @@ import {
 } from './managed-transcript-search.js';
 import { MeilisearchBackend } from './meilisearch-backend.js';
 import { startMeilisearchProcess } from './meilisearch-process.js';
-import { validateMeilisearchRuntime } from './meilisearch-runtime.js';
+import { validateMeilisearchRuntime, type SearchIndexProfile } from './meilisearch-runtime.js';
 import type { PreparedSearchProjection } from './search-projection.js';
 
 interface StartSearchRuntimeOptions {
@@ -17,7 +17,7 @@ interface StartSearchRuntimeOptions {
   binaryPath: string;
   databasePath: string;
   port?: number;
-  prepareProjection(): Promise<PreparedSearchProjection>;
+  prepareProjection(profile: SearchIndexProfile): Promise<PreparedSearchProjection>;
 }
 
 export interface SearchRuntime {
@@ -29,8 +29,8 @@ export async function startSearchRuntime(
   options: StartSearchRuntimeOptions,
 ): Promise<SearchRuntime> {
   try {
-    await validateMeilisearchRuntime(options.binaryPath);
-    const projection = await options.prepareProjection();
+    const runtime = await validateMeilisearchRuntime(options.binaryPath);
+    const projection = await options.prepareProjection(runtime.searchProfile);
     if (path.resolve(projection.databasePath) !== path.resolve(options.databasePath)) {
       throw new Error('Prepared search projection does not match the owned database path.');
     }

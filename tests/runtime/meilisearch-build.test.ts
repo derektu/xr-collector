@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The production build entry point is intentionally executable JavaScript.
-import { assertControlledCargoConfiguration, buildMeilisearch, cleanBuildEnvironment, expectedManifestFields, inspectExecutable, recipeFingerprint, runCommand, selectTarget, TARGETS, transactionalReplacePair } from '../../scripts/build-meilisearch.mjs';
+import { assertControlledCargoConfiguration, buildMeilisearch, cleanBuildEnvironment, expectedManifestFields, inspectExecutable, recipeFingerprint, runCommand, selectTarget, TARGETS, transactionalReplacePair, withRuntimeInstallLock } from '../../scripts/build-meilisearch.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -165,6 +165,21 @@ describe('pinned Meilisearch build', () => {
     expect(fake.builds()).toBe(1);
     expect(fake.run).toHaveBeenCalledWith('git', ['config', '--local', 'core.autocrlf', 'false'], expect.objectContaining({ cwd: expect.any(String) }));
     expect(JSON.parse(await readFile(first.manifestPath, 'utf8'))).toMatchObject({ target: 'darwin-arm64', sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127', features: ['chinese'] });
+  });
+
+  it('serializes Chinese and official producers at their shared runtime destination', async () => {
+    const at = await root();
+    const runtime = path.join(at, 'runtime');
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const first = withRuntimeInstallLock(runtime, async () => { entered(); await gate; });
+    await inside;
+    await expect(withRuntimeInstallLock(runtime, async () => undefined)).rejects.toThrow(/runtime installation owns/u);
+    release();
+    await first;
+    await expect(withRuntimeInstallLock(runtime, async () => 'installed')).resolves.toBe('installed');
   });
 
   it('enables repository-local long paths before upstream checkout and on cache reuse', async () => {

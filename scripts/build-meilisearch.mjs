@@ -267,18 +267,20 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
     const runtimeDirectory = options.runtimeRoot ?? path.join(projectRoot, 'resources', 'bin', target.directory);
     const binaryDestination = path.join(runtimeDirectory, target.executable);
     const manifestDestination = path.join(runtimeDirectory, 'meilisearch-build.json');
-    const installedManifest = await readJson(manifestDestination);
-    const installedValid = installedManifest && manifestMatches(installedManifest, manifest)
-      && await exists(binaryDestination) && await hashFile(binaryDestination) === manifest.binary.sha256;
-    if (!installedValid) {
-      await transactionalReplacePair({
-        binarySource: cachedBinary,
-        manifest,
-        binaryDestination,
-        manifestDestination,
-        ...(dependencies.installFault ? { fault: dependencies.installFault } : {}),
-      });
-    }
+    await withRuntimeInstallLock(runtimeDirectory, async () => {
+      const installedManifest = await readJson(manifestDestination);
+      const installedValid = installedManifest && manifestMatches(installedManifest, manifest)
+        && await exists(binaryDestination) && await hashFile(binaryDestination) === manifest.binary.sha256;
+      if (!installedValid) {
+        await transactionalReplacePair({
+          binarySource: cachedBinary,
+          manifest,
+          binaryDestination,
+          manifestDestination,
+          ...(dependencies.installFault ? { fault: dependencies.installFault } : {}),
+        });
+      }
+    });
     console.log(`${cacheHit ? 'Reused' : 'Built'} pinned Meilisearch ${recipe.meilisearchVersion} for ${target.id}: ${binaryDestination}`);
     return { cacheHit, target, entry, binaryPath: binaryDestination, manifestPath: manifestDestination, manifest };
   });
@@ -389,10 +391,20 @@ function isInside(parent, candidate) {
 }
 
 async function withBuildLock(lockPath, work) {
+  return withExclusiveLock(lockPath, `Another Meilisearch build owns ${lockPath}. If no build is running, remove only that stale lock and retry.`, work);
+}
+
+export async function withRuntimeInstallLock(runtimeDirectory, work) {
+  await mkdir(runtimeDirectory, { recursive: true });
+  const lockPath = path.join(runtimeDirectory, '.meilisearch-install.lock');
+  return withExclusiveLock(lockPath, `Another Meilisearch runtime installation owns ${lockPath}. Retry after that preparation finishes.`, work);
+}
+
+async function withExclusiveLock(lockPath, contentionMessage, work) {
   try {
     await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`, { flag: 'wx' });
   } catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another Meilisearch build owns ${lockPath}. If no build is running, remove only that stale lock and retry.`);
+    if (error.code === 'EEXIST') throw new Error(contentionMessage);
     throw error;
   }
   try { return await work(); }

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileSha256, inspectExecutable } from './build-meilisearch.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
+import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
 
 const options = parseArguments(process.argv.slice(2));
 if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--require-native]');
@@ -19,14 +20,20 @@ if (await fileSha256(binary) !== manifest.binary?.sha256 || bytes.length !== man
   || inspected.arch !== manifest.binary?.arch || manifest.binary?.version !== '1.53.2') {
   throw new Error('Smoke binary does not match its build manifest.');
 }
+if (manifest.distribution === 'official') {
+  const expected = expectedOfficialManifest(await readRuntimePins(), manifest.target);
+  if (JSON.stringify(manifest) !== JSON.stringify(expected)) throw new Error('Smoke official manifest does not match the pinned release asset.');
+}
 if (options.requireNative) {
   const expected = manifest.target === 'darwin-arm64' ? ['darwin', 'arm64']
     : manifest.target === 'darwin-x64' ? ['darwin', 'x64']
       : manifest.target === 'win32-x64' ? ['win32', 'x64'] : [];
   const host = await probePhysicalHost();
+  const producerMatches = manifest.distribution === 'official'
+    || (manifest.runner?.platform === host.platform && manifest.runner?.processArch === host.processArch
+      && manifest.runner?.hostArch === host.hostArch && manifest.runner?.emulated === false);
   if (host.platform !== expected[0] || host.processArch !== expected[1] || host.hostArch !== expected[1]
-    || host.emulated || manifest.runner?.platform !== host.platform || manifest.runner?.processArch !== host.processArch
-    || manifest.runner?.hostArch !== host.hostArch || manifest.runner?.emulated !== false) {
+    || host.emulated || !producerMatches) {
     throw new Error(`Native smoke for ${manifest.target} cannot run on ${host.platform}/${host.processArch} physical ${host.hostArch}.`);
   }
 }

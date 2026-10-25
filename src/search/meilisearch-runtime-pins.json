@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "version": "1.53.2",
+  "releaseRepository": "https://github.com/meilisearch/meilisearch",
+  "releaseTag": "v1.53.2",
+  "official": {
+    "darwin-arm64": {
+      "asset": "meilisearch-macos-apple-silicon",
+      "url": "https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-macos-apple-silicon",
+      "bytes": 341683536,
+      "sha256": "7fa492746343c1dd7217ead82fc6d42e74c1304593e4604f52ca71cf44d61b28",
+      "format": "Mach-O 64",
+      "arch": "arm64"
+    },
+    "win32-x64": {
+      "asset": "meilisearch-windows-amd64.exe",
+      "url": "https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-windows-amd64.exe",
+      "bytes": 346635776,
+      "sha256": "edb04f8288565e413a318069600954e38574714e5a2559777f8f4e8cc16d1bf3",
+      "format": "PE32+",
+      "arch": "x64"
+    }
+  }
+}

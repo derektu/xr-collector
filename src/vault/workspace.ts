@@ -857,10 +857,11 @@ export class VaultWorkspace {
     const databasePath = this.searchPath(root);
     const runtime = this.options.createSearch ? await this.options.createSearch(root) : await startSearchRuntime({
       vault, binaryPath: this.options.searchBinary, databasePath,
-      prepareProjection: () => prepareOwnedSearchProjection({
+      prepareProjection: (profile) => prepareOwnedSearchProjection({
         searchData: this.options.searchData,
         vaultRoot: root,
         binaryPath: this.options.searchBinary,
+        profile,
       }),
       ...(port ? { port } : {}),
     });

@@ -8,6 +8,7 @@ import { startSearchRuntime } from '../../src/search/runtime.js';
 
 const roots: string[] = [];
 const correctVersion = async () => 'meilisearch 1.53.2\n';
+const officialIdentity = async () => ({ bytes: 341683536, sha256: '7fa492746343c1dd7217ead82fc6d42e74c1304593e4604f52ca71cf44d61b28' });
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 async function fixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): Promise<{ root: string; binary: string; manifest: string }> {
@@ -60,10 +61,118 @@ async function fixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): P
   return { root, binary, manifest };
 }
 
+async function officialFixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): Promise<{ root: string; binary: string; manifest: string }> {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-meili-official-runtime-'));
+  roots.push(root);
+  const windows = target === 'win32-x64';
+  const binary = path.join(root, windows ? 'meilisearch.exe' : 'meilisearch');
+  const bytes = Buffer.alloc(128);
+  if (windows) {
+    bytes.write('MZ', 0, 'ascii');
+    bytes.writeUInt32LE(64, 0x3c);
+    bytes.write('PE\0\0', 64, 'ascii');
+    bytes.writeUInt16LE(0x8664, 68);
+  } else {
+    bytes.writeUInt32LE(0xfeedfacf, 0);
+    bytes.writeUInt32LE(0x0100000c, 4);
+  }
+  await writeFile(binary, bytes);
+  const manifest = path.join(root, 'meilisearch-build.json');
+  await writeFile(manifest, JSON.stringify({
+    schemaVersion: 1,
+    distribution: 'official',
+    releaseRepository: 'https://github.com/meilisearch/meilisearch',
+    releaseTag: 'v1.53.2',
+    releaseAsset: windows ? 'meilisearch-windows-amd64.exe' : 'meilisearch-macos-apple-silicon',
+    releaseUrl: windows
+      ? 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-windows-amd64.exe'
+      : 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-macos-apple-silicon',
+    target,
+    binary: windows
+      ? { version: '1.53.2', versionOutput: 'meilisearch 1.53.2', bytes: 346635776, sha256: 'edb04f8288565e413a318069600954e38574714e5a2559777f8f4e8cc16d1bf3', format: 'PE32+', arch: 'x64' }
+      : { version: '1.53.2', versionOutput: 'meilisearch 1.53.2', bytes: 341683536, sha256: '7fa492746343c1dd7217ead82fc6d42e74c1304593e4604f52ca71cf44d61b28', format: 'Mach-O 64', arch: 'arm64' },
+  }));
+  return { root, binary, manifest };
+}
+
 describe('Meilisearch runtime identity', () => {
   it('accepts the complete matching binary and build manifest pair', async () => {
     const built = await fixture();
-    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).resolves.toMatchObject({ target: 'darwin-arm64', features: ['chinese'] });
+    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).resolves.toMatchObject({
+      target: 'darwin-arm64', features: ['chinese'], variant: 'chinese',
+      searchProfile: { tokenizationFeatures: ['chinese'] },
+    });
+  });
+
+  it('accepts the pinned official distribution and returns its distinct search profile', async () => {
+    const built = await officialFixture();
+    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion, officialIdentity)).resolves.toMatchObject({
+      distribution: 'official', target: 'darwin-arm64', variant: 'official',
+      searchProfile: { engine: { version: '1.53.2', distribution: 'official' }, tokenizationFeatures: ['all-tokenizations'] },
+    });
+  });
+
+  it('rejects altered official metadata before the caller can prepare a projection', async () => {
+    const built = await officialFixture();
+    const manifest = JSON.parse(await readFile(built.manifest, 'utf8')) as { binary: { sha256: string } };
+    manifest.binary.sha256 = '0'.repeat(64);
+    await writeFile(built.manifest, JSON.stringify(manifest));
+    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/official runtime/u);
+  });
+
+  it('keeps invalid official metadata away from projection preparation', async () => {
+    const built = await officialFixture();
+    const manifest = JSON.parse(await readFile(built.manifest, 'utf8')) as { releaseAsset: string };
+    manifest.releaseAsset = 'wrong';
+    await writeFile(built.manifest, JSON.stringify(manifest));
+    const prepareProjection = vi.fn();
+    await startSearchRuntime({
+      vault: { list: vi.fn(), read: vi.fn() } as never,
+      binaryPath: built.binary,
+      databasePath: path.join(built.root, 'search'),
+      prepareProjection,
+    });
+    expect(prepareProjection).not.toHaveBeenCalled();
+  });
+
+  it('rejects a same-version executable paired with the other variant manifest before projection preparation', async () => {
+    const built = await officialFixture();
+    const prepareProjection = vi.fn();
+    const runtime = await startSearchRuntime({
+      vault: { list: vi.fn(), read: vi.fn() } as never,
+      binaryPath: built.binary,
+      databasePath: path.join(built.root, 'search'),
+      prepareProjection,
+    });
+    expect(runtime.search.status()).toMatchObject({ state: 'error' });
+    expect(prepareProjection).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown distribution before projection preparation', async () => {
+    const built = await fixture();
+    const manifest = JSON.parse(await readFile(built.manifest, 'utf8')) as Record<string, unknown>;
+    manifest.distribution = 'enterprise';
+    await writeFile(built.manifest, JSON.stringify(manifest));
+    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/Unsupported.*enterprise/u);
+    const prepareProjection = vi.fn();
+    await startSearchRuntime({
+      vault: { list: vi.fn(), read: vi.fn() } as never,
+      binaryPath: built.binary,
+      databasePath: path.join(built.root, 'search'),
+      prepareProjection,
+    });
+    expect(prepareProjection).not.toHaveBeenCalled();
+  });
+
+  it('keeps artifact identity out of both semantic profiles', async () => {
+    const chinese = await fixture();
+    const official = await officialFixture();
+    for (const runtime of [
+      await validateMeilisearchRuntime(chinese.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion),
+      await validateMeilisearchRuntime(official.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion, officialIdentity),
+    ]) {
+      expect(JSON.stringify(runtime.searchProfile)).not.toMatch(/sha256|completedAt|runner|sign/u);
+    }
   });
 
   it('rejects a missing manifest or interrupted binary/manifest pair', async () => {
@@ -72,17 +181,21 @@ describe('Meilisearch runtime identity', () => {
     await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/missing or invalid/u);
     const rebuilt = await fixture();
     await writeFile(rebuilt.binary, 'changed');
-    await expect(validateMeilisearchRuntime(rebuilt.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/incomplete or interrupted/u);
+    await expect(validateMeilisearchRuntime(rebuilt.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/binary bytes/u);
   });
 
-  it('accepts a signed-byte transform with the same architecture and version, but rejects another engine version', async () => {
+  it('rejects a byte transform until the signing identity contract is implemented', async () => {
     const built = await fixture();
     const transformed = Buffer.alloc(96);
     transformed.writeUInt32LE(0xfeedfacf, 0);
     transformed.writeUInt32LE(0x0100000c, 4);
     transformed.fill(7, 16);
     await writeFile(built.binary, transformed);
-    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).resolves.toMatchObject({ target: 'darwin-arm64' });
+    await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, correctVersion)).rejects.toThrow(/binary bytes/u);
+  });
+
+  it('rejects another engine version when the bytes still match', async () => {
+    const built = await fixture();
     await expect(validateMeilisearchRuntime(built.binary, { platform: 'darwin', arch: 'arm64' }, async () => 'meilisearch 1.52.0\n')).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
   });
 
