@@ -4,12 +4,12 @@
 
 | 功能 | 檔案 | 主要層級 | 已收錄流程 |
 | --- | --- | --- | --- |
-| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | — |
-| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary` |
+| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `workspace-content` |
+| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown` |
 | 記錄 | [activity.md](activity.md) | Web | `check-history-summary` |
-| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b` |
-| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | — |
-| RSS | [rss.md](rss.md) | Web | — |
+| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content` |
+| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `workspace-content` |
+| RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content` |
 | Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer` |
 | 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray` |
 | 登入電腦時自動啟動 | [login-startup.md](login-startup.md) | Web 負向；打包安裝版 VM | `login-startup` |
@@ -40,13 +40,20 @@
 
 每個檔案以 H1 標題與一段使用者看得到的行為描述開頭，接著依序五個 H2：`Sub-features`、`How to get to it (user POV)`、`Driving it with verify`（以 `Preconditions:` 開頭，每個步驟配對使用者動作、確切操作與可觀察結果）、`Gotchas`、`Regression flows`。`Regression flows` 每支流程一行，以流程名開頭，列出它斷言的子功能 ID 與範圍；沒有流程時寫「沒有已收錄的流程。」
 
-## 執行紀錄
+## 最近一次維護覆核
 
-| 功能 | 由本 skill 實際執行 |
+2026-10-25，以 main `6e068506a4ea9e02c63f1201b8d0b23544536959`（已含 #33／PR #146、#96／PR #147）逐份核對九份功能檔，並重新操作。表中只列本次實際範圍，未沿用合併前的執行結果。
+
+| 功能 | 本次執行與範圍 |
 | --- | --- |
-| 收集單支影片 | 2026-10-22，Mac，`examples/collect-video.mjs`，COLLECT-01／02 通過 |
-| Electron 啟動（`launchElectron`） | 2026-10-22，Mac：背景模式不顯示、不取得焦點、沒有 Dock 圖示；Vault 在 run 目錄內；`relaunch()`、`close()` 正常，沒有留下程序。尚未用來驗證任何功能 |
-| 工作頁、RSS | 2026-10-22，Mac，依功能檔實際操作：工作頁 5 步、RSS 的訂閱、閱讀、新文章、503 與 404 都與檔案相符 |
-| 訂閱與檢查 | 2026-10-23，Mac，`flows/subscribe-a-b.mjs`：訂閱、狀態序列、兩個訂閱同時收集與完成後的文件數，四個 scenario 通過 |
-| 選單列／系統匣 | 2026-10-24，`flows/tray.mjs`：Mac 與 Windows（互動桌面，x64-on-ARM64）TRAY-D1～D8 通過 |
-| 文件／閱讀／搜尋、Vault 匯出匯入與搬移 | 尚未以本 skill 執行；把手取自原始碼與 #75／#82 的 Web 驗收流程。第一次執行時修正本檔與功能檔 |
+| 收集單支影片 | `workspace-content` 的兩個加入入口、閱讀、失敗；原生開發版另驗空文件入口與原始來源交接 |
+| 訂閱與檢查 | `subscribe-a-b`、`check-history-summary`；狀態序列、文件數、連續空檢查／網路錯誤與恢復 |
+| 記錄 | `check-history-summary`；摘要、INFO／DEBUG、篩選與模式保留、群組細節與分頁 |
+| 工作頁 | `subscribe-a-b`、`workspace-content`；分區、徽章、單篇重試與移除 |
+| 文件、閱讀與搜尋 | `workspace-content`；22 篇跨頁、來源篩選、搜尋、刪除與返回、重新收集、搜尋不可用 UI fixture |
+| RSS | `rss-rate-limit`、`workspace-content`；網頁辨識、文章閱讀、設定持久化、429 隔離、暫停與恢復 |
+| Vault 匯出匯入與搬移 | `vault-transfer`；匯出、合併、取代、搬移、切換、取消等待與固定位置；Web 模式 |
+| 選單列／系統匣 | Mac 原生開發版 `tray` D1～D8；手動再次啟動的 runtime instanceId 不變。Windows 本次未重跑 |
+| 登入自啟 | Web `login-startup` 的不可設定及受控平台分支、Mac 原生開發版兩個 listener 拒絕。已安裝 App 的真實 OS 註冊／登入需 VM 與確認時段，本次未驗 |
+
+本機完整證據、各次失敗與修正後重跑放在 `.local/ticket-artifacts/verify-maintenance-96-33/`；以交付 PR 的結果與版本記錄為準。

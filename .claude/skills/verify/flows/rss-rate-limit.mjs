@@ -113,8 +113,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       { id: 'w3.detail-problem', expected: '最近一次檢查失敗（連續 1 次）：這個網站暫時限制連線。', actual: problemText });
     const newestCheck = view.getByTestId('collection-check').first();
     const newestTitle = (await newestCheck.count()) ? (await newestCheck.locator('.collection-title').innerText()).trim() : null;
-    expect(newestTitle === '立即檢查・檢查失敗・網站限制連線', '收集紀錄最新一筆是這次失敗的檢查',
-      { id: 'w3.collection-check', expected: '立即檢查・檢查失敗・網站限制連線', actual: newestTitle });
+    expect(newestTitle === '發生錯誤：網站限制連線', '收集紀錄最新一筆是這次失敗的檢查',
+      { id: 'w3.collection-check', expected: '發生錯誤：網站限制連線', actual: newestTitle });
     await shot('detail-limited', view);
     await view.close();
   });

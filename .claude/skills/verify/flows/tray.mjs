@@ -188,11 +188,13 @@ export async function run({ instance, record, waitFor, sleep }) {
     });
 
     await scenario('TRAY-D7', '視窗隱藏時再啟動一次', async ({ expect, note }) => {
+      const beforeSecondLaunch = await instanceId();
       const code = await instance.launchAgain();
       note('secondExit', code);
       expect(code === 0, '第二次啟動交給執行中的 App 後結束', code);
       await waitFor(async () => (await windowState(instance.app)).visible, 'the running window shows', { timeout: 10_000 });
       expect((await windowState(instance.app)).visible, '原本的視窗顯示出來', await windowState(instance.app));
+      expect(await instanceId() === beforeSecondLaunch, '手動第二次啟動不建立第二個 runtime', await instanceId());
     });
 
     await scenario('TRAY-D8', '檢查中從選單結束，再啟動接續', async ({ expect, note }) => {
