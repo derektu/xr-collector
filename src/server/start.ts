@@ -25,6 +25,7 @@ export interface StartServerOptions {
   runtimeStatus?: () => CollectorRuntimeStatus;
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
+  loginStartup?: import('../core/login-startup.js').LoginStartupAccess;
 }
 
 export interface RunningServer {
@@ -51,6 +52,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
+    ...(options.loginStartup ? { loginStartup: options.loginStartup } : {}),
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';

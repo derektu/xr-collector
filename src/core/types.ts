@@ -692,6 +692,16 @@ export interface JobPageView {
 
 export type EventSeverity = 'info' | 'warning' | 'error';
 
+/** Device login-startup state, shared by the Settings UI and authorized Agents. */
+export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'unavailable';
+
+export interface LoginStartupStatus {
+  supported: boolean;
+  enabled: boolean;
+  state: LoginStartupState;
+  message: string;
+}
+
 /**
  * One entry of the device activity log. Severity says how serious the entry is; outcome says what a
  * finished job produced, so a skipped item is an `info` entry with outcome `skipped`. Optional fields
@@ -907,6 +917,9 @@ export type CoreErrorCode =
   | 'transfer_cancelled'
   | 'vault_location_fixed'
   | 'insufficient_space'
+  | 'login_startup_unavailable'
+  | 'login_startup_requires_approval'
+  | 'login_startup_failed'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */
