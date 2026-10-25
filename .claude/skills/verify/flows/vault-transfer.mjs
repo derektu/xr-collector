@@ -170,8 +170,15 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await visible('transfer-cancel');
       const jobs = await instance.api('/api/jobs/overview');
       const activity = await instance.api('/api/activity');
-      expect(!!jobs.overview && Array.isArray(activity.events), '等待期間工作與活動 API 可讀');
+      const summary = await instance.api('/api/activity?view=summary');
+      expect(!!jobs.overview && Array.isArray(activity.events) && Array.isArray(summary.entries), '等待期間工作、原始活動與摘要 API 可讀');
       await shot('waiting');
+      await click('transfer-cancel');
+      await waitFor(async () => (await instance.api('/api/vault/status')).state === 'idle', 'cancel waiting releases operation lock');
+      expect((await instance.api('/api/vault/status')).state === 'idle', '取消等待後立即釋放操作鎖');
+      await visible('import-compare');
+      await shot('cancelled-wait');
+      await click('import-compare');
       const jobsPage = await openPage('/jobs');
       expect(await jobsPage.getByTestId('page-jobs').count() === 1, '等待期間工作頁可讀');
       await shot('jobs-during-wait', jobsPage);

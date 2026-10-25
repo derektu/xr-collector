@@ -5,24 +5,24 @@
 ## Sub-features
 
 - `collect-add`：文件頁「新增」→「網址」→ 貼影片網址 →「加入」。
-- `collect-mismatch`：在訂閱對話框貼影片網址，提示「這是單支影片，要改為加入一次嗎？」，按「改為加入」切換。
+- `collect-mismatch`：在訂閱對話框貼影片網址，提示「這是單支影片，要改為加入一次嗎？」，按「改為加入一次」切換。
 - `collect-done`：完成後出現在文件列表，訂閱頁不出現「單篇收集」列。
 - `collect-read`：閱讀頁顯示字幕，「開啟原始影片」連到原網址。
 - `collect-fail`：影片無法收集時，工作頁「失敗」區出現該工作（見 [jobs.md](jobs.md)）。
 
 ## How to get to it (user POV)
 
-- 文件頁右上「新增」→「網址」。
-- 訂閱頁「新增訂閱」→「YouTube 頻道」，貼影片網址後按「改為加入」。
+- 文件頁右上「新增」→「網址」；空知識庫另有相同的新增入口 `add-document-empty`。
+- 訂閱頁「新增訂閱」→「YouTube 頻道」，貼影片網址後按「改為加入一次」。
 
 ## Driving it with verify
 
 Preconditions:
 
-- 基準狀態。影片用頻道 D：`https://www.youtube.com/watch?v=vD000000001`。
+- 已選擇 Vault、網路可用的基準狀態。影片用頻道 D：`https://www.youtube.com/watch?v=vD000000001`。
 - 可直接執行 [examples/collect-video.mjs](../examples/collect-video.mjs)，它涵蓋 `collect-add`、`collect-done`、`collect-read`。
 
-- **開對話框。** `page.getByTestId('add-document').click()`，再 `getByTestId('add-item-url').click()`。`add-dialog` 出現，標題 `add-dialog-title` 為「加入網址」，焦點在 `add-url`。
+- **開對話框。** `page.getByTestId('add-document').click()`，再 `getByTestId('add-item-url').click()`。`add-dialog` 出現，標題 `add-dialog-title` 為「加入網址」，焦點在 `add-url`。空 Vault 另以 `add-document-empty` 重走同一入口。
 - **貼網址。** `getByTestId('add-url').fill(<影片網址>)`。等 `add-confirm` 文字為「加入」且 enabled。
 - **加入。** 點 `add-confirm`。`add-dialog` detached，仍在 `page-documents`，沒有 `notice` 提示，列表沒有進行中項目。
 - **完成。** 等 `document-list` 出現影片標題（合成約 1 秒）。
@@ -39,4 +39,4 @@ Preconditions:
 
 ## Regression flows
 
-沒有已收錄的流程。
+- `workspace-content`：斷言 `collect-add`、`collect-mismatch`、`collect-done`、`collect-read`、`collect-fail`。兩個加入入口、類型切換、文件／來源連結、單篇不建立訂閱，以及收集失敗後的工作列。

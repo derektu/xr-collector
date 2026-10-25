@@ -23,6 +23,7 @@ Preconditions:
 - W1 用 Web 合成資料 instance，不修改作業系統。
 - D1 用 macOS、Windows 原生開發 Electron 驗證設定頁與 Agent 都拒絕註冊；不修改作業系統登入項目。
 - P1～P3 必須在兩台 VM 用本票同一 commit 打包並安裝，實際讀寫各平台登入項目；P2 可走安裝版的受控啟動辨識，但不能取代真實登入。
+- 程式以 `app.isPackaged` 判定是否能操作 OS；未安裝的 `.app` 與 `win-unpacked` 也具備此能力。隔離 profile 不會隔離作業系統登入項目，本機打包 smoke 不點這個開關；正向案例仍使用 VM 的安裝版。
 - V1／V2 沿用 P scenarios 的 VM 安裝版；會真的登出再登入，只在使用者確認時段後執行。
 
 - **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 必須 disabled，`login-startup-status` 說明只能在安裝版設定。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。
@@ -39,4 +40,4 @@ Preconditions:
 
 ## Regression flows
 
-- `login-startup`：斷言 `login-startup-setting`、`login-startup-unavailable`、`login-startup-os-state`。先驗 Web 設定頁停用與兩個 listener 拒絕；再以清楚標示的 run-local 平台 fixture 實際點擊開啟、模擬寫入失敗後 read-back、需要核准，以及 OS 外部停用後 focus 刷新。fixture 不代表真實 OS 已註冊。
+- `login-startup`：斷言 `login-startup-setting`、`login-startup-unavailable`、`login-startup-os-state`。先驗 Web 設定頁停用與兩個 listener 拒絕；再以清楚標示的 run-local 平台 fixture 實際點擊開啟、模擬寫入失敗後 read-back、需要核准、OS 外部停用後 focus 刷新，以及慢速舊 GET 不得蓋掉新 PUT 的競態。fixture 不代表真實 OS 已註冊。

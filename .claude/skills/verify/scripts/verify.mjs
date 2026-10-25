@@ -3,7 +3,7 @@
 // Ticket flows import lib/index.mjs for everything else. Run from the checkout under test:
 //   node .claude/skills/verify/scripts/verify.mjs <command> [options]
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
@@ -130,15 +130,23 @@ async function doctor() {
   const report = { checkout, ...commitOf(checkout), environment: machine, ...(o.app ? { app: path.resolve(o.app) } : {}), missing, checks, slots, evidenceRoot: path.dirname(evidenceDir('x')) };
   let healthy = required.every((key) => checks[key].ok);
   if (o.run) {
-    const instance = attach(o.run);
-    const get = (route) => fetch(`${instance.url}${route}`).then((response) => response.json(), () => null);
+    const stored = JSON.parse(await readFile(path.join(o.run, 'run.json'), 'utf8'));
+    const native = stored.kind === 'electron';
+    // Native UI driving stays with its owner. Doctor only reads the authenticated Agent API.
+    const instance = native ? stored : attach(o.run);
+    const connection = native ? JSON.parse(await readFile(path.join(instance.profile, 'agent-connection.json'), 'utf8')) : null;
+    const url = connection?.url ?? instance.url;
+    const headers = connection ? { authorization: `Bearer ${connection.token}` } : {};
+    const get = (route) => fetch(`${url}${route}`, { headers }).then((response) => response.ok ? response.json() : null, () => null);
     const vault = await get('/api/vault/status');
     const search = await get('/api/search/status');
+    const setup = native ? await get('/api/vault/setup') : null;
     const now = commitOf(instance.checkout);
     report.instance = {
-      runDir: instance.runDir, url: instance.url, data: instance.data, vault: instance.vault, pid: instance.pid,
+      runDir: instance.runDir, url, data: instance.data, vault: instance.vault, pid: instance.pid,
+      ...(native ? { connection: 'authenticated-agent-api', vaultSetupState: setup?.vault?.state ?? null } : {}),
       processes: runProcesses(instance).map((member) => member.pid),
-      health: await fetch(`${instance.url}/api/health`).then((response) => response.ok, () => false),
+      health: await fetch(`${url}/api/health`, { headers }).then((response) => response.ok, () => false),
       search: search?.status?.state ?? null,
       vaultPath: vault?.vaultPath ?? null,
       vaultInsideRun: Boolean(vault?.vaultPath?.startsWith(instance.runDir)),
@@ -147,7 +155,8 @@ async function doctor() {
         : now.sourceHash !== instance.sourceHash ? 'checkout has uncommitted changes made after launch; relaunch to test them' : null,
     };
     const i = report.instance;
-    healthy &&= i.processes.length > 0 && i.health && (instance.vault === 'none' || (i.search === 'ready' && i.vaultInsideRun));
+    const noVault = native ? setup?.vault?.state === 'not_ready' : instance.vault === 'none';
+    healthy &&= i.processes.length > 0 && i.health && (noVault || (i.search === 'ready' && i.vaultInsideRun));
   }
   if (o.issue) report.evidence = { issue: o.issue, ...evidenceFreshness(evidenceDir(o.issue), { local: checkoutRoot() }) };
   report.healthy = healthy;

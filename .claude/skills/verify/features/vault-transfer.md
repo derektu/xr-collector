@@ -28,22 +28,24 @@ Preconditions:
 
 - **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是 run 目錄內的 `vault`，`vault-counts` 與文件數一致。
 - **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector 匯出/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
-- **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-next`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
-- **完全取代。** 同上選 `import-mode-replace`，`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
+- **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-compare`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
+- **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
 - **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`。
 - **搬移。** `vault-move` → `move-dialog`，`move-target` 填 `<runDir>/moved-vault`。等 `move-facts` 顯示檢查結果（`move-check-problem` 不出現）後點 `move-confirm`，完成出現 `move-result-path`。`vault-path` 變成新路徑；舊資料夾不再有文件；`GET /api/vault/status` 的 `vaultPath` 一致；文件頁與搜尋照常。
 - **開啟其他。** `vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-next` → `open-vault-confirm`，`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
 - **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「搬移…」「開啟其他…」disabled。
+- **等待與取消。** 以慢速收集製造進行中的工作，再開始匯入比對。等待時 `transfer-cancel` 可取消並立即釋放鎖，回到可重新比對的輸入階段；工作頁、原始活動與摘要 API 仍可讀。再比對並完成後，確認收集繼續。
 - **Desktop 對話框。** Electron 中 `stubDialogs(desktop.app, { save: <zip 路徑>, open: <zip 或資料夾> })` 後按同樣的按鈕；`globalThis.__dialogCalls` 記錄對話框參數，流程直接進入執行階段。
 
 ## Gotchas
 
 - 預設的 `selected` Vault 才能搬移；`fixed` 是刻意的限制，不是 bug。
-- 搬移或匯入進行中，收集暫停；同時跑訂閱檢查的 scenario 會看到暫停狀態。
+- 匯出、匯入比對／套用、搬移與切換都取得操作鎖並暫停派工；已開始的收集步驟先完成。比對完成會釋放鎖，收集可能改變基準；套用前若基準已改變，取消預覽並重新比對。
+- 匯出只帶知識庫文件、訂閱、排程與刪除紀錄。登入自啟是裝置設定，不會隨 zip 搬到另一台電腦。
 - 搬移目標必須不存在或是空資料夾；指向 run 目錄外會把資料留在受測範圍之外，`stop` 不會清掉。
 - Web 模式沒有 `xrCollectorDesktop` bridge，「在 Finder 顯示」類按鈕（`export-reveal`、`vault-reveal`）只在 Desktop 驗證。
 - 兩個 instance 同時跑會占兩個 slot；結束時兩個都要 stop。
 
 ## Regression flows
 
-- `vault-transfer`：`vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換到不同內容的 Vault、收集中匯入比對與固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
+- `vault-transfer`：`vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。

@@ -65,6 +65,7 @@ node .claude/skills/verify/scripts/verify.mjs doctor                 # 環境與
 node .claude/skills/verify/scripts/verify.mjs doctor --run <runDir>  # 加上這個 instance
 node .claude/skills/verify/scripts/verify.mjs doctor --app "release/mac-arm64/XR Collector.app"   # 加上受測的打包版
 node .claude/skills/verify/scripts/verify.mjs doctor --electron       # 開發版 Electron 的流程
+node .claude/skills/verify/scripts/verify.mjs doctor --electron --run <runDir>  # 唯讀檢查存活的 Electron instance
 node .claude\skills\verify\scripts\verify.mjs doctor --app "release\win-unpacked\XR Collector.exe"   # Windows 的打包版
 node .claude/skills/verify/scripts/verify.mjs doctor --issue 91           # 加上 issue 91 的證據是否對應目前的程式
 ```
@@ -72,6 +73,8 @@ node .claude/skills/verify/scripts/verify.mjs doctor --issue 91           # 加�
 唯讀。檢查平台與 Node 架構（Mac arm64 或 Windows x64）、Node ≥ 22.12、`node_modules`（tsx、playwright）、Chromium（Web 模式，Windows 不需要）、`resources/bin/<平台>` 的 Meilisearch／yt-dlp／Deno（Windows 是 `.exe`）、開發版 Electron 的執行檔（Windows 是 `node_modules/electron/dist/electron.exe`）與 `dist/node`，以及每個 slot 是 free、in use 還是 stale lock。`environment` 記錄平台、OS 版本、Node 與機器的架構；Node 以模擬執行時（Windows ARM64 上的 x64 Node、Rosetta 下的 x64 Node）`emulated` 為 true，`platform` 的值寫成 `win32 x64 (emulated on arm64)`。加 `--app` 再檢查受測的打包版：`.app` 或 `.exe` 與它的執行檔、`app.asar`、打包版 resources 內 `bin` 的 Meilisearch／yt-dlp／Deno、執行檔的架構與 Node 相同（Mac 讀 `lipo`，Windows 讀 PE header）、Electron fuses 允許 Playwright 連線（`appFuses`，值是 fuse wire，例如 `101100011`；Mac 在 Electron Framework，Windows 在 `.exe` 內）。加 `--run` 再檢查：PID 存活且命令列屬於這個 run、health、search 狀態、Vault 路徑在 run 目錄內、受測 checkout 的 commit 是否已與啟動時不同。
 
 輸出的 `missing` 列出每個沒通過的項目、路徑與修正方式，`required: true` 的項目讓 `healthy` 為 false、exit code 為 2；開發版 Electron 的項目只有 Electron 流程需要，加 `--electron` 時才列為 required。Chromium 只有 Web 模式需要：加 `--app` 或 `--electron` 時不列為 required（Windows 一律不列）。在另一台機器執行失敗時，先看 `missing`。任何結果看起來不對時，先跑 doctor。
+
+Electron 的 `doctor --run` 讀取 run 的 Agent 連線檔，僅以授權 API 檢查 health、Vault 與搜尋，不接手 Playwright。未選 Vault 時以 `/api/vault/setup` 的 `not_ready` 確認是 onboarding；已選 Vault 則仍要求搜尋 ready 與 Vault 在 run 目錄內。其他操作仍只由啟動 Electron 的流程執行。
 
 加 `--issue <N>` 再列出執行指令所在 worktree 的 `.local/ticket-artifacts/<N>/` 底下每一份 `results.json`（含 label 子資料夾），以它記錄的 `checkout` 目前的 commit 與 `sourceHash` 比對記錄值：兩者都相同為 `current`，任一不同為 `STALE`，`reasons` 寫出哪一項不同與前後的值（只有 sourceHash 不同表示未提交的內容不同）；無法解析的檔案為 `unreadable`。記錄的 checkout 在這台機器不存在時（例如在另一台機器跑完取回的證據），改以執行 doctor 的 checkout 比對，`comparedWith` 與 `reasons` 註明。輸出在 `evidence`，`stale` 是 STALE 的份數；證據新舊不影響 `healthy` 與 exit code。交付或引用證據前跑一次，STALE 的證據針對目前的程式重跑。
 
@@ -161,6 +164,7 @@ node $V flows run --issue 91 --label ticket                          # 不給名
 
 - **版本**：流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 只決定受測的 `src/`：Web UI 從受測 checkout build，伺服器是受測 checkout 自己的 `server.mts`。基準與本票版本因此跑同一份斷言，受測 checkout 沒有這支流程也能當基準。票自己的 `.local` 流程則從受測 checkout import 函式庫（見「基準」）。
 - **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
+- **內容操作**：`workspace-content` 串接單篇收集、失敗工作重試／移除、RSS 設定、文件分頁／搜尋／刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
 - **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
@@ -250,7 +254,7 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 - Mac 的 ad-hoc 簽署後的啟動；
 - `electron-builder.yml` 的打包設定，例如帶進 `.app` 的檔案與 `extraResources`。
 
-畫面、API 與資料流的行為在開發版與打包版相同，平常用 Web 模式或開發版驗證；打包版留給上列項目、發版前的 smoke 與安裝包相關的票。
+共用畫面、API 與資料流平常用 Web 模式或開發版驗證；打包版另驗上列項目、發版前 smoke 與安裝包相關的票。[登入自啟](features/login-startup.md) 是明確的平台差異：Web／開發版拒絕設定，打包版可操作真實 OS 登入項目，正向驗收使用 VM 的安裝版。
 
 打包版不需要 checkout 的 build：用 `vault: 'none'` 經 Onboarding 建立 Vault，就只需要 `.app` 與這個 skill 的 `node_modules`（Playwright）。`vault: 'selected'` 仍需要 checkout 的 `dist/node`。
 
@@ -258,7 +262,7 @@ Playwright 以 `_electron.launch` 啟動打包版，靠 Electron fuses 的 `Enab
 
 Windows 的 NSIS 安裝程式本身（安裝、捷徑、解除安裝）不經過 verify；verify 啟動的是安裝程式包進去的同一個 `win-unpacked` 內容。
 
-打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。產品沒有自動更新、登入項目或網址協定的註冊，profile 與 Vault 之外的路徑都由環境變數導進 run 目錄；macOS 仍會在每次啟動時把 StoreKit 的時間戳 `SKPurchaseIntentUpdatesLastChecked` 寫進 `~/Library/Preferences/<bundle id>.plist`，安裝的 App 啟動時也一樣，這是唯一允許的變動。
+打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。profile、Vault、匯出與備份可導進 run 目錄，但 OS 登入項目不受這些路徑隔離。主機打包 smoke 使用全新隔離 profile、不切換登入自啟；Windows 沿用登入設定的 profile 手動啟動還可能修復搬移後的 OS 註冊，這類案例也在 VM 執行。登入項目的真實註冊、外部停用與登入行為依 [login-startup.md](features/login-startup.md) 的 VM 前置條件與時段執行。macOS 啟動仍可能寫入 StoreKit 時間戳 `SKPurchaseIntentUpdatesLastChecked`；smoke 的使用者資料比較會排除此欄位。
 
 **打包版 smoke**：一個指令跑完，不需要互動，全部通過 exit code 為 0，任一項失敗不為 0：
 
@@ -276,7 +280,9 @@ node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked
 node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <dir>
 ```
 
-流程：啟動（確認 `isPackaged`、從 `app.asar` 載入、`Resources` 在受測的 `.app` 內、profile 在 run 目錄）→ Onboarding 選擇目錄並建立知識庫 → 經畫面收集一支真實 YouTube 影片（`REAL.video`），斷言閱讀頁有字幕、知識庫有對應的 Markdown 檔，以及 Meilisearch 與 yt-dlp 從受測程式自己的 bin 啟動（打包版是 `.app/Contents/Resources/bin`，開發版是 checkout 的 `resources/bin/mac`；以取樣 App 的程序樹取得執行檔路徑；Windows 一次取樣要好幾秒，另以 WMI 的程序啟動事件補上取樣之間啟動又結束的 yt-dlp）→ 重啟後文件仍在，登入項目與更新來源不變 → 結束，斷言沒有命令列含有 run 目錄的程序、slot 已釋放、7222／7175 的 listener、使用者的 Agent 連線檔（`~/Library/Application Support/XR Collector/agent-connection.json`），以及 `~/Library` 中屬於這個 bundle id 的 Preferences（時間戳除外）、Caches、HTTPStorages、Saved Application State 與 Application Support 前後相同。同一個程式另有不是 verify 啟動的 instance 在跑（例如使用者安裝的 App）時，它自己會寫入這些 `~/Library` 狀態，分不出是誰寫的，所以這幾項不比對：輸出列出略過的項目，`results.json` 的 `userAppRunning` 為 true；port listener 與 Agent 連線檔照常比對。Windows 的流程相同，只有平台的位置不同：受測程式自己的 bin 是 `.exe` 旁的 `resources\bin`（開發版是 checkout 的 `resources\bin\win`），程序樹與命令列來自 CIM；DESKTOP-05 比對的使用者資料夾是 `%APPDATA%` 與 `%LOCALAPPDATA%` 下的 `XR Collector`、`xr-collector`、`Electron`，Agent 連線檔是 `%LOCALAPPDATA%\XR Collector\agent-connection.json`。需要網路；YouTube 限流時收集的 scenario 失敗。證據預設在 `.local/ticket-artifacts/<issue>/<packaged|development>[-N]/`（issue 預設 `verify-smoke`），`--evidence` 指定時只寫該目錄。
+流程：啟動（確認 `isPackaged`、從 `app.asar` 載入、`Resources` 在受測的 `.app` 內、profile 在 run 目錄）→ Onboarding 選擇目錄並建立知識庫 → 經畫面收集一支真實 YouTube 影片（`REAL.video`），斷言閱讀頁有字幕、知識庫有對應的 Markdown 檔，以及 Meilisearch 與 yt-dlp 從受測程式自己的 bin 啟動（打包版是 `.app/Contents/Resources/bin`，開發版是 checkout 的 `resources/bin/mac`；以取樣 App 的程序樹取得執行檔路徑；Windows 一次取樣要好幾秒，另以 WMI 的程序啟動事件補上取樣之間啟動又結束的 yt-dlp）→ 重啟後文件仍在，第一次與重啟後取樣的 `openAtLogin`／更新來源相同 → 結束，斷言沒有命令列含有 run 目錄的程序、slot 已釋放、7222／7175 的 listener、使用者的 Agent 連線檔（`~/Library/Application Support/XR Collector/agent-connection.json`），以及 `~/Library` 中屬於這個 bundle id 的 Preferences（時間戳除外）、Caches、HTTPStorages、Saved Application State 與 Application Support 前後相同。同一個程式另有不是 verify 啟動的 instance 在跑（例如使用者安裝的 App）時，它自己會寫入這些 `~/Library` 狀態，分不出是誰寫的，所以這幾項不比對：輸出列出略過的項目，`results.json` 的 `userAppRunning` 為 true；port listener 與 Agent 連線檔照常比對。Windows 的流程相同，只有平台的位置不同：受測程式自己的 bin 是 `.exe` 旁的 `resources\bin`（開發版是 checkout 的 `resources\bin\win`），程序樹與命令列來自 CIM；DESKTOP-05 比對的使用者資料夾是 `%APPDATA%` 與 `%LOCALAPPDATA%` 下的 `XR Collector`、`xr-collector`、`Electron`，Agent 連線檔是 `%LOCALAPPDATA%\XR Collector\agent-connection.json`。需要網路；YouTube 限流時收集的 scenario 失敗。證據預設在 `.local/ticket-artifacts/<issue>/<packaged|development>[-N]/`（issue 預設 `verify-smoke`），`--evidence` 指定時只寫該目錄。
+
+Desktop smoke 的登入項目比較只涵蓋第一次啟動後與重啟後取樣的 `openAtLogin`；不證明首次啟動沒有異動註冊、註冊路徑／參數／核准狀態未變，或真實登入成功。這些行為依 [登入自啟](features/login-startup.md) 的原生安裝版案例驗證。
 
 **受測程式的紀錄**：Desktop run 的 `results.json` 以 `target` 記錄受測的程式，開發版與打包版、Mac 與 Windows 的欄位都相同：`kind`（`packaged`／`development`）、`app`（打包版的 `.app` 或 `.exe` 路徑，開發版為 null）、`executable`、`version` 與 `arch`（程式自己回報的 `app.getVersion()` 與 `process.arch`）、`platform`、`connection`。`commit`、`sourceHash` 記錄的是執行 skill 的 checkout，打包版的版本以 `target` 為準。每個 `results.json` 另以 `environment` 記錄執行的機器：`platform`、`osRelease`、`osVersion`、`node`、`nodeArch`、`hostArch`、`emulated`。
 
