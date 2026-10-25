@@ -113,7 +113,7 @@ class AgentConnectionService implements AgentConnectionAccess {
 }
 
 export async function startAgentAccess(options: {
-  collector?: StartServerOptions['collector']; jobs?: StartServerOptions['jobs']; activity?: StartServerOptions['activity']; protectSecret?: (secret: string) => void;
+  buildInfo?: StartServerOptions['buildInfo']; collector?: StartServerOptions['collector']; jobs?: StartServerOptions['jobs']; activity?: StartServerOptions['activity']; protectSecret?: (secret: string) => void;
   transfer?: StartServerOptions['transfer']; subscriptions?: StartServerOptions['subscriptions']; schedule?: StartServerOptions['schedule']; search?: StartServerOptions['search'];
   pacing?: StartServerOptions['pacing']; connectivity?: StartServerOptions['connectivity']; preferredPort: number; settingsFile: string; skillPath: string;
   runtimeStatus?: StartServerOptions['runtimeStatus']; notReady?: StartServerOptions['notReady']; vaultSetup?: StartServerOptions['vaultSetup'];

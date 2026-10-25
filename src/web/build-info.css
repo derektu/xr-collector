@@ -1,0 +1,12 @@
+.build-info dl { display:grid; gap:8px; margin:14px 0 0; font-size:12px; line-height:1.6; }
+.build-info dl > div { display:grid; grid-template-columns:82px minmax(0,1fr); gap:12px; }
+.build-info dt { color:var(--secondary); }
+.build-info dd { margin:0; color:var(--primary); overflow-wrap:anywhere; }
+.build-info-version { font-variant-numeric:tabular-nums; }
+.onboarding-with-build-info .onboarding-screen { min-height:0; }
+.onboarding-with-build-info .onboarding-main { min-height:calc(100vh - 165px); }
+.build-info-compact { padding:12px clamp(20px,4vw,54px) 18px; color:var(--secondary); background:var(--base); font-size:11px; line-height:1.6; }
+.build-info-compact p { margin:0 0 4px; }
+.build-info-compact dl { display:flex; flex-wrap:wrap; gap:2px 18px; margin:0; }
+.build-info-compact dl > div { display:flex; gap:6px; min-width:0; }
+.build-info-compact dd { margin:0; overflow-wrap:anywhere; }

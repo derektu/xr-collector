@@ -12,7 +12,7 @@
 | 工作與服務 | 目前程序內的批次工作與排程 | 非同步持久工作、接續與重試、活動記錄、桌面常駐 |
 | Agent | 只讀 HTTP API、每次啟動的連線檔 | 完整業務操作與受控的本機連線資料 |
 | Vault | Markdown 保存、完整匯出／還原／比對合併 | Onboarding、選址、安全搬移及新資料契約整合 |
-| 驗證與交付 | #25 已關閉：CI、獨立原生驗證；Mac arm64／Windows x64 打包入口已可用 | Mac x64、正式簽署、公證、完整安裝驗收、Release 與更新 |
+| 驗證與交付 | #25 已關閉：CI、獨立原生驗證；Mac arm64／Windows x64 打包入口已可用 | 兩平台本機正式候選包、完整安裝驗收、Release 與更新 |
 
 本輪 20 張執行票中，#25 已關閉，其餘 19 張仍開啟；#24 是總覽，不計為執行票。第一輪 #3–#9 的功能是本輪擴充與遷移的基礎，既有資料與必要行為仍須保持相容。
 
@@ -23,7 +23,7 @@
 - **實作提案**：第 4 節記錄程式檢視基準，第 5 節的模組、欄位及 API 形狀供實作時收斂，不是要求照抄的最終設計。
 - **執行與驗收**：依第 6 節的依賴選票，開工前在對應 issue 批准細部 scenario；完成後更新該票的證據與狀態。票與本計畫有需求衝突時先釐清，不能自行降低驗收標準。
 
-建議下一步先確認 #23 的設計基準；#22 服務 runtime 可依契約獨立推進，#19 App Shell 與各功能票依第 6 節銜接。#34 可提早處理剩餘平台與簽署可行性，不必等全部 UI 完成。這是依賴順序建議，不表示這些票已開始或已完成。
+建議下一步先確認 #23 的設計基準；#22 服務 runtime 可依契約獨立推進，#19 App Shell 與各功能票依第 6 節銜接。交付鏈依 #139 review／merge → #34 本機封裝 → #35 發布推進；#34 不必等全部 UI 完成。這是依賴順序建議，不表示這些票已開始或已完成。
 
 ## 1. 第二輪的產品成果
 
@@ -168,7 +168,7 @@ Skill 說明所有已交付的 API、參數、工作生命週期及錯誤處理�
 | `src/vault/vault-package.ts`、`src/vault/vault-merge.ts`、`src/vault/workspace.ts:291` | package 有完整性及路徑檢查，但文件／設定驗證與 merge 後取文含 YouTube 假設 | 來源擴充必須涵蓋備份／還原／合併，不能只換 collector interface；新增刪除紀錄也需要語意驗證 |
 | `src/web/App.tsx`、`src/web/api-client.ts` | 一個 App 管理多組狀態、輪詢、操作及閱讀；列表一次取完；Reader 用空行分段 | 按頁面與功能分離，集中工作追蹤與快取失效；加入分頁、過期回應防護及真正的 Markdown 呈現 |
 
-交付基礎：#25 已提供 GitHub Actions CI、可攜原生驗證工作區，以及 Mac arm64／Windows x64 打包入口。正式簽署、Mac x64、Release 與更新鏈由 #34–#36 驗收；Windows ARM 的 x64 模擬結果不替代原生 x64 硬體驗收。命令與能力邊界見 [開發驗證流程](development-validation.md)。
+交付基礎：#25 已提供 GitHub Actions CI、可攜原生驗證工作區，以及 Mac arm64／Windows x64 打包入口。#34 從使用者的 Apple Silicon Mac 與 Parallels Windows ARM VM 產生兩平台正式候選包；Windows 使用 x64 Node／toolchain 模擬執行並如實記錄 host 與 process 架構。Release 與更新鏈由 #35–#36 驗收，CI 產物只作補充檢查，不是正式 Release binary 的來源。命令與能力邊界見 [開發驗證流程](development-validation.md)。
 
 現有值得保留的基礎：Electron 載入標準 HTTP 畫面、UI／Agent 共用業務能力、Vault 是正式資料、索引可重建、擷取工具可替換、合併前備份與中斷恢復、可注入相依與既有行為測試。第二輪無須更換 React／Fastify／Electron／Meilisearch。
 
@@ -274,13 +274,13 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 ### 5.6 CI、Release 與自動檢查更新
 
-本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64、macOS Apple Silicon（arm64）與 Intel Mac（x64）；自動化檢查與手動建置驗證共同涵蓋此平台矩陣，包含安裝產物、內附 runtime 及更新 metadata。以下為建議工作拆分：
+本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在使用者的 Mac 建置；Windows x64 正式候選包在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。兩個環境都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及更新 metadata。詳細契約見 [本機安裝包計畫](local-packaging-plan.md)。
 
 | 項目 | 開發範圍 | 完成驗證 |
 |---|---|---|
-| CI | 每次 MR／分支變更執行可重現的相依安裝、typecheck、測試與 build；平台工作涵蓋封裝所需依賴 | 失敗檢查阻止版本發布；下載工具／引擎使用指定版本與完整性校驗 |
-| Release | 由版本 tag 對應固定 commit，產出版本資訊、release notes、平台安裝產物及更新 metadata | macOS／Windows 各自可安裝、啟動、收集與搜尋；安裝包包含 runtime 依賴與 Agent Skill |
-| 簽署與發布 | 規劃平台簽署／公證及發布位置，CI 憑證由受保護設定提供 | 從實際發布位置安裝與驗證產物；簽署與發布通道契約於實作前確認 |
+| CI | 每次 MR／分支變更執行可重現的相依安裝、typecheck、測試與 build；原生 job 檢查平台 runtime 與 API | 失敗檢查阻止版本發布；結果是本機正式候選包的補充證據，不提供 Release 安裝包 |
+| 本機封裝 | 由固定 commit／版本產出版本資訊、平台安裝包與 updater metadata | Mac arm64／Windows x64 各自可安裝、啟動、收集與搜尋；安裝包包含 runtime 依賴與 Agent Skill，並記錄版本、日期、commit、架構與 checksum |
+| 發布 | 使用者的 Mac 上傳兩個指定環境已驗證的產物，建立版本、release notes 與下載附件 | 發布附件與 updater metadata 對應同一 commit／版本；未簽章產物可交付，簽署與公證不構成本輪 gate |
 | 自動檢查更新 | 啟動時及定期檢查版本，設定頁提供目前版本、手動檢查與更新狀態 | 最新版、有新版、離線、檢查失敗各有明確呈現，檢查失敗不影響收集 |
 | 更新套用 | 發現新版先通知，使用者按下「更新」後才下載、安裝與重啟；更新資訊在主畫面與常駐入口可見 | 從前一版本實際升級，保留 Vault 選址、設定及未完成工作；安裝失敗有明確恢復方式 |
 
@@ -293,9 +293,9 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 - 檢查結果分為「已是最新版」、「有新版本」及「檢查失敗」。新版顯示版本號、更新說明與「更新」按鈕；失敗提供原因與重試入口。
 - 自動及手動檢查共用狀態；重複點擊不建立並行的檢查或下載。手動檢查本身不代表同意安裝。
 
-版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 的免登入下載位置、存取網路及發布方式於 #35 確認；private GitHub repository 的 Release 不視為匿名下載來源。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
+版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 由公開 repository 的 GitHub Releases 提供免登入下載；#35 確認 repository 已公開及客戶端無登入／token 下載成功。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
 
-macOS 由使用者在自己的 Mac 分別建置 arm64 與 x64 安裝包，內附工具依目標架構準備。Parallels Windows ARM VM 已驗證 x64 打包入口；正式 Windows 建置與原生 x64 驗收環境於 #34 確認。CI 共用檢查與本機 Release script 使用相同版本來源，手動 Mac 建置也須記錄驗證結果。公司已有 Windows 程式碼簽署憑證，實作時確認建置環境的使用方式；Apple Developer 帳號應該有，Mac 簽署及公證能力仍需確認。下載位置的部署與發布方式及 updater 選型於交付票確認。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
+macOS arm64 由使用者在自己的 Apple Silicon Mac 建置；Windows x64 由指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。建置證據保留實際 host、process 與產物架構，不能將 emulated x64 描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收這兩個指定本機環境產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
 
 ## 6. Tickets、依賴與驗收方式
 
@@ -321,7 +321,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 ### 6.2 功能清單與前置依賴
 
-下表依可行的開發順序排列；前置依賴表示該票完成驗收前必須具備的能力，不表示所有工作必須串行。#25 CI 已具備；#23 設計、#22 runtime 可依各自契約推進；#34 在基礎流程可用時提早驗證三平台打包，不等完整 UI 完成。
+下表依可行的開發順序排列；前置依賴表示該票完成驗收前必須具備的能力，不表示所有工作必須串行。#25 CI 已具備；#23 設計、#22 runtime 可依各自契約推進；交付鏈在 #139 review／merge 後進入 #34 兩平台本機封裝，再由 #35 發布，不等完整 UI 完成。
 
 | Ticket | 功能 | 前置依賴 | 獨立驗收入口 |
 |---|---|---|---|
@@ -343,10 +343,10 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | [#31](https://github.com/derektu/xr-collector/issues/31) | 安全搬移 Vault 與接續排隊工作 | [#30](https://github.com/derektu/xr-collector/issues/30)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#21](https://github.com/derektu/xr-collector/issues/21) | 設定頁搬移流程／位置、工作佇列接續、Agent move／status 與搬移後文件／搜尋。 |
 | [#32](https://github.com/derektu/xr-collector/issues/32) | 系統匣／選單列常駐與收集進度 | [#29](https://github.com/derektu/xr-collector/issues/29)、[#21](https://github.com/derektu/xr-collector/issues/21) | 真實 Desktop 原生常駐選單／面板、主視窗關閉前後的進度及 Agent 可存取性。 |
 | [#33](https://github.com/derektu/xr-collector/issues/33) | 登入自動啟動設定 | [#32](https://github.com/derektu/xr-collector/issues/32) | 設定開關、實際登出／登入後的桌面常駐與服務狀態。 |
-| [#34](https://github.com/derektu/xr-collector/issues/34) | 三平台安裝包與可重現簽署建置 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22) | 三平台實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄簽署與架構。 |
-| [#35](https://github.com/derektu/xr-collector/issues/35) | 版本 Release 與免登入下載來源 | [#34](https://github.com/derektu/xr-collector/issues/34) | GitHub Release 頁與另定的匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。 |
+| [#34](https://github.com/derektu/xr-collector/issues/34) | 兩平台本機安裝包與可重現建置 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#139](https://github.com/derektu/xr-collector/issues/139) | 指定本機環境產生的 Mac arm64／Windows x64 安裝包、安裝／啟動畫面、版本、日期、commit、runtime 與 updater metadata。 |
+| [#35](https://github.com/derektu/xr-collector/issues/35) | 版本 Release 與免登入下載來源 | [#34](https://github.com/derektu/xr-collector/issues/34) | 公開 GitHub Release 頁、附件與更新 metadata，從無登入／token 的乾淨客戶端取得指定版本。 |
 | [#36](https://github.com/derektu/xr-collector/issues/36) | 自動／手動檢查與使用者觸發更新 | [#35](https://github.com/derektu/xr-collector/issues/35)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33) | 設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。 |
-| [#10](https://github.com/derektu/xr-collector/issues/10) | 三平台整體交付與截圖驗收 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#23](https://github.com/derektu/xr-collector/issues/23)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#21](https://github.com/derektu/xr-collector/issues/21)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27)、[#52](https://github.com/derektu/xr-collector/issues/52)、[#53](https://github.com/derektu/xr-collector/issues/53)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29)、[#17](https://github.com/derektu/xr-collector/issues/17)、[#30](https://github.com/derektu/xr-collector/issues/30)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33)、[#34](https://github.com/derektu/xr-collector/issues/34)、[#35](https://github.com/derektu/xr-collector/issues/35)、[#36](https://github.com/derektu/xr-collector/issues/36) | 最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
+| [#10](https://github.com/derektu/xr-collector/issues/10) | 兩平台整體交付與截圖驗收 | [#25](https://github.com/derektu/xr-collector/issues/25)、[#23](https://github.com/derektu/xr-collector/issues/23)、[#19](https://github.com/derektu/xr-collector/issues/19)、[#22](https://github.com/derektu/xr-collector/issues/22)、[#21](https://github.com/derektu/xr-collector/issues/21)、[#20](https://github.com/derektu/xr-collector/issues/20)、[#18](https://github.com/derektu/xr-collector/issues/18)、[#26](https://github.com/derektu/xr-collector/issues/26)、[#27](https://github.com/derektu/xr-collector/issues/27)、[#52](https://github.com/derektu/xr-collector/issues/52)、[#53](https://github.com/derektu/xr-collector/issues/53)、[#28](https://github.com/derektu/xr-collector/issues/28)、[#29](https://github.com/derektu/xr-collector/issues/29)、[#17](https://github.com/derektu/xr-collector/issues/17)、[#30](https://github.com/derektu/xr-collector/issues/30)、[#31](https://github.com/derektu/xr-collector/issues/31)、[#32](https://github.com/derektu/xr-collector/issues/32)、[#33](https://github.com/derektu/xr-collector/issues/33)、[#34](https://github.com/derektu/xr-collector/issues/34)、[#35](https://github.com/derektu/xr-collector/issues/35)、[#36](https://github.com/derektu/xr-collector/issues/36) | 最終 Release 的 Mac arm64／Windows x64 完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。 |
 
 ### 6.3 既有 tickets 的責任接續
 
@@ -358,7 +358,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | #20 | Onboarding、選址及重新定位 | 匯出／還原／合併 #30；完整搬移 #31 |
 | #22 | 共用服務 runtime、現有完整 API 與授權遷移 | 所有新 API 由各票同步接入；#21 發現；#10 整合驗收 |
 | #17 | 文件刪除、不抓回與明確重收 | 本票包含刪除資料最小可攜性與衝突處理；#30 完整匯入流程 |
-| #10 | 三平台最終整合與證據索引 | 平台包 #34、發布 #35、更新 #36 各自先驗收 |
+| #10 | 兩平台最終整合與證據索引 | 平台包 #34、發布 #35、更新 #36 各自先驗收 |
 
 #1 保留第一輪歷史並指向本總覽；已完成的 #2–#9 不重開。#11–#16 與播放清單維持後續來源範圍。
 
@@ -709,24 +709,25 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **開工時收斂**：平台登入註冊、安裝位置改變、設定失敗回復與可驗證帳號環境。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#34](https://github.com/derektu/xr-collector/issues/34) 三平台安裝包與可重現簽署建置
+#### [#34](https://github.com/derektu/xr-collector/issues/34) 兩平台本機安裝包與可重現建置
 
-**成果**：相同版本可產出 Windows x64、Mac arm64／x64 安裝包，使用者不需開發環境。
+**成果**：相同版本可從指定本機環境產出 Windows x64 與 Mac arm64 安裝包，終端使用者不需開發環境。
 
-**依賴**：#25、#19、#22。
+**依賴**：#25、#19、#22、#139 review／merge。
 
 **範圍**：
 
-- Mac 由使用者電腦建置；Windows 建置環境另行確認。使用者的 Parallels Windows ARM VM 是待測驗證環境，不等同 Windows x64 原生驗收。
+- Mac arm64 由使用者的 Apple Silicon Mac 建置；Windows x64 由使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。manifest 與驗證報告記錄實際 ARM64 host、x64 process 與 x64 產物。
 - 內附 yt-dlp、Deno、Meilisearch、Agent Skill 依目標架構打包；版本／完整性與 runtime 路徑驗證。
-- 公司 Windows 憑證使用方式實作時確認；Apple Developer 帳號與 Mac 簽署／公證需核實；本機與 CI 使用相同 scripts。
-- 固定 commit／版本，產出安裝包與 updater 所需 metadata；做各目標環境安裝、啟動及基礎收集／搜尋驗證。
+- 固定 commit／版本／建置日期，產出安裝包與 updater 所需 metadata；做各目標環境安裝、啟動及基礎收集／搜尋驗證。
+- 未簽章安裝包可通過本票。簽署、公證與憑證整合不屬於完成 gate，建置與驗收不存取使用者的 Apple Team 或 Windows 簽署憑證。
+- GitHub Actions 與原生 CI 提供補充檢查，不作為正式 Release 安裝包來源。
 
-**驗收介面**：三平台實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄簽署與架構。
+**驗收介面**：兩個指定本機環境產生的實際安裝包、安裝／啟動畫面、版本與 runtime 基本功能；技術證據記錄版本、日期、完整 commit、checksum、host／process／產物架構及 updater metadata。
 
-**責任分工**：不等所有功能才首次打包；後續票沿用 pipeline。發布主機由 #35，客戶端更新由 #36，最終整合由 #10。
+**責任分工**：不等所有功能才首次打包；後續票沿用 pipeline。#35 在使用者的 Mac 上傳並發布 #34 已驗證的兩平台產物；客戶端更新由 #36，最終整合由 #10。
 
-**開工時收斂**：Runner 可用性、憑證使用、target 格式、更新包相容要求及 Intel 實機驗證來源。 詳細驗收計畫於本票實作前依 6.1 擬定。
+**開工時收斂**：本機工具前置、target 格式、版本與建置日期來源、更新包相容要求及可重跑的封裝 manifest。詳細驗收計畫見 [本機安裝包計畫](local-packaging-plan.md)，並依 6.1 記錄在 issue。
 
 #### [#35](https://github.com/derektu/xr-collector/issues/35) 版本 Release 與免登入下載來源
 
@@ -736,16 +737,16 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **範圍**：
 
-- GitHub Releases 管理 tag、固定 commit、release notes 與下載連結；安裝檔及更新 metadata 的免登入下載位置與網路可達範圍於 #35 確認；private repository 的 Release 不視為匿名下載來源。
+- 公開 repository 的 GitHub Releases 管理 tag、固定 commit、release notes、安裝檔及更新 metadata。repository 已公開是發布前置條件；無登入／token 的客戶端須可下載已發布附件。
 - CI 檢查結果與手動平台驗證可追溯；驗證通過的產物才發布，避免 metadata 指到缺漏或不同版本檔案。
-- 定義發布 script／流程、本機 Mac 產物上傳、Windows 產物接入與版本索引；不在安裝包放 GitHub token。
-- 更新來源可替換，設計已安裝版本接續來源變更的路徑；發布位置於本票確認。
+- 定義發布 script／流程，由使用者的 Mac 上傳 Mac 與 Windows 兩個本機正式候選產物並建立版本索引；不在安裝包放 GitHub token。
+- 更新來源可替換，設計已安裝版本接續來源變更的路徑；tag／各 variant metadata URL 於實作時收斂。
 
-**驗收介面**：GitHub Release 頁與另定的匿名 HTTP 下載／metadata，從乾淨客戶端取得指定版本。
+**驗收介面**：公開 GitHub Release 頁、附件與更新 metadata，從無登入／token 的乾淨客戶端取得指定版本。
 
-**責任分工**：主機與實際網址實作時確認；不把發布連結與 updater 客戶端視為同一票。
+**責任分工**：#35 負責公開 GitHub Release 與附件來源；updater 客戶端由 #36。
 
-**開工時收斂**：下載主機、發布權限、metadata／產物原子發布、來源遷移與失敗撤回方式。 詳細驗收計畫於本票實作前依 6.1 擬定。
+**開工時收斂**：repository 公開狀態、發布權限、metadata／產物完整發布、來源遷移與失敗撤回方式。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
 #### [#36](https://github.com/derektu/xr-collector/issues/36) 自動／手動檢查與使用者觸發更新
 
@@ -758,7 +759,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 - 啟動與定期檢查；設定→關於與更新、常駐選單→檢查更新，共用服務狀態與 Agent API。
 - 顯示目前版本、最新版／有新版／失敗、版本說明及更新按鈕；未明確觸發不下載安裝。
 - 協調停派、工作保存與 Vault 搬移／合併，避免寫入中直接重啟；更新後接續工作及原設定。
-- 驗證三平台從前一版本升級、下載／安裝失敗、離線不阻塞收集；更新來源不依賴 GitHub 登入。
+- 驗證 Mac arm64／Windows x64 從前一版本升級、下載／安裝失敗、離線不阻塞收集；更新來源不依賴 GitHub 登入。
 - Agent 可查詢／明確觸發同一更新操作；僅查詢不表示同意安裝。
 
 **驗收介面**：設定與原生常駐入口的更新畫面、實際下載／安裝／重啟後版本，以及 update API。
@@ -767,24 +768,24 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **開工時收斂**：updater 選型、檢查頻率、更新互斥與恢復、舊資料格式相容及測試版本。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
-#### [#10](https://github.com/derektu/xr-collector/issues/10) 三平台整體交付與截圖驗收
+#### [#10](https://github.com/derektu/xr-collector/issues/10) 兩平台整體交付與截圖驗收
 
-**成果**：使用者只看有索引的驗收截圖即可確認可視流程，三個平台有真實可追溯的交付結果。
+**成果**：使用者只看有索引的驗收截圖即可確認可視流程，Mac arm64 與 Windows x64 有真實可追溯的交付結果。
 
 **依賴**：#25、#23、#19、#22、#21、#20、#18、#26、#27、#52、#53、#28、#29、#17、#30、#31、#32、#33、#34、#35、#36。
 
 **範圍**：
 
-- 以最終候選版本及三平台安裝包執行串接驗收，覆蓋訂閱→收集→查詢／刪除、重啟接續、Agent、Vault、常駐、登入自啟、更新。
+- 以最終候選版本及兩平台安裝包執行串接驗收，覆蓋訂閱→收集→查詢／刪除、重啟接續、Agent、Vault、常駐、登入自啟、更新。
 - 整理每票 scenario 與 screenshot 的對照、平台／版本與結果；只針對整合差異補驗，不重新承擔所有功能開發。
 - 真實 YouTube、獨立 Agent process、安裝與前版升級驗證；保留技術測試及不可見資料一致性證據。
-- 交付簡短安裝與使用說明、下載位置與已知限制；缺平台／憑證的驗證明確標示未完成，不能以 build 成功代替。
+- 交付簡短安裝與使用說明、下載位置與已知限制；缺少任一交付平台的驗證明確標示未完成，不能以 build 成功代替。
 
-**驗收介面**：最終 Release 的三平台完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。
+**驗收介面**：最終 Release 的 Mac arm64／Windows x64 完整使用流程與集中截圖索引，對照各票開發前的驗收計畫。
 
 **責任分工**：功能與各票截圖由各 owner 完成；本票只整合 Release 與跨功能／平台驗證，不替未完成票補簽。
 
-**開工時收斂**：最終版本、三平台測試環境與資料、整合 scenario 及需重拍的畫面。 詳細驗收計畫於本票實作前依 6.1 擬定。
+**開工時收斂**：最終版本、兩平台測試環境與資料、整合 scenario 及需重拍的畫面。 詳細驗收計畫於本票實作前依 6.1 擬定。
 
 ### 6.5 驗收風險提示（非各票的定稿 scenario）
 
@@ -835,11 +836,11 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | 服務方向 | Collector 可獨立於 UI 作為背景服務；UI 與 Agent 共用同一服務 |
 | 桌面常駐 | 關閉主視窗後最小化／隱藏至常駐入口，服務繼續執行；入口提供進度 UI |
 | 登入自動啟動 | 設定頁提供開關；預設關閉；啟用後登入時背景常駐，不開啟主視窗 |
-| 交付平台 | Windows x64、macOS Apple Silicon（arm64）、Intel Mac（x64） |
-| 建置環境 | 使用者的 Mac 分別建置 arm64／x64；Parallels Windows ARM VM 已驗證 x64 打包入口，正式建置與原生 x64 驗收環境於 #34 確認 |
-| 簽署資源 | 公司已有 Windows 程式碼簽署憑證；Apple Developer 帳號應該有，Mac 簽署與公證能力於實作時確認 |
+| 交付平台 | Windows x64、macOS Apple Silicon（arm64） |
+| 建置環境 | Mac arm64 在使用者的 Apple Silicon Mac 建置；Windows x64 在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置；CI 只提供補充證據 |
+| 簽署邊界 | 未簽章產物可交付；簽署、公證與憑證整合不構成 #34 驗收 gate，也不在本票存取使用者憑證 |
 | 交付與更新 | 本輪包含 CI、Release、自動及手動檢查更新；發現新版先通知，使用者按下更新後才下載、安裝與重啟 |
-| 發布位置 | GitHub Releases 管理版本；免登入下載位置及存取範圍於 #35 確認，private repo 的 Release 不代表匿名下載 |
+| 發布位置 | 公開 GitHub Releases 管理版本、附件與免登入下載；#35 驗證公開狀態及無登入下載 |
 
 工作併發、重試次數及退避方式、收集設定可接受的數值範圍、時間邊界、休眠恢復判定、列表頁大小與持久狀態格式在實作票訂定。這些細節須滿足以上行為，不把範例或測試值當成額外產品承諾。
 

@@ -3,12 +3,14 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import {
   CollectorError,
+  type BuildInfo,
   type TranscriptSearch,
   type VaultInspection,
   type VaultSetupAction,
   type VaultSetupResult,
   type VaultSetupStatus,
 } from '../core/types.js';
+import { loadBuildInfo } from './build-info.js';
 import { CollectionPause } from '../core/collection-pause.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
@@ -37,6 +39,7 @@ export interface CollectorRuntimeStatus {
 export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity'>;
 
 export interface CollectorRuntimeOptions {
+  buildInfo?: BuildInfo;
   profilePath: string;
   /** Null runs only health and Agent identity, without any Vault services. */
   workspace: VaultServiceOptions | null;
@@ -171,7 +174,7 @@ export class CollectorRuntime {
         }
       },
     } : undefined;
-    const shared = { ...services, connectivity, ...(loginStartup ? { loginStartup } : {}) };
+    const shared = { ...services, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity, ...(loginStartup ? { loginStartup } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),

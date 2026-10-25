@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DEVELOPMENT_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
+import { loadBuildInfo } from '../runtime/build-info.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFolder } from '../vault/transfer-files.js';
 
@@ -26,6 +27,7 @@ const sources = await createSourcePlugins({
   program: (name, environmentName) => binary(environmentName, name),
 });
 const runtime = await CollectorRuntime.start({
+  buildInfo: await loadBuildInfo(),
   profilePath,
   workspace: {
     plugins: sources.plugins,

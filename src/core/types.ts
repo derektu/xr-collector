@@ -1132,3 +1132,17 @@ export function isRetryable(job: Pick<CollectionJob, 'state' | 'kind' | 'parentI
   if (job.parentId !== null) return false;
   return job.state === 'failed' || (jobRole(job.kind)?.role === 'check' && job.state === 'completed' && job.result?.outcome === 'partial');
 }
+
+/** The immutable artifact identity shared by the UI and authorized Agents. */
+export interface BuildInfo {
+  schemaVersion: 1;
+  kind: 'development' | 'packaged';
+  version: string;
+  builtAt: string;
+  commit: string | null;
+  buildId: string;
+  target: string;
+  variant: 'chinese' | 'official' | null;
+  /** Null means source identity could not be determined; it never means a clean checkout. */
+  sourceDirty: boolean | null;
+}
