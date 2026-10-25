@@ -59,6 +59,10 @@ describe('Vault access declared by routes', () => {
     } as unknown as VaultWorkspace;
     const app = await createHttpApp({
       ...(agentToken ? { agentToken } : {}), transfer,
+      loginStartup: {
+        status: async () => ({ supported: true, enabled: false, state: 'disabled', message: 'off' }),
+        update: async (enabled) => ({ supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: 'ok' }),
+      },
       collector: {
         listDocuments: async () => ({ documents: [], total: 0, nextOffset: null }),
         list: async () => [],
@@ -96,9 +100,12 @@ describe('Vault access declared by routes', () => {
       expect(response.statusCode, url).toBe(409);
       expect(response.json().error.code, url).toBe('vault_busy');
     }
-    for (const url of ['/api/jobs', '/api/activity', '/api/vault/status', '/api/health']) {
+    for (const url of ['/api/jobs', '/api/activity', '/api/vault/status', '/api/health', '/api/device/login-startup']) {
       expect((await app.inject({ method: 'GET', url, headers })).statusCode, url).toBe(200);
     }
+    const loginStartup = await app.inject({ method: 'PUT', url: '/api/device/login-startup', headers, payload: { enabled: true } });
+    expect(loginStartup.statusCode).toBe(200);
+    expect(loginStartup.json()).toMatchObject({ loginStartup: { enabled: true } });
     expect((await app.inject({ method: 'POST', url: '/api/search/rebuild', headers })).statusCode).toBe(409);
 
     release();

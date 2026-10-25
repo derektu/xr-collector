@@ -31,6 +31,7 @@ import type {
   ImportPreview,
   VaultSetupResult,
   VaultSetupStatus,
+  LoginStartupStatus,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -75,6 +76,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async getLoginStartup(signal?: AbortSignal): Promise<LoginStartupStatus> {
+    return (await request<{ loginStartup: LoginStartupStatus }>('/api/device/login-startup', signal ? { signal } : undefined)).loginStartup;
+  },
+
+  async setLoginStartup(enabled: boolean, signal?: AbortSignal): Promise<LoginStartupStatus> {
+    return (await request<{ loginStartup: LoginStartupStatus }>('/api/device/login-startup', {
+      method: 'PUT', body: JSON.stringify({ enabled }), ...(signal ? { signal } : {}),
+    })).loginStartup;
+  },
+
   async getVaultSetup(): Promise<VaultSetupStatus> {
     return (await request<{ vault: VaultSetupStatus }>('/api/vault/setup')).vault;
   },

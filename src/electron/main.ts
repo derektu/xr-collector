@@ -11,6 +11,8 @@ import { CloseHintRecord } from './close-hint.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
 import { AppTray } from './tray.js';
 import type { TrayAction } from './tray-menu.js';
+import { DesktopLoginStartup, isLoginStartupLaunch, shouldShowForActivation, type LoginItemAdapter } from './login-startup.js';
+import { WindowCreationGate } from './window-creation.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
@@ -20,6 +22,9 @@ let closeHint: CloseHintRecord | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
 let networkWatch: ReturnType<typeof setInterval> | null = null;
+let pendingManualShow = false;
+const windowCreation = new WindowCreationGate();
+let startupWindowState: { startedAtLogin: boolean; finished: boolean } | null = null;
 /** How often the system's own view of the network is read; reading it sends nothing. */
 const NETWORK_WATCH_MS = 5_000;
 
@@ -41,9 +46,6 @@ const validationNotifications: { title: string; content: string }[] = [];
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
 if (process.platform === 'win32') app.setAppUserModelId('com.moneydj.xrcollector');
-
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) app.quit();
 
 /** An external program's path, by its path under the runtime folder without extension; outside a package an environment variable may name it instead. */
 function runtimePath(name: string, environmentName: string): string {
@@ -70,7 +72,11 @@ async function existingDirectory(start: string): Promise<string> {
   }
 }
 
-async function createWindow(): Promise<void> {
+function createWindow(showInitially = true): Promise<void> {
+  return windowCreation.run(() => createWindowOnce(showInitially));
+}
+
+async function createWindowOnce(showInitially: boolean): Promise<void> {
   if (!runtime) throw new Error('Runtime must start before the window');
   const serverUrl = runtime.server.url;
   const validationSize = /^([0-9]+)x([0-9]+)$/.exec(process.env.XR_COLLECTOR_VALIDATION_WINDOW_SIZE ?? '');
@@ -92,10 +98,12 @@ async function createWindow(): Promise<void> {
       backgroundThrottling: !validationHidden,
     },
   });
+  // Publish the window before loading so an early second-instance request cannot create another.
+  mainWindow = window;
   // The app has no menu commands of its own; macOS keeps the default menu for
   // standard Edit and Quit shortcuts.
   if (process.platform !== 'darwin') window.removeMenu();
-  if (!validationHidden) window.once('ready-to-show', () => window.show());
+  if (!validationHidden && showInitially) window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url);
     return { action: 'deny' };
@@ -115,14 +123,24 @@ async function createWindow(): Promise<void> {
   window.on('closed', () => {
     mainWindow = null;
   });
-  await window.loadURL(serverUrl);
-  mainWindow = window;
+  try {
+    await window.loadURL(serverUrl);
+  } catch (error) {
+    if (mainWindow === window) mainWindow = null;
+    window.destroy();
+    throw error;
+  }
 }
 
 /** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
 function showWindow(page?: 'jobs' | 'activity'): void {
+  pendingManualShow = true;
+  if (windowCreation.current) {
+    // The caller that began creation performs the one pending show after loading completes.
+    return;
+  }
   if (!mainWindow) {
-    if (runtime && !isQuitting) void createWindow().then(() => showWindow(page)).catch((error) => console.error(error));
+    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow(page)).catch((error) => console.error(error));
     return;
   }
   if (page) mainWindow.webContents.send('xrCollector:navigate', page);
@@ -146,11 +164,38 @@ async function hintStillRunning(): Promise<void> {
   await closeHint.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
 }
 
-app.on('second-instance', () => {
-  showWindow();
+app.on('activate', () => {
+  const state = startupWindowState;
+  if (state && shouldShowForActivation(state.startedAtLogin, state.finished) && !isQuitting) showWindow();
 });
 
 app.whenReady().then(async () => {
+  // Electron only publishes macOS wasOpenedAtLogin while finishing launch, immediately before
+  // ready. Each process then sends its own reason through the single-instance lock; a losing
+  // process exits here and never creates a runtime.
+  const startedAtLogin = isLoginStartupLaunch(process.platform, process.argv,
+    process.platform === 'darwin' ? app.getLoginItemSettings({ type: 'mainAppService' }).wasOpenedAtLogin : false);
+  const gotSingleInstanceLock = app.requestSingleInstanceLock({ xrCollectorStartedAtLogin: startedAtLogin });
+  if (!gotSingleInstanceLock) {
+    app.quit();
+    return;
+  }
+  app.on('second-instance', (_event, commandLine, _workingDirectory, additionalData) => {
+    const launchData = additionalData as { xrCollectorStartedAtLogin?: unknown };
+    const secondStartedAtLogin = typeof launchData.xrCollectorStartedAtLogin === 'boolean'
+      ? launchData.xrCollectorStartedAtLogin
+      : isLoginStartupLaunch(process.platform, commandLine);
+    if (!secondStartedAtLogin) showWindow();
+  });
+  startupWindowState = { startedAtLogin, finished: false };
+  const loginItemAdapter: LoginItemAdapter = {
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    executablePath: process.execPath,
+    get: (options) => app.getLoginItemSettings(options),
+    set: (options) => app.setLoginItemSettings(options),
+  };
+  const loginStartup = new DesktopLoginStartup(loginItemAdapter, path.join(app.getPath('userData'), 'login-startup.json'));
   themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
   ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
   ipcMain.handle('xrCollector:theme:write', (_event, theme: unknown) => {
@@ -257,9 +302,24 @@ app.whenReady().then(async () => {
     agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DESKTOP_AGENT_PORT,
     uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
+    loginStartup,
+    startedAtLogin,
   });
+  if (!startedAtLogin) {
+    try {
+      const repair = await loginStartup.repairMovedRegistration();
+      if (repair.repaired) runtime.recordDeviceEvent('info', 'device.login_startup_repaired', 'App 位置改變後，已把登入自啟更新到目前位置。');
+    } catch (error) {
+      runtime.recordDeviceEvent('error', 'device.login_startup_repair_failed', error instanceof Error ? error.message : '無法修復登入自啟。',
+        'login_startup_failed');
+    }
+  }
   watchNetwork();
-  await createWindow();
+  const showInitially = !startedAtLogin || pendingManualShow;
+  await createWindow(showInitially);
+  // A manual request that arrived while a login-startup window was loading was not covered by
+  // ready-to-show. A normal manual first launch already has that one show scheduled.
+  if (startedAtLogin && pendingManualShow && !showInitially) showWindow();
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
     serverUrl: runtime.server.url,
@@ -268,10 +328,7 @@ app.whenReady().then(async () => {
     quit: () => app.quit(),
   });
   if (validationControl) exposeValidationControl(tray);
-
-  app.on('activate', () => {
-    if (!isQuitting) showWindow();
-  });
+  startupWindowState.finished = true;
 }).catch((error) => {
   console.error(error);
   app.quit();

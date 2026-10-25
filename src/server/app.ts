@@ -7,6 +7,7 @@ import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
@@ -116,6 +117,7 @@ export interface VaultSetup {
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
   '/api/health', '/api/agent/connection', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+  '/api/device/login-startup',
 ]);
 
 export interface HttpAppOptions {
@@ -141,6 +143,7 @@ export interface HttpAppOptions {
   /** Returns why business routes are unavailable, or null once a Vault is active. */
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
+  loginStartup?: LoginStartupAccess;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
   /**
@@ -194,6 +197,9 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   transfer_cancelled: 409,
   vault_location_fixed: 409,
   insufficient_space: 507,
+  login_startup_unavailable: 409,
+  login_startup_requires_approval: 409,
+  login_startup_failed: 500,
   capture_failed: 502,
   network_error: 503,
   offline: 503,
@@ -398,6 +404,16 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       connectivity: connectivityStatus(),
       ...(options.activity ? { activityLog: options.activity.health() } : {}),
     };
+  });
+
+  const loginStartup = options.loginStartup ?? unavailableLoginStartup;
+  app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));
+  app.put<{ Body: { enabled?: unknown } }>('/api/device/login-startup', deviceData(), async (request) => {
+    const body = request.body ?? {};
+    if (typeof body.enabled !== 'boolean' || Object.keys(body).some((field) => field !== 'enabled')) {
+      throw new CollectorError('invalid_request', '請只提供 enabled，值必須是布林值。');
+    }
+    return { loginStartup: await loginStartup.update(body.enabled) };
   });
 
   // Each pacing group is labelled with the name its source type declares for it.

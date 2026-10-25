@@ -165,6 +165,16 @@ Content-Type: application/json
 
   不存在的類型或訂閱回 404 `subscription_not_found`。
 
+## 登入電腦時自動啟動
+
+這是本機裝置設定，不屬於 Vault，也不會隨匯出、匯入、搬移或切換 Vault 改變。先以 `GET /api/device/login-startup` 讀取 `loginStartup`：
+
+- `supported` 表示目前是不是已安裝的 macOS／Windows App；`enabled` 必須以作業系統 read-back 為準。
+- `state` 為 `enabled`、`disabled`、`requires_approval` 或 `unavailable`，`message` 是應向使用者說明的狀態。
+- 只有使用者明確要求開啟或關閉時，才以 `PUT /api/device/login-startup` 送出唯一欄位 `{"enabled":true|false}`。成功後回傳同一形狀的 read-back 狀態。
+- Web／開發版不能註冊，PUT 回 409 `login_startup_unavailable`。macOS 要先到系統設定允許時回 409 `login_startup_requires_approval`。作業系統沒有接受或無法讀寫時回 500 `login_startup_failed`；不要把失敗說成已完成。
+- 作業系統設定中的外部停用優先。不要為了恢復開啟而反覆 PUT；向使用者說明目前是關閉，只有再次明確要求才開啟。
+
 ## Vault 設定
 
 每個 Vault 是自成一體的目錄，根目錄有 `xr-collector-vault.json` 標記檔。這台電腦使用哪個 Vault 屬於裝置設定，保存在 Vault 之外；Vault 尚未就緒時，只有 health 與下列設定 API 可用。
@@ -185,6 +195,7 @@ Content-Type: application/json
 | Method 與 path | 輸入／結果 |
 | --- | --- |
 | `GET /api/health` | runtime state、instance、profile、active Vault、Not Ready 原因、`connectivity` 與 `activityLog` |
+| `GET`／`PUT /api/device/login-startup` | GET 回傳安裝版支援、OS read-back 與狀態；PUT 只接受 `{"enabled":true|false}`，只在已安裝的 macOS／Windows App 可改 |
 | `GET /api/documents`、`GET /api/documents/:id` | 列表 query：`sourceType`、`publisherId`、`offset`、`limit`；ID URL encode |
 | `DELETE /api/documents/:id` | 刪除文件並保存刪除紀錄；回傳 `deleted`、`indexed`；已刪除回 404 `document_deleted`；ID URL encode |
 | `GET /api/documents/sources` | 依類型與頻道統計文件數、`subscribed` 與 `removed` |

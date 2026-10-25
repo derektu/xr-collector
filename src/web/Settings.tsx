@@ -3,6 +3,7 @@ import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
 import { VaultLocationSection } from './VaultLocation.js';
+import { LoginStartup } from './LoginStartup.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
@@ -31,6 +32,7 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
+      <LoginStartup onChanged={onChanged} />
       <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} onChanged={onChanged} />
       <SearchIndexCard />
       <section className="settings-section" data-testid="settings-appearance">
