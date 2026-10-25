@@ -142,10 +142,6 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTu
   return workspace;
 }
 
-async function settled(workspace: VaultWorkspace): Promise<void> {
-  await expect.poll(() => workspace.status().state, { timeout: 10_000 }).toMatch(/^(completed|error)$/u);
-}
-
 async function leftovers(folder: string): Promise<string[]> {
   return (await readdir(folder)).filter((name) => /\.(moving|moved)-/u.test(name));
 }
@@ -304,7 +300,7 @@ describe('moving a Vault', () => {
     expect(workspace.status().relocationUnavailable).toBeNull();
     const accepted = await workspace.move(target);
     expect(accepted).toMatchObject({ operation: 'move' });
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({
       state: 'completed', operation: 'move', vaultPath: target,
       result: { previousVaultPath: source, resumedJobs: 0 }, message: expect.stringContaining('原位置已清除'),
@@ -360,7 +356,7 @@ describe('moving a Vault', () => {
       expect(gated.started).toEqual([IDS[0]]);
       expect(jobOf(workspace, jobs[1]!).state).toBe('queued');
       resumeCopy();
-      await settled(workspace);
+      await workspace.operationFinished();
       expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target, result: { resumedJobs: 3 } });
       for (const id of jobs) expect((await workspace.jobs.whenSettled(id)).state).toBe('completed');
       expect(gated.started).toEqual(IDS);
@@ -376,7 +372,7 @@ describe('moving a Vault', () => {
       const events = (await jobStore.activity.query({ limit: 200 }, workspace.activityScope())).events;
       const types = events.map((event) => event.eventType);
       for (const type of ['test.legacy', 'job.accepted', 'vault.move_started', 'vault.moved', 'job.resumed']) expect(types).toContain(type);
-      expect(events.filter((event) => event.eventType === 'job.interrupted').every((event) => event.severity === 'info')).toBe(true);
+      expect(events.filter((event) => event.eventType === 'job.interrupted').every((event) => event.severity === 'debug')).toBe(true);
       expect(events.find((event) => event.eventType === 'job.resumed')!.message).toContain('搬移完成');
       expect(await previousLocations(context.profile, await readVaultId(target))).toEqual([source]);
     } finally { await app.close(); }
@@ -390,7 +386,7 @@ describe('moving a Vault', () => {
     const job = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     await expect.poll(() => gated.started.length).toBe(1);
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'error', errorCode: 'vault_busy', vaultPath: context.source, message: expect.stringContaining('仍在原位置') });
     expect(existsSync(target)).toBe(false);
     expect(() => workspace.enterWrite()()).not.toThrow();
@@ -449,7 +445,7 @@ describe('a move that fails before the switch (A-05)', () => {
     await expect.poll(() => gated.started.length).toBe(1);
     await workspace.move(target);
     gated.open();
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'error', operation: 'move', vaultPath: source, message: expect.stringContaining(`仍在原位置 ${source}`) });
     expect((await workspace.jobs.whenSettled(queued.job.id)).state).toBe('completed');
     await workspace.jobs.whenSettled(first.job.id);
@@ -528,7 +524,7 @@ describe('cleaning the original location after the switch (A-07)', () => {
     const workspace = await open(context);
     const unblock = await blockRename(context.source);
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({
       state: 'completed', vaultPath: target, result: { leftoverPath: context.source }, message: expect.stringContaining('未能清除'),
     });
@@ -549,7 +545,7 @@ describe('cleaning the original location after the switch (A-07)', () => {
     const target = path.join(context.root, 'Moved');
     const workspace = await open(context, { moveFaults: (phase) => { if (phase === 'cleaning') throw new Error('EBUSY'); } });
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     const leftover = workspace.status().result?.leftoverPath;
     expect(leftover).toMatch(/\.moved-[0-9a-f-]{36}$/u);
     expect(existsSync(context.source)).toBe(false);
@@ -571,23 +567,23 @@ describe('an original location that is in use again', () => {
     let workspace = await open(context, { jobStore }, false);
     const unblock = await blockRename(source);
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status().result?.leftoverPath).toBe(source);
     await unblock();
     // The person opens the leftover original again and keeps collecting there.
     await workspace.openOther(source);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: source });
     expect(existsSync(path.join(context.profile, MOVE_JOURNAL))).toBe(false);
     const added = await workspace.jobs.submitItem('youtube', urlOf(IDS[2]!));
     expect((await workspace.jobs.whenSettled(added.job.id)).state).toBe('completed');
     await workspace.openOther(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     await workspace.close();
     workspace = await open(context, { jobStore }, false);
     expect(workspace.status().vaultPath).toBe(target);
     await workspace.openOther(source);
-    await settled(workspace);
+    await workspace.operationFinished();
     await workspace.close();
     workspace = await open(context, { jobStore });
     expect(workspace.status().vaultPath).toBe(source);
@@ -600,7 +596,7 @@ describe('an original location that is in use again', () => {
     const context = await setup();
     const workspace = await open(context, { moveFaults: (phase) => { if (phase === 'cleaning') throw new Error('EBUSY'); } });
     await workspace.move(path.join(context.root, 'Moved'));
-    await settled(workspace);
+    await workspace.operationFinished();
     const leftover = workspace.status().result!.leftoverPath!;
     await expect(workspace.openOther(leftover)).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('暫存資料夾') });
     expect(workspace.status().state).toBe('completed');
@@ -742,12 +738,12 @@ describe('Vault identity (A-08)', () => {
     let fail = true;
     const workspace = await open(context, { moveFaults: (phase) => { if (fail && phase === 'prepared') throw new Error('index'); } });
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status().state).toBe('error');
     expect(stores[0]!.get('legacy-at-target')!.vaultId).toBeUndefined();
     fail = false;
     await workspace.move(target);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: target });
     expect(stores[0]!.get('legacy-at-target')).toMatchObject({ state: 'interrupted' });
     expect(stores[0]!.get('legacy-at-target')!.vaultId).toBeUndefined();
@@ -793,7 +789,7 @@ describe('opening another Vault (A-13)', () => {
     expect(workspace.status().state).toBe('idle');
     await workspace.openOther(b);
     aGate.open();
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({
       state: 'completed', operation: 'open', vaultPath: b, result: { previousVaultPath: a, interruptedJobs: 1, resumedJobs: 1 },
     });
@@ -806,10 +802,10 @@ describe('opening another Vault (A-13)', () => {
     const copy = path.join(root, 'A copy');
     await cp(a, copy, { recursive: true });
     await workspace.openOther(copy);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ vaultPath: copy, result: { resumedJobs: 0 } });
     await workspace.openOther(a);
-    await settled(workspace);
+    await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
     expect(await new MarkdownVault(a).read(`youtube:${IDS[1]}`)).not.toBeNull();
@@ -846,7 +842,7 @@ describe('move and open through HTTP (A-10)', () => {
       expect(moved.json()).toMatchObject({ operation: 'move' });
       const busy = await app.inject({ method: 'POST', url: '/api/vault/open', headers: agent, payload: { path: context.source } });
       expect([400, 409]).toContain(busy.statusCode);
-      await settled(workspace);
+      await workspace.operationFinished();
       const status = await app.inject({ url: '/api/vault/status', headers: agent });
       expect(status.json()).toMatchObject({ state: 'completed', vaultPath: target, relocationUnavailable: null });
       const missing = await app.inject({ method: 'POST', url: '/api/vault/open', headers: agent, payload: { path: path.join(context.root, 'Nothing') } });

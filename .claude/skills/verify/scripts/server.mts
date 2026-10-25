@@ -48,6 +48,7 @@ const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
 const profilePath = path.join(run, 'profile');
 const vaultPath = path.join(run, 'vault');
 const catalogPath = path.join(run, 'catalog.json');
+const loginStartupFixturePath = path.join(run, 'login-startup-fixture.json');
 const catalog = () => JSON.parse(readFileSync(catalogPath, 'utf8'));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const offline = () => catalog().network === 'offline';
@@ -55,6 +56,40 @@ const cutOff = () => { if (offline()) throw new CollectorError('network_error', 
 const createdBy = `XR Collector (verify skill, ${data} data)`;
 const program = (name: string, environmentName: string) => process.env[environmentName]
   ?? path.join(checkout, 'resources', 'bin', 'mac', name);
+
+type LoginStartupFixture = {
+  mode: 'unavailable' | 'normal' | 'failure' | 'requires_approval';
+  enabled: boolean;
+};
+if (!existsSync(loginStartupFixturePath)) writeFileSync(loginStartupFixturePath, JSON.stringify({ mode: 'unavailable', enabled: false }, null, 2));
+const readLoginStartup = (): LoginStartupFixture => JSON.parse(readFileSync(loginStartupFixturePath, 'utf8'));
+const loginStartupStatus = (fixture = readLoginStartup()) => {
+  if (fixture.mode === 'unavailable') return {
+    supported: false, enabled: false, state: 'unavailable' as const,
+    message: '登入自啟只可在已安裝的 macOS 或 Windows App 中設定。',
+  };
+  if (fixture.mode === 'requires_approval') return {
+    supported: true, enabled: false, state: 'requires_approval' as const,
+    message: '請到「系統設定 → 一般 → 登入項目與延伸功能」允許 XR Collector。',
+  };
+  return {
+    supported: true, enabled: fixture.enabled, state: fixture.enabled ? 'enabled' as const : 'disabled' as const,
+    message: fixture.enabled ? '已在登入電腦時自動啟動。' : '登入自啟已關閉。',
+  };
+};
+// Verification-only platform fixture. The product receives only the normal LoginStartupAccess seam;
+// flows mutate this run-local file to model OS read-back, never through a product API.
+const loginStartup = {
+  status: async () => loginStartupStatus(),
+  update: async (enabled: boolean) => {
+    const fixture = readLoginStartup();
+    if (fixture.mode === 'unavailable') throw new CollectorError('login_startup_unavailable', loginStartupStatus().message);
+    if (fixture.mode === 'requires_approval') throw new CollectorError('login_startup_requires_approval', loginStartupStatus().message);
+    if (fixture.mode === 'failure') throw new CollectorError('login_startup_failed', '合成作業系統拒絕更新登入自啟。');
+    writeFileSync(loginStartupFixturePath, JSON.stringify({ mode: 'normal', enabled }, null, 2));
+    return loginStartupStatus();
+  },
+};
 
 function syntheticFeedServer() {
   const server = createServer((request, response) => {
@@ -187,6 +222,7 @@ const runtime = await CollectorRuntime.start({
   agentPort: port('AGENT'),
   uiPort: port('UI'),
   webRoot: path.join(run, 'web'),
+  loginStartup,
 });
 console.log(`verify server ready at ${runtime.server.url} (${data} data, Vault ${vaultMode})`);
 logFailedRequests(runtime.server.app.server);

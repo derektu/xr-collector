@@ -40,6 +40,9 @@ import {
   recordPreviousLocation, recoverMove, removeOriginal, scanVault, treeBytes, verifyTree, writeMoveJournal, type MoveJournal, type StatFs,
 } from './vault-move.js';
 import type { VaultSelection } from './vault-selection.js';
+import {
+  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type VaultAccess,
+} from './operation-lock.js';
 
 interface Bundle {
   root: string;
@@ -164,17 +167,7 @@ export function subscriptionCollections(services: () => SubscriptionServices): S
 export class VaultWorkspace {
   private current!: Bundle;
   private preview: Preview | null = null;
-  private locked = false;
-  private mergeWriting = false;
-  private requests = 0;
-  private operation: Promise<void> | null = null;
-  /** Lifts the collection hold of the running transfer. */
-  private releaseJobs: (() => void) | null = null;
-  /** Cancels the running transfer while it waits for collection; null once it has started its work. */
-  private waitAbort: AbortController | null = null;
-  private statusValue: Omit<TransferStatus, 'vaultPath' | 'relocationUnavailable'> = {
-    state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
-  };
+  private readonly operationLock: VaultOperationLock;
   readonly collector = forwarding(() => this.current.collector);
   readonly subscriptions = forwarding(() => this.current.subscriptions);
   readonly jobs = forwarding(() => this.current.jobs);
@@ -191,6 +184,11 @@ export class VaultWorkspace {
     this.jobStore = options.jobStore ?? JobStore.memory();
     this.holdTimeoutMs = options.holdTimeoutMs;
     this.machine = options.machineName ?? machineName();
+    this.operationLock = new VaultOperationLock({
+      hold: (signal) => this.current.jobs.hold(this.holdTimeoutMs, signal),
+      idle: () => this.current.schedule.idle(),
+      suspend: (value) => this.current.schedule.setSuspended(value),
+    });
   }
   private readonly machine: string;
 
@@ -230,7 +228,7 @@ export class VaultWorkspace {
   status(): TransferStatus {
     const problem = this.relocationProblem();
     return {
-      ...this.statusValue, vaultPath: this.current.root,
+      ...this.operationLock.status(), vaultPath: this.current.root,
       relocationUnavailable: problem ? { code: problem.code, message: problem.message } : null,
     };
   }
@@ -248,20 +246,19 @@ export class VaultWorkspace {
     return null;
   }
 
-  assertReadable(): void {
-    if (this.mergeWriting) throw new CollectorError('vault_busy', '正在套用匯入的內容，請稍後再讀取。');
-  }
+  /** Acquired by HTTP requests before any handler can yield. */
+  enterRequest(access: VaultAccess): () => void { return this.operationLock.enter(access); }
 
-  /** Acquired by HTTP writes before any handler can yield. */
-  enterWrite(): () => void {
-    if (this.locked) {
-      const operation = this.statusValue.operation;
-      throw new CollectorError('vault_busy', operation === 'move' ? '正在搬移知識庫，請等搬移完成後再操作。'
-        : operation === 'open' ? '正在開啟其他知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
-    }
-    this.requests += 1;
-    let released = false;
-    return () => { if (!released) { released = true; this.requests -= 1; } };
+  /** Direct callers use the same write lease as an undeclared non-GET HTTP route. */
+  enterWrite(): () => void { return this.enterRequest('vault-write'); }
+
+  /** Direct callers use the same read check as an undeclared GET HTTP route. */
+  assertReadable(): void { this.enterRequest('vault-read')(); }
+
+  /** Resolves once the current background Vault operation has published its final state. */
+  async operationFinished(): Promise<void> {
+    await this.operationLock.finished();
+    await this.jobStore.flush();
   }
 
   private get folders() {
@@ -269,73 +266,21 @@ export class VaultWorkspace {
   }
 
   /**
-   * Takes the transfer lock at once, so a second transfer or a write is refused from this moment.
-   * Collection stops starting new steps until `end`.
-   */
-  private lock(operation: TransferOperation): void {
-    if (this.locked || this.requests) {
-      throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
-    }
-    this.locked = true;
-    this.current.schedule.setSuspended(true);
-    this.statusValue = {
-      state: 'waiting', operation, message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
-    };
-  }
-
-  /** Waits for the collection steps and the subscription check already running; `cancelWait` ends the wait. */
-  private async settleCollection(): Promise<void> {
-    const abort = new AbortController();
-    this.waitAbort = abort;
-    try {
-      this.releaseJobs = await this.current.jobs.hold(this.holdTimeoutMs, abort.signal);
-      await abortable(this.current.schedule.idle(), abort.signal);
-    } finally {
-      this.waitAbort = null;
-    }
-  }
-
-  /**
    * Cancels the transfer that is still waiting for collection steps: collection continues, nothing
    * is written, and the status returns to idle. A transfer past the wait runs to its end.
    */
   cancelWait(): TransferStatus {
-    if (!this.waitAbort) throw new CollectorError('invalid_request', '目前沒有等待中的知識庫操作；已開始的處理無法取消。');
-    this.waitAbort.abort(new CollectorError('transfer_cancelled', '已取消，資料未變更。'));
-    this.waitAbort = null;
-    this.cancelled();
+    this.operationLock.cancelWait();
     return this.status();
   }
 
-  private cancelled(): void {
-    this.statusValue = {
-      state: 'idle', operation: null, message: '已取消，資料未變更。', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
-    };
-  }
-
-  private end(): void {
-    this.releaseJobs?.();
-    this.releaseJobs = null;
-    this.locked = false;
-    this.current.schedule.setSuspended(false);
-  }
-
   /** Runs one transfer step under the lock; the lock is released whether it succeeds or fails. */
-  private async run<T>(operation: TransferOperation, label: string, body: () => Promise<T>): Promise<T> {
-    this.lock(operation);
-    try {
-      await this.settleCollection();
-      return await body();
-    } catch (error) {
-      this.fail(error, label);
-      throw error;
-    } finally {
-      this.end();
-    }
-  }
-
-  private progress(state: TransferStatus['state'], message: string): void {
-    this.statusValue = { ...this.statusValue, state, message };
+  private run<T>(operation: TransferOperation, label: string, body: (reporter: OperationReporter) => Promise<OperationCompletion<T>>,
+    failed: (error: unknown) => OperationTerminal = (error) => this.failure(error, label)): Promise<T> {
+    return this.operationLock.start({
+      operation, body, failed,
+      cancelled: () => this.record('info', 'vault.transfer_cancelled', `已取消${label}，資料未變更。`),
+    });
   }
 
   /** Where an export goes when no other place is chosen: the export folder and a file name of today. */
@@ -356,26 +301,26 @@ export class VaultWorkspace {
       requested = this.exportSuggestion().path;
     }
     const target = await checkExportFile(requested, overwrite, this.folders);
-    return this.run('export', '匯出', async () => {
+    await this.run('export', '匯出', async (reporter) => {
       // Written beside the target and renamed, so the named file is either a whole export or untouched.
       const temporary = `${target}.${randomUUID()}.tmp`;
       let written: WrittenPackage;
       try {
-        written = await this.pack(temporary, new Date());
+        written = await this.pack(temporary, new Date(), reporter);
         await rename(temporary, target);
       } finally {
         await rm(temporary, { force: true });
       }
       const result: TransferResult = { exportPath: target, exportBytes: (await stat(target)).size, unregisteredFiles: written.unregisteredFiles };
       const others = result.unregisteredFiles ? `知識庫資料夾中有 ${result.unregisteredFiles} 個不屬於知識庫的檔案沒有包含。` : '';
-      this.statusValue = { ...this.statusValue, state: 'completed', message: `已匯出：${target}${others}`, result };
       this.record('info', 'vault.exported', `已匯出知識庫：${target}${others}`);
-      return this.status();
+      return { value: undefined, message: `已匯出：${target}${others}`, result };
     });
+    return this.status();
   }
 
-  private async pack(file: string, exportedAt: Date): Promise<WrittenPackage> {
-    this.progress('exporting', '正在匯出…');
+  private async pack(file: string, exportedAt: Date, reporter: OperationReporter): Promise<WrittenPackage> {
+    reporter.progress('exporting', '正在匯出…');
     return writePackage(this.current.root, file, {
       createdBy: this.options.createdBy, exportedAt, source: { vaultId: this.current.vaultId, machine: this.machine },
     });
@@ -389,8 +334,6 @@ export class VaultWorkspace {
   private async commit(candidate: Bundle): Promise<Bundle> {
     await this.options.selection.write(candidate.root);
     const previous = this.current;
-    // The hold belongs to the previous Vault's jobs, which stop with the switch.
-    this.releaseJobs = null;
     this.current = candidate;
     return previous;
   }
@@ -430,7 +373,7 @@ export class VaultWorkspace {
   async checkMove(target: unknown): Promise<MoveCheck> {
     const problem = this.relocationProblem();
     if (problem) throw problem;
-    if (this.locked) throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
+    if (this.operationLock.isLocked()) throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
     try {
       const checked = await checkMoveTarget(target, this.folders, await this.vaultBytes(), { free: this.options.statfs });
       return { targetPath: checked.target, requiredBytes: checked.requiredBytes, availableBytes: checked.availableBytes };
@@ -457,9 +400,10 @@ export class VaultWorkspace {
    */
   async move(target: unknown): Promise<TransferStatus> {
     const checked = await this.checkMove(target);
-    this.lock('move');
     this.dropPreview();
-    this.operation = this.moveOnce(checked.targetPath).finally(() => { this.operation = null; });
+    const source = this.current.root;
+    void this.run('move', '搬移', (reporter) => this.moveOnce(checked.targetPath, reporter),
+      (error) => this.moveFailure(error, source)).catch(() => undefined);
     return this.status();
   }
 
@@ -467,7 +411,7 @@ export class VaultWorkspace {
     await this.options.moveFaults?.(phase, count);
   }
 
-  private async moveOnce(target: string): Promise<void> {
+  private async moveOnce(target: string, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     const profile = this.options.profilePath;
     const source = this.current.root;
     const vaultId = this.current.vaultId!;
@@ -475,11 +419,9 @@ export class VaultWorkspace {
     let placed = false;
     let candidate: Bundle | null = null;
     let previous: Bundle | null = null;
-    let failure: { error: unknown } | null = null;
     try {
-      await this.settleCollection();
       this.record('info', 'vault.move_started', `開始把知識庫從 ${source} 搬移到 ${target}。`);
-      this.progress('validating', '正在檢查新位置…');
+      reporter.progress('validating', '正在檢查新位置…');
       const entries = await scanVault(source);
       await checkMoveTarget(target, this.folders, treeBytes(entries), { free: this.options.statfs });
       journal = {
@@ -487,13 +429,13 @@ export class VaultWorkspace {
       };
       await writeMoveJournal(profile, journal);
       await mkdir(journal.staging, { mode: 0o700 });
-      this.statusValue = { ...this.statusValue, state: 'copying', message: '正在複製檔案…', completedFiles: 0, totalFiles: entries.length };
+      reporter.progress('copying', '正在複製檔案…', { completed: 0, total: entries.length });
       await copyTree(source, journal.staging, entries, async (done) => {
-        this.statusValue = { ...this.statusValue, completedFiles: done };
+        reporter.files(done);
         await this.fault('copying', done);
       });
       await this.fault('copied');
-      this.progress('verifying', '正在檢查複製結果…');
+      reporter.progress('verifying', '正在檢查複製結果…');
       await verifyTree(source, journal.staging, entries);
       await this.fault('verified');
       // The location may have changed while copying; space is already taken by the copy itself.
@@ -504,7 +446,7 @@ export class VaultWorkspace {
       await rename(journal.staging, target);
       placed = true;
       await this.fault('placed');
-      this.progress('indexing', '正在新位置建立搜尋索引…');
+      reporter.progress('indexing', '正在新位置建立搜尋索引…');
       candidate = await this.makeBundle(target);
       if (candidate.vaultId !== vaultId) throw new Error('The moved Vault does not carry the ID of the original');
       await candidate.runtime.search.rebuild();
@@ -512,12 +454,11 @@ export class VaultWorkspace {
       await this.fault('prepared');
       await this.fault('committing');
       previous = await this.commit(candidate);
+      reporter.discardHold();
       candidate = null;
       placed = false;
     } catch (error) {
-      failure = { error };
-    }
-    if (!previous) {
+      if (previous) throw error;
       try {
         if (candidate) {
           await candidate.schedule.close();
@@ -532,23 +473,16 @@ export class VaultWorkspace {
           await this.removeSearchData(target);
           await clearMoveJournal(profile);
         }
-      } catch (error) {
-        console.error('Move cleanup failed', error);
+      } catch (cleanupError) {
+        console.error('Move cleanup failed', cleanupError);
       }
-      // The failure is published after the lock is released, so a retry made on seeing it is not refused as busy.
-      this.end();
-      if (failure) this.moveFailed(failure.error, source);
-      return;
+      throw error;
     }
-    try {
-      await this.finishMove(previous, journal!);
-    } finally {
-      this.end();
-    }
+    return this.finishMove(previous, journal!, reporter);
   }
 
   /** Continues the moved Vault's work at its new location, then removes the original location. */
-  private async finishMove(previous: Bundle, placedJournal: MoveJournal): Promise<void> {
+  private async finishMove(previous: Bundle, placedJournal: MoveJournal, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     const profile = this.options.profilePath;
     const { source, target, vaultId } = placedJournal;
     let journal: MoveJournal = { ...placedJournal, phase: 'switched' };
@@ -560,7 +494,7 @@ export class VaultWorkspace {
     });
     await this.settleRelocation(vaultId, source, target);
     this.previousPaths = await previousLocations(profile, this.current.vaultId);
-    this.progress('cleaning', '正在清除原位置…');
+    reporter.progress('cleaning', '正在清除原位置…');
     let leftover: string | null = source;
     try {
       const removal = await removeOriginal(profile, journal, () => this.fault('cleaning'));
@@ -573,14 +507,12 @@ export class VaultWorkspace {
     const message = leftover
       ? `已搬移到 ${target} 並開始使用，但原位置未能清除：${leftover}。請確認後手動刪除這個資料夾。${jobs}`
       : `已搬移到 ${target} 並開始使用，原位置已清除。${jobs}`;
-    this.statusValue = {
-      ...this.statusValue, state: 'completed', errorCode: null, message,
-      result: { previousVaultPath: source, resumedJobs, ...(leftover ? { leftoverPath: leftover } : {}) },
-    };
+    const result: TransferResult = { previousVaultPath: source, resumedJobs, ...(leftover ? { leftoverPath: leftover } : {}) };
     this.record('info', 'vault.moved', `已把知識庫從 ${source} 搬移到 ${target}。${jobs}`);
     if (leftover) {
       this.record('warning', 'vault.move_cleanup_failed', `原位置未能清除：${leftover}。請確認後手動刪除這個資料夾。`);
     }
+    return { value: undefined, message, result };
   }
 
   /**
@@ -594,19 +526,15 @@ export class VaultWorkspace {
     await step('Previous search database removal failed', () => this.removeSearchData(source));
   }
 
-  private moveFailed(error: unknown, source: string): void {
+  private moveFailure(error: unknown, source: string): OperationTerminal {
     if (error instanceof CollectorError && error.code === 'transfer_cancelled') {
-      this.fail(error, '搬移');
-      return;
+      return this.failure(error, '搬移');
     }
     const reason = error instanceof CollectorError ? error.message : '無法完成複製或準備新位置，請確認磁碟空間、權限與搜尋服務後重試。';
     const message = `搬移失敗：${reason}知識庫仍在原位置 ${source}，資料未變更，收集已恢復。`;
-    this.statusValue = {
-      ...this.statusValue, state: 'error', result: null, message,
-      errorCode: error instanceof CollectorError ? error.code : null,
-    };
     if (!(error instanceof CollectorError)) console.error('Move failed', error);
     this.record('error', 'vault.move_failed', message, undefined, error instanceof CollectorError ? error.code : undefined);
+    return { message, result: null, errorCode: error instanceof CollectorError ? error.code : null };
   }
 
   /**
@@ -631,19 +559,16 @@ export class VaultWorkspace {
     const inspection = await inspectVaultDirectory(root);
     if (inspection.kind === 'empty') throw new CollectorError('vault_invalid', '這個資料夾還不是知識庫，請選擇已有的知識庫。');
     if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
-    this.lock('open');
     this.dropPreview();
-    this.operation = this.openOnce(inspection.path).finally(() => { this.operation = null; });
+    void this.run('open', '開啟其他知識庫', (reporter) => this.openOnce(inspection.path, reporter)).catch(() => undefined);
     return this.status();
   }
 
-  private async openOnce(root: string): Promise<void> {
+  private async openOnce(root: string, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     let candidate: Bundle | null = null;
     let previous: Bundle | null = null;
-    let failure: CollectorError | null = null;
     try {
-      await this.settleCollection();
-      this.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
+      reporter.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
       // An import a stop interrupted after its commit point is finished before anything reads the Vault;
       // the rebuild below then indexes the finished content.
       await finishInPlaceImports(root);
@@ -651,36 +576,29 @@ export class VaultWorkspace {
       await candidate.runtime.search.rebuild();
       await candidate.schedule.getSchedule();
       previous = await this.commit(candidate);
+      reporter.discardHold();
       candidate = null;
     } catch (error) {
       if (!(error instanceof CollectorError)) console.error('Opening another Vault failed', error);
-      failure = error instanceof CollectorError ? error
+      const failure = error instanceof CollectorError ? error
         : new CollectorError('vault_invalid', `無法開啟 ${root}，請確認資料夾與搜尋服務後重試。目前的知識庫不變。`);
-    }
-    try {
       if (candidate) {
         await step('Candidate schedule shutdown failed', () => candidate!.schedule.close());
         await step('Candidate jobs shutdown failed', () => candidate!.jobs.close());
         await step('Candidate search shutdown failed', () => candidate!.runtime.close());
       }
-      if (!previous) return;
-      const { interruptedJobs, resumedJobs } = await this.switchTo(previous, {
-        reason: '切換到其他知識庫時工作尚未完成；回到這個知識庫時接續。', stop: 'vault_switch', moved: false,
-      });
-      const paused = interruptedJobs ? `它的 ${interruptedJobs} 個收集工作已暫停，回到原知識庫時接續。` : '';
-      const resumed = resumedJobs ? `這個知識庫有 ${resumedJobs} 個收集工作接續。` : '';
-      const message = `已開啟知識庫 ${root}。原知識庫保留在 ${previous.root}。${paused}${resumed}`;
-      this.statusValue = {
-        ...this.statusValue, state: 'completed', errorCode: null, message,
-        result: { previousVaultPath: previous.root, interruptedJobs, resumedJobs },
-      };
-      // Device-level, so both Vaults show the switch.
-      this.record('info', 'vault.opened', message, null);
-    } finally {
-      // A failure is published after the lock is released, so a retry made on seeing it is not refused as busy.
-      this.end();
-      if (failure) this.fail(failure, '開啟其他知識庫');
+      throw failure;
     }
+    const { interruptedJobs, resumedJobs } = await this.switchTo(previous, {
+      reason: '切換到其他知識庫時工作尚未完成；回到這個知識庫時接續。', stop: 'vault_switch', moved: false,
+    });
+    const paused = interruptedJobs ? `它的 ${interruptedJobs} 個收集工作已暫停，回到原知識庫時接續。` : '';
+    const resumed = resumedJobs ? `這個知識庫有 ${resumedJobs} 個收集工作接續。` : '';
+    const message = `已開啟知識庫 ${root}。原知識庫保留在 ${previous.root}。${paused}${resumed}`;
+    const result: TransferResult = { previousVaultPath: previous.root, interruptedJobs, resumedJobs };
+    // Device-level, so both Vaults show the switch.
+    this.record('info', 'vault.opened', message, null);
+    return { value: undefined, message, result };
   }
 
   /** Takes a move interrupted by a stop forward or back before the Vault opens; see `recoverMove`. */
@@ -710,14 +628,14 @@ export class VaultWorkspace {
    */
   async previewImport(file: unknown): Promise<ImportPreview> {
     const source = await checkPackageFile(file);
-    return this.run('import', '匯入', async () => {
+    return this.run('import', '匯入', async (reporter) => {
       // A comparison refused for a busy Vault leaves the previous one usable.
       this.dropPreview();
-      this.progress('validating', '正在檢查匯出檔…');
+      reporter.progress('validating', '正在檢查匯出檔…');
       const reader = await openPackage(source);
       try {
         await checkPackageContent(reader);
-        this.progress('validating', '正在比對…');
+        reporter.progress('validating', '正在比對…');
         const { comparison, baseline } = await this.compare(reader);
         const { exportedAt, source: from } = reader.manifest;
         const value: ImportPreview = {
@@ -727,8 +645,7 @@ export class VaultWorkspace {
           mergeRecords: comparison.mergeKeys.length > 0 && !changeTotal(comparison.merge),
         };
         this.preview = { value, comparison, baseline, file: source, identity: reader.identity };
-        this.statusValue = { ...this.statusValue, state: 'completed', message: '比對完成。' };
-        return value;
+        return { value, message: '比對完成。', result: null };
       } finally {
         reader.close();
       }
@@ -754,10 +671,10 @@ export class VaultWorkspace {
   }
 
   cancelImport(id: string): void {
-    if (this.locked) throw new CollectorError('vault_busy', '正在套用匯入，請等待結果。');
+    if (this.operationLock.isLocked()) throw new CollectorError('vault_busy', '正在套用匯入，請等待結果。');
     if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇匯入檔。');
     this.dropPreview();
-    this.statusValue = { ...this.statusValue, state: 'idle', operation: null, message: '已取消匯入，資料未變更。', result: null };
+    this.operationLock.setIdle('已取消匯入，資料未變更。');
   }
 
   /**
@@ -770,8 +687,7 @@ export class VaultWorkspace {
     const preview = this.preview;
     if (mode === 'merge' && !preview.comparison.mergeKeys.length) throw new CollectorError('invalid_request', '沒有需要匯入的內容。');
     if (mode === 'replace' && !preview.comparison.replaceKeys.length) throw new CollectorError('invalid_request', '本機內容已與匯入檔相同。');
-    this.lock('import');
-    this.operation = this.importOnce(preview, mode).catch((error: unknown) => this.fail(error, '匯入')).finally(() => { this.operation = null; });
+    void this.run('import', '匯入', (reporter) => this.importOnce(preview, mode, reporter)).catch(() => undefined);
     return this.status();
   }
 
@@ -779,7 +695,7 @@ export class VaultWorkspace {
    * Exports the Vault as it is into the backup folder before an import changes it, so a wrong
    * import can be undone by importing this file.
    */
-  private async backUp(): Promise<string> {
+  private async backUp(reporter: OperationReporter): Promise<string> {
     const folder = this.options.backupFolder;
     await mkdir(folder, { recursive: true });
     const now = new Date();
@@ -788,7 +704,7 @@ export class VaultWorkspace {
     for (let index = 2; await exists(target); index += 1) target = path.join(folder, name.replace(/\.zip$/u, ` (${index}).zip`));
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      await this.pack(temporary, now);
+      await this.pack(temporary, now, reporter);
       await rename(temporary, target);
     } finally {
       await rm(temporary, { force: true });
@@ -796,14 +712,12 @@ export class VaultWorkspace {
     return target;
   }
 
-  private async importOnce(preview: Preview, mode: ImportMode): Promise<void> {
+  private async importOnce(preview: Preview, mode: ImportMode, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     const root = this.current.root;
     let reader: PackageReader | null = null;
-    let safeToResume = true;
     let applied: AppliedImport | null = null;
     try {
-      await this.settleCollection();
-      this.progress('validating', '正在檢查本機資料…');
+      reporter.progress('validating', '正在檢查本機資料…');
       reader = await openPackage(preview.file);
       const current = reader.identity === preview.identity ? await this.compare(reader) : null;
       if (!current || current.baseline !== preview.baseline) {
@@ -812,18 +726,18 @@ export class VaultWorkspace {
       }
       const plan = await planChanges(registeredSource(await registeredFiles(root)), reader, chosenKeys(current.comparison, mode), current.local);
       const counts = mode === 'replace' ? current.comparison.replace : current.comparison.merge;
-      this.progress('exporting', '正在匯出目前的內容…');
-      const backup = await this.backUp();
+      reporter.progress('exporting', '正在匯出目前的內容…');
+      const backup = await this.backUp(reporter);
       const incomingBytes = [...plan.changes.values()].reduce((sum, change) => sum + (!change ? 0
         : 'bytes' in change ? change.bytes.length : reader!.manifest.files.find((row) => row.path === change.incoming)?.size ?? 0), 0);
       await checkFreeSpace(root, incomingBytes, this.options.statfs);
-      this.mergeWriting = true;
+      reporter.blockReads();
       applied = { preview, mode, counts, plan, backup };
-      this.statusValue = { ...this.statusValue, state: 'extracting', message: '正在套用匯入的內容…', completedFiles: 0, totalFiles: plan.changes.size };
+      reporter.progress('extracting', '正在套用匯入的內容…', { completed: 0, total: plan.changes.size });
       await applyInPlace(root, reader, plan.changes, (done, total) => {
-        this.statusValue = { ...this.statusValue, completedFiles: done, totalFiles: total };
+        reporter.files(done, total);
       }, this.options.importFaults);
-      await this.importApplied(applied, mode === 'replace');
+      return await this.importApplied(applied, mode === 'replace', reporter);
     } catch (error) {
       if (!applied) throw error;
       // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
@@ -832,15 +746,13 @@ export class VaultWorkspace {
         finished = await finishInPlaceImports(root);
       } catch (again) {
         console.error('Finishing an interrupted import failed', again);
-        safeToResume = false;
-        throw new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。');
+        reporter.stop(new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。'));
       }
       if (!finished) throw error;
       console.error('An import failed while it put files in place and was carried out to its end', error);
-      await this.importApplied(applied, true);
+      return await this.importApplied(applied, true, reporter);
     } finally {
       reader?.close();
-      if (safeToResume) { this.mergeWriting = false; this.end(); }
     }
   }
 
@@ -849,8 +761,8 @@ export class VaultWorkspace {
    * `rebuild` is set or an update fails), reloads the schedule and reports the import as done. An
    * index that cannot be rebuilt either leaves the import done, with the rebuild left to the person.
    */
-  private async importApplied(applied: AppliedImport, rebuild: boolean): Promise<void> {
-    this.progress('indexing', '正在更新搜尋索引…');
+  private async importApplied(applied: AppliedImport, rebuild: boolean, reporter: OperationReporter): Promise<OperationCompletion<void>> {
+    reporter.progress('indexing', '正在更新搜尋索引…');
     let indexed = true;
     try {
       if (rebuild) await this.current.runtime.search.rebuild();
@@ -866,23 +778,21 @@ export class VaultWorkspace {
         indexed = false;
       }
     }
-    this.mergeWriting = false;
     this.dropPreview();
     const { counts, mode, backup, plan } = applied;
     const summary = changeSummary(counts);
     const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
     const done = indexed ? `${how}：${summary}。` : `匯入已完成，搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。${summary}。`;
-    this.statusValue = {
-      ...this.statusValue, state: 'completed', errorCode: null, message: `${done}匯入前的內容已備份到 ${backup}`,
-      result: {
-        importMode: mode, imported: counts, writtenFiles: plan.changes.size, backupPath: backup, ...(indexed ? {} : { searchRebuildNeeded: true }),
-      },
+    const message = `${done}匯入前的內容已備份到 ${backup}`;
+    const result: TransferResult = {
+      importMode: mode, imported: counts, writtenFiles: plan.changes.size, backupPath: backup, ...(indexed ? {} : { searchRebuildNeeded: true }),
     };
     const { fileName, machine } = applied.preview.value.package;
     const file = machine ? `${fileName}，來自 ${machine}` : fileName;
     this.record(indexed ? 'info' : 'warning', 'vault.imported', indexed
       ? `${how}（${file}）：${summary}。匯入前的內容已備份到 ${backup}`
       : `匯入已完成（${file}）：${summary}。搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。匯入前的內容已備份到 ${backup}`);
+    return { value: undefined, message, result };
   }
 
   /** Brings the search index up to date with the documents an import wrote or removed. */
@@ -906,19 +816,11 @@ export class VaultWorkspace {
     await this.current.schedule.start();
   }
 
-  private fail(error: unknown, operation: string): void {
-    if (error instanceof CollectorError && error.code === 'transfer_cancelled') {
-      this.cancelled();
-      this.record('info', 'vault.transfer_cancelled', `已取消${operation}，資料未變更。`);
-      return;
-    }
-    this.statusValue = {
-      ...this.statusValue, state: 'error', result: null,
-      errorCode: error instanceof CollectorError ? error.code : null,
-      message: error instanceof CollectorError ? error.message : '操作失敗，請確認匯出檔、磁碟空間與搜尋服務後重試。',
-    };
-    this.record('error', 'vault.transfer_failed', `${operation}失敗：${this.statusValue.message}`,
+  private failure(error: unknown, operation: string): OperationTerminal {
+    const message = error instanceof CollectorError ? error.message : '操作失敗，請確認匯出檔、磁碟空間與搜尋服務後重試。';
+    this.record('error', 'vault.transfer_failed', `${operation}失敗：${message}`,
       undefined, error instanceof CollectorError ? error.code : undefined);
+    return { message, result: null, errorCode: error instanceof CollectorError ? error.code : null };
   }
 
   /** Records a Vault operation in the device activity log, under the active Vault unless `vaultPath` says otherwise. */
@@ -1029,7 +931,7 @@ export class VaultWorkspace {
   }
 
   async close(): Promise<void> {
-    await this.operation;
+    await this.operationFinished();
     this.dropPreview();
     const drained = await Promise.allSettled([
       this.current.schedule.close(),

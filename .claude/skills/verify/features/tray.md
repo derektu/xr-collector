@@ -1,15 +1,15 @@
 # 選單列／系統匣
 
-macOS 選單列與 Windows 系統匣的 XR Collector 圖示，以及主視窗的關閉與結束。關閉視窗只隱藏，收集與 Agent API 照常；選單上方兩行灰字顯示目前的工作，項目有開啟、立即檢查所有訂閱、自動檢查、工作、記錄與結束。Windows 第一次關閉視窗時跳一次「仍在系統匣執行」的提示。
+macOS 選單列與 Windows 系統匣的 XR Collector 圖示，以及主視窗的關閉與結束。關閉視窗只隱藏，收集與 Agent API 照常；選單上方依連線與工作狀態顯示灰字，項目有開啟、立即檢查所有訂閱、自動檢查、工作、記錄與結束。Windows 第一次關閉視窗時跳一次「仍在系統匣執行」的提示。
 
 ## Sub-features
 
-- `tray-menu`：選單的狀態行（正在收集／排隊中／沒有進行中的工作／下次檢查／自動檢查已關閉）、項目順序、「工作」的失敗數、自動檢查的勾選，以及圖示的三種狀態（閒置、收集中、自動檢查關閉）。
+- `tray-menu`：選單的狀態行（沒有網路／正在檢查或收集／等待重試／排隊中／沒有進行中的工作／下次檢查／自動檢查已關閉）、項目順序、「工作」的失敗數、自動檢查的勾選，以及圖示的三種狀態（閒置、收集中、自動檢查關閉）。未選 Vault 時只有開啟與結束。
 - `tray-hide`：關閉視窗只隱藏，程序、收集與 Agent API 照常，runtime 不重啟。
 - `tray-actions`：從選單立即檢查所有訂閱、切換自動檢查。
 - `tray-open`：從選單開啟主視窗、工作頁與記錄頁；Windows 左鍵點圖示開啟視窗；頁面不重新載入。
 - `tray-hint`：Windows 第一次關閉視窗的提示，每台裝置只出現一次；macOS 不提示。
-- `tray-second-launch`：視窗隱藏時再啟動一次，叫出原本的視窗，不開第二個 instance。
+- `tray-second-launch`：視窗隱藏時手動再啟動一次，叫出原本視窗，runtime instanceId 不變；OS 登入自啟形式的第二次啟動保持隱藏，見 [登入自啟](login-startup.md)。
 - `tray-quit`：從選單結束，程序與 Meilisearch 都結束，未完成的工作下次啟動接續。
 
 ## How to get to it (user POV)
@@ -29,7 +29,7 @@ Preconditions:
 - **點選單。** `clickTray(app, action)`，action 是 `open`、`check_now`、`toggle_auto_check`、`jobs`、`activity`、`quit`，與點原生選單項目走同一段程式。
 - **視窗。** `closeWindow(app)` 等於按關閉鈕；`windowState(app)` 回傳 `{ exists, visible, focused, url }`。
 - **提示。** `notifications(app)` 回傳這次啟動發出的提示 `[{ title, content }]`；是否提示過記在 profile 的 `tray.json`。
-- **第二次啟動。** `instance.launchAgain()` 用同一個 profile 再啟動一次，回傳第二個程序的 exit code。
+- **第二次啟動。** `instance.launchAgain()` 以同一 profile 模擬手動再次開啟，回傳第二個程序的 exit code；視窗顯示且前後 `/api/health` 的 runtime instanceId 相同。此 helper 不模擬 OS 登入啟動。
 - **結束。** `clickTray(app, 'quit')` 後 `await instance.exited()`；之後 `instance.relaunch()` 用同一個 profile 再啟動。
 
 ## Gotchas

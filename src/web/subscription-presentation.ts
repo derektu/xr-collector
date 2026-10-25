@@ -20,6 +20,12 @@ export function itemNoun(type: string | null | undefined): string {
   return (type ? sourceDeclaration(type)?.item.noun : undefined) ?? '';
 }
 
+/** A source-neutral item count, e.g. "2 支影片" or "3 篇文章". */
+export function itemCount(type: string | null | undefined, count: number): string {
+  const item = type ? sourceDeclaration(type)?.item : undefined;
+  return `${count}${item ? ` ${item.measure}${item.noun}` : ''}`;
+}
+
 /** The range every check collects, in words, as the source type describes its settings. */
 export function backfillPhrase(settings: Partial<SubscriptionSettings>, type: string | null | undefined): string {
   return subscriptionOf(type)?.describeSettings(settings as SubscriptionSettings) ?? '';

@@ -221,6 +221,15 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
               </a>
             </li>;
           }
+          if (entry.kind === 'check-group') {
+            const failed = entry.result === 'network_error';
+            return <li key={entry.groupId} className={`collection-row check${failed ? ' error' : ''}`} data-testid="collection-check-group">
+              <Icon name={failed ? 'error' : 'jobs'} size={16} />
+              <span className="collection-title">{label.title}</span>
+              <span className="collection-detail collection-when">{label.detail}</span>
+              <a className="inline-link" href={`/activity?${new URLSearchParams({ group: entry.groupId, return: location.pathname }).toString()}`}>查看細節</a>
+            </li>;
+          }
           const key = entry.kind === 'check' ? `check:${entry.jobId}` : `${entry.kind}:${entry.key}`;
           return <li key={key} className={`collection-row ${entry.kind}`} data-testid={`collection-${entry.kind}`}>
             <Icon name={entry.kind === 'check' ? 'jobs' : entry.kind} size={16} />

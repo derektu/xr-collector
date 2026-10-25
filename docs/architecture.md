@@ -17,7 +17,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、自動重試、請求通道冷卻時的等待、重啟接續與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報，並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、新增中的請求） |
 | `src/subscriptions` | 訂閱資料唯一的寫入者：建立訂閱、派工與派工時間、收集進度（上次檢查時間、範圍外項目、失敗項目與跨檢查的失敗次數、連續失敗的檢查次數與自動暫停），以及每次檢查的收集規則（範圍內最新 N 則）；整份清單驗證通過才開始的手動檢查、依各訂閱頻率的週期檢查，並把工作事實與訂閱本身的狀態組合成訂閱狀態 |
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
-| `src/vault` | Markdown 保存、active Vault、匯出檔、以較新為準的匯入合併、搬移與中斷恢復 |
+| `src/vault` | Markdown 保存、active Vault、知識庫操作鎖、匯出檔、以較新為準的匯入合併、搬移與中斷恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client；來源類型的文字、設定句與文件細節取自 `src/web/plugins.tsx` 組裝的宣告 |
 
@@ -50,6 +50,8 @@ Vault 保存正式文件與可攜設定；搜尋 database 是裝置上的可重�
 Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工作與資料能力。Sources、Documents、Jobs、Activity、Search、VaultWorkspace 的責任及遷移順序以 [Round 2 第 5 節](round-2-plan.md#5-建議模組分工) 為準；來源類型以上述 plugin 介面加入。
 
 `CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都由同一個 runtime factory 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。關閉時先停止 listeners 並等待已接受的 handler，再等待資料交換與執行中的收集步驟，把尚未開始的工作記為已中斷，最後關閉搜尋 process。開啟 Vault 時，workspace 先接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`，保留 health、Agent 授權與 Vault 設定 API，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程，連線檔的 instance 與 token 不變。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
+
+`VaultWorkspace` 持有一個知識庫操作鎖，匯出、匯入、搬移與開啟其他知識庫都經同一個生命週期執行：停止派工、等待進行中的收集、執行操作、恢復收集，再發布完成或錯誤狀態。套用匯入時鎖會升級為連讀取也拒絕；如果匯入無法收尾，鎖進入停止狀態並維持寫入與排程停止，等待重新啟動恢復。HTTP route config 把路由分為知識庫讀取、知識庫寫入、裝置資料與知識庫操作；沒有宣告時依 method 推定，鎖依分類決定是否接受請求。
 
 安裝版將目前 active runtime 的 Agent 連線資訊發布到每位使用者固定的裝置入口：macOS Application Support 或 Windows LocalAppData 下的 `XR Collector/agent-connection.json`。此入口與安裝目錄及 Vault 分離；未打包執行與明確指定 profile 的執行只寫 profile-local 連線檔，因而不覆蓋正式入口。連線檔包含 schema version、instance ID、loopback URL 與每次啟動重建的 token。Agent listener 優先使用固定 port，讓 Agent 的連線位址保持不變；被佔用時才往後改用可用的 port。Agent 先以 authenticated health 比對 instance ID，才使用業務 API；保留的舊連線檔只表示曾啟動，不表示服務仍存活。
 

@@ -34,6 +34,7 @@ import { limitText, redact } from '../activity/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
+import { JobWaits, type WaitCondition } from './job-waits.js';
 
 export interface JobLimits {
   /** Subscription resolution and discovery running at once. */
@@ -173,9 +174,8 @@ export const HOLD_TIMEOUT_MS = 2 * 60_000;
 export class JobManager {
   private readonly limits: JobLimits;
   private readonly retryPolicy: RetryPolicy;
-  private readonly setTimer: (callback: () => void, ms: number) => () => void;
-  /** Cancel functions of jobs waiting for their next attempt. */
-  private readonly retryTimers = new Map<string, () => void>();
+  /** What each queued job waits for, and the timers that end the timed waits. */
+  private readonly waits: JobWaits;
   private readonly now: () => Date;
   private readonly createId: () => string;
   /** Unfinished jobs, including check jobs waiting for their items. */
@@ -215,20 +215,26 @@ export class JobManager {
   private stepAbort = new AbortController();
   private readonly plugins = new Map<string, SourcePlugin>();
   private readonly gates = new Map<string, Pacing>();
-  /** The cooldown in force per pacing group; no step of the group starts before it ends. */
-  private readonly cooldowns = new Map<string, { until: string; cancel: () => void }>();
   private readonly unsubscribePacing: Array<() => void> = [];
   private readonly unsubscribePause: (() => void) | undefined;
 
   constructor(private readonly options: JobManagerOptions) {
     this.limits = { ...DEFAULT_JOB_LIMITS, ...options.limits };
     this.retryPolicy = { ...DEFAULT_RETRY_POLICY, ...options.retry };
-    this.setTimer = options.setTimer ?? ((callback, ms) => {
-      const timer = setTimeout(callback, ms);
-      return () => clearTimeout(timer);
-    });
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? (() => randomUUID());
+    this.waits = new JobWaits({
+      now: this.now,
+      setTimer: options.setTimer ?? ((callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      }),
+      gates: this.gates,
+      groupOf: (job) => this.groupOf(job),
+      blocked: () => this.blocked,
+      onCooldownEnded: (group) => this.endCooldown(group),
+      onRetryDue: (id) => this.retryDue(id),
+    });
     for (const plugin of options.plugins) this.plugins.set(plugin.id, plugin);
     for (const gate of options.pacing ?? []) {
       this.gates.set(gate.group, gate);
@@ -292,14 +298,7 @@ export class JobManager {
    * job that hit the limit does.
    */
   private enterCooldown(group: string, until: string): void {
-    const current = this.cooldowns.get(group);
-    if (current && current.until >= until) return;
-    current?.cancel();
-    const cancel = this.setTimer(() => {
-      if (this.cooldowns.get(group)?.until === until) this.cooldowns.delete(group);
-      this.endCooldown(group);
-    }, Math.max(0, new Date(until).getTime() - this.now().getTime()));
-    this.cooldowns.set(group, { until, cancel });
+    if (!this.waits.startCooldown(group, until)) return;
     for (const job of this.jobs.values()) {
       if (job.state === 'queued' && this.groupOf(job) === group) this.markWaiting(job);
     }
@@ -308,10 +307,7 @@ export class JobManager {
   /** Gives a queued job the wait of its group's cooldown in force; outside a cooldown it does nothing. */
   private markWaiting(job: CollectionJob): void {
     const group = this.groupOf(job);
-    if (!group) return;
-    const cooldown = this.cooldowns.get(group)?.until ?? null;
-    const until = cooldown && new Date(cooldown).getTime() > this.now().getTime()
-      ? cooldown : this.gates.get(group)?.status().cooldownUntil ?? null;
+    const until = group ? this.waits.cooldownUntil(group) : null;
     if (!until || job.wait?.until === until) return;
     this.update(job, { wait: { reason: 'rate_limited', until } });
     this.syncItemWait(job);
@@ -319,23 +315,13 @@ export class JobManager {
 
   /** Ends a group's cooldown: its waiting jobs drop their wait and queued steps start again. */
   private endCooldown(group: string): void {
-    this.cooldowns.get(group)?.cancel();
-    this.cooldowns.delete(group);
+    this.waits.endCooldown(group);
     if (this.closed) return;
     for (const job of this.jobs.values()) {
       if (!job.wait || this.groupOf(job) !== group) continue;
       this.clearWait(job);
     }
     this.pump();
-  }
-
-  /** Whether the job's pacing group is cooling down, so its next step waits. */
-  private coolingDown(job: CollectionJob): boolean {
-    const group = this.groupOf(job);
-    if (!group) return false;
-    if (this.gates.get(group)?.status().state === 'cooldown') return true;
-    const until = this.cooldowns.get(group)?.until;
-    return until !== undefined && new Date(until).getTime() > this.now().getTime();
   }
 
   private clearWait(job: CollectionJob): void {
@@ -902,16 +888,16 @@ export class JobManager {
     this.keys.set(job.id, key);
     this.activeByKey.set(key, job.id);
     if (job.claimedByUser) this.manualClaims.add(job.id);
+    const waits = this.waits.stored(job);
+    const group = this.groupOf(job);
     if (job.wait) {
-      // A cooldown still in force keeps the job waiting; one that ended while stopped is over.
-      const group = this.groupOf(job);
-      if (group && new Date(job.wait.until).getTime() > this.now().getTime()) this.enterCooldown(group, job.wait.until);
+      if (group && waits.cooldown) this.enterCooldown(group, waits.cooldown.until);
       else delete job.wait;
     }
     this.options.store.put(job);
     const stopReason = job.recovery?.lastStop ?? 'unknown';
     this.event(job, {
-      severity: 'info', eventType: 'job.resumed', stopReason,
+      severity: job.parentId ? 'debug' : 'info', eventType: 'job.resumed', stopReason,
       message: stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
         : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。'
           : stopReason === 'vault_move' ? '知識庫搬移完成，接續收集工作。'
@@ -919,8 +905,7 @@ export class JobManager {
     });
     if (waitsForItems || !options.queue) return job;
     this.markWaiting(job);
-    const waitMs = job.retry?.nextAttemptAt ? new Date(job.retry.nextAttemptAt).getTime() - this.now().getTime() : 0;
-    if (waitMs > 0) this.waitForAttempt(job, waitMs);
+    if (waits.retry) this.waitFor(job, waits.retry);
     else this.requeue(job);
     return job;
   }
@@ -950,8 +935,7 @@ export class JobManager {
     this.stepAbort.abort(new CollectorError('vault_busy', '服務正在停止。'));
     for (const unsubscribe of this.unsubscribePacing) unsubscribe();
     this.unsubscribePause?.();
-    for (const cooldown of this.cooldowns.values()) cooldown.cancel();
-    this.cooldowns.clear();
+    this.waits.close();
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
       this.options.store.interrupt(job, reason, { stop });
@@ -1035,7 +1019,7 @@ export class JobManager {
     this.requeue(job);
     this.markWaiting(job);
     this.options.store.put(job);
-    this.event(job, { severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
+    this.event(job, { severity: 'debug', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
     return { job: structuredClone(job), deduplicated: false };
   }
 
@@ -1062,11 +1046,34 @@ export class JobManager {
     }
   }
 
+  /**
+   * Puts a job whose step cannot go on back in line to wait for `condition`; a closing manager
+   * leaves it for close() to record. A step a hold, the collection pause or a cooldown stopped had
+   * its turn, so it returns to the head of its queue. A job waiting for its next attempt leaves the
+   * queue and joins its back once the time comes.
+   */
+  private waitFor(job: CollectionJob, condition: WaitCondition): void {
+    if (this.closed) return;
+    if (condition.kind === 'retry') {
+      this.waits.startRetry(job.id, condition.until);
+      return;
+    }
+    this.syncItemWait(job);
+    this.requeue(job, true);
+  }
+
+  /** A job's retry time came: it joins the back of its queue. */
+  private retryDue(id: string): void {
+    const job = this.jobs.get(id);
+    if (this.closed || !job) return;
+    this.requeue(job);
+    this.pump();
+  }
+
   /** A step stopped by a hold or the collection pause returns to the queue without spending an attempt. */
   private returnToQueue(job: CollectionJob): void {
     this.update(job, { state: 'queued' });
-    this.syncItemWait(job);
-    this.requeue(job, true);
+    this.waitFor(job, { kind: 'collection' });
   }
 
   /**
@@ -1075,17 +1082,16 @@ export class JobManager {
    */
   private deferForCooldown(job: CollectionJob, retryAt: string | undefined): void {
     const group = this.groupOf(job);
-    const until = retryAt ?? (group ? this.cooldowns.get(group)?.until : undefined)
+    const until = retryAt ?? (group ? this.waits.cooldownUntil(group) : null)
       ?? new Date(this.now().getTime() + FALLBACK_COOLDOWN_MS).toISOString();
     if (group) this.enterCooldown(group, until);
     this.update(job, { state: 'queued', wait: { reason: 'rate_limited', until } });
     this.event(job, {
-      severity: 'info', eventType: 'job.deferred',
+      severity: 'debug', eventType: 'job.deferred',
       message: `${group ? this.pacingLabel(group) : this.plugin(job.source.type)?.label ?? job.source.type} 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
       until, ...(job.phase ? { phase: job.phase } : {}),
     });
-    this.syncItemWait(job);
-    this.requeue(job, true);
+    this.waitFor(job, { kind: 'cooldown', until });
   }
 
   /** How a step that threw ended when the throw was not its own failure; true when handled. */
@@ -1121,14 +1127,16 @@ export class JobManager {
     return count;
   }
 
+  /** Whether a queued step may start now; the ID of a job that ended meanwhile is dropped when its turn comes. */
+  private ready(id: string): boolean {
+    const job = this.jobs.get(id);
+    return !job || this.waits.conditionOf(job) === null;
+  }
+
   private pump(): void {
-    if (this.closed || this.blocked || this.resuming) return;
-    // Every step reads from its source, so no step of a cooling pacing group starts; other groups go on.
+    if (this.closed || this.resuming) return;
     while (this.runningDiscovery < this.limits.discovery) {
-      const index = this.discoveryQueue.findIndex((id) => {
-        const job = this.jobs.get(id);
-        return !job || !this.coolingDown(job);
-      });
+      const index = this.discoveryQueue.findIndex((id) => this.ready(id));
       if (index < 0) break;
       const [id] = this.discoveryQueue.splice(index, 1);
       this.runningDiscovery += 1;
@@ -1154,13 +1162,13 @@ export class JobManager {
     }
   }
 
-  /** The head of the first lane, in rotation order, whose head job's pacing group is not cooling down. */
+  /** The head of the first lane, in rotation order, whose head job may start. */
   private nextCapture(): string | undefined {
     for (let position = 0; position < this.laneOrder.length; position += 1) {
       const lane = this.laneOrder[position]!;
       const queue = this.captureLanes.get(lane)!;
-      const head = this.jobs.get(queue[0]!);
-      if (head && this.coolingDown(head)) continue;
+      // Every job of a lane is of one source type, so the head waits for whatever holds the rest.
+      if (!this.ready(queue[0]!)) continue;
       this.laneOrder.splice(position, 1);
       const id = queue.shift();
       if (queue.length > 0) this.laneOrder.push(lane);
@@ -1293,20 +1301,7 @@ export class JobManager {
       ...(detail ? { detail } : {}),
     });
     this.notifyItemRetry(job);
-    this.waitForAttempt(job, delay);
-  }
-
-  /** Puts the job back in line once its wait is over; a closing manager leaves it for close() to record. */
-  private waitForAttempt(job: CollectionJob, delayMs: number): void {
-    this.retryTimers.get(job.id)?.();
-    if (this.closed) return;
-    const cancel = this.setTimer(() => {
-      this.retryTimers.delete(job.id);
-      if (this.closed || this.jobs.get(job.id) !== job) return;
-      this.requeue(job);
-      this.pump();
-    }, Math.max(0, delayMs));
-    this.retryTimers.set(job.id, cancel);
+    this.waitFor(job, { kind: 'retry', until: nextAttemptAt });
   }
 
   /** Check jobs show the retry state of each of their items. */
@@ -1397,6 +1392,9 @@ export class JobManager {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
       return;
     }
+    this.event(job, {
+      severity: 'debug', eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
+    });
     const items: JobItem[] = discovery.items.map((found) => {
       const title = found.title ?? '';
       const item: JobItem = {
@@ -1418,9 +1416,6 @@ export class JobManager {
       return item;
     });
     this.update(job, { phase: 'capture', items, progress: progressOf(items) });
-    this.event(job, {
-      severity: 'info', eventType: 'channel.discovered', message: `發現 ${items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
-    });
     // The check is reported only after the accepted items are recorded, so a stop in between finds them again.
     await this.options.store.flush();
     if (this.stoppedJobs.has(job.id) || retryItems) {
@@ -1487,7 +1482,7 @@ export class JobManager {
     const name = item.source.title ? `「${item.source.title}」` : item.source.url;
     this.event(item, recorded.skipped
       ? {
-        severity: 'info', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
+        severity: 'warning', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
         message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`,
       }
       : {
@@ -1534,6 +1529,7 @@ export class JobManager {
 
   private start(job: CollectionJob, phase: JobPhase): void {
     const timestamp = this.now().toISOString();
+    const firstStart = job.startedAt === null;
     if (job.wait) delete job.wait;
     this.update(job, {
       state: 'running', phase, startedAt: job.startedAt ?? timestamp,
@@ -1542,19 +1538,37 @@ export class JobManager {
     // Check items stop showing the wait once the next attempt starts.
     this.notifyItemRetry(job);
     this.syncItemWait(job);
-    this.event(job, { severity: 'info', eventType: 'job.started', message: '開始執行收集工作。', phase });
+    const role = roleOf(job);
+    const majorStart = firstStart && role !== 'add' && !(role === 'item' && job.parentId !== null);
+    this.event(job, { severity: majorStart ? 'info' : 'debug', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
 
   private finish(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, detail?: string): void {
     this.update(job, { state, result, error, finishedAt: this.now().toISOString() });
+    const progress = job.progress ?? { total: 0, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
+    const check = roleOf(job) === 'check' && job.scope ? {
+      trigger: job.scope.trigger,
+      result: (state === 'failed' && error?.code === 'network_error' ? 'network_error'
+        : state === 'completed' && result.outcome !== 'skipped'
+          && progress.created === 0 && progress.failed === 0 && (progress.skipped ?? 0) === 0
+          ? 'empty' : 'other') as 'empty' | 'network_error' | 'other',
+      created: progress.created, existing: progress.existing, failed: progress.failed, skipped: progress.skipped ?? 0,
+    } : undefined;
+    const role = roleOf(job);
+    const completedSeverity = role === 'check'
+      ? (result.outcome === 'partial' || progress.failed > 0 ? 'warning' : result.outcome === 'skipped' ? 'debug' : 'info')
+      : role === 'add' || job.parentId !== null || result.outcome === 'created' || result.outcome === 'skipped'
+        ? 'debug' : 'info';
     this.event(job, state === 'completed'
       ? {
-        severity: 'info', eventType: 'job.completed', message: this.completionMessage(job, result), outcome: result.outcome,
+        severity: completedSeverity, eventType: 'job.completed', message: this.completionMessage(job, result), outcome: result.outcome,
+        ...(check ? { check } : {}),
         ...(result.skipReason ? { skipReason: result.skipReason } : {}),
         ...(result.documentId ? { documentId: result.documentId } : {}),
       }
       : {
         severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
+        ...(check ? { check } : {}),
         ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });
     const end = this.checkEnd(job);
@@ -1592,8 +1606,7 @@ export class JobManager {
   }
 
   private release(job: CollectionJob): void {
-    this.retryTimers.get(job.id)?.();
-    this.retryTimers.delete(job.id);
+    this.waits.endRetry(job.id);
     this.jobs.delete(job.id);
     this.stoppedJobs.delete(job.id);
     this.manualClaims.delete(job.id);
@@ -1620,8 +1633,10 @@ export class JobManager {
    */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     const subscriptionId = this.subscriptionOf(job);
+    const role = roleOf(job);
     this.options.store.event({
       ...entry, vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
+      ...(role ? { jobRole: role } : {}),
       sourceType: job.source.type,
       ...(job.source.id ? { sourceId: job.source.id } : {}),
       ...(job.source.title ? { sourceTitle: job.source.title } : {}),
@@ -1652,18 +1667,21 @@ export class JobManager {
     const role = roleOf(job);
     const plugin = this.plugin(job.source.type);
     if (role === 'item') {
-      const stored = result.outcome === 'created' ? '收集完成，文件已保存' : '文件已存在';
+      const stored = result.outcome === 'created' ? '收集完成' : '文件已存在';
       return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
     }
     if (role === 'add') {
-      return result.outcome === 'created' ? '已訂閱，開始首次收集。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
+      return result.outcome === 'created' ? '已新增訂閱。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
     }
     if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
     const progress = job.progress;
     if (!progress) return '收集完成。';
-    const parts = [`新增 ${progress.created}`, `已存在 ${progress.existing}`];
-    if (progress.skipped) parts.push(`略過 ${progress.skipped}`);
-    if (progress.failed) parts.push(`失敗 ${progress.failed}`);
+    const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measure}${plugin.item.noun}` : ''}`;
+    const parts = progress.created ? [`新增 ${count(progress.created)}`] : [];
+    if (progress.existing) parts.push(`已存在 ${count(progress.existing)}`);
+    if (progress.skipped) parts.push(`略過 ${count(progress.skipped)}`);
+    if (progress.failed) parts.push(`失敗 ${count(progress.failed)}`);
+    if (parts.length === 0) return '收集完成。';
     return `收集完成：${parts.join('・')}。`;
   }
 }

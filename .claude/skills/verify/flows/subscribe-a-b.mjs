@@ -94,12 +94,10 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
 
   await record.scenario('SUBAB-3', '兩者完成：狀態序列、文件數、工作頁與徽章', async ({ expect, shot, note }) => {
     await waitFor(async () => (await apiStatus(a))?.state === 'scheduled' && (await apiStatus(b))?.state === 'scheduled', 'A and B scheduled', { timeout: 120_000 });
-    // The screen polls the API; the rows count as settled once they stay the same for 1.5 s.
-    await waitFor(async () => {
-      const before = [await statusOf(a), await statusOf(b)].join('|');
-      await sleep(1500);
-      return before === [await statusOf(a), await statusOf(b)].join('|');
-    }, 'rows settled', { timeout: 30_000 });
+    // An unchanged row can still be waiting for the next poll. Wait for the terminal render,
+    // retaining the checks below on timeout so stale rows fail with their observed text.
+    await waitFor(async () => [await statusOf(a), await statusOf(b)].every((text) => /^下次 /u.test(text ?? '')),
+      'rows show the completed checks', { timeout: 30_000 }).catch(() => undefined);
     const statuses = await watched(page, 'status');
     for (const [source, label] of [[a, 'A'], [b, 'B']]) {
       const sequence = distinct(statuses[rowOf(source)] ?? []);

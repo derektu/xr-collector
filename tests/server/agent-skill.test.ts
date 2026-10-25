@@ -51,6 +51,7 @@ describe('Agent Skill', () => {
       { method: 'GET', url: '/api/subscriptions' },
       { method: 'GET', url: '/api/subscriptions/:type/:id' },
       { method: 'GET', url: '/api/activity' },
+      { method: 'GET', url: '/api/activity/groups/:groupId' },
       { method: 'GET', url: '/api/jobs/summary' },
       { method: 'POST', url: '/api/jobs/:id/retry' },
       { method: 'GET', url: '/api/pacing' },
@@ -122,7 +123,8 @@ describe('Agent Skill', () => {
   it('documents the activity log, its retention and manual retry', async () => {
     const skill = await readFile(skillPath, 'utf8');
     for (const term of ['`severity`', '`eventType`', '`subscriptionId`', '`nextCursor`', '`retentionDays`', '`activityLog`', '`failing`', '`dropped`',
-      '`job_not_retryable`', '`retryOf`', '`retriedBy`', '`activityIncomplete: true`', '保留最近 30 天', '`[已遮蔽]`', '`outcome: skipped`']) {
+      '`job_not_retryable`', '`retryOf`', '`retriedBy`', '`activityIncomplete: true`', '保留最近 30 天', '`[已遮蔽]`', '`outcome: skipped`',
+      '`view=summary`', '`sourceType`', '`groupId`', '`activity_group_expired`', '`activity_snapshot_expired`']) {
       expect(skill).toContain(term);
     }
   });

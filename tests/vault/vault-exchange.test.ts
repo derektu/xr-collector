@@ -18,7 +18,7 @@ import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
-import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, settled, temp, video, type Machine } from './exchange-fixtures.js';
+import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from './exchange-fixtures.js';
 import type { YouTubeTestSources } from '../support/youtube-sources.js';
 import { manifestOf, packageOf, tampered } from './package-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
@@ -156,7 +156,7 @@ describe('a deletion and an addition meet (X77-A02)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({ removed: 1 }), replace: counts({ removed: 2 }), localNewer: 1 });
-      workspace.applyImport(preview.id, 'merge'); await settled(workspace);
+      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
     });
     expect(await documents(a.vault)).toEqual([D1, D3, D4, D5, SEEDED].sort());
 
@@ -221,7 +221,7 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.applyImport(preview.id, 'merge'); await settled(workspace);
+      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
       expect(workspace.status().state).toBe('completed');
     });
     expect(await deletedAt(a.vault)).toEqual({ [D1]: at(2), [D3]: at(2) });
@@ -353,7 +353,7 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.applyImport(preview.id, 'merge'); await settled(workspace);
+      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
       expect(workspace.status().state).toBe('completed');
     });
     expect(await deletions(a.vault)).toEqual(['bbbbbbbbbbX']);
@@ -385,7 +385,7 @@ describe('nothing to import (X77-A10)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }), localNewer: 2 });
-      workspace.applyImport(preview.id, 'replace'); await settled(workspace);
+      workspace.applyImport(preview.id, 'replace'); await workspace.operationFinished();
       expect(workspace.status().state).toBe('completed');
     });
     expect(await items(a.vault)).toEqual(await items(b.vault));
@@ -440,7 +440,7 @@ describe('the export before an import (X77-A11)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(backup);
       expect(preview).toMatchObject({ merge: counts({}), replace: changedCounts, localNewer: 6 });
-      workspace.applyImport(preview.id, 'replace'); await settled(workspace);
+      workspace.applyImport(preview.id, 'replace'); await workspace.operationFinished();
       expect(workspace.status().state).toBe('completed');
     });
     expect(await items(a.vault)).toEqual(original);
@@ -487,7 +487,7 @@ describe('an import stopped while it applies (X77-A12)', () => {
     });
     const c = await machine('C', root);
     await using(c, async (workspace) => {
-      await workspace.openOther(stopped.vault); await settled(workspace);
+      await workspace.openOther(stopped.vault); await workspace.operationFinished();
       expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: stopped.vault });
       expect(await workFolders(stopped.vault)).toEqual([]);
       expect(await items(stopped.vault)).toEqual(expected === 'before' ? before : after);
@@ -574,7 +574,7 @@ describe('an import stopped while it applies (X77-A12)', () => {
         expect(read.statusCode).toBe(409);
         expect(read.json()).toMatchObject({ error: { code: 'vault_busy' } });
         expect((await app.inject('/api/vault/status')).statusCode).toBe(200);
-        release(); await settled(workspace);
+        release(); await workspace.operationFinished();
         expect((await app.inject('/api/documents')).statusCode).toBe(200);
       } finally { await app.close(); }
     }, { importFaults: async (phase, count) => { if (phase === 'renaming' && count === 1) { reached = true; await held; } } });
@@ -619,7 +619,7 @@ describe('collection during an import (X77-A12)', () => {
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');
       release();
-      await settled(workspace);
+      await workspace.operationFinished();
       expect(workspace.status().state).toBe('completed');
       await Promise.all(runs.map((run) => workspace.jobs.whenSettled(run.job.id)));
       // The queued check of the subscription the import removed never ran.
@@ -649,7 +649,7 @@ describe('a comparison the Vault outdated (X77-A13)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       await modify(a.vault, D3, '比對後才改的段落', at(9));
-      workspace.applyImport(preview.id, 'merge'); await settled(workspace);
+      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
       expect(workspace.status()).toMatchObject({ state: 'error', errorCode: 'invalid_request', message: expect.stringContaining('重新選擇') });
       expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     });
@@ -785,7 +785,7 @@ describe('export and import over HTTP (X77-A14)', () => {
           expect(mode.statusCode).toBe(400);
           const apply = await app.inject({ method: 'POST', url: '/api/vault/import/apply', headers, payload: { id, mode: 'merge' } });
           expect(apply.statusCode).toBe(202);
-          await settled(workspace);
+          await workspace.operationFinished();
           expect((await app.inject({ method: 'GET', url: '/api/vault/status', headers })).json())
             .toMatchObject({ state: 'completed', operation: 'import', result: { importMode: 'merge', imported: changedCounts } });
         } finally { await app.close(); }

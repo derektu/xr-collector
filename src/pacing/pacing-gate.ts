@@ -93,13 +93,15 @@ function clockTime(value: Date): string {
  * down: nothing is sent until the cooldown ends, and requests asked for meanwhile fail at once with
  * `rate_limited`. The cooldown starts at its initial length, doubles with each consecutive limit up
  * to its maximum, and starts over after a successful request or after a long enough time without a
- * limit.
+ * limit. A group that declares `cooldown: false` never cools down: a limit fails only the request
+ * that met it.
  */
 export class PacingGate implements Pacing {
   readonly group: string;
   private readonly label: string;
   private readonly waitRange: WaitRange;
-  private readonly cooldown: CooldownPolicy;
+  /** Null for a group whose limits fail only the request that met them. */
+  private readonly cooldown: CooldownPolicy | null;
   private readonly now: () => Date;
   private readonly random: () => number;
   private readonly setTimer: (callback: () => void, ms: number) => () => void;
@@ -118,7 +120,7 @@ export class PacingGate implements Pacing {
     this.group = declaration.group;
     this.label = declaration.label;
     this.waitRange = options.waitRangeMs ?? declaration.waitRangeMs;
-    this.cooldown = { ...DEFAULT_COOLDOWN, ...declaration.cooldown, ...options.cooldown };
+    this.cooldown = declaration.cooldown === false ? null : { ...DEFAULT_COOLDOWN, ...declaration.cooldown, ...options.cooldown };
     this.now = options.now ?? (() => new Date());
     this.random = options.random ?? Math.random;
     this.setTimer = options.setTimer ?? ((callback, ms) => {
@@ -128,10 +130,13 @@ export class PacingGate implements Pacing {
     });
   }
 
-  /** Opens the channel with the cooldown its state file recorded; a missing or unreadable file starts fresh. */
+  /**
+   * Opens the channel with the cooldown its state file recorded; a missing or unreadable file starts
+   * fresh. A group without cooldowns reads no file and writes none.
+   */
   static async open(declaration: PacingDeclaration, options: PacingGateOptions = {}): Promise<PacingGate> {
     const gate = new PacingGate(declaration, options);
-    if (options.statePath) {
+    if (options.statePath && gate.cooldown) {
       try {
         const value = await readJsonFile(options.statePath) as Partial<StoredPacing> | undefined;
         if (value && typeof value === 'object') {
@@ -167,7 +172,8 @@ export class PacingGate implements Pacing {
   /**
    * Runs one request when its turn comes. Aborting `signal` before the request starts removes it
    * from the queue and rejects with the signal's reason; a request already running finishes. A
-   * `rate_limited` failure starts the cooldown and is rethrown with its end time.
+   * `rate_limited` failure starts the cooldown and is rethrown with its end time; without cooldowns
+   * it is rethrown as it is.
    */
   run<T>(priority: GatePriority, request: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) return Promise.reject(signal.reason);
@@ -186,7 +192,8 @@ export class PacingGate implements Pacing {
             this.ended();
             resolve(value);
           }, (error: unknown) => {
-            const limited = error instanceof CollectorError && error.code === 'rate_limited' ? this.limited(error) : null;
+            const limited = this.cooldown && error instanceof CollectorError && error.code === 'rate_limited'
+              ? this.limited(this.cooldown, error) : null;
             this.ended();
             reject(limited ?? error);
           });
@@ -256,12 +263,12 @@ export class PacingGate implements Pacing {
   }
 
   /** Starts a cooldown after a limit and returns the error the request fails with. */
-  private limited(error: CollectorError): CollectorError {
+  private limited(cooldown: CooldownPolicy, error: CollectorError): CollectorError {
     const now = this.now();
     const last = this.stored.lastLimitedAt ? Date.parse(this.stored.lastLimitedAt) : Number.NaN;
-    const fresh = Number.isNaN(last) || now.getTime() - last > this.cooldown.resetAfterMs;
+    const fresh = Number.isNaN(last) || now.getTime() - last > cooldown.resetAfterMs;
     const level = fresh ? 1 : this.stored.level + 1;
-    const duration = Math.min(this.cooldown.initialMs * 2 ** (level - 1), this.cooldown.maxMs);
+    const duration = Math.min(cooldown.initialMs * 2 ** (level - 1), cooldown.maxMs);
     const until = new Date(now.getTime() + duration).toISOString();
     this.stored = { cooldownUntil: until, level, lastLimitedAt: now.toISOString() };
     this.persist();

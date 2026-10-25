@@ -61,7 +61,7 @@ describe('finding the feed of an address (R11-T4)', () => {
 });
 
 describe('reading a feed over HTTP (R11-T6)', () => {
-  it('classifies failures: server errors are retried now, 429 waits for the cooldown, a missing or invalid feed fails the check', async () => {
+  it('classifies failures: server errors are retried now, a limit, a missing or an invalid feed fails the check', async () => {
     feeds.set('/busy', { status: 503, body: 'busy' });
     feeds.set('/limited', { status: 429, body: 'slow down' });
     feeds.set('/gone', { status: 410, body: 'gone' });
@@ -78,7 +78,7 @@ describe('reading a feed over HTTP (R11-T6)', () => {
     await expect(fetchText('http://127.0.0.1:9/feed')).rejects.toMatchObject({ code: 'network_error' });
     expect(['network_error', 'rate_limited', 'feed_not_found', 'feed_unavailable', 'feed_invalid', 'article_missing', 'whatever']
       .map((errorCode) => rssDefinition.classifyFailure({ code: errorCode })))
-      .toEqual(['retry_now', 'rate_limited', 'retry_next_check', 'retry_next_check', 'retry_next_check', 'retry_next_check', 'skip']);
+      .toEqual(['retry_now', 'retry_next_check', 'retry_next_check', 'retry_next_check', 'retry_next_check', 'retry_next_check', 'skip']);
   });
 
   it('decodes the charset the response or the document declares', () => {

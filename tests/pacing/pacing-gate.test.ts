@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import {
   PacingGate,
   type PacingGateOptions,
 } from '../../src/pacing/pacing-gate.js';
+import { rssDefinition } from '../../src/plugins/rss/server.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 
 // The request channel runs with a manual clock and timers, so every wait is checked exactly.
@@ -257,5 +259,32 @@ describe('cooldown after YouTube limits requests (P-T4)', () => {
     expect(waitRangeFromEnv('300,100')).toBeUndefined();
     expect(waitRangeFromEnv('fast')).toBeUndefined();
     expect(waitRangeFromEnv(undefined)).toBeUndefined();
+  });
+});
+
+describe('a group without cooldowns (RSS)', () => {
+  it('fails only the limited request: no cooldown, no event, no state file, and the next request goes out after the usual wait', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'xr-rss-gate-'));
+    directories.push(directory);
+    const statePath = path.join(directory, 'rss-pacing.json');
+    const h = harness();
+    const gate = await PacingGate.open(rssDefinition.pacing!, { ...h.options, statePath });
+    const events: PacingEvent[] = [];
+    gate.subscribe((event) => events.push(event));
+
+    const siteLimit = new CollectorError('rate_limited', '這個網站暫時限制連線。');
+    const running = controlled<string>();
+    const first = gate.run('background', running.request);
+    const waiting = gate.run('background', async () => 'other feed');
+    await settle();
+    running.fail(siteLimit);
+    await expect(first).rejects.toBe(siteLimit);
+    expect(siteLimit.retryAt).toBeUndefined();
+    expect(gate.status()).toMatchObject({ state: 'waiting', cooldownUntil: null, level: 0 });
+    await h.advance(8_000);
+    await expect(waiting).resolves.toBe('other feed');
+    expect(events).toEqual([]);
+    await gate.flush();
+    expect(existsSync(statePath)).toBe(false);
   });
 });

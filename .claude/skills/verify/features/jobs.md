@@ -1,6 +1,6 @@
 # 工作頁
 
-工作頁列出收集與訂閱檢查的工作，分「進行中」「排隊中」「失敗」三區；沒有工作時顯示「沒有進行中的工作」。失敗的工作可重試或移除，側欄的工作徽章顯示待處理數。
+工作頁列出收集與訂閱檢查的工作，分「進行中」「排隊中」「失敗」三區；沒有工作時顯示「沒有進行中的工作」。失敗區列出可重試或移除的單篇與新增訂閱工作；訂閱檢查與子工作的問題到訂閱及記錄頁查看。側欄的工作徽章顯示待處理數。
 
 ## Sub-features
 
@@ -29,16 +29,19 @@ Preconditions:
 - **失敗。** 經文件頁加入 `https://www.youtube.com/watch?v=vD000000003`。工作頁 `jobs-failed` 出現該工作與失敗原因；沒有其他工作時側欄不顯示 `jobs-badge`。
 - **重試。** 先把 `failVideo` 改回 `null`，再點該列的 `job-retry`。工作離開失敗區，文件頁出現 D 第 3 集。
 - **移除。** 再造一個失敗後點 `job-dismiss`。列消失，`GET /api/jobs/overview` 的 `failed` 不含它。
+- **離線。** 依 [訂閱與檢查](subscriptions.md) 的斷網步驟進入離線；失敗列的 `job-retry` disabled，`job-dismiss` 仍可按。
 
 ## Gotchas
 
 - 三區只在有內容時渲染（`jobs-<id>` 不存在不代表錯誤）；斷言前先等「正在讀取…」消失與工作狀態，或以 `GET /api/jobs/overview` 對照。
 - 失敗不計入側欄徽章；只有失敗工作時找不到 `jobs-badge` 是正常的。
 - 合成收集很快，不調慢 `captureDelayMs` 很難拍到進行中。
-- 沒有未結束的工作時，工作頁每 10 秒才重新讀取一次，之後送出的工作最多 10 秒才出現；在有工作進行時打開工作頁，就以進行中的頻率更新。
+- 沒有未結束的工作時每 2 秒更新，有工作時每 1.5 秒更新。等待畫面符合預期，不以 API 剛完成就假定畫面已刷新。
 - 重試前沒把注入的失敗拿掉，重試會再次失敗；這是驗證步驟的錯誤，不是產品問題。
 - 失敗原因的用字由 plugin 分類決定（`tests/plugins/youtube/failures.test.ts`），截圖只核對畫面呈現。
 
 ## Regression flows
 
 - `subscribe-a-b`：斷言 `jobs-sections`、`jobs-empty`、`jobs-badge`。A、B 開始後在進行中且不回到排隊中、沒有失敗區、結束後顯示空狀態，以及工作全部結束、畫面穩定後沒有徽章。
+- `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中並以「YouTube 限制連線」說明等待原因，冷卻期間送出的單支影片在排隊中。
+- `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`。單篇失敗後重新收集及從失敗區移除，以 API 與文件內容確認結果。

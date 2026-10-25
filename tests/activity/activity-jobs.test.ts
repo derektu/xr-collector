@@ -8,6 +8,7 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import {
   CollectorError,
+  type CollectionJob,
   type DocumentSummary,
   type SavedDocument,
   type SubscriptionRecord,
@@ -168,7 +169,7 @@ describe('manual retry (A-T9)', () => {
     const forOriginal = (await events({ jobId: failed.id })).map((entry) => entry.eventType).reverse();
     expect(forOriginal).toEqual(['job.accepted', 'job.started', 'job.failed', 'job.accepted', 'job.retry_requested']);
     const requested = (await events({ eventType: ['job.retry_requested'] }))[0]!;
-    expect(requested).toMatchObject({ jobId: retried.job.id, retryOf: failed.id, sourceId: 'aaaaaaaaaaa' });
+    expect(requested).toMatchObject({ jobId: retried.job.id, retryOf: failed.id, sourceId: 'aaaaaaaaaaa', severity: 'info' });
   });
 
   it('gives a job whose automatic retries ran out a fresh attempt budget', async () => {
@@ -183,6 +184,9 @@ describe('manual retry (A-T9)', () => {
     expect(failed).toMatchObject({ state: 'failed', retry: { attempts: 3 } });
     const failure = (await events({ jobId: id, eventType: ['job.failed'] }))[0]!;
     expect(failure.detail).toContain('Unable to download webpage');
+    expect((await events({ jobId: id, eventType: ['job.retry_scheduled'] })).every((event) => event.severity === 'warning')).toBe(true);
+    const starts = await events({ jobId: id, eventType: ['job.started'] });
+    expect(starts.map((event) => event.severity)).toEqual(['debug', 'debug', 'info']);
 
     const retried = await manager.retry(id);
     const done = await manager.whenSettled(retried.job.id);
@@ -307,6 +311,43 @@ describe('masked job errors (A-T6)', () => {
 });
 
 describe('job summary and event fields', () => {
+  it('persists severity from job role and outcome instead of event name alone (L1)', async () => {
+    const { manager, source, subs, events } = setup();
+    const created = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('qqqqqqqqqqq'))).job.id);
+    expect(created.result?.outcome).toBe('created');
+    expect((await events({ jobId: created.id })).map((event) => [event.eventType, event.severity]).reverse()).toEqual([
+      ['job.accepted', 'debug'], ['job.started', 'info'], ['document.saved', 'info'], ['job.completed', 'debug'],
+    ]);
+
+    const existing = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('qqqqqqqqqqq'))).job.id);
+    expect(existing.result?.outcome).toBe('existing');
+    expect((await events({ jobId: existing.id, eventType: ['job.completed'] }))[0]).toMatchObject({ severity: 'info', outcome: 'existing' });
+
+    const channel = subscribe(subs, 'UC-levels');
+    source.channelVideos.set('UC-levels', [{ id: 'rrrrrrrrrrr', title: '子工作', url: watchUrl('rrrrrrrrrrr'), publishedAt: T0.toISOString(), upcoming: false }]);
+    const checked = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'manual')).job.id);
+    const checkEvents = await events({ jobId: checked.id });
+    expect(checkEvents.find((event) => event.jobId === checked.id && event.eventType === 'job.started')).toMatchObject({ severity: 'info' });
+    expect(checkEvents.find((event) => event.parentJobId === checked.id && event.eventType === 'job.started')).toMatchObject({ severity: 'debug' });
+    expect(checkEvents.find((event) => event.parentJobId === checked.id && event.eventType === 'job.completed')).toMatchObject({ severity: 'debug' });
+    expect(checkEvents.find((event) => event.jobId === checked.id && event.eventType === 'channel.discovered')).toMatchObject({ severity: 'debug' });
+    expect(checkEvents.find((event) => event.jobId === checked.id && event.eventType === 'job.completed')).toMatchObject({ severity: 'info' });
+
+    source.channelVideos.set('UC-levels', [{ id: 'sssssssssss', title: '失敗子工作', url: watchUrl('sssssssssss'), publishedAt: T0.toISOString(), upcoming: false }]);
+    source.captureFailures.set('sssssssssss', [noSubtitles()]);
+    const partial = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'manual')).job.id);
+    expect((await events({ jobId: partial.id, eventType: ['job.completed'] })).find((event) => event.jobId === partial.id))
+      .toMatchObject({ severity: 'warning', outcome: 'partial' });
+    expect((await events({ jobId: partial.id, eventType: ['subscription.item_failed'] }))[0]).toMatchObject({ severity: 'warning' });
+  });
+
+  it('records a created item completion without repeating the document-save stage', async () => {
+    const { manager, events } = setup();
+    const done = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('zzzzzzzzzzz'))).job.id);
+    const completed = (await events({ jobId: done.id, eventType: ['job.completed'] }))[0]!;
+    expect(completed).toMatchObject({ message: '收集完成。', jobRole: 'item', outcome: 'created' });
+  });
+
   it('counts active jobs and jobs finished since a time, leaving out retried failures', async () => {
     // A second capture slot lets the retry finish while another capture is held.
     const { manager, source } = setup(undefined, { capture: 2 });
@@ -334,11 +375,14 @@ describe('job summary and event fields', () => {
     const saved = (await events({ eventType: ['document.saved'] }))[0]!;
     expect(saved).toMatchObject({ subscriptionId: 'UC9', parentJobId: submission!.job.id, sourceTitle: '影片 iiiiiiiiiii', documentId: 'youtube:iiiiiiiiiii' });
     const accepted = (await events({ jobId: submission!.job.id, eventType: ['job.accepted'] })).find((entry) => entry.jobId === submission!.job.id)!;
-    expect(accepted).toMatchObject({ trigger: 'scheduled', sourceTitle: '頻道 UC9', subscriptionId: 'UC9' });
+    expect(accepted).toMatchObject({ trigger: 'scheduled', sourceTitle: '頻道 UC9', subscriptionId: 'UC9', jobRole: 'check' });
     const completed = (await events({ jobId: submission!.job.id, eventType: ['job.completed'] })).find((entry) => entry.jobId === submission!.job.id)!;
-    expect(completed.message).toBe('收集完成：新增 1・已存在 0。');
+    expect(completed.message).toBe('收集完成：新增 1 支影片。');
     const videoAccepted = (await events({ eventType: ['job.accepted'] })).find((entry) => entry.parentJobId === submission!.job.id)!;
-    expect(videoAccepted.sourceTitle).toBe('頻道影片');
+    expect(videoAccepted).toMatchObject({ sourceTitle: '頻道影片', jobRole: 'item' });
+    const chronology = await events({ jobId: submission!.job.id });
+    expect(chronology.findIndex((entry) => entry.eventId === videoAccepted.eventId))
+      .toBeLessThan(chronology.findIndex((entry) => entry.eventType === 'channel.discovered'));
     expect((await events({ subscriptionId: 'UC9' })).length).toBeGreaterThanOrEqual(6);
     await service.setEnabled('UC9', false);
     expect((await events({ subscriptionId: 'UC9', eventType: ['subscription.paused'] }))[0]).toMatchObject({ sourceTitle: '頻道 UC9' });
@@ -346,6 +390,29 @@ describe('job summary and event fields', () => {
 });
 
 describe('retention leaves job records alone (A-T3)', () => {
+  it('keeps real check summaries and detail after their jobs are pruned and the store restarts (#96 A6)', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-summary-jobs-'));
+    directories.push(directory);
+    const store = await JobStore.open(directory, clock);
+    const first = setup(store);
+    const channel = subscribe(first.subs, 'UC-summary');
+    for (let index = 0; index < 12; index += 1) {
+      const submission = await first.manager.submitCheck('youtube', channel, 'scheduled');
+      expect(await first.manager.whenSettled(submission.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
+    }
+    for (let index = 0; index < 1001; index += 1) store.put(finished(`later-${index}`, new Date(T0.getTime() + 86_400_000 + index).toISOString()));
+    await first.manager.close();
+    await store.close();
+
+    const reopened = await JobStore.open(directory, clock);
+    expect(reopened.list(VAULT).some((job) => job.kind === 'youtube.channel')).toBe(false);
+    const summary = await reopened.activity.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-summary' }, { vaultPath: VAULT });
+    const group = summary.entries.find((entry) => entry.kind === 'check')!;
+    expect(group).toMatchObject({ count: 12, result: 'empty' });
+    expect((await reopened.activity.group(group.groupId, { vaultPath: VAULT })).checks).toHaveLength(12);
+    await reopened.close();
+  });
+
   it('keeps an interrupted job and an index failure after every event expired, and resumes the job', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-jobs-'));
     directories.push(directory);
@@ -372,3 +439,11 @@ describe('retention leaves job records alone (A-T3)', () => {
     await store.close();
   });
 });
+
+function finished(id: string, timestamp: string): CollectionJob {
+  return {
+    id, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, parentId: null,
+    source: { type: 'youtube', id, url: watchUrl(id), title: id }, createdAt: timestamp, startedAt: timestamp,
+    finishedAt: timestamp, updatedAt: timestamp, progress: null, items: null, result: { outcome: 'existing' }, error: null,
+  };
+}

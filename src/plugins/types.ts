@@ -199,7 +199,11 @@ export interface PacingDeclaration {
   label: string;
   /** Random gap between two requests, in milliseconds. */
   waitRangeMs: { min: number; max: number };
-  cooldown?: { initialMs?: number; maxMs?: number; resetAfterMs?: number };
+  /**
+   * How a limit cools the group down. `false`: the group never cools down; a limit fails only the
+   * request that met it, for a group whose requests go to unrelated sites.
+   */
+  cooldown?: { initialMs?: number; maxMs?: number; resetAfterMs?: number } | false;
   /** Environment variable that overrides `waitRangeMs` as `min,max`, for tests and acceptance runs. */
   envVar?: string;
 }

@@ -10,6 +10,7 @@ import {
   type VaultSetupStatus,
 } from '../core/types.js';
 import { CollectionPause } from '../core/collection-pause.js';
+import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
@@ -55,6 +56,10 @@ export interface CollectorRuntimeOptions {
   uiPort: number;
   uiHost?: string;
   webRoot?: string;
+  /** Packaged desktop login-startup service; absent servers report the setting unavailable. */
+  loginStartup?: LoginStartupAccess;
+  /** Records a packaged OS login launch in the device activity log. */
+  startedAtLogin?: boolean;
 }
 
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
@@ -101,6 +106,11 @@ export class CollectorRuntime {
 
   get workspace(): VaultWorkspace | null { return this.workspaceValue; }
 
+  /** Records a device-wide desktop event; global events stay visible with any Vault selected. */
+  recordDeviceEvent(severity: 'info' | 'warning' | 'error', eventType: string, message: string, errorCode?: string): void {
+    this.jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
+  }
+
   static async start(options: CollectorRuntimeOptions): Promise<CollectorRuntime> {
     const instanceId = randomUUID();
     const selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
@@ -118,6 +128,10 @@ export class CollectorRuntime {
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
     const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs')) : null;
+    const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: string, message: string, errorCode?: string) => {
+      jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
+    };
+    if (options.startedAtLogin) deviceEvent('info', 'device.login_startup_launched', 'XR Collector 由電腦登入自動啟動，並在背景執行。');
     const pause = options.pause ?? new CollectionPause();
     const connectivity = new Connectivity({ ...options.connectivity, pause });
     const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? { ...options.workspace, jobStore, pause, connectivity } : null;
@@ -125,6 +139,10 @@ export class CollectorRuntime {
     const activity: ActivityAccess | undefined = jobStore ? {
       query: (query) => jobStore.activity.query(query,
         (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
+      summary: (query) => jobStore.activity.summary(query,
+        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
+      group: (groupId, limit, cursor, severity) => jobStore.activity.group(groupId,
+        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }, limit, cursor, severity),
       health: () => jobStore.activity.health(),
     } : undefined;
     const services = options.workspace ? {
@@ -136,7 +154,23 @@ export class CollectorRuntime {
       search: forwarding<TranscriptSearch>(() => current().search),
       ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),
     } : {};
-    const shared = { ...services, connectivity };
+    const loginStartup: LoginStartupAccess | undefined = options.loginStartup ? {
+      status: () => options.loginStartup!.status(),
+      update: async (enabled) => {
+        try {
+          const status = await options.loginStartup!.update(enabled);
+          deviceEvent('info', enabled ? 'device.login_startup_enabled' : 'device.login_startup_disabled',
+            enabled ? '已開啟登入電腦時自動啟動。' : '已關閉登入電腦時自動啟動。');
+          return status;
+        } catch (error) {
+          const code = error instanceof CollectorError ? error.code : 'login_startup_failed';
+          deviceEvent(code === 'login_startup_requires_approval' ? 'warning' : 'error',
+            'device.login_startup_failed', error instanceof Error ? error.message : '登入自啟設定失敗。', code);
+          throw error;
+        }
+      },
+    } : undefined;
+    const shared = { ...services, connectivity, ...(loginStartup ? { loginStartup } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),

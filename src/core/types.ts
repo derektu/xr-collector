@@ -430,6 +430,11 @@ export type SubscriptionCollectionEntry =
     created: number; failed: number;
     /** Why the check could not list its subscription; null when it listed it. */
     error: JobError | null;
+    groupId?: string;
+  }
+  | {
+    kind: 'check-group'; at: string; firstAt: string; groupId: string; trigger: ChannelJobTrigger;
+    result: ActivityCheckSummary['result']; count: number; errorCode?: string; message: string;
   };
 
 export interface SubscriptionDetail {
@@ -690,11 +695,21 @@ export interface JobPageView {
   nextCursor: string | null;
 }
 
-export type EventSeverity = 'info' | 'warning' | 'error';
+export type EventSeverity = 'debug' | 'info' | 'warning' | 'error';
+
+/** Device login-startup state, shared by the Settings UI and authorized Agents. */
+export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'unavailable';
+
+export interface LoginStartupStatus {
+  supported: boolean;
+  enabled: boolean;
+  state: LoginStartupState;
+  message: string;
+}
 
 /**
  * One entry of the device activity log. Severity says how serious the entry is; outcome says what a
- * finished job produced, so a skipped item is an `info` entry with outcome `skipped`. Optional fields
+ * finished job produced. Optional fields
  * appear when the entry concerns them.
  */
 export interface JobEvent {
@@ -731,6 +746,8 @@ export interface JobEvent {
   sourceId?: string;
   /** Display title of the item or subscription target. */
   sourceTitle?: string;
+  /** Durable role of a job event, so summary projection does not depend on retained job records. */
+  jobRole?: JobRole;
   /** The subscription the event belongs to, for check jobs and the items they queued. */
   subscriptionId?: string;
   /** The check job that queued this item job. */
@@ -740,21 +757,84 @@ export interface JobEvent {
   retryOf?: string;
   /** `collection.paused` and `collection.resumed`: the reason that came into force or lifted. */
   pauseReason?: PauseReason;
+  /** Durable terminal metadata for a subscription check; unlike jobs.json, events live for 30 days. */
+  check?: {
+    trigger: ChannelJobTrigger;
+    result: 'empty' | 'network_error' | 'other';
+    created: number;
+    existing: number;
+    failed: number;
+    skipped: number;
+  };
 }
 
 /** Filters of an activity query; every filter given must match. */
 export interface ActivityQuery {
+  /** Raw events by default; summary folds each completed subscription check into one row. */
+  view?: 'raw' | 'summary';
   severity?: EventSeverity[];
   eventType?: string[];
   /** A job's own events, the events of the items it queued and of the job that retries it. */
   jobId?: string;
   subscriptionId?: string;
+  sourceType?: DocumentSourceType;
   /** Inclusive lower bound, ISO time. */
   since?: string;
   /** Exclusive upper bound, ISO time. */
   until?: string;
   limit?: number;
   cursor?: string;
+}
+
+export interface ActivityCheckSummary {
+  kind: 'check';
+  groupId: string;
+  /** The newest terminal check in this row; for singleton rows this is the check itself. */
+  jobId: string;
+  sourceType: DocumentSourceType;
+  subscriptionId: string;
+  sourceTitle: string | null;
+  trigger: ChannelJobTrigger;
+  result: 'empty' | 'network_error' | 'other';
+  created: number;
+  existing: number;
+  failed: number;
+  skipped: number;
+  count: number;
+  firstFinishedAt: string;
+  lastFinishedAt: string;
+  severity: EventSeverity;
+  errorCode?: string;
+  message: string;
+}
+
+export type ActivitySummaryEntry = { kind: 'event'; event: JobEvent } | ActivityCheckSummary;
+
+export interface ActivitySummaryPage {
+  entries: ActivitySummaryEntry[];
+  nextCursor: string | null;
+  retentionDays: number;
+  log: ActivityLogHealth;
+}
+
+export interface ActivityCheckDetail {
+  jobId: string;
+  finishedAt: string;
+  result: ActivityCheckSummary['result'];
+  created: number;
+  existing: number;
+  failed: number;
+  skipped: number;
+  errorCode?: string;
+  message: string;
+  events: JobEvent[];
+}
+
+export interface ActivityGroupPage {
+  group: ActivityCheckSummary;
+  checks: ActivityCheckDetail[];
+  nextCursor: string | null;
+  retentionDays: number;
 }
 
 /** Whether the activity log keeps up with what happens. */
@@ -907,6 +987,11 @@ export type CoreErrorCode =
   | 'transfer_cancelled'
   | 'vault_location_fixed'
   | 'insufficient_space'
+  | 'activity_snapshot_expired'
+  | 'activity_group_expired'
+  | 'login_startup_unavailable'
+  | 'login_startup_requires_approval'
+  | 'login_startup_failed'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */

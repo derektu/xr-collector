@@ -303,7 +303,9 @@ describe('video jobs across restarts (R-T2)', () => {
       'job.accepted', 'job.started', 'job.interrupted', 'job.resumed', 'document.saved', 'job.completed',
     ]));
     expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.resumed'))
-      .toMatchObject({ stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
+      .toMatchObject({ severity: 'info', stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
+    expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.interrupted'))
+      .toMatchObject({ severity: 'warning' });
   });
 
   it('only updates the index of a document saved before the restart', async () => {
@@ -596,6 +598,38 @@ describe('system sleep (#97)', () => {
     expect(doneFirst.retry).toMatchObject({ attempts: 1 });
     expect(w.script.captures.sort()).toEqual([retried, retried, queued].sort());
   });
+
+  it('puts a step the sleep stopped back at the head of its lane while a sibling waits for its retry', async () => {
+    const pause = new CollectionPause();
+    const w = await world({ pause });
+    const a = subscribe(w.subs, 'UC-A');
+    const b = subscribe(w.subs, 'UC-B');
+    w.script.channelVideos.set(a.id, listed(2, 'a'));
+    w.script.channelVideos.set(b.id, listed(2, 'b'));
+    const [a0, a1] = [videoId(0, 'a'), videoId(1, 'a')];
+    w.script.captureFailures.set(a0, [network()]);
+    w.script.captureFailures.set(a1, [network()]);
+    const g = await w.boot((source) => { source.holdCaptures = new Set([a0]); });
+    await g.manager.submitCheck('youtube', a, 'manual');
+    await vi.waitFor(() => expect(g.source.held.has(a0)).toBe(true));
+    const checkB = await g.manager.submitCheck('youtube', b, 'manual');
+    await vi.waitFor(() => expect(g.manager.get(checkB.job.id).items).toHaveLength(2));
+
+    // a0 fails and waits for its retry; a1 starts and is stopped by the sleep.
+    g.source.holdCaptures = new Set([a1]);
+    g.source.release(a0);
+    await vi.waitFor(() => expect(g.source.held.has(a1)).toBe(true));
+    pause.set('sleep', true);
+    g.source.holdCaptures = new Set();
+    g.source.release(a1);
+    await vi.waitFor(() => expect(g.manager.get(checkB.job.id).items?.every((item) => item.state === 'queued')).toBe(true));
+    await vi.waitFor(() => expect(g.manager.list().jobs.find((job) => job.source.id === a.id)?.items?.[1]?.state).toBe('queued'));
+
+    g.source.holdAllCaptures = true;
+    pause.set('sleep', false);
+    await vi.waitFor(() => expect(w.script.captures).toHaveLength(3));
+    expect(w.script.captures).toEqual([a0, a1, a1]);
+  });
 });
 
 describe('lost network (#128)', () => {
@@ -838,7 +872,9 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(g2.manager.get(failing.job.id)).toMatchObject({ state: 'queued', retry: { attempts: 2 }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(g2.timers.map((timer) => timer.ms)).toEqual([60_000]);
     expect((await w.events()).find((event) => event.jobId === failing.job.id && event.eventType === 'job.resumed'))
-      .toMatchObject({ stopReason: 'shutdown', message: '服務正常關閉後重新啟動，接續收集工作。' });
+      .toMatchObject({ severity: 'info', stopReason: 'shutdown', message: '服務正常關閉後重新啟動，接續收集工作。' });
+    expect((await w.events()).find((event) => event.jobId === failing.job.id && event.eventType === 'job.interrupted'))
+      .toMatchObject({ severity: 'debug' });
     g2.fireTimers();
     const done = await g2.manager.whenSettled(failing.job.id);
 
@@ -847,6 +883,18 @@ describe('automatic retries (R-T6, R-T7)', () => {
       error: { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。（已嘗試 3 次）' },
     });
     expect(w.script.captures.filter((id) => id === videoId(6))).toHaveLength(3);
+  });
+
+  it('does not count a job waiting for its next attempt toward the queue limit', async () => {
+    const w = await world({ limits: { maxQueued: 1 } });
+    w.script.captureFailures.set(videoId(8), [network()]);
+    const g = await w.boot();
+    const failing = await g.manager.submitItem('youtube', watchUrl(videoId(8)));
+    await vi.waitFor(() => expect(g.manager.get(failing.job.id).retry?.attempts).toBe(1));
+    const other = await g.manager.submitItem('youtube', watchUrl(videoId(9)));
+    expect(await g.manager.whenSettled(other.job.id)).toMatchObject({ state: 'completed' });
+    g.fireTimers();
+    expect(await g.manager.whenSettled(failing.job.id)).toMatchObject({ state: 'completed', retry: { attempts: 1 } });
   });
 });
 

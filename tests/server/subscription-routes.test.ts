@@ -446,6 +446,28 @@ function switchableNetwork() {
   return network;
 }
 
+describe('a preview while its source cools down', () => {
+  it('answers rate_limited at once, to the UI and to an Agent, without asking the source', async () => {
+    const w = await world();
+    const c = caseOf('fake')(w);
+    const target = c.addTarget('cooling');
+    const resolve = vi.spyOn(w.fake, 'resolve');
+    resolve.mockRejectedValueOnce(new CollectorError('rate_limited', '暫時限制連線。'));
+    expect(await w.send('POST', '/api/subscription-previews', { url: target.url }))
+      .toMatchObject({ status: 503, body: { error: { code: 'rate_limited' } } });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect((await w.send('GET', '/api/pacing')).body.groups.find((group: { group: string }) => group.group === FAKE.pacing!.group))
+      .toMatchObject({ state: 'cooldown' });
+
+    for (const app of [w.agent, w.ui]) {
+      expect(await w.send('POST', '/api/subscription-previews', { url: target.url }, app))
+        .toMatchObject({ status: 503, body: { error: { code: 'rate_limited' } } });
+    }
+    expect(resolve).toHaveBeenCalledTimes(1);
+    await w.close();
+  });
+});
+
 describe('without a network (#128)', () => {
   it('refuses work that needs the network with offline, and starts no job', async () => {
     const network = switchableNetwork();

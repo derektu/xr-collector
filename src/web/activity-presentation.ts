@@ -1,26 +1,35 @@
 import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent } from '../core/types.js';
 import { jobRole } from '../core/source-registry.js';
 import { jobKindLabel, jobTitle } from './job-presentation.js';
-import { triggerLabel } from './subscription-presentation.js';
 
-export type ActivityLevel = 'all' | 'errors' | 'added';
+export type ActivityRecordType = 'all' | 'documents';
+export type ActivityMinLevel = 'debug' | 'info' | 'warning' | 'error';
 export type ActivityRange = 'today' | '7d' | '30d';
 
 /** The log filters the activity page keeps in its address, so a link can open it filtered. */
 export interface ActivityViewState {
-  level: ActivityLevel;
+  mode: 'summary' | 'raw';
+  recordType: ActivityRecordType;
+  minLevel: ActivityMinLevel;
   /** Subscription (channel ID) whose activity is shown; null for every source. */
   source: string | null;
   range: ActivityRange;
   /** Job whose events are shown, with the videos it queued; null for every job. */
   job: string | null;
+  group: string | null;
+  returnTo: string | null;
 }
 
-const LEVELS: readonly ActivityLevel[] = ['all', 'errors', 'added'];
+const RECORD_TYPES: readonly ActivityRecordType[] = ['all', 'documents'];
+const MIN_LEVELS: readonly ActivityMinLevel[] = ['debug', 'info', 'warning', 'error'];
 const RANGES: readonly ActivityRange[] = ['today', '7d', '30d'];
 
-export const LEVEL_OPTIONS: Array<{ value: ActivityLevel; label: string }> = [
-  { value: 'all', label: '全部' }, { value: 'errors', label: '錯誤' }, { value: 'added', label: '新增' },
+export const RECORD_TYPE_OPTIONS: Array<{ value: ActivityRecordType; label: string }> = [
+  { value: 'all', label: '全部' }, { value: 'documents', label: '新增文件' },
+];
+export const MIN_LEVEL_OPTIONS: Array<{ value: ActivityMinLevel; label: string }> = [
+  { value: 'debug', label: 'DEBUG 以上' }, { value: 'info', label: 'INFO 以上' },
+  { value: 'warning', label: 'WARN 以上' }, { value: 'error', label: 'ERROR' },
 ];
 export const RANGE_OPTIONS: Array<{ value: ActivityRange; label: string }> = [
   { value: 'today', label: '今天' }, { value: '7d', label: '最近 7 天' }, { value: '30d', label: '30 天內' },
@@ -28,22 +37,31 @@ export const RANGE_OPTIONS: Array<{ value: ActivityRange; label: string }> = [
 
 export function parseActivityState(search: string): ActivityViewState {
   const parameters = new URLSearchParams(search);
-  const level = parameters.get('level') as ActivityLevel | null;
+  const recordType = parameters.get('type') as ActivityRecordType | null;
+  const minLevel = parameters.get('minLevel') as ActivityMinLevel | null;
   const range = parameters.get('range') as ActivityRange | null;
   return {
-    level: level && LEVELS.includes(level) ? level : 'all',
+    mode: parameters.get('mode') === 'raw' ? 'raw' : 'summary',
+    recordType: recordType && RECORD_TYPES.includes(recordType) ? recordType : 'all',
+    minLevel: minLevel && MIN_LEVELS.includes(minLevel) ? minLevel : 'info',
     source: parameters.get('source') || null,
     range: range && RANGES.includes(range) ? range : '30d',
     job: parameters.get('job') || null,
+    group: parameters.get('group') || null,
+    returnTo: parameters.get('return') || null,
   };
 }
 
 export function activityStateSearch(state: ActivityViewState): string {
   const parameters = new URLSearchParams();
-  if (state.level !== 'all') parameters.set('level', state.level);
+  if (state.mode === 'raw') parameters.set('mode', 'raw');
+  if (state.recordType !== 'all') parameters.set('type', state.recordType);
+  if (state.minLevel !== 'info') parameters.set('minLevel', state.minLevel);
   if (state.source) parameters.set('source', state.source);
   if (state.range !== '30d') parameters.set('range', state.range);
   if (state.job) parameters.set('job', state.job);
+  if (state.group) parameters.set('group', state.group);
+  if (state.returnTo) parameters.set('return', state.returnTo);
   const search = parameters.toString();
   return search ? `?${search}` : '';
 }
@@ -53,11 +71,17 @@ export function localDayStart(now: Date, daysBack = 0): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack);
 }
 
-/** The activity query for the page's filters. "Errors" covers warnings too: a retry or an interruption is a problem worth seeing. */
+/** The activity query for the page's record type and inclusive minimum severity. */
 export function activityQuery(state: ActivityViewState, now: Date): ActivityQuery {
   const query: ActivityQuery = {};
-  if (state.level === 'errors') query.severity = ['warning', 'error'];
-  if (state.level === 'added') query.eventType = ['document.saved'];
+  const severity = {
+    debug: ['debug', 'info', 'warning', 'error'],
+    info: ['info', 'warning', 'error'],
+    warning: ['warning', 'error'],
+    error: ['error'],
+  } as const;
+  query.severity = [...severity[state.minLevel]];
+  if (state.recordType === 'documents') query.eventType = ['document.saved'];
   if (state.source) query.subscriptionId = state.source;
   if (state.job) query.jobId = state.job;
   if (state.range === 'today') query.since = localDayStart(now).toISOString();
@@ -65,14 +89,13 @@ export function activityQuery(state: ActivityViewState, now: Date): ActivityQuer
   return query;
 }
 
-export type EventLevel = 'ERR' | 'WARN' | 'OK' | 'DONE' | 'SKIP' | 'INFO';
+export type EventLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
-/** The log's level label, derived from severity, type and outcome; a skipped video is not an error. */
-export function eventLevel(event: Pick<JobEvent, 'severity' | 'eventType' | 'outcome'>): EventLevel {
-  if (event.severity === 'error') return 'ERR';
+/** The log's level label from the severity persisted with the event. */
+export function eventLevel(event: Pick<JobEvent, 'severity'>): EventLevel {
+  if (event.severity === 'error') return 'ERROR';
   if (event.severity === 'warning') return 'WARN';
-  if (event.eventType === 'document.saved') return 'OK';
-  if (event.eventType === 'job.completed') return event.outcome === 'skipped' ? 'SKIP' : 'DONE';
+  if (event.severity === 'debug') return 'DEBUG';
   return 'INFO';
 }
 
@@ -80,10 +103,21 @@ export function eventLevel(event: Pick<JobEvent, 'severity' | 'eventType' | 'out
  * The log line: the source's title, the reason a channel job started it, then the message. A message
  * that already names the source, such as a subscription change, keeps its own wording.
  */
-export function eventText(event: Pick<JobEvent, 'sourceTitle' | 'trigger' | 'eventType' | 'message' | 'parentJobId'>): string {
-  const reason = event.trigger && !event.parentJobId && event.eventType === 'job.accepted' ? `${triggerLabel(event.trigger)}・` : '';
-  const prefix = event.sourceTitle && !event.message.includes(event.sourceTitle) ? `${event.sourceTitle}：` : '';
-  return `${prefix}${reason}${event.message}`;
+export function eventText(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole'>): string {
+  const prefix = event.sourceTitle ? `${event.sourceTitle}：` : '';
+  switch (event.eventType) {
+    case 'job.accepted': return event.jobRole === 'add' ? `${prefix}訂閱請求已排入佇列。` : `${prefix}加入收集佇列。`;
+    case 'job.started': return event.jobRole === 'add' ? `${prefix}開始新增訂閱。` : `${prefix}開始收集。`;
+    case 'document.saved': return `${prefix}已新增文件。`;
+    case 'subscription.added': return `新增訂閱${event.sourceTitle ? `：${event.sourceTitle}` : ''}。`;
+    case 'job.failed': return `${prefix}發生錯誤：${event.message}`;
+    case 'job.completed': {
+      if (event.jobRole === 'add') return `${prefix}已新增訂閱。`;
+      const completed = event.message.replace(/^收集完成，文件已保存/u, '完成收集').replace(/^收集完成/u, '完成收集');
+      return `${prefix}${completed}`;
+    }
+    default: return `${event.sourceTitle && !event.message.includes(event.sourceTitle) ? prefix : ''}${event.message}`;
+  }
 }
 
 function pad(value: number): string {
@@ -94,6 +128,12 @@ function pad(value: number): string {
 export function logTime(value: string): string {
   const date = new Date(value);
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/** A check run's inclusive completed-at range, retaining both dates across midnight. */
+export function summaryRange(first: string, last: string): string {
+  if (first === last) return logTime(last);
+  return `${logTime(first)}–${logTime(last)}`;
 }
 
 /** The warning above the log while events cannot be written, or after some were lost. */
