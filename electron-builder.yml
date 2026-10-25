@@ -45,7 +45,7 @@ win:
       to: tray
     - from: resources/bin/win
       to: bin
-      filter: ['*.exe', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*', '!vcruntime140.dll']
+      filter: ['*.exe', 'vcruntime140.dll', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*']
 nsis:
   oneClick: false
   perMachine: false

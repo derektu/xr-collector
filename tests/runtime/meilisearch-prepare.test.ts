@@ -173,13 +173,13 @@ describe('Meilisearch runtime preparation', () => {
     expect(config.mac?.artifactName).toBe('XR-Collector-${version}-official-mac-${arch}.${ext}');
     expect(config.win?.artifactName).toBe('XR-Collector-${version}-official-win-${arch}-setup.${ext}');
     expect(config.win?.extraResources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['*.dll', 'runtime-dependencies.json']) }),
+      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['vcruntime140.dll', 'runtime-dependencies.json']) }),
     ]));
     const chineseConfig = await getConfig(process.cwd(), 'electron-builder.yml');
     expect(chineseConfig.mac?.artifactName).toBe('XR-Collector-${version}-chinese-mac-${arch}.${ext}');
     expect(chineseConfig.win?.artifactName).toBe('XR-Collector-${version}-chinese-win-${arch}-setup.${ext}');
     expect(chineseConfig.win?.extraResources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['!vcruntime140.dll', 'runtime-dependencies.json']) }),
+      expect.objectContaining({ from: 'resources/bin/win', filter: expect.arrayContaining(['vcruntime140.dll', 'runtime-dependencies.json']) }),
     ]));
   });
 

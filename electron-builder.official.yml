@@ -5,11 +5,3 @@ mac:
   artifactName: XR-Collector-${version}-official-mac-${arch}.${ext}
 win:
   artifactName: XR-Collector-${version}-official-win-${arch}-setup.${ext}
-  extraResources:
-    - from: skills
-      to: skills
-    - from: resources/tray
-      to: tray
-    - from: resources/bin/win
-      to: bin
-      filter: ['*.exe', '*.dll', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*']
