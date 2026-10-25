@@ -1,18 +1,18 @@
 # #139 第二階段：repo 內建中文精簡 Meilisearch 計畫
 
-狀態：第二階段執行計畫。使用者已指示進入第二階段、維持搜尋設定，並以 repo 指令抓原始碼建置；建置指令已實作；本文件列出平台驗收計畫，不代表已通過三平台驗收。由開發子 agent 實作、獨立 reviewer 審查，最後由 parent 檢查並 commit。
+交付目標為 Mac arm64 與 Windows x64。建置指令與兩種引擎 bundle 位於 [PR #151](https://github.com/derektu/xr-collector/pull/151)，平台驗收結果以該 PR 的固定 commit 與證據為準。後續本機打包及發布依 [兩平台本機交付計畫](local-packaging-plan.md)，由開發子 agent 實作、獨立 reviewer 審查，parent 檢查後 commit。
 
 ## 本階段成果與邊界
 
 - repo 提供 `npm run build:meilisearch`：抓取固定的 Meilisearch 原始碼，在目前 host toolchain 對應的目標編譯中文精簡 binary，驗證後放入 XR Collector 擁有的 runtime 位置。
 - 同一指令供開發機、package script 與 CI 使用，不另外維護一套 CI build recipe。
-- 支援三個目標（CI 以原生 runner 驗證）：`darwin-arm64`、`darwin-x64`、`win32-x64`。不以 cross compile 結果冒充該平台原生驗證。
+- 交付兩個目標：`darwin-arm64`、`win32-x64`。在使用者 Mac 與本機 Windows VM 建置；CI 作為額外自動檢查，不提供 Release App 產物。Windows 模擬結果如實標示。
 - 安裝包已內含建好的 binary；終端使用者不需要 Rust、Cargo 或網路抓原始碼。需要 Rust 與平台原生 build prerequisites 的是開發／CI／打包機。
 - yt-dlp 與 Deno 仍由現有流程下載固定版本與 checksum；本票只把 Meilisearch 從「下載官方 binary」改為「repo 指令從固定 source build」。沒有 public runtime repo、匿名下載 host 或 #35 的發布決策。
 - 搜尋契約維持現況：`documents_v2`、三個 `searchableAttributes`、四個 `filterableAttributes`、`maxTotalHits: 10000`，不加入 `localizedAttributes`，query、filter、分頁、highlight/crop 參數也不改。
 - 不做通用 Rust build framework、舊格式 migration／相容層、runtime updater 或額外搜尋功能。
 
-Mac x64 在本票完成的是 Meilisearch 原生 x64 build 與 API 驗證。完整 Mac Intel App 仍受 #34 約束：必須另外取得並驗證 x64 Deno、確認 yt-dlp folder build 的 executable 與所有 native libraries 可在 Intel 執行，並加入 Electron x64 package target。#139 不沿用 arm64 Deno、不假設 yt-dlp 是 universal，也不因 Meilisearch x64 完成便宣稱 Mac x64 App 完成。
+完整 App 交付只涵蓋 Mac arm64 與 Windows x64。builder 保留的 `darwin-x64` 引擎測試能力不代表 Mac Intel App 支援，也不是 #34 的待補交付。
 
 ## repo 指令與可重現 build
 
@@ -20,11 +20,11 @@ Mac x64 在本票完成的是 Meilisearch 原生 x64 build 與 API 驗證。完�
 
 `npm run prepare:meilisearch -- --variant chinese|official --target <target>` 是打包前的共同入口；預設仍為 `chinese`，並直接沿用下述 source builder、fingerprint 與 cache，不因新增 variant 改變既有 Chinese identity。`official` 固定下載同版本官方 community release，驗 URL、大小、SHA-256、executable header、架構與 `--version` 後才原子替換 runtime pair，不記錄不存在的 Rust／compiler provenance，也不 fallback 到 Chinese 或其他版本。
 
-官方 v1.53.2 community release 只有 Mac Apple Silicon 與 Windows x64 asset；因此 official variant 只支援 `darwin-arm64`、`win32-x64`，`darwin-x64` 在任何下載／安裝前明確失敗。Mac Intel CI 仍建置並驗證 Chinese runtime；完整 Intel App 留在 #34。預設 package scripts 繼續只產 Chinese App 至 `release/`；`:official` scripts 各產一個只內含 official engine 的 App 至 `release/official/`，不做執行中切換、下載或 silent fallback。
+官方 v1.53.2 community release 只有 Mac Apple Silicon 與 Windows x64 asset；因此 official variant 只支援 `darwin-arm64`、`win32-x64`，`darwin-x64` 在任何下載／安裝前明確失敗。兩種 variant 均以兩個交付目標驗收。預設 package scripts 繼續只產 Chinese App 至 `release/`；`:official` scripts 各產一個只內含 official engine 的 App 至 `release/official/`，不做執行中切換、下載或 silent fallback。
 
 官方 Windows x64 asset 的實物 PE imports 包含 `VCRUNTIME140.dll` 與 Windows UCRT API sets；選用它的終端需要 Microsoft 支援的 Visual C++ v14 x64 runtime。CLI 無法執行該 binary 時給出此前置提示；本票不下載／安裝／重分發 redistributable，完整 installer dependency 由 #34 處理。預設 Chinese Windows binary 維持 static CRT。CI 保存 official dependency inventory；裝有 Visual Studio／CRT 的驗收機不能冒充 fresh-no-CRT 證據。
 
-Chinese 與 official 各有自己的 cache lock，但安裝至同一個 `resources/bin/<platform>` 前另共用 destination lock，讓 binary 與 manifest 不會被兩個 producer 交錯。runtime validation 只接受兩種固定 manifest，並在任何 projection 操作前串流核對實際 bytes 與 manifest 的大小、SHA-256，再回傳對應的穩定索引語意 profile；variant 改變會重建目前 Vault 的 owned search projection，同 profile 則保留。binary SHA、runner 與準備時間只屬 artifact identity，不進索引 profile，但仍是目前未簽章 MVP 的啟動必要驗證。#34 正式簽章若改變 runtime bytes，必須先加入可測的簽章後 identity 更新流程；本票不接受任意同版本／同 header 的 byte transform。
+Chinese 與 official 各有自己的 cache lock，但安裝至同一個 `resources/bin/<platform>` 前另共用 destination lock，讓 binary 與 manifest 不會被兩個 producer 交錯。runtime validation 只接受兩種固定 manifest，並在任何 projection 操作前串流核對實際 bytes 與 manifest 的大小、SHA-256，再回傳對應的穩定索引語意 profile；variant 改變會重建目前 Vault 的 owned search projection，同 profile 則保留。binary SHA、runner 與準備時間只屬 artifact identity，不進索引 profile，但仍是目前未簽章 MVP 的啟動必要驗證。後續正式簽章若改變 runtime bytes，該簽章工作必須先加入可測的最終 identity 更新流程；本票不接受任意同版本／同 header 的 byte transform。
 
 ### `npm run build:meilisearch`
 
@@ -49,21 +49,18 @@ build fingerprint 至少包含完整 source SHA、Cargo.lock SHA-256、recipe re
 
 cache hit 必須同時滿足 manifest 全欄位、來源 pin、output checksum、`--version` 與 architecture；任何一項不符即重建，不能靜默使用 stale binary、其他架構或舊官方版。編譯使用受控 Cargo 設定：清除外部 compiler／wrapper／rustflags／profile 環境覆寫，拒絕 verified source 外會被 Cargo 讀取的 config；source 內 config 必須為 pinned tracked file。不宣稱不同 runner／OS 的 bit-for-bit 重現。build 在 staging 目錄完成，先驗證 version、檔案格式／架構與 checksum，再將 binary 和 manifest 安裝至該 target 的 owned runtime 位置。驗證失敗時不得動現有 runtime；replace 使用同檔案系統的 sibling staging/backup，swap 失敗 rollback，成功才刪 backup。
 
-runtime 準備流程明確分兩段：既有 downloader 只處理固定版本的 yt-dlp/Deno；`build:meilisearch` 處理 Meilisearch。Mac arm64 與 Windows x64 package script 依序準備兩者再 build App。Mac x64 package script 留給 #34 在其他 runtime 架構收斂後加入，避免本票做出混架構安裝包。
+runtime 準備流程明確分兩段：既有 downloader 只處理固定版本的 yt-dlp/Deno；`build:meilisearch` 處理 Meilisearch。Mac arm64 與 Windows x64 package script 依序準備兩者再 build App。安裝包與各 variant 的 metadata 由 #34 驗收。
 
-## 三平台 CI
+## 兩平台本機建置與 CI 檢查
 
-新增 #139 專用 workflow，三個 job 都只呼叫 repo 的同一命令：
-
-| 產品目標 | 原生 runner | 指令目標 | 產物 |
+| 交付目標 | 本機建置環境 | 追加 CI 檢查 | 產物 |
 | --- | --- | --- | --- |
-| Mac arm64 | `macos-15`（Apple Silicon） | `darwin-arm64` | `meilisearch` + manifest |
-| Mac x64 | `macos-15-intel` | `darwin-x64` | `meilisearch` + manifest |
-| Windows x64 | `windows-2022` | `win32-x64` | `meilisearch.exe` + manifest |
+| Mac arm64 | 使用者 Mac／UTM arm64 VM | `macos-15` | `meilisearch` + manifest |
+| Windows x64 | Parallels Windows ARM VM，x64 toolchain | `windows-2022` | `meilisearch.exe` + manifest |
 
-workflow 的 checkout、Rust setup actions 以完整 commit SHA 固定，Rust 明確為 1.91.1。每個 job 先確認實際 Rust host／runner host arch（不能只看 Node process.arch），再執行 `npm ci` 與 `npm run build:meilisearch -- --target <target>`，接著跑該 binary 的 native API smoke。CI 上傳三份具 build fingerprint 與 output SHA 的 artifacts，供驗收與 package machine 取回；artifacts 是 build evidence/交接物，不是 App runtime 的公開下載來源，也不改變產品端無 token 的要求。
+package 與 CI 使用相同 repo builder、固定 source／toolchain／lock。CI 的 `--require-native` 驗證 runner 的實體架構及 API smoke；本機 Windows x64 模擬建置不使用該 native-only gate，manifest 記錄實際 ARM64 host 與 emulated=true。CI artifact 屬額外測試證據，安裝包從使用者電腦建置，#35 從 Mac 上傳同一批已驗收產物。
 
-workflow 必須先存在於 pushed commit 才能在 GitHub runner 執行。因此開發 agent 可在本機完成目前平台與自動測試，但 parent 第一次 commit／push 前不得宣稱三個 native CI job 已通過；CI 結果回到相同 commit 後，才能完成 P139-01/02。
+兩種引擎都需核對 binary／manifest／版本／架構並跑 API 與 packaged Desktop 驗收；已取得的其他架構研究證據不增加交付平台。安裝包預設未簽署，正式憑證與公證不列本輪門檻。固定 commit 的既有成功結果保留，後續變更只重跑受影響的情境。
 
 ## 引擎 fingerprint 與重建
 
@@ -79,7 +76,7 @@ workflow 必須先存在於 pushed commit 才能在 GitHub runner 執行。因�
 
 ## 最小實作面
 
-1. build：新增專用 build script、pins/recipe manifest 與三目標 workflow；調整 `package.json`。不新增通用 build framework。
+1. build：新增專用 build script、pins/recipe manifest 與平台檢查 workflow；調整 `package.json`。不新增通用 build framework。
 2. runtime preparation：將 `scripts/download-runtime.mjs` 的 Meilisearch 責任移除，保留 yt-dlp/Deno；既有 `download:runtime`／`:win` 的 npm 入口也串接 `build:meilisearch`，維持 verify skill 使用這兩個入口即可備妥全部 runtime；`electron-builder.yml` 明確將 build manifest 一起包入 bin。`electron-builder.yml` 只在現有 Mac arm64/Windows x64 路徑需要時調整，不在本票偷開 Mac x64 package。
 3. search runtime：在 `src/search/runtime.ts`／`src/search/meilisearch-process.ts` 附近實作 fingerprint、安全 leftover 停止及受限清除，沿用 workspace `searchPath` ownership。
 4. tests/docs：補 build cache/replacement、fingerprint、真實引擎與 runner smoke；更新 build prerequisites 及 `tests/README.md` 的 binary/skip 規則。UI 與業務 API 不變；verify skill 依收錄規則新增可重跑的 documents-reader-search flow 與功能地圖 Regression flows 映射，不改 verify lib/CLI 或業務 Agent Skill。
@@ -88,33 +85,33 @@ workflow 必須先存在於 pushed commit 才能在 GitHub runner 執行。因�
 
 | ID | 層級／平台 | 操作與可比對預期 |
 | --- | --- | --- |
-| P139-01 | CI build／三個原生 runner | 三 job 對同一 pushed commit 呼叫 repo 指令；source/toolchain/lock/recipe 完全固定，manifest 與 binary 的 target、version、bytes、SHA 一致。任一平台缺漏即不算三目標完成。parent 首次 commit/push 前保持 pending。 |
-| P139-02 | native engine API／三個原生 runner | 以剛 build 的 binary 啟動隔離 DB，套 canonical settings，索引固定中英文件，斷言 query、filter、分頁、highlight/crop；關閉後用同 DB 重啟，結果與文件數一致。核對程序架構及 binary SHA；這不等於 Desktop package 驗收。 |
+| P139-01 | build／Mac arm64、Windows x64 | 兩個交付目標由同一 commit 的 repo 指令建置，source/toolchain/lock/recipe 固定，manifest 與實物 target/version/bytes/SHA 各自一致；本機產物與追加 CI 證據分開記錄。 |
+| P139-02 | engine API／兩個交付目標 | 以剛 build 的 binary 啟動隔離 DB，套 canonical settings，索引固定中英文件，斷言 query、filter、分頁、highlight/crop；關閉後用同 DB 重啟，結果與文件數一致。核對程序架構及 binary SHA；這不等於 Desktop package 驗收。 |
 | P139-03 | build command／各可用原生平台 | 首次抓固定 source 並 build；第二次命中同 target cache。修改假的 source/lock/recipe/toolchain/target/output SHA 任一值會拒絕 cache。離線且沒有完整 cache、target/host 不符、版本或架構驗證失敗都 non-zero，且既有 runtime bytes 不變；不得 fallback 官方版。 |
 | P139-04 | runtime/filesystem integration／任一平台 | 相同 fingerprint 不刪 DB；不同／缺少／損壞 fingerprint 在 launch 前只清 owned DB/state/PID/fingerprint，從 fixture Vault 重建後寫新 marker。相鄰 sentinel、另一 Vault DB 與 Vault 原文 hash 前後相同；重建失敗不寫 marker且下次可重試。新斷言在基準版本應失敗。 |
 | P139-05 | contract regression／自動檢查 | request-level 斷言 settings/search request 等於現況且沒有 `localizedAttributes`；既有 search tests、`npm run test:meilisearch:mac` 與 `npm run verify` 通過。 |
-| P139-06 | packaged Desktop／Mac arm64 | 同一乾淨 commit 準備固定 yt-dlp/Deno 並本機 build slim Meili，再產 DMG/ZIP。記錄下載／建置原檔與 App 內 Meili 各自的 SHA、arm64、版本與 manifest；目前 identity=null，App 內 runtime bytes／SHA 必須與 manifest 相同。#34 日後正式簽章若改變 bytes，須先加入可測的簽章後 identity 更新流程，不能在本票直接接受任意 byte transform。記 `.app`/package bytes，Meili 相對官方版仍至少減半。verify skill 以隔離 profile 驗舊 fingerprint 重建及搜尋→filter→分頁→閱讀→刪除→重啟。 |
+| P139-06 | packaged Desktop／Mac arm64 | 同一乾淨 commit 準備固定 yt-dlp/Deno 並本機 build slim Meili，再產 DMG/ZIP。記錄下載／建置原檔與 App 內 Meili 各自的 SHA、arm64、版本與 manifest；目前 identity=null，App 內 runtime bytes／SHA 必須與 manifest 相同。後續簽章若改變 bytes，該簽章工作須先加入可測的最終 identity 更新流程，不能在本票直接接受任意 byte transform。記 `.app`/package bytes，Meili 相對官方版仍至少減半。verify skill 以隔離 profile 驗舊 fingerprint 重建及搜尋→filter→分頁→閱讀→刪除→重啟。 |
 | P139-07 | packaged Desktop／Windows x64 | 同一 commit 在 x64 build environment 準備其他 runtime 並 build slim Meili，產 NSIS/win-unpacked；核對 SHA、PE x64、版本、manifest，跑同一 Desktop flow。若 Windows 11 ARM64 VM 用 x64 模擬，證據標 `emulated`，不宣稱 Intel/AMD 原生 Desktop 通過。 |
-| P139-08 | Mac x64 邊界／Intel runner + 待補 Desktop | P139-01/02 在 Intel runner 通過。本票不產混架構 App；待 #34 提供/驗證 x64 Deno、yt-dlp executable/native libraries、Electron x64 package target 後才驗完整 package。沒有 Intel Desktop 時標 pending，不以 Rosetta 代替。 |
+| P139-08 | 平台邊界／文件與產物檢查 | 交付僅 Mac arm64、Windows x64；無 Mac Intel 或 Windows ARM64 App 的待補承諾。Windows 模擬結果不標為實體 x64。 |
 | P139-09 | Web 回歸／Mac | baseline 與本票各跑本票收錄的 `documents-reader-search` 合成流程，以及既有 `subscribe-a-b`，UI/query 行為一致。本票不改收集來源，不重新抓字幕/RSS，也不重跑第一階段 relevance benchmark 來代替回歸。 |
 
 包裝驗收記錄 commit、OS、host/process arch、是否模擬、App 與內含 binary SHA、大小、scenario 結果與證據路徑。build 成功、CI artifact 或 API smoke 都不替代 Desktop 操作；缺平台時保持 pending/blocked。
 
 ## 自動檢查與獨立 review
 
-- 非 Markdown 實作完成後跑 `npm run verify`。build/fingerprint 新測試先在基準證明失敗，再在本票通過；三 runner 不把 skip 算 pass。
+- 非 Markdown 實作完成後跑 `npm run verify`。build/fingerprint 新測試先在基準證明失敗，再在本票通過；各平台不把 skip 算 pass。
 - replacement 測試注入 fetch/checkout、source/lock、toolchain、Cargo build、version、architecture、checksum 與 rename 失敗，逐項證明舊 runtime 保留。
 - 受限清除測試包含相鄰目錄、另一 Vault、symlink/不受管理路徑拒絕；reviewer 核對所有 `rm` target 只由 owned search path 導出。
-- reviewer 對 parent 指定 revision 唯讀檢查：repo/CI 是否真用同一命令；exact pins、`--locked`、三個原生 target 與 cache key 是否完整；無官方/stale/cross-arch fallback；終端 App 不需要 Rust；canonical settings/query 不變；fingerprint 在 launch 前處理且成功後才寫 marker；Mac x64 與 Windows emulation 沒有過度宣稱。
+- reviewer 對 parent 指定 revision 唯讀檢查：repo/CI 是否真用同一命令；exact pins、`--locked`、兩個交付 target 與 cache key 是否完整；無官方/stale/cross-arch fallback；終端 App 不需要 Rust；canonical settings/query 不變；fingerprint 在 launch 前處理且成功後才寫 marker；平台交付與 Windows emulation 沒有過度宣稱。
 - blocking finding 修正後重跑受影響 scenario 再 review。最後由 parent 核對 diff、issue 驗收計畫與已可執行的本機證據後 commit；CI 依推送授權與環境後補，不自行 push；本計畫本身不授權外部發布。
 
 ## 環境與驗證相依
 
-1. private repo 是否可用 `macos-15`、`macos-15-intel`、`windows-2022` runner；不可用時指定同架構 self-hosted runner，不改用 cross compile 冒充。
+1. 本機兩個交付環境可用；CI 可追加 `macos-15` 與 `windows-2022` 的引擎檢查，不取代本機 package 操作證據。
 2. source cache 固定在本 repo 的 ignored `.local/runtime-builds/meilisearch/`；清理只限此指令建立的 cache；source URL、commit 與 Cargo.lock SHA 已固定，不把上游 source 提交進 repo。
 3. 本機兩 VM 已完成唯讀 preflight 與本票 owned Rust 1.91.1 工具鏈準備，無 global/default toolchain 修改：UTM macOS arm64 與 Parallels Windows ARM64（x64 Node/MSVC Rust 模擬）。parent commit 後以 crabbox 同步至各自本票獨立 workroot，clean commit 建置／取回 evidence；Windows 原生 x64 仍由 CI 證明。
-4. #34 的 Mac Intel Deno 來源、yt-dlp Intel 相容證據、Electron x64 target 與 Intel Desktop 來源。這些不阻擋本票的 Mac x64 Meili CI，會阻擋完整 Mac x64 App 驗收。
+4. #34 負責兩平台安裝、建置資訊與 metadata，#35 負責從 Mac 發布；憑證及正式簽章另行安排。
 
 ## 交付與授權範圍
 
-使用者授權 parent 在開發與 review 後 commit。本輪不預設 push、merge 或發佈 App；三平台 GitHub CI 需分支可供 runner checkout 後才能實跑，未執行的項目保留 pending，不用本機成功代替。使用者已指定以 crabbox 使用兩台 VM；VM 工作目錄與工具鏈均與其他 Claude sessions 隔離。Windows ARM 的 x64 建置／Desktop 結果明列 emulated，不替代原生 x64。
+開發與 review 後由 parent commit。#139 的 PR／CI 結果以 [PR #151](https://github.com/derektu/xr-collector/pull/151) 為準；merge 與 App 發布依使用者的發布指示執行。後續順序為 #139 收尾、#34 本機打包驗收、#35 本機 Release。VM 工作目錄與工具鏈均與其他 sessions 隔離；Windows ARM 的 x64 建置／Desktop 結果標為 emulated，不替代原生 x64。

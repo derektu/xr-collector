@@ -1,143 +1,15 @@
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+#!/usr/bin/env node
+import { prepareRuntimeDependencies } from './runtime-dependencies.mjs';
 
-const target = process.argv[2];
-if (target !== 'mac' && target !== 'win') {
+const target = process.argv[2] === 'mac'
+  ? 'darwin-arm64'
+  : process.argv[2] === 'win'
+    ? 'win32-x64'
+    : null;
+
+if (!target) {
   console.error('Usage: node scripts/download-runtime.mjs <mac|win>');
-  process.exit(1);
-}
-
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDir = path.join(projectRoot, 'resources', 'bin', target);
-const downloads = target === 'win' ? {
-  ytDlp: { url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_win.zip', sha256: '30b4c14aafab6082becff7881e41b76df46dc43ea7633479410a91e29da492bf' },
-  deno: { url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-pc-windows-msvc.zip', sha256: '15e5300b0ba3c3695a7621d90160a746ec9e710228cee639afa9d580f6e3cd11' },
-} : {
-  ytDlp: {
-    url: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos.zip',
-    sha256: '07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8',
-  },
-  deno: {
-    url: 'https://github.com/denoland/deno/releases/download/v2.9.6/deno-aarch64-apple-darwin.zip',
-    sha256: '213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb8f35807a472',
-  },
-};
-
-async function download(url, expectedSha256, destination) {
-  const response = await fetch(url, { redirect: 'follow' });
-  if (!response.ok) throw new Error(`Download failed: ${response.status} ${url}`);
-  if (!response.body) throw new Error(`Download returned no body: ${url}`);
-  await pipeline(
-    Readable.fromWeb(response.body),
-    createWriteStream(destination, { flags: 'wx' }),
-  );
-  const actual = await fileSha256(destination);
-  if (actual !== expectedSha256) {
-    await rm(destination, { force: true });
-    throw new Error(`Checksum mismatch for ${url}: expected ${expectedSha256}, got ${actual}`);
-  }
-}
-
-async function fileSha256(filePath) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
-  return hash.digest('hex');
-}
-
-async function extractZip(zipPath, destination) {
-  if (process.platform === 'win32') {
-    const quote = (value) => `'${value.replaceAll("'", "''")}'`;
-    const command = `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destination)} -Force`;
-    await run('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')]);
-  } else {
-    await run('unzip', ['-q', '-o', zipPath, '-d', destination]);
-  }
-}
-
-async function readText(filePath) {
-  try {
-    return (await readFile(filePath, 'utf8')).trim();
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-function run(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: 'inherit' });
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} exited with status ${code}`));
-    });
-  });
-}
-
-function reportsVersion(command, expectedVersion) {
-  return new Promise((resolve) => {
-    const child = spawn(command, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let output = '';
-    child.stdout.on('data', (chunk) => {
-      output += chunk.toString();
-    });
-    child.once('error', () => resolve(false));
-    child.once('exit', (code) => resolve(code === 0 && output.includes(expectedVersion)));
-  });
-}
-
-await mkdir(outputDir, { recursive: true });
-const workDir = await mkdtemp(path.join(tmpdir(), 'xr-collector-runtime-'));
-try {
-  // yt-dlp ships as the official folder build: an executable beside its `_internal` libraries. The
-  // single-file build unpacks itself into a new temporary folder on every run, and the system checks
-  // new files before they run, which costs seconds on every call. The Mac executable is renamed to
-  // `yt-dlp` so both platforms run `yt-dlp/yt-dlp[.exe]`. The SHA-256 of the extracted zip is kept
-  // beside the folder to tell an up-to-date folder from an old or partial one.
-  const ytDlpDir = path.join(outputDir, 'yt-dlp');
-  const ytDlpStamp = path.join(outputDir, 'yt-dlp.sha256');
-  if (await readText(ytDlpStamp) === downloads.ytDlp.sha256) {
-    console.log('Pinned yt-dlp 2026.08.19 is already available.');
-  } else {
-    const ytDlpZip = path.join(workDir, 'yt-dlp.zip');
-    const ytDlpTemp = path.join(workDir, 'yt-dlp');
-    console.log('Downloading pinned yt-dlp 2026.08.19…');
-    await download(downloads.ytDlp.url, downloads.ytDlp.sha256, ytDlpZip);
-    await extractZip(ytDlpZip, ytDlpTemp);
-    if (target === 'mac') {
-      await rename(path.join(ytDlpTemp, 'yt-dlp_macos'), path.join(ytDlpTemp, 'yt-dlp'));
-      await chmod(path.join(ytDlpTemp, 'yt-dlp'), 0o755);
-    }
-    await rm(ytDlpStamp, { force: true });
-    await rm(ytDlpDir, { recursive: true, force: true });
-    // A single-file build from an older checkout sits where the folder goes, or beside it on Windows.
-    await rm(path.join(outputDir, 'yt-dlp.exe'), { force: true });
-    await rename(ytDlpTemp, ytDlpDir);
-    await writeFile(ytDlpStamp, `${downloads.ytDlp.sha256}\n`);
-  }
-
-  const denoPath = path.join(outputDir, target === 'win' ? 'deno.exe' : 'deno');
-  if (await reportsVersion(denoPath, 'deno 2.9.6')) {
-    console.log('Pinned Deno 2.9.6 is already available.');
-  } else {
-    const denoZip = path.join(workDir, 'deno.zip');
-    console.log('Downloading pinned Deno 2.9.6…');
-    await download(downloads.deno.url, downloads.deno.sha256, denoZip);
-    await extractZip(denoZip, workDir);
-    const denoTemp = path.join(workDir, target === 'win' ? 'deno.exe' : 'deno');
-    await chmod(denoTemp, 0o755);
-    await rm(denoPath, { force: true });
-    await rename(denoTemp, denoPath);
-  }
-
-  console.log(`Downloaded runtime dependencies ready in ${outputDir}`);
-} finally {
-  await rm(workDir, { recursive: true, force: true });
+  process.exitCode = 1;
+} else {
+  await prepareRuntimeDependencies({ target });
 }

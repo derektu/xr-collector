@@ -5,6 +5,7 @@ import { CollectionPause } from '../core/collection-pause.js';
 import { internetProbe } from '../core/connectivity.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { agentConnectionFile, DESKTOP_AGENT_PORT } from '../runtime/agent-discovery.js';
+import { loadBuildInfo } from '../runtime/build-info.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { CloseHintRecord } from './close-hint.js';
@@ -276,6 +277,7 @@ app.whenReady().then(async () => {
     program: runtimePath,
   });
   runtime = await CollectorRuntime.start({
+    buildInfo: await loadBuildInfo({ packaged: app.isPackaged }),
     profilePath: app.getPath('userData'),
     pause: collectionPause,
     // Electron's client follows the system's proxy settings, as the person's other apps do.

@@ -182,9 +182,15 @@ Content-Type: application/json
 - Web／開發版不能註冊，PUT 回 409 `login_startup_unavailable`。macOS 要先到系統設定允許時回 409 `login_startup_requires_approval`。作業系統沒有接受或無法讀寫時回 500 `login_startup_failed`；不要把失敗說成已完成。
 - 作業系統設定中的外部停用優先。不要為了恢復開啟而反覆 PUT；向使用者說明目前是關閉，只有再次明確要求才開啟。
 
+## 辨識正在執行的 build
+
+`GET /api/device/build-info` 回傳 `buildInfo`，與設定頁「關於 XR Collector」及 Onboarding 底部相同。欄位為 `schemaVersion: 1`、`kind`（`development`／`packaged`）、`version`、`builtAt`（ISO 時間）、`commit`（完整 SHA 或 null）、`buildId`、`target`、`variant`（`chinese`／`official`／null）、`sourceDirty`（boolean 或 null）。`buildId` 區分同一 commit 的不同 build。
+
+此唯讀 API 是裝置資料，Vault 尚未設定或正在匯入／搬移時也能讀，Agent 仍須目前的 token。`sourceDirty: true` 表示開發原始碼有未提交修改，null 表示無法確認；不要把 null 說成乾淨版本。`variant: null` 表示開發原始碼尚未準備引擎身分，不表示已通過任何引擎驗證。`packaged` 的 commit、target 與 variant 來自安裝包內固定資訊，不依執行目錄或啟動時 Git 決定。
+
 ## Vault 設定
 
-每個 Vault 是自成一體的目錄，根目錄有 `xr-collector-vault.json` 標記檔。這台電腦使用哪個 Vault 屬於裝置設定，保存在 Vault 之外；Vault 尚未就緒時，只有 health 與下列設定 API 可用。
+每個 Vault 是自成一體的目錄，根目錄有 `xr-collector-vault.json` 標記檔。這台電腦使用哪個 Vault 屬於裝置設定，保存在 Vault 之外；Vault 尚未就緒時，health、建置資訊與下列設定 API 可用。
 
 1. `GET /api/vault/setup` 讀取狀態。`failure` 不為 null 時，表示先前選擇的 Vault 無法開啟，向使用者說明其 `path` 與 `reason`。
 2. 只使用使用者明確指定的絕對路徑，不自行猜測或選用 `suggestedPath`。先以 `POST /api/vault/inspect` 檢查：`empty` 可建立（`exists: false` 代表建立時會一併建立目錄），`existing` 可開啟，`invalid` 依 `reason` 請使用者改選。
@@ -201,6 +207,7 @@ Content-Type: application/json
 
 | Method 與 path | 輸入／結果 |
 | --- | --- |
+| `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台、引擎 variant 與原始碼狀態；Vault 未就緒／鎖定時可讀 |
 | `GET /api/health` | runtime state、instance、profile、active Vault、Not Ready 原因、`connectivity` 與 `activityLog` |
 | `GET`／`PUT /api/device/login-startup` | GET 回傳安裝版支援、OS read-back 與狀態；PUT 只接受 `{"enabled":true|false}`，只在已安裝的 macOS／Windows App 可改 |
 | `GET /api/documents`、`GET /api/documents/:id` | 列表 query：`sourceType`、`publisherId`、`offset`、`limit`；ID URL encode |

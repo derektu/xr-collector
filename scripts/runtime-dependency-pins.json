@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "darwin-arm64": {
+      "directory": "mac",
+      "ytDlp": {
+        "version": "2026.08.19",
+        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos.zip",
+        "sha256": "07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8",
+        "archiveExecutable": "yt-dlp_macos",
+        "installedExecutable": "yt-dlp/yt-dlp"
+      },
+      "deno": {
+        "version": "2.9.6",
+        "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-aarch64-apple-darwin.zip",
+        "sha256": "213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb8f35807a472",
+        "archiveExecutable": "deno",
+        "installedExecutable": "deno"
+      }
+    },
+    "win32-x64": {
+      "directory": "win",
+      "ytDlp": {
+        "version": "2026.08.19",
+        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_win.zip",
+        "sha256": "30b4c14aafab6082becff7881e41b76df46dc43ea7633479410a91e29da492bf",
+        "archiveExecutable": "yt-dlp.exe",
+        "installedExecutable": "yt-dlp/yt-dlp.exe"
+      },
+      "deno": {
+        "version": "2.9.6",
+        "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-pc-windows-msvc.zip",
+        "sha256": "15e5300b0ba3c3695a7621d90160a746ec9e710228cee639afa9d580f6e3cd11",
+        "archiveExecutable": "deno.exe",
+        "installedExecutable": "deno.exe"
+      }
+    }
+  },
+  "officialWindowsCrt": {
+    "fileName": "vcruntime140.dll",
+    "bytes": 119888,
+    "sha256": "642ae52687a7a6bfb03d0b20dc7e07f4b11ceca634f7eb7ba184d6711ab51a51",
+    "fileVersion": "14.40.33816.0",
+    "signerSubject": "CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+    "signerThumbprint": "19FAC08D74CA905CEC066C597708A16148C8FCD5"
+  }
+}
