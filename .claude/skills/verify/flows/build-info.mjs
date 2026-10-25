@@ -41,7 +41,7 @@ export async function run({ instance, page, record }) {
       { id: 'settings.source-identity', expected: { version: pkg.version, commit: instance.commit, kind: 'development' },
         actual: { version: info.version, commit: info.commit, kind: info.kind } });
     await cardMatches(page, info, expect, 'settings');
-    const connection = JSON.parse(await readFile(path.join(instance.runDir, 'profile', 'agent-connection.json'), 'utf8'));
+    const { connection } = await instance.api('/api/device/agent/connection');
     const authorized = await fetch(`${connection.url}/api/device/build-info`, { headers: { authorization: `Bearer ${connection.token}` } });
     const agent = await authorized.json();
     expect(authorized.status === 200 && JSON.stringify(agent) === JSON.stringify(response.body), '授權 Agent 與 UI 是同一份身分',
