@@ -8,7 +8,9 @@
 | --- | --- | --- |
 | [#139](https://github.com/derektu/xr-collector/issues/139) | 固定 source 的 Chinese Meilisearch 與 official bundle 選項 | PR #151 review、合併；保留兩平台本機驗收與既有 CI 證據 |
 | [#34](https://github.com/derektu/xr-collector/issues/34) | 本機打包、建置資訊、runtime 與安裝驗收 | 同一乾淨 commit／版本的兩平台、兩種引擎 bundle；驗收與產物清單完整 |
-| [#35](https://github.com/derektu/xr-collector/issues/35) | 從 Mac 上傳並發布 GitHub Release、建立下載來源 | 使用 #34 已驗收的原產物及 checksum，不重新 build；確認下載與 metadata 一致 |
+| [#35](https://github.com/derektu/xr-collector/issues/35) | 建立 Mac publisher、版本索引、完整性與發布 gate | 本機 plan／stage 與 fake transport 測試完成；任何 GitHub 修改皆需明確授權 |
+| [#36](https://github.com/derektu/xr-collector/issues/36) | 實作 updater 並鎖定 client metadata 契約 | App 能依 target／variant 取得版本、release notes、下載及安裝狀態 |
+| 首版發布 | 從 #36 完成後的乾淨 commit 建置四包，再由 Mac 發布 | 四包驗收完整，使用者確認後才建立 tag／draft／公開 Release；確認匿名下載與 metadata 一致 |
 
 #34 的實作以 #139 合併後的 main 為基準。規劃工作可在承接 PR #151 的獨立 worktree 進行；#34 的 PR 只包含本票修改。開發子 agent 負責實作，另一子 agent review，parent 核對驗收結果後 commit。各票分開交付；merge 與正式 Release 依使用者的發布指示執行。
 
@@ -52,7 +54,9 @@
 
 ## #35 交接
 
-Mac 收齊 Windows 產物、各 variant metadata、產物清單與驗收索引，重新核對 checksum 後，由本機發布指令建立 tag／draft Release、上傳附件、讀回清單，再執行經授權的正式發布。驗收後不重編同名產物。
+#36 完成後固定首版乾淨 commit，兩個指定本機環境從該 commit 建置四包。Mac 收齊 Windows 產物、各 variant metadata、產物清單與驗收索引，重新核對 checksum 後，由本機發布指令建立 tag／draft Release、上傳附件、讀回清單，再執行經授權的正式發布。驗收後不重編同名產物；#34 的既有產物只用於 publisher parser 驗證，不作為首版候選。
+
+發布指令、候選目錄、授權檔與各階段的修改邊界見 [Release 發布手冊](release-runbook.md)。
 
 發布來源為公開 repository 的 GitHub Releases，直接提供安裝檔及更新 metadata。#35 的公開發布前置條件是 repository 已設為 public；尚為 private 時不能宣稱免登入下載完成。以無 GitHub 登入／token 的客戶端驗證已發布附件與 metadata 的可達性及 checksum；draft Release 只供發布前核對，不作匿名下載完成證據。任何 token 只留發布端，不放 App／metadata。
 

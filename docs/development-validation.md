@@ -126,4 +126,4 @@ Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolch
 
 GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的中文測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
 
-#35 在使用者的 Mac 核對兩平台附件後上傳並發布；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata；#35 在正式發布前確認 repository 已公開，並以無 GitHub 登入／token 的客戶端驗證。工作順序為 #139 review／merge、#34 本機封裝、#35 發布，具體契約見 [本機安裝包計畫](local-packaging-plan.md)。
+#35 提供在使用者 Mac 執行的發布工具與附件來源契約；#36 完成 updater 後才固定首版 commit，並從該 commit 建置、驗收及發布四個正式候選。GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata；#35 在正式發布前確認 repository 已公開，並以無 GitHub 登入／token 的客戶端驗證。具體順序與契約見 [本機安裝包計畫](local-packaging-plan.md)。
