@@ -9,7 +9,7 @@ const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
 };
 
 /** Settings section that shows whether the search index matches the Vault and lets the user rebuild it. */
-export function SearchIndexCard() {
+export function SearchIndexCard({ revision }: { revision: number }) {
   const [status, setStatus] = useState<SearchStatusReport | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
@@ -24,7 +24,7 @@ export function SearchIndexCard() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, revision]);
   const busy = rebuilding || (status !== null && status.state !== 'ready' && status.state !== 'error');
   useEffect(() => {
     if (!busy) return undefined;
