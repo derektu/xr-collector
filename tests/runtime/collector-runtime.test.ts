@@ -250,10 +250,12 @@ describe('CollectorRuntime', () => {
     expect(resumed).toMatchObject({ result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(resumed).not.toHaveProperty('checkpoint');
     expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(3);
-    const events = (await readEventFiles(path.join(setup.value.profilePath, 'jobs')))
-      .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
-    expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
-    expect(events.at(-1)).toBe('job.completed');
+    await vi.waitFor(async () => {
+      const events = (await readEventFiles(path.join(setup.value.profilePath, 'jobs')))
+        .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
+      expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
+      expect(events.at(-1)).toBe('job.completed');
+    });
   });
 
   it('resumes the work of a killed process without capturing saved videos again', async () => {
