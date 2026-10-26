@@ -13,9 +13,11 @@ const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', d
  * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
-export function Settings({ vaultPath, activeJobs, themePreference, onThemePreference, onChanged }: {
+export function Settings({ vaultPath, activeJobs, revision, themePreference, onThemePreference, onChanged }: {
   vaultPath: string | null;
   activeJobs: number;
+  /** Changes when collection work or its schedule changes, prompting the Vault totals to reload. */
+  revision: number;
   themePreference: ThemePreference;
   onThemePreference: (preference: ThemePreference) => void;
   onChanged: (message: string) => void;
@@ -29,13 +31,13 @@ export function Settings({ vaultPath, activeJobs, themePreference, onThemePrefer
       .then(([documents, sources]) => setCounts({ documents: documents.total, sources: sources.subscriptions.length }))
       .catch(() => undefined);
     return () => controller.abort();
-  }, []);
+  }, [revision]);
 
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
       <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} onChanged={onChanged} />
-      <SearchIndexCard />
+      <SearchIndexCard revision={revision} />
       <LoginStartup onChanged={onChanged} />
       <AgentConnection />
       <section className="settings-section" data-testid="settings-appearance">

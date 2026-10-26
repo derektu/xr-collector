@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { articles, channel, idle } from '../scripts/lib/index.mjs';
+import { articles, channel, idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'workspace-content';
 export const title = '單篇收集、工作操作、RSS 設定與文件閱讀搜尋';
@@ -19,6 +19,7 @@ export const covers = [
   'reader-view',
   'reader-delete',
   'reader-recollect',
+  'vault-info',
   'rss-add-feed',
   'rss-add-page',
   'rss-articles',
@@ -57,6 +58,132 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-item-url').click();
     await submit(url);
   };
+  const displayedVaultCountsWithin = async (expected, timeout = 6000) => {
+    const deadline = Date.now() + timeout;
+    let actual = '';
+    do {
+      actual = (await by('vault-counts').innerText()).trim();
+      if (actual === expected) return actual;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } while (Date.now() < deadline);
+    return actual;
+  };
+  const displayedSearchCountsWithin = async (expected, timeout = 6000) => {
+    const totals = by('settings-search-index').locator('p').filter({ hasText: '已索引' });
+    const deadline = Date.now() + timeout;
+    let actual = '';
+    do {
+      actual = (await totals.innerText()).trim();
+      if (actual === expected) return actual;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } while (Date.now() < deadline);
+    return actual;
+  };
+  await instance.updateCatalog((c) => {
+    c.feeds['/counts-three.xml'] = {
+      kind: 'rss2', title: '【合成】計數第一輪', articles: articles('計數第一輪', 3),
+    };
+    c.feeds['/counts-two.xml'] = {
+      kind: 'rss2', title: '【合成】計數第二輪', articles: articles('計數第二輪', 2),
+    };
+  });
+
+  await scenario('COUNTS-1', '留在設定時文件數從 0 更新為 3', async ({ expect, shot }) => {
+    await go('/documents');
+    await by('documents-empty-vault').waitFor();
+    expect((await by('documents-empty-vault').count()) === 1, '空 Vault 顯示新增入口', {
+      id: 'COUNTS-1.empty-vault', expected: 1, actual: await by('documents-empty-vault').count(),
+    });
+    await by('add-document-empty').click();
+    await by('add-item-url').click();
+    expect((await by('add-dialog').count()) === 1, '空 Vault 的新增入口開啟相同對話框', {
+      id: 'COUNTS-1.empty-add-entry', expected: 1, actual: await by('add-dialog').count(),
+    });
+    await page.keyboard.press('Escape');
+    await go('/settings');
+    await by('vault-counts').waitFor();
+    expect((await by('vault-counts').innerText()).trim() === '0 份文件・0 個訂閱', '初始畫面顯示 0 份文件', {
+      id: 'COUNTS-1.initial-dom', expected: '0 份文件・0 個訂閱', actual: (await by('vault-counts').innerText()).trim(),
+    });
+    await subscribe(instance, instance.feedsOrigin + '/counts-three.xml');
+    await idle(instance);
+    const state = await instance.state();
+    expect(state.api.documents.total === 3, '背景收集後 API 有 3 份文件', {
+      id: 'COUNTS-1.api', expected: 3, actual: state.api.documents.total,
+    });
+    expect(state.vault.documents.length === 3, '背景收集後 Vault 有 3 份文件', {
+      id: 'COUNTS-1.vault', expected: 3, actual: state.vault.documents.length,
+    });
+    const actual = await displayedVaultCountsWithin('3 份文件・1 個訂閱');
+    expect(actual === '3 份文件・1 個訂閱', '不離開設定，畫面在 6 秒內更新為 3 份文件', {
+      id: 'COUNTS-1.dom-within-6s', expected: '3 份文件・1 個訂閱', actual,
+    });
+    const search = await waitFor(async () => {
+      const next = (await instance.api('/api/search/status')).status;
+      return next.state === 'ready' && next.indexedDocuments === 3 && next.vaultDocuments === 3 ? next : null;
+    }, 'search has 3 documents');
+    expect(search.indexedDocuments === 3 && search.vaultDocuments === 3, '搜尋狀態 API 已索引與知識庫數都是 3', {
+      id: 'COUNTS-1.search-api', expected: { indexedDocuments: 3, vaultDocuments: 3 },
+      actual: { indexedDocuments: search.indexedDocuments, vaultDocuments: search.vaultDocuments },
+    });
+    const searchActual = await displayedSearchCountsWithin('已索引 3 份／知識庫 3 份');
+    expect(searchActual === '已索引 3 份／知識庫 3 份', '搜尋 API 就緒後 6 秒內，搜尋卡更新為 3／3', {
+      id: 'COUNTS-1.search-dom-within-6s', expected: '已索引 3 份／知識庫 3 份', actual: searchActual,
+    });
+    const settled = await instance.state();
+    const index = settled.index.indexes.find((candidate) => candidate.uid === 'documents_v2');
+    expect(index?.numberOfDocuments === 3, '搜尋引擎實際索引有 3 份文件', {
+      id: 'COUNTS-1.index', expected: 3, actual: index?.numberOfDocuments ?? null,
+    });
+    await shot('counts-3');
+  });
+
+  await scenario('COUNTS-2', '再次收集更新為 5，返回設定仍為 5', async ({ expect, shot }) => {
+    await subscribe(instance, instance.feedsOrigin + '/counts-two.xml');
+    await idle(instance);
+    const state = await instance.state();
+    expect(state.api.documents.total === 5, '第二次背景收集後 API 有 5 份文件', {
+      id: 'COUNTS-2.api', expected: 5, actual: state.api.documents.total,
+    });
+    expect(state.vault.documents.length === 5, '第二次背景收集後 Vault 有 5 份文件', {
+      id: 'COUNTS-2.vault', expected: 5, actual: state.vault.documents.length,
+    });
+    const actual = await displayedVaultCountsWithin('5 份文件・2 個訂閱');
+    expect(actual === '5 份文件・2 個訂閱', '不離開設定，畫面在 6 秒內更新為 5 份文件', {
+      id: 'COUNTS-2.dom-within-6s', expected: '5 份文件・2 個訂閱', actual,
+    });
+    const search = await waitFor(async () => {
+      const next = (await instance.api('/api/search/status')).status;
+      return next.state === 'ready' && next.indexedDocuments === 5 && next.vaultDocuments === 5 ? next : null;
+    }, 'search has 5 documents');
+    expect(search.indexedDocuments === 5 && search.vaultDocuments === 5, '搜尋狀態 API 已索引與知識庫數都是 5', {
+      id: 'COUNTS-2.search-api', expected: { indexedDocuments: 5, vaultDocuments: 5 },
+      actual: { indexedDocuments: search.indexedDocuments, vaultDocuments: search.vaultDocuments },
+    });
+    const searchActual = await displayedSearchCountsWithin('已索引 5 份／知識庫 5 份');
+    expect(searchActual === '已索引 5 份／知識庫 5 份', '搜尋 API 就緒後 6 秒內，搜尋卡更新為 5／5', {
+      id: 'COUNTS-2.search-dom-within-6s', expected: '已索引 5 份／知識庫 5 份', actual: searchActual,
+    });
+    const settled = await instance.state();
+    const index = settled.index.indexes.find((candidate) => candidate.uid === 'documents_v2');
+    expect(index?.numberOfDocuments === 5, '搜尋引擎實際索引有 5 份文件', {
+      id: 'COUNTS-2.index', expected: 5, actual: index?.numberOfDocuments ?? null,
+    });
+    await shot('counts-5');
+    await by('nav-documents').click();
+    await by('page-documents').waitFor();
+    await by('nav-settings').click();
+    await by('vault-counts').waitFor();
+    const returned = (await by('vault-counts').innerText()).trim();
+    expect(returned === '5 份文件・2 個訂閱', '離開再返回設定仍顯示 5 份文件', {
+      id: 'COUNTS-2.returned-dom', expected: '5 份文件・2 個訂閱', actual: returned,
+    });
+    const returnedSearch = (await by('settings-search-index').locator('p').filter({ hasText: '已索引' }).innerText()).trim();
+    expect(returnedSearch === '已索引 5 份／知識庫 5 份', '離開再返回設定，搜尋卡仍顯示 5／5', {
+      id: 'COUNTS-2.returned-search-dom', expected: '已索引 5 份／知識庫 5 份', actual: returnedSearch,
+    });
+  });
+
   const d = (await instance.catalog()).youtube.channels.find((x) => x.handle === 'verify-d');
   await instance.updateCatalog((c) => {
     c.youtube.channels.push(channel('E', 1, '工作失敗驗證'));
@@ -65,12 +192,6 @@ export async function run({ instance, page, record, waitFor }) {
   await scenario('CONTENT-1', '兩個單篇入口與閱讀', async ({ expect, shot }) => {
     await go('/documents');
     await page.locator('[data-testid="documents-empty-vault"], [data-testid="documents-summary"]').waitFor();
-    if (await by('documents-empty-vault').count()) {
-      await by('add-document-empty').click();
-      await by('add-item-url').click();
-      expect((await by('add-dialog').count()) === 1, '空 Vault 的新增入口開啟相同對話框');
-      await page.keyboard.press('Escape');
-    }
     await by('add-document').click();
     await by('add-item-url').click();
     await by('add-url').fill('https://www.youtube.com/watch?v=' + d.videos[0].id);
