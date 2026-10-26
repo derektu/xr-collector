@@ -49,6 +49,7 @@ const profilePath = path.join(run, 'profile');
 const vaultPath = path.join(run, 'vault');
 const catalogPath = path.join(run, 'catalog.json');
 const loginStartupFixturePath = path.join(run, 'login-startup-fixture.json');
+const scheduleTriggerPath = path.join(run, 'schedule-trigger');
 const catalog = () => JSON.parse(readFileSync(catalogPath, 'utf8'));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const offline = () => catalog().network === 'offline';
@@ -212,6 +213,9 @@ const runtime = await CollectorRuntime.start({
     // The product's folder names under the run, as the app puts them under ~/Documents.
     exportFolder: exportFolder(path.join(run, 'documents')),
     backupFolder: backupFolder(path.join(run, 'documents')),
+    // Keep retry state transitions but make synthetic failures settle promptly. Production uses the
+    // normal 30 s / 120 s delays; this option already exists for controlled runtimes and tests.
+    ...(data === 'synthetic' ? { jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] } } : {}),
   },
   ...(vaultMode === 'fixed' ? { explicitVaultPath: vaultPath } : {}),
   // Onboarding suggests this folder; inside the run, so accepting the suggestion stays isolated.
@@ -224,6 +228,18 @@ const runtime = await CollectorRuntime.start({
   webRoot: path.join(run, 'web'),
   loginStartup,
 });
+// A flow can move nextCheckAt into the past and touch this run-local file to request one scheduler
+// poll immediately. This keeps scheduled-trigger semantics while avoiding a 15-second wall-clock
+// wait per fixture. It belongs to the verify server, so product runtimes keep their normal timer.
+let scheduleTrigger = '';
+const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
+  if (!existsSync(scheduleTriggerPath)) return;
+  const value = readFileSync(scheduleTriggerPath, 'utf8');
+  if (value === scheduleTrigger) return;
+  scheduleTrigger = value;
+  const schedule = runtime.workspace?.schedule as unknown as { checkNow(): Promise<void> } | undefined;
+  void schedule?.checkNow().catch((error) => console.error('verify schedule trigger failed', error));
+}, 50) : null;
 console.log(`verify server ready at ${runtime.server.url} (${data} data, Vault ${vaultMode})`);
 logFailedRequests(runtime.server.app.server);
 
@@ -252,6 +268,7 @@ let stopping = false;
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
+  if (scheduleTriggerTimer) clearInterval(scheduleTriggerTimer);
   try {
     await runtime.close();
     feeds?.closeAllConnections();

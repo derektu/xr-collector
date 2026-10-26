@@ -31,8 +31,9 @@ import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, claimEvidence, cleanEnv, commitOf, dropUnusedEvidence, processStart, runMarker } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, commitOf, processStart, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
+import { writeFailureResult } from './failure.mjs';
 import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 import { endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
@@ -116,24 +117,36 @@ export function recordElectronUiOrigin(record, window) {
  */
 export async function launchElectron({
   issue, label, evidence: explicitEvidence, app: appPath, checkout = checkoutRoot(), vault = 'selected', size = '1280x900', hidden = true,
+  prepareVault,
 } = {}) {
   if (!issue) throw new Error('launchElectron needs an issue (number or label) for the evidence folder');
   if (!['selected', 'none'].includes(vault)) throw new Error(`vault must be selected or none, not ${vault}`);
   checkout = path.resolve(checkout);
-  const target = desktopTarget({ checkout, app: appPath });
-  requireTarget(target);
-  if (vault === 'selected' && !existsSync(path.join(checkout, 'dist', 'node', 'vault', 'vault-selection.js'))) {
-    throw new Error(`vault: 'selected' writes the Vault with ${checkout}/dist/node; run npm run build there, or use vault: 'none' and choose the Vault through Onboarding`);
-  }
   // A label already used gets the next free <label>-N folder; the record carries the one used.
   const claimed = claimEvidence(issue, label, { evidence: explicitEvidence });
   const evidence = claimed.evidence;
   label = claimed.label ?? undefined;
+  const startupFailure = (error, target = { kind: appPath ? 'packaged' : 'development', app: appPath ? path.resolve(appPath) : null }) =>
+    writeFailureResult({ evidence, error, phase: 'startup', record: {
+      issue: String(issue), label, checkout, ...commitOf(checkout), data: prepareVault ? 'fixture' : 'real',
+      layer: '原生 Desktop（Playwright _electron）', target,
+    } });
+  let target;
+  try {
+    target = desktopTarget({ checkout, app: appPath });
+    requireTarget(target);
+    if (vault === 'selected' && !existsSync(path.join(checkout, 'dist', 'node', 'vault', 'vault-selection.js'))) {
+      throw new Error(`vault: 'selected' writes the Vault with ${checkout}/dist/node; run npm run build there, or use vault: 'none' and choose the Vault through Onboarding`);
+    }
+  } catch (error) {
+    await startupFailure(error);
+    throw error;
+  }
   let run;
   try {
     run = await createRun(issue, checkout, { label, suffix: '-electron' });
   } catch (error) {
-    dropUnusedEvidence(claimed);
+    await startupFailure(error, { kind: target.kind, app: target.app, executable: target.executable });
     throw error;
   }
   const { runDir, ports } = run;
@@ -160,7 +173,7 @@ export async function launchElectron({
   const record = {
     kind: 'electron', issue: String(issue), ...(label ? { label: String(label) } : {}), runDir, evidence, checkout, ...commitOf(checkout),
     profile, vault: vault === 'selected' ? vaultPath : null, documents, ports,
-    pid: process.pid, start: processStart(process.pid), data: 'real', layer: '原生 Desktop（Playwright _electron）',
+    pid: process.pid, start: processStart(process.pid), data: prepareVault ? 'fixture' : 'real', layer: '原生 Desktop（Playwright _electron）',
     target: { kind: target.kind, app: target.app, executable: target.executable, version: null, platform: process.platform, arch: null, connection: CONNECTION },
     startedAt: new Date().toISOString(),
   };
@@ -197,6 +210,7 @@ export async function launchElectron({
       const { VaultSelection } = await load('vault/vault-selection.js');
       await createVaultDirectory(vaultPath, 'XR Collector (verify skill, Electron)');
       await new VaultSelection(path.join(profile, 'vault-selection.json')).write(vaultPath);
+      if (prepareVault) await prepareVault({ vault: vaultPath, profile });
     }
     current = await start();
     // The program reports its own version and architecture, the same way for both kinds of target.
@@ -207,8 +221,9 @@ export async function launchElectron({
   } catch (error) {
     try { if (current) await quit(current, runDir); } catch { /* already closed */ }
     await terminateRun(runDir);
+    if (existsSync(log)) await copyFile(log, path.join(evidence, 'server.log')).catch(() => undefined);
     releaseSlot(ports.slot, runDir);
-    dropUnusedEvidence(claimed);
+    await writeFailureResult({ evidence, record, error, phase: 'startup' });
     throw error;
   }
   const handle = {

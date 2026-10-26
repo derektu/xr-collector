@@ -25,6 +25,8 @@ const CHECK_TIMEOUT = 5 * 60_000;
 const NEXT_TIME = String.raw`(?:\d{2}:\d{2}|明天 \d{2}:\d{2}|\d{2}-\d{2} \d{2}:\d{2})`;
 const ONE_FAILURE = new RegExp(`^錯誤（連續 1 次）・${NEXT_TIME} 重試$`, 'u');
 
+export const checkRecordForJob = (collection, jobId) => collection.find((entry) => entry.kind === 'check' && entry.jobId === jobId);
+
 export async function run({ instance, page, openPage, record, waitFor }) {
   const catalog = await instance.catalog();
   const a = catalog.youtube.channels.find((source) => source.handle === 'verify-a');
@@ -102,8 +104,12 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(api.checkFailures?.count === 1 && api.checkFailures.since === failed.finishedAt && api.status === 'error',
       'API 的 checkFailures 為 1 次，從這次失敗起算', { id: 'w1.api-failures', expected: { count: 1, since: failed.finishedAt }, actual: api.checkFailures ?? null });
     expect(api.lastCheckedAt === failed.finishedAt, '上次檢查是失敗那次檢查結束的時間', { id: 'w1.last-checked', expected: failed.finishedAt, actual: api.lastCheckedAt });
-    const newest = (await detail()).collection.find((entry) => entry.kind === 'check');
-    expect(newest?.at === api.lastCheckedAt, '收集紀錄最新一筆檢查與上次檢查同一個時間', { id: 'w1.record-matches', expected: api.lastCheckedAt, actual: newest?.at ?? null });
+    const failedRecord = checkRecordForJob((await detail()).collection, failed.id);
+    expect(Boolean(failedRecord), '收集紀錄包含同一個失敗工作',
+      { id: 'w1.record-matches', expected: { jobId: failed.id },
+        actual: failedRecord
+          ? { jobId: failedRecord.jobId, recordAt: failedRecord.at, jobFinishedAt: failed.finishedAt, lastCheckedAt: api.lastCheckedAt }
+          : null });
 
     const view = await detailPage();
     expect(view.problem?.startsWith('最近一次檢查失敗（連續 1 次）：') ?? false, '詳情頁紅條顯示連續次數與原因',

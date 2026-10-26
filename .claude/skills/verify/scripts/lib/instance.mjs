@@ -164,10 +164,11 @@ export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
  * free `<label>-N`, see claimEvidence), evidence (an explicit evidence folder, missing or empty),
  * checkout, data ('synthetic' | 'real'), vault ('selected' | 'fixed' | 'none'), catalog (synthetic
  * catalog; defaultCatalog() otherwise), build (false copies the checkout's existing dist/web instead
- * of building). The server is the checkout's own copy of server.mts, so it matches the src/ it
- * loads. The returned instance carries the evidence folder and label actually used.
+ * of building), server (verification server script; the checkout's own server.mts by default).
+ * The returned instance carries the evidence folder and label actually used.
  */
-export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true } = {}) {
+export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true,
+  server: serverScript } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   if (process.platform !== 'darwin') throw new Error(`Web mode runs on macOS; on ${process.platform} use the Desktop runs (launchElectron)`);
   checkout = path.resolve(checkout);
@@ -194,7 +195,7 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
       if (!existsSync(path.join(built, 'index.html'))) throw new Error(`--no-build needs ${built}; run npm run build:web first`);
       await cp(built, web, { recursive: true });
     }
-    const script = existsSync(path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts'))
+    const script = serverScript ? path.resolve(serverScript) : existsSync(path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts'))
       ? path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts') : OWN_SERVER;
     const record = {
       kind: 'web', issue: String(issue), ...(claimed.label ? { label: claimed.label } : {}), runDir, evidence: claimed.evidence,

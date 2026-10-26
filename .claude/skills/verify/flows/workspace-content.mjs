@@ -327,7 +327,12 @@ export async function run({ instance, page, record, waitFor }) {
     await page.locator('.document-row').first().click();
     await by('reader-body').waitFor();
     expect((await by('reader-body').innerText()).includes('【合成文章】'), 'RSS Markdown 文章可閱讀');
-    expect((await by('reader-publisher').getAttribute('href')) !== null, '仍訂閱的發布者可以開啟訂閱詳情');
+    const publisherHref = `/sources/rss/${encodeURIComponent(feed.id)}`;
+    const shownPublisherHref = await waitFor(async () => {
+      const href = await by('reader-publisher').getAttribute('href');
+      return href === publisherHref ? href : null;
+    }, 'reader links the subscribed RSS publisher');
+    expect(shownPublisherHref === publisherHref, '仍訂閱的發布者可以開啟正確的訂閱詳情');
     await page.locator('.reader-bar').getByRole('button', { name: '文件', exact: true }).click();
     await waitFor(async () => (await page.locator('.document-row').count()) === 2, 'reader returns to second page');
     expect(new URL(page.url()).searchParams.get('page') === '2', '返回保留分頁');

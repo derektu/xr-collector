@@ -160,9 +160,10 @@ V=.claude/skills/verify/scripts/verify.mjs
 node $V flows list                                                   # 每支流程與它涵蓋的子功能
 node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
 node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
+node $V flows run --web --issue 91 --label ci-web                    # CI：動態跑全部非 Desktop 流程
 ```
 
-- **版本**：流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 只決定受測的 `src/`：Web UI 從受測 checkout build，伺服器是受測 checkout 自己的 `server.mts`。基準與本票版本因此跑同一份斷言，受測 checkout 沒有這支流程也能當基準。票自己的 `.local` 流程則從受測 checkout import 函式庫（見「基準」）。
+- **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的產品 `src/` 與 Web UI；收錄流程同時使用流程來源 checkout 的合成 verification server，才能以候選 harness 重複測固定的乾淨 main。`results.json` 分別記受測 checkout 與 `flowSource`，不可把兩者當成同一版本。票自己的 `.local` 流程若直接呼叫 `launchWeb`，預設仍使用受測 checkout 的 server；需要拆開時明確傳 `server`（見 API 表）。
 - **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
 - **內容操作**：`workspace-content` 串接單篇收集、失敗工作重試／移除、RSS 設定、文件分頁／搜尋／刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
 - **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
@@ -192,7 +193,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 
 | 函式 | 用途 |
 | --- | --- |
-| `launchWeb({ issue, label, evidence, checkout, data, vault, catalog, build })` | 同 CLI `launch`，回傳 instance |
+| `launchWeb({ issue, label, evidence, checkout, data, vault, catalog, build, server })` | 同 CLI `launch`，回傳 instance；`server` 可指定 verification server script，預設為受測 checkout 的版本 |
 | `attach(runDir)` | 接手已啟動的 instance |
 | `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw；只有帶 `body` 的請求才送 `content-type: application/json` |
 | `instance.catalog()`／`instance.updateCatalog(fn)` | 讀／改合成資料 |
@@ -277,6 +278,7 @@ Windows 同一支 smoke：
 ```powershell
 npm run package:win
 node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <dir>
+node .claude\skills\verify\scripts\smoke-packaged-offline.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <dir> # CI 離線 smoke
 node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <dir>
 ```
 
