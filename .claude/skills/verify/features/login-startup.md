@@ -20,11 +20,10 @@
 
 Preconditions:
 
-- W1 用 Web 合成資料 instance，不修改作業系統。
-- D1 用 macOS、Windows 原生開發 Electron 驗證設定頁與 Agent 都拒絕註冊；不修改作業系統登入項目。
-- P1～P3 必須在兩台 VM 用本票同一 commit 打包並安裝，實際讀寫各平台登入項目；P2 可走安裝版的受控啟動辨識，但不能取代真實登入。
+- 開發版負向案例用 Web 合成資料或 macOS／Windows 原生開發 Electron，驗證設定頁與 Agent 都拒絕註冊，不修改作業系統登入項目。
+- 真實 OS 註冊、外部停用及登入案例必須在兩台 VM 使用相同受測 commit 的安裝版；受控啟動辨識只能補驗分支，不能取代真實登入。
 - 程式以 `app.isPackaged` 判定是否能操作 OS；未安裝的 `.app` 與 `win-unpacked` 也具備此能力。隔離 profile 不會隔離作業系統登入項目，本機打包 smoke 不點這個開關；正向案例仍使用 VM 的安裝版。
-- V1／V2 沿用 P scenarios 的 VM 安裝版；會真的登出再登入，只在使用者確認時段後執行。
+- 真登入案例沿用上述 VM 安裝版，會真的登出再登入，只在使用者確認時段後執行。
 
 - **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 必須 disabled，`login-startup-status` 說明只能在安裝版設定。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。
 - **切換與 read-back。** 安裝版切換後，以兩個 listener 的 GET 比對 OS 實際狀態；製造 adapter 失敗時，開關維持 read-back 值並在卡片顯示錯誤。
@@ -35,7 +34,7 @@ Preconditions:
 
 - 開發版 Electron 與瀏覽器不是安裝版，不能用它們證明 OS 登入項目真的生效。
 - macOS 未簽章的 44.4.1 App 可能回 `requires-approval` 或設定後 read-back 仍為關閉；這是要呈現的 OS 狀態，不可當作成功。
-- V1／V2 會登出 VM，會中斷該 VM 的其他驗收；先與使用者確認時段。
+- 真登入案例會登出 VM，會中斷該 VM 的其他驗收；先與使用者確認時段。
 - 只看到 build 成功、registry/plist 存在或 process 出現，都不能取代「登入後背景服務可用且視窗未顯示」的行為驗收。
 
 ## Regression flows

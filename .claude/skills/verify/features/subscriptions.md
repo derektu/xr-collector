@@ -4,9 +4,9 @@
 
 ## Sub-features
 
-- `sub-add`：「新增訂閱」→「YouTube 頻道」→ 貼頻道網址 →「訂閱」。
+- `sub-add`：頁首或空清單的「新增訂閱」→「YouTube 頻道」→ 貼頻道網址 →「訂閱」。
 - `sub-status`：狀態欄的排隊中、檢查中、下載中 k/n、錯誤・HH:MM 重試、下次 HH:MM、錯誤（連續 n 次）・HH:MM 重試、已暫停、已暫停・連續失敗 n 次、自動檢查已關閉，以及文件欄的份數。
-- `sub-check`：「檢查全部」立即送出檢查。
+- `sub-check`：頁首「立即檢查」送出所有已啟用訂閱的檢查。
 - `sub-pause`：列上的暫停按鈕。
 - `sub-auto`：自動檢查開關。
 - `sub-remove`：列的「更多動作」→「移除」，預設保留文件，可選一併刪除。
@@ -17,6 +17,7 @@
 ## How to get to it (user POV)
 
 - 側欄「訂閱」（`/`）→ 右上「新增訂閱」。
+- 空清單中央另有「新增訂閱」入口；有訂閱時可用類型 chips 與「篩選訂閱」搜尋名稱。
 - 文件頁「新增」→「網址」貼頻道網址，按「改為訂閱」。
 - 訂閱頁每列：名稱連到 `/sources/youtube/<id>`，右側暫停按鈕與「更多動作」選單。
 
@@ -27,6 +28,7 @@ Preconditions:
 - 基準狀態。頻道 A：`https://www.youtube.com/@verify-a`；B：`@verify-b`。
 
 - **訂閱。** `getByTestId('nav-sources')` → `add-subscription` → `add-item-youtube-channel`，`add-url` 填頻道網址，等 `add-confirm` 為「訂閱」且 enabled 後點擊。對話框關閉，留在 `page-sources`。
+- **空清單與篩選。** 空清單的 `add-subscription-empty` 開啟同一新增選單。完成訂閱後，`sources-filter` 填名稱，並在 `getByRole('group', { name: '類型' })` 選「全部」「YouTube」或「RSS」；結果不符時顯示 `sources-no-match`，清空名稱及類型恢復清單。
 - **狀態變化。** 記錄 `source-row-<channelId>` 內 `subscription-status` 每個不同的值（頁內 MutationObserver，見 `flows/lib/watch.mjs`）。預期依序為「排隊中 → 檢查中 → 下載中 0/5 … 4/5 → 下次 HH:MM」，可省略排隊中與檢查中（檢查中只持續約 200 ms，取樣不一定拍到）；開始後不再回到排隊中，k 只增不減。完成後列的文件欄為 5。
 - **兩個訂閱同時收集。** A 下載中時訂閱 B：B 開始前顯示「排隊中」，開始後為「檢查中」「下載中 k/3」，兩者輪流擷取時都維持下載中，不回到排隊中。
 - **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；下載中的訂閱轉為「錯誤・HH:MM 重試」（時間是冷卻結束），還沒開始的檢查維持「排隊中」；冷卻 30 秒後自動繼續並完成。
@@ -48,11 +50,13 @@ Preconditions:
 - 冷卻期間互動式請求（訂閱預覽）立即失敗，新增訂閱的對話框會顯示錯誤；這是產品行為。
 - `auto-collection-switch` 是視覺上覆蓋的 checkbox，點擊要 `force: true`。
 - 新增 toast（`notice`）會擋住下一個動作，等 `notice` 數量為 0 再繼續。
+- 移除時只有已有文件或仍有收集中的訂閱才顯示保留／刪除文件選項；空訂閱的確認框直接提供取消與移除，不應等待不存在的 `remove-keep`。
 - 斷網只在收集請求連不上時才被發現：沒有工作在跑時設 `network: 'offline'` 不會出現訊息，要有工作連網（或按「立即檢查」）才會確認。合成模式離線時每 2 秒確認一次，正式版是 30 秒。
 - 讓訂閱在流程中到期：改 Vault 的 `settings/youtube-channels.json` 中該頻道的 `nextCheckAt`，服務每次讀檔，不必重啟。
 
 ## Regression flows
 
+- `feature-navigation`：斷言 `sub-add`、`sub-status`。空清單與頁首新增入口、名稱無結果／類型篩選，以及詳情暫停與恢復；不取代完整狀態序列流程。
 - `check-history-summary`：斷言 `sub-detail`、`sub-failure`。同一訂閱的定時無新內容、網路錯誤與恢復分組，詳情顯示次數與細節入口，現有錯誤狀態不被摘要取代。
 - `offline-recover`：斷言 `sub-status`、`sub-check`、`sub-offline`。A 下載中、B 在斷網期間到期：訊息與停用的按鈕、立即檢查被拒絕、斷網期間沒有派工、失敗與重試、列上從未出現「錯誤」；恢復後訊息消失、定時派工一次、B 一個檢查、A 文件數正確。
 - `subscription-failures`：斷言 `sub-status`、`sub-failure`。A 的列出失敗：重試期間與失敗後的列文字與顏色、API 的連續失敗次數、詳情頁紅條、「上次檢查」與收集紀錄最新一筆檢查一致、失敗的檢查不在工作頁失敗區；第 5 次失敗自動暫停（列、Vault 檔、API、事件、詳情頁）；恢復後歸零並檢查一次。

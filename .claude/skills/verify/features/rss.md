@@ -9,7 +9,7 @@
 - `rss-atom`：Atom feed。
 - `rss-articles`：文章收進文件頁，閱讀頁顯示轉好的 Markdown（標題、段落、連結）。
 - `rss-check`：feed 新增文章後，檢查只收新文章。
-- `rss-failure`：讀取失敗的處理。5xx 與連線錯誤是網路錯誤，工作留在排隊中等待重試；404、410、429 與非 feed 內容讓這次檢查失敗、等到下次檢查再試，錯誤記在記錄頁，並計入該訂閱的連續失敗。429 只影響回 429 的那個訂閱，RSS 沒有共用冷卻。
+- `rss-failure`：讀取失敗的處理。5xx 與連線錯誤是網路錯誤，已開始的檢查留在工作頁「進行中」等待重試；404、410、429 與非 feed 內容讓這次檢查失敗、等到下次檢查再試，錯誤記在記錄頁，並計入該訂閱的連續失敗。429 只影響回 429 的那個訂閱，RSS 沒有共用冷卻。
 - `rss-settings`：訂閱詳情頁的 RSS 收集設定。
 
 ## How to get to it (user POV)
@@ -45,5 +45,6 @@ Preconditions:
 
 ## Regression flows
 
+- `feature-navigation`：斷言 `rss-failure`。503 後已開始的檢查在工作頁「進行中」等待重試，恢復 feed 後完成。
 - `rss-rate-limit`：斷言 `rss-add-feed`、`rss-atom`、`rss-check`、`rss-failure`。一個 feed 回 429：該列的連續失敗與紅色、檢查工作失敗、詳情頁紅條與收集紀錄、另一個 feed 的檢查照常完成並收進新文章、RSS 請求通道從未冷卻、記錄沒有 RSS 的限流事件；第 5 次失敗自動暫停；恢復後歸零並檢查一次。
 - `workspace-content`：斷言 `rss-add-feed`、`rss-add-page`、`rss-articles`、`rss-settings`。從畫面辨識網頁宣告的 feed、訂閱與閱讀，修改收集設定後比對刷新及 Vault 資料。

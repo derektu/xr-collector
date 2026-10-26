@@ -73,4 +73,27 @@ export async function run({ instance, page, record }) {
       note('onboarding.consoleErrors', opened.consoleErrors);
     } finally { await opened.close(); await startup.stop(); }
   });
+
+  await record.scenario('BINFO-W3', '讀取失敗可從卡片重試', async ({ expect, shot }) => {
+    await page.getByTestId('nav-settings').click();
+    const info = (await readInfo(instance)).body.buildInfo;
+    const route = '**/api/device/build-info';
+    await page.route(route, (request) => request.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'unavailable', message: '驗收注入建置資訊讀取失敗' } }),
+    }));
+    try {
+      await page.reload();
+      const card = page.getByTestId('build-info');
+      const alert = card.getByRole('alert');
+      await alert.waitFor();
+      await card.scrollIntoViewIfNeeded();
+      expect((await alert.innerText()).includes('無法讀取建置資訊'), '讀取失敗顯示重試入口', { id: 'retry.error', actual: await alert.innerText() });
+      await shot('read-error');
+      await page.unroute(route);
+      await alert.getByRole('button', { name: '重試' }).click();
+      await cardMatches(page, info, expect, 'retry-restored');
+      await card.scrollIntoViewIfNeeded();
+      await shot('retry-restored');
+    } finally { await page.unroute(route); }
+  });
 }

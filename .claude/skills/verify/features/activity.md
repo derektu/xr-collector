@@ -13,6 +13,7 @@
 - 側欄「記錄」（`/activity`）預設開啟摘要。
 - 訂閱詳情「收集紀錄」的合併檢查列 →「查看細節」。
 - 記錄摘要列 →「查看細節」；頁首「完整事件」切換原始記錄。
+- 工作限定網址 `/activity?job=<jobId>` 顯示該工作原始事件、可清除的工作篩選與「複製診斷資訊」。
 
 ## Driving it with verify
 
@@ -24,6 +25,7 @@ Preconditions:
 - **篩選。** 選 `log-type`、`log-level`、`log-source`、`log-range`；中間被篩掉的不同檢查結果仍切斷前後同結果群組。重新整理、進出細節與返回保留所有條件；新增文件＋ERROR 顯示空狀態且不改模式。
 - **細節。** `summary-check` 的「查看細節」→ `activity-group-context`；`activity-group-check` 初始最多 10 次，頁首顯示已載入與總次數，每列可展開原始事件。按「載入更早的檢查」每次再載入最多 10 次，全部載入後列數才等於摘要次數。切換最低等級保留已載入次數。按「返回」後原本等級、訂閱與時間篩選仍在。
 - **完整事件。** 按 `activity-raw`，預設 INFO 以上不顯示 DEBUG；切 DEBUG 以上可看到先前已記錄的內部事件。`log-row` 等級只出現 `DEBUG`／`INFO`／`WARN`／`ERROR`。
+- **工作限定。** 開啟本 instance 已知工作 ID 的 `/activity?job=…`，`log-job-filter` 出現且使用完整事件模式；`copy-diagnostics` 複製工作與事件診斷，按「清除工作篩選」回一般記錄。Web 若攔截 `clipboard.writeText`，只證明交付文字，不能當作真 OS 剪貼簿通過。
 - **訂閱詳情。** `/sources/<type>/<id>` 的 `collection-check-group` 顯示結果、次數與時間範圍；點「查看細節」進相同群組，返回訂閱詳情。
 
 ## Gotchas
@@ -34,4 +36,5 @@ Preconditions:
 
 ## Regression flows
 
+- `feature-navigation`：斷言 `activity-raw`、`activity-summary`。工作限定網址、清除篩選與複製診斷文字，再回摘要等事件載入；Web 攔截 clipboard payload，不驗真 OS 剪貼簿。
 - `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。建立無新內容、網路錯誤與恢復三段，檢查等級與類型篩選、空交集、模式與 URL 保留、DEBUG 原始事件、群組限定與載入數不變。

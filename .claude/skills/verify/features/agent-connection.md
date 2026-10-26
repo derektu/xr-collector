@@ -12,7 +12,7 @@
 ## How to get to it (user POV)
 
 - 主視窗左側「設定」→「AI 助理連線」。
-- 尚未建立知識庫時，「選擇知識庫位置」畫面也有同一個連線步驟說明。
+- 尚未建立知識庫時，在「選擇知識庫位置」畫面按「AI 助理連線」，展開同一個完整面板（`onboarding-agent-panel`），可下載、複製及設定連線。
 - 一般使用者只需「下載 Skill」；分開安裝或更新連線時才使用「複製連線資料」。
 
 ## Driving it with verify
@@ -21,7 +21,7 @@ Preconditions:
 
 - 使用隔離 Web instance，不讀取或覆寫使用者的 Agent 設定。
 - 斷言設定卡片順序、active loopback URL，以及 helper 的 hover、click 與 Escape 行為。
-- 透過瀏覽器實際觸發 ZIP 下載與剪貼簿，和 explicit connection API 比對 active 資料。
+- 透過瀏覽器實際下載 ZIP、解壓並比對 active 連線；收錄的 Web flow 替換 `navigator.clipboard.writeText`，只比對複製按鈕交付的文字與 explicit connection API。真實系統剪貼簿另以原生 Desktop 驗收。
 - 將固定埠保存為目前埠，斷言畫面顯示下次重啟套用而 active URL 不變；重設金鑰後直接向 Agent listener 驗證舊金鑰 401、新金鑰 200。
 
 ## Gotchas
@@ -29,6 +29,7 @@ Preconditions:
 - Web flow 不重新啟動同一 instance，因此固定埠真正 bind 與失敗降級由服務測試及後續原生驗收覆蓋。
 - URL 與金鑰屬於敏感連線資料；證據不可記錄 token，畫面也不直接顯示 token。
 - 下載包已含連線資料，不要把每次 session 都重新貼上 token 寫成必要步驟。
+- 固定 URL 且金鑰未變時可跨 App 重啟與 Agent session 沿用。port 變更生效、自動 port 漂移或重設金鑰後，更新已安裝 Skill 旁的 `connection.json`；重新下載時確認覆蓋的是 Agent 實際使用的目錄。
 
 ## Regression flows
 
