@@ -26,7 +26,7 @@ Preconditions:
 - 匯入合併需要另一個 Vault 的匯出檔：在同一流程再 `launchWeb({ issue })` 一個 instance（會拿另一個 slot），在那邊收不同的影片後匯出，把 zip 路徑交給第一個 instance。
 - 所有路徑都放在 run 目錄內，例如 `path.join(instance.runDir, 'exports', 'a.zip')`、`path.join(instance.runDir, 'moved-vault')`。
 
-- **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是 run 目錄內的 `vault`，`vault-counts` 與文件數一致。
+- **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是目前選用的 Vault，初始為 run 目錄內的 `vault`；`vault-counts` 與文件數一致。保持設定頁開啟，再以背景收集增加文件，知識庫數量與搜尋卡應跟著更新，不必離開頁面；`workspace-content` 的 COUNTS-1／2 比對 0 → 3 → 5。
 - **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector 匯出/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
 - **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-compare`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
 - **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
@@ -41,7 +41,7 @@ Preconditions:
 
 - 預設的 `selected` Vault 才能搬移；`fixed` 是刻意的限制，不是 bug。
 - 匯出、匯入比對／套用、搬移與切換都取得操作鎖並暫停派工；已開始的收集步驟先完成。比對完成會釋放鎖，收集可能改變基準；套用前若基準已改變，取消預覽並重新比對。
-- 匯出只帶知識庫文件、訂閱、排程與刪除紀錄。登入自啟是裝置設定，不會隨 zip 搬到另一台電腦。
+- 匯出只帶知識庫文件、訂閱、排程與刪除紀錄。登入自啟、Agent port 與金鑰屬於裝置 profile，不隨 zip 搬到另一台電腦；匯入、搬移及切換 Vault 也不替換此 profile 的 Agent 連線設定。
 - 搬移目標必須不存在或是空資料夾；指向 run 目錄外會把資料留在受測範圍之外，`stop` 不會清掉。
 - Web 模式沒有 `xrCollectorDesktop` bridge，「在 Finder 顯示」類按鈕（`export-reveal`、`vault-reveal`）只在 Desktop 驗證。
 - 兩個 instance 同時跑會占兩個 slot；結束時兩個都要 stop。

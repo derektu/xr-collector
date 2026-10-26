@@ -20,7 +20,8 @@ Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none
 1. 點「設定」，讀取 `build-info` 區塊；`build-info-version`、`build-info-time`、`build-info-commit`、`build-info-id`、`build-info-target`、`build-info-kind`、`build-info-variant` 與 `GET /api/device/build-info` 相同。版本及 commit 再和受測 checkout 比對。
 2. 由這個 run 的 UI `GET /api/device/agent/connection` 取得目前連線資料，再以 Bearer token 讀 Agent listener 同一路徑，回應與 UI API 相同；無 token 回 401。重新整理設定頁，畫面 buildId 與原本相同。
 3. 在 `vault: 'none'` instance 開啟 Onboarding，先確認 Vault API 為 `not_ready`，再比對建置資訊 DOM 與裝置 API，截深／淺色畫面。
-4. 打包版從實際安裝位置啟動，將 API／DOM 與 App 內 `dist/node/build-info.json`、產物清單比對；記錄 buildId、完整 commit、架構與 variant。此步另由本票原生流程完成，Web 不替代安裝驗收。
+4. API 讀取失敗時，卡片顯示「無法讀取建置資訊」與「重試」。可用瀏覽器路由暫回 503 並重新整理；恢復真實 API 後點「重試」，確認原 buildId 再次出現。此注入只證明 UI 錯誤與恢復分支。
+5. 打包版需有匹配 commit 的實際安裝產物與 manifest；從隔離 profile 啟動，將 API／DOM 與 `app.asar` 內的 `dist/node/build-info.json`、產物清單比對，記錄 buildId、完整 commit、架構與 variant。沒有安裝產物時回報待驗，Web 不替代安裝驗收。
 
 ## Gotchas
 
@@ -30,4 +31,4 @@ Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none
 
 ## Regression flows
 
-- `build-info`：斷言 `build-info-settings`、`build-info-onboarding`、`build-info-api`；設定／重新整理、兩 listener、token 與 Not Ready Onboarding。
+- `build-info`：斷言 `build-info-settings`、`build-info-onboarding`、`build-info-api`；設定／重新整理、兩 listener、token、Not Ready Onboarding，以及 UI 讀取失敗後點重試恢復。503 是路由注入，不宣稱真實服務故障。
