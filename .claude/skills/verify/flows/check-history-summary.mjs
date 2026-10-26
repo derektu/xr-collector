@@ -8,7 +8,7 @@ export const name = 'check-history-summary';
 export const title = '定時檢查摘要與完整細節';
 export const covers = ['sub-detail', 'sub-failure', 'activity-summary', 'activity-detail', 'activity-raw'];
 
-const CHECK_TIMEOUT = 5 * 60_000;
+const CHECK_TIMEOUT = 30_000;
 
 /** A quick, independently runnable L6 check over verify-b's exact three-document first batch. */
 export async function verifyThreeDocumentLifecycle({ instance, page, record, waitFor }) {
@@ -93,6 +93,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const row = file.channels.find((candidate) => candidate.id === source.id);
     row.nextCheckAt = new Date(Date.now() - 1_000).toISOString();
     await writeFile(subscriptionsFile, `${JSON.stringify(file, null, 2)}\n`);
+    await writeFile(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
     return waitFor(async () => {
       const job = (await jobs()).find((candidate) => !before.has(candidate.id) && candidate.scope?.trigger === 'scheduled');
       return job && (job.state === 'completed' || job.state === 'failed') ? job : null;

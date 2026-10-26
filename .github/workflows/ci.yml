@@ -10,12 +10,22 @@ on:
     branches: [main]
     paths: ['**', '!**/*.md', 'skills/xr-collector-agent/SKILL.md']
   workflow_dispatch:
+    inputs:
+      tested_ref:
+        description: Optional full 40-character commit to test with this branch's Web regression harness
+        required: false
+        type: string
+      packaged_smoke:
+        description: Build and run the offline packaged-App smoke on Mac ARM64 and Windows x64
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -47,5 +57,121 @@ jobs:
         with:
           name: build-${{ github.sha }}
           path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  web-regression:
+    name: Web regression
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out regression harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install harness dependencies
+        run: npm ci
+      - name: Validate separately tested commit
+        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.tested_ref }}
+        run: |
+          [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]] || { echo 'tested_ref must be a full lowercase commit SHA' >&2; exit 1; }
+      - name: Check out separately tested source
+        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tested_ref }}
+          path: .data/ci/tested-source
+      - name: Select tested source
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.tested_ref }}
+        run: |
+          if [[ -n "$REQUESTED_REF" ]]; then
+            echo "XR_TESTED_SOURCE=$GITHUB_WORKSPACE/.data/ci/tested-source" >> "$GITHUB_ENV"
+            echo "XR_EXPECTED_TESTED_SHA=$REQUESTED_REF" >> "$GITHUB_ENV"
+          else
+            echo "XR_TESTED_SOURCE=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+            echo "XR_EXPECTED_TESTED_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+          fi
+      - name: Install separately tested source dependencies
+        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
+        working-directory: .data/ci/tested-source
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install chromium
+      - name: Prepare pinned official search engine for Web regression
+        working-directory: ${{ env.XR_TESTED_SOURCE }}
+        run: npm run prepare:meilisearch -- --variant official --target darwin-arm64 --require-native
+      - name: Run every registered Web flow
+        run: |
+          [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
+          node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --checkout "$XR_TESTED_SOURCE"
+          [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
+      - name: Save failed Web evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-regression-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ticket-artifacts/119/ci-web/**/results.json
+            .local/ticket-artifacts/119/ci-web/**/*.png
+            .local/ticket-artifacts/119/ci-web/**/server.log
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  packaged-smoke:
+    name: Packaged smoke (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' && inputs.packaged_smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            package_command: package:mac
+            app: release/mac-arm64/XR Collector.app
+          - runner: windows-2022
+            target: win32-x64
+            rust_target: x86_64-pc-windows-msvc
+            package_command: package:win
+            app: release/win-unpacked/XR Collector.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.91.1
+          targets: ${{ matrix.rust_target }}
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build unsigned Chinese test package
+        run: npm run ${{ matrix.package_command }}
+      - name: Run offline packaged-App smoke
+        shell: bash
+        timeout-minutes: 12
+        run: node .claude/skills/verify/scripts/smoke-packaged-offline.mjs --app "${{ matrix.app }}" --evidence ".data/ci/package-smoke"
+      - name: Save failed packaged smoke evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packaged-smoke-failure-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .data/ci/package-smoke/results.json
+            .data/ci/package-smoke/*.png
+            .data/ci/package-smoke/server.log
+            .data/ci/package-smoke/*-server.log
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: error

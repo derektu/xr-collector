@@ -92,7 +92,8 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
       return pass;
     },
     async finish(extra = {}) {
-      const passed = results.every((result) => result.pass);
+      // A driver/cleanup error is part of the run result, not only its process exit status.
+      const passed = !extra.error && results.length > 0 && results.every((result) => result.pass);
       await writeFile(path.join(instance.evidence, file), JSON.stringify({
         issue: instance.issue, label: instance.label ?? null, checkout: instance.checkout,
         commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, data: instance.data,

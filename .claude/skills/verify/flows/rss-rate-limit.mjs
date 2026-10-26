@@ -78,9 +78,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       const failed = await checkFromRow(feeds.a);
       expect(failed?.state === 'failed' && failed.error?.code === 'rate_limited', 'RSS 的檢查立刻失敗，錯誤為 rate_limited',
         { id: 'w2.a-failed', expected: { state: 'failed', code: 'rate_limited' }, actual: failed ? { state: failed.state, error: failed.error } : 'not settled' });
-      const shown = await rowShows(feeds.a, /^錯誤（連續 1 次）・\d{2}:\d{2} 重試$/u);
-      expect(/^錯誤（連續 1 次）・\d{2}:\d{2} 重試$/u.test(shown.text) && shown.error, 'RSS 列為紅色「錯誤（連續 1 次）・HH:MM 重試」',
-        { id: 'w2.a-row', expected: '錯誤（連續 1 次）・HH:MM 重試（紅色）', actual: shown });
+      const retryLabel = /^錯誤（連續 1 次）・(?:明天 )?\d{2}:\d{2} 重試$/u;
+      const shown = await rowShows(feeds.a, retryLabel);
+      expect(retryLabel.test(shown.text) && shown.error, 'RSS 列為紅色並顯示重試時間',
+        { id: 'w2.a-row', expected: '錯誤（連續 1 次）・[明天 ]HH:MM 重試（紅色）', actual: shown });
       const stored = await storedFeed(feeds.a.id);
       expect(stored.checkFailures?.count === 1 && stored.checkFailures.error?.code === 'rate_limited', 'Vault 檔中 RSS 的連續失敗為 1 次、rate_limited',
         { id: 'w2.a-vault', expected: { count: 1, code: 'rate_limited' }, actual: stored.checkFailures ?? null });

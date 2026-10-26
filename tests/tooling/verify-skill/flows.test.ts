@@ -1,10 +1,13 @@
 // Recorded regression flows: the status sequences they judge, the checks they write to
 // results.json, and the feature map naming, for each feature, the flows that cover it.
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { checkEntry, failureHint } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
-import { listFlows } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
+import { checkEntry, failureHint, recorder } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
+import { listFlows, selectFlows, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../../.claude/skills/verify/flows/lib/status-sequence.mjs';
 
 const FEATURES = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/features');
@@ -12,6 +15,52 @@ const FEATURES = path.resolve(import.meta.dirname, '../../../.claude/skills/veri
 type Check = { id: string; ok: boolean; actual: unknown };
 const failed = (checks: Check[]) => checks.filter((check) => !check.ok).map((check) => check.id);
 const sequence = (...values: string[]) => subscriptionSequenceChecks('A', values, { total: 5 }) as Check[];
+
+describe('CI flow selection', () => {
+  const flows = [
+    { name: 'web-a', desktop: false },
+    { name: 'native-a', desktop: true },
+    { name: 'web-b', desktop: false },
+  ] as Awaited<ReturnType<typeof listFlows>>;
+
+  it('discovers every Web flow without maintaining a second fixed list', () => {
+    expect(selectFlows(flows, { layer: 'web' }).map((flow) => flow.name)).toEqual(['web-a', 'web-b']);
+    expect(selectFlows(flows, { layer: 'desktop' }).map((flow) => flow.name)).toEqual(['native-a']);
+  });
+
+  it('keeps explicit names strict and combines them with the requested layer', () => {
+    expect(selectFlows(flows, { names: ['web-b'], layer: 'web' }).map((flow) => flow.name)).toEqual(['web-b']);
+    expect(() => selectFlows(flows, { names: ['missing'], layer: 'web' })).toThrow(/Unknown flow missing/u);
+  });
+
+  it('keeps a machine-readable failed result when provisioning stops before the recorder', async () => {
+    const evidence = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-provisioning-'));
+    try {
+      await writeProvisioningFailure({ issue: '119', label: 'ci-web', evidence, checkout: path.resolve(import.meta.dirname, '../../..'),
+        flow: 'web-a', source: { commit: 'a'.repeat(40) }, error: new Error('browser did not start') });
+      const result = JSON.parse(await readFile(path.join(evidence, 'results.json'), 'utf8'));
+      expect(result).toMatchObject({ issue: '119', label: 'ci-web', flow: 'web-a', passed: false, phase: 'provisioning' });
+      expect(result.error).toContain('browser did not start');
+    } finally {
+      await rm(evidence, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('packaged smoke keeps an existing explicit evidence directory untouched', async () => {
+    const evidence = await mkdtemp(path.join(os.tmpdir(), 'xr-smoke-owned-evidence-'));
+    const sentinel = '{"owner":"previous run"}\n';
+    const script = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/smoke-packaged-offline.mjs');
+    try {
+      await writeFile(path.join(evidence, 'results.json'), sentinel);
+      const result = spawnSync(process.execPath, [script, '--app', path.join(evidence, 'missing.app'), '--evidence', evidence], { encoding: 'utf8' });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('is not empty; give a new or empty folder');
+      expect(await readFile(path.join(evidence, 'results.json'), 'utf8')).toBe(sentinel);
+    } finally {
+      await rm(evidence, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('subscription status sequence', () => {
   it('classifies the status texts of the status model', () => {
@@ -75,6 +124,18 @@ describe('recorder checks', () => {
     expect(checkEntry(true, '文字')).toEqual({ ok: true, text: '文字' });
     expect(checkEntry(0, '文字', { id: 'x.y', expected: 5, actual: 4 })).toEqual({ id: 'x.y', ok: false, text: '文字', expected: 5, actual: 4 });
     expect(failureHint('文字', { id: 'x.y', expected: 5, actual: ['a'] })).toBe('[x.y] 文字\n      預期：5\n      實際：["a"]');
+  });
+
+  it('marks a completed scenario failed when driver or cleanup reports an error', async () => {
+    const evidence = await mkdtemp(path.join(os.tmpdir(), 'xr-recorder-cleanup-'));
+    try {
+      const record = recorder({ issue: '119', evidence, checkout: '/test', data: 'fixture' }, {});
+      await record.scenario('CI-119-06', 'cleanup failure', async ({ expect }) => expect(true, 'scenario passed'));
+      expect(await record.finish({ error: 'app did not exit' })).toBe(false);
+      expect(JSON.parse(await readFile(path.join(evidence, 'results.json'), 'utf8'))).toMatchObject({ passed: false, error: 'app did not exit' });
+    } finally {
+      await rm(evidence, { recursive: true, force: true });
+    }
   });
 });
 

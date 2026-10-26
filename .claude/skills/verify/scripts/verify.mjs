@@ -37,7 +37,7 @@ const USAGE = `verify.mjs <command>
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process
   flows list                                   the recorded regression flows and the feature-map sub-features each covers
-  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>]
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop]
            runs the named recorded flows (all without names), each on its own instance; the flows and this
            library come from the checkout the command runs in, --checkout picks only the src/ under test;
            evidence goes to .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows);
@@ -53,6 +53,7 @@ const { values: o, positionals } = parseArgs({ allowPositionals: true, options: 
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
   commit: { type: 'string' }, platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
+  web: { type: 'boolean' }, desktop: { type: 'boolean' },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -215,7 +216,9 @@ async function main() {
   if (command === 'flows') {
     if (positionals[1] === 'list') return print((await listFlows()).map(({ name, title, covers }) => ({ name, title, covers })));
     if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
-    const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout });
+    if (o.web && o.desktop) throw new Error('Choose only one of --web or --desktop');
+    const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout,
+      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all' });
     print(outcome);
     if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
     return;
