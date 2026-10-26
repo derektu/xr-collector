@@ -8,6 +8,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkEntry, failureHint, recorder } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
 import { listFlows, selectFlows, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
+import { checkRecordForJob } from '../../../.claude/skills/verify/flows/subscription-failures.mjs';
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../../.claude/skills/verify/flows/lib/status-sequence.mjs';
 
 const FEATURES = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/features');
@@ -63,6 +64,17 @@ describe('CI flow selection', () => {
 });
 
 describe('subscription status sequence', () => {
+  it('matches a collection check by job identity when event and job timestamps differ', () => {
+    const recordAt = '2026-10-26T03:04:09.841Z';
+    const jobFinishedAt = '2026-10-26T03:04:09.840Z';
+    const record = checkRecordForJob([
+      { kind: 'check', jobId: 'other-job', at: jobFinishedAt },
+      { kind: 'check', jobId: 'failed-job', at: recordAt },
+    ], 'failed-job');
+    expect(record).toMatchObject({ jobId: 'failed-job', at: recordAt });
+    expect(record?.at).not.toBe(jobFinishedAt);
+  });
+
   it('classifies the status texts of the status model', () => {
     expect(subscriptionPhase('排隊中')).toEqual({ phase: 'queued' });
     expect(subscriptionPhase('檢查中')).toEqual({ phase: 'checking' });
