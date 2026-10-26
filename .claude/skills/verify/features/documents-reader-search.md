@@ -31,7 +31,7 @@ Preconditions:
 - **閱讀。** 點 A 第 1 集。`reader-body` 含「【合成字幕】」，`reader-publisher` 顯示頻道，`reader-source-link` 指向影片網址。
 - **刪除。** `reader-delete` → `confirm-delete-document`，先取消確認仍可閱讀，再按「刪除」。畫面返回原入口，文件從列表與搜尋消失，`vault/settings/deleted-documents.json` 多一筆。重新開啟同一 ID 才顯示 `reader-deleted`。列表每列的 `document-more` →「刪除」也有相同確認。
 - **重新收集。** 重新開啟已刪除的 YouTube ID，點 `reader-recollect`，完成後 `reader-body` 再次出現。已刪除 RSS ID 不提供此按鈕。
-- **搜尋索引設定。** 設定頁 `settings-search-index` 的 `search-index-state` 顯示索引狀態。
+- **搜尋索引設定。** 設定頁 `settings-search-index` 的 `search-index-state` 顯示索引狀態；背景收集新增文件後，「已索引 N 份／知識庫 M 份」會隨既有收集狀態訊號重新讀取，不必離開頁面。
 - **搜尋不可用。** 搜尋 API 回 `search_unavailable` 時，`search-unavailable` 提示保留搜尋字串，下方退回相同來源的 Vault 瀏覽列表，仍可閱讀；「前往設定」開啟索引設定。路由 stub 可證明此 UI 分支，回報須明說未造成真實引擎故障。
 
 ## Gotchas
@@ -46,4 +46,4 @@ Preconditions:
 ## Regression flows
 
 - `documents-reader-search`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-view`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁、來源篩選、搜尋與無結果、閱讀；刪除後先記錄目前回文件頁且保留搜尋詞的行為，再直接開已刪文件網址驗已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集並在重啟後再次搜尋。
-- `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回、取消與確認刪除、YouTube 重新收集與 RSS 無此操作、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支。
+- `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回、取消與確認刪除、YouTube 重新收集與 RSS 無此操作、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支；COUNTS-1、COUNTS-2 另比對搜尋狀態 API、實際索引與設定頁搜尋卡在背景收集後的 3／3、5／5。

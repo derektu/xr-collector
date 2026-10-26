@@ -198,7 +198,8 @@ export default function App() {
     body = <Activity revision={status.revision} busy={active.length > 0} search={location.search} onState={onActivityState}
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
   } else {
-    body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length} themePreference={themePreference} onThemePreference={persist} onChanged={announce} />;
+    body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length} revision={status.revision}
+      themePreference={themePreference} onThemePreference={persist} onChanged={announce} />;
   }
 
   return <div className={readerId ? 'shell reader-mode' : 'shell'} data-theme={themeName}>
