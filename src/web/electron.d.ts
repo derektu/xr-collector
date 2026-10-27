@@ -17,7 +17,7 @@ export interface DesktopBridge {
   /** Operating system of the desktop app, for labels such as Finder or File Explorer. */
   platform: string;
   /** Calls `listener` when the tray menu opens the window on a page. */
-  onNavigate(listener: (page: 'jobs' | 'activity') => void): void;
+  onNavigate(listener: (page: 'jobs' | 'activity' | 'settings' | 'update') => void): void;
 }
 declare global { interface Window { xrCollectorTheme?: ElectronThemeBridge; xrCollectorDesktop?: DesktopBridge; } }
 export {};

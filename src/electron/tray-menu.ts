@@ -1,10 +1,10 @@
-import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../core/types.js';
 
 /** The three tray icons: nothing to do, work queued or running, automatic checks off. */
 export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off';
 
 /** What the menu acts on; the menu's own items use these as their ids. */
-export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'quit';
+export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'check_app_update' | 'quit';
 
 export type TrayMenuItem =
   | { kind: 'status'; label: string }
@@ -22,8 +22,9 @@ export interface TrayMenu {
  * is open (Onboarding, or the Vault is unavailable).
  */
 export interface TrayState {
-  overview: JobOverview;
-  schedule: CollectionScheduleView;
+  overview?: JobOverview;
+  schedule?: CollectionScheduleView;
+  update?: DeviceUpdateStatus;
 }
 
 const separator: TrayMenuItem = { kind: 'separator' };
@@ -33,6 +34,7 @@ const quit: TrayMenuItem = { kind: 'action', action: 'quit', label: '結束 XR C
 /** The tray icon, its tooltip and its menu for the open Vault's work, or for no open Vault. */
 export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayMenu {
   if (!state) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, quit] };
+  if (!state.overview || !state.schedule) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, ...updateItems(state.update), quit] };
   const { overview, schedule } = state;
   const [current] = overview.running;
   const busy = overview.running.length > 0 || overview.queued.length > 0;
@@ -60,9 +62,34 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
       { kind: 'action', action: 'jobs', label: failed > 0 ? `工作（${failed} 項失敗）` : '工作' },
       { kind: 'action', action: 'activity', label: '記錄' },
       separator,
+      ...updateItems(state.update),
       quit,
     ],
   };
+}
+
+function updateItems(update: DeviceUpdateStatus | undefined): TrayMenuItem[] {
+  if (!update) return [];
+  const version = (update.ready ?? update.offer)?.version;
+  const progress = update.progress && update.progress.total > 0
+    ? ` ${Math.round(update.progress.transferred / update.progress.total * 100)}%` : '';
+  const labels: Record<DeviceUpdateStatus['phase'], string> = {
+    idle: '檢查 App 更新',
+    checking: 'App 更新：正在檢查',
+    available: version ? `App 更新：可下載 ${version}` : 'App 更新：可下載',
+    downloading: `App 更新：下載中${progress}`,
+    verifying: 'App 更新：驗證下載',
+    ready: version ? `App 更新：已下載待安裝 ${version}` : 'App 更新：已下載待安裝',
+    waiting: 'App 更新：等待工作完成',
+    installing: 'App 更新：安裝中',
+    up_to_date: '檢查 App 更新',
+    error: 'App 更新：錯誤',
+  };
+  return [
+    { kind: 'status', label: `版本 ${update.currentVersion}` },
+    { kind: 'action', action: 'check_app_update', label: labels[update.phase] },
+    separator,
+  ];
 }
 
 function runningLine(entry: JobOverviewEntry): string {

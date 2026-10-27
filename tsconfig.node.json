@@ -26,6 +26,7 @@
     "src/vault/**/*.ts",
     "src/server/**/*.ts",
     "src/runtime/**/*.ts",
+    "src/updates/**/*.ts",
     "src/electron/**/*.ts",
     "src/electron/**/*.cts"
   ]

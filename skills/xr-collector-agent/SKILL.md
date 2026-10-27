@@ -1,6 +1,6 @@
 ---
 name: xr-collector-agent
-description: 操作本機 XR Collector 的訂閱、網址辨識、收集工作、頻道、排程、文件、搜尋、Vault 資料交換及搬移。使用者要求管理或查詢其 Collector 時使用。
+description: 操作本機 XR Collector 的訂閱、網址辨識、收集工作、頻道、排程、文件、搜尋、App 更新、Vault 資料交換及搬移。使用者要求管理或查詢其 Collector 時使用。
 ---
 
 # XR Collector Agent
@@ -188,6 +188,12 @@ Content-Type: application/json
 
 此唯讀 API 是裝置資料，Vault 尚未設定或正在匯入／搬移時也能讀，Agent 仍須目前的 token。`sourceDirty: true` 表示開發原始碼有未提交修改，null 表示無法確認；不要把 null 說成乾淨版本。`variant: null` 表示開發原始碼尚未準備引擎身分，不表示已通過任何引擎驗證。`packaged` 的 commit、target 與 variant 來自安裝包內固定資訊，不依執行目錄或啟動時 Git 決定。
 
+## App 更新
+
+App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、引擎 variant、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
+
+套用會結束 App，必須再次取得使用者明確同意，並把 `ready.version`、`ready.payload.sha256` 原樣送到 `POST /api/device/updates/apply`；不能改用目前 `offer` 或自行選新版本。`POST /api/device/updates/cancel` 取消下載或等待安全停止，已驗證檔仍保留，正常關閉 App 不會自動安裝。`update_busy`、`update_offer_changed` 或 `update_not_ready` 時重新讀狀態，不重複送出；`update_integrity_failed` 必須重新下載。所有更新 API 在 Vault 未設定時仍可用。
+
 ## Vault 設定
 
 每個 Vault 是自成一體的目錄，根目錄有 `xr-collector-vault.json` 標記檔。這台電腦使用哪個 Vault 屬於裝置設定，保存在 Vault 之外；Vault 尚未就緒時，health、建置資訊與下列設定 API 可用。
@@ -208,6 +214,11 @@ Content-Type: application/json
 | Method 與 path | 輸入／結果 |
 | --- | --- |
 | `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台、引擎 variant 與原始碼狀態；Vault 未就緒／鎖定時可讀 |
+| `GET /api/device/updates` | 唯讀更新狀態；Vault 未就緒／鎖定時可讀 |
+| `POST /api/device/updates/check` | 檢查穩定版 metadata，不下載；回傳 `update` |
+| `POST /api/device/updates/download` | 經使用者確認後送 `{"version":"...","sha256":"64 位小寫十六進位"}`；下載及驗證固定 offer |
+| `POST /api/device/updates/apply` | 經使用者再次確認後送與 `ready` 相同的版本及雜湊；等待安全停止並重新啟動安裝 |
+| `POST /api/device/updates/cancel` | 取消進行中的下載或等待；已驗證檔保留 |
 | `GET /api/health` | runtime state、instance、profile、active Vault、Not Ready 原因、`connectivity` 與 `activityLog` |
 | `GET /api/device/agent` | 目前 listener 狀態、active URL／port、已保存的連線埠模式及是否要重啟套用 |
 | `GET /api/device/agent/connection` | 目前 active `url` 與 `token`；listener 不可用時回 409 |

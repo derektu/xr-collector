@@ -17,6 +17,7 @@ import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js'
 import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
 import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
+import type { UpdateAccess } from '../updates/types.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
 import { startServer, type RunningServer } from '../server/start.js';
 import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
@@ -24,6 +25,7 @@ import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-dire
 import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
+import type { UpdateLease } from '../vault/operation-lock.js';
 
 export type CollectorRuntimeState = 'starting' | 'ready' | 'not_ready' | 'stopping' | 'stopped' | 'unavailable';
 
@@ -64,6 +66,8 @@ export interface CollectorRuntimeOptions {
   loginStartup?: LoginStartupAccess;
   /** Records a packaged OS login launch in the device activity log. */
   startedAtLogin?: boolean;
+  /** Device-level software update state shared by UI and authorized Agent APIs. */
+  updates?: UpdateAccess;
 }
 
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
@@ -82,6 +86,7 @@ export class CollectorRuntime {
   private stateValue: CollectorRuntimeState;
   private message: string;
   private settingUp = false;
+  private preparingUpdate = false;
   private closing: Promise<void> | null = null;
 
   private constructor(
@@ -174,7 +179,8 @@ export class CollectorRuntime {
         }
       },
     } : undefined;
-    const shared = { ...services, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity, ...(loginStartup ? { loginStartup } : {}) };
+    const shared = { ...services, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
+      ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),
@@ -274,6 +280,7 @@ export class CollectorRuntime {
     if (this.closing) throw new CollectorError('vault_busy', '服務正在停止。');
     if (this.workspaceValue) throw new CollectorError('vault_already_set', '已經有使用中的知識庫。更換位置請使用搬移功能。');
     if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等待目前的操作完成。');
+    if (this.preparingUpdate) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能變更知識庫。');
     if (!path.isAbsolute(vaultPath)) throw new CollectorError('invalid_request', '請提供完整的絕對路徑。');
     this.settingUp = true;
     try {
@@ -323,6 +330,37 @@ export class CollectorRuntime {
     } finally {
       this.settingUp = false;
     }
+  }
+
+  /** Device-level update exclusion, including the no-Vault state. */
+  async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
+    if (signal.aborted) throw signal.reason;
+    if (this.closing || this.preparingUpdate) throw new CollectorError('update_busy', '更新或服務停止已經進行中。');
+    if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等它完成後再更新。');
+    this.preparingUpdate = true;
+    let workspaceLease: UpdateLease | null = null;
+    try {
+      workspaceLease = this.workspaceValue ? await this.workspaceValue.prepareUpdate(signal) : null;
+      if (signal.aborted || this.closing) throw signal.aborted ? signal.reason : new CollectorError('update_busy', '服務正在停止。');
+    }
+    catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
+    let finished = false;
+    return {
+      cancel: () => {
+        if (finished) return; finished = true; workspaceLease?.cancel(); this.preparingUpdate = false;
+      },
+      transferToShutdown: () => {
+        if (finished) throw new CollectorError('update_busy', '更新等待已經結束。');
+        if (signal.aborted || this.closing) {
+          workspaceLease?.cancel(); this.preparingUpdate = false;
+          throw signal.aborted ? signal.reason : new CollectorError('update_busy', '服務正在停止。');
+        }
+        try { workspaceLease?.transferToShutdown(); }
+        catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
+        finished = true;
+        // Keep preparingUpdate true: this runtime is now terminal and must close, not resume.
+      },
+    };
   }
 
   status(): CollectorRuntimeStatus {

@@ -18,10 +18,19 @@ export function parsePackageArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--target') result.target = argv[++index];
     else if (argv[index] === '--variant') result.variant = argv[++index];
+    else if (argv[index] === '--validation-version') result.validationVersion = argv[++index];
+    else if (argv[index] === '--validation-app-id') result.validationAppId = argv[++index];
+    else if (argv[index] === '--validation-product-name') result.validationProductName = argv[++index];
     else throw new Error(`Unknown packaging argument ${argv[index]}.`);
   }
   if (!['darwin-arm64', 'win32-x64'].includes(result.target)) throw new Error(`Unsupported packaging target ${result.target ?? 'missing'}; use darwin-arm64 or win32-x64.`);
   if (!['chinese', 'official'].includes(result.variant)) throw new Error(`Unsupported packaging variant ${result.variant ?? 'missing'}; use chinese or official.`);
+  const validation = [result.validationVersion, result.validationAppId, result.validationProductName];
+  if (validation.some(Boolean)) {
+    if (!validation.every(Boolean) || process.env.XR_COLLECTOR_VALIDATION_BUILD !== '1') throw new Error('Validation identity requires all validation options and XR_COLLECTOR_VALIDATION_BUILD=1.');
+    if (!/^\d+\.\d+\.\d+$/u.test(result.validationVersion) || !/^com\.xrcollector\.verify[\w.-]+$/u.test(result.validationAppId)
+      || !/^XR Update Verify [\w .-]+$/u.test(result.validationProductName)) throw new Error('Validation version, app id or product name is invalid.');
+  }
   return result;
 }
 
@@ -31,6 +40,7 @@ export async function packageApplication(options, dependencies = {}) {
   return withPackageCheckoutLock(path.join(projectRoot, '.local/package-app.lock'), async () => {
     const { commit } = await readPackagingGitIdentity(projectRoot);
     const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
+    const version = options.validationVersion ?? packageJson.version;
     const outputDir = path.join(projectRoot, options.variant === 'official' ? 'release/official' : 'release');
     const npmCli = npmCliPath();
     const electronBuilderCli = path.join(projectRoot, 'node_modules/electron-builder/cli.js');
@@ -46,17 +56,22 @@ export async function packageApplication(options, dependencies = {}) {
       await rm(path.join(projectRoot, 'resources/bin/win/vcruntime140.dll'), { force: true });
     }
     await run(process.execPath, [npmCli, 'run', 'build']);
-    await run(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant]);
+    await run(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
+      ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]);
+    if (options.target === 'darwin-arm64') await run(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
     const builderArgs = options.variant === 'official' ? ['--config', 'electron-builder.official.yml'] : [];
     builderArgs.push(options.target === 'darwin-arm64' ? '--mac' : '--win');
     if (options.target === 'win32-x64') builderArgs.push('--x64');
+    if (options.validationVersion) builderArgs.push(`--config.extraMetadata.version=${options.validationVersion}`,
+      `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`);
     builderArgs.push('--publish', 'never');
     await clearPreviousArtifactSet(outputDir, [
-      expectedArtifactPrefix(packageJson.version, options.variant, options.target),
-      `XR-Collector-${packageJson.version}-${options.variant}-${options.target}`,
+      expectedArtifactPrefix(version, options.variant, options.target),
+      `XR-Collector-${version}-${options.variant}-${options.target}`,
     ]);
     await run(process.execPath, [electronBuilderCli, ...builderArgs]);
-    const expected = { commit, version: packageJson.version, target: options.target, variant: options.variant };
+    const expected = { commit, version, target: options.target, variant: options.variant,
+      ...(options.validationProductName ? { productName: options.validationProductName } : {}) };
     const verified = await verifyPackagedApplication({ outputDir, ...expected });
     const artifacts = await findInstallerArtifacts(outputDir, expected);
     const host = await probeHost();
@@ -94,12 +109,14 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
   return { commit };
 }
 
-export async function verifyPackagedApplication({ outputDir, commit, version, target, variant }, dependencies = {}) {
+export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector' }, dependencies = {}) {
   const resources = target === 'darwin-arm64'
-    ? path.join(outputDir, 'mac-arm64/XR Collector.app/Contents/Resources')
+    ? path.join(outputDir, 'mac-arm64', `${productName}.app`, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
   const asarPath = path.join(resources, 'app.asar');
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
+  const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
+  if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
   const required = { schemaVersion: 1, kind: 'packaged', version, commit, target, variant, sourceDirty: false };
   for (const [key, value] of Object.entries(required)) if (buildInfo[key] !== value) throw new Error(`Packaged BuildInfo ${key} does not match the packaging request.`);
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');
@@ -123,6 +140,11 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     throw new Error('Packaged Agent Skill does not match the source artifact.');
   }
   const crt = path.join(bin, 'vcruntime140.dll');
+  if (target === 'darwin-arm64') {
+    const helper = path.join(bin, 'xr-mac-update-helper');
+    const helperInfo = await stat(helper);
+    if (!helperInfo.isFile() || (helperInfo.mode & 0o111) === 0) throw new Error('Packaged macOS update helper is missing or not executable.');
+  }
   if (target === 'win32-x64' && variant === 'official') {
     const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');

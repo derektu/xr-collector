@@ -20,6 +20,15 @@ it('accepts only the two delivery targets and two explicit variants', () => {
   expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'other'])).toThrow(/Unsupported packaging variant/u);
 });
 
+it('requires an explicit isolated identity for validation version overrides', () => {
+  const args = ['--target', 'darwin-arm64', '--variant', 'chinese', '--validation-version', '0.1.1',
+    '--validation-app-id', 'com.xrcollector.verify36', '--validation-product-name', 'XR Update Verify 36'];
+  expect(() => parsePackageArguments(args)).toThrow(/XR_COLLECTOR_VALIDATION_BUILD/u);
+  process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
+  try { expect(parsePackageArguments(args)).toMatchObject({ validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36' }); }
+  finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
+});
+
 it('allows an x64 Windows process on the authorized ARM64 builder and records emulation separately', async () => {
   await expect(assertHostTarget('win32-x64', async () => ({ platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true }))).resolves.toBeUndefined();
   await expect(assertHostTarget('win32-x64', async () => ({ platform: 'win32', processArch: 'arm64', hostArch: 'arm64', emulated: false }))).rejects.toThrow(/x64 Windows process/u);
@@ -85,14 +94,17 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(sourceSkill, 'skill');
   await mkdir(path.join(asarSource, 'dist/node'), { recursive: true });
   const commit = 'b'.repeat(40);
-  await writeFile(path.join(asarSource, 'dist/node/build-info.json'), JSON.stringify({ schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit, buildId: 'id', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false }));
+  const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit, buildId: 'id', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false };
+  await writeFile(path.join(asarSource, 'dist/node/build-info.json'), JSON.stringify(buildInfo));
   await mkdir(resources, { recursive: true });
   await createPackage(asarSource, path.join(resources, 'app.asar'));
+  await writeFile(path.join(resources, 'build-info.json'), JSON.stringify(buildInfo));
   await mkdir(path.join(resources, 'skills/xr-collector-agent'), { recursive: true });
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'skill');
   await mkdir(path.join(resources, 'bin/yt-dlp'), { recursive: true });
   await writeFile(path.join(resources, 'bin/yt-dlp/yt-dlp'), 'yt');
   await writeFile(path.join(resources, 'bin/deno'), 'deno');
+  await writeFile(path.join(resources, 'bin/xr-mac-update-helper'), 'helper', { mode: 0o755 });
   const fileEntry = async (file: string, relative: string) => ({ path: relative, bytes: (await readFile(file)).byteLength, sha256: createHash('sha256').update(await readFile(file)).digest('hex') });
   const dependencyPins = JSON.parse(await readFile(path.resolve('scripts/runtime-dependency-pins.json'), 'utf8'));
   const dependency = (pin: { version: string; url: string; sha256: string }) => ({ version: pin.version, url: pin.url, archiveSha256: pin.sha256 });

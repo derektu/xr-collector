@@ -7,6 +7,7 @@ import type { BuildInfo, TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
 import type { AgentConnectionAccess } from './agent-access.js';
+import type { UpdateAccess } from '../updates/types.js';
 
 export interface StartServerOptions {
   buildInfo?: BuildInfo;
@@ -29,6 +30,7 @@ export interface StartServerOptions {
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
   loginStartup?: import('../core/login-startup.js').LoginStartupAccess;
+  updates?: UpdateAccess;
 }
 
 export interface RunningServer {
@@ -58,6 +60,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.notReady ? { notReady: options.notReady } : {}),
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
     ...(options.loginStartup ? { loginStartup: options.loginStartup } : {}),
+    ...(options.updates ? { updates: options.updates } : {}),
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';

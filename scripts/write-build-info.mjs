@@ -25,7 +25,11 @@ export async function createBuildInfo(options, dependencies = {}) {
   }
   if (packaged && !options.variant) throw new Error('A packaged build requires an explicit engine variant.');
   const packageInfo = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
-  if (typeof packageInfo.version !== 'string' || !/^\d+\.\d+\.\d+(?:-[\da-z.-]+)?(?:\+[\da-z.-]+)?$/iu.test(packageInfo.version)) {
+  const version = options.versionOverride ?? packageInfo.version;
+  if (options.versionOverride !== undefined && (dependencies.sourceEnvironment ?? process.env).XR_COLLECTOR_VALIDATION_BUILD !== '1') {
+    throw new Error('A version override is restricted to an explicit validation build.');
+  }
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[\da-z.-]+)?(?:\+[\da-z.-]+)?$/iu.test(version)) {
     throw new Error('The package version is missing or invalid.');
   }
   // Git environment routing must not point this source check at another checkout or index.
@@ -61,7 +65,7 @@ export async function createBuildInfo(options, dependencies = {}) {
   return {
     schemaVersion: 1,
     kind: options.kind,
-    version: packageInfo.version,
+    version,
     builtAt: new Date().toISOString(),
     commit,
     buildId: randomUUID(),
@@ -85,6 +89,7 @@ function argumentsOf(argv) {
     if (argv[i] === '--kind') options.kind = argv[++i];
     else if (argv[i] === '--target') options.target = argv[++i];
     else if (argv[i] === '--variant') options.variant = argv[++i];
+    else if (argv[i] === '--version-override') options.versionOverride = argv[++i];
     else throw new Error(`Unknown build information argument ${argv[i]}.`);
   }
   return options;

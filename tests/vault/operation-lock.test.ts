@@ -198,4 +198,31 @@ describe('Vault operation lock', () => {
     })).toThrowError(/其他知識庫操作/u);
     release();
   });
+
+  it('gates new work, drains old writes, and transfers a hold without joining transfer completion', async () => {
+    const held = lock();
+    const releaseWrite = held.value.enter('vault-write');
+    const prepared = held.value.prepareUpdate(new AbortController().signal);
+    expect(() => held.value.enter('vault-write')).toThrowError(/更新/u);
+    expect(() => held.value.start({ operation: 'move', failed: failure,
+      body: async () => ({ value: undefined, message: 'must not run' }) })).toThrowError(/更新/u);
+    let settled = false; void prepared.then(() => { settled = true; });
+    await Promise.resolve(); expect(settled).toBe(false);
+    releaseWrite();
+    const lease = await prepared;
+    expect(held.suspended).toEqual([true]);
+    lease.transferToShutdown();
+    await expect(held.value.finished()).resolves.toBeUndefined();
+    expect(held.release).not.toHaveBeenCalled();
+    expect(() => held.value.enter('vault-write')).toThrowError(/更新/u);
+  });
+
+  it('cancels only its own update gate and hold', async () => {
+    const held = lock();
+    const lease = await held.value.prepareUpdate(new AbortController().signal);
+    lease.cancel(); lease.cancel();
+    expect(held.release).toHaveBeenCalledOnce();
+    expect(held.suspended).toEqual([true, false]);
+    expect(() => held.value.enter('vault-write')()).not.toThrow();
+  });
 });
