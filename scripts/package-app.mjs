@@ -63,8 +63,7 @@ export async function packageApplication(options, dependencies = {}) {
     const builderArgs = options.variant === 'official' ? ['--config', 'electron-builder.official.yml'] : [];
     builderArgs.push(options.target === 'darwin-arm64' ? '--mac' : '--win');
     if (options.target === 'win32-x64') builderArgs.push('--x64');
-    if (options.validationVersion) builderArgs.push(`--config.extraMetadata.version=${options.validationVersion}`,
-      `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`);
+    builderArgs.push(...validationBuilderArguments(options));
     builderArgs.push('--publish', 'never');
     await clearPreviousArtifactSet(outputDir, [
       expectedArtifactPrefix(version, options.variant, options.target),
@@ -113,6 +112,14 @@ export async function stageBuildInfoSidecar(root = projectRoot) {
   return { source, destination, bytes };
 }
 
+/** Validation packages bake their unique product name into ASAR metadata as well as the installer. */
+export function validationBuilderArguments(options) {
+  if (!options.validationVersion) return [];
+  return [`--config.extraMetadata.version=${options.validationVersion}`,
+    `--config.extraMetadata.productName=${options.validationProductName}`,
+    `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`];
+}
+
 export async function readPackagingGitIdentity(root, sourceEnvironment = process.env) {
   const environment = packageChildEnvironment(sourceEnvironment);
   const topLevel = (await capture('git', ['rev-parse', '--show-toplevel'], { cwd: root, environment })).trim();
@@ -129,6 +136,8 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     ? path.join(outputDir, 'mac-arm64', `${productName}.app`, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
   const asarPath = path.join(resources, 'app.asar');
+  const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
+  assertPackagedProductMetadata(packageMetadata, productName);
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
   const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
   if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
@@ -164,7 +173,16 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
-  return { resources, buildInfo, dependencyManifest, meiliManifest };
+  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest };
+}
+
+export function assertPackagedProductMetadata(metadata, productName) {
+  if (metadata?.name !== 'xr-collector') throw new Error('Packaged application name is not XR Collector.');
+  if (productName === 'XR Collector') {
+    if (metadata.productName !== undefined && metadata.productName !== productName) throw new Error('Packaged productName does not match the packaging request.');
+  } else if (metadata.productName !== productName) {
+    throw new Error('Validation productName is missing from packaged application metadata.');
+  }
 }
 
 export async function writeArtifactHandoff(input) {

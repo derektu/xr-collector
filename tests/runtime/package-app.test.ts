@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -27,6 +27,19 @@ it('requires an explicit isolated identity for validation version overrides', ()
   process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
   try { expect(parsePackageArguments(args)).toMatchObject({ validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36' }); }
   finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
+});
+
+it('bakes the validation product name into package metadata so Electron derives an isolated userData folder', () => {
+  const options = { validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationProductName: 'XR Update Verify Mac Chinese' };
+  expect(validationBuilderArguments(options)).toEqual([
+    '--config.extraMetadata.version=0.1.1',
+    '--config.extraMetadata.productName=XR Update Verify Mac Chinese',
+    '--config.appId=com.xrcollector.verify36',
+    '--config.productName=XR Update Verify Mac Chinese',
+  ]);
+  expect(() => assertPackagedProductMetadata({ name: 'xr-collector' }, options.validationProductName)).toThrow(/productName/u);
+  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', productName: options.validationProductName }, options.validationProductName)).not.toThrow();
+  expect(validationBuilderArguments({})).toEqual([]);
 });
 
 it('allows an x64 Windows process on the authorized ARM64 builder and records emulation separately', async () => {
@@ -113,6 +126,7 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await mkdir(path.join(asarSource, 'dist/node'), { recursive: true });
   const commit = 'b'.repeat(40);
   const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit, buildId: 'id', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false };
+  await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0' }));
   await writeFile(path.join(asarSource, 'dist/node/build-info.json'), JSON.stringify(buildInfo));
   await mkdir(resources, { recursive: true });
   await createPackage(asarSource, path.join(resources, 'app.asar'));
