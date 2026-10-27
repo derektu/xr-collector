@@ -11,10 +11,7 @@ interface SavedUpdateState {
   schemaVersion: 1;
   ready: { offer: UpdateOffer; fileName: string } | null;
   attempt: (UpdateInstallAttempt & { previousVersion: string; previousBuildId: string; eventRecorded: boolean }) | null;
-  notifiedAvailable: string[];
-  notifiedReady: string[];
 }
-const MAX_NOTIFIED_VERSIONS = 32;
 
 export interface UpdateServiceOptions {
   identity: UpdateIdentity;
@@ -25,7 +22,6 @@ export interface UpdateServiceOptions {
   request?: typeof fetch;
   now?: () => Date;
   event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
-  notify?: (kind: 'available' | 'ready', offer: UpdateOffer) => void;
   apply?: (request: UpdateApplyRequest) => void;
 }
 
@@ -36,7 +32,7 @@ export class UpdateService implements UpdateAccess {
   private readonly request: typeof fetch;
   private readonly now: () => Date;
   private state: DeviceUpdateStatus;
-  private saved: SavedUpdateState = { schemaVersion: 1, ready: null, attempt: null, notifiedAvailable: [], notifiedReady: [] };
+  private saved: SavedUpdateState = { schemaVersion: 1, ready: null, attempt: null };
   private packageFile: string | null = null;
   private checkWork: Promise<DeviceUpdateStatus> | null = null;
   private checkAbort: AbortController | null = null;
@@ -184,10 +180,6 @@ export class UpdateService implements UpdateAccess {
       } else {
         this.set({ checkedAt, offer, phase: this.state.ready ? 'ready' : 'available',
           message: this.state.ready ? `${this.state.ready.version} 已準備好；另有 ${offer.version} 可下載。` : `有新版本 ${offer.version}。`, errorCode: null });
-        if (!this.saved.notifiedAvailable.includes(offer.version)) {
-          this.saved.notifiedAvailable = rememberVersion(this.saved.notifiedAvailable, offer.version);
-          await this.save(); this.options.notify?.('available', offer);
-        }
         this.options.event?.('info', 'device.update_available', `有新版本 ${offer.version}。`);
       }
     } catch (error) {
@@ -243,10 +235,6 @@ export class UpdateService implements UpdateAccess {
       this.set({ phase: 'ready', ready: offer, progress: null, message: `${offer.version} 已準備好。`, errorCode: null });
       await this.save();
       if (old && old !== destination) await rm(old, { force: true });
-      if (!this.saved.notifiedReady.includes(offer.version)) {
-        this.saved.notifiedReady = rememberVersion(this.saved.notifiedReady, offer.version);
-        await this.save(); this.options.notify?.('ready', offer);
-      }
       this.options.event?.('info', 'device.update_ready', `版本 ${offer.version} 已下載並驗證。`);
     } catch (error) {
       await rm(temporary, { force: true });
@@ -265,12 +253,9 @@ export class UpdateService implements UpdateAccess {
     try {
       const value = await readJsonFile(this.stateFile) as Partial<SavedUpdateState> | undefined;
       if (!value) { await this.save(); return; }
-      if (value.schemaVersion !== 1 || !('ready' in value) || !('attempt' in value) || !Array.isArray(value.notifiedAvailable) || !Array.isArray(value.notifiedReady)
-        || value.notifiedAvailable.some((item) => typeof item !== 'string') || value.notifiedReady.some((item) => typeof item !== 'string')) throw new Error('unsupported state');
-      this.saved = { schemaVersion: 1, ready: value.ready ?? null,
-        attempt: parseAttempt(value.attempt),
-        notifiedAvailable: value.notifiedAvailable.slice(-MAX_NOTIFIED_VERSIONS),
-        notifiedReady: value.notifiedReady.slice(-MAX_NOTIFIED_VERSIONS) };
+      if (value.schemaVersion !== 1 || !('ready' in value) || !('attempt' in value)
+        || Object.keys(value).some((key) => !['schemaVersion', 'ready', 'attempt'].includes(key))) throw new Error('unsupported state');
+      this.saved = { schemaVersion: 1, ready: value.ready ?? null, attempt: parseAttempt(value.attempt) };
       await this.reconcileAttempt();
       if (!this.saved.ready) return;
       const offer = this.saved.ready.offer;
@@ -348,9 +333,6 @@ function parseAttempt(value: unknown): SavedUpdateState['attempt'] {
 function publicAttempt(attempt: NonNullable<SavedUpdateState['attempt']>): UpdateInstallAttempt {
   const { previousVersion: _previousVersion, previousBuildId: _previousBuildId, eventRecorded: _eventRecorded, ...visible } = attempt;
   return visible;
-}
-function rememberVersion(versions: string[], version: string): string[] {
-  return [...versions.filter((item) => item !== version), version].slice(-MAX_NOTIFIED_VERSIONS);
 }
 function updateError(error: unknown, code: string, fallback: string): CollectorError {
   if (error instanceof CollectorError) return error;

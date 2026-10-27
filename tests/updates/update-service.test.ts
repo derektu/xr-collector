@@ -22,10 +22,10 @@ it('checks without downloading, pins an offer, verifies the stream, and restores
   const source = { id: 'test', check: vi.fn(async () => offer) };
   const installer = { available: true, validate: vi.fn(async () => undefined) };
   const request = vi.fn(async () => new Response(payload));
-  const notifications: string[] = [];
-  const first = await UpdateService.open({ identity, source, installer, directory, request: request as typeof fetch, notify: (kind) => notifications.push(kind) });
+  const first = await UpdateService.open({ identity, source, installer, directory, request: request as typeof fetch });
   expect((await first.check()).phase).toBe('available'); expect(request).not.toHaveBeenCalled();
-  expect((await first.download({ version: offer.version, sha256: offer.payload.sha256 })).phase).toBe('ready'); expect(notifications).toEqual(['available', 'ready']);
+  expect((await first.download({ version: offer.version, sha256: offer.payload.sha256 })).phase).toBe('ready');
+  expect(Object.keys(JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8'))).sort()).toEqual(['attempt', 'ready', 'schemaVersion']);
   const restarted = await UpdateService.open({ identity, source, installer, directory, request: request as typeof fetch });
   expect(restarted.status()).toMatchObject({ phase: 'ready', ready: { version: '0.1.1' } });
   expect(request).toHaveBeenCalledTimes(1);
@@ -133,21 +133,6 @@ it('finishes an in-flight check before accepting a selection so stale UI cannot 
   finish(newer); await checking;
   await expect(download).rejects.toMatchObject({ code: 'update_offer_changed' });
   expect(request).not.toHaveBeenCalled();
-});
-
-it('notifies each stable version once even when the source regresses and the service restarts', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-service-'));
-  const second: UpdateOffer = { ...offer, version: '0.1.2', buildInfo: { ...offer.buildInfo, version: '0.1.2' } };
-  const sequence = [offer, second, offer]; const notices: string[] = [];
-  const first = await UpdateService.open({ identity, source: { id: 'test', check: async () => sequence.shift() ?? offer },
-    installer: { available: true, validate: async () => undefined }, directory,
-    notify: (kind, found) => notices.push(`${kind}:${found.version}`) });
-  await first.check(); await first.check(); await first.check();
-  const restarted = await UpdateService.open({ identity, source: { id: 'test', check: async () => offer },
-    installer: { available: true, validate: async () => undefined }, directory,
-    notify: (kind, found) => notices.push(`${kind}:${found.version}`) });
-  await restarted.check();
-  expect(notices).toEqual(['available:0.1.1', 'available:0.1.2']);
 });
 
 it('persists an install attempt before handoff and confirms it only from the running build identity', async () => {

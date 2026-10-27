@@ -2,6 +2,8 @@
 
 XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.json` schema 1 所列的固定 manifest 與安裝檔。服務先依目前 `target`、引擎 `variant` 及版本選出候選，再驗證 manifest 和 payload 的大小、SHA-256 與內含 BuildInfo；候選的 payload 必須以同一份描述出現在已驗證 manifest 的產物清單，檔名也必須符合該版本、平台與引擎。檢查、下載及套用是三個分開且由使用者觸發的動作。套用前會保存安裝嘗試，只有新版本的 runtime、畫面與原生啟動確認完成後才記為成功；無法確認時保留 unknown，不用程序退出推測成功。
 
+版本更新不送作業系統通知。可用版本、下載、等待與安裝結果只透過設定頁、側欄、原生選單、裝置更新 API 及持久事件呈現；Windows 第一次關閉視窗的系統匣提示是獨立的關窗行為。
+
 正式預設來源透過 GitHub 公開 Releases JSON API 讀取最新穩定 release，並只從該 release 尋找 `release-index.json` asset。它不解析 HTML、不使用 token，也不直接信任 latest download URL。開發與公司的鏡像環境可設定 `XR_COLLECTOR_UPDATE_INDEX_URL`，直接提供同一份 schema 1 index；URL 必須是 HTTPS，只有隔離驗收允許 `127.0.0.1` 或 `localhost` 的 HTTP。
 
 公司日後若改用自己的檢查 API，有兩條相容路徑：

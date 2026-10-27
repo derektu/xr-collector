@@ -315,7 +315,6 @@ app.whenReady().then(async () => {
       if (runtime) runtime.recordDeviceEvent(severity, type, message, code);
       else startupUpdateEvents.push({ severity, type, message, ...(code ? { code } : {}) });
     },
-    notify: (kind, offer) => notifyUpdate(kind, offer.version),
     apply: (request) => { void coordinateUpdate(request, nativeInstaller); },
   });
   runtime = await CollectorRuntime.start({
@@ -356,7 +355,7 @@ app.whenReady().then(async () => {
   watchNetwork();
   const showInitially = !startedAtLogin || pendingManualShow;
   await createWindow(showInitially);
-  // A tray/notification request can arrive while the window is loading. Replay its latest page as
+  // A tray request can arrive while the window is loading. Replay its latest page as
   // well as the show request after load; otherwise a device-level update click can land on the
   // default page (especially before a Vault exists).
   if (pendingWindowPage || startedAtLogin && pendingManualShow && !showInitially) showWindow();
@@ -425,16 +424,6 @@ function continueAfterSleep(): void {
   collectionPause.set('sleep', false);
   const checked = updateService?.status().checkedAt;
   if (updateService?.status().installerAvailable && (!checked || Date.now() - Date.parse(checked) >= 24 * 60 * 60 * 1000)) void updateService.check();
-}
-
-function notifyUpdate(kind: 'available' | 'ready', version: string): void {
-  const notice = kind === 'available'
-    ? { title: `XR Collector ${version} 可以更新`, content: '開啟設定查看版本說明並下載。' }
-    : { title: `XR Collector ${version} 已準備好`, content: '開啟設定，重新啟動以安裝。' };
-  const notification = new Notification({ title: notice.title, body: notice.content });
-  notification.on('click', () => showWindow('update'));
-  notification.show();
-  if (validationControl) validationNotifications.push(notice);
 }
 
 /** Applies one user-confirmed ready package; the two-minute signal spans every Vault drain stage. */

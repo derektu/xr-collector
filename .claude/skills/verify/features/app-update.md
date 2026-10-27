@@ -2,6 +2,8 @@
 
 設定頁、側欄、原生選單與授權 Agent 共用同一份裝置更新狀態。檢查只讀穩定版索引；下載固定使用者選定的版本與雜湊，驗證完成後才可明確重新啟動安裝。關窗不安裝，未建立 Vault 也能檢查與下載。
 
+版本可用、下載完成及安裝等待都不發作業系統通知；狀態只出現在設定頁、側欄、選單及授權 Agent API。Windows 第一次關閉視窗的「仍在系統匣執行」提示屬於關窗行為，不是版本更新通知。
+
 ## Sub-features
 
 - `update-discovery`：檢查固定 release index，區分最新版、未發布與錯誤，顯示版本說明但不自動下載。
@@ -33,6 +35,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私
 
 - Web 流程證明共用 source、service、HTTP API 與 UI 狀態機；fake installer 不會取代 App，也不是原生安裝證據。
 - 「稍後」只標示已保留，不能移除同頁的安裝按鈕，也不刪 verified cache；正常關窗不套用。`waiting` 可取消，`installing` 已交接時沒有取消動作。
+- 版本更新任何 phase 都不送 OS notification；用設定頁、側欄或原生選單確認狀態。
 - ready 綁定已下載 offer；後來檢查到更新版本不能默默改掉使用者準備安裝的版本。
 - 官方 GitHub adapter 只讀公開 latest stable release 的 `release-index.json`；私人或公司服務可提供相同 index 合約，不抓 HTML。
 - 未簽章 Mac 更新需走產品內附 helper 的驗證、備份、ack 與 rollback；Windows 走 electron-updater 的標準 NSIS 路徑。兩者失敗都不能報成功。

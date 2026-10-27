@@ -192,6 +192,8 @@ Content-Type: application/json
 
 App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、引擎 variant、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
 
+版本更新不發作業系統通知。可用版本、下載進度與 ready 狀態只從上述 API，以及 App 的設定頁、側欄與原生選單呈現；不要告知使用者會收到版本通知。
+
 套用會結束 App，必須再次取得使用者明確同意，並把 `ready.version`、`ready.payload.sha256` 原樣送到 `POST /api/device/updates/apply`；不能改用目前 `offer` 或自行選新版本。`POST /api/device/updates/cancel` 取消下載或等待安全停止，已驗證檔仍保留，正常關閉 App 不會自動安裝。`update_busy`、`update_offer_changed` 或 `update_not_ready` 時重新讀狀態，不重複送出；`update_integrity_failed` 必須重新下載。所有更新 API 在 Vault 未設定時仍可用。
 
 ## Vault 設定

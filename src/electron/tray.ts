@@ -80,7 +80,7 @@ export class AppTray {
     const key = JSON.stringify(this.menu);
     if (key === this.drawn) return;
     this.drawn = key;
-    this.tray.setImage(this.image(this.menu.icon));
+    this.tray.setImage(this.image(this.menu.icon, this.menu.updateBadge));
     this.tray.setToolTip(this.menu.tooltip);
     this.tray.setContextMenu(Menu.buildFromTemplate(this.menu.items.map((item): MenuItemConstructorOptions => {
       if (item.kind === 'separator') return { type: 'separator' };
@@ -122,8 +122,9 @@ export class AppTray {
   }
 
   /** macOS takes black template images it tints for the menu bar; Windows takes colored ones. */
-  private image(icon: TrayIcon): Electron.NativeImage {
-    const name = process.platform === 'darwin' ? `tray-${icon}Template.png` : `tray-${icon}.png`;
+  private image(icon: TrayIcon, updateBadge = false): Electron.NativeImage {
+    const state = `${icon}${updateBadge ? '-update' : ''}`;
+    const name = process.platform === 'darwin' ? `tray-${state}Template.png` : `tray-${state}.png`;
     return nativeImage.createFromPath(path.join(this.options.iconFolder, name));
   }
 }

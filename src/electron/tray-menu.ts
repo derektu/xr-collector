@@ -13,6 +13,8 @@ export type TrayMenuItem =
 
 export interface TrayMenu {
   icon: TrayIcon;
+  /** An update shape over the existing work-state icon; no system notification. */
+  updateBadge?: boolean;
   tooltip: string;
   items: TrayMenuItem[];
 }
@@ -34,7 +36,7 @@ const quit: TrayMenuItem = { kind: 'action', action: 'quit', label: '結束 XR C
 /** The tray icon, its tooltip and its menu for the open Vault's work, or for no open Vault. */
 export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayMenu {
   if (!state) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, quit] };
-  if (!state.overview || !state.schedule) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, ...updateItems(state.update), quit] };
+  if (!state.overview || !state.schedule) return withUpdateBadge({ icon: 'idle', tooltip: 'XR Collector', items: [open, separator, ...updateItems(state.update), quit] }, state.update);
   const { overview, schedule } = state;
   const [current] = overview.running;
   const busy = overview.running.length > 0 || overview.queued.length > 0;
@@ -49,7 +51,7 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
   }
   const icon: TrayIcon = busy ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
   const failed = overview.failed.length;
-  return {
+  return withUpdateBadge({
     icon,
     tooltip: tooltipFor(icon, current),
     items: [
@@ -65,7 +67,13 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
       ...updateItems(state.update),
       quit,
     ],
-  };
+  }, state.update);
+}
+
+function withUpdateBadge(menu: TrayMenu, update: DeviceUpdateStatus | undefined): TrayMenu {
+  const version = (update?.ready ?? update?.offer)?.version;
+  if (!version || version === update?.currentVersion) return menu;
+  return { ...menu, updateBadge: true, tooltip: `${menu.tooltip} · 有新版本 ${version}` };
 }
 
 function updateItems(update: DeviceUpdateStatus | undefined): TrayMenuItem[] {

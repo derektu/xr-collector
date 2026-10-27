@@ -89,6 +89,26 @@ describe('tray menu (#32 T1)', () => {
     expect(menu.icon).toBe('idle');
   });
 
+  it('keeps each work-state icon while adding a persistent update shape and menu entry', () => {
+    const available = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
+    const cases = [
+      { overview: overview(), schedule: schedule(), icon: 'idle' },
+      { overview: overview({ running: [entry({ status: { state: 'downloading' } })] }), schedule: schedule(), icon: 'collecting' },
+      { overview: overview(), schedule: schedule({ enabled: false }), icon: 'auto_check_off' },
+    ] as const;
+    for (const state of cases) {
+      const menu = trayMenu({ ...state, update: available }, now);
+      expect(menu.icon).toBe(state.icon);
+      expect(menu.updateBadge).toBe(true);
+      expect(menu.tooltip).toContain('有新版本 0.1.1');
+      expect(actions(menu)).toContain('App 更新：可下載 0.1.1');
+      expect(actions(menu)).toContain('結束 XR Collector');
+    }
+    expect(trayMenu({ update: available }, now).updateBadge).toBe(true);
+    expect(trayMenu({ update: update() }, now).updateBadge).toBeUndefined();
+    expect(trayMenu({ update: update({ phase: 'ready', ready: { version: '0.1.0' } as DeviceUpdateStatus['ready'] }) }, now).updateBadge).toBeUndefined();
+  });
+
   it('puts App version and its distinct update action immediately before Quit', () => {
     const menu = trayMenu({ overview: overview(), schedule: schedule(), update: update() }, now);
     expect(status(menu).at(-1)).toBe('版本 0.1.0');
