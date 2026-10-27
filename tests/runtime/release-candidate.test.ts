@@ -5,10 +5,26 @@ import path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { afterEach, expect, it } from 'vitest';
 import { expectedOfficialManifest, readRuntimePins } from '../../scripts/prepare-meilisearch.mjs';
-import { planReleaseCandidate, stageReleaseCandidate, verifyStagedCandidate } from '../../scripts/release-candidate.mjs';
+import { inspectPackagedPayload, planReleaseCandidate, stageReleaseCandidate, verifyStagedCandidate } from '../../scripts/release-candidate.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+
+it('fully extracts and verifies the sealed Mac application before accepting its update ZIP', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  let extractedRoot = '';
+  await expect(inspectPackagedPayload('/candidate/update.zip', 'darwin-arm64', {
+    productName: 'XR Update Verify Chinese', appId: 'com.xrcollector.verify.public.chinese', updateRepository: 'derektu/xr-collector-test',
+  }, {
+    run: async (command: string, args: string[]) => { calls.push({ command, args }); extractedRoot = args[3]!; },
+    verifyMacBundle: async (app: string) => {
+      expect(app).toBe(path.join(extractedRoot, 'XR Update Verify Chinese.app'));
+      throw new Error('code has no resources but signature indicates they must be present');
+    },
+  })).rejects.toThrow(/no resources.*signature/u);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ command: '/usr/bin/ditto', args: ['-x', '-k', '/candidate/update.zip', extractedRoot] });
+});
 
 it('preflights all four identities and stages only sanitized, version-pinned public files', async () => {
   const fixture = await releaseFixture();

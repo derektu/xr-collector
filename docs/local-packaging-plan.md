@@ -31,7 +31,7 @@
 - 產出建置資訊：版本、build 時間、commit／build identifier、平台及引擎 variant。App 的固定可見位置與唯讀業務 API 顯示相同資訊；開發版也有可辨識身分，不能偽裝成乾淨正式 build。API、Agent Skill 與 verify 功能地圖隨實作同步更新。
 - 產物清單記錄完整 commit、版本、兩台建置環境、模擬狀態、實際工具版本、各附件 bytes／SHA-256／架構／簽署狀態，並關聯驗收 evidence。可追溯配方不等於跨機器 bit-for-bit 相同。
 - 更新 metadata 只指向同版本、同架構、同 variant 的已驗證附件；安裝器與 #35／#36 的發布、更新責任分開。
-- 預設未簽署，不自動選用公司的 Team 或憑證。Meilisearch 的 packaged bytes 必須符合 manifest；簽署流程若日後改變 bytes，該流程須另外建立並驗證最終 identity，不能放寬目前的完整性檢查。
+- 不自動選用公司的 Team 或憑證。Windows 預設未簽署；Mac 預設以 `identity: "-"` 完成整個 App 的 ad-hoc signing，關閉 hardened runtime，並在交接前通過 `codesign --verify --deep --strict`。這個完整性 gate 不等於 Developer ID、notarization 或 Gatekeeper 信任。Meilisearch 的 packaged bytes 必須符合 manifest；簽署流程若日後改變 bytes，該流程須另外建立並驗證最終 identity，不能放寬目前的完整性檢查。
 - Windows Chinese 維持 static CRT；official 包須完成受支援的 VC++ v14 x64 runtime 前提處理及驗證。實作前查核 redistributable 的固定來源、完整性與安裝方式，並確認乾淨無 CRT 的驗收環境。現有 NSIS 為 per-user／allowElevation=false，不能假設需要系統管理權限的 redistributable 可直接安裝；不能以建置 VM 已裝 Visual Studio 作為乾淨客戶端證據。
 - 不實作 Mac Intel、Windows ARM64 安裝包、Release 上傳、自動更新客戶端或 #150 的共用 HTTP shutdown 修正。
 
@@ -62,4 +62,4 @@
 
 ## 驗收與憑證邊界
 
-本輪允許 unsigned／ad-hoc App，OS 提示與安裝步驟須據實交付，不能宣稱已通過 Developer ID、notarization 或 SmartScreen 信任。使用者可在 Xcode 使用公司 Team，簽署權限及對外分發憑證的設定留給後續簽署工作，不列為 #34／#35 的阻擋條件。
+本輪允許 Windows unsigned 與 Mac ad-hoc App，OS 提示與安裝步驟須據實交付；Mac bundle 本身的 ad-hoc seal 必須有效，但不能宣稱已通過 Developer ID、notarization、Gatekeeper 或 SmartScreen 信任。使用者可在 Xcode 使用公司 Team，簽署權限及對外分發憑證的設定留給後續簽署工作，不列為 #34／#35 的阻擋條件。

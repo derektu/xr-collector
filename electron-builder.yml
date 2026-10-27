@@ -17,7 +17,8 @@ mac:
     - target: zip
       arch: [arm64]
   category: public.app-category.productivity
-  identity: null
+  identity: "-"
+  hardenedRuntime: false
   extraResources:
     - from: skills
       to: skills

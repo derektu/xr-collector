@@ -118,7 +118,7 @@ npm run release -- stage \
   --output .local/ticket-artifacts/35/stage-v0.1.0
 ```
 
-preflight 重算每個 artifact 的 bytes、SHA-256 及 update YAML 的 SHA-512，並從 Mac ZIP 或 Windows NSIS 實際抽出 `app.asar`、BuildInfo 及 runtime inventory。完整 commit、版本、`sourceDirty=false`、target、variant、buildId、Meilisearch producer、yt-dlp／Deno pin、主要 runtime bytes、結構化驗收結果，以及 official Windows 的 app-local CRT 必須一致。少一個組合、混用版本或 variant、額外 basename、被修改的檔案及缺少合格驗收報告都會在上傳前失敗。
+preflight 重算每個 artifact 的 bytes、SHA-256 及 update YAML 的 SHA-512。Mac publisher 以系統 `ditto` 完整解開 ZIP（保留 framework symlink 與 bundle 結構），先以 `codesign --verify --deep --strict` 核對完整 App 的 signature 與 sealed resources，再讀取 `app.asar`、BuildInfo 及 runtime inventory；Windows NSIS 則抽出同一組必要資料。完整 commit、版本、`sourceDirty=false`、target、variant、buildId、Meilisearch producer、yt-dlp／Deno pin、主要 runtime bytes、結構化驗收結果，以及 official Windows 的 app-local CRT 必須一致。少一個組合、混用版本或 variant、額外 basename、被修改的檔案、無效 Mac bundle seal 及缺少合格驗收報告都會在上傳前失敗。ad-hoc seal 通過只證明 bundle 完整，不代表 Developer ID、notarization 或 Gatekeeper 信任。
 
 stage 目錄包含原封不動的十六個 installer／ZIP／blockmap／versioned update metadata、四份 sanitized public manifest、`release-index.json` 與 `SHA256SUMS`。`.release-state.json` 是本機控制檔，不是 Release asset。publisher 每次讀取 stage 都會交叉核對控制檔、public index、四份 manifest、二十二個 asset 與 checksum inventory；控制檔不能單獨改變 commit、版本、tag、來源 URL 或 release notes。
 

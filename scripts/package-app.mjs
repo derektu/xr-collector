@@ -101,7 +101,9 @@ export async function packageApplication(options, dependencies = {}) {
           ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt
           : null,
       },
-      signing: { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' },
+      signing: options.target === 'darwin-arm64'
+        ? { policy: 'ad-hoc', credentialDiscovery: false, actualVerification: { kind: 'codesign-deep-strict', notarization: 'not-requested', gatekeeperDownload: 'not-trusted' } }
+        : { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' },
     });
   });
 }
@@ -142,9 +144,11 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
 }
 
 export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository }, dependencies = {}) {
-  const resources = target === 'darwin-arm64'
-    ? path.join(outputDir, 'mac-arm64', `${productName}.app`, 'Contents/Resources')
+  const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;
+  const resources = appPath
+    ? path.join(appPath, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
+  if (appPath) await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
   const asarPath = path.join(resources, 'app.asar');
   const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
   assertPackagedProductMetadata(packageMetadata, productName, appId, updateRepository);
@@ -184,6 +188,14 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
   return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest };
+}
+
+export async function verifyMacBundleSignature(appPath, run = runVerificationCommand) {
+  try {
+    await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
+  } catch (error) {
+    throw new Error(`Packaged macOS application has an invalid signature or sealed resource inventory: ${error instanceof Error ? error.message : error}`, { cause: error });
+  }
 }
 
 export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository) {
@@ -291,6 +303,18 @@ function capture(command, args, options = {}) {
 
 async function runForOutput(command, args) {
   return { stdout: await capture(command, args), stderr: '' };
+}
+
+function runVerificationCommand(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'], env: packageChildEnvironment() });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve({ stdout, stderr })
+      : reject(new Error(`${path.basename(command)} exited with status ${code}: ${(stderr || stdout).trim() || 'no diagnostic output'}`)));
+  });
 }
 
 export function packageChildEnvironment(source = process.env) {

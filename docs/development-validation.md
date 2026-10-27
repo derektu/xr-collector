@@ -122,7 +122,7 @@ Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolch
 
 交付平台固定為 Mac arm64 與 Windows x64。Mac 在使用者的 Apple Silicon Mac 執行 `npm run package:mac`；Windows 在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 執行 `npm run package:win`。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
 
-正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。未簽章產物可以通過 #34，簽署、公證與憑證整合留待後續工作，驗收不讀取或修改使用者的簽署憑證。
+正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 未使用 Developer ID 時仍須由 electron-builder 對完整 App 做 ad-hoc signing，且 package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources。這不代表通過 Developer ID、notarization 或 Gatekeeper 信任。憑證整合留待後續工作，驗收不讀取或修改使用者的簽署憑證。
 
 GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的中文測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
 

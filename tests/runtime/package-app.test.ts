@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -75,9 +75,21 @@ it('removes Git routing and signing credentials from every packaging child envir
   })).toEqual({ PATH: '/tools', CSC_IDENTITY_AUTO_DISCOVERY: 'false' });
 });
 
+it('verifies the complete Mac bundle with strict deep codesign diagnostics', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  await verifyMacBundleSignature('/Applications/XR Collector.app', async (command: string, args: string[]) => {
+    calls.push({ command, args });
+  });
+  expect(calls).toEqual([{ command: '/usr/bin/codesign', args: ['--verify', '--deep', '--strict', '/Applications/XR Collector.app'] }]);
+  await expect(verifyMacBundleSignature('/Applications/Broken.app', async () => {
+    throw new Error('code has no resources but signature indicates they must be present');
+  })).rejects.toThrow(/invalid signature.*no resources.*signature/iu);
+});
+
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
   for (const configFile of ['electron-builder.official.yml', 'electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
+    expect(config.mac, configFile).toMatchObject({ identity: '-', hardenedRuntime: false });
     const resources = config.win?.extraResources ?? [];
     const keys = resources.map((entry) => typeof entry === 'string' ? entry : `${entry.from}:${entry.to}`);
     expect(new Set(keys).size, configFile).toBe(keys.length);
@@ -180,11 +192,18 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   };
   await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
 
-  const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2') => verifyPackagedApplication(
+  const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2', verifyMacBundle = async () => undefined) => verifyPackagedApplication(
     { outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese' },
-    { trustedManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }) },
+    { trustedManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }), verifyMacBundle },
   );
   await expect(verify()).resolves.toMatchObject({ buildInfo: { buildId: 'id' } });
+  const expectedApp = path.join(outputDir, 'mac-arm64/XR Collector.app');
+  await expect(verify(meiliManifest, 'meilisearch 1.53.2', async (app: string) => {
+    expect(app).toBe(expectedApp);
+  })).resolves.toMatchObject({ buildInfo: { buildId: 'id' } });
+  await expect(verify(meiliManifest, 'meilisearch 1.53.2', async () => {
+    throw new Error('code has no resources but signature indicates they must be present');
+  })).rejects.toThrow(/no resources.*signature/u);
   await expect(verify(meiliManifest, 'meilisearch 1.52.0')).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
   const inventedSourceDistribution = { ...meiliManifest, distribution: 'source' };
   await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(inventedSourceDistribution));
@@ -206,7 +225,7 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), path.join(outputDir, `mac-arm64/${validationProductName}.app`));
   await expect(verifyPackagedApplication({ outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese',
     productName: validationProductName, appId: validationAppId, updateRepository: 'derektu/xr-collector-test' },
-  { trustedManifest: meiliManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }) }))
+  { trustedManifest: meiliManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }), verifyMacBundle: async () => undefined }))
     .resolves.toMatchObject({ packageMetadata: { productName: validationProductName, xrCollectorUpdateRepository: 'derektu/xr-collector-test' } });
 });
 

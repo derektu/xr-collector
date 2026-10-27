@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { inspectExecutable } from './build-meilisearch.mjs';
+import { verifyMacBundleSignature } from './package-app.mjs';
 import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -147,21 +148,22 @@ export async function verifyStagedCandidate(stageDirectory) {
 
 export async function inspectPackagedPayload(payload, target, packageIdentity = {
   productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector',
-}) {
+}, inspection = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-release-inspect-'));
   try {
-    const binary = sevenZip.path7za;
-    await chmod(binary, 0o755);
     const prefix = target === 'darwin-arm64' ? `${packageIdentity.productName}.app/Contents/Resources` : 'resources';
     const resources = path.join(root, ...prefix.split('/'));
-    const requested = [
-      `${prefix}/app.asar`, `${prefix}/bin/runtime-dependencies.json`, `${prefix}/bin/meilisearch-build.json`,
-      `${prefix}/bin/meilisearch${target === 'win32-x64' ? '.exe' : ''}`,
-      `${prefix}/bin/deno${target === 'win32-x64' ? '.exe' : ''}`,
-      `${prefix}/bin/yt-dlp/yt-dlp${target === 'win32-x64' ? '.exe' : ''}`,
-      ...(target === 'win32-x64' ? [`${prefix}/bin/vcruntime140.dll`] : []),
-    ];
-    await run(binary, ['x', '-y', `-o${root}`, payload, ...requested], { allowMissingPatterns: true });
+    if (target === 'darwin-arm64') {
+      await extractMacApplication(payload, root, packageIdentity.productName, inspection);
+    } else {
+      const binary = sevenZip.path7za;
+      await chmod(binary, 0o755);
+      const requested = [
+        `${prefix}/app.asar`, `${prefix}/bin/runtime-dependencies.json`, `${prefix}/bin/meilisearch-build.json`,
+        `${prefix}/bin/meilisearch.exe`, `${prefix}/bin/deno.exe`, `${prefix}/bin/yt-dlp/yt-dlp.exe`, `${prefix}/bin/vcruntime140.dll`,
+      ];
+      await (inspection.run ?? run)(binary, ['x', '-y', `-o${root}`, payload, ...requested], { allowMissingPatterns: true });
+    }
     const asar = path.join(resources, 'app.asar');
     const packageMetadata = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
     const buildInfo = JSON.parse(extractFile(asar, 'dist/node/build-info.json').toString('utf8'));
@@ -180,6 +182,13 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+}
+
+async function extractMacApplication(payload, root, productName, dependencies = {}) {
+  await (dependencies.run ?? run)('/usr/bin/ditto', ['-x', '-k', payload, root]);
+  const appPath = path.join(root, `${productName}.app`);
+  await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+  return appPath;
 }
 
 async function validateInspectedIdentity(inspected, manifest) {
