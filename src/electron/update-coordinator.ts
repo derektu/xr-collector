@@ -19,7 +19,7 @@ export async function runUpdateCoordinator(
   const cancelled = () => controller.abort(request.signal.reason);
   request.signal.addEventListener('abort', cancelled, { once: true });
   if (request.signal.aborted) cancelled();
-  const timeout = setTimeout(() => controller.abort(new Error('等待安全停止超過兩分鐘。')), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(new Error('準備更新超過兩分鐘，已取消本次安裝；App 仍可使用，請稍後重試。')), timeoutMs);
   let lease: Awaited<ReturnType<CollectorRuntime['prepareUpdate']>> | null = null;
   let prepared: Awaited<ReturnType<NativeInstaller['prepare']>> | null = null;
   let transferred = false;
@@ -42,7 +42,13 @@ export async function runUpdateCoordinator(
   } catch (error) {
     await prepared?.cancel().catch(() => undefined);
     if (!transferred) lease?.cancel();
-    const problem = error instanceof Error ? error : new Error('無法安全套用更新。');
+    // Before ownership transfers, the coordinator's signal is the authoritative reason for
+    // cancellation. A dependency commonly rejects with a generic AbortError and would otherwise
+    // hide whether the user cancelled or the two-minute safety deadline elapsed. After transfer,
+    // preserve the concrete close/handoff failure because the old runtime is no longer reusable.
+    const problem = !transferred && controller.signal.aborted && controller.signal.reason instanceof Error
+      ? controller.signal.reason
+      : error instanceof Error ? error : new Error('無法安全套用更新。');
     let terminalProblem = problem;
     try { await request.failed('update_apply_failed', problem.message); }
     catch (failure) {

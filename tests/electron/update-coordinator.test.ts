@@ -53,6 +53,23 @@ describe('update coordinator terminal boundary', () => {
     expect(terminal).not.toHaveBeenCalled();
   });
 
+  it('reports the localized safety deadline instead of a dependency AbortError before transfer', async () => {
+    const events: string[] = []; const terminal = vi.fn(); let genericAbortThrown = false;
+    const prepare: NativeInstaller['prepare'] = async (_offer, _file, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => { genericAbortThrown = true; reject(new DOMException('The operation was aborted', 'AbortError')); }, { once: true });
+    });
+    await runUpdateCoordinator(request(events), installer(events, { prepare }), runtime(events), {
+      shutdownOwned: () => events.push('owned'), completed: () => events.push('completed'), terminalFailure: terminal,
+    }, 5);
+    expect(events).toEqual([
+      'lease-cancel',
+      'failed:update_apply_failed:準備更新超過兩分鐘，已取消本次安裝；App 仍可使用，請稍後重試。',
+    ]);
+    expect(genericAbortThrown).toBe(true);
+    expect(events.join('\n')).not.toContain('The operation was aborted');
+    expect(terminal).not.toHaveBeenCalled();
+  });
+
   it('persists failure and enters terminal UX when runtime close fails after transfer', async () => {
     const events: string[] = [];
     await runUpdateCoordinator(request(events), installer(events), runtime(events, async () => { events.push('close'); throw new Error('close failed'); }), {

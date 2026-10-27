@@ -11,6 +11,8 @@ XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.jso
 1. 最小遷移：在公司的 HTTPS 主機原樣提供 `release-index.json`、manifest 與安裝檔，再把環境設定指向 index。
 2. 自訂發現：實作 `UpdateSource`，把公司 API 的結果轉成不可變的 `UpdateOffer`。下載、雜湊驗證、持久 cache、UI／Agent API 與原生安裝器不需要改動。
 
+來源在 Electron 啟動入口組裝，`XR_COLLECTOR_UPDATE_INDEX_URL` 是啟動時覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動腳本的環境變數；公司的發行版本應在組裝入口選用公司的預設 adapter，或由部署環境持續提供來源設定。
+
 啟動依賴要特別處理：App 必須先能找到下一份 index，才能透過更新改用新來源。因此來源搬移至少要讓舊 URL 在一個發布週期內仍提供 index，或先發布同時認得新來源的過渡版，再關閉舊來源。不要只在新來源發布一個舊 App 不知道的位置。
 
 驗收可以使用 loopback generic source，但必須使用正式 schema、真實封裝產物及真實原生安裝路徑；不能把模擬的「安裝成功」當成平台驗收。
@@ -24,4 +26,6 @@ XR_COLLECTOR_VALIDATION_BUILD=1 npm run package:mac -- \
   --validation-product-name "XR Update Verify 36"
 ```
 
-三個 `--validation-*` 參數必須一起提供，且只有明確設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受。正式封裝不帶這些參數，仍固定使用 repo 的版本、appId 與產品名稱。每次啟動驗收 App 另使用專屬 `XR_COLLECTOR_PROFILE`、Vault、Agent port 及 `XR_COLLECTOR_UPDATE_INDEX_URL`，不能指向正式資料。
+三個 `--validation-*` 參數必須一起提供，且只有明確設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受。唯一產品名稱同時寫入 ASAR，讓 Electron 的預設資料目錄也與正式 App 分開。正式封裝不帶這些參數，仍固定使用 repo 的版本、appId 與產品名稱。
+
+驗收 A、B 使用同一個隔離 profile、Vault 與 Agent port，不能指向正式資料。原生重啟驗收優先使用唯一驗收產品的預設 profile，將固定 Agent port 與 Vault 選址寫入該 profile，並由同一個登入使用者安裝與更新。使用 `XR_COLLECTOR_PROFILE` 覆寫時，須實測該平台交接確實保留環境；不能假定 Windows shell 會保留。中斷 helper 後先等待並盤點作業系統已排隊的啟動，再決定是否手動啟動。
