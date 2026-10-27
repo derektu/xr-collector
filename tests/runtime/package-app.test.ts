@@ -90,6 +90,24 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
   for (const configFile of ['electron-builder.official.yml', 'electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
     expect(config.mac, configFile).toMatchObject({ identity: '-', hardenedRuntime: false });
+    expect(config.mac?.signIgnore, configFile).toEqual(['/Contents/Resources/bin(?:/|$)']);
+    const signIgnore = (config.mac?.signIgnore ?? []).map((pattern) => new RegExp(pattern));
+    const macApp = '/private/tmp/XR Collector.app';
+    for (const resource of config.mac?.extraResources ?? []) {
+      if (typeof resource === 'string' || !resource.to?.startsWith('bin/')) continue;
+      expect(signIgnore.some((pattern) => pattern.test(path.join(macApp, 'Contents/Resources', resource.to))), `${configFile}: ${resource.to}`).toBe(true);
+    }
+    for (const runtimeCode of [
+      'Contents/Resources/bin/meilisearch',
+      'Contents/Resources/bin/deno',
+      'Contents/Resources/bin/xr-mac-update-helper',
+      'Contents/Resources/bin/yt-dlp/_internal/Python.framework/Python',
+    ]) expect(signIgnore.some((pattern) => pattern.test(path.join(macApp, runtimeCode))), `${configFile}: ${runtimeCode}`).toBe(true);
+    for (const signedCode of [
+      path.join(macApp, 'Contents/MacOS/XR Collector'),
+      path.join(macApp, 'Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework'),
+      path.join(macApp, 'Contents/Resources/bin-adjacent/tool'),
+    ]) expect(signIgnore.some((pattern) => pattern.test(signedCode)), `${configFile}: ${signedCode}`).toBe(false);
     const resources = config.win?.extraResources ?? [];
     const keys = resources.map((entry) => typeof entry === 'string' ? entry : `${entry.from}:${entry.to}`);
     expect(new Set(keys).size, configFile).toBe(keys.length);

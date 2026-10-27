@@ -19,6 +19,8 @@ mac:
   category: public.app-category.productivity
   identity: "-"
   hardenedRuntime: false
+  signIgnore:
+    - '/Contents/Resources/bin(?:/|$)'
   extraResources:
     - from: skills
       to: skills
