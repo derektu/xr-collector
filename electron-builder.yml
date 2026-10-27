@@ -35,7 +35,7 @@ mac:
       to: bin/meilisearch-build.json
     - from: resources/bin/mac/xr-mac-update-helper
       to: bin/xr-mac-update-helper
-    - from: dist/node/build-info.json
+    - from: .local/package-resources/build-info.json
       to: build-info.json
 win:
   target:
@@ -50,7 +50,7 @@ win:
     - from: resources/bin/win
       to: bin
       filter: ['*.exe', 'vcruntime140.dll', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*']
-    - from: dist/node/build-info.json
+    - from: .local/package-resources/build-info.json
       to: build-info.json
 nsis:
   oneClick: false

@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -52,7 +52,25 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
     if (typeof runtime === 'string' || runtime === undefined) throw new Error(`${configFile} lacks its Windows runtime resource.`);
     expect(runtime.filter, configFile).toContain('vcruntime140.dll');
     expect(runtime.filter, configFile).not.toContain('*.dll');
+    for (const resources of [config.mac?.extraResources ?? [], config.win?.extraResources ?? []]) {
+      expect(resources).toContainEqual(expect.objectContaining({ from: '.local/package-resources/build-info.json', to: 'build-info.json' }));
+      expect(resources).not.toContainEqual(expect.objectContaining({ from: 'dist/node/build-info.json' }));
+    }
   }
+});
+
+it('stages byte-identical BuildInfo for extraResources without consuming the ASAR source path', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-package-build-info-'));
+  roots.push(root);
+  const source = path.join(root, 'dist/node/build-info.json');
+  await mkdir(path.dirname(source), { recursive: true });
+  const bytes = Buffer.from('{"buildId":"same-bytes"}\n');
+  await writeFile(source, bytes);
+  const staged = await stageBuildInfoSidecar(root);
+  expect(staged.source).toBe(source);
+  expect(staged.destination).toBe(path.join(root, '.local/package-resources/build-info.json'));
+  expect(await readFile(staged.destination)).toEqual(bytes);
+  expect(await readFile(source)).toEqual(bytes);
 });
 
 it('rejects the actual dirty checkout even when inherited Git routing points at another clean repository', async () => {

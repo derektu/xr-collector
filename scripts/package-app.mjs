@@ -58,6 +58,7 @@ export async function packageApplication(options, dependencies = {}) {
     await run(process.execPath, [npmCli, 'run', 'build']);
     await run(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
       ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]);
+    await stageBuildInfoSidecar(projectRoot);
     if (options.target === 'darwin-arm64') await run(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
     const builderArgs = options.variant === 'official' ? ['--config', 'electron-builder.official.yml'] : [];
     builderArgs.push(options.target === 'darwin-arm64' ? '--mac' : '--win');
@@ -96,6 +97,20 @@ export async function packageApplication(options, dependencies = {}) {
       signing: { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' },
     });
   });
+}
+
+/**
+ * Stages an exact sidecar copy outside electron-builder's ASAR file set. Using the ASAR source
+ * itself as `extraResources.from` makes electron-builder exclude that source from app.asar.
+ */
+export async function stageBuildInfoSidecar(root = projectRoot) {
+  const source = path.join(root, 'dist/node/build-info.json');
+  const destination = path.join(root, '.local/package-resources/build-info.json');
+  const bytes = await readFile(source);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, bytes);
+  if (!Buffer.from(await readFile(destination)).equals(bytes)) throw new Error('Staged BuildInfo sidecar differs from the ASAR source.');
+  return { source, destination, bytes };
 }
 
 export async function readPackagingGitIdentity(root, sourceEnvironment = process.env) {
