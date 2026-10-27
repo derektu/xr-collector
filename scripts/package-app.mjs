@@ -12,6 +12,7 @@ import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const productionUpdateRepository = 'derektu/xr-collector';
 
 export function parsePackageArguments(argv) {
   const result = {};
@@ -21,15 +22,21 @@ export function parsePackageArguments(argv) {
     else if (argv[index] === '--validation-version') result.validationVersion = argv[++index];
     else if (argv[index] === '--validation-app-id') result.validationAppId = argv[++index];
     else if (argv[index] === '--validation-product-name') result.validationProductName = argv[++index];
+    else if (argv[index] === '--validation-update-repository') result.validationUpdateRepository = argv[++index];
     else throw new Error(`Unknown packaging argument ${argv[index]}.`);
   }
   if (!['darwin-arm64', 'win32-x64'].includes(result.target)) throw new Error(`Unsupported packaging target ${result.target ?? 'missing'}; use darwin-arm64 or win32-x64.`);
   if (!['chinese', 'official'].includes(result.variant)) throw new Error(`Unsupported packaging variant ${result.variant ?? 'missing'}; use chinese or official.`);
-  const validation = [result.validationVersion, result.validationAppId, result.validationProductName];
-  if (validation.some(Boolean)) {
-    if (!validation.every(Boolean) || process.env.XR_COLLECTOR_VALIDATION_BUILD !== '1') throw new Error('Validation identity requires all validation options and XR_COLLECTOR_VALIDATION_BUILD=1.');
-    if (!/^\d+\.\d+\.\d+$/u.test(result.validationVersion) || !/^com\.xrcollector\.verify[\w.-]+$/u.test(result.validationAppId)
-      || !/^XR Update Verify [\w .-]+$/u.test(result.validationProductName)) throw new Error('Validation version, app id or product name is invalid.');
+  const validationIdentity = [result.validationVersion, result.validationAppId, result.validationProductName];
+  if (validationIdentity.some(Boolean) || result.validationUpdateRepository) {
+    if (!validationIdentity.every(Boolean) || process.env.XR_COLLECTOR_VALIDATION_BUILD !== '1') throw new Error('Validation identity requires all validation options and XR_COLLECTOR_VALIDATION_BUILD=1.');
+    result.validationUpdateRepository ??= productionUpdateRepository;
+    if (!/^\d+\.\d+\.\d+$/u.test(result.validationVersion)
+      || !/^com\.xrcollector\.verify[\w.-]+$/u.test(result.validationAppId)
+      || !/^XR Update Verify [\w .-]+$/u.test(result.validationProductName)
+      || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(result.validationUpdateRepository)) {
+      throw new Error('Validation version, app id, product name or update repository is invalid.');
+    }
   }
   return result;
 }
@@ -71,7 +78,8 @@ export async function packageApplication(options, dependencies = {}) {
     ]);
     await run(process.execPath, [electronBuilderCli, ...builderArgs]);
     const expected = { commit, version, target: options.target, variant: options.variant,
-      ...(options.validationProductName ? { productName: options.validationProductName } : {}) };
+      ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
+      updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
     const verified = await verifyPackagedApplication({ outputDir, ...expected });
     const artifacts = await findInstallerArtifacts(outputDir, expected);
     const host = await probeHost();
@@ -117,6 +125,8 @@ export function validationBuilderArguments(options) {
   if (!options.validationVersion) return [];
   return [`--config.extraMetadata.version=${options.validationVersion}`,
     `--config.extraMetadata.productName=${options.validationProductName}`,
+    `--config.extraMetadata.xrCollectorAppId=${options.validationAppId}`,
+    `--config.extraMetadata.xrCollectorUpdateRepository=${options.validationUpdateRepository ?? productionUpdateRepository}`,
     `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`];
 }
 
@@ -131,13 +141,13 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
   return { commit };
 }
 
-export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector' }, dependencies = {}) {
+export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository }, dependencies = {}) {
   const resources = target === 'darwin-arm64'
     ? path.join(outputDir, 'mac-arm64', `${productName}.app`, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
   const asarPath = path.join(resources, 'app.asar');
   const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
-  assertPackagedProductMetadata(packageMetadata, productName);
+  assertPackagedProductMetadata(packageMetadata, productName, appId, updateRepository);
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
   const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
   if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
@@ -176,12 +186,18 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest };
 }
 
-export function assertPackagedProductMetadata(metadata, productName) {
+export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository) {
   if (metadata?.name !== 'xr-collector') throw new Error('Packaged application name is not XR Collector.');
   if (productName === 'XR Collector') {
     if (metadata.productName !== undefined && metadata.productName !== productName) throw new Error('Packaged productName does not match the packaging request.');
   } else if (metadata.productName !== productName) {
     throw new Error('Validation productName is missing from packaged application metadata.');
+  }
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(updateRepository)) throw new Error('Packaging update repository is invalid.');
+  if (productName === 'XR Collector') {
+    if (metadata.xrCollectorUpdateRepository !== undefined || metadata.xrCollectorAppId !== undefined) throw new Error('Production package must not override its packaged identity.');
+  } else if (metadata.xrCollectorUpdateRepository !== updateRepository || metadata.xrCollectorAppId !== appId) {
+    throw new Error('Validation update repository is missing from packaged application metadata.');
   }
 }
 
@@ -197,6 +213,7 @@ export async function writeArtifactHandoff(input) {
   const artifactManifest = path.join(input.outputDir, `${base}-artifacts.json`);
   const document = {
     schemaVersion: 1, version: input.version, commit: input.commit, target: input.target, variant: input.variant,
+    packageIdentity: { productName: input.productName ?? 'XR Collector', appId: input.appId ?? 'com.moneydj.xrcollector', updateRepository: input.updateRepository ?? productionUpdateRepository },
     buildInfo: input.buildInfo, builderHost: input.host, toolVersions: input.toolVersions, signing: input.signing,
     runtimeIdentity: input.runtimeIdentity ?? null,
     artifacts: await Promise.all(artifacts.map(async (artifact) => ({ path: path.basename(artifact), ...await describeFile(artifact) }))),

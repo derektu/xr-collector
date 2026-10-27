@@ -23,9 +23,12 @@ XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.jso
 XR_COLLECTOR_VALIDATION_BUILD=1 npm run package:mac -- \
   --validation-version 0.1.1 \
   --validation-app-id com.xrcollector.verify36 \
-  --validation-product-name "XR Update Verify 36"
+  --validation-product-name "XR Update Verify 36" \
+  --validation-update-repository derektu/xr-collector-test
 ```
 
-三個 `--validation-*` 參數必須一起提供，且只有明確設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受。唯一產品名稱同時寫入 ASAR，讓 Electron 的預設資料目錄也與正式 App 分開。正式封裝不帶這些參數，仍固定使用 repo 的版本、appId 與產品名稱。
+版本、appId 與產品名稱三個 `--validation-*` 參數必須一起提供，且只有明確設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受。repository 是第四個選用參數，未提供時維持正式來源 `derektu/xr-collector`，供既有 loopback 驗收使用；提供時會和 appId、產品名稱一起寫入 ASAR，讓 Windows shell 或 macOS helper 重啟 App、沒有原啟動環境變數時，仍使用隔離的資料目錄、App 身分與 GitHub repository。正式封裝不帶這些參數，仍固定使用 repo 的版本、appId、產品名稱與正式 repository。
+
+公開更新驗收固定使用兩個彼此隔離、A／B 版本內一致的身分：中文版為 `XR Update Verify Chinese`／`com.xrcollector.verify.public.chinese`，官方 engine 版為 `XR Update Verify Official`／`com.xrcollector.verify.public.official`；兩者的 repository 都是 `derektu/xr-collector-test`。發布候選會從實際 ASAR 讀回這三項身分，並和四份 private handoff、GitHub Release URL 與 publisher 的 `--repo` 交叉核對，不接受把驗收 App 發到正式 repository，或把不同 variant 的 package 混在一起。
 
 驗收 A、B 使用同一個隔離 profile、Vault 與 Agent port，不能指向正式資料。原生重啟驗收優先使用唯一驗收產品的預設 profile，將固定 Agent port 與 Vault 選址寫入該 profile，並由同一個登入使用者安裝與更新。使用 `XR_COLLECTOR_PROFILE` 覆寫時，須實測該平台交接確實保留環境；不能假定 Windows shell 會保留。中斷 helper 後先等待並盤點作業系統已排隊的啟動，再決定是否手動啟動。

@@ -58,7 +58,7 @@
 
 發布指令、候選目錄、授權檔與各階段的修改邊界見 [Release 發布手冊](release-runbook.md)。
 
-發布來源為公開 repository 的 GitHub Releases，直接提供安裝檔及更新 metadata。#35 的公開發布前置條件是 repository 已設為 public；尚為 private 時不能宣稱免登入下載完成。以無 GitHub 登入／token 的客戶端驗證已發布附件與 metadata 的可達性及 checksum；draft Release 只供發布前核對，不作匿名下載完成證據。任何 token 只留發布端，不放 App／metadata。
+發布來源為公開 repository 的 GitHub Releases，直接提供安裝檔及更新 metadata。#35 的公開發布前置條件是 repository 已設為 public；尚為 private 時不能宣稱免登入下載完成。publisher 必須確認四個候選從 ASAR 讀回的產品名稱、appId 與更新 repository 都和 private handoff 一致，GitHub source URL 及實際發布 repository 也必須是同一個 repository。以無 GitHub 登入／token 的客戶端驗證已發布附件與 metadata 的可達性及 checksum；draft Release 只供發布前核對，不作匿名下載完成證據。任何 token 只留發布端，不放 App／metadata。
 
 ## 驗收與憑證邊界
 

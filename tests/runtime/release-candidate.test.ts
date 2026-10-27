@@ -152,7 +152,16 @@ it('requires a structured acceptance summary instead of treating an arbitrary ha
   await expect(planReleaseCandidate(fixture.options, { inspectPackagedPayload: fixture.inspect })).rejects.toThrow(/structured acceptance summary/u);
 });
 
-async function releaseFixture() {
+it('stages validation packages only for the GitHub repository baked into all four apps', async () => {
+  const fixture = await releaseFixture(true);
+  const plan = await planReleaseCandidate(fixture.options, { inspectPackagedPayload: fixture.inspect });
+  expect(plan.updateRepository).toBe('derektu/xr-collector-test');
+  await expect(planReleaseCandidate({ ...fixture.options,
+    sourceBaseUrl: 'https://github.com/derektu/other/releases/download/v0.1.0/' }, { inspectPackagedPayload: fixture.inspect }))
+    .rejects.toThrow(/packaged update repository/u);
+});
+
+async function releaseFixture(validation = false) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-release-fixture-'));
   roots.push(root);
   const input = path.join(root, 'input');
@@ -191,6 +200,11 @@ async function releaseFixture() {
     await writeFile(updatePath, stringifyYaml({ version, files: [{ url: primaryName, sha512, size: primary.bytes }], path: primaryName, sha512, releaseDate: '2026-10-26T00:00:00.000Z' }));
     artifactPaths.push(updatePath);
     const buildInfo = { schemaVersion: 1, kind: 'packaged', version, builtAt: '2026-10-26T00:00:00.000Z', commit, buildId: `${target}-${variant}`, target, variant, sourceDirty: false };
+    const packageIdentity = validation ? {
+      productName: `XR Update Verify ${variant === 'chinese' ? 'Chinese' : 'Official'}`,
+      appId: `com.xrcollector.verify.public.${variant}`,
+      updateRepository: 'derektu/xr-collector-test',
+    } : { productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' };
     const targetPins = pins.targets[target];
     const dependencies = {
       schemaVersion: 1, target,
@@ -214,7 +228,7 @@ async function releaseFixture() {
     const manifestPath = path.join(directory, manifestName);
     const artifacts = await Promise.all(artifactPaths.map(async (file) => ({ path: path.basename(file), ...await describe(file) })));
     await writeFile(manifestPath, JSON.stringify({
-      schemaVersion: 1, version, commit, target, variant, buildInfo,
+      schemaVersion: 1, version, commit, target, variant, buildInfo, packageIdentity,
       builderHost: { platform: target === 'darwin-arm64' ? 'darwin' : 'win32', processArch: target === 'darwin-arm64' ? 'arm64' : 'x64', hostArch: 'arm64', emulated: target === 'win32-x64' },
       toolVersions: { node: 'v22.22.3' },
       signing: { policy: 'unsigned', credentialDiscovery: false, actualVerification: { kind: 'fixture', output: `${root}/private.log` } },
@@ -246,6 +260,8 @@ async function releaseFixture() {
     }, null, 2)}\n`);
     records.push({ manifestPath, artifactPaths, acceptanceSummaryPath, target, variant, buildInfo });
     inspected.set(primaryPath, {
+      packageMetadata: { name: 'xr-collector', ...(validation ? { productName: packageIdentity.productName,
+        xrCollectorAppId: packageIdentity.appId, xrCollectorUpdateRepository: packageIdentity.updateRepository } : {}) },
       buildInfo, dependencies, meilisearch,
       runtimeFiles: {
         [dependencies.executables.ytDlp]: { bytes: 2, sha256: sha('yt') },
@@ -272,7 +288,10 @@ async function releaseFixture() {
   await writeFile(acceptancePath, JSON.stringify({ schemaVersion: 1, version, commit, candidates, scenarios }));
   const notes = path.join(root, 'notes.md');
   await writeFile(notes, '# XR Collector 0.1.0\n\nUnsigned first release candidate.\n');
-  const options = { input, acceptance: acceptancePath, notes, version, tag: `v${version}`, sourceBaseUrl: 'https://downloads.example.test/archive/v0.1.0/' };
+  const options = { input, acceptance: acceptancePath, notes, version, tag: `v${version}`,
+    sourceBaseUrl: validation
+      ? 'https://github.com/derektu/xr-collector-test/releases/download/v0.1.0/'
+      : 'https://downloads.example.test/archive/v0.1.0/' };
   return { root, input, commit, options, records, inspect: async (payload: string) => inspected.get(payload) };
 }
 

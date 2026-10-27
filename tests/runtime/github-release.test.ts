@@ -80,16 +80,17 @@ it('makes every release mutation explicit and Mac-only', () => {
 
 it('refuses private repositories and accounts without release permissions', async () => {
   const privateRepository = createGitHubAdapter('owner/repo', { gh: async () => ({ private: true, visibility: 'private', permissions: { admin: true } }) });
-  await expect(privateRepository.assertRepositoryReady()).rejects.toThrow(/must be public/u);
+  await expect(privateRepository.assertRepositoryReady(undefined, 'owner/repo')).rejects.toThrow(/must be public/u);
   const readOnly = createGitHubAdapter('owner/repo', { gh: async () => ({ private: false, visibility: 'public', permissions: { pull: true } }) });
-  await expect(readOnly.assertRepositoryReady()).rejects.toThrow(/cannot publish/u);
+  await expect(readOnly.assertRepositoryReady(undefined, 'owner/repo')).rejects.toThrow(/cannot publish/u);
 });
 
 it('rejects a github.com asset source that points at a different repository before publishing', async () => {
   const adapter = createGitHubAdapter('owner/repo', {
     gh: async () => ({ private: false, visibility: 'public', permissions: { push: true } }),
   });
-  await expect(adapter.assertRepositoryReady('https://github.com/other/project/releases/download/v0.1.0/')).rejects.toThrow(/source.*owner\/repo/u);
+  await expect(adapter.assertRepositoryReady('https://github.com/other/project/releases/download/v0.1.0/', 'owner/repo')).rejects.toThrow(/source.*owner\/repo/u);
+  await expect(adapter.assertRepositoryReady('https://mirror.example.test/v0.1.0/', 'other/project')).rejects.toThrow(/differs from packaged/u);
 });
 
 it('uses typed GitHub booleans and discovers resumable drafts through the authenticated release list', async () => {
@@ -154,6 +155,7 @@ async function stagedFixture() {
   }
   const state = await stageReleaseCandidate({
     version, tag: `v${version}`, commit,
+    updateRepository: 'derektu/xr-collector',
     sourceBaseUrl: 'https://downloads.example.test/v0.1.0/',
     releaseNotes: '# 0.1.0\n', acceptance: { scenarios: acceptance }, candidates,
   }, root);

@@ -10,7 +10,7 @@ import { verifyStagedCandidate } from './release-candidate.mjs';
 export async function uploadDraftRelease(stageDirectory, adapter, authorization) {
   const state = await verifyStagedCandidate(stageDirectory);
   assertAuthorization(state, authorization, 'draft-upload');
-  await adapter.assertRepositoryReady(state.sourceBaseUrl);
+  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
   await ensureTag(adapter, state, authorization);
   let release = await adapter.getReleaseByTag(state.tag);
   if (release && !release.draft) throw new Error(`Release ${state.tag} is already public and cannot be overwritten.`);
@@ -35,6 +35,7 @@ export async function uploadDraftRelease(stageDirectory, adapter, authorization)
 
 export async function verifyRemoteRelease(stageDirectory, adapter, options = {}) {
   const state = await verifyStagedCandidate(stageDirectory);
+  await adapter.assertRepositoryIdentity?.(state.sourceBaseUrl, state.updateRepository);
   const release = await adapter.getReleaseByTag(state.tag);
   if (!release) throw new Error(`Remote release ${state.tag} does not exist.`);
   if (options.requireDraft && !release.draft) throw new Error(`Remote release ${state.tag} is not a draft.`);
@@ -72,7 +73,7 @@ export async function publishPrerelease(stageDirectory, adapter, authorization) 
   const state = await verifyStagedCandidate(stageDirectory);
   assertAuthorization(state, authorization, 'publish-prerelease');
   assertScenarioGates(authorization, ['R35-01', 'R35-02', 'R35-03', 'R35-06'], ['R35-07']);
-  await adapter.assertRepositoryReady(state.sourceBaseUrl);
+  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
   const release = await verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true });
   const updated = await adapter.updateRelease(release, { draft: false, prerelease: true, make_latest: 'false' });
   if (updated.draft || !updated.prerelease) throw new Error('GitHub did not publish the release as a prerelease.');
@@ -83,7 +84,7 @@ export async function promoteStableRelease(stageDirectory, adapter, authorizatio
   const state = await verifyStagedCandidate(stageDirectory);
   assertAuthorization(state, authorization, 'promote-stable');
   assertScenarioGates(authorization, ['R35-01', 'R35-02', 'R35-03', 'R35-04', 'R35-05', 'R35-06'], ['R35-07']);
-  await adapter.assertRepositoryReady(state.sourceBaseUrl);
+  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
   const release = await verifyRemoteRelease(stageDirectory, adapter, { authenticated: true });
   if (release.draft || !release.prerelease) throw new Error('Only the already-public prerelease may be promoted.');
   await verifyAnonymousRelease(stageDirectory, request);
@@ -123,9 +124,16 @@ export function createGitHubAdapter(repository, dependencies = {}) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) throw new Error('Repository must be owner/name.');
   const gh = dependencies.gh ?? ghJson;
   const ghDownload = dependencies.ghDownload ?? downloadWithGh;
+  const assertRepositoryIdentity = (sourceBaseUrl, packagedRepository) => {
+    if (packagedRepository?.toLowerCase() !== repository.toLowerCase()) {
+      throw new Error(`Publisher repository ${repository} differs from packaged update repository ${packagedRepository ?? 'missing'}.`);
+    }
+    if (sourceBaseUrl) assertGitHubSourceRepository(sourceBaseUrl, repository);
+  };
   return {
-    async assertRepositoryReady(sourceBaseUrl) {
-      if (sourceBaseUrl) assertGitHubSourceRepository(sourceBaseUrl, repository);
+    assertRepositoryIdentity,
+    async assertRepositoryReady(sourceBaseUrl, packagedRepository) {
+      assertRepositoryIdentity(sourceBaseUrl, packagedRepository);
       const repo = await gh(['api', `repos/${repository}`]);
       if (repo.private || repo.visibility !== 'public') throw new Error(`Repository ${repository} must be public before release staging.`);
       if (!(repo.permissions?.admin || repo.permissions?.maintain || repo.permissions?.push)) throw new Error(`Current gh account cannot publish ${repository}.`);

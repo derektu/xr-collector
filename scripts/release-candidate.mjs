@@ -60,18 +60,25 @@ export async function planReleaseCandidate(options, dependencies = {}) {
     const inspect = dependencies.inspectPackagedPayload ?? inspectPackagedPayload;
     const primary = artifacts.find((artifact) => manifest.target === 'darwin-arm64' ? artifact.basename.endsWith('.zip') : artifact.basename.endsWith('.exe'));
     if (!primary) throw new Error(`Missing primary update payload for ${key}.`);
-    const inspected = await inspect(primary.path, manifest.target);
+    const inspected = await inspect(primary.path, manifest.target, manifest.packageIdentity);
     await validateInspectedIdentity(inspected, manifest);
     candidates.push({ key, manifestPath: item.manifestPath, manifest, artifacts, acceptance: acceptanceRecord, inspected });
   }
   if (seen.size !== combinationKeys.size) throw new Error('Release candidate does not contain all target and variant combinations.');
+  const repositories = new Set(candidates.map((candidate) => candidate.manifest.packageIdentity.updateRepository));
+  if (repositories.size !== 1) throw new Error('All release candidates must use the same packaged update repository.');
+  const [updateRepository] = repositories;
+  const githubRepository = githubReleaseRepository(sourceBaseUrl);
+  if (githubRepository && githubRepository.toLowerCase() !== updateRepository.toLowerCase()) {
+    throw new Error(`GitHub release source must match packaged update repository ${updateRepository}.`);
+  }
   const allInputFiles = await walkFiles(options.input);
   const acceptanceResolved = resolvePath(options.acceptance);
   if (allInputFiles.some((file) => resolvePath(file) === acceptanceResolved)) allowedInputFiles.add(acceptanceResolved);
   const extras = allInputFiles.filter((file) => !allowedInputFiles.has(resolvePath(file)));
   if (extras.length) throw new Error(`Input contains files outside the four declared handoffs: ${extras.map((file) => path.relative(options.input, file)).join(', ')}.`);
   validateGlobalAcceptance(acceptance, commit, expectedVersion);
-  return { schemaVersion: 1, version: expectedVersion, tag, commit, sourceBaseUrl, releaseNotes, acceptance, candidates };
+  return { schemaVersion: 1, version: expectedVersion, tag, commit, sourceBaseUrl, updateRepository, releaseNotes, acceptance, candidates };
 }
 
 export async function stageReleaseCandidate(plan, output) {
@@ -101,7 +108,8 @@ export async function stageReleaseCandidate(plan, output) {
     await writeFile(path.join(output, 'SHA256SUMS'), `${checksumLines.join('\n')}\n`, { flag: 'wx' });
     staged.push({ name: 'SHA256SUMS', ...await describeFile(path.join(output, 'SHA256SUMS')), kind: 'checksums' });
     const state = {
-      schemaVersion: 1, version: plan.version, tag: plan.tag, commit: plan.commit, sourceBaseUrl: plan.sourceBaseUrl, releaseNotes: plan.releaseNotes,
+      schemaVersion: 1, version: plan.version, tag: plan.tag, commit: plan.commit, sourceBaseUrl: plan.sourceBaseUrl,
+      updateRepository: plan.updateRepository, releaseNotes: plan.releaseNotes,
       assets: staged.sort((a, b) => a.name.localeCompare(b.name)),
       acceptance: plan.acceptance.scenarios,
     };
@@ -116,7 +124,10 @@ export async function stageReleaseCandidate(plan, output) {
 
 export async function verifyStagedCandidate(stageDirectory) {
   const state = JSON.parse(await readFile(path.join(stageDirectory, '.release-state.json'), 'utf8'));
-  if (state.schemaVersion !== 1 || !Array.isArray(state.assets)) throw new Error('Staged control file schema is invalid.');
+  if (state.schemaVersion !== 1 || !Array.isArray(state.assets)
+    || typeof state.updateRepository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(state.updateRepository)) {
+    throw new Error('Staged control file schema is invalid.');
+  }
   ensureUniqueNames(state.assets.map((entry) => entry.name));
   const actual = (await walkFiles(stageDirectory)).filter((file) => path.basename(file) !== '.release-state.json');
   if (actual.length !== state.assets.length) throw new Error('Staged release inventory is incomplete or contains extra public assets.');
@@ -134,12 +145,14 @@ export async function verifyStagedCandidate(stageDirectory) {
   return state;
 }
 
-export async function inspectPackagedPayload(payload, target) {
+export async function inspectPackagedPayload(payload, target, packageIdentity = {
+  productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector',
+}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-release-inspect-'));
   try {
     const binary = sevenZip.path7za;
     await chmod(binary, 0o755);
-    const prefix = target === 'darwin-arm64' ? 'XR Collector.app/Contents/Resources' : 'resources';
+    const prefix = target === 'darwin-arm64' ? `${packageIdentity.productName}.app/Contents/Resources` : 'resources';
     const resources = path.join(root, ...prefix.split('/'));
     const requested = [
       `${prefix}/app.asar`, `${prefix}/bin/runtime-dependencies.json`, `${prefix}/bin/meilisearch-build.json`,
@@ -150,6 +163,7 @@ export async function inspectPackagedPayload(payload, target) {
     ];
     await run(binary, ['x', '-y', `-o${root}`, payload, ...requested], { allowMissingPatterns: true });
     const asar = path.join(resources, 'app.asar');
+    const packageMetadata = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
     const buildInfo = JSON.parse(extractFile(asar, 'dist/node/build-info.json').toString('utf8'));
     const dependencies = JSON.parse(await readFile(path.join(resources, 'bin/runtime-dependencies.json'), 'utf8'));
     const meilisearch = JSON.parse(await readFile(path.join(resources, 'bin/meilisearch-build.json'), 'utf8'));
@@ -162,7 +176,7 @@ export async function inspectPackagedPayload(payload, target) {
     const crt = path.join(resources, 'bin/vcruntime140.dll');
     let windowsCrt = null;
     try { windowsCrt = await describeFile(crt); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    return { buildInfo, dependencies, meilisearch, runtimeFiles, binaryIdentity, windowsCrt };
+    return { packageMetadata, buildInfo, dependencies, meilisearch, runtimeFiles, binaryIdentity, windowsCrt };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -172,6 +186,14 @@ async function validateInspectedIdentity(inspected, manifest) {
   const expected = { schemaVersion: 1, kind: 'packaged', version: manifest.version, commit: manifest.commit, target: manifest.target, variant: manifest.variant, sourceDirty: false };
   for (const [key, value] of Object.entries(expected)) if (inspected.buildInfo[key] !== value) throw new Error(`Packaged app.asar BuildInfo ${key} does not match ${manifest.target}/${manifest.variant}.`);
   if (JSON.stringify(inspected.buildInfo) !== JSON.stringify(manifest.buildInfo)) throw new Error('Private manifest BuildInfo differs from packaged app.asar.');
+  const metadata = inspected.packageMetadata;
+  const metadataProduct = metadata?.productName ?? 'XR Collector';
+  const metadataAppId = metadata?.xrCollectorAppId ?? 'com.moneydj.xrcollector';
+  const metadataRepository = metadata?.xrCollectorUpdateRepository ?? 'derektu/xr-collector';
+  if (metadata?.name !== 'xr-collector' || metadataProduct !== manifest.packageIdentity.productName
+    || metadataAppId !== manifest.packageIdentity.appId || metadataRepository !== manifest.packageIdentity.updateRepository) {
+    throw new Error('Packaged app.asar identity differs from the private manifest.');
+  }
   if (JSON.stringify(inspected.dependencies) !== JSON.stringify(manifest.runtimeIdentity?.dependencies)) throw new Error('Packaged runtime dependency inventory differs from the private manifest.');
   if (JSON.stringify(inspected.meilisearch) !== JSON.stringify(manifest.runtimeIdentity?.meilisearch)) throw new Error('Packaged Meilisearch producer identity differs from the private manifest.');
   const dependencyPins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
@@ -209,6 +231,15 @@ function validateManifestIdentity(manifest, version, key) {
     if (build?.[field] !== expected) throw new Error(`Private manifest BuildInfo ${field} is invalid for ${key}.`);
   }
   if (!Array.isArray(manifest.artifacts) || !manifest.artifacts.length) throw new Error(`Private manifest has no artifacts for ${key}.`);
+  const identity = manifest.packageIdentity;
+  if (!identity || typeof identity.productName !== 'string' || typeof identity.appId !== 'string'
+    || typeof identity.updateRepository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(identity.updateRepository)) {
+    throw new Error(`Private manifest package identity is invalid for ${key}.`);
+  }
+  const production = identity.updateRepository === 'derektu/xr-collector';
+  const expectedProduct = production ? 'XR Collector' : `XR Update Verify ${manifest.variant === 'chinese' ? 'Chinese' : 'Official'}`;
+  const expectedAppId = production ? 'com.moneydj.xrcollector' : `com.xrcollector.verify.public.${manifest.variant}`;
+  if (identity.productName !== expectedProduct || identity.appId !== expectedAppId) throw new Error(`Private manifest product identity is invalid for ${key}.`);
 }
 
 function validateArtifactInventory(manifest, artifacts) {
@@ -286,6 +317,8 @@ async function validateFrozenPublicMetadata(stageDirectory, state) {
   if (!identityMatches) throw new Error('The staged control file identity disagrees with the frozen public metadata.');
   const normalizedSource = normalizeSourceBaseUrl(state.sourceBaseUrl, state.tag);
   if (normalizedSource !== state.sourceBaseUrl) throw new Error('Staged control file source URL is not canonical.');
+  const githubRepository = githubReleaseRepository(state.sourceBaseUrl);
+  if (githubRepository && githubRepository.toLowerCase() !== state.updateRepository?.toLowerCase()) throw new Error('Staged source repository differs from the packaged update repository.');
   if (index.checksums !== assetUrl(state.sourceBaseUrl, 'SHA256SUMS')) throw new Error('The release index checksum reference is invalid.');
   if (!Array.isArray(index.candidates) || index.candidates.length !== combinationKeys.size) throw new Error('The release index must contain exactly four candidates.');
 
@@ -417,6 +450,15 @@ function normalizeSourceBaseUrl(value, tag) {
   if (segments.includes('latest') || (!segments.includes(tag) && !segments.includes(tag.slice(1)))) throw new Error(`Release source base URL must be pinned to ${tag}.`);
   if (!url.pathname.endsWith('/')) url.pathname += '/';
   return url.toString();
+}
+function githubReleaseRepository(value) {
+  const url = new URL(value);
+  if (url.hostname.toLowerCase() !== 'github.com') return null;
+  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  if (segments.length < 5 || segments[2] !== 'releases' || segments[3] !== 'download') {
+    throw new Error('GitHub release source URL must use owner/repository/releases/download/tag/.');
+  }
+  return `${segments[0]}/${segments[1]}`;
 }
 function assetUrl(base, name) { return new URL(encodeURIComponent(assertBasename(name)), base).toString(); }
 function assertBasename(value) { if (typeof value !== 'string' || path.basename(value) !== value || value === '.' || value === '..') throw new Error(`Unsafe release asset name ${value}.`); return value; }

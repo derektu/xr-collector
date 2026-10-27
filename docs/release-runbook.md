@@ -97,6 +97,8 @@ acceptance summary 的 `buildInfo` 必須與該安裝包內的 BuildInfo 完全�
 
 下列兩個階段不連 GitHub，也不修改外部狀態。`source-base-url` 必須是 HTTPS 且固定到版本 tag，不得包含帳號、密碼、query 或 fragment；不可使用 `releases/latest/download/` 作為 payload URL。`github.com` URL 在發布前還必須與 `--repo` 指定的 owner／repository 相同；符合相同 immutable URL 契約的自訂 mirror 可以使用其他 hostname。
 
+公開更新驗收使用 `derektu/xr-collector-test` 時，四個候選必須先以相同 repository 封裝；下列所有 `source-base-url` 與 `--repo` 也一起改成該 repository。stage 會從實際 ASAR 與 private handoff 讀回 repository、產品名稱及 appId 再交叉核對，不能只在發布指令替換 repository。
+
 ```bash
 npm run release -- plan \
   --input .local/ticket-artifacts/35/candidate-input \

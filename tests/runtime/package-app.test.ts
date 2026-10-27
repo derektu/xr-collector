@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -25,7 +25,12 @@ it('requires an explicit isolated identity for validation version overrides', ()
     '--validation-app-id', 'com.xrcollector.verify36', '--validation-product-name', 'XR Update Verify 36'];
   expect(() => parsePackageArguments(args)).toThrow(/XR_COLLECTOR_VALIDATION_BUILD/u);
   process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
-  try { expect(parsePackageArguments(args)).toMatchObject({ validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36' }); }
+  try {
+    expect(parsePackageArguments(args)).toMatchObject({ validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationUpdateRepository: 'derektu/xr-collector' });
+    expect(parsePackageArguments([...args, '--validation-update-repository', 'derektu/xr-collector-test'])).toMatchObject({ validationUpdateRepository: 'derektu/xr-collector-test' });
+    expect(() => parsePackageArguments([...args, '--validation-update-repository', 'https://github.com/derektu/xr-collector-test'])).toThrow(/repository/u);
+    expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--validation-update-repository', 'derektu/xr-collector-test'])).toThrow(/all validation options/u);
+  }
   finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
 });
 
@@ -34,12 +39,28 @@ it('bakes the validation product name into package metadata so Electron derives 
   expect(validationBuilderArguments(options)).toEqual([
     '--config.extraMetadata.version=0.1.1',
     '--config.extraMetadata.productName=XR Update Verify Mac Chinese',
+    '--config.extraMetadata.xrCollectorAppId=com.xrcollector.verify36',
+    '--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector',
     '--config.appId=com.xrcollector.verify36',
     '--config.productName=XR Update Verify Mac Chinese',
   ]);
-  expect(() => assertPackagedProductMetadata({ name: 'xr-collector' }, options.validationProductName)).toThrow(/productName/u);
-  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', productName: options.validationProductName }, options.validationProductName)).not.toThrow();
+  expect(() => assertPackagedProductMetadata({ name: 'xr-collector' }, options.validationProductName, options.validationAppId)).toThrow(/productName/u);
+  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', productName: options.validationProductName,
+    xrCollectorAppId: options.validationAppId, xrCollectorUpdateRepository: 'derektu/xr-collector' }, options.validationProductName, options.validationAppId)).not.toThrow();
+  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', xrCollectorUpdateRepository: 'derektu/xr-collector-test' }, 'XR Collector')).toThrow(/Production package/u);
   expect(validationBuilderArguments({})).toEqual([]);
+});
+
+it('accepts the two public update-test identities within the existing validation namespace', () => {
+  process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
+  try {
+    for (const [variant, productName] of [['chinese', 'XR Update Verify Chinese'], ['official', 'XR Update Verify Official']]) {
+      const options = parsePackageArguments(['--target', 'darwin-arm64', '--variant', variant,
+        '--validation-version', '0.1.0', '--validation-app-id', `com.xrcollector.verify.public.${variant}`,
+        '--validation-product-name', productName, '--validation-update-repository', 'derektu/xr-collector-test']);
+      expect(validationBuilderArguments(options)).toContain('--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector-test');
+    }
+  } finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
 });
 
 it('allows an x64 Windows process on the authorized ARM64 builder and records emulation separately', async () => {
@@ -174,6 +195,19 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'skill');
   await writeFile(path.join(resources, 'bin/meilisearch'), 'official wrong pair');
   await expect(verify()).rejects.toThrow(/Meilisearch bytes/u);
+
+  await writeFile(path.join(resources, 'bin/meilisearch'), meiliBinary);
+  const validationProductName = 'XR Update Verify Chinese';
+  const validationAppId = 'com.xrcollector.verify.public.chinese';
+  await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0',
+    productName: validationProductName, xrCollectorAppId: validationAppId, xrCollectorUpdateRepository: 'derektu/xr-collector-test' }));
+  await rm(path.join(resources, 'app.asar'));
+  await createPackage(asarSource, path.join(resources, 'app.asar'));
+  await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), path.join(outputDir, `mac-arm64/${validationProductName}.app`));
+  await expect(verifyPackagedApplication({ outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese',
+    productName: validationProductName, appId: validationAppId, updateRepository: 'derektu/xr-collector-test' },
+  { trustedManifest: meiliManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }) }))
+    .resolves.toMatchObject({ packageMetadata: { productName: validationProductName, xrCollectorUpdateRepository: 'derektu/xr-collector-test' } });
 });
 
 it('writes unique update metadata and an exact artifact inventory', async () => {
@@ -190,6 +224,7 @@ it('writes unique update metadata and an exact artifact inventory', async () => 
   expect(path.basename(result.updateMetadata)).toBe('XR-Collector-0.1.0-official-win32-x64-update.yml');
   expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-official-win32-x64-artifacts.json');
   const manifest = JSON.parse(await readFile(result.artifactManifest, 'utf8'));
+  expect(manifest.packageIdentity).toEqual({ productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' });
   expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual([
     'XR-Collector-0.1.0-official-win-x64-setup.exe',
     'XR-Collector-0.1.0-official-win32-x64-update.yml',

@@ -11,12 +11,21 @@ const harness = vi.hoisted(() => ({
   loginReadsBeforeReady: 0,
   lockGranted: true,
   quits: 0,
+  packageMetadata: { name: 'xr-collector' } as Record<string, unknown>,
+  updateRepositories: [] as string[],
+  appIds: [] as string[],
   lockData: null as Record<string, unknown> | null,
   readyPromise: Promise.resolve() as Promise<void>,
   readyResolve: (() => undefined) as () => void,
   loadPromise: Promise.resolve() as Promise<void>,
   loadResolve: (() => undefined) as () => void,
 }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, readFileSync: (file: Parameters<typeof actual.readFileSync>[0], options?: Parameters<typeof actual.readFileSync>[1]) =>
+    String(file) === '/tmp/xr-main-wiring/app/package.json' ? JSON.stringify(harness.packageMetadata) : actual.readFileSync(file, options as never) };
+});
 
 vi.mock('electron', () => {
   class FakeBrowserWindow {
@@ -52,7 +61,7 @@ vi.mock('electron', () => {
     isPackaged: false,
     dock: { hide: () => undefined },
     setPath: () => undefined,
-    setAppUserModelId: () => undefined,
+    setAppUserModelId: (value: string) => { harness.appIds.push(value); },
     requestSingleInstanceLock: (data: Record<string, unknown>) => { harness.lockData = data; return harness.lockGranted; },
     quit: () => { harness.quits += 1; },
     on: (event: string, listener: (...args: any[]) => void) => {
@@ -87,6 +96,11 @@ vi.mock('electron', () => {
 vi.mock('../../src/plugins/index.js', () => ({
   createSourcePlugins: async () => ({ plugins: [], pacing: {} }),
 }));
+vi.mock('../../src/updates/sources.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/updates/sources.js')>();
+  return { ...actual, GitHubReleasesSource: class { constructor(repository: string) { harness.updateRepositories.push(repository); } } };
+});
+vi.mock('../../src/updates/windows-installer.js', () => ({ WindowsNativeInstaller: class {} }));
 vi.mock('../../src/runtime/collector-runtime.js', () => ({
   CollectorRuntime: {
     start: async () => {
@@ -144,6 +158,9 @@ beforeEach(() => {
   harness.loginReadsBeforeReady = 0;
   harness.lockGranted = true;
   harness.quits = 0;
+  harness.packageMetadata = { name: 'xr-collector' };
+  harness.updateRepositories.splice(0);
+  harness.appIds.splice(0);
   harness.lockData = null;
   const ready = deferred();
   harness.readyPromise = ready.promise;
@@ -211,5 +228,17 @@ describe('Electron main login-startup wiring', () => {
     await vi.waitFor(() => expect(harness.shows).toBe(1));
     expect(harness.windows).toHaveLength(1);
     expect(harness.runtimeStarts).toBe(1);
+  });
+
+  it('uses the repository and Windows app id baked into a validation package without inherited environment', async () => {
+    restorePlatform();
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    restorePlatform = () => platform.mockRestore();
+    harness.packageMetadata = { name: 'xr-collector', xrCollectorUpdateRepository: 'derektu/xr-collector-test',
+      xrCollectorAppId: 'com.xrcollector.verify.public.chinese' };
+
+    await loadMain(false);
+    await vi.waitFor(() => expect(harness.updateRepositories).toEqual(['derektu/xr-collector-test']));
+    expect(harness.appIds).toEqual(['com.xrcollector.verify.public.chinese']);
   });
 });

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
@@ -22,6 +23,7 @@ import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInst
 import { WindowsNativeInstaller } from '../updates/windows-installer.js';
 import type { NativeInstaller, UpdateApplyRequest } from '../updates/types.js';
 import { runUpdateCoordinator } from './update-coordinator.js';
+import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../updates/config.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
@@ -44,6 +46,7 @@ const NETWORK_WATCH_MS = 5_000;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
+const packageMetadata = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')) as Record<string, unknown>;
 
 // Background validation mode, for native acceptance runs only: the window is never shown or
 // focused and macOS shows no Dock icon, so a developer keeps working on the same machine while
@@ -61,7 +64,7 @@ const validationNotifications: { title: string; content: string }[] = [];
 if (process.platform === 'win32') {
   const validationAppId = process.env.XR_COLLECTOR_VALIDATION_APP_ID;
   app.setAppUserModelId(validationAppId && /^com\.xrcollector\.verify[\w.-]+$/u.test(validationAppId)
-    ? validationAppId : 'com.moneydj.xrcollector');
+    ? validationAppId : appIdFromPackageMetadata(packageMetadata));
 }
 
 /** An external program's path, by its path under the runtime folder without extension; outside a package an environment variable may name it instead. */
@@ -298,9 +301,10 @@ app.whenReady().then(async () => {
   const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
   startupBuildInfo = buildInfo;
   const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+  const updateRepository = updateRepositoryFromPackageMetadata(packageMetadata);
   const updateSource = process.env.XR_COLLECTOR_UPDATE_INDEX_URL
     ? new GenericIndexSource(process.env.XR_COLLECTOR_UPDATE_INDEX_URL, updateRequest)
-    : new GitHubReleasesSource('derektu/xr-collector', updateRequest);
+    : new GitHubReleasesSource(updateRepository, updateRequest);
   // Platform adapters replace this unavailable boundary only when the installed package has a
   // verified native handoff path. Discovery remains useful in development without pretending it can install.
   const nativeInstaller: NativeInstaller = process.platform === 'darwin'
