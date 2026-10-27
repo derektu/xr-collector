@@ -23,6 +23,19 @@ it('resumes an interrupted draft without duplicate uploads and verifies every do
   expect(remote.hashCalls).toBeGreaterThanOrEqual(fixture.state.assets.length);
 });
 
+it('returns the fresh verified release snapshot after uploading every draft asset', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+
+  const release = await uploadDraftRelease(fixture.root, remote.adapter, fixture.authorization(['draft-upload', 'create-tag', 'create-draft']));
+
+  expect(fixture.state.assets).toHaveLength(22);
+  expect(remote.createdSnapshot).toMatchObject({ assets: [] });
+  expect(release).not.toBe(remote.createdSnapshot);
+  expect(release.assets).toHaveLength(22);
+  expect(release.assets.map((asset: any) => asset.name).sort()).toEqual(fixture.state.assets.map((asset) => asset.name).sort());
+});
+
 it('rejects stale tags, different-byte collisions, and partial remote inventories', async () => {
   const fixture = await stagedFixture();
   const stale = fakeRemote(fixture.state);
@@ -259,13 +272,17 @@ async function stagedFixture() {
 }
 
 function fakeRemote(state: Awaited<ReturnType<typeof stagedFixture>>['state']) {
-  const remote: any = { tagCommit: null, release: null, assets: [], failUploadAfter: null, uploadCalls: 0, hashCalls: 0 };
+  const remote: any = { tagCommit: null, release: null, createdSnapshot: null, assets: [], failUploadAfter: null, uploadCalls: 0, hashCalls: 0 };
   remote.adapter = {
     assertRepositoryReady: async () => undefined,
     getTagCommit: async () => remote.tagCommit,
     createTag: async (_tag: string, commit: string) => { remote.tagCommit = commit; },
-    getReleaseByTag: async () => remote.release,
-    createDraft: async () => { remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' }; return remote.release; },
+    getReleaseByTag: async () => remote.release && { ...remote.release, assets: [...remote.assets] },
+    createDraft: async () => {
+      remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
+      remote.createdSnapshot = { ...remote.release, assets: [] };
+      return remote.createdSnapshot;
+    },
     listAssets: async () => remote.assets,
     uploadAsset: async (_release: object, file: string, name: string) => {
       remote.uploadCalls += 1;

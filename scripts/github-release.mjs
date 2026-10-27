@@ -31,8 +31,7 @@ export async function uploadDraftRelease(stageDirectory, adapter, authorization)
     }
     await adapter.uploadAsset(release, path.join(stageDirectory, expected.name), expected.name);
   }
-  await verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true });
-  return release;
+  return verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true });
 }
 
 export async function verifyRemoteRelease(stageDirectory, adapter, options = {}) {
