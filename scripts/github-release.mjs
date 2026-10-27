@@ -7,6 +7,8 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { verifyStagedCandidate } from './release-candidate.mjs';
 
+const RELEASE_VERIFICATION_CONCURRENCY = 3;
+
 export async function uploadDraftRelease(stageDirectory, adapter, authorization) {
   const state = await verifyStagedCandidate(stageDirectory);
   assertAuthorization(state, authorization, 'draft-upload');
@@ -46,17 +48,17 @@ export async function verifyRemoteRelease(stageDirectory, adapter, options = {})
   const actualNames = assets.map((asset) => asset.name).sort();
   if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) throw new Error('Remote release inventory is partial or contains unexpected assets.');
   const expectedByName = new Map(state.assets.map((asset) => [asset.name, asset]));
-  for (const asset of assets) {
+  await verifyConcurrently(assets, async (asset) => {
     const expected = expectedByName.get(asset.name);
     const digest = await adapter.hashAsset(asset, { authenticated: options.authenticated !== false });
     if (asset.size !== expected.bytes || digest !== expected.sha256) throw new Error(`Remote release asset does not match staged bytes: ${asset.name}.`);
-  }
+  });
   return release;
 }
 
 export async function verifyAnonymousRelease(stageDirectory, request = fetch) {
   const state = await verifyStagedCandidate(stageDirectory);
-  for (const asset of state.assets) {
+  await verifyConcurrently(state.assets, async (asset) => {
     const response = await request(new URL(encodeURIComponent(asset.name), state.sourceBaseUrl), { redirect: 'follow', headers: { Accept: 'application/octet-stream' } });
     if (!response.ok || !response.body) throw new Error(`Anonymous download failed for ${asset.name}: HTTP ${response.status}.`);
     const contentType = response.headers.get('content-type') ?? '';
@@ -65,8 +67,32 @@ export async function verifyAnonymousRelease(stageDirectory, request = fetch) {
     let bytes = 0;
     for await (const chunk of response.body) { hash.update(chunk); bytes += chunk.byteLength; }
     if (bytes !== asset.bytes || hash.digest('hex') !== asset.sha256) throw new Error(`Anonymous download bytes do not match ${asset.name}.`);
-  }
+  });
   return state;
+}
+
+async function verifyConcurrently(items, verify) {
+  let nextIndex = 0;
+  let failed = false;
+  let firstError;
+  const worker = async () => {
+    while (!failed) {
+      const index = nextIndex;
+      if (index >= items.length) return;
+      nextIndex += 1;
+      try {
+        await verify(items[index]);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+        }
+      }
+    }
+  };
+  const workers = Array.from({ length: Math.min(RELEASE_VERIFICATION_CONCURRENCY, items.length) }, () => worker());
+  await Promise.all(workers);
+  if (failed) throw firstError;
 }
 
 export async function publishPrerelease(stageDirectory, adapter, authorization) {

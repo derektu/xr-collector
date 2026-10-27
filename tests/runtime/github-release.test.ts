@@ -71,6 +71,98 @@ it('rejects anonymous HTML, missing assets, and incorrect bytes', async () => {
   await expect(verifyAnonymousRelease(fixture.root, async () => new Response('wrong', { status: 200, headers: { 'content-type': 'application/octet-stream' } }))).rejects.toThrow(/do not match/u);
 });
 
+it('bounds remote hash verification, stops scheduling after a bad hash, and drains in-flight checks before publication fails', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  remote.tagCommit = fixture.state.commit;
+  remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
+  remote.assets.push(...fixture.state.assets.map((asset, index) => assetFromState(asset, index + 1)));
+  const pending = new Map<string, { resolve: (digest: string) => void }>();
+  const calls: string[] = [];
+  let active = 0;
+  let maximumActive = 0;
+  let updateCalls = 0;
+  remote.adapter.hashAsset = (asset: any) => new Promise<string>((resolve) => {
+    calls.push(asset.name);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    pending.set(asset.name, { resolve: (digest) => { active -= 1; resolve(digest); } });
+  });
+  remote.adapter.updateRelease = async () => { updateCalls += 1; return remote.release; };
+  const authorization = fixture.authorization(['publish-prerelease'], {
+    'R35-01': 'passed', 'R35-02': 'passed', 'R35-03': 'passed', 'R35-06': 'passed', 'R35-07': 'pending',
+  }, ['R35-07']);
+
+  const publication = publishPrerelease(fixture.root, remote.adapter, authorization);
+  let settled = false;
+  void publication.then(() => { settled = true; }, () => { settled = true; });
+  await waitFor(() => calls.length === 3);
+  pending.get(calls[0]!)!.resolve('0'.repeat(64));
+  await waitFor(() => active === 2);
+  await flushMicrotasks();
+
+  expect(maximumActive).toBe(3);
+  expect(calls).toHaveLength(3);
+  expect(settled).toBe(false);
+  expect(updateCalls).toBe(0);
+
+  for (const name of calls.slice(1)) pending.get(name)!.resolve(remote.assets.find((asset: any) => asset.name === name).sha256);
+  await expect(publication).rejects.toThrow(/does not match staged bytes/u);
+  expect(calls).toHaveLength(3);
+  expect(updateCalls).toBe(0);
+});
+
+it('bounds anonymous downloads and drains in-flight checks before rejecting a bad download hash', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  remote.tagCommit = fixture.state.commit;
+  remote.release = { id: 1, draft: false, prerelease: true, upload_url: 'fake' };
+  remote.assets.push(...fixture.state.assets.map((asset, index) => assetFromState(asset, index + 1)));
+  const pending = new Map<string, { resolve: (response: Response) => void }>();
+  const calls: string[] = [];
+  let active = 0;
+  let maximumActive = 0;
+  let updateCalls = 0;
+  remote.adapter.updateRelease = async () => { updateCalls += 1; return remote.release; };
+  const request = async (input: URL | RequestInfo) => {
+    const name = decodeURIComponent(new URL(input.toString()).pathname.split('/').pop()!);
+    calls.push(name);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    return new Promise<Response>((resolve) => {
+      pending.set(name, { resolve: (response) => { active -= 1; resolve(response); } });
+    });
+  };
+  const authorization = fixture.authorization(['promote-stable'], {
+    'R35-01': 'passed', 'R35-02': 'passed', 'R35-03': 'passed', 'R35-04': 'passed', 'R35-05': 'passed', 'R35-06': 'passed', 'R35-07': 'pending',
+  }, ['R35-07']);
+
+  const promotion = promoteStableRelease(fixture.root, remote.adapter, authorization, request);
+  let settled = false;
+  void promotion.then(() => { settled = true; }, () => { settled = true; });
+  await waitFor(() => calls.length === 3);
+  const first = calls[0]!;
+  const correct = await readFile(path.join(fixture.root, first));
+  const corrupt = Buffer.from(correct);
+  corrupt[0] = (corrupt[0]! + 1) % 256;
+  pending.get(first)!.resolve(new Response(corrupt, { status: 200, headers: { 'content-type': 'application/octet-stream' } }));
+  await waitFor(() => active === 2);
+  await flushMicrotasks();
+
+  expect(maximumActive).toBe(3);
+  expect(calls).toHaveLength(3);
+  expect(settled).toBe(false);
+  expect(updateCalls).toBe(0);
+
+  for (const name of calls.slice(1)) {
+    const value = await readFile(path.join(fixture.root, name));
+    pending.get(name)!.resolve(new Response(value, { status: 200, headers: { 'content-type': 'application/octet-stream' } }));
+  }
+  await expect(promotion).rejects.toThrow(/do not match/u);
+  expect(calls).toHaveLength(3);
+  expect(updateCalls).toBe(0);
+});
+
 it('makes every release mutation explicit and Mac-only', () => {
   expect(parseReleaseArguments(['stage', '--input', 'in', '--acceptance', 'accept.json', '--notes', 'notes.md', '--source-base-url', 'https://example.test/v0.1.0/', '--output', 'out'])).toMatchObject({ action: 'stage', sourceBaseUrl: 'https://example.test/v0.1.0/' });
   expect(() => parseReleaseArguments(['publish'])).toThrow(/action must be/u);
@@ -197,3 +289,12 @@ function goodAnonymous(fixture: Awaited<ReturnType<typeof stagedFixture>>) {
   };
 }
 function sha(value: string | Buffer) { return createHash('sha256').update(value).digest('hex'); }
+async function flushMicrotasks() { await Promise.resolve(); await Promise.resolve(); }
+async function waitFor(condition: () => boolean) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for release verification state.');
+}
