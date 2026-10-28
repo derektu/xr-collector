@@ -16,6 +16,12 @@ const roots: string[] = [];
 const describeStableCodeIdentity = async () => ({ teamId: 'ABCDE12345', cdHash: 'a'.repeat(40), identifier: 'com.moneydj.xrcollector' });
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
+async function privateSigningRoot(prefix = 'xr-signing-test-'): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
+
 it.skipIf(process.platform === 'win32')('loads only the exact protected credential contract under an explicit root', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-config-'));
   roots.push(root);
@@ -36,6 +42,7 @@ it.skipIf(process.platform === 'win32')('loads only the exact protected credenti
 });
 
 it('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
+  const tempRoot = await privateSigningRoot();
   const calls: string[][] = [];
   const existingKeychains = [path.resolve('fixture/login.keychain-db'), path.resolve('fixture/other-session.keychain-db')];
   let keychains = [...existingKeychains];
@@ -54,7 +61,8 @@ it('appends its keychain without reordering existing sessions and removes only i
     expect(identity).toMatchObject({ sha1: 'A'.repeat(40), teamId: 'ABCDE12345' });
     keychains.push(path.resolve('fixture/concurrent-session.keychain-db'));
     return 'done';
-  }, { run, randomPassword: () => 'temporary-password' })).resolves.toBe('done');
+  }, { run, randomPassword: () => 'temporary-password', tempRoot,
+    keychainSearchLock: path.join(tempRoot, 'search-list.lock') })).resolves.toBe('done');
   const set = calls.find((args) => args[0] === 'list-keychains' && args[3] === '-s')!;
   expect(set.slice(4, -1)).toEqual(existingKeychains);
   expect(set.at(-1)).toMatch(/signing\.keychain-db$/u);
@@ -67,14 +75,20 @@ it('appends its keychain without reordering existing sessions and removes only i
 });
 
 it('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
-  const stale = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
-  const live = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
-  roots.push(stale, live);
-  await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: 501, startedAt: 'old' }));
+  const universe = await privateSigningRoot('xr-mac-signing-scope-');
+  const tempRoot = path.join(universe, 'chosen-root');
+  await mkdir(tempRoot, { mode: 0o700 });
+  const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
+  const live = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
+  const external = await mkdtemp(path.join(universe, 'xr-mac-signing-'));
+  const uid = process.getuid?.() ?? 501;
+  await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid, startedAt: 'old' }));
   await writeFile(path.join(stale, 'signing.keychain-db'), 'stale');
-  await writeFile(path.join(live, 'owner.json'), JSON.stringify({ pid: 42, uid: 501, startedAt: 'live' }));
+  await writeFile(path.join(live, 'owner.json'), JSON.stringify({ pid: 42, uid, startedAt: 'live' }));
   await writeFile(path.join(live, 'signing.keychain-db'), 'live');
-  let keychains = [path.join(stale, 'signing.keychain-db'), path.join(live, 'signing.keychain-db')];
+  await writeFile(path.join(external, 'owner.json'), JSON.stringify({ pid: 43, uid, startedAt: 'external' }));
+  await writeFile(path.join(external, 'signing.keychain-db'), 'external');
+  let keychains = [path.join(stale, 'signing.keychain-db'), path.join(live, 'signing.keychain-db'), path.join(external, 'signing.keychain-db')];
   const run = async (_command: string, args: string[]) => {
     if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
     if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
@@ -82,27 +96,40 @@ it('recovers a SIGKILL-stale signing keychain without touching a live session', 
     if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
     return { stdout: '', stderr: '' };
   };
-  await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => undefined, {
-    run, randomPassword: () => 'temporary-password', processIdentity: async (pid: number) => pid === 42 ? { pid, uid: 501, startedAt: 'live' } : pid === process.pid ? { pid, uid: 501, startedAt: 'current' } : null,
-  });
+  const processIdentity = vi.fn(async (pid: number) => pid === 42 ? { pid, uid, startedAt: 'live' }
+    : pid === process.pid ? { pid, uid, startedAt: 'current' } : null);
+  const previousTmp = process.env.TMPDIR;
+  process.env.TMPDIR = universe;
+  try {
+    await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => undefined, {
+      run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock'), processIdentity,
+    });
+  } finally {
+    if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
+  }
   await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(stat(live)).resolves.toBeDefined();
-  expect(keychains).toEqual([path.join(live, 'signing.keychain-db')]);
+  await expect(stat(external)).resolves.toBeDefined();
+  expect(processIdentity).not.toHaveBeenCalledWith(43);
+  expect(keychains).toEqual([path.join(live, 'signing.keychain-db'), path.join(external, 'signing.keychain-db')]);
 });
 
 it('fails closed when a stale-session process identity cannot be inspected', async () => {
-  const stale = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
-  roots.push(stale);
+  const tempRoot = await privateSigningRoot();
+  const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
   await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'unknown' }));
   await writeFile(path.join(stale, 'signing.keychain-db'), 'private-key');
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => undefined, {
     run: async () => ({ stdout: '', stderr: '' }),
-    processIdentity: async () => { throw new Error('ps unavailable'); },
+    processIdentity: async () => { throw new Error('ps unavailable'); }, tempRoot,
+    keychainSearchLock: path.join(tempRoot, 'search-list.lock'),
   })).rejects.toThrow(/ps unavailable/u);
   await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
 });
 
 it('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-'));
+  roots.push(root);
   const signalTarget = new EventEmitter();
   let keychains: string[] = [];
   let deleted = '';
@@ -118,7 +145,8 @@ it('deletes its temporary keychain when the terminal sends SIGTERM', async () =>
     owned = keychain;
     signalTarget.emit('SIGTERM');
     signal.throwIfAborted();
-  }, { run, signalTarget, terminateAfterSignal: () => {}, randomPassword: () => 'temporary-password' })).rejects.toThrow(/SIGTERM/u);
+  }, { run, signalTarget, terminateAfterSignal: () => {}, randomPassword: () => 'temporary-password', tempRoot: root,
+    keychainSearchLock: path.join(root, 'search-list.lock') })).rejects.toThrow(/SIGTERM/u);
   expect(deleted).toBe(owned);
 });
 
@@ -140,7 +168,7 @@ it('preserves its signing session and shared lock when cleanup cannot confirm pr
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
     run, mkdtemp: async () => session, realpath: async (value: string) => value,
     processIdentity: async (pid: number) => ({ pid, uid: process.getuid?.() ?? 501, startedAt: 'current' }),
-    keychainSearchLock: sharedLock, randomPassword: () => 'temporary-password',
+    keychainSearchLock: sharedLock, randomPassword: () => 'temporary-password', tempRoot: root,
   })).rejects.toMatchObject({ preserveOwnedResources: true, processTree: tree });
   await expect(stat(session)).resolves.toBeDefined();
   const [sharedOwner] = await readdir(sharedLock);
@@ -156,12 +184,13 @@ it('a real packaging subprocess aborts its security child before append and remo
   const appended = path.join(root, 'search-list-appended');
   const packageModule = pathToFileURL(path.resolve('scripts/package-app.mjs')).href;
   const signingModule = pathToFileURL(path.resolve('scripts/mac-signing.mjs')).href;
+  const uid = process.getuid?.() ?? 501;
   const script = `
     import { spawn } from 'node:child_process';
     import { mkdir, writeFile } from 'node:fs/promises';
     import { withPackageCheckoutLock } from ${JSON.stringify(packageModule)};
     import { withTemporarySigningKeychain } from ${JSON.stringify(signingModule)};
-    const paths = ${JSON.stringify({ session, lock, ready, appended })};
+    const paths = ${JSON.stringify({ root, session, lock, ready, appended })};
     const run = async (_command, args, options = {}) => {
       if (args[0] === 'create-keychain') {
         await writeFile(args.at(-1), 'private-key');
@@ -181,7 +210,8 @@ it('a real packaging subprocess aborts its security child before append and remo
         { certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' },
         async () => {},
         { signal, run, mkdtemp: async () => { await mkdir(paths.session, { mode: 0o700 }); return paths.session; }, realpath: async (value) => value,
-          processIdentity: async (pid) => ({ pid, uid: 501, startedAt: 'child' }) }
+          processIdentity: async (pid) => ({ pid, uid: ${JSON.stringify(uid)}, startedAt: 'child' }), tempRoot: paths.root,
+          keychainSearchLock: paths.root + '/search-list.lock' }
       ));
     } catch (error) {
       if (!process.exitCode) { console.error(error); process.exitCode = 1; }
@@ -225,7 +255,7 @@ it('uses one canonical owned keychain path when macOS rewrites /var as /private/
   }, {
     run, mkdtemp: async () => requestedDirectory, realpath: async (value: string) => value.replace(/^\/var\//u, '/private/var/'),
     writeFile: async () => {}, inspectDirectory: async () => ({ isDirectory: () => true, mode: 0o700, uid: process.getuid?.() }),
-    randomPassword: () => 'temporary-password', keychainSearchLock: path.join(root, 'search-list.lock'),
+    randomPassword: () => 'temporary-password', keychainSearchLock: path.join(root, 'search-list.lock'), tempRoot: root,
   })).resolves.toBeUndefined();
   const append = calls.find((args) => args[0] === 'list-keychains' && args[3] === '-s')!;
   expect(append.at(-1)).toBe(`${canonicalDirectory}/signing.keychain-db`);
@@ -234,6 +264,7 @@ it('uses one canonical owned keychain path when macOS rewrites /var as /private/
 });
 
 it('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
+  const tempRoot = await privateSigningRoot();
   const existing = path.resolve('fixture/login.keychain-db');
   const concurrent = path.resolve('fixture/concurrent-session.keychain-db');
   let keychains = [existing];
@@ -252,7 +283,8 @@ it('preserves concurrent keychains and aggregates the work and owned-keychain de
       owned = keychain;
       keychains.push(concurrent);
       throw new Error('simulated signing failure');
-    }, { run, randomPassword: () => 'temporary-password' });
+    }, { run, randomPassword: () => 'temporary-password', tempRoot,
+      keychainSearchLock: path.join(tempRoot, 'search-list.lock') });
   } catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(AggregateError);
   expect((failure as AggregateError).errors.map((error) => String(error))).toEqual([
@@ -279,7 +311,7 @@ it('reclaims only a shared keychain-list lock whose recorded owner process is go
     return { stdout: '', stderr: '' };
   };
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock,
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, tempRoot: root,
     processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
   })).resolves.toBe('done');
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -299,13 +331,13 @@ it('reclaims an ownerless shared lock after its creation grace but fails closed 
     return { stdout: '', stderr: '' };
   };
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0,
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
   })).resolves.toBe('done');
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   await mkdir(lock, { mode: 0o700 });
   await writeFile(path.join(lock, 'owner-a1.json'), '{truncated', { mode: 0o600 });
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0,
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
   })).rejects.toBeInstanceOf(AggregateError);
   await expect(stat(lock)).resolves.toBeDefined();
 });

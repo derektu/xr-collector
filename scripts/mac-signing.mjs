@@ -87,9 +87,10 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
   const remove = dependencies.rm ?? rm;
   const write = dependencies.writeFile ?? writeFile;
   const canonicalize = dependencies.realpath ?? realpath;
+  const tempRoot = dependencies.tempRoot ?? tmpdir();
   const password = (dependencies.randomPassword ?? (() => randomBytes(32).toString('base64url')))();
-  await recoverStaleSigningKeychains({ ...dependencies, run, remove });
-  const directory = await canonicalize(await makeTemp(path.join(tmpdir(), 'xr-mac-signing-')));
+  await recoverStaleSigningKeychains({ ...dependencies, run, remove, tempRoot });
+  const directory = await canonicalize(await makeTemp(path.join(tempRoot, 'xr-mac-signing-')));
   const directoryInfo = await (dependencies.inspectDirectory ?? stat)(directory);
   if (!directoryInfo.isDirectory() || (directoryInfo.mode & 0o077) !== 0
     || (typeof process.getuid === 'function' && directoryInfo.uid !== process.getuid())) {
@@ -231,15 +232,17 @@ async function inspectSigningProcess(pid) {
 
 async function recoverStaleSigningKeychains(dependencies) {
   const inspect = dependencies.processIdentity ?? inspectSigningProcess;
-  const canonicalTemp = await realpath(tmpdir());
-  const entries = await readdir(tmpdir(), { withFileTypes: true });
+  const tempRoot = dependencies.tempRoot ?? tmpdir();
+  const canonicalize = dependencies.realpath ?? realpath;
+  const canonicalTemp = await canonicalize(tempRoot);
+  const entries = await readdir(tempRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith('xr-mac-signing-')) continue;
-    const directory = path.join(tmpdir(), entry.name);
+    const directory = path.join(tempRoot, entry.name);
     const info = await lstat(directory);
     if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0
       || (typeof process.getuid === 'function' && info.uid !== process.getuid())) continue;
-    const canonicalDirectory = await realpath(directory);
+    const canonicalDirectory = await canonicalize(directory);
     const relative = path.relative(canonicalTemp, canonicalDirectory);
     if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
     let owner;

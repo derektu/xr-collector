@@ -65,11 +65,12 @@ it('records an unverified process tree and refuses stale-owner recovery while it
   const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-lock-unsafe-'));
   roots.push(root);
   const lock = path.join(root, 'lock');
+  const uid = process.getuid?.() ?? 501;
   const tree = { platform: 'darwin', pid: 4242, kind: 'posix-process-group' };
   await expect(withOwnedDirectoryLock(lock, async () => {
     throw new UnsafeProcessTreeError('tree still active', tree);
   }, {
-    ownerIdentity: async () => ({ pid: 41, uid: 501, startedAt: 'owner' }),
+    ownerIdentity: async () => ({ pid: 41, uid, startedAt: 'owner' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => true,
     waitForBusy: false,
@@ -79,7 +80,7 @@ it('records an unverified process tree and refuses stale-owner recovery while it
   const [ownerName] = await readdir(lock);
   expect(JSON.parse(await readFile(path.join(lock, ownerName!), 'utf8'))).toMatchObject({ unsafeProcessTree: tree });
   await expect(withOwnedDirectoryLock(lock, async () => undefined, {
-    ownerIdentity: async () => ({ pid: 42, uid: 501, startedAt: 'next' }),
+    ownerIdentity: async () => ({ pid: 42, uid, startedAt: 'next' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => true,
     waitForBusy: false,

@@ -24,14 +24,24 @@ export async function run({ instance, page, record, waitFor }) {
 
     await page.addInitScript(() => {
       let navigate;
+      let readyCalled = false;
       window.xrCollectorDesktop = {
         chooseDirectory: async () => null, chooseExportFile: async () => null, chooseImportFile: async () => null,
         revealVault: async () => undefined, revealExport: async () => undefined, platform: 'darwin',
         onNavigate: (listener) => { navigate = listener; },
+        ready: () => { readyCalled = true; },
       };
-      window.__verifyOpenUpdate = () => navigate?.('update');
+      window.__verifyDesktopReady = () => readyCalled && typeof navigate === 'function';
+      window.__verifyOpenUpdate = () => {
+        if (!readyCalled || typeof navigate !== 'function') throw new Error('Desktop navigation handshake is not ready');
+        navigate('update');
+      };
     });
     await page.goto(`${instance.url}/documents`);
+    await waitFor(() => page.evaluate(() => window.__verifyDesktopReady()), 'desktop navigation handshake', { timeout: 8_000 });
+    expect(await page.evaluate(() => window.__verifyDesktopReady()), 'renderer 完成註冊導覽 listener 後向 preload 回報 ready', {
+      id: 'u36.native-navigation-handshake', expected: true, actual: await page.evaluate(() => window.__verifyDesktopReady()),
+    });
     await page.evaluate(() => window.__verifyOpenUpdate());
     await page.getByTestId('software-update').waitFor();
     await waitFor(() => panelIsInViewport(page), 'native update panel in viewport', { timeout: 8_000 });
