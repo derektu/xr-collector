@@ -60,6 +60,33 @@ it('appends its keychain without reordering existing sessions and removes only i
   expect(parseUserKeychainList(existingKeychains.map((entry) => `    ${JSON.stringify(entry)}`).join('\n'))).toEqual(existingKeychains);
 });
 
+it('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-keychain-alias-test-'));
+  roots.push(root);
+  const requestedDirectory = '/var/folders/fixture/xr-mac-signing-alias';
+  const canonicalDirectory = '/private/var/folders/fixture/xr-mac-signing-alias';
+  let keychains = ['/Users/example/Library/Keychains/login.keychain-db'];
+  const calls: string[][] = [];
+  const run = async (_command: string, args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
+    if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
+    if (args[0] === 'delete-keychain') { keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
+    return { stdout: '', stderr: '' };
+  };
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain }) => {
+    expect(keychain).toBe(`${canonicalDirectory}/signing.keychain-db`);
+  }, {
+    run, mkdtemp: async () => requestedDirectory, realpath: async (value: string) => value.replace(/^\/var\//u, '/private/var/'),
+    randomPassword: () => 'temporary-password', keychainSearchLock: path.join(root, 'search-list.lock'),
+  })).resolves.toBeUndefined();
+  const append = calls.find((args) => args[0] === 'list-keychains' && args[3] === '-s')!;
+  expect(append.at(-1)).toBe(`${canonicalDirectory}/signing.keychain-db`);
+  expect(calls.find((args) => args[0] === 'delete-keychain')?.[1]).toBe(`${canonicalDirectory}/signing.keychain-db`);
+  expect(keychains).toEqual(['/Users/example/Library/Keychains/login.keychain-db']);
+});
+
 it('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
   const existing = path.resolve('fixture/login.keychain-db');
   const concurrent = path.resolve('fixture/concurrent-session.keychain-db');

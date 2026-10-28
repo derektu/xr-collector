@@ -70,8 +70,9 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
   const run = dependencies.run ?? runCaptured;
   const makeTemp = dependencies.mkdtemp ?? mkdtemp;
   const remove = dependencies.rm ?? rm;
+  const canonicalize = dependencies.realpath ?? realpath;
   const password = (dependencies.randomPassword ?? (() => randomBytes(32).toString('base64url')))();
-  const directory = await makeTemp(path.join(tmpdir(), 'xr-mac-signing-'));
+  const directory = await canonicalize(await makeTemp(path.join(tmpdir(), 'xr-mac-signing-')));
   const keychain = path.join(directory, 'signing.keychain-db');
   let created = false;
   let primaryError;
