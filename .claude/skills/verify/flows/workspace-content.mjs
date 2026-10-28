@@ -131,7 +131,7 @@ export async function run({ instance, page, record, waitFor }) {
       id: 'COUNTS-1.search-dom-within-6s', expected: '已索引 3 份／知識庫 3 份', actual: searchActual,
     });
     const settled = await instance.state();
-    const index = settled.index.indexes.find((candidate) => candidate.uid === 'documents_v2');
+    const index = settled.index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
     expect(index?.numberOfDocuments === 3, '搜尋引擎實際索引有 3 份文件', {
       id: 'COUNTS-1.index', expected: 3, actual: index?.numberOfDocuments ?? null,
     });
@@ -165,7 +165,7 @@ export async function run({ instance, page, record, waitFor }) {
       id: 'COUNTS-2.search-dom-within-6s', expected: '已索引 5 份／知識庫 5 份', actual: searchActual,
     });
     const settled = await instance.state();
-    const index = settled.index.indexes.find((candidate) => candidate.uid === 'documents_v2');
+    const index = settled.index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
     expect(index?.numberOfDocuments === 5, '搜尋引擎實際索引有 5 份文件', {
       id: 'COUNTS-2.index', expected: 5, actual: index?.numberOfDocuments ?? null,
     });

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../src/core/types.js';
 import { ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
+import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
 import {
   startMeilisearchProcess,
   type RunningMeilisearch,
@@ -14,6 +15,8 @@ import {
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();
 const bundledBinary = path.resolve('resources/bin/mac/meilisearch');
+const bundledLexicon = path.resolve('resources/search/coct-main.txt');
+const lexiconPromise = loadSearchLexicon(bundledLexicon);
 
 afterEach(async () => {
   await Promise.all([...running].map((process) => process.close()));
@@ -51,12 +54,13 @@ async function withSearch<T>(
   documents: () => SavedDocument[],
   use: (search: ManagedTranscriptSearch, engine: RunningMeilisearch, rebuilds: number) => Promise<T>,
 ): Promise<T> {
-  const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
+  const lexicon = await lexiconPromise;
+  const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath, lexiconPath: bundledLexicon });
   running.add(engine);
   try {
     let rebuilds = 0;
     const search = new ManagedTranscriptSearch(
-      new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey }),
+      new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon }),
       async () => documents(),
       { load: async () => ({ lastRebuiltAt: null }), save: async () => { rebuilds += 1; } },
     );
@@ -130,7 +134,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
     const databasePath = await tempDatabase();
     const documents = Array.from({ length: 30 }, (_, index) => transcript(
       `page${String(index).padStart(7, '0')}`,
-      `共同關鍵詞 第 ${index} 篇`,
+      `${index % 2 === 0 ? '共同關鍵詞' : '共同关键词'} 第 ${index} 篇`,
       index < 3 ? null : 'channel-1',
     ));
     await withSearch(databasePath, () => documents, async (search) => {
@@ -142,6 +146,103 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       const legacy = await search.search({ query: '共同關鍵詞', sourceType: 'youtube', publisherId: 'none' });
       expect(legacy.total).toBe(3);
       expect(legacy.hits.every((hit) => hit.publisher.id === null)).toBe(true);
+    });
+  }, 30_000);
+
+  it('normalizes document and query text while returning raw metadata and snippets', async () => {
+    const databasePath = await tempDatabase();
+    const variants = [
+      { sourceId: 'traditional', title: '台積電 ＡＩ', publisher: 'CoWoS 頻道', body: '發展 ００５０與台積電🙂 <script>raw</script>' },
+      { sourceId: 'simplified0', title: '台积电 AI', publisher: 'cowos 频道', body: '发展 0050与台积电🙂 <script>raw</script>' },
+      { sourceId: 'variant0000', title: '臺積電 ai', publisher: 'ＣｏＷｏＳ 頻道', body: '發展 0050與臺積電🙂 <script>raw</script>' },
+    ].map(({ sourceId, title, publisher, body }) => ({
+      ...transcript(sourceId, body), title, publisher: { id: 'normalization', name: publisher },
+    }));
+
+    await withSearch(databasePath, () => variants, async (search) => {
+      const expectedIds = new Set(variants.map(({ id }) => id));
+      for (const query of ['台積電', '台积电', '臺積電', 'ＡＩ', 'AI', 'CoWoS', 'cowos', '００５０', '0050']) {
+        const result = await search.search({ query });
+        expect(result.total, query).toBe(3);
+        expect(new Set(result.hits.map(({ id }) => id)), query).toEqual(expectedIds);
+      }
+      const simplified = await search.search({ query: '台积电', limit: 10 });
+      expect(simplified.hits.find(({ id }) => id === 'youtube:simplified0')).toMatchObject({
+        title: '台积电 AI', publisher: { name: 'cowos 频道' },
+      });
+      const rawSnippet = simplified.hits.find(({ id }) => id === 'youtube:simplified0')!.snippet;
+      expect(rawSnippet).toContain('<mark>台积电</mark>');
+      expect(rawSnippet).toContain('🙂 <script>raw</script>');
+      expect((await search.search({ query: ' \n\t　' })).total).toBe(3);
+    });
+  }, 30_000);
+
+  it('applies the same projection independently to title, publisher and body', async () => {
+    const databasePath = await tempDatabase();
+    const inTitle = { ...transcript('fieldtitle0', '正文沒有目標'), title: '光刻机標題' };
+    const inPublisher = {
+      ...transcript('fieldpubl00', '正文沒有目標'),
+      publisher: { id: 'field-publisher', name: '光刻機發布者' },
+    };
+    const inBody = transcript('fieldbody00', '正文只有這裡寫光刻機');
+    const expected = new Set([inTitle.id, inPublisher.id, inBody.id]);
+    await withSearch(databasePath, () => [inTitle, inPublisher, inBody], async (search) => {
+      for (const query of ['光刻机', '光刻機']) {
+        const result = await search.search({ query });
+        expect(result.total, query).toBe(3);
+        expect(new Set(result.hits.map(({ id }) => id)), query).toEqual(expected);
+      }
+      const simplified = await search.search({ query: '光刻机' });
+      expect(simplified.hits.find(({ id }) => id === inTitle.id)?.title).toBe('光刻机標題');
+      expect(simplified.hits.find(({ id }) => id === inPublisher.id)?.publisher.name).toBe('光刻機發布者');
+    });
+  }, 30_000);
+
+  it('uses OpenCC phrase context without expanding regional vocabulary', async () => {
+    const databasePath = await tempDatabase();
+    const contextual = transcript('context0000', '发展、头发、干燥、干部；服务器與软件。');
+    const regional = transcript('regional00', '發展、頭髮、乾燥、幹部；伺服器與軟體。');
+    await withSearch(databasePath, () => [contextual, regional], async (search) => {
+      for (const query of ['發展', '頭髮', '乾燥', '幹部']) expect((await search.search({ query })).total, query).toBe(2);
+      expect((await search.search({ query: '服務器' })).hits.map(({ id }) => id)).toEqual([contextual.id]);
+      expect((await search.search({ query: '伺服器' })).hits.map(({ id }) => id)).toEqual([regional.id]);
+      expect((await search.search({ query: '軟件' })).hits.map(({ id }) => id)).toEqual([contextual.id]);
+      expect((await search.search({ query: '軟體' })).hits.map(({ id }) => id)).toEqual([regional.id]);
+    });
+  }, 30_000);
+
+  it('keeps complete words first and recalls only contiguous Chinese fragments', async () => {
+    const databasePath = await tempDatabase();
+    const exactWord = transcript('exactword00', '今天談股，也談別的主題。');
+    const fragment = transcript('fragment000', '半導體與個股現金流量，也追蹤離岸風電。');
+    const scattered = transcript('scattered00', '半年展望由導師說明，直觀分析後產品賣光；離岸市場稍後有風。');
+    const crossField = { ...transcript('crossfield0', '體'), title: '半', publisher: { id: 'channel-1', name: '導' } };
+    await withSearch(databasePath, () => [fragment, scattered, crossField, exactWord], async (search) => {
+      expect((await search.search({ query: '股' })).hits.map(({ id }) => id)).toEqual([exactWord.id, fragment.id]);
+      expect((await search.search({ query: '半導' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      expect((await search.search({ query: '導體' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      expect((await search.search({ query: '金' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      expect((await search.search({ query: '觀光' })).total).toBe(0);
+      expect((await search.search({ query: '離岸風' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      expect((await search.search({ query: '"半導體與個股"' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      expect((await search.search({ query: '半導體 現金' })).hits.map(({ id }) => id)).toEqual([fragment.id]);
+      const snippet = (await search.search({ query: '導體' })).hits[0]!.snippet;
+      expect(snippet).toContain('半<mark>導體</mark>');
+    });
+  }, 30_000);
+
+  it('leaves pure Latin and mixed-query typo and prefix matching to Meilisearch', async () => {
+    const databasePath = await tempDatabase();
+    const target = transcript('mixedlatin0', 'semiconductor roadmap 與半導體供應鏈');
+    const wrongChinese = transcript('wrongcjk000', 'semiconductor roadmap，半年後由導師更新');
+    await withSearch(databasePath, () => [target, wrongChinese], async (search) => {
+      expect((await search.search({ query: 'semiconductr' })).hits.map(({ id }) => id)).toContain(target.id);
+      expect((await search.search({ query: 'semicon' })).hits.map(({ id }) => id)).toContain(target.id);
+      const mixed = await search.search({ query: 'semiconductr 半導' });
+      expect(mixed.hits.map(({ id }) => id)).toEqual([target.id]);
+      expect(mixed.hits[0]!.snippet).toContain('<mark>semiconducto</mark>r');
+      expect(mixed.hits[0]!.snippet).toContain('<mark>半導</mark>');
+      expect((await search.search({ query: 'semicon 半導' })).hits.map(({ id }) => id)).toEqual([target.id]);
     });
   }, 30_000);
 

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "coct-news-1141208",
+  "source": {
+    "url": "https://coct.naer.edu.tw/file/files/%E9%80%9A%E7%94%A8%E8%A9%9E%E9%A0%BB%E8%A1%A8%20-%20%E5%AE%9A%E7%A8%BF1141208.xlsx",
+    "sha256": "bfd3b73938e115ae39a44c5e11c97135c09939cf598157cb2fe0b33c4302de75",
+    "fileVersion": "定稿1141208",
+    "fileLastModified": "Mon, 08 Dec 2025 00:24:59 GMT",
+    "corpusCollectionPeriod": "not established",
+    "license": "Product redistribution/derivative terms not established; public availability is not an open-license assertion."
+  },
+  "extraction": {
+    "sheet": "通用詞頻表",
+    "wordColumn": "B",
+    "rawNewsCountColumn": "I",
+    "rawRows": 163701
+  },
+  "normalization": {
+    "revision": 1,
+    "openccVersion": "1.4.2",
+    "implementation": "src/normalize.mjs"
+  },
+  "frequency": "Sum raw news counts for normalized collisions; floor each resulting zero to 1. POS n is an unused placeholder. No gold/query-dependent word selection.",
+  "uniqueTerms": 162966,
+  "rejectedRows": 0,
+  "collisionGroups": 730,
+  "zeroNewsFloored": 439,
+  "output": {
+    "file": "coct-main.txt",
+    "sha256": "4b2d026eaa353ffde900f36049e72f1fa6902fbf25b14dbcb0b675d541e01264",
+    "bytes": 2212252
+  }
+}

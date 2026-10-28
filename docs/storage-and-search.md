@@ -195,7 +195,13 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 收集先保存 Markdown，再更新索引。索引失敗不刪除已保存文件；列表與全文可從 Vault 讀取，搜尋依索引狀態回報結果或錯誤。合併匯入只對寫入或移除的文件更新索引；完全取代與中斷後完成的匯入從 Vault 全量重建。匯入的檔案都已到位後，更新索引或重新載入訂閱失敗時改為全量重建；重建也失敗時匯入仍算完成，狀態為 `completed`、`result.searchRebuildNeeded` 為 true，狀態訊息為「匯入已完成，搜尋索引需要重建」，完成畫面提示到設定按「重建索引」；重新啟動程式時搜尋服務也會發現索引與 Vault 不符而重建。從匯出檔建立的 Vault 開啟時建立自己的索引。
 
-索引名稱帶 schema 版本（`documents_v2`）；schema 改變時使用新名稱並從 Vault 全量重建，舊版本的索引在啟動時刪除。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。
+索引名稱帶 schema 版本（`documents_v3`）；schema 改變時使用新名稱並從 Vault 全量重建。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。
+
+搜尋索引另存 title、publisher name 與 body 的正規化投影；Vault 與回傳的 metadata、Reader 內文、摘要文字都保留原文。文件與 query 共用固定順序：完整 Unicode NFKC、ASCII A–Z 小寫、OpenCC `s2t`、OpenCC `t2tw`、`臺` 轉 `台`，最後把 Unicode `White_Space` 連續區段收成一個 ASCII 空格並去掉頭尾空白。OpenCC 使用固定的純 JavaScript `opencc-js` 1.4.2 及其內嵌字典，不需要平台 binary 或執行時下載；不使用 `s2twp`，因此不做「服务器／伺服器」這類地區用詞替換。filter ID、日期、URL 與文件 ID 不經正規化。命中位置以正規化文字的 UTF-8 byte offset 映回原文後才產生 `<mark>` 摘要。
+
+中文引擎從 App 的獨立 COCT 主詞庫資源建立 Jieba 第一輪詞界，不把詞庫編入 Meilisearch binary，也不作搜尋用的二次拆詞。啟動先核對 provenance manifest、檔案 SHA-256、UTF-8 與正整數詞頻格式，再讓引擎實際初始化中文 tokenizer；資源不完整時搜尋維持不可用。詞庫身分與查詢策略都在搜尋 profile，換檔後從 Vault 重建投影，不需要重建相同的通用引擎 binary。
+
+查詢以相同 COCT 詞頻執行 Jieba 加權路徑；COCT 辨識的多詞維持 AND，相鄰未知單字組成的短片段即使跨 COCT 詞界也維持逐字連續，引號內文字整段連續。每個中文片段必須在同一個正規化欄位逐字相鄰，可位於較長詞內，但不能跨空白、標點或欄位。Meilisearch 的合格 primary 排序優先，片段補回結果按 Vault 順序穩定接續；純 Latin 沿用引擎查詢，中英混合由引擎處理 Latin typo／prefix，再驗中文連續性。衍生的 normalized fields 與 unique-character postings 只存在 Node 記憶體，從 Vault 重建並在增刪成功後同步；任何同步或重建失敗都不提供 stale-ready 搜尋。
 
 來源專屬的欄位放在以來源類型為名的區塊，由 plugin 的 frontmatter codec 讀出，例如 YouTube 文件的 `youtube` 區塊含字幕語言與種類。每筆索引文件帶有其 metadata、來源專屬區塊與正文的內容雜湊，欄位順序固定，雜湊只隨內容改變；`tests/search/indexed-document.test.ts` 固定了一份 YouTube 文件的雜湊值。啟動時逐筆比對索引與 Vault 的文件 ID 及雜湊，集合或任一雜湊不同就從 Vault 全量重建，因此篇數相同但內容或身分不同時也會重建；完全一致時沿用持久化索引。全量重建完成的時間記錄在裝置的搜尋資料旁（`<搜尋資料目錄>-state.json`），供設定頁與 `GET /api/search/status` 顯示。這項比對只在啟動時進行；執行期間的收集逐筆更新索引。
 

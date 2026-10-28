@@ -10,8 +10,9 @@ import { probePhysicalHost } from './physical-host.mjs';
 import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
 
 const options = parseArguments(process.argv.slice(2));
-if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--require-native]');
+if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--lexicon <path>] [--require-native]');
 const binary = path.resolve(options.binary);
+const lexicon = path.resolve(options.lexicon ?? 'resources/search/coct-main.txt');
 const manifestPath = path.resolve(options.manifest ?? path.join(path.dirname(binary), 'meilisearch-build.json'));
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const bytes = await readFile(binary);
@@ -43,7 +44,7 @@ const port = await availablePort();
 const key = randomBytes(32).toString('hex');
 let engine;
 try {
-  engine = await start(binary, database, port, key);
+  engine = await start(binary, database, port, key, lexicon);
   const baseUrl = `http://127.0.0.1:${port}`;
   const version = await request(baseUrl, key, '/version');
   if (version.pkgVersion !== '1.53.2') throw new Error(`Smoke engine version is ${version.pkgVersion ?? 'unknown'}, expected 1.53.2.`);
@@ -85,7 +86,7 @@ try {
   if (youtubeOnly.totalHits !== 2 || JSON.stringify(youtubeOnly.hits.map(({ id }) => id).sort()) !== JSON.stringify(['youtube:one', 'youtube:three'])
     || rssOnly.totalHits !== 1 || rssOnly.hits[0]?.id !== 'rss:two') throw new Error('Source filter counterfactual smoke failed.');
   await stop(engine);
-  engine = await start(binary, database, port, key);
+  engine = await start(binary, database, port, key, lexicon);
   const restartedStats = await request(baseUrl, key, '/indexes/documents_v2/stats');
   const restartedSearch = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(searchPayload) });
   const restartedEnglish = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(englishPayload) });
@@ -97,9 +98,15 @@ try {
   await rm(database, { recursive: true, force: true });
 }
 
-async function start(executable, databasePath, portNumber, apiKey) {
+async function start(executable, databasePath, portNumber, apiKey, dictionaryPath) {
   const child = spawn(executable, ['--db-path', databasePath, '--http-addr', `127.0.0.1:${portNumber}`, '--env', 'production', '--no-analytics'], {
-    env: { ...process.env, MEILI_MASTER_KEY: apiKey }, stdio: ['ignore', 'ignore', 'pipe'],
+    env: {
+      ...process.env,
+      MEILI_MASTER_KEY: apiKey,
+      XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH: dictionaryPath,
+      XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT: '1',
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-8192); });
@@ -156,6 +163,7 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--binary') parsed.binary = argv[++index];
     else if (argv[index] === '--manifest') parsed.manifest = argv[++index];
+    else if (argv[index] === '--lexicon') parsed.lexicon = argv[++index];
     else if (argv[index] === '--require-native') parsed.requireNative = true;
     else throw new Error(`Unknown argument ${argv[index]}`);
   }

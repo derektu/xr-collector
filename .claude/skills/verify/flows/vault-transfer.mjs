@@ -42,7 +42,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(await page.locator('.document-row').count() === count, '搜尋可找到所有文件');
     const state = await instance.state();
     expect(state.vault.documents?.length === count, `Vault 實際保存 ${count} 份文件`, { id: `vault.count.${count}`, expected: count, actual: state.vault.documents?.length });
-    const index = state.index.indexes?.find((entry) => entry.uid === 'documents_v2');
+    const index = state.index.indexes?.find((entry) => ['documents_v3', 'documents_v2'].includes(entry.uid));
     expect(index?.numberOfDocuments === count, '搜尋索引筆數一致', { id: `index.count.${count}`, expected: count, actual: index?.numberOfDocuments });
     await button('documents-search').fill('');
     await settings();

@@ -7,6 +7,7 @@
 - `docs-list`：列表、摘要「共 n 份文件」、每頁 20 份的分頁。
 - `docs-filter`：來源選單 `documents-source`（「全部（n）」、各頻道與 feed、已移除的訂閱）。
 - `docs-search`：搜尋框，結果與「沒有符合的文件」。
+- `docs-search-normalization`：query 與 title、publisher、body 共用 NFKC、ASCII 小寫、繁簡／常見繁體異體與 Unicode 空白正規化；COCT 詞界保留完整詞，中文片段須在同一欄位連續；列表、摘要與閱讀頁仍顯示 Vault 原文。
 - `docs-search-unavailable`：搜尋引擎不可用時的提示。
 - `reader-view`：閱讀頁內文、發布者、原始來源連結。
 - `reader-delete`：閱讀頁或列表更多動作的刪除確認；確認後回原列表，重新開啟已刪除 ID 才顯示刪除狀態。
@@ -49,3 +50,4 @@ Preconditions:
 - `feature-navigation`：斷言 `docs-search` 的設定入口，從畫面重建索引後回到就緒，Vault 文件內容不變。
 - `documents-reader-search`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-view`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁、來源篩選、搜尋與無結果、閱讀；刪除後先記錄目前回文件頁且保留搜尋詞的行為，再直接開已刪文件網址驗已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集並在重啟後再次搜尋。
 - `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回、取消與確認刪除、YouTube 重新收集與 RSS 無此操作、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支；COUNTS-1、COUNTS-2 另比對搜尋狀態 API、實際索引與設定頁搜尋卡在背景收集後的 3／3、5／5。
+- `search-normalization`：斷言 `docs-search-normalization`。五份合成 RSS 文件驗繁簡／臺台、NFKC、ASCII 大小寫、前導零、Unicode 純空白 browse、地區用詞不互換、完整詞與連續片段、散字負例、原文 highlight 與重啟後 Vault 不變。

@@ -292,6 +292,10 @@ describe('HTTP app', () => {
     ]);
     expect(response.json()).toEqual({ hits: [hit], total: 21, offset: 20, limit: 20 });
 
+    const whitespace = await app.inject({ method: 'GET', url: `/api/search?q=${encodeURIComponent('\u0085\u00a0　')}` });
+    expect(whitespace.statusCode).toBe(200);
+    expect(searchRequests.at(-1)).toMatchObject({ query: '', offset: 0, limit: 50 });
+
     const rejected = await Promise.all([
       '/api/search?q=x&channel=%E6%B8%AC%E8%A9%A6%E9%A0%BB%E9%81%93',
       '/api/search?q=x&publisherId=UC-test',
@@ -302,7 +306,7 @@ describe('HTTP app', () => {
     expect(rejected.map((item) => [item.statusCode, item.json().error.code])).toEqual(
       Array.from({ length: 5 }, () => [400, 'invalid_request']),
     );
-    expect(searchRequests).toHaveLength(1);
+    expect(searchRequests).toHaveLength(2);
     await app.close();
   });
 

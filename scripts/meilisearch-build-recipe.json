@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recipeRevision": 1,
+  "recipeRevision": 2,
   "repository": "https://github.com/meilisearch/meilisearch.git",
   "tag": "v1.53.2",
   "sourceCommit": "ec006cecec6f684b1dcaee093a45ab4c05707127",
@@ -10,5 +10,13 @@
   "profile": "release",
   "features": ["chinese"],
   "defaultFeatures": false,
+  "charabiaOverride": {
+    "version": "0.10.0",
+    "archiveSha256": "27d98f4c66de52108210ee491c9c991513021dfd259bf65e4bbd889687b488d7",
+    "patch": "scripts/meilisearch-patches/charabia-external-dictionary.patch",
+    "patchSha256": "0c0c20f5b5ddc869850be40228eb7db7baad872c3b3b4b94ca86eb4455503206",
+    "validator": "scripts/meilisearch-patches/dictionary.rs",
+    "validatorSha256": "31fdcf813e8b9668bf3306c0bfe75b0f1925438a6bd2871652c125e926a8e767"
+  },
   "meilisearchVersion": "1.53.2"
 }
