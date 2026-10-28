@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { inspectExecutable } from './build-meilisearch.mjs';
-import { verifyMacBundleSignature } from './package-app.mjs';
+import { verifyMacBundleSignature, verifySignedMacDmgContents } from './package-app.mjs';
+import { DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage } from './mac-signing.mjs';
 import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,7 +62,20 @@ export async function planReleaseCandidate(options, dependencies = {}) {
     const inspect = dependencies.inspectPackagedPayload ?? inspectPackagedPayload;
     const primary = artifacts.find((artifact) => manifest.target === 'darwin-arm64' ? artifact.basename.endsWith('.zip') : artifact.basename.endsWith('.exe'));
     if (!primary) throw new Error(`Missing primary update payload for ${key}.`);
-    const inspected = await inspect(primary.path, manifest.target, manifest.packageIdentity);
+    if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY) {
+      const dmg = artifacts.find((artifact) => artifact.basename.endsWith('.dmg'));
+      const verifyDmg = dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage;
+      const validateDmg = dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact;
+      const inspectDmg = dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents;
+      await verifyDmg(dmg.path, manifest.signing.teamId);
+      await validateDmg(dmg.path, 'dmg');
+      if (!sameFileIdentity(dmg, manifest.signing.actualVerification.dmg.stapled)) throw new Error('Final DMG bytes differ from the notarization receipt.');
+      const dmgInspection = await inspectDmg(dmg.path, manifest.packageIdentity.productName, manifest.signing.teamId);
+      if (!isDeepStrictEqual(dmgInspection.appIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
+    }
+    const inspected = await inspect(primary.path, manifest.target, manifest.packageIdentity, { signing: manifest.signing });
+    if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY
+      && !isDeepStrictEqual(inspected.notarizedAppIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
     await validateInspectedIdentity(inspected, manifest);
     candidates.push({ key, manifestPath: item.manifestPath, manifest, artifacts, acceptance: acceptanceRecord, inspected });
   }
@@ -78,7 +92,7 @@ export async function planReleaseCandidate(options, dependencies = {}) {
   if (allInputFiles.some((file) => resolvePath(file) === acceptanceResolved)) allowedInputFiles.add(acceptanceResolved);
   const extras = allInputFiles.filter((file) => !allowedInputFiles.has(resolvePath(file)));
   if (extras.length) throw new Error(`Input contains files outside the four declared handoffs: ${extras.map((file) => path.relative(options.input, file)).join(', ')}.`);
-  validateGlobalAcceptance(acceptance, commit, expectedVersion);
+  validateGlobalAcceptance(acceptance, commit, expectedVersion, candidates.some((candidate) => candidate.manifest.signing.policy === DEVELOPER_ID_POLICY));
   return { schemaVersion: 1, version: expectedVersion, tag, commit, sourceBaseUrl, updateRepository, releaseNotes, acceptance, candidates };
 }
 
@@ -153,8 +167,10 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
   try {
     const prefix = target === 'darwin-arm64' ? `${packageIdentity.productName}.app/Contents/Resources` : 'resources';
     const resources = path.join(root, ...prefix.split('/'));
+    let notarizedAppIdentity = null;
     if (target === 'darwin-arm64') {
-      await extractMacApplication(payload, root, packageIdentity.productName, inspection);
+      const appPath = await extractMacApplication(payload, root, packageIdentity.productName, inspection);
+      if (inspection.signing?.policy === DEVELOPER_ID_POLICY) notarizedAppIdentity = await (inspection.describeArtifact ?? describeArtifact)(appPath);
     } else {
       const binary = sevenZip.path7za;
       await chmod(binary, 0o755);
@@ -169,6 +185,9 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
     const buildInfo = JSON.parse(extractFile(asar, 'dist/node/build-info.json').toString('utf8'));
     const dependencies = JSON.parse(await readFile(path.join(resources, 'bin/runtime-dependencies.json'), 'utf8'));
     const meilisearch = JSON.parse(await readFile(path.join(resources, 'bin/meilisearch-build.json'), 'utf8'));
+    let signed = null;
+    try { signed = JSON.parse(await readFile(path.join(resources, 'bin', RUNTIME_SIGNING_MANIFEST), 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const runtimeFiles = {};
     for (const relative of [dependencies.executables.deno, dependencies.executables.ytDlp, target === 'win32-x64' ? 'meilisearch.exe' : 'meilisearch'].map(assertRelativeRuntimePath)) {
       runtimeFiles[relative] = await describeFile(path.join(resources, 'bin', relative));
@@ -178,7 +197,7 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
     const crt = path.join(resources, 'bin/vcruntime140.dll');
     let windowsCrt = null;
     try { windowsCrt = await describeFile(crt); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    return { packageMetadata, buildInfo, dependencies, meilisearch, runtimeFiles, binaryIdentity, windowsCrt };
+    return { packageMetadata, buildInfo, dependencies, meilisearch, signed, runtimeFiles, binaryIdentity, windowsCrt, notarizedAppIdentity };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -187,7 +206,10 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
 async function extractMacApplication(payload, root, productName, dependencies = {}) {
   await (dependencies.run ?? run)('/usr/bin/ditto', ['-x', '-k', payload, root]);
   const appPath = path.join(root, `${productName}.app`);
-  await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+  if (dependencies.signing?.policy === DEVELOPER_ID_POLICY) {
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, dependencies.signing.teamId);
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+  } else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
   return appPath;
 }
 
@@ -205,6 +227,7 @@ async function validateInspectedIdentity(inspected, manifest) {
   }
   if (JSON.stringify(inspected.dependencies) !== JSON.stringify(manifest.runtimeIdentity?.dependencies)) throw new Error('Packaged runtime dependency inventory differs from the private manifest.');
   if (JSON.stringify(inspected.meilisearch) !== JSON.stringify(manifest.runtimeIdentity?.meilisearch)) throw new Error('Packaged Meilisearch producer identity differs from the private manifest.');
+  if (JSON.stringify(inspected.signed ?? null) !== JSON.stringify(manifest.runtimeIdentity?.signed ?? null)) throw new Error('Packaged signed runtime inventory differs from the private manifest.');
   const dependencyPins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
   const targetPins = dependencyPins.targets[manifest.target];
   for (const name of ['ytDlp', 'deno']) {
@@ -212,8 +235,13 @@ async function validateInspectedIdentity(inspected, manifest) {
     const pin = targetPins[name];
     if (actual.version !== pin.version || actual.url !== pin.url || actual.archiveSha256 !== pin.sha256) throw new Error(`Packaged ${name} producer does not match repository pins.`);
   }
+  const signed = manifest.signing.policy === DEVELOPER_ID_POLICY ? inspected.signed : null;
+  if (manifest.signing.policy === DEVELOPER_ID_POLICY) validateSignedRuntimeInspection(signed, inspected, manifest);
+  else if (signed) throw new Error('An ad-hoc or unsigned package must not contain a Developer ID runtime signing inventory.');
   for (const [relative, actual] of Object.entries(inspected.runtimeFiles)) {
-    const expectedFile = relative.startsWith('meilisearch') ? inspected.meilisearch.binary : inspected.dependencies.files.find((file) => file.path === relative);
+    const expectedFile = signed
+      ? signed.files.find((file) => file.path === relative && file.type === 'file')
+      : (relative.startsWith('meilisearch') ? inspected.meilisearch.binary : inspected.dependencies.files.find((file) => file.path === relative));
     if (!expectedFile || expectedFile.bytes !== actual.bytes || expectedFile.sha256 !== actual.sha256) throw new Error(`Packaged runtime bytes do not match inventory: ${relative}.`);
   }
   if (inspected.binaryIdentity?.format !== inspected.meilisearch.binary.format || inspected.binaryIdentity?.arch !== inspected.meilisearch.binary.arch) throw new Error('Packaged Meilisearch executable architecture differs from its producer manifest.');
@@ -249,18 +277,67 @@ function validateManifestIdentity(manifest, version, key) {
   const expectedProduct = production ? 'XR Collector' : `XR Update Verify ${manifest.variant === 'chinese' ? 'Chinese' : 'Official'}`;
   const expectedAppId = production ? 'com.moneydj.xrcollector' : `com.xrcollector.verify.public.${manifest.variant}`;
   if (identity.productName !== expectedProduct || identity.appId !== expectedAppId) throw new Error(`Private manifest product identity is invalid for ${key}.`);
+  validateSigningIdentity(manifest, key);
 }
 
+function validateSigningIdentity(manifest, key) {
+  const signing = manifest.signing;
+  if (!signing || signing.credentialDiscovery !== false) throw new Error(`Private manifest signing policy is invalid for ${key}.`);
+  if (manifest.target !== 'darwin-arm64') {
+    if (signing.policy !== 'unsigned') throw new Error(`Windows signing policy is invalid for ${key}.`);
+    return;
+  }
+  if (signing.policy === 'ad-hoc') return;
+  if (signing.policy !== DEVELOPER_ID_POLICY || !/^[A-Z0-9]{10}$/u.test(signing.teamId ?? '')
+    || !/^[0-9a-f]{40}$/iu.test(signing.identity?.sha1 ?? '')
+    || !signing.identity?.name?.startsWith('Developer ID Application:') || !signing.identity.name.includes(`(${signing.teamId})`)
+    || signing.actualVerification?.kind !== DEVELOPER_ID_POLICY) throw new Error(`Developer ID signing identity is invalid for ${key}.`);
+  for (const kind of ['app', 'dmg']) validateNotaryReceipt(signing.actualVerification[kind], kind, signing.teamId, key);
+}
+
+function validateNotaryReceipt(receipt, kind, teamId, key) {
+  if (receipt?.schemaVersion !== 1 || receipt.kind !== kind || receipt.teamId !== teamId
+    || !/^[0-9a-f-]{36}$/iu.test(receipt.submissionId ?? '') || receipt.status !== 'Accepted'
+    || receipt.issues !== 0 || receipt.stapleValidated !== true || !/^[0-9a-f]{64}$/u.test(receipt.logSha256 ?? '')
+    || !validFileIdentity(receipt.submitted) || !validFileIdentity(receipt.stapled)) {
+    throw new Error(`Developer ID ${kind} notarization receipt is invalid for ${key}.`);
+  }
+}
+
+function validateSignedRuntimeInspection(signed, inspected, manifest) {
+  if (signed?.schemaVersion !== 1 || signed.policy !== DEVELOPER_ID_POLICY || signed.expectedAppTeamId !== manifest.signing.teamId
+    || !Array.isArray(signed.files) || signed.files.length === 0) throw new Error('Packaged signed runtime inventory is invalid.');
+  if (!validFileIdentity(signed.sourceIdentity?.dependencyManifest) || !validFileIdentity(signed.sourceIdentity?.meilisearchManifest)
+    || !validFileIdentity(signed.meilisearch?.source) || !validFileIdentity(signed.meilisearch?.final)
+    || signed.meilisearch.source.bytes !== inspected.meilisearch.binary.bytes
+    || signed.meilisearch.source.sha256 !== inspected.meilisearch.binary.sha256) throw new Error('Signed runtime source identity is invalid.');
+  const paths = signed.files.map((file) => assertRelativeRuntimePath(file.path));
+  if (new Set(paths).size !== paths.length || signed.files.some((file) => !['file', 'symlink'].includes(file.type)
+    || (file.type === 'file' ? !validRuntimeFileIdentity(file) : typeof file.target !== 'string' || path.isAbsolute(file.target)
+      || file.target.split(/[\\/]/u).some((part) => part === '..' || part === '')))) {
+    throw new Error('Signed runtime final inventory paths or identities are invalid.');
+  }
+  const finalMeili = signed.files.find((file) => file.path === 'meilisearch' && file.type === 'file');
+  if (!finalMeili || !isDeepStrictEqual(pick(finalMeili, ['bytes', 'sha256']), signed.meilisearch.final)) throw new Error('Signed Meilisearch final identity is invalid.');
+  for (const relative of Object.keys(inspected.runtimeFiles)) {
+    if (signed.files.filter((file) => file.path === relative && file.type === 'file' && validRuntimeFileIdentity(file)).length !== 1) throw new Error(`Signed runtime final identity is missing or duplicated: ${relative}.`);
+  }
+}
+
+function validFileIdentity(value) { return Number.isSafeInteger(value?.bytes) && value.bytes > 0 && /^[0-9a-f]{64}$/u.test(value.sha256 ?? ''); }
+function validRuntimeFileIdentity(value) { return Number.isSafeInteger(value?.bytes) && value.bytes >= 0 && /^[0-9a-f]{64}$/u.test(value.sha256 ?? ''); }
+function sameFileIdentity(left, right) { return left?.bytes === right?.bytes && left?.sha256 === right?.sha256; }
+
 function validateArtifactInventory(manifest, artifacts) {
-  const expected = artifactBasenames(manifest.version, manifest.target, manifest.variant);
+  const expected = artifactBasenames(manifest.version, manifest.target, manifest.variant, manifest.signing?.policy);
   const names = artifacts.map((entry) => entry.basename).sort();
   if (JSON.stringify(names) !== JSON.stringify(expected.sort())) throw new Error(`Artifact inventory is missing, mixed, or contains unexpected names for ${manifest.target}/${manifest.variant}.`);
 }
 
-function artifactBasenames(version, target, variant) {
+function artifactBasenames(version, target, variant, signingPolicy) {
   const base = `XR-Collector-${version}-${variant}`;
   return target === 'darwin-arm64'
-    ? [`${base}-mac-arm64.dmg`, `${base}-mac-arm64.dmg.blockmap`, `${base}-mac-arm64.zip`, `${base}-mac-arm64.zip.blockmap`, `${base}-darwin-arm64-update.yml`]
+    ? [`${base}-mac-arm64.dmg`, ...(signingPolicy === DEVELOPER_ID_POLICY ? [] : [`${base}-mac-arm64.dmg.blockmap`]), `${base}-mac-arm64.zip`, `${base}-mac-arm64.zip.blockmap`, `${base}-darwin-arm64-update.yml`]
     : [`${base}-win-x64-setup.exe`, `${base}-win-x64-setup.exe.blockmap`, `${base}-win32-x64-update.yml`];
 }
 
@@ -306,12 +383,20 @@ function validateAcceptanceSummary(summary, manifest, key) {
   }
 }
 
-function validateGlobalAcceptance(index, commit, version) {
+function validateGlobalAcceptance(index, commit, version, signedMode) {
   if (index.commit !== commit || index.version !== version) throw new Error('Acceptance index source identity does not match the release candidate.');
   if (!index.scenarios || typeof index.scenarios !== 'object') throw new Error('Acceptance index must state each R35 scenario explicitly.');
   for (const id of ['R35-01', 'R35-02', 'R35-03', 'R35-04', 'R35-05', 'R35-06', 'R35-07', 'R35-08']) {
     if (!['passed', 'pending', 'blocked'].includes(index.scenarios[id]?.status)) throw new Error(`Acceptance scenario ${id} has no explicit status.`);
   }
+  if (!signedMode) return;
+  for (const id of ['S35-01', 'S35-02', 'S35-03', 'S35-04', 'S35-05', 'S35-06']) {
+    if (!['passed', 'pending', 'blocked'].includes(index.scenarios[id]?.status)) throw new Error(`Signed acceptance scenario ${id} has no explicit status.`);
+  }
+  for (const id of ['S35-01', 'S35-02', 'S35-03', 'S35-04', 'S35-05']) {
+    if (index.scenarios[id].status !== 'passed') throw new Error(`Signed acceptance scenario ${id} must pass before publication staging.`);
+  }
+  if (index.scenarios['S35-06'].status !== 'passed' && !index.scenarios['S35-06'].reason) throw new Error('Pending signed update scenario S35-06 requires a reason.');
 }
 
 async function validateFrozenPublicMetadata(stageDirectory, state) {
@@ -343,8 +428,9 @@ async function validateFrozenPublicMetadata(stageDirectory, state) {
     if (JSON.stringify(Object.keys(candidate).sort()) !== JSON.stringify(['installer', 'manifest', 'target', 'updateMetadata', 'updatePayload', 'variant'])) {
       throw new Error(`The release index candidate fields are invalid for ${key}.`);
     }
-    const artifacts = artifactBasenames(state.version, target, variant);
     const manifestName = `XR-Collector-${state.version}-${variant}-${target}-manifest.json`;
+    const publicManifest = JSON.parse(await readFile(path.join(stageDirectory, manifestName), 'utf8'));
+    const artifacts = artifactBasenames(state.version, target, variant, publicManifest.signing?.policy);
     for (const name of [...artifacts, manifestName]) expectedNames.add(name);
     const installerName = target === 'darwin-arm64' ? `XR-Collector-${state.version}-${variant}-mac-arm64.dmg` : `XR-Collector-${state.version}-${variant}-win-x64-setup.exe`;
     const updatePayloadName = target === 'darwin-arm64' ? `XR-Collector-${state.version}-${variant}-mac-arm64.zip` : installerName;
@@ -354,7 +440,6 @@ async function validateFrozenPublicMetadata(stageDirectory, state) {
     assertIndexedAsset(candidate.updateMetadata, stateByName, state.sourceBaseUrl, updateMetadataName, `update metadata for ${key}`);
     assertIndexedAsset(candidate.manifest, stateByName, state.sourceBaseUrl, manifestName, `manifest reference for ${key}`);
 
-    const publicManifest = JSON.parse(await readFile(path.join(stageDirectory, manifestName), 'utf8'));
     const manifestIdentity = { schemaVersion: 1, version: state.version, tag: state.tag, commit: state.commit, target, variant };
     for (const [field, expected] of Object.entries(manifestIdentity)) if (publicManifest[field] !== expected) throw new Error(`Public manifest ${field} is invalid for ${key}.`);
     if (publicManifest.url !== assetUrl(state.sourceBaseUrl, manifestName)) throw new Error(`Public manifest URL is invalid for ${key}.`);
@@ -389,6 +474,11 @@ function sanitizeManifest(plan, candidate, publicName) {
     kind: typeof source.signing?.actualVerification === 'object' ? source.signing.actualVerification.kind ?? 'unknown' : source.signing?.actualVerification ?? 'unknown',
     notarization: typeof source.signing?.actualVerification === 'object' ? source.signing.actualVerification.notarization ?? 'unknown' : 'unknown',
     gatekeeperDownload: typeof source.signing?.actualVerification === 'object' ? source.signing.actualVerification.gatekeeperDownload ?? 'unknown' : 'unknown',
+    ...(source.signing?.policy === DEVELOPER_ID_POLICY ? {
+      teamId: source.signing.teamId,
+      identity: pick(source.signing.identity, ['sha1', 'name']),
+      receipts: Object.fromEntries(['app', 'dmg'].map((kind) => [kind, pick(source.signing.actualVerification[kind], ['schemaVersion', 'kind', 'teamId', 'submissionId', 'status', 'issues', 'stapleValidated', 'submitted', 'stapled', 'logSha256'])])),
+    } : {}),
   };
   return {
     schemaVersion: 1, version: plan.version, tag: plan.tag, commit: plan.commit, target: source.target, variant: source.variant,
@@ -421,6 +511,13 @@ function sanitizeRuntimeIdentity(identity) {
       binary: meilisearch.binary ? pick(meilisearch.binary, ['version', 'versionOutput', 'bytes', 'sha256', 'format', 'arch']) : null,
     } : null,
     windowsCrt: windowsCrt ? pick(windowsCrt, ['fileName', 'bytes', 'sha256', 'fileVersion']) : null,
+    signed: identity?.signed ? {
+      schemaVersion: identity.signed.schemaVersion, policy: identity.signed.policy,
+      expectedAppTeamId: identity.signed.expectedAppTeamId,
+      sourceIdentity: identity.signed.sourceIdentity,
+      meilisearch: identity.signed.meilisearch ? { source: identity.signed.meilisearch.source, final: identity.signed.meilisearch.final } : null,
+      files: Array.isArray(identity.signed.files) ? identity.signed.files.map((file) => pick(file, ['path', 'type', 'target', 'mode', 'bytes', 'sha256'])) : [],
+    } : null,
   };
 }
 

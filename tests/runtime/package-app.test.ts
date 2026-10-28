@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -18,6 +18,17 @@ it('accepts only the two delivery targets and two explicit variants', () => {
   expect(parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese'])).toEqual({ target: 'darwin-arm64', variant: 'chinese' });
   expect(() => parsePackageArguments(['--target', 'darwin-x64', '--variant', 'official'])).toThrow(/Unsupported packaging target/u);
   expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'other'])).toThrow(/Unsupported packaging variant/u);
+});
+
+it('requires an explicit complete Developer ID mode only for Mac packaging', () => {
+  expect(parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized',
+    '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toMatchObject({
+    macSigningMode: 'developer-id-notarized', macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
+  });
+  expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized']))
+    .toThrow(/requires Mac target plus/u);
+  expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized',
+    '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toThrow(/requires Mac target plus/u);
 });
 
 it('requires an explicit isolated identity for validation version overrides', () => {
@@ -86,6 +97,27 @@ it('verifies the complete Mac bundle with strict deep codesign diagnostics', asy
   })).rejects.toThrow(/invalid signature.*no resources.*signature/iu);
 });
 
+it('opens both final Mac containers and rechecks their only App with Developer ID and notarization gates', async () => {
+  const zipCalls: string[] = [];
+  await verifySignedMacZip('/candidate/update.zip', 'XR Collector', 'ABCDE12345', {
+    run: async (_command: string, args: string[]) => { await mkdir(path.join(args[3]!, 'XR Collector.app')); },
+    verifyDeveloperIdApplication: async (_app: string, team: string) => { zipCalls.push(`identity:${team}`); },
+    validateNotarizedArtifact: async (_app: string, kind: string) => { zipCalls.push(`notary:${kind}`); },
+  });
+  expect(zipCalls).toEqual(['identity:ABCDE12345', 'notary:app']);
+
+  const dmgCalls: string[] = [];
+  await verifySignedMacDmgContents('/candidate/installer.dmg', 'XR Collector', 'ABCDE12345', {
+    run: async (_command: string, args: string[]) => {
+      if (args[0] === 'attach') { await mkdir(path.join(args[4]!, 'XR Collector.app')); dmgCalls.push('attach'); }
+      if (args[0] === 'detach') dmgCalls.push('detach');
+    },
+    verifyDeveloperIdApplication: async (_app: string, team: string) => { dmgCalls.push(`identity:${team}`); },
+    validateNotarizedArtifact: async (_app: string, kind: string) => { dmgCalls.push(`notary:${kind}`); },
+  });
+  expect(dmgCalls).toEqual(['attach', 'identity:ABCDE12345', 'notary:app', 'detach']);
+});
+
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
   for (const configFile of ['electron-builder.official.yml', 'electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
@@ -121,6 +153,21 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
       expect(resources).not.toContainEqual(expect.objectContaining({ from: 'dist/node/build-info.json' }));
     }
   }
+});
+
+it('inherits the runtime resources but switches signed Mac packages to hardened, explicit hook ownership', async () => {
+  for (const configFile of ['electron-builder.signed.yml', 'electron-builder.official.signed.yml']) {
+    const config = await getConfig(process.cwd(), path.resolve(configFile), null);
+    expect(config, configFile).toMatchObject({ forceCodeSigning: true, afterPack: './scripts/mac-signing-hook.mjs' });
+    expect(config.mac, configFile).toMatchObject({
+      identity: null, hardenedRuntime: true, notarize: false, strictVerify: true,
+      entitlements: 'build/entitlements.mac.plist', entitlementsInherit: 'build/entitlements.mac.inherit.plist',
+    });
+    expect(config.dmg, configFile).toMatchObject({ sign: true, writeUpdateInfo: false });
+    expect(config.mac?.extraResources).toContainEqual(expect.objectContaining({ from: 'resources/bin/mac/meilisearch', to: 'bin/meilisearch' }));
+  }
+  expect(await readFile('build/entitlements.mac.plist', 'utf8')).toContain('com.apple.security.cs.allow-jit');
+  expect(await readFile('build/entitlements.mac.plist', 'utf8')).not.toMatch(/get-task-allow|allow-unsigned-executable-memory|disable-library-validation/u);
 });
 
 it('stages byte-identical BuildInfo for extraResources without consuming the ASAR source path', async () => {

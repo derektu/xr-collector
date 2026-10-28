@@ -1,0 +1,13 @@
+extends: ./electron-builder.yml
+forceCodeSigning: true
+afterPack: ./scripts/mac-signing-hook.mjs
+mac:
+  identity: null
+  hardenedRuntime: true
+  notarize: false
+  strictVerify: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+dmg:
+  sign: true
+  writeUpdateInfo: false

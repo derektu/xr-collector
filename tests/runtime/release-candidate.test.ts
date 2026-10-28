@@ -26,6 +26,19 @@ it('fully extracts and verifies the sealed Mac application before accepting its 
   expect(calls[0]).toMatchObject({ command: '/usr/bin/ditto', args: ['-x', '-k', '/candidate/update.zip', extractedRoot] });
 });
 
+it('uses the Developer ID, Team, and notarization gates for a signed Mac update ZIP', async () => {
+  const calls: string[] = [];
+  await expect(inspectPackagedPayload('/candidate/update.zip', 'darwin-arm64', {
+    productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector',
+  }, {
+    signing: { policy: 'developer-id-notarized', teamId: 'ABCDE12345' },
+    run: async () => {},
+    verifyDeveloperIdApplication: async (_app: string, team: string) => { calls.push(`identity:${team}`); },
+    validateNotarizedArtifact: async (_app: string, kind: string) => { calls.push(`notary:${kind}`); throw new Error('signed gate reached'); },
+  })).rejects.toThrow(/signed gate reached/u);
+  expect(calls).toEqual(['identity:ABCDE12345', 'notary:app']);
+});
+
 it('preflights all four identities and stages only sanitized, version-pinned public files', async () => {
   const fixture = await releaseFixture();
   const plan = await planReleaseCandidate(fixture.options, { inspectPackagedPayload: fixture.inspect });
@@ -177,6 +190,73 @@ it('stages validation packages only for the GitHub repository baked into all fou
     .rejects.toThrow(/packaged update repository/u);
 });
 
+it('keeps legacy ad-hoc staging independent of signed S35 evidence', async () => {
+  const fixture = await releaseFixture();
+  const acceptance = JSON.parse(await readFile(fixture.options.acceptance, 'utf8'));
+  for (const id of Object.keys(acceptance.scenarios)) if (id.startsWith('S35-')) delete acceptance.scenarios[id];
+  await writeFile(fixture.options.acceptance, JSON.stringify(acceptance));
+  await expect(planReleaseCandidate(fixture.options, { inspectPackagedPayload: fixture.inspect })).resolves.toMatchObject({ version: '0.1.0' });
+});
+
+it('accepts the signed Mac inventory only after the DMG and signed runtime receipts pass', async () => {
+  const fixture = await releaseFixture();
+  const record = fixture.records.find((entry) => entry.target === 'darwin-arm64' && entry.variant === 'chinese')!;
+  const manifest = JSON.parse(await readFile(record.manifestPath, 'utf8'));
+  const blockmap = manifest.artifacts.find((artifact: any) => artifact.path.endsWith('.dmg.blockmap'));
+  manifest.artifacts = manifest.artifacts.filter((artifact: any) => artifact !== blockmap);
+  await rm(path.join(path.dirname(record.manifestPath), blockmap.path));
+  const fileIdentity = { bytes: 1, sha256: '1'.repeat(64) };
+  const dmgArtifact = manifest.artifacts.find((artifact: any) => artifact.path.endsWith('.dmg'));
+  const receipt = (kind: string) => ({ schemaVersion: 1, kind, teamId: 'ABCDE12345', submissionId: '12345678-1234-1234-1234-123456789abc', status: 'Accepted', issues: 0,
+    logSha256: '2'.repeat(64), submitted: fileIdentity, stapled: kind === 'dmg' ? { bytes: dmgArtifact.bytes, sha256: dmgArtifact.sha256 } : fileIdentity, stapleValidated: true });
+  manifest.signing = { policy: 'developer-id-notarized', credentialDiscovery: false, teamId: 'ABCDE12345',
+    identity: { sha1: 'a'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)' },
+    actualVerification: { kind: 'developer-id-notarized', app: receipt('app'), dmg: receipt('dmg'), gatekeeperDownload: 'pending-clean-browser-acceptance' } };
+  const primary = record.artifactPaths.find((file) => file.endsWith('.zip'))!;
+  const inspected = fixture.inspected.get(primary) as any;
+  inspected.notarizedAppIdentity = fileIdentity;
+  const finalFiles = Object.entries(inspected.runtimeFiles).map(([relative, identity]: any) => ({ path: relative, type: 'file', mode: 0o755, ...identity }));
+  finalFiles.push({ path: 'yt-dlp/_internal/empty-resource', type: 'file', mode: 0o644, bytes: 0, sha256: createHash('sha256').update('').digest('hex') });
+  manifest.runtimeIdentity.signed = inspected.signed = {
+    schemaVersion: 1, policy: 'developer-id-notarized', expectedAppTeamId: 'ABCDE12345',
+    sourceIdentity: { dependencyManifest: fileIdentity, meilisearchManifest: fileIdentity },
+    meilisearch: { source: { bytes: inspected.meilisearch.binary.bytes, sha256: inspected.meilisearch.binary.sha256 }, final: inspected.runtimeFiles.meilisearch },
+    files: finalFiles, executableSignatures: {},
+  };
+  await writeFile(record.manifestPath, JSON.stringify(manifest));
+  const dmgChecks: string[] = [];
+  const plan = await planReleaseCandidate(fixture.options, {
+    inspectPackagedPayload: fixture.inspect,
+    verifyDeveloperIdDiskImage: async (_dmg: string, team: string) => { dmgChecks.push(`identity:${team}`); },
+    validateNotarizedArtifact: async (_dmg: string, kind: string) => { dmgChecks.push(`notary:${kind}`); },
+    verifySignedMacDmgContents: async (_dmg: string, product: string, team: string) => { dmgChecks.push(`contents:${product}:${team}`); return { appIdentity: fileIdentity }; },
+  });
+  expect(plan).toMatchObject({ version: '0.1.0' });
+  expect(dmgChecks).toEqual(['identity:ABCDE12345', 'notary:dmg', 'contents:XR Collector:ABCDE12345']);
+  const stage = path.join(fixture.root, 'signed-stage');
+  const state = await stageReleaseCandidate(plan, stage);
+  expect(state.assets).toHaveLength(21);
+  expect(state.assets.some((asset) => asset.name.endsWith('.dmg.blockmap'))).toBe(true);
+  expect(state.assets.some((asset) => asset.name === 'XR-Collector-0.1.0-chinese-mac-arm64.dmg.blockmap')).toBe(false);
+  const publicManifest = JSON.parse(await readFile(path.join(stage, 'XR-Collector-0.1.0-chinese-darwin-arm64-manifest.json'), 'utf8'));
+  expect(publicManifest.signing).toMatchObject({ policy: 'developer-id-notarized', teamId: 'ABCDE12345', receipts: { app: { status: 'Accepted' }, dmg: { status: 'Accepted' } } });
+  await expect(verifyStagedCandidate(stage)).resolves.toMatchObject({ version: '0.1.0' });
+
+  manifest.signing.actualVerification.dmg.stapled.sha256 = '0'.repeat(64);
+  await writeFile(record.manifestPath, JSON.stringify(manifest));
+  await expect(planReleaseCandidate(fixture.options, {
+    inspectPackagedPayload: fixture.inspect, verifyDeveloperIdDiskImage: async () => {}, validateNotarizedArtifact: async () => {},
+    verifySignedMacDmgContents: async () => ({ appIdentity: fileIdentity }),
+  })).rejects.toThrow(/Final DMG bytes differ/u);
+  manifest.signing.actualVerification.dmg.stapled.sha256 = dmgArtifact.sha256;
+  await writeFile(record.manifestPath, JSON.stringify(manifest));
+  inspected.notarizedAppIdentity = { bytes: 1, sha256: 'f'.repeat(64) };
+  await expect(planReleaseCandidate(fixture.options, {
+    inspectPackagedPayload: fixture.inspect, verifyDeveloperIdDiskImage: async () => {}, validateNotarizedArtifact: async () => {},
+    verifySignedMacDmgContents: async () => ({ appIdentity: fileIdentity }),
+  })).rejects.toThrow(/ZIP App identity differs/u);
+});
+
 async function releaseFixture(validation = false) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-release-fixture-'));
   roots.push(root);
@@ -247,7 +327,7 @@ async function releaseFixture(validation = false) {
       schemaVersion: 1, version, commit, target, variant, buildInfo, packageIdentity,
       builderHost: { platform: target === 'darwin-arm64' ? 'darwin' : 'win32', processArch: target === 'darwin-arm64' ? 'arm64' : 'x64', hostArch: 'arm64', emulated: target === 'win32-x64' },
       toolVersions: { node: 'v22.22.3' },
-      signing: { policy: 'unsigned', credentialDiscovery: false, actualVerification: { kind: 'fixture', output: `${root}/private.log` } },
+      signing: { policy: target === 'darwin-arm64' ? 'ad-hoc' : 'unsigned', credentialDiscovery: false, actualVerification: { kind: 'fixture', output: `${root}/private.log` } },
       runtimeIdentity: {
         dependencies,
         meilisearch,
@@ -300,6 +380,7 @@ async function releaseFixture(validation = false) {
     }],
   })));
   const scenarios = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`R35-0${index + 1}`, { status: index < 3 ? 'passed' : 'pending', reason: 'not publicly executed' }]));
+  Object.assign(scenarios, Object.fromEntries(Array.from({ length: 6 }, (_, index) => [`S35-0${index + 1}`, { status: index < 5 ? 'passed' : 'pending', reason: index < 5 ? 'verified fixture' : 'A-to-B update remains pending' }])));
   const acceptancePath = path.join(root, 'acceptance.json');
   await writeFile(acceptancePath, JSON.stringify({ schemaVersion: 1, version, commit, candidates, scenarios }));
   const notes = path.join(root, 'notes.md');
@@ -308,7 +389,7 @@ async function releaseFixture(validation = false) {
     sourceBaseUrl: validation
       ? 'https://github.com/derektu/xr-collector-test/releases/download/v0.1.0/'
       : 'https://downloads.example.test/archive/v0.1.0/' };
-  return { root, input, commit, options, records, inspect: async (payload: string) => inspected.get(payload) };
+  return { root, input, commit, options, records, inspected, inspect: async (payload: string) => inspected.get(payload) };
 }
 
 async function describe(file: string) { const value = await readFile(file); return { bytes: value.byteLength, sha256: sha(value) }; }

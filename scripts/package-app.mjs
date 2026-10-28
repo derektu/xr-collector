@@ -3,13 +3,19 @@ import { extractFile } from '@electron/asar';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
+import {
+  DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
+  signedBuilderEnvironment, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
+  withTemporarySigningKeychain,
+} from './mac-signing.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const productionUpdateRepository = 'derektu/xr-collector';
@@ -23,10 +29,19 @@ export function parsePackageArguments(argv) {
     else if (argv[index] === '--validation-app-id') result.validationAppId = argv[++index];
     else if (argv[index] === '--validation-product-name') result.validationProductName = argv[++index];
     else if (argv[index] === '--validation-update-repository') result.validationUpdateRepository = argv[++index];
+    else if (argv[index] === '--mac-signing-mode') result.macSigningMode = argv[++index];
+    else if (argv[index] === '--mac-signing-env') result.macSigningEnv = argv[++index];
+    else if (argv[index] === '--mac-signing-root') result.macSigningRoot = argv[++index];
     else throw new Error(`Unknown packaging argument ${argv[index]}.`);
   }
   if (!['darwin-arm64', 'win32-x64'].includes(result.target)) throw new Error(`Unsupported packaging target ${result.target ?? 'missing'}; use darwin-arm64 or win32-x64.`);
   if (!['chinese', 'official'].includes(result.variant)) throw new Error(`Unsupported packaging variant ${result.variant ?? 'missing'}; use chinese or official.`);
+  const signingOptions = [result.macSigningMode, result.macSigningEnv, result.macSigningRoot];
+  if (signingOptions.some(Boolean)) {
+    if (!signingOptions.every(Boolean) || result.macSigningMode !== DEVELOPER_ID_POLICY || result.target !== 'darwin-arm64') {
+      throw new Error(`Developer ID signing requires Mac target plus --mac-signing-mode ${DEVELOPER_ID_POLICY}, --mac-signing-env, and --mac-signing-root.`);
+    }
+  }
   const validationIdentity = [result.validationVersion, result.validationAppId, result.validationProductName];
   if (validationIdentity.some(Boolean) || result.validationUpdateRepository) {
     if (!validationIdentity.every(Boolean) || process.env.XR_COLLECTOR_VALIDATION_BUILD !== '1') throw new Error('Validation identity requires all validation options and XR_COLLECTOR_VALIDATION_BUILD=1.');
@@ -46,6 +61,10 @@ export async function packageApplication(options, dependencies = {}) {
   const probeHost = dependencies.probePhysicalHost ?? (() => probePhysicalHost({ run: runForOutput }));
   return withPackageCheckoutLock(path.join(projectRoot, '.local/package-app.lock'), async () => {
     const { commit } = await readPackagingGitIdentity(projectRoot);
+    const signingConfiguration = options.macSigningMode
+      ? await (dependencies.loadMacSigningConfiguration ?? loadMacSigningConfiguration)({ environmentFile: options.macSigningEnv, pathRoot: options.macSigningRoot })
+      : null;
+    const build = async (signingContext = null) => {
     const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
     const version = options.validationVersion ?? packageJson.version;
     const outputDir = path.join(projectRoot, options.variant === 'official' ? 'release/official' : 'release');
@@ -67,21 +86,60 @@ export async function packageApplication(options, dependencies = {}) {
       ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]);
     await stageBuildInfoSidecar(projectRoot);
     if (options.target === 'darwin-arm64') await run(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
-    const builderArgs = options.variant === 'official' ? ['--config', 'electron-builder.official.yml'] : [];
-    builderArgs.push(options.target === 'darwin-arm64' ? '--mac' : '--win');
-    if (options.target === 'win32-x64') builderArgs.push('--x64');
-    builderArgs.push(...validationBuilderArguments(options));
-    builderArgs.push('--publish', 'never');
     await clearPreviousArtifactSet(outputDir, [
       expectedArtifactPrefix(version, options.variant, options.target),
       `XR-Collector-${version}-${options.variant}-${options.target}`,
     ]);
-    await run(process.execPath, [electronBuilderCli, ...builderArgs]);
+    const signed = signingConfiguration !== null;
+    const config = signed
+      ? (options.variant === 'official' ? 'electron-builder.official.signed.yml' : 'electron-builder.signed.yml')
+      : (options.variant === 'official' ? 'electron-builder.official.yml' : null);
+    const commonBuilderArgs = [...(config ? ['--config', config] : []),
+      ...validationBuilderArguments(options), '--publish', 'never'];
+    const builderEnvironment = signedBuilderEnvironmentForPackage(signingConfiguration, signingContext);
+    let signingReceipt = null;
+    if (signed) {
+      const firstArgs = [...commonBuilderArgs, '--mac', '--dir', `--config.mac.identity=${signingContext.identity.name}`];
+      await run(process.execPath, [electronBuilderCli, ...firstArgs], { environment: builderEnvironment });
+      const productName = options.validationProductName ?? 'XR Collector';
+      const appPath = path.join(outputDir, 'mac-arm64', `${productName}.app`);
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId);
+      const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', `${version}-${options.variant}`);
+      const app = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
+        kind: 'app', artifactPath: appPath, credentials: signingConfiguration.notary, evidenceDirectory,
+      });
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId);
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+      const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, `--config.mac.identity=${signingContext.identity.name}`];
+      await run(process.execPath, [electronBuilderCli, ...secondArgs], { environment: builderEnvironment });
+      const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
+      const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
+      const zipInspection = await (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId);
+      if (JSON.stringify(zipInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
+      const dmg = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
+        kind: 'dmg', artifactPath: dmgPath, credentials: signingConfiguration.notary, evidenceDirectory,
+      });
+      await (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId);
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(dmgPath, 'dmg');
+      const dmgInspection = await (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId);
+      if (JSON.stringify(dmgInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
+      signingReceipt = {
+        policy: DEVELOPER_ID_POLICY,
+        credentialDiscovery: false,
+        teamId: signingConfiguration.teamId,
+        identity: { sha1: signingContext.identity.sha1, name: signingContext.identity.name },
+        actualVerification: { kind: 'developer-id-notarized', app, dmg, gatekeeperDownload: 'pending-clean-browser-acceptance' },
+      };
+    } else {
+      const builderArgs = [...commonBuilderArgs, options.target === 'darwin-arm64' ? '--mac' : '--win'];
+      if (options.target === 'win32-x64') builderArgs.push('--x64');
+      await run(process.execPath, [electronBuilderCli, ...builderArgs]);
+    }
     const expected = { commit, version, target: options.target, variant: options.variant,
       ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
-    const verified = await verifyPackagedApplication({ outputDir, ...expected });
-    const artifacts = await findInstallerArtifacts(outputDir, expected);
+    const verified = await verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId });
+    const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
     const host = await probeHost();
     const toolVersions = {
       node: process.version,
@@ -97,14 +155,28 @@ export async function packageApplication(options, dependencies = {}) {
       toolVersions, runtimeIdentity: {
         dependencies: verified.dependencyManifest,
         meilisearch: verified.meiliManifest,
+        signed: verified.signedRuntimeIdentity ?? null,
         windowsCrt: options.target === 'win32-x64' && options.variant === 'official'
           ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt
           : null,
       },
-      signing: options.target === 'darwin-arm64'
+      signing: signingReceipt ?? (options.target === 'darwin-arm64'
         ? { policy: 'ad-hoc', credentialDiscovery: false, actualVerification: { kind: 'codesign-deep-strict', notarization: 'not-requested', gatekeeperDownload: 'not-trusted' } }
-        : { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' },
+        : { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' }),
     });
+    };
+    if (!signingConfiguration) return build();
+    return (dependencies.withTemporarySigningKeychain ?? withTemporarySigningKeychain)(signingConfiguration, build);
+  });
+}
+
+function signedBuilderEnvironmentForPackage(configuration, context) {
+  if (!configuration) return undefined;
+  return signedBuilderEnvironment(packageChildEnvironment(), {
+    keychain: context.keychain,
+    identity: context.identity,
+    teamId: configuration.teamId,
+    sourceRoot: projectRoot,
   });
 }
 
@@ -143,12 +215,15 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
   return { commit };
 }
 
-export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository }, dependencies = {}) {
+export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, expectedTeamId }, dependencies = {}) {
   const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;
   const resources = appPath
     ? path.join(appPath, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
-  if (appPath) await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+  if (appPath) {
+    if (signingPolicy === DEVELOPER_ID_POLICY) await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
+    else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+  }
   const asarPath = path.join(resources, 'app.asar');
   const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
   assertPackagedProductMetadata(packageMetadata, productName, appId, updateRepository);
@@ -160,7 +235,12 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');
   const bin = path.join(resources, 'bin');
   const dependencyManifest = JSON.parse(await readFile(path.join(bin, 'runtime-dependencies.json'), 'utf8'));
-  if (dependencyManifest.target !== target || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
+  let signedRuntimeIdentity = null;
+  if (signingPolicy === DEVELOPER_ID_POLICY) {
+    const trustedDependencies = JSON.parse(await readFile(path.join(projectRoot, 'resources/bin/mac/runtime-dependencies.json'), 'utf8'));
+    if (dependencyManifest.target !== target || JSON.stringify(dependencyManifest) !== JSON.stringify(trustedDependencies)) throw new Error('Signed package raw runtime producer identity is invalid.');
+    signedRuntimeIdentity = await (dependencies.verifySignedRuntimeInventory ?? verifySignedRuntimeInventory)(bin, expectedTeamId, { verifySignatures: dependencies.verifyRuntimeSignatures !== false });
+  } else if (dependencyManifest.target !== target || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
   const meiliManifest = JSON.parse(await readFile(path.join(bin, 'meilisearch-build.json'), 'utf8'));
   if (meiliManifest.target !== target || manifestVariant(meiliManifest) !== variant) throw new Error('Packaged Meilisearch identity does not match the package variant.');
   const runtimeDirectory = target === 'win32-x64' ? 'win' : 'mac';
@@ -168,10 +248,16 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/bin', runtimeDirectory, 'meilisearch-build.json'), 'utf8'));
   if (JSON.stringify(meiliManifest) !== JSON.stringify(trustedManifest)) throw new Error('Packaged Meilisearch manifest does not match the prepared producer identity.');
   const executable = path.join(bin, target === 'win32-x64' ? 'meilisearch.exe' : 'meilisearch');
-  if ((await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
+  if (signingPolicy !== DEVELOPER_ID_POLICY
+    && ((await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256)) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
   const validateBinary = dependencies.validateBinary ?? validateBuiltBinary;
   const binaryIdentity = await validateBinary(executable, TARGETS[target], '1.53.2', dependencies.runBinary ?? runForOutput);
-  if (JSON.stringify(binaryIdentity) !== JSON.stringify(meiliManifest.binary)) throw new Error('Packaged Meilisearch executable identity does not match its trusted producer manifest.');
+  if (signingPolicy === DEVELOPER_ID_POLICY) {
+    if (binaryIdentity.version !== meiliManifest.binary.version || binaryIdentity.versionOutput !== meiliManifest.binary.versionOutput
+      || binaryIdentity.format !== meiliManifest.binary.format || binaryIdentity.arch !== meiliManifest.binary.arch) {
+      throw new Error('Signed Meilisearch executable semantics do not match its trusted producer manifest.');
+    }
+  } else if (JSON.stringify(binaryIdentity) !== JSON.stringify(meiliManifest.binary)) throw new Error('Packaged Meilisearch executable identity does not match its trusted producer manifest.');
   const packagedSkill = path.join(resources, 'skills/xr-collector-agent/SKILL.md');
   const sourceSkill = dependencies.sourceSkillPath ?? path.join(projectRoot, 'skills/xr-collector-agent/SKILL.md');
   if ((await stat(packagedSkill)).size !== (await stat(sourceSkill)).size || await sha256(packagedSkill) !== await sha256(sourceSkill)) {
@@ -187,7 +273,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
-  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest };
+  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity };
 }
 
 export async function verifyMacBundleSignature(appPath, run = runVerificationCommand) {
@@ -196,6 +282,53 @@ export async function verifyMacBundleSignature(appPath, run = runVerificationCom
   } catch (error) {
     throw new Error(`Packaged macOS application has an invalid signature or sealed resource inventory: ${error instanceof Error ? error.message : error}`, { cause: error });
   }
+}
+
+export async function verifySignedMacZip(zipPath, productName, expectedTeamId, dependencies = {}) {
+  const temporary = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-signed-zip-'));
+  try {
+    await (dependencies.run ?? runVerificationCommand)('/usr/bin/ditto', ['-x', '-k', zipPath, temporary]);
+    const appPath = await requireOnlyExpectedApplication(temporary, productName);
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+    return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
+  } finally { await (dependencies.rm ?? rm)(temporary, { recursive: true, force: true }); }
+}
+
+export async function verifySignedMacDmgContents(dmgPath, productName, expectedTeamId, dependencies = {}) {
+  const temporary = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-signed-dmg-'));
+  const mount = path.join(temporary, 'mount');
+  const run = dependencies.run ?? runVerificationCommand;
+  let mounted = false;
+  let primaryError;
+  try {
+    await mkdir(mount);
+    await run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mount, dmgPath]);
+    mounted = true;
+    const appPath = await requireOnlyExpectedApplication(mount, productName);
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+    return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    let detachError;
+    if (mounted) {
+      try { await run('/usr/bin/hdiutil', ['detach', mount]); mounted = false; }
+      catch (error) {
+        try { await run('/usr/bin/hdiutil', ['detach', '-force', mount]); mounted = false; }
+        catch (forceError) { detachError = new AggregateError([error, forceError], `Unable to detach the owned read-only DMG mount ${mount}.`); }
+      }
+    }
+    if (!mounted) await (dependencies.rm ?? rm)(temporary, { recursive: true, force: true });
+    if (detachError) throw primaryError ? new AggregateError([primaryError, detachError], 'DMG verification and mount cleanup both failed.') : detachError;
+  }
+}
+
+async function requireOnlyExpectedApplication(directory, productName) {
+  const apps = (await readdir(directory)).filter((name) => name.endsWith('.app'));
+  const expected = `${productName}.app`;
+  if (apps.length !== 1 || apps[0] !== expected) throw new Error(`Signed artifact must contain exactly ${expected}.`);
+  return path.join(directory, expected);
 }
 
 export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository) {
@@ -235,13 +368,22 @@ export async function writeArtifactHandoff(input) {
   return { updateMetadata, artifactManifest, manifest: document };
 }
 
-async function findInstallerArtifacts(outputDir, { version, variant, target }) {
+async function findInstallerArtifacts(outputDir, { version, variant, target }, signingPolicy) {
   const expectedPrefix = expectedArtifactPrefix(version, variant, target);
   const entries = (await readdir(outputDir)).filter((name) => name.startsWith(expectedPrefix) && ['.dmg', '.zip', '.exe', '.blockmap'].includes(path.extname(name)));
   const installers = entries.filter((name) => ['.dmg', '.zip', '.exe'].includes(path.extname(name)));
   const expectedCount = target === 'darwin-arm64' ? 2 : 1;
   if (installers.length !== expectedCount) throw new Error(`Expected ${expectedCount} uniquely named ${variant} ${target} installer artifacts, found ${installers.length}.`);
+  if (target === 'darwin-arm64' && signingPolicy === DEVELOPER_ID_POLICY && entries.some((name) => name.endsWith('.dmg.blockmap'))) {
+    throw new Error('Developer ID packages must not retain a pre-staple DMG blockmap.');
+  }
   return entries.sort().map((entry) => path.join(outputDir, entry));
+}
+
+async function findUniqueArtifact(outputDir, prefix, extension) {
+  const matches = (await readdir(outputDir)).filter((name) => name.startsWith(prefix) && name.endsWith(extension));
+  if (matches.length !== 1) throw new Error(`Expected exactly one ${prefix}*${extension} artifact, found ${matches.length}.`);
+  return path.join(outputDir, matches[0]);
 }
 
 function expectedArtifactPrefix(version, variant, target) {
@@ -279,9 +421,9 @@ export async function withPackageCheckoutLock(lock, work) {
   try { return await work(); } finally { await rm(lock, { force: true }); }
 }
 
-function runCommand(command, args) {
+function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: projectRoot, stdio: 'inherit', env: packageChildEnvironment() });
+    const child = spawn(command, args, { cwd: projectRoot, stdio: 'inherit', env: options.environment ?? packageChildEnvironment() });
     child.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with status ${code}`)));
   });

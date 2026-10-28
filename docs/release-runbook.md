@@ -5,7 +5,7 @@
 ## 首版工作順序
 
 1. #35 先合併 publisher 工具、拒絕條件、fake transport 測試及本手冊。
-2. #36 實作 App updater，並鎖定 client 實際讀取的 index／metadata 契約。二十二個 public asset stage 是供 #36 驗證的候選契約；首版正式契約以 #36 的 client 測試為準。
+2. #36 實作 App updater，並鎖定 client 實際讀取的 index／metadata 契約。Developer ID 模式的二十個 public asset stage 是供 #36 驗證的候選契約；首版正式契約以 #36 的 client 測試為準。
 3. #36 整合完成後固定最終乾淨 commit C。Mac arm64 與 Windows x64 的 Chinese／official 四包全部從 C 在指定本機重新建置，不能把 #34 的歷史包當成首版候選。
 4. 四包完成本機與安裝版驗收，再由 Mac plan／stage。所有 pending、blocked 與 clean Windows 的 deferred 狀態如實呈現。
 5. 使用者另外確認公開動作後，才建立固定 tag／draft、上傳、公開 prerelease，完成匿名及瀏覽器下載驗收，最後再經授權轉 stable／Latest。
@@ -19,12 +19,11 @@ candidate-input/
   darwin-arm64-chinese/
     XR-Collector-0.1.0-chinese-darwin-arm64-artifacts.json
     XR-Collector-0.1.0-chinese-mac-arm64.dmg
-    XR-Collector-0.1.0-chinese-mac-arm64.dmg.blockmap
     XR-Collector-0.1.0-chinese-mac-arm64.zip
     XR-Collector-0.1.0-chinese-mac-arm64.zip.blockmap
     XR-Collector-0.1.0-chinese-darwin-arm64-update.yml
   darwin-arm64-official/
-    ...同平台 official 六個檔案...
+    ...同平台 official 五個檔案...
   win32-x64-chinese/
     XR-Collector-0.1.0-chinese-win32-x64-artifacts.json
     XR-Collector-0.1.0-chinese-win-x64-setup.exe
@@ -118,11 +117,11 @@ npm run release -- stage \
   --output .local/ticket-artifacts/35/stage-v0.1.0
 ```
 
-preflight 重算每個 artifact 的 bytes、SHA-256 及 update YAML 的 SHA-512。Mac publisher 以系統 `ditto` 完整解開 ZIP（保留 framework symlink 與 bundle 結構），先以 `codesign --verify --deep --strict` 核對完整 App 的 signature 與 sealed resources，再讀取 `app.asar`、BuildInfo 及 runtime inventory；Windows NSIS 則抽出同一組必要資料。完整 commit、版本、`sourceDirty=false`、target、variant、buildId、Meilisearch producer、yt-dlp／Deno pin、主要 runtime bytes、結構化驗收結果，以及 official Windows 的 app-local CRT 必須一致。少一個組合、混用版本或 variant、額外 basename、被修改的檔案、無效 Mac bundle seal 及缺少合格驗收報告都會在上傳前失敗。ad-hoc seal 通過只證明 bundle 完整，不代表 Developer ID、notarization 或 Gatekeeper 信任。
+preflight 重算每個 artifact 的 bytes、SHA-256 及 update YAML 的 SHA-512。Mac publisher 先核對 DMG 的 Developer ID Team、timestamped signature、公證 staple 與 OS assessment，唯讀掛載並對其中唯一且名稱相符的 App 重跑完整 gate；再以系統 `ditto` 完整解開 ZIP（保留 framework symlink 與 bundle 結構），對其中唯一的 App 重跑 Developer ID Team、hardened runtime、entitlements、notarization、staple、sealed resources 及 signed runtime raw／final inventory gate，才讀取 `app.asar` 與 BuildInfo；Windows NSIS 則抽出同一組必要資料。private handoff 的 App／DMG 收據必須是同 Team、`Accepted`、零 issues、staple valid，且 submission ID、upload／log／stapled identity 完整。完整 commit、版本、`sourceDirty=false`、target、variant、buildId、Meilisearch producer、yt-dlp／Deno pin、主要 runtime bytes、結構化驗收結果，以及 official Windows 的 app-local CRT 必須一致。少一個組合、混用版本或 variant、額外 basename、被修改的檔案、無效 identity／seal／receipt 及缺少合格驗收報告都會在上傳前失敗。ad-hoc seal 仍只證明 bundle 完整，不代表 Developer ID、notarization 或 Gatekeeper 信任。
 
-stage 目錄包含原封不動的十六個 installer／ZIP／blockmap／versioned update metadata、四份 sanitized public manifest、`release-index.json` 與 `SHA256SUMS`。`.release-state.json` 是本機控制檔，不是 Release asset。publisher 每次讀取 stage 都會交叉核對控制檔、public index、四份 manifest、二十二個 asset 與 checksum inventory；控制檔不能單獨改變 commit、版本、tag、來源 URL 或 release notes。
+Developer ID stage 目錄包含原封不動的十四個 installer／ZIP／blockmap／versioned update metadata、四份 sanitized public manifest、`release-index.json` 與 `SHA256SUMS`，共二十個 public assets。DMG staple 會改變 DMG bytes，因此正式模式不產生會在 staple 前失效的 DMG blockmap；ZIP blockmap仍對應已 stapled App 的最終 ZIP。`.release-state.json` 是本機控制檔，不是 Release asset。publisher 每次讀取 stage 都會交叉核對控制檔、public index、四份 manifest、二十個 asset 與 checksum inventory；控制檔不能單獨改變 commit、版本、tag、來源 URL 或 release notes。ad-hoc 歷史候選仍依其 policy 使用含 DMG blockmap 的舊 inventory，兩種 policy 不能混用。
 
-public manifest 的 runtime identity 使用欄位白名單，只保留 Meilisearch 與 yt-dlp／Deno 的 producer identity、相對 runtime inventory，以及 app-local CRT 的檔名、版本、bytes 與 SHA-256。原始 private manifest、驗收路徑、載入中的 Windows process／module 路徑及原始簽署診斷不會進入 stage。
+public manifest 的 runtime identity 使用欄位白名單，只保留 Meilisearch 與 yt-dlp／Deno 的 producer identity、signed runtime 的 raw／final 相對 inventory，以及 app-local CRT 的檔名、版本、bytes 與 SHA-256。簽署欄位只保留 Team、identity fingerprint／名稱、submission ID、狀態、issues 數、staple 狀態及 upload／log／stapled hash。p12／p8、密碼、絕對路徑、原始 private manifest、驗收路徑、載入中的 Windows process／module 路徑及 Apple 原始 log 不會進入 stage。
 
 `release-index.json` 包含 version、tag、完整 commit、已清理的 release notes，並以 target 與 variant 映射 installer、update payload、versioned metadata 及 public manifest；#36 因而不必為了顯示版本說明再呼叫 GitHub API。#36 若日後需要 stock updater channel alias，alias 必須另行定義及測試，而且其中 payload URL 仍固定到版本 tag；#35 不預先產生 alias。
 

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import runtimePins from './meilisearch-runtime-pins.json' with { type: 'json' };
 
 const run = promisify(execFile);
+const SIGNING_MANIFEST = 'runtime-signing.json';
 
 const SOURCE_COMMIT = 'ec006cecec6f684b1dcaee093a45ab4c05707127';
 const CARGO_LOCK_SHA256 = 'f884034e00ae026ecc9a3c15999b11857dff4a99ba8d7c0528626571627cefbf';
@@ -81,6 +82,7 @@ export async function validateMeilisearchRuntime(
   environment: { platform: NodeJS.Platform; arch: string } = { platform: process.platform, arch: process.arch },
   readVersion: (executable: string) => Promise<string> = executeVersion,
   readIdentity: (filePath: string) => Promise<{ bytes: number; sha256: string }> = runtimeBinaryIdentity,
+  verifySignedIdentity: typeof verifySignedMeilisearchIdentity = verifySignedMeilisearchIdentity,
 ): Promise<ValidatedMeilisearchRuntime> {
   const manifestPath = meilisearchBuildManifestPath(binaryPath);
   let manifest: MeilisearchRuntimeManifest;
@@ -114,7 +116,7 @@ export async function validateMeilisearchRuntime(
       || manifest.binary.sha256 !== pin.sha256 || manifest.binary.format !== pin.format || manifest.binary.arch !== pin.arch) {
       throw new Error(`Meilisearch official runtime manifest does not match the pinned ${expectedTarget ?? 'unsupported'} release asset.`);
     }
-    await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity);
+    await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity, verifySignedIdentity);
     return { ...manifest, variant: 'official', searchProfile: OFFICIAL_SEARCH_INDEX_PROFILE };
   }
   const expectedFingerprint = createHash('sha256').update(JSON.stringify({
@@ -151,7 +153,7 @@ export async function validateMeilisearchRuntime(
     || !Number.isInteger(manifest.binary?.bytes) || manifest.binary.bytes <= 0 || !/^[a-f0-9]{64}$/u.test(manifest.binary?.sha256 ?? '')) {
     throw new Error(`Meilisearch build manifest does not match the required ${expectedTarget} Chinese runtime.`);
   }
-  await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity);
+  await validateExecutable(binaryPath, manifest.binary, readVersion, readIdentity, verifySignedIdentity);
   return { ...manifest, variant: 'chinese', searchProfile: SEARCH_INDEX_PROFILE };
 }
 
@@ -164,12 +166,15 @@ async function validateExecutable(
   binary: { bytes: number; sha256: string; format: string; arch: string },
   readVersion: (executable: string) => Promise<string>,
   readIdentity: (filePath: string) => Promise<{ bytes: number; sha256: string }>,
+  verifySignedIdentity: typeof verifySignedMeilisearchIdentity,
 ): Promise<void> {
   const identity = await readIdentity(binaryPath).catch((error) => {
     throw new Error('Meilisearch binary bytes do not match its runtime manifest.', { cause: error });
   });
   if (identity.bytes !== binary.bytes || identity.sha256 !== binary.sha256) {
-    throw new Error('Meilisearch binary bytes do not match its runtime manifest.');
+    await verifySignedIdentity(binaryPath, binary, identity).catch((error) => {
+      throw new Error('Meilisearch binary bytes do not match its raw manifest or a sealed Developer ID runtime identity.', { cause: error });
+    });
   }
   const actual = await executableIdentity(binaryPath).catch((error) => {
     throw new Error('Meilisearch binary does not match its build manifest; the runtime pair may be incomplete or interrupted.', { cause: error });
@@ -179,6 +184,43 @@ async function validateExecutable(
   }
   const version = (await readVersion(binaryPath)).trim();
   if (version !== 'meilisearch 1.53.2') throw new Error(`Meilisearch runtime version is ${version || 'unknown'}, expected meilisearch 1.53.2.`);
+}
+
+export async function verifySignedMeilisearchIdentity(
+  binaryPath: string,
+  source: { bytes: number; sha256: string },
+  finalIdentity: { bytes: number; sha256: string },
+  execute: typeof run = run,
+): Promise<void> {
+  if (process.platform !== 'darwin') throw new Error('A signed runtime identity is supported only inside a macOS App bundle.');
+  const bin = path.dirname(path.resolve(binaryPath));
+  const resources = path.dirname(bin);
+  const appPath = path.resolve(resources, '../..');
+  if (!appPath.endsWith('.app') || path.basename(resources) !== 'Resources' || path.basename(bin) !== 'bin') throw new Error('Signed Meilisearch is not inside a macOS App Resources/bin directory.');
+  const document = JSON.parse(await readFile(path.join(bin, SIGNING_MANIFEST), 'utf8')) as {
+    schemaVersion?: number;
+    policy?: string;
+    expectedAppTeamId?: string;
+    meilisearch?: { source?: { bytes?: number; sha256?: string }; final?: { bytes?: number; sha256?: string } };
+  };
+  const team = document.expectedAppTeamId;
+  if (document.schemaVersion !== 1 || document.policy !== 'developer-id-notarized' || !/^[A-Z0-9]{10}$/u.test(team ?? '')
+    || document.meilisearch?.source?.bytes !== source.bytes || document.meilisearch.source.sha256 !== source.sha256
+    || document.meilisearch?.final?.bytes !== finalIdentity.bytes || document.meilisearch.final.sha256 !== finalIdentity.sha256) {
+    throw new Error('Signed Meilisearch identity manifest is invalid.');
+  }
+  await execute('/usr/bin/codesign', ['--verify', '--strict', appPath], { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  await execute('/usr/bin/codesign', ['--verify', '--strict', binaryPath], { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  const [appSignature, binarySignature] = await Promise.all([
+    execute('/usr/bin/codesign', ['-dv', '--verbose=4', appPath], { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 }),
+    execute('/usr/bin/codesign', ['-dv', '--verbose=4', binaryPath], { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 }),
+  ]);
+  for (const [label, output] of [['App', appSignature.stderr], ['Meilisearch', binarySignature.stderr]] as const) {
+    if (!output.includes(`TeamIdentifier=${team}`) || !output.includes('Authority=Developer ID Application:')
+      || (!output.includes('(runtime)') && !output.includes('Runtime Version=')) || !output.includes('Timestamp=')) {
+      throw new Error(`${label} does not match the sealed Developer ID publisher identity.`);
+    }
+  }
 }
 
 async function runtimeBinaryIdentity(filePath: string): Promise<{ bytes: number; sha256: string }> {

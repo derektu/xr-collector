@@ -1,0 +1,7 @@
+extends: ./electron-builder.signed.yml
+directories:
+  output: release/official
+mac:
+  artifactName: XR-Collector-${version}-official-mac-${arch}.${ext}
+win:
+  artifactName: XR-Collector-${version}-official-win-${arch}-setup.${ext}
