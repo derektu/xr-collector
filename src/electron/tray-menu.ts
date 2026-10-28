@@ -1,14 +1,16 @@
 import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { AutoPauseNotification } from '../notifications/types.js';
 
 /** The three tray icons: nothing to do, work queued or running, automatic checks off. */
-export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off';
+export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off' | 'attention' | 'update_available';
 
 /** What the menu acts on; the menu's own items use these as their ids. */
-export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'quit';
+export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'quit' | `subscription:${string}`;
 
 export type TrayMenuItem =
   | { kind: 'status'; label: string }
   | { kind: 'action'; action: TrayAction; label: string; checked?: boolean }
+  | { kind: 'submenu'; label: string; items: Array<{ action: TrayAction; label: string }> }
   | { kind: 'separator' };
 
 export interface TrayMenu {
@@ -24,6 +26,9 @@ export interface TrayMenu {
 export interface TrayState {
   overview: JobOverview;
   schedule: CollectionScheduleView;
+  actionable?: AutoPauseNotification[];
+  /** Contract for #36; #136 does not populate this from an update service. */
+  updateAvailable?: boolean;
 }
 
 const separator: TrayMenuItem = { kind: 'separator' };
@@ -34,6 +39,7 @@ const quit: TrayMenuItem = { kind: 'action', action: 'quit', label: '結束 XR C
 export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayMenu {
   if (!state) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, quit] };
   const { overview, schedule } = state;
+  const actionable = state.actionable ?? [];
   const [current] = overview.running;
   const busy = overview.running.length > 0 || overview.queued.length > 0;
   const status: string[] = [];
@@ -45,13 +51,16 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
     if (!schedule.enabled) status.push('自動檢查已關閉');
     else if (schedule.nextCheck) status.push(`下次檢查 ${clockLabel(schedule.nextCheck.at, now)}`);
   }
-  const icon: TrayIcon = busy ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
+  const operational: TrayIcon = busy ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
+  const icon: TrayIcon = actionable.length > 0 ? 'attention' : state.updateAvailable ? 'update_available' : operational;
   const failed = overview.failed.length;
   return {
     icon,
-    tooltip: tooltipFor(icon, current),
+    tooltip: actionable.length > 0 ? `XR Collector・${actionable.length} 個訂閱需要處理・${operationalLabel(operational, current)}` : tooltipFor(icon, current),
     items: [
       ...status.map((label): TrayMenuItem => ({ kind: 'status', label })),
+      ...(actionable.length ? [{ kind: 'submenu' as const, label: `需要處理的訂閱（${actionable.length}）`,
+        items: actionable.map((event) => ({ action: `subscription:${event.id}` as const, label: event.title })) }] : []),
       separator,
       open,
       { kind: 'action', action: 'check_now', label: '立即檢查所有訂閱' },
@@ -77,6 +86,12 @@ function tooltipFor(icon: TrayIcon, current: JobOverviewEntry | undefined): stri
   if (icon === 'auto_check_off') return 'XR Collector・自動檢查已關閉';
   if (icon !== 'collecting') return 'XR Collector';
   return current?.progress ? `XR Collector・收集中 ${current.progress.done}/${current.progress.total}` : 'XR Collector・收集中';
+}
+
+function operationalLabel(icon: TrayIcon, current: JobOverviewEntry | undefined): string {
+  if (icon === 'auto_check_off') return '自動檢查已關閉';
+  if (icon === 'collecting') return current?.progress ? `收集中 ${current.progress.done}/${current.progress.total}` : '收集中';
+  return '沒有進行中的工作';
 }
 
 /** An address without its scheme and `www.`, as the jobs page shows work whose title is unknown. */

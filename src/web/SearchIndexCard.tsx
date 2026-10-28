@@ -60,6 +60,5 @@ export function SearchIndexCard({ revision }: { revision: number }) {
       {rebuildError ? <p className="index-problem">{rebuildError}</p> : null}
     </> : !loadError ? <p className="loading">正在讀取…</p> : null}
     <button type="button" className="button" disabled={busy || !status} onClick={() => void rebuild()}>{rebuilding ? '重建中…' : '重建索引'}</button>
-    <p className="hint">索引由知識庫文件產生，重建不會改動文件。</p>
   </section>;
 }

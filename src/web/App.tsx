@@ -12,6 +12,7 @@ import {
   type NavigationItem, type ShellPage, type ThemePreference, type ThemeStore,
 } from './app-shell.js';
 import { Documents } from './Documents.js';
+import { handleDesktopNavigation } from './desktop-navigation.js';
 import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
 import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
@@ -76,7 +77,14 @@ export default function App() {
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { void loadVault(); }, []);
   // The tray menu opens the window on a page; navigating only touches the history and location state.
-  useEffect(() => { window.xrCollectorDesktop?.onNavigate((next) => navigate(next)); }, []);
+  useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
+    handleDesktopNavigation(next, window.location.pathname, {
+      navigate,
+      openSource,
+      refresh: status.announce,
+      announce: (message) => announce(message, 'error'),
+    });
+  }); desktopBridge?.ready(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
   // Focus the page heading after navigation so keyboard and screen reader users start at the new page.
   useEffect(() => {

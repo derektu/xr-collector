@@ -112,6 +112,8 @@ export interface WorkspaceOptions {
    * or a stop before that write still lets the import be taken back.
    */
   pendingImport?: boolean;
+  /** Device-profile notification sink; Vault data never contains notification delivery state. */
+  onAutoPaused?: (vaultId: string, sourceType: string, subscription: import('../core/types.js').SubscriptionRecord) => void | Promise<void>;
 }
 
 /**
@@ -192,6 +194,16 @@ export class VaultWorkspace {
       suspend: (value) => this.current.schedule.setSuspended(value),
     });
   }
+
+  /** Active Vault subscription rows for device-profile notification reconciliation. */
+  async notificationSubscriptions(): Promise<Array<{ vaultId: string; sourceType: string; subscription: import('../core/types.js').SubscriptionRecord }>> {
+    const rows: Array<{ vaultId: string; sourceType: string; subscription: import('../core/types.js').SubscriptionRecord }> = [];
+    for (const service of this.current.subscriptions.all()) {
+      for (const subscription of await service.list()) rows.push({ vaultId: this.current.vaultId, sourceType: service.type, subscription });
+    }
+    return rows;
+  }
+  activeVaultId(): string { return this.current.vaultId; }
   private readonly machine: string;
 
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
@@ -909,6 +921,7 @@ export class VaultWorkspace {
         deleteDocument: (id) => collector.delete(id),
         recordDeletion: (entry) => collector.recordDeletion(entry),
         ...(plugin.login ? { loginRequired: () => plugin.login!.status() === 'required' } : {}),
+        ...(this.options.onAutoPaused ? { onAutoPaused: (record) => this.options.onAutoPaused!(vaultId, plugin.id, record) } : {}),
       })));
     for (const record of recovery.completed) {
       jobs.recordEvent({

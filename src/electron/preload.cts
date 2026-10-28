@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+let navigationListener: ((_event: unknown, target: unknown) => void) | undefined;
 
 contextBridge.exposeInMainWorld('xrCollectorTheme', {
   read: () => ipcRenderer.invoke('xrCollector:theme:read'),
@@ -12,7 +13,10 @@ contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),
   revealExport: () => ipcRenderer.invoke('xrCollector:desktop:revealExport'),
   platform: process.platform,
-  onNavigate: (listener: (page: 'jobs' | 'activity') => void) => {
-    ipcRenderer.on('xrCollector:navigate', (_event: unknown, page: 'jobs' | 'activity') => listener(page));
+  ready: () => ipcRenderer.send('xrCollector:renderer:ready'),
+  onNavigate: (listener: (target: unknown) => void) => {
+    if (navigationListener) ipcRenderer.removeListener('xrCollector:navigate', navigationListener);
+    navigationListener = (_event: unknown, target: unknown) => listener(target);
+    ipcRenderer.on('xrCollector:navigate', navigationListener);
   },
 });

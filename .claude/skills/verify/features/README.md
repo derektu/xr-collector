@@ -10,8 +10,9 @@
 | 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content` |
 | 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization` |
 | RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
-| Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`workspace-content` |
-| 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray` |
+| Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`workspace-content` |
+| 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray`、`notification-clicks` |
+| 訂閱自動暫停通知 | [notifications.md](notifications.md) | Web＋原生 Desktop | `notifications`、`notification-clicks` |
 | 建置資訊 | [build-info.md](build-info.md) | Web；安裝身分需 packaged Desktop | `build-info` |
 | 登入電腦時自動啟動 | [login-startup.md](login-startup.md) | Web 負向；打包安裝版 VM | `login-startup` |
 | AI 助理連線 | [agent-connection.md](agent-connection.md) | Web；固定埠原生啟動另驗 | `agent-connection` |

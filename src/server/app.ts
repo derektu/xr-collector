@@ -11,6 +11,7 @@ import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import type { NotificationState } from '../notifications/notification-center.js';
 import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
@@ -127,8 +128,13 @@ export interface VaultSetup {
 const NOT_READY_ROUTES = new Set([
   '/api/health', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
   '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
-  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
+  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info', '/api/device/notifications',
 ]);
+
+export interface NotificationAccess {
+  read(): Promise<NotificationState>;
+  update(enabled: boolean): Promise<NotificationState>;
+}
 
 export interface HttpAppOptions {
   buildInfo?: BuildInfo;
@@ -156,6 +162,7 @@ export interface HttpAppOptions {
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
   loginStartup?: LoginStartupAccess;
+  notifications?: NotificationAccess;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
   /**
@@ -237,6 +244,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
   const connectivity = options.connectivity;
+  let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [], events: [] };
+  const notifications: NotificationAccess = options.notifications ?? {
+    read: async () => fallbackNotifications,
+    update: async (enabled) => (fallbackNotifications = { ...fallbackNotifications, enabled }),
+  };
   const connectivityStatus = (): ConnectivityStatus => connectivity?.status() ?? { state: 'online', checkedAt: null };
   /** Refuses work that would only fail without a network. */
   const requireOnline = (): void => {
@@ -430,6 +442,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   const loginStartup = options.loginStartup ?? unavailableLoginStartup;
   app.get('/api/device/build-info', deviceData(), async () => ({ buildInfo }));
+  {
+    app.get('/api/device/notifications', deviceData(), async () => ({ notifications: await notifications.read() }));
+    app.put<{ Body: { enabled?: unknown } }>('/api/device/notifications', deviceData(), async (request) => {
+      if (!request.body || typeof request.body.enabled !== 'boolean' || Object.keys(request.body).some((key) => key !== 'enabled')) {
+        throw new CollectorError('invalid_request', '系統通知設定必須提供 enabled。');
+      }
+      return { notifications: await notifications.update(request.body.enabled) };
+    });
+  }
 
   app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));
   app.put<{ Body: { enabled?: unknown } }>('/api/device/login-startup', deviceData(), async (request) => {

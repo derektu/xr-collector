@@ -6,6 +6,7 @@ import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../.
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { trayMenu } from '../../src/electron/tray-menu.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';
+import type { AutoPauseNotification } from '../../src/notifications/types.js';
 
 const now = new Date('2026-10-24T10:24:00+08:00');
 const entry = (overrides: Partial<JobOverviewEntry>): JobOverviewEntry => ({
@@ -20,6 +21,11 @@ const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionSc
 
 const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
 const actions = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'action' ? [item.label] : []);
+const alert = (id: string, title: string): AutoPauseNotification => ({
+  id, title, vaultId: 'vault', sourceType: 'youtube', subscriptionId: id, failureCount: 5,
+  error: { code: 'network_error', message: '無法連線' }, autoPausedAt: `2026-10-24T0${id.length}:00:00.000Z`,
+  delivery: 'attempted', deliveryMessage: null,
+});
 
 describe('tray menu (#32 T1)', () => {
   const timeZone = process.env.TZ;
@@ -84,6 +90,24 @@ describe('tray menu (#32 T1)', () => {
     const menu = trayMenu({ overview: overview({ failed: [failed, failed] }), schedule: schedule() }, now);
     expect(menu.items).toContainEqual({ kind: 'action', action: 'jobs', label: '工作（2 項失敗）' });
     expect(menu.icon).toBe('idle');
+  });
+
+  it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational and future update icons (#136)', () => {
+    const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true, updateAvailable = false) =>
+      trayMenu({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
+    expect(make([]).items.some((item) => item.kind === 'submenu')).toBe(false);
+    const one = make([alert('a', 'A')], {}, false, true);
+    expect(one.icon).toBe('attention');
+    expect(one.tooltip).toContain('自動檢查已關閉');
+    expect(one.items).toContainEqual({ kind: 'submenu', label: '需要處理的訂閱（1）', items: [{ action: 'subscription:a', label: 'A' }] });
+    const busy = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
+    const two = make([alert('a', 'A'), alert('bb', 'B')], { running: [busy] }, true, true);
+    expect(two.icon).toBe('attention');
+    expect(two.tooltip).toContain('收集中 3/10');
+    expect(two.items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（2）' }));
+    expect(make([alert('bb', 'B')]).items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（1）' }));
+    expect(make([], {}, true, true).icon).toBe('update_available');
+    expect(make([]).icon).toBe('idle');
   });
 });
 

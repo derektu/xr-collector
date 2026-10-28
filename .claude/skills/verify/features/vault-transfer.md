@@ -5,6 +5,8 @@
 ## Sub-features
 
 - `vault-info`：`settings-vault` 的 `vault-path` 與 `vault-counts`。
+- `vault-actions`：一般寬度單排；左側「開啟其他知識庫…」及桌面版 Finder／檔案總管入口，右側「搬移…」「匯入…」「匯出…」。窄視窗可換行，鍵盤順序與畫面一致。
+- `vault-native-dialogs`：Desktop 顯示資料夾、匯入開啟檔案與匯出儲存檔案的原生入口。
 - `vault-export`：匯出 zip，檔案已存在時選擇取代或保留。
 - `vault-import-merge`：預覽差異後以較新為準合併。
 - `vault-import-replace`：完全取代，含二次確認。
@@ -48,5 +50,7 @@ Preconditions:
 
 ## Regression flows
 
-- `vault-transfer`：`vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
+- `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的單排及窄視窗幾何斷言、DOM 順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。
+
+- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `workspace-content`：斷言 `vault-info`。COUNTS-1、COUNTS-2 留在設定頁進行兩次背景 RSS 收集，以文件 API、Vault 檔案、搜尋狀態 API 與實際索引獨立確認 0 → 3 → 5，並檢查知識庫及搜尋卡各自在對應 API 就緒後 6 秒內更新，離開再返回仍為 5。

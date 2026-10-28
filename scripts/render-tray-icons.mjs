@@ -14,14 +14,18 @@ const macBadges = {
   idle: '',
   collecting: '<circle cx="19.5" cy="18.5" r="3" fill="#000"/>',
   auto_check_off: '<path d="M18 16v5M21 16v5" stroke="#000" stroke-width="2"/>',
+  attention: '<path d="M20 15v5M20 22h.01" stroke="#000" stroke-width="2.4"/>',
+  update_available: '<circle cx="20" cy="19" r="3" fill="#000"/>',
 };
 const mac = (state) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${layers('#000')}${macBadges[state]}</svg>`;
 
-const winTile = { idle: '#6BA6DF', collecting: '#6BA6DF', auto_check_off: '#7C8799' };
+const winTile = { idle: '#6BA6DF', collecting: '#6BA6DF', auto_check_off: '#7C8799', attention: '#D58A20', update_available: '#6BA6DF' };
 const winBadges = {
   idle: '',
   collecting: '<circle cx="19.5" cy="19.5" r="4" fill="#FFFFFF" stroke="#202020" stroke-width="1.5"/>',
   auto_check_off: '',
+  attention: '<path d="M19.5 15v5M19.5 22h.01" stroke="#202020" stroke-width="2.4"/>',
+  update_available: '<circle cx="19.5" cy="19.5" r="4" fill="#FFFFFF" stroke="#202020" stroke-width="1.5"/>',
 };
 const win = (state) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="22" height="22" rx="6" fill="${winTile[state]}"/><g transform="translate(2.4 2.6) scale(0.8)">${layers('#0C1322')}</g>${winBadges[state]}</svg>`;
 
