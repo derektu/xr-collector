@@ -73,15 +73,19 @@ export function VaultLocationSection({ vaultPath, activeJobs, counts, onChanged 
     <h2>知識庫</h2>
     <code className="setting-path" data-testid="vault-path">{current}</code>
     {counts ? <p className="hint" data-testid="vault-counts">{counts.documents} 份文件・{counts.sources} 個訂閱</p> : null}
-    <div className="settings-line">
-      {desktop ? <button type="button" className="button" onClick={() => void reveal()} data-testid="vault-reveal">{revealLabel(desktop.platform)}</button> : null}
-      <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'move', resume: false })}
-        data-testid="vault-move">搬移…</button>
-      <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'open', resume: false })}
-        data-testid="vault-open-other">開啟其他知識庫…</button>
+    <div className="settings-line vault-actions" data-testid="vault-actions">
+      <div className="vault-action-group">
+        <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'open', resume: false })}
+          data-testid="vault-open-other">開啟其他知識庫…</button>
+        {desktop ? <button type="button" className="button" onClick={() => void reveal()} data-testid="vault-reveal">{revealLabel(desktop.platform)}</button> : null}
+      </div>
+      <div className="vault-action-group vault-actions-secondary">
+        <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'move', resume: false })}
+          data-testid="vault-move">搬移…</button>
+        {current ? <ExchangeActions onChanged={onChanged} /> : null}
+      </div>
     </div>
     {unavailable ? <p className="hint" data-testid="vault-relocation-unavailable">{unavailable.message}</p> : null}
-    {current ? <ExchangeActions onChanged={onChanged} /> : null}
     {running && !open && status ? <div className="transfer-progress-line vault-background" data-testid="vault-background">
       <p className="transfer-progress" role="status"><span className="spinner" aria-hidden="true" />{status.message}</p>
       <button type="button" className="button small" onClick={() => {

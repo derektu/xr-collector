@@ -26,6 +26,8 @@ mac:
       to: skills
     - from: resources/tray
       to: tray
+    - from: resources/search
+      to: search
     - from: resources/bin/mac/yt-dlp
       to: bin/yt-dlp
     - from: resources/bin/mac/deno
@@ -50,6 +52,8 @@ win:
       to: skills
     - from: resources/tray
       to: tray
+    - from: resources/search
+      to: search
     - from: resources/bin/win
       to: bin
       filter: ['*.exe', 'vcruntime140.dll', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*']

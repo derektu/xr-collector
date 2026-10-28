@@ -14,19 +14,24 @@ const macBadges = {
   idle: '',
   collecting: '<circle cx="19.5" cy="18.5" r="3" fill="#000"/>',
   auto_check_off: '<path d="M18 16v5M21 16v5" stroke="#000" stroke-width="2"/>',
+  attention: '<path d="M20 15v5M20 22h.01" stroke="#000" stroke-width="2.4"/>',
+  update_available: '<circle cx="20" cy="19" r="3" fill="#000"/>',
 };
 const mac = (state, update = false) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${update ? '<defs><mask id="base"><rect width="24" height="24" fill="white"/><rect x="15" width="9" height="12" fill="black"/></mask></defs>' : ''}<g${update ? ' mask="url(#base)"' : ''}>${layers('#000')}${macBadges[state]}</g>${update ? '<path d="M19 10V2m-3 3 3-3 3 3" stroke="#000" stroke-width="2"/>' : ''}</svg>`;
 
-const winTile = { idle: '#6BA6DF', collecting: '#6BA6DF', auto_check_off: '#7C8799' };
+const winTile = { idle: '#6BA6DF', collecting: '#6BA6DF', auto_check_off: '#7C8799', attention: '#D58A20', update_available: '#6BA6DF' };
 const winBadges = {
   idle: '',
   collecting: '<circle cx="19.5" cy="19.5" r="4" fill="#FFFFFF" stroke="#202020" stroke-width="1.5"/>',
   auto_check_off: '<circle cx="19.5" cy="19" r="4.3" fill="#fff" stroke="#202020" stroke-width="1"/><path d="M18 17v4m3-4v4" stroke="#202020" stroke-width="1.6"/>',
+  attention: '<path d="M19.5 15v5M19.5 22h.01" stroke="#202020" stroke-width="2.4"/>',
+  update_available: '<circle cx="19.5" cy="19.5" r="4" fill="#FFFFFF" stroke="#202020" stroke-width="1.5"/>',
+
 };
 const win = (state, update = false) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="22" height="22" rx="6" fill="${winTile[state]}"/><g transform="translate(2.4 2.6) scale(0.8)">${layers('#0C1322')}</g>${winBadges[state]}${update ? '<circle cx="18.5" cy="5.5" r="4.7" fill="#fff" stroke="#202020" stroke-width="1"/><path d="M18.5 8.5v-6m-2 2 2-2 2 2" stroke="#0b4f97" stroke-width="1.7"/>' : ''}</svg>`;
 
 const icons = [];
-for (const state of Object.keys(macBadges)) for (const update of [false, true]) {
+for (const state of Object.keys(macBadges)) for (const update of (['attention', 'update_available'].includes(state) ? [false] : [false, true])) {
   const key = `${state}${update ? '-update' : ''}`;
   icons.push({ name: `tray-${key}Template.png`, svg: mac(state, update), size: 18 });
   icons.push({ name: `tray-${key}Template@2x.png`, svg: mac(state, update), size: 36 });

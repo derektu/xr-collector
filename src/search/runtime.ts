@@ -8,13 +8,16 @@ import {
   type SearchStateStore,
 } from './managed-transcript-search.js';
 import { MeilisearchBackend } from './meilisearch-backend.js';
+import { SEARCH_QUERY_STRATEGY_REVISION } from './fragment-query.js';
 import { startMeilisearchProcess } from './meilisearch-process.js';
 import { validateMeilisearchRuntime, type SearchIndexProfile } from './meilisearch-runtime.js';
+import { loadSearchLexicon } from './search-lexicon.js';
 import type { PreparedSearchProjection } from './search-projection.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
   binaryPath: string;
+  lexiconPath?: string;
   databasePath: string;
   port?: number;
   prepareProjection(profile: SearchIndexProfile): Promise<PreparedSearchProjection>;
@@ -30,19 +33,30 @@ export async function startSearchRuntime(
 ): Promise<SearchRuntime> {
   try {
     const runtime = await validateMeilisearchRuntime(options.binaryPath);
-    const projection = await options.prepareProjection(runtime.searchProfile);
+    const lexicon = await loadSearchLexicon(options.lexiconPath ?? path.resolve('resources/search/coct-main.txt'));
+    const searchProfile: SearchIndexProfile = {
+      ...runtime.searchProfile,
+      lexicon: lexicon.identity,
+      queryStrategy: {
+        revision: SEARCH_QUERY_STRATEGY_REVISION,
+        chineseFragments: 'contiguous-field-substring',
+      },
+    };
+    const projection = await options.prepareProjection(searchProfile);
     if (path.resolve(projection.databasePath) !== path.resolve(options.databasePath)) {
       throw new Error('Prepared search projection does not match the owned database path.');
     }
     const process = await startMeilisearchProcess({
       binaryPath: options.binaryPath,
       databasePath: options.databasePath,
+      lexiconPath: lexicon.path,
       ...(options.port ? { port: options.port } : {}),
     });
     const search = new ManagedTranscriptSearch(
       new MeilisearchBackend({
         baseUrl: process.url,
         apiKey: process.apiKey,
+        lexicon,
       }),
       () => loadAllDocuments(options.vault),
       fileSearchStateStore(`${options.databasePath}-state.json`),

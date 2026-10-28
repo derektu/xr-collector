@@ -1,11 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
-type NavigationPage = 'jobs' | 'activity' | 'settings' | 'update';
-const navigationListeners = new Set<(page: NavigationPage) => void>();
-let pendingNavigation: NavigationPage | undefined;
-ipcRenderer.on('xrCollector:navigate', (_event: unknown, page: NavigationPage) => {
-  if (navigationListeners.size === 0) pendingNavigation = page;
-  else for (const listener of navigationListeners) listener(page);
-});
+let navigationListener: ((_event: unknown, target: unknown) => void) | undefined;
 
 contextBridge.exposeInMainWorld('xrCollectorTheme', {
   read: () => ipcRenderer.invoke('xrCollector:theme:read'),
@@ -19,8 +13,10 @@ contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),
   revealExport: () => ipcRenderer.invoke('xrCollector:desktop:revealExport'),
   platform: process.platform,
-  onNavigate: (listener: (page: NavigationPage) => void) => {
-    navigationListeners.add(listener);
-    if (pendingNavigation) { const page = pendingNavigation; pendingNavigation = undefined; listener(page); }
+  ready: () => ipcRenderer.send('xrCollector:renderer:ready'),
+  onNavigate: (listener: (target: unknown) => void) => {
+    if (navigationListener) ipcRenderer.removeListener('xrCollector:navigate', navigationListener);
+    navigationListener = (_event: unknown, target: unknown) => listener(target);
+    ipcRenderer.on('xrCollector:navigate', navigationListener);
   },
 });

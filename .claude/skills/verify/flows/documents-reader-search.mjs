@@ -14,7 +14,7 @@ const fromIndexKey = (key) => Buffer.from(key, 'base64url').toString('utf8');
 const listedIds = (state) => (state.api.documents?.documents ?? []).map((document) => document.id).sort();
 const vaultIds = (state) => (state.vault.documents ?? []).map((document) => document.frontmatter?.collector?.id).filter(Boolean).sort();
 const indexIds = (state) => {
-  const index = state.index.indexes?.find((entry) => entry.uid === 'documents_v2');
+  const index = state.index.indexes?.find((entry) => ['documents_v3', 'documents_v2'].includes(entry.uid));
   return index ? index.keys.map(fromIndexKey).sort() : null;
 };
 const sameIds = (actual, expected) => actual !== null && JSON.stringify(actual) === JSON.stringify(expected);

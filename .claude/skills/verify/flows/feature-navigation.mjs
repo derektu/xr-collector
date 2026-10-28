@@ -79,7 +79,7 @@ export async function run({ instance, page, record, waitFor }) {
     await waitFor(async () => (await page.getByTestId('search-index-state').innerText()).includes('就緒'), 'ready UI');
     const after = await instance.state();
     expect(before.vault.documents.length > 0 && before.vault.documents.length === after.vault.documents.length, '重建前後 Vault 文件數相同且不為空');
-    const index = after.index.indexes.find((entry) => entry.uid === 'documents_v2');
+    const index = after.index.indexes.find((entry) => ['documents_v3', 'documents_v2'].includes(entry.uid));
     expect(index.numberOfDocuments === after.vault.documents.length, '實際索引筆數與 Vault 相同');
     expect(JSON.stringify(before.vault.documents) === JSON.stringify(after.vault.documents), '重建沒有改動文件內容');
     await shot('rebuilt');

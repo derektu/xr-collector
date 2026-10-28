@@ -25,6 +25,7 @@ describe('document presentation', () => {
   it('keeps a trailing space typed before the debounced query lands', () => {
     // Typing "machine " and pausing writes "machine" to the URL; the box must keep the space.
     expect(draftForQuery('machine ', 'machine')).toBe('machine ');
+    expect(draftForQuery('\u0085\u00a0　', '')).toBe('\u0085\u00a0　');
     expect(draftForQuery('machine ', 'learning')).toBe('learning');
     expect(draftForQuery('machine', '')).toBe('');
   });

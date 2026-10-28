@@ -12,6 +12,7 @@ import {
   type NavigationItem, type ShellPage, type ThemePreference, type ThemeStore,
 } from './app-shell.js';
 import { Documents } from './Documents.js';
+import { handleDesktopNavigation } from './desktop-navigation.js';
 import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
 import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
@@ -81,7 +82,16 @@ export default function App() {
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { void loadVault(); }, []);
   // The tray menu opens the window on a page; navigating only touches the history and location state.
-  useEffect(() => { window.xrCollectorDesktop?.onNavigate((next) => next === 'update' ? openUpdate() : navigate(next)); }, []);
+  useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
+    if (next === 'update') { openUpdate(); return; }
+    if (next === 'settings') { navigate('settings'); return; }
+    handleDesktopNavigation(next, window.location.pathname, {
+      navigate,
+      openSource,
+      refresh: status.announce,
+      announce: (message) => announce(message, 'error'),
+    });
+  }); desktopBridge?.ready(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
   useEffect(() => {
     let active = true;

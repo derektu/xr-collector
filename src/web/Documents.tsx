@@ -3,6 +3,7 @@ import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import type { DocumentMetadata, DocumentSources } from '../core/types.js';
+import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { ApiError, api } from './api-client.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import {
@@ -81,8 +82,9 @@ export function Documents({ state, revision, offline, scroller, onState, onOpen,
 
   // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
-    if (draft.trim() === state.query) return undefined;
-    const timer = setTimeout(() => onState({ query: draft.trim(), source: state.source, page: 1 }), SEARCH_DEBOUNCE_MS);
+    const query = trimSearchQueryWhitespace(draft);
+    if (query === state.query) return undefined;
+    const timer = setTimeout(() => onState({ query, source: state.source, page: 1 }), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [draft, state.query, state.source, onState]);
 
@@ -178,7 +180,7 @@ export function Documents({ state, revision, offline, scroller, onState, onOpen,
           placeholder="搜尋文件內容…"
           maxLength={500}
           onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter') onState({ ...state, query: draft.trim(), page: 1 }); }}
+          onKeyDown={(event) => { if (event.key === 'Enter') onState({ ...state, query: trimSearchQueryWhitespace(draft), page: 1 }); }}
           data-testid="documents-search"
         />
         {draft ? <button type="button" className="search-clear" aria-label="清除搜尋" onClick={() => { setDraft(''); onState({ ...state, query: '', page: 1 }); }}>×</button> : null}

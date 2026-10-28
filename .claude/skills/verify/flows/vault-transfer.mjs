@@ -6,7 +6,7 @@ import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '..
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入、搬移與切換';
-export const covers = ['vault-info', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-move', 'vault-open-other', 'vault-fixed'];
+export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-move', 'vault-open-other', 'vault-fixed'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const button = (id) => page.getByTestId(id);
@@ -42,7 +42,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(await page.locator('.document-row').count() === count, '搜尋可找到所有文件');
     const state = await instance.state();
     expect(state.vault.documents?.length === count, `Vault 實際保存 ${count} 份文件`, { id: `vault.count.${count}`, expected: count, actual: state.vault.documents?.length });
-    const index = state.index.indexes?.find((entry) => entry.uid === 'documents_v2');
+    const index = state.index.indexes?.find((entry) => ['documents_v3', 'documents_v2'].includes(entry.uid));
     expect(index?.numberOfDocuments === count, '搜尋索引筆數一致', { id: `index.count.${count}`, expected: count, actual: index?.numberOfDocuments });
     await button('documents-search').fill('');
     await settings();
@@ -62,9 +62,18 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await cp(path.join(donor.runDir, 'vault'), donorRoot, { recursive: true });
     await settings();
 
-    await record.scenario('R102-1', '資訊、匯出、同名檔保留與覆蓋', async ({ expect, shot }) => {
+    await record.scenario('R102-1', '資訊、匯出、同名檔保留與覆蓋', async ({ expect, shot, themed }) => {
       expect((await button('vault-path').innerText()).trim() === path.join(instance.runDir, 'vault'), '設定顯示目前 Vault 路徑');
       expect((await button('vault-counts').innerText()).includes('1'), '設定顯示一份文件');
+      const order = await button('settings-vault').locator('button').allTextContents();
+      expect(JSON.stringify(order) === JSON.stringify(['開啟其他知識庫…', '搬移…', '匯入…', '匯出…']), '知識庫操作順序：開啟在左，搬移、匯入、匯出在右',
+        { id: 'vault.actions.order', expected: ['開啟其他知識庫…', '搬移…', '匯入…', '匯出…'], actual: order });
+      const frames = await Promise.all(['vault-open-other', 'vault-move', 'vault-import', 'vault-export'].map((id) => button(id).boundingBox()));
+      expect(frames.every((frame) => frame && Math.abs(frame.y - frames[0].y) < 1), '一般寬度的知識庫操作按鈕同一排',
+        { id: 'vault.actions.row', expected: 'same y', actual: frames });
+      expect(frames[1].x > frames[0].x + frames[0].width + 32, '開啟與資料操作群組分居左右',
+        { id: 'vault.actions.groups', expected: 'separated groups', actual: frames });
+      await themed('vault-actions');
       await click('vault-export');
       await button('export-path').fill(exportPath);
       await shot('export-input');

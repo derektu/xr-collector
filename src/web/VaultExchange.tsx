@@ -39,9 +39,9 @@ export function ExchangeActions({ onChanged }: { onChanged: (message: string) =>
   }
 
   return <>
-    <div className="settings-line" data-testid="vault-exchange">
-      <button type="button" className="button" onClick={() => void choose('export')} data-testid="vault-export">匯出…</button>
+    <div className="settings-line vault-exchange-actions" data-testid="vault-exchange">
       <button type="button" className="button" onClick={() => void choose('import')} data-testid="vault-import">匯入…</button>
+      <button type="button" className="button" onClick={() => void choose('export')} data-testid="vault-export">匯出…</button>
     </div>
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
     {open?.kind === 'export' ? <ExportDialog file={open.file} onClose={() => setOpen(null)} /> : null}

@@ -7,9 +7,11 @@ import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import type { NotificationState } from '../notifications/notification-center.js';
 import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
 import type { UpdateAccess, UpdateSelection } from '../updates/types.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
@@ -129,8 +131,13 @@ const NOT_READY_ROUTES = new Set([
   '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
   '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
   '/api/device/updates', '/api/device/updates/check', '/api/device/updates/download',
-  '/api/device/updates/apply', '/api/device/updates/cancel',
+  '/api/device/updates/apply', '/api/device/updates/cancel', '/api/device/notifications',
 ]);
+
+export interface NotificationAccess {
+  read(): Promise<NotificationState>;
+  update(enabled: boolean): Promise<NotificationState>;
+}
 
 export interface HttpAppOptions {
   buildInfo?: BuildInfo;
@@ -159,6 +166,7 @@ export interface HttpAppOptions {
   vaultSetup?: VaultSetup;
   loginStartup?: LoginStartupAccess;
   updates?: UpdateAccess;
+  notifications?: NotificationAccess;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
   /**
@@ -253,6 +261,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
   const connectivity = options.connectivity;
+  let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [], events: [] };
+  const notifications: NotificationAccess = options.notifications ?? {
+    read: async () => fallbackNotifications,
+    update: async (enabled) => (fallbackNotifications = { ...fallbackNotifications, enabled }),
+  };
   const connectivityStatus = (): ConnectivityStatus => connectivity?.status() ?? { state: 'online', checkedAt: null };
   /** Refuses work that would only fail without a network. */
   const requireOnline = (): void => {
@@ -446,6 +459,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   const loginStartup = options.loginStartup ?? unavailableLoginStartup;
   app.get('/api/device/build-info', deviceData(), async () => ({ buildInfo }));
+  {
+    app.get('/api/device/notifications', deviceData(), async () => ({ notifications: await notifications.read() }));
+    app.put<{ Body: { enabled?: unknown } }>('/api/device/notifications', deviceData(), async (request) => {
+      if (!request.body || typeof request.body.enabled !== 'boolean' || Object.keys(request.body).some((key) => key !== 'enabled')) {
+        throw new CollectorError('invalid_request', '系統通知設定必須提供 enabled。');
+      }
+      return { notifications: await notifications.update(request.body.enabled) };
+    });
+  }
 
   {
     const unavailableUpdate = (): import('../core/types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
@@ -514,7 +536,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
     const parameters = singleValues(request.query);
-    const query = parameters.q?.trim() ?? '';
+    const query = typeof parameters.q === 'string' ? trimSearchQueryWhitespace(parameters.q) : '';
     const { publishedFrom, publishedTo } = parameters;
     if (query.length > 500) {
       throw new CollectorError('invalid_request', '搜尋條件過長。');

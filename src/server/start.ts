@@ -1,7 +1,7 @@
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
-import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup } from './app.js';
+import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
 import type { Collector } from '../core/collector.js';
 import type { BuildInfo, TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -31,6 +31,7 @@ export interface StartServerOptions {
   vaultSetup?: VaultSetup;
   loginStartup?: import('../core/login-startup.js').LoginStartupAccess;
   updates?: UpdateAccess;
+  notifications?: NotificationAccess;
 }
 
 export interface RunningServer {
@@ -61,6 +62,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.vaultSetup ? { vaultSetup: options.vaultSetup } : {}),
     ...(options.loginStartup ? { loginStartup: options.loginStartup } : {}),
     ...(options.updates ? { updates: options.updates } : {}),
+    ...(options.notifications ? { notifications: options.notifications } : {}),
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';

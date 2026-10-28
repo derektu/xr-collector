@@ -26,6 +26,8 @@ import { runUpdateCoordinator } from './update-coordinator.js';
 import { recoverNativeInstallations } from './update-recovery.js';
 import { startUpdateCheckScheduler } from './update-check-scheduler.js';
 import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../updates/config.js';
+import { ElectronSystemNotifications } from './system-notifications.js';
+import { notificationNavigation } from './notification-navigation.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
@@ -40,7 +42,11 @@ let isQuitting = false;
 const collectionPause = new CollectionPause();
 let networkWatch: ReturnType<typeof setInterval> | null = null;
 let pendingManualShow = false;
-let pendingWindowPage: 'jobs' | 'activity' | 'settings' | 'update' | undefined;
+type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
+  | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
+let pendingNavigation: DesktopTarget | undefined;
+let pendingNotificationId: string | undefined;
+let rendererReady = false;
 const windowCreation = new WindowCreationGate();
 let startupWindowState: { startedAtLogin: boolean; finished: boolean } | null = null;
 /** How often the system's own view of the network is read; reading it sends nothing. */
@@ -59,7 +65,7 @@ if (validationHidden) app.dock?.hide();
 // Validation control channel, for native acceptance runs only: Playwright reads and drives the tray
 // and the window through globalThis.__xrCollectorValidation in this process.
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
-const validationNotifications: { title: string; content: string }[] = [];
+const validationNotifications: { id?: string; title: string; content: string }[] = [];
 
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
@@ -120,6 +126,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
       backgroundThrottling: !validationHidden,
     },
   });
+  rendererReady = false;
   // Publish the window before loading so an early second-instance request cannot create another.
   mainWindow = window;
   // The app has no menu commands of its own; macOS keeps the default menu for
@@ -144,6 +151,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
   window.on('session-end', () => { isQuitting = true; });
   window.on('closed', () => {
     mainWindow = null;
+    rendererReady = false;
   });
   try {
     await window.loadURL(serverUrl);
@@ -155,25 +163,37 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
 }
 
 /** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
-function showWindow(page?: 'jobs' | 'activity' | 'settings' | 'update'): void {
+function showWindow(page?: DesktopTarget | { notificationId: string }): void {
   pendingManualShow = true;
-  if (page) pendingWindowPage = page;
+  if (typeof page === 'object' && 'notificationId' in page) {
+    if (!runtime) { pendingNotificationId = page.notificationId; return; }
+    const notificationId = page.notificationId;
+    void runtime.resolveNotification(notificationId).then((event) => {
+      pendingNavigation = notificationNavigation(event, runtime?.workspace?.activeVaultId() ?? null);
+      showWindow();
+    }).catch((error: unknown) => console.warn('Unable to resolve notification target', error));
+    return;
+  } else if (page) pendingNavigation = page;
   if (windowCreation.current) {
     // The caller that began creation performs the one pending show after loading completes.
     return;
   }
   if (!mainWindow) {
-    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow(page)).catch((error) => console.error(error));
+    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow()).catch((error) => console.error(error));
     return;
   }
-  const destination = pendingWindowPage;
-  pendingWindowPage = undefined;
-  if (destination) mainWindow.webContents.send('xrCollector:navigate', destination);
+  deliverPendingNavigation();
   if (validationHidden) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   if (process.platform === 'darwin') app.focus({ steal: true });
   mainWindow.focus();
+}
+
+function deliverPendingNavigation(): void {
+  if (!pendingNavigation || !rendererReady || !mainWindow) return;
+  mainWindow.webContents.send('xrCollector:navigate', pendingNavigation);
+  pendingNavigation = undefined;
 }
 
 /**
@@ -223,6 +243,11 @@ app.whenReady().then(async () => {
   const loginStartup = new DesktopLoginStartup(loginItemAdapter, path.join(app.getPath('userData'), 'login-startup.json'));
   themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
   ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
+  ipcMain.on('xrCollector:renderer:ready', (event) => {
+    if (mainWindow?.webContents !== event.sender) return;
+    rendererReady = true;
+    deliverPendingNavigation();
+  });
   ipcMain.handle('xrCollector:theme:write', (_event, theme: unknown) => {
     if (!isStoredTheme(theme)) throw new Error('Unsupported theme preference');
     return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
@@ -332,6 +357,10 @@ app.whenReady().then(async () => {
     workspace: {
       plugins: sources.plugins, pacing: sources.pacing,
       searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
+      searchLexicon: path.resolve(process.env.XR_COLLECTOR_SEARCH_LEXICON
+        ?? (app.isPackaged
+          ? path.join(process.resourcesPath, 'search', 'coct-main.txt')
+          : path.join(app.getAppPath(), 'resources', 'search', 'coct-main.txt'))),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
       backupFolder: backupFolder(app.getPath('documents')),
@@ -347,8 +376,15 @@ app.whenReady().then(async () => {
     loginStartup,
     startedAtLogin,
     updates: updateService,
+    systemNotifications: new ElectronSystemNotifications((id) => showWindow({ notificationId: id }),
+      validationControl ? (notification) => validationNotifications.push(notification) : undefined),
   });
   for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
+  if (pendingNotificationId) {
+    const id = pendingNotificationId;
+    pendingNotificationId = undefined;
+    showWindow({ notificationId: id });
+  }
   if (!startedAtLogin) {
     try {
       const repair = await loginStartup.repairMovedRegistration();
@@ -364,7 +400,7 @@ app.whenReady().then(async () => {
   // A tray request can arrive while the window is loading. Replay its latest page as
   // well as the show request after load; otherwise a device-level update click can land on the
   // default page (especially before a Vault exists).
-  if (pendingWindowPage || startedAtLogin && pendingManualShow && !showInitially) showWindow();
+  if (pendingNavigation || startedAtLogin && pendingManualShow && !showInitially) showWindow();
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
     serverUrl: runtime.server.url,
@@ -519,6 +555,8 @@ function exposeValidationControl(appTray: AppTray): void {
   (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
     tray: async () => { await appTray.refresh(); return appTray.current(); },
     click: (action: TrayAction) => appTray.run(action),
+    notifications: () => [...validationNotifications],
+    activateNotification: (id: string) => showWindow({ notificationId: id }),
     window: () => ({
       exists: Boolean(mainWindow),
       visible: mainWindow?.isVisible() ?? false,
@@ -526,7 +564,6 @@ function exposeValidationControl(appTray: AppTray): void {
       url: mainWindow?.webContents.getURL() ?? null,
     }),
     closeWindow: () => mainWindow?.close(),
-    notifications: () => [...validationNotifications],
     update: () => updateService?.status() ?? null,
   };
 }

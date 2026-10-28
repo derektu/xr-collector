@@ -26,6 +26,7 @@ import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
 import type { UpdateLease } from '../vault/operation-lock.js';
+import { NotificationCenter, type SystemNotificationAdapter } from '../notifications/notification-center.js';
 
 export type CollectorRuntimeState = 'starting' | 'ready' | 'not_ready' | 'stopping' | 'stopped' | 'unavailable';
 
@@ -68,6 +69,7 @@ export interface CollectorRuntimeOptions {
   startedAtLogin?: boolean;
   /** Device-level software update state shared by UI and authorized Agent APIs. */
   updates?: UpdateAccess;
+  systemNotifications?: SystemNotificationAdapter;
 }
 
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
@@ -81,6 +83,7 @@ export class CollectorRuntime {
   /** The device's collection pause, followed by the scheduler and jobs of whichever Vault is open. */
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
+  readonly notifications: NotificationCenter;
   private workspaceValue: VaultWorkspace | null;
   private failure: { path: string; reason: string } | null;
   private stateValue: CollectorRuntimeState;
@@ -100,9 +103,11 @@ export class CollectorRuntime {
     private readonly jobStore: JobStore | null,
     pause: CollectionPause,
     connectivity: Connectivity,
+    notifications: NotificationCenter,
   ) {
     this.pause = pause;
     this.connectivity = connectivity;
+    this.notifications = notifications;
     this.instanceId = instanceId;
     this.profilePath = path.resolve(options.profilePath);
     this.workspaceValue = initial.workspace;
@@ -114,6 +119,15 @@ export class CollectorRuntime {
   }
 
   get workspace(): VaultWorkspace | null { return this.workspaceValue; }
+
+  /** A persisted old notification or an actionable row synthesized from the current Vault. */
+  async resolveNotification(id: string): Promise<import('../notifications/types.js').AutoPauseNotification | null> {
+    const persisted = this.notifications.event(id);
+    if (persisted) return persisted;
+    const workspace = this.workspaceValue;
+    if (!workspace) return null;
+    return this.notifications.view(await workspace.notificationSubscriptions(), workspace.activeVaultId()).active.find((event) => event.id === id) ?? null;
+  }
 
   /** Records a device-wide desktop event; global events stay visible with any Vault selected. */
   recordDeviceEvent(severity: 'info' | 'warning' | 'error', eventType: string, message: string, errorCode?: string): void {
@@ -143,7 +157,11 @@ export class CollectorRuntime {
     if (options.startedAtLogin) deviceEvent('info', 'device.login_startup_launched', 'XR Collector 由電腦登入自動啟動，並在背景執行。');
     const pause = options.pause ?? new CollectionPause();
     const connectivity = new Connectivity({ ...options.connectivity, pause });
-    const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? { ...options.workspace, jobStore, pause, connectivity } : null;
+    const notifications = await NotificationCenter.open(options.profilePath, options.systemNotifications);
+    const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? {
+      ...options.workspace, jobStore, pause, connectivity,
+      onAutoPaused: (vaultId, sourceType, record) => notifications.recordAutoPause(vaultId, sourceType, record),
+    } : null;
     // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
     const activity: ActivityAccess | undefined = jobStore ? {
       query: (query) => jobStore.activity.query(query,
@@ -179,7 +197,11 @@ export class CollectorRuntime {
         }
       },
     } : undefined;
-    const shared = { ...services, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
+    const notificationAccess = {
+      read: async () => { const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+      update: async (enabled: boolean) => { await notifications.update(enabled); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+    };
+    const shared = { ...services, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
@@ -210,7 +232,7 @@ export class CollectorRuntime {
         agentConnection: agentAccess,
         runtimeStatus, notReady, vaultSetup,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity);
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity, notifications);
       return runtime;
     } catch (error) {
       await agentAccess?.close().catch(() => undefined);

@@ -6,6 +6,7 @@ import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOvervi
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { trayMenu } from '../../src/electron/tray-menu.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';
+import type { AutoPauseNotification } from '../../src/notifications/types.js';
 
 const now = new Date('2026-10-24T10:24:00+08:00');
 const entry = (overrides: Partial<JobOverviewEntry>): JobOverviewEntry => ({
@@ -23,6 +24,11 @@ const update = (overrides: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus
 
 const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
 const actions = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'action' ? [item.label] : []);
+const alert = (id: string, title: string): AutoPauseNotification => ({
+  id, title, vaultId: 'vault', sourceType: 'youtube', subscriptionId: id, failureCount: 5,
+  error: { code: 'network_error', message: '無法連線' }, autoPausedAt: `2026-10-24T0${id.length}:00:00.000Z`,
+  delivery: 'attempted', deliveryMessage: null,
+});
 
 describe('tray menu (#32 T1)', () => {
   const timeZone = process.env.TZ;
@@ -124,6 +130,29 @@ describe('tray menu (#32 T1)', () => {
     expect(labels({ phase: 'waiting' })).toBe('App 更新：等待工作完成');
     expect(labels({ phase: 'installing' })).toBe('App 更新：安裝中');
     expect(labels({ phase: 'error', errorCode: 'update_failed' })).toBe('App 更新：錯誤');
+  });
+
+  it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational and future update icons (#136)', () => {
+    const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true, updateAvailable = false) =>
+      trayMenu({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
+    expect(make([]).items.some((item) => item.kind === 'submenu')).toBe(false);
+    const one = make([alert('a', 'A')], {}, false, true);
+    expect(one.icon).toBe('attention');
+    expect(one.tooltip).toContain('自動檢查已關閉');
+    expect(one.items).toContainEqual({ kind: 'submenu', label: '需要處理的訂閱（1）', items: [{ action: 'subscription:a', label: 'A' }] });
+    const busy = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
+    const two = make([alert('a', 'A'), alert('bb', 'B')], { running: [busy] }, true, true);
+    expect(two.icon).toBe('attention');
+    expect(two.tooltip).toContain('收集中 3/10');
+    expect(two.items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（2）' }));
+    expect(make([alert('bb', 'B')]).items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（1）' }));
+    expect(make([], {}, true, true).icon).toBe('update_available');
+    expect(make([]).icon).toBe('idle');
+    const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
+    const attentionWithUpdate = trayMenu({ overview: overview(), schedule: schedule(), actionable: [alert('a', 'A')], update: offered }, now);
+    expect(attentionWithUpdate.icon).toBe('attention');
+    expect(attentionWithUpdate.updateBadge).toBeUndefined();
+    expect(actions(attentionWithUpdate)).toContain('App 更新：可下載 0.1.1');
   });
 });
 

@@ -41,7 +41,7 @@ describe('evidenceFreshness', () => {
     results(root, 'same', { checkout: worktree, commit: now.commit, sourceHash: now.sourceHash });
     results(root, 'other-commit', { checkout: worktree, commit: 'a'.repeat(40), sourceHash: now.sourceHash });
     results(root, 'other-changes', { checkout: worktree, commit: now.commit, sourceHash: '0123456789abcdef' });
-    results(root, 'elsewhere', { checkout: 'C:\\projects\\xr-collector', commit: now.commit, sourceHash: now.sourceHash });
+    results(root, 'elsewhere', { checkout: path.join(worktree, 'checkout-that-does-not-exist'), commit: now.commit, sourceHash: now.sourceHash });
 
     const report = evidenceFreshness(root, { local: worktree });
     const folders = byFolder(report);

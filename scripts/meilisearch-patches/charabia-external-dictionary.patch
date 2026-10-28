@@ -1,0 +1,69 @@
+--- a/src/segmenter/chinese.rs
++++ b/src/segmenter/chinese.rs
+@@ -1,4 +1,7 @@
+-use std::sync::LazyLock;
++use std::{env, fs, io::Cursor, path::Path, sync::LazyLock};
++
++#[path = "xr_collector_dictionary.rs"]
++mod dictionary_format;
+ 
+ use jieba_rs::Jieba;
+ 
+@@ -49,18 +52,46 @@
+     Box::new(subwords.into_iter())
+ }
+ 
++fn secondary_split<'a>(word: &'a str) -> Box<dyn Iterator<Item = &'a str> + 'a> {
++    if *DISABLE_SECONDARY_SPLIT {
++        Box::new(std::iter::once(word))
++    } else {
++        cut_for_search(word)
++    }
++}
++
+ impl Segmenter for ChineseSegmenter {
+     fn segment_str<'o>(&self, to_segment: &'o str) -> Box<dyn Iterator<Item = &'o str> + 'o> {
+         let segmented: Vec<&str> = JIEBA
+             .cut(to_segment, false) // disable Hidden Markov Models.
+             .into_iter()
+-            .flat_map(|x| cut_for_search(x.word))
++            .flat_map(|x| secondary_split(x.word))
+             .collect();
+         Box::new(segmented.into_iter())
+     }
+ }
+ 
+-static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
++static JIEBA: LazyLock<Jieba> = LazyLock::new(|| {
++    let path = env::var("XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH")
++        .expect("XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH must name an external Jieba dictionary");
++    assert!(Path::new(&path).is_absolute(), "XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH must be absolute");
++    let text = fs::read_to_string(&path)
++        .unwrap_or_else(|error| panic!("cannot read XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH {path:?}: {error}"));
++    dictionary_format::validate_dictionary(&text)
++        .unwrap_or_else(|error| panic!("invalid external dictionary {path:?}: {error}"));
++    Jieba::with_dict(&mut Cursor::new(text.as_bytes()))
++        .unwrap_or_else(|error| panic!("cannot load external Jieba dictionary {path:?}: {error}"))
++});
++
++static DISABLE_SECONDARY_SPLIT: LazyLock<bool> = LazyLock::new(|| {
++    match env::var("XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT") {
++        Ok(value) if value == "0" => false,
++        Ok(value) if value == "1" => true,
++        Ok(value) => panic!("XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT must be 0 or 1, got {value:?}"),
++        Err(env::VarError::NotPresent) => false,
++        Err(env::VarError::NotUnicode(_)) => panic!("XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT must be valid Unicode"),
++    }
++});
+ 
+ #[cfg(test)]
+ mod test {
+
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -118,4 +118,5 @@
+ [dependencies.jieba-rs]
+ version = "0.10.3"
+ optional = true
++default-features = false
+ 

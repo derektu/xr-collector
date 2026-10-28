@@ -169,6 +169,7 @@ export async function packageApplication(options, dependencies = {}) {
         dependencies: verified.dependencyManifest,
         meilisearch: verified.meiliManifest,
         signed: verified.signedRuntimeIdentity ?? null,
+        searchLexicon: verified.lexiconManifest,
         windowsCrt: options.target === 'win32-x64' && options.variant === 'official'
           ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt
           : null,
@@ -276,6 +277,15 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
       throw new Error('Signed Meilisearch executable semantics do not match its trusted producer manifest.');
     }
   } else if (JSON.stringify(binaryIdentity) !== JSON.stringify(meiliManifest.binary)) throw new Error('Packaged Meilisearch executable identity does not match its trusted producer manifest.');
+  const lexiconDirectory = path.join(resources, 'search');
+  const lexiconManifest = JSON.parse(await readFile(path.join(lexiconDirectory, 'coct-main.json'), 'utf8'));
+  const trustedLexiconManifest = dependencies.trustedLexiconManifest
+    ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/search/coct-main.json'), 'utf8'));
+  if (JSON.stringify(lexiconManifest) !== JSON.stringify(trustedLexiconManifest)) throw new Error('Packaged search lexicon manifest does not match the source resource identity.');
+  const lexicon = path.join(lexiconDirectory, lexiconManifest.output?.file ?? '');
+  if ((await stat(lexicon)).size !== lexiconManifest.output?.bytes || await sha256(lexicon) !== lexiconManifest.output?.sha256) {
+    throw new Error('Packaged search lexicon bytes do not match its manifest.');
+  }
   const packagedSkill = path.join(resources, 'skills/xr-collector-agent/SKILL.md');
   const sourceSkill = dependencies.sourceSkillPath ?? path.join(projectRoot, 'skills/xr-collector-agent/SKILL.md');
   if ((await stat(packagedSkill)).size !== (await stat(sourceSkill)).size || await sha256(packagedSkill) !== await sha256(sourceSkill)) {
@@ -291,7 +301,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
-  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity };
+  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity, lexiconManifest };
 }
 
 export async function verifyMacBundleSignature(appPath, run = runVerificationCommand) {
@@ -505,7 +515,7 @@ function runCommand(command, args, options = {}) {
   }).then(() => undefined);
 }
 
-function capture(command, args, options = {}) {
+export function capture(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd ?? projectRoot,
@@ -513,9 +523,17 @@ function capture(command, args, options = {}) {
       env: options.environment ?? packageChildEnvironment(),
     });
     let output = '';
+    let settled = false;
     child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve(output) : reject(new Error(`${command} exited with status ${code}`)));
+    child.once('error', (error) => { if (!settled) { settled = true; reject(error); } });
+    // A child can exit while a descendant still owns its stdout pipe. `close` is emitted only after
+    // the process has ended and its stdio has drained, so the captured output is complete here.
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) resolve(output);
+      else reject(new Error(`${command} exited with ${code === null ? `signal ${signal ?? 'unknown'}` : `status ${code}`}`));
+    });
   });
 }
 

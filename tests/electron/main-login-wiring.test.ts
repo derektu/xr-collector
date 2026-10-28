@@ -1,7 +1,12 @@
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   appHandlers: new Map<string, ((...args: any[]) => void)[]>(),
+  ipcHandlers: new Map<string, ((...args: any[]) => void)[]>(),
+  notifications: [] as any[],
+  sent: [] as unknown[],
+  systemNotifications: null as any,
   windows: [] as any[],
   shows: 0,
   trays: 0,
@@ -33,7 +38,7 @@ vi.mock('electron', () => {
     readonly webContents = {
       setWindowOpenHandler: () => undefined,
       on: () => undefined,
-      send: () => undefined,
+      send: (_channel: string, value: unknown) => { harness.sent.push(value); },
       getURL: () => 'http://127.0.0.1:1',
     };
     constructor() { harness.windows.push(this); }
@@ -85,9 +90,16 @@ vi.mock('electron', () => {
     app,
     BrowserWindow: FakeBrowserWindow,
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showSaveDialog: async () => ({ canceled: true }) },
-    ipcMain: { handle: () => undefined },
+    ipcMain: {
+      handle: () => undefined,
+      on: (event: string, listener: (...args: any[]) => void) => harness.ipcHandlers.set(event, [...(harness.ipcHandlers.get(event) ?? []), listener]),
+    },
     net: { fetch: async () => new Response(), isOnline: () => true },
-    Notification: class { show() {} },
+    Notification: class extends EventEmitter {
+      id: string;
+      constructor(options: { id?: string } = {}) { super(); this.id = options.id ?? ''; harness.notifications.push(this); }
+      show() { this.emit('show'); }
+    },
     powerMonitor: { on: () => undefined, removeListener: () => undefined },
     shell: { openExternal: async () => undefined, showItemInFolder: () => undefined },
   };
@@ -103,14 +115,16 @@ vi.mock('../../src/updates/sources.js', async (importOriginal) => {
 vi.mock('../../src/updates/windows-installer.js', () => ({ WindowsNativeInstaller: class {} }));
 vi.mock('../../src/runtime/collector-runtime.js', () => ({
   CollectorRuntime: {
-    start: async () => {
+    start: async (options: any) => {
       harness.runtimeStarts += 1;
+      harness.systemNotifications = options.systemNotifications;
       return {
         server: { url: 'http://127.0.0.1:1' },
-        workspace: null,
         connectivity: { check: async () => undefined },
         recordDeviceEvent: () => undefined,
         close: async () => undefined,
+        workspace: { activeVaultId: () => 'vault-a', status: () => ({ vaultPath: '/vault' }) },
+        resolveNotification: async () => ({ id: 'event', vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' }),
       };
     },
   },
@@ -149,7 +163,11 @@ beforeEach(() => {
   restorePlatform = () => platform.mockRestore();
   vi.resetModules();
   harness.appHandlers.clear();
+  harness.ipcHandlers.clear();
   harness.windows.splice(0);
+  harness.notifications.splice(0);
+  harness.sent.splice(0);
+  harness.systemNotifications = null;
   harness.shows = 0;
   harness.trays = 0;
   harness.runtimeStarts = 0;
@@ -240,5 +258,21 @@ describe('Electron main login-startup wiring', () => {
     await loadMain(false);
     await vi.waitFor(() => expect(harness.updateRepositories).toEqual(['derektu/xr-collector-test']));
     expect(harness.appIds).toEqual(['com.xrcollector.verify.public.chinese']);
+  });
+
+  it('keeps a notification target clicked while loading until the renderer listener is ready', async () => {
+    await loadMain(false);
+    await harness.systemNotifications.show({
+      id: 'event', vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a', title: 'A', failureCount: 5,
+      error: { code: 'network_error', message: 'failed' }, autoPausedAt: '2026-10-28T00:00:00.000Z', delivery: 'pending', deliveryMessage: null,
+    });
+    harness.notifications[0].emit('click');
+    await Promise.resolve();
+    expect(harness.sent).toEqual([]);
+    harness.loadResolve();
+    await vi.waitFor(() => expect(harness.trays).toBe(1));
+    const window = harness.windows[0];
+    for (const listener of harness.ipcHandlers.get('xrCollector:renderer:ready') ?? []) listener({ sender: window.webContents });
+    expect(harness.sent).toEqual([{ kind: 'source', type: 'youtube', id: 'a' }]);
   });
 });

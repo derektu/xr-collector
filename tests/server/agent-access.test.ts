@@ -9,6 +9,7 @@ import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
+import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
 import { startMeilisearchProcess } from '../../src/search/meilisearch-process.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
@@ -163,9 +164,10 @@ describe('Agent authenticated HTTP access', () => {
 
   it.skipIf(!existsSync('resources/bin/mac/meilisearch'))('serves the platform-neutral HTTP contract and keeps credentials across restart', async () => {
     const { root, vault, collector } = await fixture();
-    const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search') });
+    const lexiconPath = path.resolve('resources/search/coct-main.txt');
+    const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search'), lexiconPath });
     cleanup.push(() => engine.close());
-    const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey }),
+    const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));
     await search.start();
     const settingsFile = path.join(root, 'agent-settings.json');
@@ -176,7 +178,7 @@ describe('Agent authenticated HTTP access', () => {
     const access = await startAgentAccess(options);
     cleanup.push(() => access.close());
     const config = access.connection();
-    expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
     expect(new URL(config.url).hostname).toBe('127.0.0.1');
     // The development test runner is the HTTP client; no client-side helper is distributed.
     const get = async (route: string) => {
@@ -262,7 +264,7 @@ describe('Agent authenticated HTTP access', () => {
     expect(rotated.token).not.toBe(before);
     expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${before}` } })).status).toBe(401);
     expect((await fetch(`${config.url}/api/documents`, { headers: { Authorization: `Bearer ${rotated.token}` } })).status).toBe(200);
-    expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
     const files = await zipEntries(await preferred.download());
     expect([...files.keys()]).toEqual(['xr-collector-agent/SKILL.md', 'xr-collector-agent/connection.json']);
     const bundled = JSON.parse(files.get('xr-collector-agent/connection.json')!.toString());

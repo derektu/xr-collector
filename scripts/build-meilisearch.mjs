@@ -34,6 +34,7 @@ export function recipeFingerprint(recipe, target, rustc) {
     profile: recipe.profile,
     features: recipe.features,
     defaultFeatures: recipe.defaultFeatures,
+    charabiaOverride: recipe.charabiaOverride,
     target: target.rustTarget,
     rustcHost: rustc.host,
     rustcRelease: rustc.release,
@@ -115,8 +116,9 @@ export function expectedManifestFields({ recipe, target, fingerprint, rustc, car
     rustTarget: target.rustTarget,
     features: recipe.features,
     defaultFeatures: recipe.defaultFeatures,
+    charabiaOverride: recipe.charabiaOverride,
     profile: recipe.profile,
-    buildCommand: `cargo +${recipe.rustVersion} ${cargoArguments(recipe, target).join(' ')}`,
+    buildCommand: `cargo +${recipe.rustVersion} ${cargoArguments(recipe, target, '<isolated-charabia>').join(' ')}`,
     buildEnvironment: { rustflags: target.rustflags, cargoProfileOverrides: {} },
     runner: {
       platform: environment.platform,
@@ -212,6 +214,7 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
     : await probePhysicalHost({ run });
   const environment = { ...physical, ...environmentOverride, requireNative: options.requireNative ?? false };
   const recipe = await readRecipe(options.recipePath ?? recipePath);
+  await verifyRecipeResources(recipe, hashFile);
   const target = selectTarget(options.target, environment);
   const rustcOutput = await run('rustc', [`+${recipe.rustVersion}`, '-Vv']).catch((error) => {
     throw new Error(`Rust ${recipe.rustVersion} is unavailable. Install it with rustup toolchain install ${recipe.rustVersion}.`, { cause: error });
@@ -233,6 +236,8 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
   return withBuildLock(path.join(entry, '.build.lock'), async () => {
     await ensureSource({ sourceDir, recipe, run });
     await verifySource({ sourceDir, recipe, run, hashFile });
+    const charabiaOverride = dependencies.charabiaOverridePath
+      ?? await prepareCharabiaOverride({ recipe, cacheRoot, run, hashFile, request: dependencies.fetch ?? fetch });
     await assertControlledCargoConfiguration(sourceDir, inheritedEnvironment, run);
     const base = { recipe, target, fingerprint, rustc, cargoVersion: cargo.stdout.trim(), environment };
     let binary;
@@ -247,7 +252,7 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
     }
     if (!cacheHit) {
       await mkdir(cargoTargetDir, { recursive: true });
-      await run('cargo', [`+${recipe.rustVersion}`, ...cargoArguments(recipe, target)], {
+      await run('cargo', [`+${recipe.rustVersion}`, ...cargoArguments(recipe, target, charabiaOverride)], {
         cwd: sourceDir,
         env: cleanBuildEnvironment(cargoTargetDir, inheritedEnvironment, target.rustflags),
         stdio: 'inherit',
@@ -314,8 +319,77 @@ async function verifySource({ sourceDir, recipe, run, hashFile }) {
   if (lock !== recipe.cargoLockSha256) throw new Error(`Meilisearch Cargo.lock checksum is ${lock}, expected ${recipe.cargoLockSha256}.`);
 }
 
-function cargoArguments(recipe, target) {
-  return ['build', '--release', '--locked', '-p', recipe.package, '--no-default-features', '--features', recipe.features.join(','), '--target', target.rustTarget];
+function cargoArguments(recipe, target, charabiaOverride) {
+  const arguments_ = ['build', '--release', '--locked', '-p', recipe.package, '--no-default-features', '--features', recipe.features.join(','), '--target', target.rustTarget];
+  if (charabiaOverride) arguments_.push('--config', `paths=${JSON.stringify([charabiaOverride])}`);
+  return arguments_;
+}
+
+async function verifyRecipeResources(recipe, hashFile) {
+  const override = recipe.charabiaOverride;
+  if (!override || override.version !== '0.10.0'
+    || !/^[a-f0-9]{64}$/u.test(override.archiveSha256 ?? '')
+    || !/^[a-f0-9]{64}$/u.test(override.patchSha256 ?? '')
+    || !/^[a-f0-9]{64}$/u.test(override.validatorSha256 ?? '')) {
+    throw new Error('Meilisearch recipe is missing the pinned external Charabia override.');
+  }
+  for (const [relative, expected] of [[override.patch, override.patchSha256], [override.validator, override.validatorSha256]]) {
+    const absolute = path.resolve(projectRoot, relative);
+    if (!isInside(projectRoot, absolute) || await hashFile(absolute) !== expected) {
+      throw new Error(`Meilisearch recipe resource does not match its pinned hash: ${relative}.`);
+    }
+  }
+}
+
+async function prepareCharabiaOverride({ recipe, cacheRoot, run, hashFile, request }) {
+  const config = recipe.charabiaOverride;
+  const identity = sha256(Buffer.from(JSON.stringify(config)));
+  const destination = path.join(cacheRoot, 'source-overrides', `charabia-${config.version}-${identity.slice(0, 16)}`);
+  const identityPath = path.join(destination, '.xr-collector-identity.json');
+  if (await exists(destination)) {
+    const saved = await readJson(identityPath);
+    const validatorPath = path.join(destination, 'src', 'segmenter', 'xr_collector_dictionary.rs');
+    if (!saved || saved.identity !== identity || await hashFile(validatorPath) !== config.validatorSha256
+      || await hashFile(path.join(destination, 'src', 'segmenter', 'chinese.rs')) !== saved.chineseSha256
+      || await hashFile(path.join(destination, 'Cargo.toml')) !== saved.cargoTomlSha256) {
+      throw new Error(`Isolated Charabia override was modified: ${destination}.`);
+    }
+    return destination;
+  }
+  const downloads = path.join(cacheRoot, 'downloads');
+  await mkdir(downloads, { recursive: true });
+  const archive = path.join(downloads, `charabia-${config.version}.crate`);
+  if (!await exists(archive)) {
+    const response = await request(`https://static.crates.io/crates/charabia/charabia-${config.version}.crate`);
+    if (!response.ok) throw new Error(`Charabia source download failed with HTTP ${response.status}.`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (sha256(bytes) !== config.archiveSha256) throw new Error('Downloaded Charabia source does not match the pinned hash.');
+    const temporary = `${archive}.${process.pid}.tmp`;
+    await writeFile(temporary, bytes, { flag: 'wx' });
+    await rename(temporary, archive);
+  }
+  if (await hashFile(archive) !== config.archiveSha256) throw new Error('Cached Charabia source does not match the pinned hash.');
+  const unpack = path.join(cacheRoot, `charabia-unpack-${process.pid}-${randomBytes(4).toString('hex')}`);
+  await mkdir(unpack, { recursive: false });
+  try {
+    await run('tar', ['-xzf', archive, '-C', unpack]);
+    const directory = path.join(unpack, `charabia-${config.version}`);
+    const patchFile = path.resolve(projectRoot, config.patch);
+    await run('git', ['apply', '--unsafe-paths', '--directory', directory, '--check', patchFile]);
+    await run('git', ['apply', '--unsafe-paths', '--directory', directory, patchFile]);
+    await copyFile(path.resolve(projectRoot, config.validator), path.join(directory, 'src', 'segmenter', 'xr_collector_dictionary.rs'));
+    const saved = {
+      identity,
+      chineseSha256: await hashFile(path.join(directory, 'src', 'segmenter', 'chinese.rs')),
+      cargoTomlSha256: await hashFile(path.join(directory, 'Cargo.toml')),
+    };
+    await writeFile(path.join(directory, '.xr-collector-identity.json'), `${JSON.stringify(saved, null, 2)}\n`);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await rename(directory, destination);
+    return destination;
+  } finally {
+    await rm(unpack, { recursive: true, force: true });
+  }
 }
 
 export async function runCommand(command, args, options = {}) {

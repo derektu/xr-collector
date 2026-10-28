@@ -239,6 +239,11 @@ dialog::backdrop { background:var(--overlay); }
 /* Export and import */
 .settings-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
 .settings-section .settings-line .button { margin-top:0; }
+.vault-actions { justify-content:space-between; align-items:flex-start; }
+.vault-action-group { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.vault-actions-secondary { margin-left:auto; }
+.vault-actions .vault-exchange-actions { margin-top:0; }
+.vault-actions-secondary > .add-problem { flex-basis:100%; }
 .transfer-dialog[open] { display:flex; flex-direction:column; gap:4px; }
 .transfer-dialog.wide { width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 48px); }
 .transfer-dialog code { overflow-wrap:anywhere; font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }

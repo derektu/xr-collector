@@ -129,4 +129,3 @@ it('lets a valid acknowledgement that arrived after the deadline commit recovery
   expect(recovered).toMatchObject({ launchReady: true, results: [{ token: 'late-run', phase: 'succeeded' }] });
   await rm(workDir, { recursive: true, force: true });
 });
-
