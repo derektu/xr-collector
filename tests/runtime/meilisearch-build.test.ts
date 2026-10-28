@@ -118,6 +118,17 @@ describe('pinned Meilisearch build', () => {
     });
   });
 
+  it('checks out byte-verified build and dictionary resources with LF on every platform', async () => {
+    const resources = [
+      'scripts/meilisearch-patches/charabia-external-dictionary.patch',
+      'scripts/meilisearch-patches/dictionary.rs',
+      'resources/search/coct-main.txt',
+      'resources/search/coct-main.json',
+    ];
+    const result = await runCommand('git', ['check-attr', 'eol', '--', ...resources]);
+    expect(result.stdout.trim().split(/\r?\n/u)).toEqual(resources.map((resource) => `${resource}: eol: lf`));
+  });
+
   it('propagates a streamed build command failure', async () => {
     await expect(runCommand(process.execPath, ['-e', 'process.exit(7)'], { stdio: 'inherit' })).rejects.toThrow(/code 7/u);
   });
