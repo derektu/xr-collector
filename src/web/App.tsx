@@ -75,6 +75,8 @@ export default function App() {
   const [update, setUpdate] = useState<DeviceUpdateStatus | null>(null);
   const [updateNavigation, setUpdateNavigation] = useState(0);
   const handledUpdateNavigation = useRef(0);
+  const handledUpdatePanel = useRef<HTMLElement | null>(null);
+  const stopUpdateNavigationTracking = useRef<(() => void) | null>(null);
   const ready = vault?.state === 'ready';
   const status = useCollectionStatus(ready);
 
@@ -110,21 +112,51 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [notice]);
   useEffect(() => {
-    if (!updateNavigation || updateNavigation <= handledUpdateNavigation.current || page !== 'settings') return undefined;
+    if (!updateNavigation || page !== 'settings') return undefined;
+    const currentPanel = document.getElementById('software-update');
+    if (updateNavigation <= handledUpdateNavigation.current && currentPanel === handledUpdatePanel.current) return undefined;
     const root = content.current ?? document.body;
     const reveal = () => {
       const panel = document.getElementById('software-update');
       if (!panel) return false;
-      panel.scrollIntoView({ block: 'center' });
+      const bounds = panel.getBoundingClientRect();
+      if (bounds.top < 0 || bounds.bottom > window.innerHeight) panel.scrollIntoView({ block: 'center' });
       handledUpdateNavigation.current = updateNavigation;
+      handledUpdatePanel.current = panel;
       return true;
     };
-    if (reveal()) return undefined;
-    // BuildInfoCard fetches its device identity before mounting SoftwareUpdate. Observe that render
-    // instead of guessing a delay, so tray/notification navigation always reaches the update panel.
-    const observer = new MutationObserver(() => { if (reveal()) observer.disconnect(); });
-    observer.observe(root, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    const layout = new ResizeObserver(() => { reveal(); });
+    const observeLayout = () => {
+      const panel = document.getElementById('software-update');
+      const container = panel?.closest<HTMLElement>('.settings-sections, .onboarding-card');
+      if (!container || !reveal()) return false;
+      layout.observe(container);
+      return true;
+    };
+    // BuildInfoCard mounts SoftwareUpdate asynchronously. The cards above it also finish loading
+    // independently, so keep the requested panel visible while that Settings layout settles.
+    const mount = new MutationObserver(() => { if (observeLayout()) mount.disconnect(); });
+    if (!observeLayout()) mount.observe(root, { childList: true, subtree: true });
+    let stopped = false;
+    const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      mount.disconnect(); layout.disconnect();
+      root.removeEventListener('wheel', stop);
+      root.removeEventListener('touchstart', stop);
+      root.removeEventListener('pointerdown', pointer);
+      root.removeEventListener('keydown', keyboard);
+      if (stopUpdateNavigationTracking.current === stop) stopUpdateNavigationTracking.current = null;
+    };
+    const pointer = (event: PointerEvent) => { if (event.target === root) stop(); };
+    const keyboard = (event: KeyboardEvent) => { if (scrollKeys.has(event.key)) stop(); };
+    root.addEventListener('wheel', stop, { passive: true });
+    root.addEventListener('touchstart', stop, { passive: true });
+    root.addEventListener('pointerdown', pointer);
+    root.addEventListener('keydown', keyboard);
+    stopUpdateNavigationTracking.current = stop;
+    return stop;
   }, [page, updateNavigation, vault?.state]);
 
   // A subscription request this window sent that ended without subscribing reports why; its row has
@@ -161,7 +193,7 @@ export default function App() {
     if (historyState().returnable) window.history.back();
     else go(fallback, '', {}, replace);
   }
-  function navigate(next: ShellPage): void { go(pathForRoute(next)); }
+  function navigate(next: ShellPage): void { if (next === 'settings') stopUpdateNavigationTracking.current?.(); go(pathForRoute(next)); }
   function openUpdate(): void { navigate('settings'); setUpdateNavigation((value) => value + 1); }
   const scroller = useCallback(() => content.current, []);
   const listState = parseListState(location.search);
