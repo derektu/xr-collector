@@ -161,6 +161,7 @@ node $V flows list                                                   # 每支流
 node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
 node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
 node $V flows run feature-navigation build-info --issue 91 --label navigation # 入口、診斷、索引及建置資訊
+node $V flows run search-normalization --issue 91 --label search      # 文字等價、詞界／片段、原文、條件／分頁及 Agent 一致性
 node $V flows run --web --issue 91 --label ci-web                    # CI：動態跑全部非 Desktop 流程
 ```
 

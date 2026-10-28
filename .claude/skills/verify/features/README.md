@@ -8,7 +8,7 @@
 | 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation` |
 | 記錄 | [activity.md](activity.md) | Web | `check-history-summary`、`feature-navigation` |
 | 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content` |
-| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `documents-reader-search`、`workspace-content`、`feature-navigation` |
+| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization` |
 | RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
 | Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`workspace-content` |
 | 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray` |
