@@ -411,10 +411,16 @@ describe('CollectorRuntime', () => {
     await vi.waitFor(async () => {
       expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { subscriptionId: 'UC-runtime' } });
     });
-    // Adding a channel starts its first collection job; the channel reads 'tracking' once that job settles.
+    // Adding a channel starts its first collection job. Wait for that check to record its end and
+    // leave the job board before comparing complete UI and Agent snapshots.
     const uiChannels = await vi.waitFor(async () => {
       const channels = (await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions;
-      expect(channels).toMatchObject([{ id: 'UC-runtime', enabled: true, status: 'tracking', documentCount: 0 }]);
+      expect(channels).toMatchObject([{
+        id: 'UC-runtime', enabled: true, status: 'tracking', documentCount: 0, lastCheckedAt: expect.any(String),
+      }]);
+      expect((await (await fetch(`${runtime.server.url}/api/jobs/overview`)).json()).overview).toMatchObject({
+        running: [], queued: [],
+      });
       return channels;
     });
     // The Agent reads the same subscriptions and previews through the same service.

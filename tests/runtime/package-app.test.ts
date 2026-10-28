@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, capture as captureCommandOutput, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -32,6 +32,16 @@ it('removes Git routing and signing credentials from every packaging child envir
   })).toEqual({ PATH: '/tools', CSC_IDENTITY_AUTO_DISCOVERY: 'false' });
 });
 
+it('keeps stdout written after the direct child exits but before its pipe closes', async () => {
+  const descendant = `setTimeout(() => process.stdout.write('complete output'), 50)`;
+  const directChild = `
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 'inherit', 'inherit'] });
+    child.unref();
+  `;
+  await expect(captureCommandOutput(process.execPath, ['-e', directChild])).resolves.toBe('complete output');
+});
+
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
   for (const configFile of ['electron-builder.official.yml', 'electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
@@ -43,6 +53,7 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
     if (typeof runtime === 'string' || runtime === undefined) throw new Error(`${configFile} lacks its Windows runtime resource.`);
     expect(runtime.filter, configFile).toContain('vcruntime140.dll');
     expect(runtime.filter, configFile).not.toContain('*.dll');
+    expect(resources, configFile).toContainEqual({ from: 'resources/search', to: 'search' });
   }
 });
 
@@ -114,10 +125,18 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
     binary: { version: '1.53.2', versionOutput: 'meilisearch 1.53.2', bytes: meiliFile.bytes, sha256: meiliFile.sha256, format: 'Mach-O 64', arch: 'arm64' },
   };
   await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
+  await mkdir(path.join(resources, 'search'), { recursive: true });
+  await writeFile(path.join(resources, 'search/coct-main.txt'), '測試 1 n\n');
+  const lexiconBytes = await readFile(path.join(resources, 'search/coct-main.txt'));
+  const lexiconManifest = {
+    schemaVersion: 1,
+    output: { file: 'coct-main.txt', bytes: lexiconBytes.byteLength, sha256: createHash('sha256').update(lexiconBytes).digest('hex') },
+  };
+  await writeFile(path.join(resources, 'search/coct-main.json'), JSON.stringify(lexiconManifest));
 
   const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2') => verifyPackagedApplication(
     { outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese' },
-    { trustedManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }) },
+    { trustedManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }) },
   );
   await expect(verify()).resolves.toMatchObject({ buildInfo: { buildId: 'id' } });
   await expect(verify(meiliManifest, 'meilisearch 1.52.0')).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
@@ -128,6 +147,9 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'stale skill');
   await expect(verify()).rejects.toThrow(/Agent Skill/u);
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'skill');
+  await writeFile(path.join(resources, 'search/coct-main.txt'), 'wrong lexicon');
+  await expect(verify()).rejects.toThrow(/search lexicon bytes/u);
+  await writeFile(path.join(resources, 'search/coct-main.txt'), lexiconBytes);
   await writeFile(path.join(resources, 'bin/meilisearch'), 'official wrong pair');
   await expect(verify()).rejects.toThrow(/Meilisearch bytes/u);
 });

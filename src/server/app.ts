@@ -7,6 +7,7 @@ import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Collector } from '../core/collector.js';
+import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -472,7 +473,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
     const parameters = singleValues(request.query);
-    const query = parameters.q?.trim() ?? '';
+    const query = typeof parameters.q === 'string' ? trimSearchQueryWhitespace(parameters.q) : '';
     const { publishedFrom, publishedTo } = parameters;
     if (query.length > 500) {
       throw new CollectorError('invalid_request', '搜尋條件過長。');

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { MAX_PENDING_REMOVALS } from '../../src/search/managed-transcript-search.js';
 import type { SavedDocument } from '../../src/core/types.js';
 import {
@@ -7,6 +8,7 @@ import {
   type SearchStateStore,
 } from '../../src/search/managed-transcript-search.js';
 import { indexKey, MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
+import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
 
 const documents: SavedDocument[] = [
   {
@@ -152,28 +154,28 @@ describe('ManagedTranscriptSearch', () => {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
       requests.push({ url, method, body });
 
-      if (url.endsWith('/indexes/documents_v2') && method === 'GET') {
-        return Response.json({ uid: 'documents_v2', primaryKey: 'key' });
+      if (url.endsWith('/indexes/documents_v3') && method === 'GET') {
+        return Response.json({ uid: 'documents_v3', primaryKey: 'key' });
       }
       if (url.endsWith('/indexes/transcripts') && method === 'GET') {
         return Response.json({ message: 'not found' }, { status: 404 });
       }
-      if (url.endsWith('/indexes/documents_v2/settings') && method === 'PATCH') {
+      if (url.endsWith('/indexes/documents_v3/settings') && method === 'PATCH') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
       if (url.endsWith('/tasks/1')) {
         return Response.json({ uid: 1, status: 'succeeded', error: null });
       }
-      if (url.includes('/indexes/documents_v2/documents?fields=key,contentHash')) {
+      if (url.includes('/indexes/documents_v3/documents?fields=key,contentHash')) {
         return Response.json({ results: [], total: 0 });
       }
-      if (url.endsWith('/indexes/documents_v2/documents') && method === 'DELETE') {
+      if (url.endsWith('/indexes/documents_v3/documents') && method === 'DELETE') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v2/documents') && method === 'PUT') {
+      if (url.endsWith('/indexes/documents_v3/documents') && method === 'PUT') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v2/search') && method === 'POST') {
+      if (url.endsWith('/indexes/documents_v3/search') && method === 'POST') {
         return Response.json({
           hits: [{
             id: documents[0]!.id,
@@ -187,8 +189,8 @@ describe('ManagedTranscriptSearch', () => {
             publishedAt: documents[0]!.publishedAt,
             collectedAt: documents[0]!.collectedAt,
             youtube: documents[0]!.youtube,
-            bodyMarkdown: documents[0]!.bodyMarkdown,
-            _formatted: { bodyMarkdown: '…<mark>關鍵字</mark>出現在這裡…' },
+            bodyMarkdown: '關鍵字出現在這裡',
+            _matchesPosition: { searchBodyMarkdown: [{ start: 0, length: 9 }] },
           }],
           totalHits: 41,
           page: 3,
@@ -207,15 +209,20 @@ describe('ManagedTranscriptSearch', () => {
 
     const settings = requests.find(({ url, method }) => url.endsWith('/settings') && method === 'PATCH')?.body as Record<string, unknown>;
     expect(settings).toEqual({
-      searchableAttributes: ['title', 'publisherName', 'bodyMarkdown'],
+      searchableAttributes: ['searchTitle', 'searchPublisherName', 'searchBodyMarkdown'],
       filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
       pagination: { maxTotalHits: 10_000 },
     });
     expect(settings).not.toHaveProperty('localizedAttributes');
 
-    const indexed = requests.find(({ url, method }) => url.endsWith('/documents') && method === 'PUT')?.body as Array<{ key: string }>;
+    const indexed = requests.find(({ url, method }) => url.endsWith('/documents') && method === 'PUT')?.body as Array<{
+      key: string; searchTitle: string; searchPublisherName: string; searchBodyMarkdown: string;
+    }>;
     expect(indexed.map(({ key }) => key)).toEqual(documents.map(({ id }) => indexKey(id)));
     expect(Buffer.from(indexed[0]!.key, 'base64url').toString()).toBe('youtube:dQw4w9WgXcQ');
+    expect(indexed[0]).toMatchObject({
+      searchTitle: '第一支影片', searchPublisherName: '測試頻道', searchBodyMarkdown: '第一份字幕',
+    });
 
     const result = await search.search({
       query: '關鍵字',
@@ -239,13 +246,14 @@ describe('ManagedTranscriptSearch', () => {
         publishedAt: '2026-09-01T00:00:00.000Z',
         collectedAt: '2026-09-17T00:00:00.000Z',
         youtube: { languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual' },
-        snippet: '…<mark>關鍵字</mark>出現在這裡…',
+        snippet: '<mark>關鍵字</mark>出現在這裡',
       }],
       total: 41,
       offset: 40,
       limit: 20,
     });
-    const searchRequest = requests.find(({ url }) => url.endsWith('/search'));
+    const searchRequest = requests.find(({ url, body }) => url.endsWith('/search')
+      && (body as { q?: unknown } | null)?.q === '關鍵字');
     expect(searchRequest?.body).toMatchObject({
       q: '關鍵字',
       matchingStrategy: 'all',
@@ -257,8 +265,7 @@ describe('ManagedTranscriptSearch', () => {
         'publishedAtEpoch >= 1788220800000',
         'publishedAtEpoch <= 1790812799999',
       ],
-      attributesToCrop: ['bodyMarkdown:32'],
-      highlightPreTag: '<mark>',
+      showMatchesPosition: true,
     });
 
     await search.search({ query: '關鍵字', sourceType: 'youtube', publisherId: 'none' });
@@ -269,6 +276,48 @@ describe('ManagedTranscriptSearch', () => {
 
   it('gives different source types with the same source ID different keys', () => {
     expect(indexKey('youtube:abc')).not.toBe(indexKey('rss:abc'));
+  });
+
+  it('requests match positions only for the final mixed-query page', async () => {
+    const document = { ...documents[0]!, bodyMarkdown: 'AI半導體供應鏈' };
+    const searchRequests: Array<Record<string, unknown>> = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {};
+      if (url.endsWith('/documents') && ['DELETE', 'PUT'].includes(method)) return Response.json({ taskUid: 1 });
+      if (url.endsWith('/tasks/1')) return Response.json({ uid: 1, status: 'succeeded', error: null });
+      if (url.endsWith('/search')) {
+        searchRequests.push(body);
+        if ((body.attributesToRetrieve as string[]).length === 1) {
+          return Response.json({ hits: [{ id: document.id }], totalHits: 1 });
+        }
+        return Response.json({
+          hits: [{
+            id: document.id, type: document.type, sourceType: document.sourceType,
+            sourceId: document.sourceId, sourceUrl: document.sourceUrl, title: document.title,
+            publisherId: document.publisher.id, publisherName: document.publisher.name,
+            publishedAt: document.publishedAt, collectedAt: document.collectedAt,
+            youtube: document.youtube, bodyMarkdown: document.bodyMarkdown,
+            _matchesPosition: { searchBodyMarkdown: [{ start: 0, length: 2 }] },
+          }],
+          totalHits: 1,
+        });
+      }
+      return Response.json({ message: `Unexpected request: ${method} ${url}` }, { status: 500 });
+    };
+    const backend = new MeilisearchBackend({
+      baseUrl: 'http://127.0.0.1:7177', apiKey: 'test-master-key-at-least-16-bytes', fetch: fakeFetch,
+      lexicon: await loadSearchLexicon(path.resolve('resources/search/coct-main.txt')),
+    });
+    await backend.replaceAll([document]);
+    expect((await backend.search({ query: '半導 ai' })).total).toBe(1);
+
+    expect(searchRequests).toHaveLength(3);
+    expect(searchRequests.slice(0, 2).map((request) => request.q)).toEqual(['半導 ai', 'ai']);
+    for (const request of searchRequests.slice(0, 2)) expect(request).not.toHaveProperty('showMatchesPosition');
+    expect(searchRequests[2]).toMatchObject({ q: 'ai', showMatchesPosition: true, matchingStrategy: 'all' });
+    expect(searchRequests[2]!.filter).toEqual([`id IN [${JSON.stringify(document.id)}]`]);
   });
 });
 

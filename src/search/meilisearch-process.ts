@@ -10,6 +10,7 @@ const run = promisify(execFile);
 export interface StartMeilisearchOptions {
   binaryPath: string;
   databasePath: string;
+  lexiconPath?: string;
   port?: number;
 }
 
@@ -47,6 +48,10 @@ export async function startMeilisearchProcess(
       env: {
         ...process.env,
         MEILI_MASTER_KEY: apiKey,
+        ...(options.lexiconPath ? {
+          XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH: path.resolve(options.lexiconPath),
+          XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT: '1',
+        } : {}),
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     },

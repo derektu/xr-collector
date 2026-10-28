@@ -9,6 +9,11 @@ import { startSearchRuntime } from '../../src/search/runtime.js';
 const roots: string[] = [];
 const correctVersion = async () => 'meilisearch 1.53.2\n';
 const officialIdentity = async () => ({ bytes: 341683536, sha256: '7fa492746343c1dd7217ead82fc6d42e74c1304593e4604f52ca71cf44d61b28' });
+const charabiaOverride = {
+  version: '0.10.0', archiveSha256: '27d98f4c66de52108210ee491c9c991513021dfd259bf65e4bbd889687b488d7',
+  patch: 'scripts/meilisearch-patches/charabia-external-dictionary.patch', patchSha256: '0c0c20f5b5ddc869850be40228eb7db7baad872c3b3b4b94ca86eb4455503206',
+  validator: 'scripts/meilisearch-patches/dictionary.rs', validatorSha256: '31fdcf813e8b9668bf3306c0bfe75b0f1925438a6bd2871652c125e926a8e767',
+};
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 async function fixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): Promise<{ root: string; binary: string; manifest: string }> {
@@ -31,14 +36,14 @@ async function fixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): P
   await writeFile(binary, bytes);
   const manifest = path.join(root, 'meilisearch-build.json');
   const recipeFingerprint = createHash('sha256').update(JSON.stringify({
-    schemaVersion: 1, recipeRevision: 1, sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127',
+    schemaVersion: 1, recipeRevision: 2, sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127',
     cargoLockSha256: 'f884034e00ae026ecc9a3c15999b11857dff4a99ba8d7c0528626571627cefbf',
     rustVersion: '1.91.1', package: 'meilisearch', profile: 'release', features: ['chinese'], defaultFeatures: false,
-    target: rustTarget, rustcHost: rustTarget, rustcRelease: '1.91.1', rustflags, cargoProfileOverrides: {},
+    charabiaOverride, target: rustTarget, rustcHost: rustTarget, rustcRelease: '1.91.1', rustflags, cargoProfileOverrides: {},
   })).digest('hex');
   await writeFile(manifest, JSON.stringify({
     schemaVersion: 1,
-    recipeRevision: 1,
+    recipeRevision: 2,
     recipeFingerprint,
     sourceRepository: 'https://github.com/meilisearch/meilisearch.git',
     sourceTag: 'v1.53.2',
@@ -51,8 +56,9 @@ async function fixture(target: 'darwin-arm64' | 'win32-x64' = 'darwin-arm64'): P
     rustTarget,
     features: ['chinese'],
     defaultFeatures: false,
+    charabiaOverride,
     profile: 'release',
-    buildCommand: `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target ${rustTarget}`,
+    buildCommand: `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target ${rustTarget} --config paths=["<isolated-charabia>"]`,
     buildEnvironment: { rustflags, cargoProfileOverrides: {} },
     runner: { platform: windows ? 'win32' : 'darwin', processArch: windows ? 'x64' : 'arm64', hostArch: windows ? 'x64' : 'arm64', emulated: false },
     completedAt: '2026-10-24T00:00:00.000Z',

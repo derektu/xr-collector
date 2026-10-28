@@ -1,4 +1,5 @@
 import { markdownToPlainText } from '../core/document-text.js';
+import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { sourceDeclaration } from '../core/source-registry.js';
 import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/types.js';
 
@@ -38,7 +39,7 @@ export function listStateSearch(state: DocumentListState): string {
  * (back, reload, clear) replaces the draft.
  */
 export function draftForQuery(draft: string, query: string): string {
-  return draft.trim() === query ? draft : query;
+  return trimSearchQueryWhitespace(draft) === query ? draft : query;
 }
 
 export function sourceFilter(source: string): DocumentFilter {

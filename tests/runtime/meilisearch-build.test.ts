@@ -46,7 +46,7 @@ function harness() {
     if (command === 'git') return { stdout: '', stderr: '' };
     if (command === 'cargo') {
       cargoBuilds += 1;
-      expect(args).toEqual(['+1.91.1', 'build', '--release', '--locked', '-p', 'meilisearch', '--no-default-features', '--features', 'chinese', '--target', 'aarch64-apple-darwin']);
+      expect(args).toEqual(['+1.91.1', 'build', '--release', '--locked', '-p', 'meilisearch', '--no-default-features', '--features', 'chinese', '--target', 'aarch64-apple-darwin', '--config', 'paths=["<isolated-charabia>"]']);
       expect(options.env?.RUSTFLAGS).toBe('');
       expect(options.env?.CARGO_ENCODED_RUSTFLAGS).toBeUndefined();
       expect(Object.keys(options.env ?? {}).some((key) => key.startsWith('CARGO_PROFILE_'))).toBe(false);
@@ -63,7 +63,7 @@ function harness() {
     ? lockHash
     : createHash('sha256').update(await readFile(file)).digest('hex');
   return {
-    run, hashFile, builds: () => cargoBuilds,
+    run, hashFile, charabiaOverridePath: '<isolated-charabia>', builds: () => cargoBuilds,
     setDirty: (value: string) => { dirty = value; },
     setVersion: (value: string) => { version = value; },
     setRustRelease: (value: string) => { rustRelease = value; },
@@ -101,10 +101,10 @@ describe('pinned Meilisearch build', () => {
     const recipe = JSON.parse(await readFile(path.resolve('scripts/meilisearch-build-recipe.json'), 'utf8'));
     expect(TARGETS['darwin-arm64'].rustflags).toBe('');
     expect(recipeFingerprint(recipe, TARGETS['darwin-arm64'], { host: 'aarch64-apple-darwin', release: '1.91.1' }))
-      .toBe('07a9ec2aabee095eb5aea410722a643e6c215f985711dd47b21bc64fa175f128');
+      .toBe('43f2491ac1118305d00db7880945b5b883d9940db83cad19bd506f8b24c31c43');
     expect(TARGETS['win32-x64'].rustflags).toBe('-C target-feature=+crt-static');
     expect(recipeFingerprint(recipe, TARGETS['win32-x64'], { host: 'x86_64-pc-windows-msvc', release: '1.91.1' }))
-      .toBe('01476c07e95bece701f6d58ddba293d97aa909d00f115e601ad96a4662747f32');
+      .toBe('be5706afa5dff4134cb7223ba0ab70311e41406c91a35636e040fbd3b2d9c767');
     expect(cleanBuildEnvironment('/target', { RUSTFLAGS: '-C inherited' }, TARGETS['win32-x64'].rustflags))
       .toEqual({ RUSTFLAGS: '-C target-feature=+crt-static', CARGO_TARGET_DIR: '/target' });
     const windows = selectTarget('win32-x64', { platform: 'win32', processArch: 'x64', hostArch: 'arm64' });
@@ -118,6 +118,17 @@ describe('pinned Meilisearch build', () => {
     });
   });
 
+  it('checks out byte-verified build and dictionary resources with LF on every platform', async () => {
+    const resources = [
+      'scripts/meilisearch-patches/charabia-external-dictionary.patch',
+      'scripts/meilisearch-patches/dictionary.rs',
+      'resources/search/coct-main.txt',
+      'resources/search/coct-main.json',
+    ];
+    const result = await runCommand('git', ['check-attr', 'eol', '--', ...resources]);
+    expect(result.stdout.trim().split(/\r?\n/u)).toEqual(resources.map((resource) => `${resource}: eol: lf`));
+  });
+
   it('propagates a streamed build command failure', async () => {
     await expect(runCommand(process.execPath, ['-e', 'process.exit(7)'], { stdio: 'inherit' })).rejects.toThrow(/code 7/u);
   });
@@ -129,7 +140,7 @@ describe('pinned Meilisearch build', () => {
     await writeFile(path.join(source, '.cargo', 'config.toml'), '[build]\nrustflags = []\n');
     const tracked = vi.fn(async () => ({ stdout: '.cargo/config.toml\n', stderr: '' }));
     await expect(assertControlledCargoConfiguration(source, { CARGO_HOME: path.join(at, 'empty-cargo-home') }, tracked)).resolves.toBeUndefined();
-    expect(tracked).toHaveBeenCalledWith('git', ['ls-files', '--error-unmatch', '--', '.cargo/config.toml'], { cwd: source });
+    expect(tracked).toHaveBeenCalledWith('git', ['ls-files', '--error-unmatch', '--', path.join('.cargo', 'config.toml')], { cwd: source });
   });
 
   it('rejects an ignored or otherwise untracked Cargo config inside the source checkout', async () => {
@@ -158,8 +169,8 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
-    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
+    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     expect(first.cacheHit).toBe(false);
     expect(second.cacheHit).toBe(true);
     expect(fake.builds()).toBe(1);
@@ -192,7 +203,7 @@ describe('pinned Meilisearch build', () => {
       return fake.run(command, args, options);
     });
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'nested', 'project', 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const dependencies = { run, fileSha256: fake.hashFile };
+    const dependencies = { run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath };
     await expect(buildMeilisearch(options, dependencies)).resolves.toMatchObject({ cacheHit: false });
     longPaths = false;
     await expect(buildMeilisearch(options, dependencies)).resolves.toMatchObject({ cacheHit: true });
@@ -215,7 +226,7 @@ describe('pinned Meilisearch build', () => {
     await expect(buildMeilisearch({
       target: 'darwin-arm64', cacheRoot, runtimeRoot: path.join(at, 'runtime'),
       environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' },
-    }, { run, fileSha256: fake.hashFile })).resolves.toMatchObject({ cacheHit: false });
+    }, { run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).resolves.toMatchObject({ cacheHit: false });
     expect(fake.builds()).toBe(1);
   });
 
@@ -223,10 +234,10 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     const before = await readFile(path.join(at, 'runtime', 'meilisearch'));
     fake.setDirty('?? unexpected');
-    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile })).rejects.toThrow(/source cache is dirty/u);
+    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow(/source cache is dirty/u);
     expect(await readFile(path.join(at, 'runtime', 'meilisearch'))).toEqual(before);
     expect(fake.builds()).toBe(1);
   });
@@ -235,9 +246,9 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     await writeFile(first.manifestPath, '{"tampered":true}\n');
-    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     expect(second.cacheHit).toBe(true);
     expect(fake.builds()).toBe(1);
     expect(JSON.parse(await readFile(second.manifestPath, 'utf8'))).toMatchObject({ sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127' });
@@ -247,12 +258,12 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     const cachedBinary = path.join(first.entry, 'artifact', 'meilisearch');
     const tampered = await readFile(cachedBinary);
     tampered[12] = 1;
     await writeFile(cachedBinary, tampered);
-    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     expect(second.cacheHit).toBe(false);
     expect(fake.builds()).toBe(2);
   });
@@ -261,12 +272,12 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     const cachedManifest = path.join(first.entry, 'artifact', 'meilisearch-build.json');
     const value = JSON.parse(await readFile(cachedManifest, 'utf8')) as Record<string, unknown>;
     value.completedAt = 'not-a-date';
     await writeFile(cachedManifest, JSON.stringify(value));
-    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const second = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     expect(second.cacheHit).toBe(false);
     expect(fake.builds()).toBe(2);
   });
@@ -276,12 +287,12 @@ describe('pinned Meilisearch build', () => {
     const wrongRust = harness();
     wrongRust.setRustRelease('1.90.0');
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'rust-cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await expect(buildMeilisearch(options, { run: wrongRust.run, fileSha256: wrongRust.hashFile })).rejects.toThrow(/Rust 1\.91\.1/u);
+    await expect(buildMeilisearch(options, { run: wrongRust.run, fileSha256: wrongRust.hashFile, charabiaOverridePath: wrongRust.charabiaOverridePath })).rejects.toThrow(/Rust 1\.91\.1/u);
     expect(wrongRust.builds()).toBe(0);
 
     const wrongLock = harness();
     wrongLock.setLockHash('0'.repeat(64));
-    await expect(buildMeilisearch({ ...options, cacheRoot: path.join(at, 'lock-cache') }, { run: wrongLock.run, fileSha256: wrongLock.hashFile })).rejects.toThrow(/Cargo\.lock checksum/u);
+    await expect(buildMeilisearch({ ...options, cacheRoot: path.join(at, 'lock-cache') }, { run: wrongLock.run, fileSha256: wrongLock.hashFile, charabiaOverridePath: wrongLock.charabiaOverridePath })).rejects.toThrow(/Cargo\.lock checksum/u);
     expect(wrongLock.builds()).toBe(0);
   });
 
@@ -289,12 +300,12 @@ describe('pinned Meilisearch build', () => {
     const at = await root();
     const fake = harness();
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile });
+    const first = await buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     const oldBinary = await readFile(first.binaryPath);
     const oldManifest = await readFile(first.manifestPath);
     await rm(path.join(first.entry, 'artifact'), { recursive: true });
     fake.setVersion('meilisearch 9.9.9\n');
-    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile })).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
+    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
     expect(await readFile(first.binaryPath)).toEqual(oldBinary);
     expect(await readFile(first.manifestPath)).toEqual(oldManifest);
   });
@@ -311,7 +322,7 @@ describe('pinned Meilisearch build', () => {
       return fake.run(command, args, options);
     });
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot, environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await expect(buildMeilisearch(options, { run: failingRun, fileSha256: fake.hashFile })).rejects.toThrow('offline');
+    await expect(buildMeilisearch(options, { run: failingRun, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow('offline');
     expect(await readFile(path.join(runtimeRoot, 'meilisearch'), 'utf8')).toBe('old');
     expect(await readFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'utf8')).toBe('{"old":true}\n');
   });
@@ -327,7 +338,7 @@ describe('pinned Meilisearch build', () => {
     await writeFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'old-manifest');
     await writeFile(path.join(cargoHome, 'config.toml'), '[build]\nrustc = "/wrong/compiler"\n');
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot, environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, inheritedEnvironment: { CARGO_HOME: cargoHome } })).rejects.toThrow(new RegExp(cargoHome.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath, inheritedEnvironment: { CARGO_HOME: cargoHome } })).rejects.toThrow(new RegExp(cargoHome.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
     expect(fake.builds()).toBe(0);
     expect(await readFile(path.join(runtimeRoot, 'meilisearch'), 'utf8')).toBe('old-binary');
     expect(await readFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'utf8')).toBe('old-manifest');
@@ -348,7 +359,7 @@ describe('pinned Meilisearch build', () => {
       return fake.run(command, args, options);
     });
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot, environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await expect(buildMeilisearch(options, { run: failingRun, fileSha256: fake.hashFile })).rejects.toThrow(/injected build step/u);
+    await expect(buildMeilisearch(options, { run: failingRun, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow(/injected build step/u);
     expect(await readFile(path.join(runtimeRoot, 'meilisearch'), 'utf8')).toBe('old-binary');
     expect(await readFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'utf8')).toBe('old-manifest');
   });
@@ -362,7 +373,7 @@ describe('pinned Meilisearch build', () => {
     await writeFile(path.join(runtimeRoot, 'meilisearch'), 'old-binary');
     await writeFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'old-manifest');
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot, environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile })).rejects.toThrow(/architecture x64 does not match arm64/u);
+    await expect(buildMeilisearch(options, { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow(/architecture x64 does not match arm64/u);
     expect(await readFile(path.join(runtimeRoot, 'meilisearch'), 'utf8')).toBe('old-binary');
     expect(await readFile(path.join(runtimeRoot, 'meilisearch-build.json'), 'utf8')).toBe('old-manifest');
   });
@@ -384,9 +395,9 @@ describe('pinned Meilisearch build', () => {
       return fake.run(command, args, options);
     });
     const options = { target: 'darwin-arm64', cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'), environment: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' } };
-    const first = buildMeilisearch(options, { run: gatedRun, fileSha256: fake.hashFile });
+    const first = buildMeilisearch(options, { run: gatedRun, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
     await cargoEntered;
-    await expect(buildMeilisearch(options, { run: gatedRun, fileSha256: fake.hashFile })).rejects.toThrow(/Another Meilisearch build owns/u);
+    await expect(buildMeilisearch(options, { run: gatedRun, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath })).rejects.toThrow(/Another Meilisearch build owns/u);
     release();
     await expect(first).resolves.toMatchObject({ cacheHit: false });
   });

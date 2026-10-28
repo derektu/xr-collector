@@ -33,6 +33,7 @@ const runtime = await CollectorRuntime.start({
     plugins: sources.plugins,
     pacing: sources.pacing,
     searchBinary: binary('XR_COLLECTOR_MEILISEARCH', 'meilisearch'),
+    searchLexicon: path.resolve(process.env.XR_COLLECTOR_SEARCH_LEXICON ?? path.join(projectRoot, 'resources', 'search', 'coct-main.txt')),
     searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
     ...(searchPort ? { searchPort } : {}),
     exportFolder: exportFolder(path.join(homedir(), 'Documents')),

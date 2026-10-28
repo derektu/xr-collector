@@ -152,7 +152,7 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
     const api = { onlyInApi: difference(apiIds, vaultIds), onlyInVault: difference(vaultIds, apiIds) };
     expect(!api.onlyInApi.length && !api.onlyInVault.length, 'API 的文件與 Vault 的文件一一對應', { id: 'api.matches-vault', expected: { onlyInApi: [], onlyInVault: [] }, actual: api });
 
-    const index = state.index.indexes?.find((entry) => entry.uid === 'documents_v2') ?? state.index.indexes?.[0];
+    const index = state.index.indexes?.find((entry) => ['documents_v3', 'documents_v2'].includes(entry.uid)) ?? state.index.indexes?.[0];
     const indexIds = new Set((index?.keys ?? []).map(fromIndexKey));
     const searchable = { onlyInIndex: difference(indexIds, vaultIds), onlyInVault: difference(vaultIds, indexIds) };
     expect(index !== undefined && !searchable.onlyInIndex.length && !searchable.onlyInVault.length, '索引的文件與 Vault 的文件一一對應',

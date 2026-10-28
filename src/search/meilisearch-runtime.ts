@@ -5,28 +5,45 @@ import { open, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import runtimePins from './meilisearch-runtime-pins.json' with { type: 'json' };
+import { SEARCH_QUERY_STRATEGY_REVISION } from './fragment-query.js';
+import { OPENCC_DATA_VERSION, SEARCH_NORMALIZATION_REVISION } from './search-normalization.js';
+import type { SearchLexiconIdentity } from './search-lexicon.js';
 
 const run = promisify(execFile);
 
 const SOURCE_COMMIT = 'ec006cecec6f684b1dcaee093a45ab4c05707127';
 const CARGO_LOCK_SHA256 = 'f884034e00ae026ecc9a3c15999b11857dff4a99ba8d7c0528626571627cefbf';
+const CHARABIA_OVERRIDE = {
+  version: '0.10.0',
+  archiveSha256: '27d98f4c66de52108210ee491c9c991513021dfd259bf65e4bbd889687b488d7',
+  patch: 'scripts/meilisearch-patches/charabia-external-dictionary.patch',
+  patchSha256: '0c0c20f5b5ddc869850be40228eb7db7baad872c3b3b4b94ca86eb4455503206',
+  validator: 'scripts/meilisearch-patches/dictionary.rs',
+  validatorSha256: '31fdcf813e8b9668bf3306c0bfe75b0f1925438a6bd2871652c125e926a8e767',
+} as const;
 
 export const SEARCH_INDEX_PROFILE = {
-  schemaVersion: 1,
+  schemaVersion: 3,
   engine: { version: '1.53.2', sourceCommit: SOURCE_COMMIT },
   tokenizationFeatures: ['chinese'],
-  buildRecipeRevision: 1,
-  indexSchema: 'documents_v2',
+  buildRecipeRevision: 2,
+  indexSchema: 'documents_v3',
+  normalization: { revision: SEARCH_NORMALIZATION_REVISION, openccDataVersion: OPENCC_DATA_VERSION },
+  queryStrategy: { revision: SEARCH_QUERY_STRATEGY_REVISION, chineseFragments: 'contiguous-field-substring' },
 } as const;
 
 export const OFFICIAL_SEARCH_INDEX_PROFILE = {
-  schemaVersion: 1,
+  schemaVersion: 3,
   engine: { version: '1.53.2', distribution: 'official' },
   tokenizationFeatures: ['all-tokenizations'],
-  indexSchema: 'documents_v2',
+  indexSchema: 'documents_v3',
+  normalization: { revision: SEARCH_NORMALIZATION_REVISION, openccDataVersion: OPENCC_DATA_VERSION },
+  queryStrategy: { revision: SEARCH_QUERY_STRATEGY_REVISION, chineseFragments: 'contiguous-field-substring' },
 } as const;
 
-export type SearchIndexProfile = typeof SEARCH_INDEX_PROFILE | typeof OFFICIAL_SEARCH_INDEX_PROFILE;
+export type SearchIndexProfile = (typeof SEARCH_INDEX_PROFILE | typeof OFFICIAL_SEARCH_INDEX_PROFILE) & {
+  lexicon?: SearchLexiconIdentity;
+};
 export type MeilisearchVariant = 'chinese' | 'official';
 
 export interface MeilisearchBuildManifest {
@@ -45,6 +62,7 @@ export interface MeilisearchBuildManifest {
   rustTarget: string;
   features: string[];
   defaultFeatures: boolean;
+  charabiaOverride?: unknown;
   profile: string;
   buildCommand: string;
   buildEnvironment?: { rustflags?: unknown; cargoProfileOverrides?: unknown };
@@ -127,6 +145,7 @@ export async function validateMeilisearchRuntime(
     profile: 'release',
     features: ['chinese'],
     defaultFeatures: false,
+    charabiaOverride: CHARABIA_OVERRIDE,
     target: expectedRustTarget,
     rustcHost: expectedRustTarget,
     rustcRelease: '1.91.1',
@@ -139,8 +158,9 @@ export async function validateMeilisearchRuntime(
     || manifest.rustVersion !== '1.91.1' || manifest.target !== expectedTarget || manifest.rustTarget !== expectedRustTarget
     || manifest.rustcHost !== expectedRustTarget || typeof manifest.cargoVersion !== 'string' || !manifest.cargoVersion.startsWith('cargo 1.91.1 ')
     || JSON.stringify(manifest.features) !== JSON.stringify(['chinese']) || manifest.defaultFeatures !== false
+    || JSON.stringify(manifest.charabiaOverride) !== JSON.stringify(CHARABIA_OVERRIDE)
     || manifest.profile !== 'release' || manifest.buildEnvironment?.rustflags !== expectedRustflags
-    || manifest.buildCommand !== `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target ${expectedRustTarget}`
+    || manifest.buildCommand !== `cargo +1.91.1 build --release --locked -p meilisearch --no-default-features --features chinese --target ${expectedRustTarget} --config paths=["<isolated-charabia>"]`
     || JSON.stringify(manifest.buildEnvironment?.cargoProfileOverrides) !== JSON.stringify({})
     || manifest.runner?.platform !== environment.platform || manifest.runner?.processArch !== expectedArch
     || !['arm64', 'x64'].includes(manifest.runner?.hostArch) || typeof manifest.runner?.emulated !== 'boolean'

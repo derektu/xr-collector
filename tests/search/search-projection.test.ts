@@ -89,4 +89,16 @@ describe('owned search projection profile', () => {
     expect(prepared.forceRebuild).toBe(false);
     expect(await readFile(path.join(context.database, 'old'), 'utf8')).toBe('projection');
   });
+
+  it('rebuilds when the external lexicon identity changes without changing the engine', async () => {
+    const context = await setup();
+    const previous = { ...SEARCH_INDEX_PROFILE, lexicon: { id: 'coct-a', sha256: 'a'.repeat(64), bytes: 10, formatRevision: 1, normalizationRevision: 1 } } as const;
+    const next = { ...SEARCH_INDEX_PROFILE, lexicon: { id: 'coct-b', sha256: 'b'.repeat(64), bytes: 11, formatRevision: 1, normalizationRevision: 1 } } as const;
+    await writeFile(searchProfilePath(context.database), JSON.stringify({ schemaVersion: 1, profile: previous }));
+    const prepared = await prepareOwnedSearchProjection({ ...context, profile: next });
+    expect(prepared.forceRebuild).toBe(true);
+    await expect(readFile(path.join(context.database, 'old'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await prepared.recordRebuild();
+    expect(JSON.parse(await readFile(searchProfilePath(context.database), 'utf8'))).toEqual({ schemaVersion: 1, profile: next });
+  });
 });

@@ -284,6 +284,10 @@ app.whenReady().then(async () => {
     workspace: {
       plugins: sources.plugins, pacing: sources.pacing,
       searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
+      searchLexicon: path.resolve(process.env.XR_COLLECTOR_SEARCH_LEXICON
+        ?? (app.isPackaged
+          ? path.join(process.resourcesPath, 'search', 'coct-main.txt')
+          : path.join(app.getAppPath(), 'resources', 'search', 'coct-main.txt'))),
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
       backupFolder: backupFolder(app.getPath('documents')),
