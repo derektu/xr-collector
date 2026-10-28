@@ -142,14 +142,24 @@ export function releaseSlot(slot, runDir) {
 // ---- runs --------------------------------------------------------------------------------------
 
 /**
- * Creates a new run directory and claims a slot for it; the PID in its name keeps simultaneous
- * launches of one issue apart. When no slot is free the directory is removed again.
+ * Creates a new run directory and claims a slot for it; the PID in its name keeps launches from
+ * different processes apart, and a counter (`-2`, `-3`…) the launches one process makes in the same
+ * second, such as flows run side by side. When no slot is free the directory is removed again.
  */
 export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
   const root = runsRoot(checkout);
   await mkdir(root, { recursive: true });
-  const runDir = path.join(root, `${issue}${label ? `-${label}` : ''}-${stamp()}-${process.pid}${suffix}`);
-  await mkdir(runDir);
+  const base = path.join(root, `${issue}${label ? `-${label}` : ''}-${stamp()}-${process.pid}`);
+  let runDir;
+  for (let number = 1; !runDir; number += 1) {
+    const candidate = `${base}${number === 1 ? '' : `-${number}`}${suffix}`;
+    try {
+      await mkdir(candidate);
+      runDir = candidate;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
   try {
     return { runDir, ports: await claimSlot(runDir) };
   } catch (error) {

@@ -37,10 +37,12 @@ const USAGE = `verify.mjs <command>
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process
   flows list                                   the recorded regression flows and the feature-map sub-features each covers
-  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop]
-           runs the named recorded flows (all without names), each on its own instance; the flows and this
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--jobs <N>]
+           runs the named recorded flows (all without names), each on its own instance; --jobs runs up to N
+           at once (default 1, at most one per verify slot; a Desktop flow always runs alone); the flows and this
            library come from the checkout the command runs in, --checkout picks only the src/ under test;
            evidence goes to .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows);
+           each results.json records timings (prepareMs, runMs, cleanupMs) and the run ends with a table of them;
            exit code 1 when any flow fails
   summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
            whether every scenario passed on every given platform (any one platform without --platform), counting
@@ -53,7 +55,7 @@ const { values: o, positionals } = parseArgs({ allowPositionals: true, options: 
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
   commit: { type: 'string' }, platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
-  web: { type: 'boolean' }, desktop: { type: 'boolean' },
+  web: { type: 'boolean' }, desktop: { type: 'boolean' }, jobs: { type: 'string', default: '1' },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -218,7 +220,7 @@ async function main() {
     if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
     if (o.web && o.desktop) throw new Error('Choose only one of --web or --desktop');
     const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout,
-      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all' });
+      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
     print(outcome);
     if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
     return;

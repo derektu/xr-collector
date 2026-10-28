@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { WEB_REGRESSION_JOB } from '../../.github/scripts/web-regression-reuse.mjs';
 
 const workflowPath = path.resolve(import.meta.dirname, '../..', '.github/workflows/ci.yml');
 const workflow = parse(await readFile(workflowPath, 'utf8'));
@@ -12,6 +13,21 @@ describe('CI UI regression contract', () => {
     expect(job['runs-on']).toBe('macos-15');
     expect(job.steps.some((step: { run?: string }) => step.run?.includes('flows run --web'))).toBe(true);
     expect(job['timeout-minutes']).toBeGreaterThan(0);
+  });
+
+  it('runs flows three at a time and skips a main push only when the reuse check says so', () => {
+    const job = workflow.jobs['web-regression'];
+    expect(job.name).toBe(WEB_REGRESSION_JOB);
+    const run = job.steps.find((step: { name?: string }) => step.name === 'Run every registered Web flow');
+    expect(run.run).toContain('--jobs 3');
+    const reuse = workflow.jobs['web-regression-reuse'];
+    expect(reuse.if).toBe("github.event_name == 'push'");
+    expect(reuse.outputs.reuse).toContain('steps.decide.outputs.reuse');
+    expect(job.needs).toBe('web-regression-reuse');
+    expect(job.if).toContain('!cancelled()');
+    expect(job.if).toContain("needs.web-regression-reuse.outputs.reuse != 'true'");
+    expect(workflow.jobs.verify.needs).toBeUndefined();
+    expect(workflow.jobs.verify.if).toBeUndefined();
   });
 
   it('keeps packaged smoke manual and covers only the two delivery targets', () => {

@@ -1,6 +1,6 @@
 # 開發驗證流程
 
-PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式執行所有已收錄的非 Desktop 回歸流程。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
+PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式同時三支執行所有已收錄的非 Desktop 回歸流程；push 到 main 的 tree 與 merge 的 PR 最後一個 commit 相同、且那個 commit 的 PR run 已通過 Web 回歸時，main 沿用該結果，不再執行，log 寫出沿用的 PR 與 run。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
 
 ## 驗證層級
 
@@ -22,13 +22,20 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 - 驗收計畫列出要跑的已收錄流程與原因；功能相關但不跑的，也寫出原因。協調者與使用者審驗收計畫時，以這份清單判斷有沒有漏跑。
 - 流程何時收錄、何時更新，依 [verify skill 的收錄規則](../.claude/skills/verify/SKILL.md#已收錄流程)：涵蓋功能地圖子功能、以合成資料就能重跑的流程，寫出它的那張票就收錄；票改變了已收錄流程所檢查的行為時，同一張票更新它。PR 描述的驗證段落列出本票收錄或更新的流程；功能地圖上的功能有寫流程卻沒收錄的，寫出原因。
 
-**基準**：回歸流程先跑基準，再跑本票版本。基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main、不放未提交修改）：在票的 worktree 以 `--checkout <主 checkout>` 啟動 instance，跑同一支流程。票的 worktree 一開始改程式就不再等於 main，所以基準不在票的 worktree 跑，也不另建 worktree。兩次的證據分開存放，以結果比對：只在本票版本與功能檔或基準不一致的，是本票改變了行為；基準就與功能檔不一致的，是功能檔的問題，記在 PR 的待決定問題。
+**基準**：基準是主 checkout（`/Users/derektu/projects/km/xr-collector`，追蹤 main、不放未提交修改）：在票的 worktree 以 `--checkout <主 checkout>` 啟動 instance，跑同一支流程。票的 worktree 一開始改程式就不再等於 main，所以基準不在票的 worktree 跑，也不另建 worktree。基準只用來證明本票新增的斷言在 main 上失敗（見下一段）。確認行為不變的回歸流程不跑基準：main 的每個 commit 都已通過 PR CI 的全部 Web 流程，本票版本與功能檔不一致的，就是本票改變了行為；判斷不了是本票造成還是功能檔本身有誤時，才對那一支跑基準比對，功能檔的問題記在 PR 的待決定問題。
 
-**斷言要能失敗**：證明本票新行為的斷言，在基準上必須失敗；基準上也通過的斷言不證明本票的修改，要改寫到能區分兩者。修正完成後，保留測試與斷言、拿掉修正再跑一次，例如以 `git archive` 匯出基準的程式執行新測試，斷言必須跟著失敗；交付報告附上這次失敗的輸出，只列斷言與數量。單元測試與 Web 流程的斷言都適用。確認行為不變的回歸斷言則在基準與本票版本都通過。
+**斷言要能失敗**：證明本票新行為的斷言，在基準上必須失敗；基準上也通過的斷言不證明本票的修改，要改寫到能區分兩者。修正完成後，保留測試與斷言、拿掉修正再跑一次，例如以 `git archive` 匯出基準的程式執行新測試，斷言必須跟著失敗；交付報告附上這次失敗的輸出，只列斷言與數量。單元測試與 Web 流程的斷言都適用。確認行為不變的回歸斷言在本票版本通過即可。
 
 **斷言放在哪一層**：畫面上的狀態讀 DOM 的文字與屬性；資料面的狀態直接讀資料本身，例如 Vault 的檔案、profile 的紀錄與搜尋索引，不只經過本票修改的 API；截圖負責版面、視覺與斷言沒有涵蓋的部分。能寫成斷言的預期不只靠看截圖判斷，因為截圖無法重跑比對。
 
 **真實資料**：合成資料只替代 yt-dlp 與網路上的 feed，看不到限流、實際的字幕軌道、頻道辨識的耗時與真實 feed 的格式差異。改到收集、字幕選軌、頻道或網址辨識、feed 讀取的票，交付前至少以 `--data real` 執行一次相關 scenario，或執行 verify skill 的真實資料 smoke。網路或限流使 scenario 無法完成時記為 blocked，不以合成結果代替。
+
+**本機執行**：本機與 CI 分工，本機不重跑 CI 會跑的東西。
+
+- 本機只跑本票的新 scenario，加上功能地圖列出、與本票改動相關的已收錄流程；全部 Web 流程由 PR CI 執行。
+- 只改流程腳本（verify skill 的 `flows/` 或票的 `.local/` 腳本）時，不重跑 `npm run verify`，只重跑改到的流程。
+- 執行 `npm run verify` 或流程的指令保留退出碼：不接 `| tee`，或先 `set -o pipefail`。退出碼是判定失敗的依據，被管線吃掉時失敗不會被發現。
+- 需要同時跑多支流程時用 `flows run --jobs <N>`，每支仍是獨立 instance，佔一個 verify slot；`doctor` 列出空著的 slot。
 
 畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；涵蓋功能地圖子功能、可重跑的流程收進 verify skill 的 `flows/`；只對本票有意義的腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 

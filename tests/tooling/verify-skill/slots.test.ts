@@ -24,6 +24,15 @@ afterAll(() => rmSync(home, { recursive: true, force: true }));
 // Windows answers each processStart through PowerShell, which takes seconds.
 const SLOW = { timeout: 60_000 };
 
+describe('slot ports', () => {
+  it('gives ten slots four ports each over the reserved range 7250–7289, without overlap', () => {
+    const ports = paths.SLOTS.flatMap((slot: { ui: number; search: number; agent: number; feeds: number }) => [slot.ui, slot.search, slot.agent, slot.feeds]);
+    expect(paths.SLOTS).toHaveLength(10);
+    expect(paths.SLOTS.map((slot: { slot: number }) => slot.slot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(ports).toEqual(Array.from({ length: 40 }, (_, index) => 7250 + index));
+  });
+});
+
 describe('lockLive', SLOW, () => {
   it('holds while the process with that PID and start time runs', () => {
     expect(lockLive({ pid: process.pid, start: processStart(process.pid) })).toBe(true);

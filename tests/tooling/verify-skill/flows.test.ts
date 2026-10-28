@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkEntry, failureHint, recorder } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
-import { listFlows, selectFlows, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
+import { listFlows, runPool, selectFlows, startable, timingTable, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
 import { checkRecordForJob } from '../../../.claude/skills/verify/flows/subscription-failures.mjs';
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../../.claude/skills/verify/flows/lib/status-sequence.mjs';
 
@@ -60,6 +60,57 @@ describe('CI flow selection', () => {
     } finally {
       await rm(evidence, { recursive: true, force: true });
     }
+  });
+});
+
+describe('parallel flow runs', () => {
+  type Flow = { name: string; desktop: boolean };
+  const web = (name: string): Flow => ({ name, desktop: false });
+  const native = (name: string): Flow => ({ name, desktop: true });
+  const names = (flows: Flow[]) => flows.map((flow) => flow.name);
+
+  it('starts Web flows in order up to the job limit', () => {
+    const waiting = [web('a'), web('b'), web('c'), web('d')];
+    expect(names(startable(waiting, [], 3))).toEqual(['a', 'b', 'c']);
+    expect(names(startable(waiting.slice(2), [web('a'), web('b')], 3))).toEqual(['c']);
+    expect(names(startable(waiting, [], 1))).toEqual(['a']);
+  });
+
+  it('runs a Desktop flow alone and keeps the flows after it waiting', () => {
+    expect(names(startable([native('n'), web('b')], [web('a')], 3))).toEqual([]);
+    expect(names(startable([native('n'), web('b')], [], 3))).toEqual(['n']);
+    expect(names(startable([web('b')], [native('n')], 3))).toEqual([]);
+    expect(names(startable([web('a'), native('n'), web('b')], [], 3))).toEqual(['a']);
+  });
+
+  it('never runs more than the job limit and finishes every flow when one fails or throws', async () => {
+    const flows = ['a', 'b', 'c', 'd', 'e'].map(web);
+    let running = 0;
+    let peak = 0;
+    const outcomes = await runPool(flows, 3, async (flow: Flow) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, flow.name === 'b' ? 30 : 5));
+      running -= 1;
+      if (flow.name === 'c') throw new Error('driver crashed');
+      return { name: flow.name, passed: flow.name !== 'a' };
+    });
+    expect(peak).toBe(3);
+    expect(outcomes).toEqual([
+      { name: 'a', passed: false }, { name: 'b', passed: true }, { name: 'c', passed: false, error: 'driver crashed' },
+      { name: 'd', passed: true }, { name: 'e', passed: true },
+    ]);
+  });
+
+  it('prints each flow\'s phases and the wall clock', () => {
+    const table = timingTable([
+      { name: 'vault-transfer', passed: true, timings: { prepareMs: 6_100, runMs: 70_300, cleanupMs: 1_000 } },
+      { name: 'build-info', passed: false, timings: { prepareMs: 900 } },
+    ], { jobs: 3, wallMs: 80_000 });
+    expect(table).toContain('vault-transfer  PASSED');
+    expect(table).toMatch(/vault-transfer +PASSED +6\.1s +70\.3s +1\.0s +77\.4s/u);
+    expect(table).toMatch(/build-info +FAILED +0\.9s +- +- +0\.9s/u);
+    expect(table).toContain('2 flows in 80.0s with --jobs 3');
   });
 });
 
