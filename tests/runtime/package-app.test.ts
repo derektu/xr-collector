@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, capture as captureCommandOutput, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, verifyPackagedApplication, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -30,6 +30,16 @@ it('removes Git routing and signing credentials from every packaging child envir
     PATH: '/tools', GIT_DIR: '/other/.git', git_work_tree: '/other', CSC_LINK: 'secret', CSC_KEY_PASSWORD: 'secret',
     WIN_CSC_LINK: 'secret', APPLE_ID: 'secret', APPLE_API_KEY: 'secret', NOTARYTOOL_PROFILE: 'secret',
   })).toEqual({ PATH: '/tools', CSC_IDENTITY_AUTO_DISCOVERY: 'false' });
+});
+
+it('keeps stdout written after the direct child exits but before its pipe closes', async () => {
+  const descendant = `setTimeout(() => process.stdout.write('complete output'), 50)`;
+  const directChild = `
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 'inherit', 'inherit'] });
+    child.unref();
+  `;
+  await expect(captureCommandOutput(process.execPath, ['-e', directChild])).resolves.toBe('complete output');
 });
 
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {

@@ -213,7 +213,7 @@ function runCommand(command, args) {
   });
 }
 
-function capture(command, args, options = {}) {
+export function capture(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd ?? projectRoot,
@@ -221,9 +221,17 @@ function capture(command, args, options = {}) {
       env: options.environment ?? packageChildEnvironment(),
     });
     let output = '';
+    let settled = false;
     child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve(output) : reject(new Error(`${command} exited with status ${code}`)));
+    child.once('error', (error) => { if (!settled) { settled = true; reject(error); } });
+    // A child can exit while a descendant still owns its stdout pipe. `close` is emitted only after
+    // the process has ended and its stdio has drained, so the captured output is complete here.
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) resolve(output);
+      else reject(new Error(`${command} exited with ${code === null ? `signal ${signal ?? 'unknown'}` : `status ${code}`}`));
+    });
   });
 }
 
