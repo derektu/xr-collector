@@ -288,16 +288,18 @@ it('reclaims only a dead packaging owner and removes its lock on terminal signal
   const signalTarget = new EventEmitter();
   const terminated: string[] = [];
   const identities = async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' };
+  let announceStarted!: () => void;
+  const started = new Promise<void>((resolve) => { announceStarted = resolve; });
   const running = withPackageCheckoutLock(lock, async ({ signal }) => new Promise<void>((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    announceStarted();
   }), { processIdentity: identities, signalTarget, terminateAfterSignal: (signal: string) => terminated.push(signal) });
-  await new Promise((resolve) => setTimeout(resolve, 10));
   const interrupted = expect(running).rejects.toThrow(/SIGHUP/u);
+  await started;
   signalTarget.emit('SIGHUP');
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await interrupted;
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
   expect(terminated).toEqual(['SIGHUP']);
-  await interrupted;
 
   await mkdir(lock, { mode: 0o700 });
   await writeFile(path.join(lock, 'owner-b2.json'), JSON.stringify({ pid: 42, uid, startedAt: 'live', token: 'b2' }), { mode: 0o600 });
