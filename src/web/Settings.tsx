@@ -6,6 +6,7 @@ import { VaultLocationSection } from './VaultLocation.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { LoginStartup } from './LoginStartup.js';
 import { AgentConnection } from './AgentConnection.js';
+import type { DeviceUpdateStatus } from '../core/types.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
@@ -13,12 +14,14 @@ const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', d
  * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
-export function Settings({ vaultPath, activeJobs, revision, themePreference, onThemePreference, onChanged }: {
+export function Settings({ vaultPath, activeJobs, revision, themePreference, update, onUpdate, onThemePreference, onChanged }: {
   vaultPath: string | null;
   activeJobs: number;
   /** Changes when collection work or its schedule changes, prompting the Vault totals to reload. */
   revision: number;
   themePreference: ThemePreference;
+  update: DeviceUpdateStatus | null;
+  onUpdate: (status: DeviceUpdateStatus) => void;
   onThemePreference: (preference: ThemePreference) => void;
   onChanged: (message: string) => void;
 }) {
@@ -55,7 +58,7 @@ export function Settings({ vaultPath, activeJobs, revision, themePreference, onT
             onClick={() => onThemePreference(value)}>{themeLabels[value]}</button>)}
         </div>
       </section>
-      <BuildInfoCard />
+      <BuildInfoCard update={update} onUpdate={onUpdate} />
     </div>
   </>;
 }

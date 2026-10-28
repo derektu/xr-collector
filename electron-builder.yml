@@ -17,7 +17,10 @@ mac:
     - target: zip
       arch: [arm64]
   category: public.app-category.productivity
-  identity: null
+  identity: "-"
+  hardenedRuntime: false
+  signIgnore:
+    - '/Contents/Resources/bin(?:/|$)'
   extraResources:
     - from: skills
       to: skills
@@ -35,6 +38,10 @@ mac:
       to: bin/meilisearch
     - from: resources/bin/mac/meilisearch-build.json
       to: bin/meilisearch-build.json
+    - from: resources/bin/mac/xr-mac-update-helper
+      to: bin/xr-mac-update-helper
+    - from: .local/package-resources/build-info.json
+      to: build-info.json
 win:
   target:
     - target: nsis
@@ -50,6 +57,8 @@ win:
     - from: resources/bin/win
       to: bin
       filter: ['*.exe', 'vcruntime140.dll', 'meilisearch-build.json', 'runtime-dependencies.json', 'yt-dlp/**/*']
+    - from: .local/package-resources/build-info.json
+      to: build-info.json
 nsis:
   oneClick: false
   perMachine: false

@@ -993,6 +993,19 @@ export type CoreErrorCode =
   | 'login_startup_requires_approval'
   | 'login_startup_failed'
   | 'agent_connection_unavailable'
+  | 'update_busy'
+  | 'update_cancelled'
+  | 'update_source_failed'
+  | 'update_not_published'
+  | 'update_metadata_invalid'
+  | 'update_asset_missing'
+  | 'update_not_available'
+  | 'update_offer_changed'
+  | 'update_download_failed'
+  | 'update_integrity_failed'
+  | 'update_not_ready'
+  | 'update_install_unavailable'
+  | 'update_apply_failed'
   | 'invalid_request';
 
 /** Result of reading a directory before it is created or opened as a Vault. */
@@ -1145,4 +1158,51 @@ export interface BuildInfo {
   variant: 'chinese' | 'official' | null;
   /** Null means source identity could not be determined; it never means a clean checkout. */
   sourceDirty: boolean | null;
+}
+
+export type UpdatePhase = 'idle' | 'checking' | 'up_to_date' | 'available' | 'downloading' | 'verifying'
+  | 'ready' | 'waiting' | 'installing' | 'error';
+
+export interface UpdateAsset { name: string; url: string; bytes: number; sha256: string }
+
+/** One immutable release choice. Latest discovery never changes an offer after it is selected. */
+export interface UpdateOffer {
+  version: string;
+  commit: string;
+  target: string;
+  variant: 'chinese' | 'official';
+  releaseNotes: string;
+  source: { id: string; indexUrl: string };
+  payload: UpdateAsset;
+  manifest: UpdateAsset;
+  buildInfo: BuildInfo;
+}
+
+export interface UpdateInstallAttempt {
+  id: string;
+  version: string;
+  buildId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  outcome: 'pending' | 'succeeded' | 'failed' | 'unknown';
+  message: string;
+}
+
+/** Device-level update state shared by the UI, tray and authorized Agent API. */
+export interface DeviceUpdateStatus {
+  phase: UpdatePhase;
+  currentVersion: string;
+  target: string;
+  variant: 'chinese' | 'official' | null;
+  installerAvailable: boolean;
+  offer: UpdateOffer | null;
+  ready: UpdateOffer | null;
+  lastAttempt: UpdateInstallAttempt | null;
+  progress: { transferred: number; total: number; percent: number } | null;
+  /** Most recent check attempt, successful or failed; scheduling uses this to avoid retry storms. */
+  lastCheckAttemptAt: string | null;
+  /** Most recent successful check. */
+  checkedAt: string | null;
+  message: string;
+  errorCode: string | null;
 }

@@ -23,7 +23,7 @@ export async function listFlows(dir = FLOWS_DIR) {
     if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
       throw new Error(`${file} must export name, title, covers and run`);
     }
-    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true,
+    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true, catalog: flow.catalog,
       vault: flow.vault === 'none' ? 'none' : 'selected', run: flow.run, file: path.join(dir, file) };
   }));
 }
@@ -79,6 +79,7 @@ async function runOne(flow, options) {
     // The flow, driver and verification server are one harness revision; only product src comes
     // from --checkout. This lets a candidate CI harness repeatedly test a clean main revision.
     instance = await launchWeb({ issue, label, evidence, checkout, vault: flow.vault,
+      ...(typeof flow.catalog === 'function' ? { catalog: flow.catalog() } : {}),
       server: path.resolve(FLOWS_DIR, '..', 'scripts', 'server.mts') });
   } catch (error) {
     // Provisioning can fail before a recorder exists (runtime, browser or server startup). Keep a

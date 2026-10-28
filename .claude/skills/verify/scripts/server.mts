@@ -20,6 +20,7 @@
 //
 // Environment: XR_VERIFY_CHECKOUT, XR_VERIFY_RUN, XR_VERIFY_DATA, XR_VERIFY_VAULT_MODE (selected | fixed | none),
 // XR_VERIFY_UI_PORT, XR_VERIFY_SEARCH_PORT, XR_VERIFY_AGENT_PORT, XR_VERIFY_FEEDS_PORT.
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -44,6 +45,15 @@ const { createVaultDirectory } = await load('src/vault/vault-directory.ts');
 const { VaultSelection } = await load('src/vault/vault-selection.ts');
 const { exportFolder, backupFolder } = await load('src/vault/transfer-files.ts');
 const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
+// A reverse-baseline run uses an older checkout that has no updater modules. Keep its server
+// runnable without copying new product source into it: the flow then fails meaningfully on the
+// absent device update API instead of failing verification-server provisioning.
+const updateModulesAvailable = existsSync(path.join(checkout, 'src/updates/update-service.ts'))
+  && existsSync(path.join(checkout, 'src/updates/sources.ts'));
+const updateServiceModule = updateModulesAvailable ? await load('src/updates/update-service.ts') : null;
+const updateSourcesModule = updateModulesAvailable ? await load('src/updates/sources.ts') : null;
+const UpdateService = updateServiceModule?.UpdateService;
+const GenericIndexSource = updateSourcesModule?.GenericIndexSource;
 
 const profilePath = path.join(run, 'profile');
 const vaultPath = path.join(run, 'vault');
@@ -57,6 +67,30 @@ const cutOff = () => { if (offline()) throw new CollectorError('network_error', 
 const createdBy = `XR Collector (verify skill, ${data} data)`;
 const program = (name: string, environmentName: string) => process.env[environmentName]
   ?? path.join(checkout, 'resources', 'bin', 'mac', name);
+
+// Opt-in fixture for the recorded update flow. It serves the real generic-index protocol and runs
+// the real UpdateService, but validates a semantic test file instead of pretending Web mode can
+// install a native app. Other verification runs do not receive an update source or fake installer.
+const updateEnabled = () => updateModulesAvailable && data === 'synthetic' && catalog().updates?.enabled === true;
+const sha256 = (value: Buffer) => createHash('sha256').update(value).digest('hex');
+const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', version: '0.1.0', builtAt: '2026-10-27T00:00:00.000Z',
+  commit: '1'.repeat(40), buildId: 'verify-update-0.1.0', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false });
+const updateFixture = (version = String(catalog().updates?.version ?? '0.1.1')) => {
+  const prefix = Buffer.from(`XR-COLLECTOR-VERIFY-UPDATE-${version}\n`);
+  const payload = Buffer.concat([prefix, Buffer.alloc(100_000 - prefix.byteLength, version.endsWith('.2') ? 0x37 : 0x36)]);
+  const base = `http://127.0.0.1:${port('FEEDS')}/updates/v${version}/`;
+  const payloadName = `XR-Collector-${version}-chinese-mac-arm64.zip`;
+  const manifestName = `XR-Collector-${version}-chinese-mac-arm64.manifest.json`;
+  const nextBuildInfo = { ...fixtureBuildInfo, kind: 'packaged', version, buildId: `verify-update-${version}` };
+  const payloadAsset = { name: payloadName, url: `${base}${payloadName}`, bytes: payload.byteLength, sha256: sha256(payload) };
+  const manifestBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit: '2'.repeat(40), target: 'darwin-arm64', variant: 'chinese',
+    buildInfo: { ...nextBuildInfo, commit: '2'.repeat(40) }, artifacts: [payloadAsset] }));
+  const manifestAsset = { name: manifestName, url: `${base}${manifestName}`, bytes: manifestBody.byteLength, sha256: sha256(manifestBody) };
+  const indexBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, tag: `v${version}`, commit: '2'.repeat(40),
+    releaseNotes: `## 驗證版 ${version}\n\n- 合成更新，只驗證共用下載與等待流程。`, source: { id: 'verify-private-feed', baseUrl: base },
+    candidates: [{ target: 'darwin-arm64', variant: 'chinese', updatePayload: payloadAsset, manifest: manifestAsset }] }));
+  return { version, payload, payloadName, manifestName, manifestBody, indexBody };
+};
 
 type LoginStartupFixture = {
   mode: 'unavailable' | 'normal' | 'failure' | 'requires_approval';
@@ -95,8 +129,31 @@ const loginStartup = {
 function syntheticFeedServer() {
   const server = createServer((request, response) => {
     if (offline()) { request.socket.destroy(); return; }
-    if (new URL(request.url ?? '/', 'http://127.0.0.1').pathname === '/connectivity') { response.writeHead(204).end(); return; }
-    const route = catalog().feeds?.[new URL(request.url ?? '/', 'http://127.0.0.1').pathname];
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (pathname === '/connectivity') { response.writeHead(204).end(); return; }
+    if (updateEnabled() && pathname === '/updates/release-index.json') {
+      const { indexBody } = updateFixture();
+      const status = Number(catalog().updates.indexStatus ?? 200);
+      response.writeHead(status, { 'content-type': 'application/json', 'content-length': status === 200 ? indexBody.byteLength : 0 }).end(status === 200 ? indexBody : undefined); return;
+    }
+    const fixture = updateEnabled() ? updateFixture() : null;
+    if (fixture && pathname === `/updates/v${fixture.version}/${fixture.manifestName}`) {
+      const { manifestBody } = fixture;
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': manifestBody.byteLength }).end(manifestBody); return;
+    }
+    if (fixture && pathname === `/updates/v${fixture.version}/${fixture.payloadName}`) {
+      const settings = catalog().updates;
+      const body = settings.payloadMode === 'corrupt' ? Buffer.from(fixture.payload) : fixture.payload;
+      if (settings.payloadMode === 'corrupt') body[body.length - 1] ^= 0xff;
+      response.writeHead(200, { 'content-type': 'application/zip', 'content-length': body.byteLength });
+      const delay = Number(settings.payloadDelayMs ?? 0);
+      if (!delay) { response.end(body); return; }
+      const first = Math.floor(body.byteLength * 0.62);
+      response.write(body.subarray(0, first));
+      setTimeout(() => { if (!response.destroyed) response.end(body.subarray(first)); }, delay);
+      return;
+    }
+    const route = catalog().feeds?.[pathname];
     const answer = () => {
       if (!route) { response.writeHead(404).end('not found'); return; }
       const body = route.kind === 'rss2' ? rss2(route.title, revive(route.articles))
@@ -184,6 +241,24 @@ const feeds = data === 'synthetic' ? await syntheticFeedServer() : null;
 const sources = data === 'synthetic'
   ? await syntheticSources()
   : await createSourcePlugins({ profilePath, env: process.env, program });
+const updateService = updateEnabled() ? await UpdateService.open({
+  identity: { version: fixtureBuildInfo.version, target: fixtureBuildInfo.target, variant: fixtureBuildInfo.variant },
+  currentBuildId: fixtureBuildInfo.buildId,
+  source: new GenericIndexSource(`http://127.0.0.1:${port('FEEDS')}/updates/release-index.json`),
+  installer: {
+    available: true,
+    validate: async (_offer: unknown, packageFile: string, signal?: AbortSignal) => {
+      if (signal?.aborted) throw signal.reason;
+      const expected = updateFixture((_offer as { version: string }).version).payload;
+      if (!readFileSync(packageFile).equals(expected)) throw new CollectorError('update_integrity_failed', '合成更新檔內容不正確。');
+    },
+    prepare: async () => { throw new CollectorError('update_install_unavailable', 'Web 驗證不會安裝原生 App。'); },
+  },
+  directory: path.join(profilePath, 'updates'),
+  // Leave a real apply request in waiting until the flow cancels it. This verifies the common
+  // service/API/UI contract without claiming that a Web run can hand off to a native installer.
+  apply: () => undefined,
+}) : null;
 
 // `selected` opens the Vault the way a user's chosen one opens, so moving it and opening another stay
 // available; `fixed` is the XR_COLLECTOR_VAULT path, where the location cannot change. The Vault is
@@ -203,6 +278,7 @@ const syntheticConnectivity = {
 };
 const runtime = await CollectorRuntime.start({
   profilePath,
+  ...(updateService ? { buildInfo: fixtureBuildInfo, updates: updateService } : {}),
   ...(data === 'synthetic' ? { connectivity: syntheticConnectivity } : {}),
   workspace: {
     plugins: sources.plugins,
@@ -270,6 +346,7 @@ async function stop(): Promise<void> {
   stopping = true;
   if (scheduleTriggerTimer) clearInterval(scheduleTriggerTimer);
   try {
+    await updateService?.close();
     await runtime.close();
     feeds?.closeAllConnections();
     feeds?.close();

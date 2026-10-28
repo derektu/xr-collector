@@ -44,6 +44,14 @@ interface RunContext {
   cancelledEvent: (() => void) | null;
 }
 
+interface UpdateContext { releaseHold: (() => void) | null; transferred: boolean; signal: AbortSignal }
+
+export interface UpdateLease {
+  cancel(): void;
+  /** Keeps the gate held while the runtime destructively closes; it must never be resumed afterwards. */
+  transferToShutdown(): void;
+}
+
 type Lifecycle = { kind: 'idle' } | { kind: 'running'; context: RunContext } | { kind: 'stopped'; context: RunContext };
 
 class StoppedOperation extends Error {
@@ -60,6 +68,8 @@ export class VaultOperationLock {
   };
   private lifecycle: Lifecycle = { kind: 'idle' };
   private writes = 0;
+  private readonly writeWaiters = new Set<() => void>();
+  private updateContext: UpdateContext | null = null;
   private active: Promise<void> = Promise.resolve();
 
   constructor(private readonly dependencies: LockDependencies) {}
@@ -78,12 +88,46 @@ export class VaultOperationLock {
       return () => undefined;
     }
     if (this.lifecycle.kind !== 'idle') throw this.busyWrite();
+    if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能寫入知識庫。');
     this.writes += 1;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.writes -= 1;
+      if (this.writes === 0) { for (const resolve of this.writeWaiters) resolve(); this.writeWaiters.clear(); }
+    };
+  }
+
+  /** Atomically excludes Vault operations/new writes, then drains existing writes and collection. */
+  async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
+    if (this.lifecycle.kind !== 'idle' || this.updateContext) throw this.busyWrite();
+    const context: UpdateContext = { releaseHold: null, transferred: false, signal };
+    this.updateContext = context;
+    this.dependencies.suspend(true);
+    try {
+      // JobManager.hold increments its dispatch gate before its first await. Acquire it first so
+      // queued work cannot start while existing request writes drain.
+      const release = await this.dependencies.hold(signal);
+      if (signal.aborted) { release(); throw signal.reason; }
+      context.releaseHold = release;
+      if (this.writes > 0) await abortable(new Promise<void>((resolve) => this.writeWaiters.add(resolve)), signal);
+      await abortable(this.dependencies.idle(), signal);
+      if (signal.aborted) throw signal.reason;
+    } catch (error) {
+      this.releaseUpdate(context);
+      throw error;
+    }
+    let finished = false;
+    return {
+      cancel: () => { if (finished) return; finished = true; this.releaseUpdate(context); },
+      transferToShutdown: () => {
+        if (finished || this.updateContext !== context) throw new CollectorError('update_busy', '更新等待已經結束。');
+        if (context.signal.aborted) { finished = true; this.releaseUpdate(context); throw context.signal.reason; }
+        finished = true; context.transferred = true;
+        // The runtime now owns a destructive close. Keep the gate and hold in force; jobs.close()
+        // consumes them, and a close failure must not claim the old runtime resumed safely.
+      },
     };
   }
 
@@ -124,6 +168,7 @@ export class VaultOperationLock {
   }
 
   private acquire(operation: TransferOperation, cancelledEvent?: () => void): RunContext {
+    if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
     if (this.lifecycle.kind !== 'idle' || this.writes) {
       throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
     }
@@ -227,9 +272,18 @@ export class VaultOperationLock {
   }
 
   private busyWrite(): CollectorError {
+    if (this.updateContext) return new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
     const operation = this.value.operation;
     return new CollectorError('vault_busy', operation === 'move' ? '正在搬移知識庫，請等搬移完成後再操作。'
       : operation === 'open' ? '正在開啟其他知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
+  }
+
+  private releaseUpdate(context: UpdateContext): void {
+    if (this.updateContext !== context || context.transferred) return;
+    this.updateContext = null;
+    this.dependencies.suspend(false);
+    context.releaseHold?.();
+    context.releaseHold = null;
   }
 }
 

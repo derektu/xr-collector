@@ -115,6 +115,70 @@ describe('CollectorRuntime', () => {
     expect(await readdir(root)).toEqual(['agent-settings.json']);
   });
 
+  it('acquires and releases the device update exclusion without a Vault', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-update-no-vault-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const runtime = await CollectorRuntime.start({ profilePath: root, workspace: null,
+      agentSettingsFile: path.join(root, 'agent-settings.json'), skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0 });
+    cleanups.push(() => runtime.close());
+    const lease = await runtime.prepareUpdate(new AbortController().signal);
+    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'update_busy' });
+    lease.cancel();
+    const next = await runtime.prepareUpdate(new AbortController().signal);
+    next.cancel();
+  });
+
+  it('refuses update preparation while Onboarding is setting up a Vault', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const { explicitVaultPath: _explicit, ...notReady } = setup.value;
+    const originalCreateSearch = notReady.workspace!.createSearch!;
+    let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = await CollectorRuntime.start({ ...notReady, workspace: { ...notReady.workspace!,
+      createSearch: async (root) => { entered(); await held; return originalCreateSearch(root); },
+    } });
+    cleanups.push(() => runtime.close());
+    const settingUp = fetch(`${runtime.server.url}/api/vault/setup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', path: setup.vaultPath }),
+    });
+    await started;
+    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
+    release(); expect((await settingUp).status).toBe(200);
+  });
+
+  it('refuses update preparation while a Vault move or import owns the operation lock', async () => {
+    const base = await options({ capture: vi.fn() }); const { explicitVaultPath: _explicit, ...value } = base.value;
+    await writeVaultMarker(await mkdir(base.vaultPath, { recursive: true }).then(() => base.vaultPath), 'XR Collector test');
+    await writeFile(path.join(value.profilePath, 'vault-selection.json'), JSON.stringify({ path: base.vaultPath }));
+    let entered!: () => void; const moving = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+    let importEntered!: () => void; const importing = new Promise<void>((resolve) => { importEntered = resolve; });
+    let releaseImport!: () => void; const importHeld = new Promise<void>((resolve) => { releaseImport = resolve; });
+    const runtime = await CollectorRuntime.start({ ...value, workspace: { ...value.workspace!,
+      moveFaults: async (phase) => { if (phase === 'copying') { entered(); await held; } },
+      importFaults: async (phase) => { if (phase === 'staged') { importEntered(); await importHeld; } },
+    } });
+    cleanups.push(() => runtime.close());
+    const target = path.join(value.profilePath, '..', `${path.basename(value.profilePath)}-update-move`);
+    cleanups.push(() => rm(target, { recursive: true, force: true }));
+    await runtime.workspace!.move(target); await moving;
+    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
+    release(); await runtime.workspace!.operationFinished();
+
+    const source = path.join(value.profilePath, 'incoming-vault');
+    await new MarkdownVault(source).add(transcriptDocument({
+      videoId: 'updatehold1', sourceUrl: 'https://www.youtube.com/watch?v=updatehold1', title: 'Import hold',
+      channelId: 'UC-runtime', channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
+      subtitleKind: 'manual', bodyMarkdown: 'Imported while update waits.',
+    }));
+    await new JsonScheduleStore(source).save({ enabled: true });
+    const packageFile = path.join(value.profilePath, 'incoming.zip'); await writeFile(packageFile, await packageBytes(source));
+    const preview = await runtime.workspace!.previewImport(packageFile);
+    runtime.workspace!.applyImport(preview.id, 'merge'); await importing;
+    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
+    releaseImport(); await runtime.workspace!.operationFinished();
+  });
+
   it('reports a missing selected Vault as Not Ready without falling back', async () => {
     const setup = await options({ capture: vi.fn() });
     const { explicitVaultPath: _explicit, ...selected } = setup.value;

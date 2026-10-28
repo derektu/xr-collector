@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
+import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { trayMenu } from '../../src/electron/tray-menu.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';
@@ -18,6 +18,9 @@ const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionSc
   enabled: true, status: 'scheduled', lastCheck: null, connectivity: { state: 'online', checkedAt: null },
   nextCheck: { type: 'youtube', subscriptionId: 's', title: 'Acquired', at: '2026-10-24T18:52:00+08:00' }, ...overrides,
 });
+const update = (overrides: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus => ({ phase: 'up_to_date', currentVersion: '0.1.0',
+  target: 'darwin-arm64', variant: 'chinese', installerAvailable: true, offer: null, ready: null, lastAttempt: null, progress: null,
+  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '已是最新版。', errorCode: null, ...overrides });
 
 const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
 const actions = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'action' ? [item.label] : []);
@@ -92,6 +95,43 @@ describe('tray menu (#32 T1)', () => {
     expect(menu.icon).toBe('idle');
   });
 
+  it('keeps each work-state icon while adding a persistent update shape and menu entry', () => {
+    const available = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
+    const cases = [
+      { overview: overview(), schedule: schedule(), icon: 'idle' },
+      { overview: overview({ running: [entry({ status: { state: 'downloading' } })] }), schedule: schedule(), icon: 'collecting' },
+      { overview: overview(), schedule: schedule({ enabled: false }), icon: 'auto_check_off' },
+    ] as const;
+    for (const state of cases) {
+      const menu = trayMenu({ ...state, update: available }, now);
+      expect(menu.icon).toBe(state.icon);
+      expect(menu.updateBadge).toBe(true);
+      expect(menu.tooltip).toContain('有新版本 0.1.1');
+      expect(actions(menu)).toContain('App 更新：可下載 0.1.1');
+      expect(actions(menu)).toContain('結束 XR Collector');
+    }
+    expect(trayMenu({ update: available }, now).updateBadge).toBe(true);
+    expect(trayMenu({ update: update() }, now).updateBadge).toBeUndefined();
+    expect(trayMenu({ update: update({ phase: 'ready', ready: { version: '0.1.0' } as DeviceUpdateStatus['ready'] }) }, now).updateBadge).toBeUndefined();
+  });
+
+  it('puts App version and its distinct update action immediately before Quit', () => {
+    const menu = trayMenu({ overview: overview(), schedule: schedule(), update: update() }, now);
+    expect(status(menu).at(-1)).toBe('版本 0.1.0');
+    expect(actions(menu).slice(-2)).toEqual(['檢查 App 更新', '結束 XR Collector']);
+    const withoutVault = trayMenu({ update: update() }, now);
+    expect(actions(withoutVault)).toEqual(['開啟 XR Collector', '檢查 App 更新', '結束 XR Collector']);
+  });
+
+  it('describes each active App update phase without starting another check', () => {
+    const labels = (value: Partial<DeviceUpdateStatus>) => actions(trayMenu({ update: update(value) }, now))[1];
+    expect(labels({ phase: 'downloading', progress: { transferred: 62, total: 100 } })).toBe('App 更新：下載中 62%');
+    expect(labels({ phase: 'ready', ready: { version: '0.1.1' } as DeviceUpdateStatus['ready'] })).toBe('App 更新：已下載待安裝 0.1.1');
+    expect(labels({ phase: 'waiting' })).toBe('App 更新：等待工作完成');
+    expect(labels({ phase: 'installing' })).toBe('App 更新：安裝中');
+    expect(labels({ phase: 'error', errorCode: 'update_failed' })).toBe('App 更新：錯誤');
+  });
+
   it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational and future update icons (#136)', () => {
     const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true, updateAvailable = false) =>
       trayMenu({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
@@ -108,6 +148,11 @@ describe('tray menu (#32 T1)', () => {
     expect(make([alert('bb', 'B')]).items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（1）' }));
     expect(make([], {}, true, true).icon).toBe('update_available');
     expect(make([]).icon).toBe('idle');
+    const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
+    const attentionWithUpdate = trayMenu({ overview: overview(), schedule: schedule(), actionable: [alert('a', 'A')], update: offered }, now);
+    expect(attentionWithUpdate.icon).toBe('attention');
+    expect(attentionWithUpdate.updateBadge).toBeUndefined();
+    expect(actions(attentionWithUpdate)).toContain('App 更新：可下載 0.1.1');
   });
 });
 

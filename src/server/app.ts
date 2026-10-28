@@ -13,6 +13,7 @@ import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import type { NotificationState } from '../notifications/notification-center.js';
 import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
+import type { UpdateAccess, UpdateSelection } from '../updates/types.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../plugins/types.js';
@@ -128,7 +129,9 @@ export interface VaultSetup {
 const NOT_READY_ROUTES = new Set([
   '/api/health', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
   '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
-  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info', '/api/device/notifications',
+  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
+  '/api/device/updates', '/api/device/updates/check', '/api/device/updates/download',
+  '/api/device/updates/apply', '/api/device/updates/cancel', '/api/device/notifications',
 ]);
 
 export interface NotificationAccess {
@@ -162,6 +165,7 @@ export interface HttpAppOptions {
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
   loginStartup?: LoginStartupAccess;
+  updates?: UpdateAccess;
   notifications?: NotificationAccess;
   /** Source types the service offers; tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
@@ -220,6 +224,19 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   login_startup_requires_approval: 409,
   login_startup_failed: 500,
   agent_connection_unavailable: 409,
+  update_busy: 409,
+  update_cancelled: 409,
+  update_source_failed: 502,
+  update_not_published: 404,
+  update_metadata_invalid: 502,
+  update_asset_missing: 409,
+  update_not_available: 409,
+  update_offer_changed: 409,
+  update_download_failed: 502,
+  update_integrity_failed: 422,
+  update_not_ready: 409,
+  update_install_unavailable: 409,
+  update_apply_failed: 500,
   capture_failed: 502,
   network_error: 503,
   offline: 503,
@@ -450,6 +467,31 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       return { notifications: await notifications.update(request.body.enabled) };
     });
+  }
+
+  {
+    const unavailableUpdate = (): import('../core/types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
+      target: buildInfo.target, variant: buildInfo.variant, installerAvailable: false, offer: null, ready: null, progress: null,
+      lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null });
+    const updates: UpdateAccess = options.updates ?? {
+      status: unavailableUpdate, check: async () => unavailableUpdate(), cancel: async () => unavailableUpdate(),
+      download: async () => { throw new CollectorError('update_install_unavailable', '此執行環境無法安裝更新。'); },
+      apply: async () => { throw new CollectorError('update_install_unavailable', '此執行環境無法安裝更新。'); },
+    };
+    const selection = (body: unknown): UpdateSelection => {
+      if (!body || typeof body !== 'object') throw new CollectorError('invalid_request', '請提供更新版本與雜湊。');
+      const value = body as Record<string, unknown>;
+      if (typeof value.version !== 'string' || typeof value.sha256 !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(value.sha256) || Object.keys(value).some((key) => key !== 'version' && key !== 'sha256')) {
+        throw new CollectorError('invalid_request', '請只提供有效的 version 與 sha256。');
+      }
+      return { version: value.version, sha256: value.sha256 };
+    };
+    app.get('/api/device/updates', deviceData(), async () => ({ update: updates.status() }));
+    app.post('/api/device/updates/check', deviceData(), async () => ({ update: await updates.check() }));
+    app.post<{ Body: unknown }>('/api/device/updates/download', deviceData(), async (request) => ({ update: await updates.download(selection(request.body)) }));
+    app.post<{ Body: unknown }>('/api/device/updates/apply', deviceData(), async (request) => ({ update: await updates.apply(selection(request.body)) }));
+    app.post('/api/device/updates/cancel', deviceData(), async () => ({ update: await updates.cancel() }));
   }
 
   app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));

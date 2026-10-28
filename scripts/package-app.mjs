@@ -3,34 +3,80 @@ import { extractFile } from '@electron/asar';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
+import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
+import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
+import {
+  DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
+  signedBuilderEnvironment, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
+  withTemporarySigningKeychain,
+} from './mac-signing.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const productionUpdateRepository = 'derektu/xr-collector';
 
 export function parsePackageArguments(argv) {
   const result = {};
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--target') result.target = argv[++index];
     else if (argv[index] === '--variant') result.variant = argv[++index];
+    else if (argv[index] === '--validation-version') result.validationVersion = argv[++index];
+    else if (argv[index] === '--validation-app-id') result.validationAppId = argv[++index];
+    else if (argv[index] === '--validation-product-name') result.validationProductName = argv[++index];
+    else if (argv[index] === '--validation-update-repository') result.validationUpdateRepository = argv[++index];
+    else if (argv[index] === '--mac-signing-mode') result.macSigningMode = argv[++index];
+    else if (argv[index] === '--mac-signing-env') result.macSigningEnv = argv[++index];
+    else if (argv[index] === '--mac-signing-root') result.macSigningRoot = argv[++index];
     else throw new Error(`Unknown packaging argument ${argv[index]}.`);
   }
   if (!['darwin-arm64', 'win32-x64'].includes(result.target)) throw new Error(`Unsupported packaging target ${result.target ?? 'missing'}; use darwin-arm64 or win32-x64.`);
   if (!['chinese', 'official'].includes(result.variant)) throw new Error(`Unsupported packaging variant ${result.variant ?? 'missing'}; use chinese or official.`);
+  const signingOptions = [result.macSigningMode, result.macSigningEnv, result.macSigningRoot];
+  if (signingOptions.some(Boolean)) {
+    if (!signingOptions.every(Boolean) || result.macSigningMode !== DEVELOPER_ID_POLICY || result.target !== 'darwin-arm64') {
+      throw new Error(`Developer ID signing requires Mac target plus --mac-signing-mode ${DEVELOPER_ID_POLICY}, --mac-signing-env, and --mac-signing-root.`);
+    }
+  }
+  const validationIdentity = [result.validationVersion, result.validationAppId, result.validationProductName];
+  if (validationIdentity.some(Boolean) || result.validationUpdateRepository) {
+    if (!validationIdentity.every(Boolean) || process.env.XR_COLLECTOR_VALIDATION_BUILD !== '1') throw new Error('Validation identity requires all validation options and XR_COLLECTOR_VALIDATION_BUILD=1.');
+    result.validationUpdateRepository ??= productionUpdateRepository;
+    if (!/^\d+\.\d+\.\d+$/u.test(result.validationVersion)
+      || !/^com\.xrcollector\.verify[\w.-]+$/u.test(result.validationAppId)
+      || !/^XR Update Verify [\w .-]+$/u.test(result.validationProductName)
+      || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(result.validationUpdateRepository)) {
+      throw new Error('Validation version, app id, product name or update repository is invalid.');
+    }
+  }
   return result;
 }
 
 export async function packageApplication(options, dependencies = {}) {
   const run = dependencies.run ?? runCommand;
   const probeHost = dependencies.probePhysicalHost ?? (() => probePhysicalHost({ run: runForOutput }));
-  return withPackageCheckoutLock(path.join(projectRoot, '.local/package-app.lock'), async () => {
-    const { commit } = await readPackagingGitIdentity(projectRoot);
+  const ownCheckout = dependencies.withPackageCheckoutLock ?? withPackageCheckoutLock;
+  return ownCheckout(path.join(projectRoot, '.local/package-app.lock'), async ({ signal, processTracker }) => {
+    const lifecycleRun = (command, args, runOptions = {}) => run(command, args, {
+      ...runOptions, signal, processTracker, processTrackers: runOptions.processTrackers ?? [processTracker],
+    });
+    const { commit } = await (dependencies.readPackagingGitIdentity ?? readPackagingGitIdentity)(projectRoot);
+    const signingConfiguration = options.macSigningMode
+      ? await (dependencies.loadMacSigningConfiguration ?? loadMacSigningConfiguration)({ environmentFile: options.macSigningEnv, pathRoot: options.macSigningRoot })
+      : null;
+    const build = async (signingContext = null) => {
+    const buildProcessTrackers = signingContext?.processTrackers ?? [processTracker];
+    const buildLifecycleRun = (command, args, runOptions = {}) => lifecycleRun(command, args, {
+      ...runOptions, processTrackers: runOptions.processTrackers ?? buildProcessTrackers,
+    });
     const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
+    const version = options.validationVersion ?? packageJson.version;
     const outputDir = path.join(projectRoot, options.variant === 'official' ? 'release/official' : 'release');
     const npmCli = npmCliPath();
     const electronBuilderCli = path.join(projectRoot, 'node_modules/electron-builder/cli.js');
@@ -38,27 +84,75 @@ export async function packageApplication(options, dependencies = {}) {
     await stat(electronBuilderCli);
     await assertHostTarget(options.target, probeHost);
     const targetArg = options.target === 'darwin-arm64' ? 'mac' : 'win';
-    await run(process.execPath, [path.join(projectRoot, 'scripts/download-runtime.mjs'), targetArg]);
-    await run(process.execPath, [path.join(projectRoot, 'scripts/prepare-meilisearch.mjs'), '--variant', options.variant, '--target', options.target]);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/download-runtime.mjs'), targetArg]);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-meilisearch.mjs'), '--variant', options.variant, '--target', options.target]);
     if (options.target === 'win32-x64' && options.variant === 'official') {
-      await run(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]);
+      await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]);
     } else if (options.target === 'win32-x64') {
       await rm(path.join(projectRoot, 'resources/bin/win/vcruntime140.dll'), { force: true });
     }
-    await run(process.execPath, [npmCli, 'run', 'build']);
-    await run(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant]);
-    const builderArgs = options.variant === 'official' ? ['--config', 'electron-builder.official.yml'] : [];
-    builderArgs.push(options.target === 'darwin-arm64' ? '--mac' : '--win');
-    if (options.target === 'win32-x64') builderArgs.push('--x64');
-    builderArgs.push('--publish', 'never');
-    await clearPreviousArtifactSet(outputDir, [
-      expectedArtifactPrefix(packageJson.version, options.variant, options.target),
-      `XR-Collector-${packageJson.version}-${options.variant}-${options.target}`,
+    await buildLifecycleRun(process.execPath, [npmCli, 'run', 'build']);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
+      ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]);
+    await (dependencies.stageBuildInfoSidecar ?? stageBuildInfoSidecar)(projectRoot);
+    if (options.target === 'darwin-arm64') await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
+    await (dependencies.clearPreviousArtifactSet ?? clearPreviousArtifactSet)(outputDir, [
+      expectedArtifactPrefix(version, options.variant, options.target),
+      `XR-Collector-${version}-${options.variant}-${options.target}`,
     ]);
-    await run(process.execPath, [electronBuilderCli, ...builderArgs]);
-    const expected = { commit, version: packageJson.version, target: options.target, variant: options.variant };
-    const verified = await verifyPackagedApplication({ outputDir, ...expected });
-    const artifacts = await findInstallerArtifacts(outputDir, expected);
+    const signed = signingConfiguration !== null;
+    const config = signed
+      ? (options.variant === 'official' ? 'electron-builder.official.signed.yml' : 'electron-builder.signed.yml')
+      : (options.variant === 'official' ? 'electron-builder.official.yml' : null);
+    const commonBuilderArgs = [...(config ? ['--config', config] : []),
+      ...validationBuilderArguments(options), '--publish', 'never'];
+    const builderEnvironment = signedBuilderEnvironmentForPackage(signingConfiguration, signingContext);
+    let signingReceipt = null;
+    if (signed) {
+      const identityOverride = signedBuilderIdentityOverride(signingContext.identity);
+      const firstArgs = [...commonBuilderArgs, '--mac', '--dir', identityOverride];
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...firstArgs], { environment: builderEnvironment });
+      const productName = options.validationProductName ?? 'XR Collector';
+      const appPath = path.join(outputDir, 'mac-arm64', `${productName}.app`);
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId, { run: buildLifecycleRun });
+      const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', `${version}-${options.variant}`);
+      const app = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
+        kind: 'app', artifactPath: appPath, credentials: signingConfiguration.notary, evidenceDirectory,
+      }, { signal, processTrackers: signingContext.processTrackers });
+      signal.throwIfAborted();
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId, { run: buildLifecycleRun });
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run: buildLifecycleRun });
+      const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, identityOverride];
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...secondArgs], { environment: builderEnvironment });
+      const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
+      const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
+      const zipInspection = await (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun });
+      if (JSON.stringify(zipInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
+      const dmg = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
+        kind: 'dmg', artifactPath: dmgPath, credentials: signingConfiguration.notary, evidenceDirectory,
+      }, { signal, processTrackers: signingContext.processTrackers });
+      signal.throwIfAborted();
+      await (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId, { run: buildLifecycleRun });
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(dmgPath, 'dmg', { run: buildLifecycleRun });
+      const dmgInspection = await (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun });
+      if (JSON.stringify(dmgInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
+      signingReceipt = {
+        policy: DEVELOPER_ID_POLICY,
+        credentialDiscovery: false,
+        teamId: signingConfiguration.teamId,
+        identity: { sha1: signingContext.identity.sha1, name: signingContext.identity.name },
+        actualVerification: { kind: 'developer-id-notarized', app, dmg, gatekeeperDownload: 'pending-clean-browser-acceptance' },
+      };
+    } else {
+      const builderArgs = [...commonBuilderArgs, options.target === 'darwin-arm64' ? '--mac' : '--win'];
+      if (options.target === 'win32-x64') builderArgs.push('--x64');
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...builderArgs]);
+    }
+    const expected = { commit, version, target: options.target, variant: options.variant,
+      ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
+      updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
+    const verified = await verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId }, { run: buildLifecycleRun });
+    const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
     const host = await probeHost();
     const toolVersions = {
       node: process.version,
@@ -74,14 +168,59 @@ export async function packageApplication(options, dependencies = {}) {
       toolVersions, runtimeIdentity: {
         dependencies: verified.dependencyManifest,
         meilisearch: verified.meiliManifest,
+        signed: verified.signedRuntimeIdentity ?? null,
         searchLexicon: verified.lexiconManifest,
         windowsCrt: options.target === 'win32-x64' && options.variant === 'official'
           ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt
           : null,
       },
-      signing: { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' },
+      signing: signingReceipt ?? (options.target === 'darwin-arm64'
+        ? { policy: 'ad-hoc', credentialDiscovery: false, actualVerification: { kind: 'codesign-deep-strict', notarization: 'not-requested', gatekeeperDownload: 'not-trusted' } }
+        : { policy: 'unsigned', credentialDiscovery: false, actualVerification: 'pending-native-package-check' }),
     });
+    };
+    if (!signingConfiguration) return build();
+    return (dependencies.withTemporarySigningKeychain ?? withTemporarySigningKeychain)(signingConfiguration, build, { signal, processTracker });
   });
+}
+
+function signedBuilderEnvironmentForPackage(configuration, context) {
+  if (!configuration) return undefined;
+  return signedBuilderEnvironment(packageChildEnvironment(), {
+    keychain: context.keychain,
+    identity: context.identity,
+    teamId: configuration.teamId,
+    sourceRoot: projectRoot,
+  });
+}
+
+export function signedBuilderIdentityOverride(identity) {
+  if (!/^[0-9a-f]{40}$/iu.test(identity?.sha1 ?? '')) throw new Error('Signed Mac builder identity requires the selected certificate SHA-1.');
+  return `--config.mac.identity=${identity.sha1}`;
+}
+
+/**
+ * Stages an exact sidecar copy outside electron-builder's ASAR file set. Using the ASAR source
+ * itself as `extraResources.from` makes electron-builder exclude that source from app.asar.
+ */
+export async function stageBuildInfoSidecar(root = projectRoot) {
+  const source = path.join(root, 'dist/node/build-info.json');
+  const destination = path.join(root, '.local/package-resources/build-info.json');
+  const bytes = await readFile(source);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, bytes);
+  if (!Buffer.from(await readFile(destination)).equals(bytes)) throw new Error('Staged BuildInfo sidecar differs from the ASAR source.');
+  return { source, destination, bytes };
+}
+
+/** Validation packages bake their unique product name into ASAR metadata as well as the installer. */
+export function validationBuilderArguments(options) {
+  if (!options.validationVersion) return [];
+  return [`--config.extraMetadata.version=${options.validationVersion}`,
+    `--config.extraMetadata.productName=${options.validationProductName}`,
+    `--config.extraMetadata.xrCollectorAppId=${options.validationAppId}`,
+    `--config.extraMetadata.xrCollectorUpdateRepository=${options.validationUpdateRepository ?? productionUpdateRepository}`,
+    `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`];
 }
 
 export async function readPackagingGitIdentity(root, sourceEnvironment = process.env) {
@@ -95,18 +234,32 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
   return { commit };
 }
 
-export async function verifyPackagedApplication({ outputDir, commit, version, target, variant }, dependencies = {}) {
-  const resources = target === 'darwin-arm64'
-    ? path.join(outputDir, 'mac-arm64/XR Collector.app/Contents/Resources')
+export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, expectedTeamId }, dependencies = {}) {
+  const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;
+  const resources = appPath
+    ? path.join(appPath, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
+  if (appPath) {
+    if (signingPolicy === DEVELOPER_ID_POLICY) await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run: dependencies.run });
+    else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath, dependencies.run);
+  }
   const asarPath = path.join(resources, 'app.asar');
+  const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
+  assertPackagedProductMetadata(packageMetadata, productName, appId, updateRepository);
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
+  const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
+  if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
   const required = { schemaVersion: 1, kind: 'packaged', version, commit, target, variant, sourceDirty: false };
   for (const [key, value] of Object.entries(required)) if (buildInfo[key] !== value) throw new Error(`Packaged BuildInfo ${key} does not match the packaging request.`);
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');
   const bin = path.join(resources, 'bin');
   const dependencyManifest = JSON.parse(await readFile(path.join(bin, 'runtime-dependencies.json'), 'utf8'));
-  if (dependencyManifest.target !== target || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
+  let signedRuntimeIdentity = null;
+  if (signingPolicy === DEVELOPER_ID_POLICY) {
+    const trustedDependencies = JSON.parse(await readFile(path.join(projectRoot, 'resources/bin/mac/runtime-dependencies.json'), 'utf8'));
+    if (dependencyManifest.target !== target || JSON.stringify(dependencyManifest) !== JSON.stringify(trustedDependencies)) throw new Error('Signed package raw runtime producer identity is invalid.');
+    signedRuntimeIdentity = await (dependencies.verifySignedRuntimeInventory ?? verifySignedRuntimeInventory)(bin, expectedTeamId, { verifySignatures: dependencies.verifyRuntimeSignatures !== false });
+  } else if (dependencyManifest.target !== target || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
   const meiliManifest = JSON.parse(await readFile(path.join(bin, 'meilisearch-build.json'), 'utf8'));
   if (meiliManifest.target !== target || manifestVariant(meiliManifest) !== variant) throw new Error('Packaged Meilisearch identity does not match the package variant.');
   const runtimeDirectory = target === 'win32-x64' ? 'win' : 'mac';
@@ -114,10 +267,16 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/bin', runtimeDirectory, 'meilisearch-build.json'), 'utf8'));
   if (JSON.stringify(meiliManifest) !== JSON.stringify(trustedManifest)) throw new Error('Packaged Meilisearch manifest does not match the prepared producer identity.');
   const executable = path.join(bin, target === 'win32-x64' ? 'meilisearch.exe' : 'meilisearch');
-  if ((await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
+  if (signingPolicy !== DEVELOPER_ID_POLICY
+    && ((await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256)) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
   const validateBinary = dependencies.validateBinary ?? validateBuiltBinary;
   const binaryIdentity = await validateBinary(executable, TARGETS[target], '1.53.2', dependencies.runBinary ?? runForOutput);
-  if (JSON.stringify(binaryIdentity) !== JSON.stringify(meiliManifest.binary)) throw new Error('Packaged Meilisearch executable identity does not match its trusted producer manifest.');
+  if (signingPolicy === DEVELOPER_ID_POLICY) {
+    if (binaryIdentity.version !== meiliManifest.binary.version || binaryIdentity.versionOutput !== meiliManifest.binary.versionOutput
+      || binaryIdentity.format !== meiliManifest.binary.format || binaryIdentity.arch !== meiliManifest.binary.arch) {
+      throw new Error('Signed Meilisearch executable semantics do not match its trusted producer manifest.');
+    }
+  } else if (JSON.stringify(binaryIdentity) !== JSON.stringify(meiliManifest.binary)) throw new Error('Packaged Meilisearch executable identity does not match its trusted producer manifest.');
   const lexiconDirectory = path.join(resources, 'search');
   const lexiconManifest = JSON.parse(await readFile(path.join(lexiconDirectory, 'coct-main.json'), 'utf8'));
   const trustedLexiconManifest = dependencies.trustedLexiconManifest
@@ -133,11 +292,87 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     throw new Error('Packaged Agent Skill does not match the source artifact.');
   }
   const crt = path.join(bin, 'vcruntime140.dll');
+  if (target === 'darwin-arm64') {
+    const helper = path.join(bin, 'xr-mac-update-helper');
+    const helperInfo = await stat(helper);
+    if (!helperInfo.isFile() || (helperInfo.mode & 0o111) === 0) throw new Error('Packaged macOS update helper is missing or not executable.');
+  }
   if (target === 'win32-x64' && variant === 'official') {
     const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
     if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
-  return { resources, buildInfo, dependencyManifest, meiliManifest, lexiconManifest };
+  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity, lexiconManifest };
+}
+
+export async function verifyMacBundleSignature(appPath, run = runVerificationCommand) {
+  try {
+    await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
+  } catch (error) {
+    throw new Error(`Packaged macOS application has an invalid signature or sealed resource inventory: ${error instanceof Error ? error.message : error}`, { cause: error });
+  }
+}
+
+export async function verifySignedMacZip(zipPath, productName, expectedTeamId, dependencies = {}) {
+  const temporary = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-signed-zip-'));
+  const run = dependencies.run ?? runVerificationCommand;
+  try {
+    await run('/usr/bin/ditto', ['-x', '-k', zipPath, temporary]);
+    const appPath = await requireOnlyExpectedApplication(temporary, productName);
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run });
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run });
+    return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
+  } finally { await (dependencies.rm ?? rm)(temporary, { recursive: true, force: true }); }
+}
+
+export async function verifySignedMacDmgContents(dmgPath, productName, expectedTeamId, dependencies = {}) {
+  const temporary = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-signed-dmg-'));
+  const mount = path.join(temporary, 'mount');
+  const run = dependencies.run ?? runVerificationCommand;
+  let mounted = false;
+  let primaryError;
+  try {
+    await mkdir(mount);
+    await run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mount, dmgPath]);
+    mounted = true;
+    const appPath = await requireOnlyExpectedApplication(mount, productName);
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run });
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run });
+    return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    let detachError;
+    if (mounted) {
+      try { await run('/usr/bin/hdiutil', ['detach', mount]); mounted = false; }
+      catch (error) {
+        try { await run('/usr/bin/hdiutil', ['detach', '-force', mount]); mounted = false; }
+        catch (forceError) { detachError = new AggregateError([error, forceError], `Unable to detach the owned read-only DMG mount ${mount}.`); }
+      }
+    }
+    if (!mounted) await (dependencies.rm ?? rm)(temporary, { recursive: true, force: true });
+    if (detachError) throw primaryError ? new AggregateError([primaryError, detachError], 'DMG verification and mount cleanup both failed.') : detachError;
+  }
+}
+
+async function requireOnlyExpectedApplication(directory, productName) {
+  const apps = (await readdir(directory)).filter((name) => name.endsWith('.app'));
+  const expected = `${productName}.app`;
+  if (apps.length !== 1 || apps[0] !== expected) throw new Error(`Signed artifact must contain exactly ${expected}.`);
+  return path.join(directory, expected);
+}
+
+export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository) {
+  if (metadata?.name !== 'xr-collector') throw new Error('Packaged application name is not XR Collector.');
+  if (productName === 'XR Collector') {
+    if (metadata.productName !== undefined && metadata.productName !== productName) throw new Error('Packaged productName does not match the packaging request.');
+  } else if (metadata.productName !== productName) {
+    throw new Error('Validation productName is missing from packaged application metadata.');
+  }
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(updateRepository)) throw new Error('Packaging update repository is invalid.');
+  if (productName === 'XR Collector') {
+    if (metadata.xrCollectorUpdateRepository !== undefined || metadata.xrCollectorAppId !== undefined) throw new Error('Production package must not override its packaged identity.');
+  } else if (metadata.xrCollectorUpdateRepository !== updateRepository || metadata.xrCollectorAppId !== appId) {
+    throw new Error('Validation update repository is missing from packaged application metadata.');
+  }
 }
 
 export async function writeArtifactHandoff(input) {
@@ -152,6 +387,7 @@ export async function writeArtifactHandoff(input) {
   const artifactManifest = path.join(input.outputDir, `${base}-artifacts.json`);
   const document = {
     schemaVersion: 1, version: input.version, commit: input.commit, target: input.target, variant: input.variant,
+    packageIdentity: { productName: input.productName ?? 'XR Collector', appId: input.appId ?? 'com.moneydj.xrcollector', updateRepository: input.updateRepository ?? productionUpdateRepository },
     buildInfo: input.buildInfo, builderHost: input.host, toolVersions: input.toolVersions, signing: input.signing,
     runtimeIdentity: input.runtimeIdentity ?? null,
     artifacts: await Promise.all(artifacts.map(async (artifact) => ({ path: path.basename(artifact), ...await describeFile(artifact) }))),
@@ -161,13 +397,22 @@ export async function writeArtifactHandoff(input) {
   return { updateMetadata, artifactManifest, manifest: document };
 }
 
-async function findInstallerArtifacts(outputDir, { version, variant, target }) {
+async function findInstallerArtifacts(outputDir, { version, variant, target }, signingPolicy) {
   const expectedPrefix = expectedArtifactPrefix(version, variant, target);
   const entries = (await readdir(outputDir)).filter((name) => name.startsWith(expectedPrefix) && ['.dmg', '.zip', '.exe', '.blockmap'].includes(path.extname(name)));
   const installers = entries.filter((name) => ['.dmg', '.zip', '.exe'].includes(path.extname(name)));
   const expectedCount = target === 'darwin-arm64' ? 2 : 1;
   if (installers.length !== expectedCount) throw new Error(`Expected ${expectedCount} uniquely named ${variant} ${target} installer artifacts, found ${installers.length}.`);
+  if (target === 'darwin-arm64' && signingPolicy === DEVELOPER_ID_POLICY && entries.some((name) => name.endsWith('.dmg.blockmap'))) {
+    throw new Error('Developer ID packages must not retain a pre-staple DMG blockmap.');
+  }
   return entries.sort().map((entry) => path.join(outputDir, entry));
+}
+
+async function findUniqueArtifact(outputDir, prefix, extension) {
+  const matches = (await readdir(outputDir)).filter((name) => name.startsWith(prefix) && name.endsWith(extension));
+  if (matches.length !== 1) throw new Error(`Expected exactly one ${prefix}*${extension} artifact, found ${matches.length}.`);
+  return path.join(outputDir, matches[0]);
 }
 
 function expectedArtifactPrefix(version, variant, target) {
@@ -198,19 +443,76 @@ function npmCliPath() {
   return value;
 }
 
-export async function withPackageCheckoutLock(lock, work) {
+export async function withPackageCheckoutLock(lock, work, dependencies = {}) {
   await mkdir(path.dirname(lock), { recursive: true });
-  try { await writeFile(lock, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`, { flag: 'wx' }); }
-  catch (error) { if (error.code === 'EEXIST') throw new Error(`Another whole-checkout packaging run owns ${lock}.`); throw error; }
-  try { return await work(); } finally { await rm(lock, { force: true }); }
+  const identity = await (dependencies.processIdentity ?? readPackagingProcessIdentity)(process.pid);
+  if (!identity) throw new Error('Unable to identify the packaging process owner.');
+  const inspect = dependencies.processIdentity ?? readPackagingProcessIdentity;
+  return withOwnedDirectoryLock(lock, async (processTracker) => {
+    const controller = new AbortController();
+    let interruptedSignal = null;
+    const unregister = registerAbortSignals(controller, (signal) => { interruptedSignal ??= signal; }, dependencies);
+    try { return await work({ signal: controller.signal, processTracker }); }
+    finally {
+      unregister();
+      if (interruptedSignal) (dependencies.terminateAfterSignal ?? ((name) => { process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[name]; }))(interruptedSignal);
+    }
+  }, {
+    ownerIdentity: async () => identity,
+    inspectOwner: inspect,
+    inspectUnsafeTree: dependencies.inspectProcessTree ?? inspectOwnedProcessTree,
+    ownerGraceMs: dependencies.lockOwnerGraceMs,
+    waitForBusy: false,
+    busyMessage: `Another whole-checkout packaging run owns ${lock}.`,
+    randomToken: dependencies.randomLockToken,
+  });
 }
 
-function runCommand(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: projectRoot, stdio: 'inherit', env: packageChildEnvironment() });
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with status ${code}`)));
-  });
+export async function readPackagingProcessIdentity(pid, dependencies = {}) {
+  const platform = dependencies.platform ?? process.platform;
+  const query = dependencies.capture ?? capture;
+  try {
+    if (platform === 'win32') {
+      const script = `$p=Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; if($null -eq $p){exit 44}; $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'Unable to resolve process owner SID'}; [Console]::Write(('{0}|{1}|{2}' -f $p.ProcessId,$p.CreationDate.ToUniversalTime().Ticks,$owner.Sid))`;
+      const output = await query('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { environment: process.env });
+      const fields = output.split('|');
+      const [recordedPid, startedAt, uid] = fields;
+      if (fields.length !== 3 || Number(recordedPid) !== pid || !/^\d+$/u.test(startedAt ?? '') || !uid) {
+        throw new Error(`PowerShell returned malformed process identity for ${pid}.`);
+      }
+      return { pid, uid, startedAt };
+    }
+    const output = await query('/bin/ps', ['-o', 'uid=', '-o', 'lstart=', '-p', String(pid)], { environment: { ...process.env, LC_ALL: 'C' } });
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(output);
+    if (!match) throw new Error(`ps returned malformed packaging process identity for ${pid}.`);
+    return { pid, uid: Number(match[1]), startedAt: match[2] };
+  } catch (error) {
+    if (platform === 'win32' && /exited with status 44\b/u.test(String(error?.message))) return null;
+    if (platform !== 'win32' && /exited with status 1\b/u.test(String(error?.message))) return null;
+    if (/malformed (?:packaging )?process identity/u.test(String(error?.message))) throw error;
+    throw new Error(`Unable to inspect packaging process ${pid}.`, { cause: error });
+  }
+}
+
+function registerAbortSignals(controller, onSignal, dependencies) {
+  const target = dependencies.signalTarget ?? process;
+  const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => {
+    onSignal(signal);
+    controller.abort(new Error(`Packaging interrupted by ${signal}.`));
+  }]));
+  for (const [signal, handler] of handlers) target.once(signal, handler);
+  return () => { for (const [signal, handler] of handlers) target.removeListener(signal, handler); };
+}
+
+function runCommand(command, args, options = {}) {
+  return runOwnedProcess(command, args, {
+    cwd: projectRoot,
+    stdio: 'inherit',
+    environment: options.environment ?? packageChildEnvironment(),
+    signal: options.signal,
+    processTracker: options.processTracker,
+    processTrackers: options.processTrackers,
+  }).then(() => undefined);
 }
 
 export function capture(command, args, options = {}) {
@@ -237,6 +539,18 @@ export function capture(command, args, options = {}) {
 
 async function runForOutput(command, args) {
   return { stdout: await capture(command, args), stderr: '' };
+}
+
+function runVerificationCommand(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'], env: packageChildEnvironment() });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve({ stdout, stderr })
+      : reject(new Error(`${path.basename(command)} exited with status ${code}: ${(stderr || stdout).trim() || 'no diagnostic output'}`)));
+  });
 }
 
 export function packageChildEnvironment(source = process.env) {

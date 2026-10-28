@@ -1,11 +1,12 @@
-import type { CollectionScheduleView, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../core/types.js';
 import type { AutoPauseNotification } from '../notifications/types.js';
 
 /** The three tray icons: nothing to do, work queued or running, automatic checks off. */
 export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off' | 'attention' | 'update_available';
 
 /** What the menu acts on; the menu's own items use these as their ids. */
-export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'quit' | `subscription:${string}`;
+export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'check_app_update' | 'quit'
+  | `subscription:${string}`;
 
 export type TrayMenuItem =
   | { kind: 'status'; label: string }
@@ -15,6 +16,8 @@ export type TrayMenuItem =
 
 export interface TrayMenu {
   icon: TrayIcon;
+  /** An update shape over the existing work-state icon; no system notification. */
+  updateBadge?: boolean;
   tooltip: string;
   items: TrayMenuItem[];
 }
@@ -24,8 +27,9 @@ export interface TrayMenu {
  * is open (Onboarding, or the Vault is unavailable).
  */
 export interface TrayState {
-  overview: JobOverview;
-  schedule: CollectionScheduleView;
+  overview?: JobOverview;
+  schedule?: CollectionScheduleView;
+  update?: DeviceUpdateStatus;
   actionable?: AutoPauseNotification[];
   /** Contract for #36; #136 does not populate this from an update service. */
   updateAvailable?: boolean;
@@ -38,8 +42,13 @@ const quit: TrayMenuItem = { kind: 'action', action: 'quit', label: '結束 XR C
 /** The tray icon, its tooltip and its menu for the open Vault's work, or for no open Vault. */
 export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayMenu {
   if (!state) return { icon: 'idle', tooltip: 'XR Collector', items: [open, separator, quit] };
-  const { overview, schedule } = state;
   const actionable = state.actionable ?? [];
+  if (!state.overview || !state.schedule) return withUpdateBadge({
+    icon: actionable.length > 0 ? 'attention' : state.updateAvailable ? 'update_available' : 'idle',
+    tooltip: actionable.length > 0 ? `XR Collector・${actionable.length} 個訂閱需要處理` : 'XR Collector',
+    items: [open, ...actionableItems(actionable), separator, ...updateItems(state.update), quit],
+  }, state.update);
+  const { overview, schedule } = state;
   const [current] = overview.running;
   const busy = overview.running.length > 0 || overview.queued.length > 0;
   const status: string[] = [];
@@ -54,13 +63,12 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
   const operational: TrayIcon = busy ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
   const icon: TrayIcon = actionable.length > 0 ? 'attention' : state.updateAvailable ? 'update_available' : operational;
   const failed = overview.failed.length;
-  return {
+  return withUpdateBadge({
     icon,
     tooltip: actionable.length > 0 ? `XR Collector・${actionable.length} 個訂閱需要處理・${operationalLabel(operational, current)}` : tooltipFor(icon, current),
     items: [
       ...status.map((label): TrayMenuItem => ({ kind: 'status', label })),
-      ...(actionable.length ? [{ kind: 'submenu' as const, label: `需要處理的訂閱（${actionable.length}）`,
-        items: actionable.map((event) => ({ action: `subscription:${event.id}` as const, label: event.title })) }] : []),
+      ...actionableItems(actionable),
       separator,
       open,
       { kind: 'action', action: 'check_now', label: '立即檢查所有訂閱' },
@@ -69,9 +77,46 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
       { kind: 'action', action: 'jobs', label: failed > 0 ? `工作（${failed} 項失敗）` : '工作' },
       { kind: 'action', action: 'activity', label: '記錄' },
       separator,
+      ...updateItems(state.update),
       quit,
     ],
+  }, state.update);
+}
+
+function withUpdateBadge(menu: TrayMenu, update: DeviceUpdateStatus | undefined): TrayMenu {
+  const version = (update?.ready ?? update?.offer)?.version;
+  if (menu.icon === 'attention' || menu.icon === 'update_available' || !version || version === update?.currentVersion) return menu;
+  return { ...menu, updateBadge: true, tooltip: `${menu.tooltip} · 有新版本 ${version}` };
+}
+
+function actionableItems(actionable: AutoPauseNotification[]): TrayMenuItem[] {
+  if (actionable.length === 0) return [];
+  return [{ kind: 'submenu', label: `需要處理的訂閱（${actionable.length}）`,
+    items: actionable.map((event) => ({ action: `subscription:${event.id}` as const, label: event.title })) }];
+}
+
+function updateItems(update: DeviceUpdateStatus | undefined): TrayMenuItem[] {
+  if (!update) return [];
+  const version = (update.ready ?? update.offer)?.version;
+  const progress = update.progress && update.progress.total > 0
+    ? ` ${Math.round(update.progress.transferred / update.progress.total * 100)}%` : '';
+  const labels: Record<DeviceUpdateStatus['phase'], string> = {
+    idle: '檢查 App 更新',
+    checking: 'App 更新：正在檢查',
+    available: version ? `App 更新：可下載 ${version}` : 'App 更新：可下載',
+    downloading: `App 更新：下載中${progress}`,
+    verifying: 'App 更新：驗證下載',
+    ready: version ? `App 更新：已下載待安裝 ${version}` : 'App 更新：已下載待安裝',
+    waiting: 'App 更新：等待工作完成',
+    installing: 'App 更新：安裝中',
+    up_to_date: '檢查 App 更新',
+    error: 'App 更新：錯誤',
   };
+  return [
+    { kind: 'status', label: `版本 ${update.currentVersion}` },
+    { kind: 'action', action: 'check_app_update', label: labels[update.phase] },
+    separator,
+  ];
 }
 
 function runningLine(entry: JobOverviewEntry): string {

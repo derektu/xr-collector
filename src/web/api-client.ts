@@ -35,6 +35,7 @@ import type {
   VaultSetupResult,
   VaultSetupStatus,
   LoginStartupStatus,
+  DeviceUpdateStatus,
 } from '../core/types.js';
 
 interface ErrorResponse {
@@ -86,6 +87,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  async updateStatus(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates', signal ? { signal } : undefined)).update;
+  },
+  async checkForUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/check', { method: 'POST', ...(signal ? { signal } : {}) })).update;
+  },
+  async downloadUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/download', {
+      method: 'POST', body: JSON.stringify({ version, sha256 }), ...(signal ? { signal } : {}),
+    })).update;
+  },
+  async applyUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/apply', {
+      method: 'POST', body: JSON.stringify({ version, sha256 }), ...(signal ? { signal } : {}),
+    })).update;
+  },
+  async cancelUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/cancel', { method: 'POST', ...(signal ? { signal } : {}) })).update;
+  },
   async buildInfo(signal?: AbortSignal): Promise<BuildInfo> {
     return (await request<{ buildInfo: BuildInfo }>('/api/device/build-info', signal ? { signal } : undefined)).buildInfo;
   },

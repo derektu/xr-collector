@@ -41,7 +41,7 @@ import {
 } from './vault-move.js';
 import type { VaultSelection } from './vault-selection.js';
 import {
-  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type VaultAccess,
+  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type UpdateLease, type VaultAccess,
 } from './operation-lock.js';
 
 interface Bundle {
@@ -262,6 +262,9 @@ export class VaultWorkspace {
 
   /** Acquired by HTTP requests before any handler can yield. */
   enterRequest(access: VaultAccess): () => void { return this.operationLock.enter(access); }
+
+  /** Excludes transfers and new writes, then waits for current writes and collection to settle. */
+  prepareUpdate(signal: AbortSignal): Promise<UpdateLease> { return this.operationLock.prepareUpdate(signal); }
 
   /** Direct callers use the same write lease as an undeclared non-GET HTTP route. */
   enterWrite(): () => void { return this.enterRequest('vault-write'); }

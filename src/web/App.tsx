@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
+import type { DeviceUpdateStatus, SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { jobRole } from '../core/source-registry.js';
 import { Activity } from './Activity.js';
 import { Jobs } from './Jobs.js';
@@ -17,6 +17,8 @@ import { listStateSearch, parseListState, readerIdForPath, readerPath, type Docu
 import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
 import { Settings } from './Settings.js';
+import { SoftwareUpdate } from './SoftwareUpdate.js';
+import { sidebarUpdateLabel } from './update-presentation.js';
 import { SourceDetail } from './SourceDetail.js';
 import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceRouteForPath, type SourceListState } from './source-presentation.js';
 import { Sources } from './Sources.js';
@@ -70,6 +72,11 @@ export default function App() {
   const [adding, setAdding] = useState<AddMode | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string; key: number } | null>(null);
   const [sourceTypes, setSourceTypes] = useState<SourceTypeInfo[]>([]);
+  const [update, setUpdate] = useState<DeviceUpdateStatus | null>(null);
+  const [updateNavigation, setUpdateNavigation] = useState(0);
+  const handledUpdateNavigation = useRef(0);
+  const handledUpdatePanel = useRef<HTMLElement | null>(null);
+  const stopUpdateNavigationTracking = useRef<(() => void) | null>(null);
   const ready = vault?.state === 'ready';
   const status = useCollectionStatus(ready);
 
@@ -78,6 +85,8 @@ export default function App() {
   useEffect(() => { void loadVault(); }, []);
   // The tray menu opens the window on a page; navigating only touches the history and location state.
   useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
+    if (next === 'update') { openUpdate(); return; }
+    if (next === 'settings') { navigate('settings'); return; }
     handleDesktopNavigation(next, window.location.pathname, {
       navigate,
       openSource,
@@ -86,6 +95,12 @@ export default function App() {
     });
   }); desktopBridge?.ready(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
+  useEffect(() => {
+    let active = true;
+    const load = () => void api.updateStatus().then((value) => { if (active) setUpdate(value); }).catch(() => undefined);
+    load(); const timer = window.setInterval(load, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   // Focus the page heading after navigation so keyboard and screen reader users start at the new page.
   useEffect(() => {
     const frame = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[data-page-heading], .reader-title')?.focus({ preventScroll: true }));
@@ -96,6 +111,53 @@ export default function App() {
     const timer = setTimeout(() => setNotice(null), NOTICE_MS);
     return () => clearTimeout(timer);
   }, [notice]);
+  useEffect(() => {
+    if (!updateNavigation || page !== 'settings') return undefined;
+    const currentPanel = document.getElementById('software-update');
+    if (updateNavigation <= handledUpdateNavigation.current && currentPanel === handledUpdatePanel.current) return undefined;
+    const root = content.current ?? document.body;
+    const reveal = () => {
+      const panel = document.getElementById('software-update');
+      if (!panel) return false;
+      const bounds = panel.getBoundingClientRect();
+      if (bounds.top < 0 || bounds.bottom > window.innerHeight) panel.scrollIntoView({ block: 'center' });
+      handledUpdateNavigation.current = updateNavigation;
+      handledUpdatePanel.current = panel;
+      return true;
+    };
+    const layout = new ResizeObserver(() => { reveal(); });
+    const observeLayout = () => {
+      const panel = document.getElementById('software-update');
+      const container = panel?.closest<HTMLElement>('.settings-sections, .onboarding-card');
+      if (!container || !reveal()) return false;
+      layout.observe(container);
+      return true;
+    };
+    // BuildInfoCard mounts SoftwareUpdate asynchronously. The cards above it also finish loading
+    // independently, so keep the requested panel visible while that Settings layout settles.
+    const mount = new MutationObserver(() => { if (observeLayout()) mount.disconnect(); });
+    if (!observeLayout()) mount.observe(root, { childList: true, subtree: true });
+    let stopped = false;
+    const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      mount.disconnect(); layout.disconnect();
+      root.removeEventListener('wheel', stop);
+      root.removeEventListener('touchstart', stop);
+      root.removeEventListener('pointerdown', pointer);
+      root.removeEventListener('keydown', keyboard);
+      if (stopUpdateNavigationTracking.current === stop) stopUpdateNavigationTracking.current = null;
+    };
+    const pointer = (event: PointerEvent) => { if (event.target === root) stop(); };
+    const keyboard = (event: KeyboardEvent) => { if (scrollKeys.has(event.key)) stop(); };
+    root.addEventListener('wheel', stop, { passive: true });
+    root.addEventListener('touchstart', stop, { passive: true });
+    root.addEventListener('pointerdown', pointer);
+    root.addEventListener('keydown', keyboard);
+    stopUpdateNavigationTracking.current = stop;
+    return stop;
+  }, [page, updateNavigation, vault?.state]);
 
   // A subscription request this window sent that ended without subscribing reports why; its row has
   // left the list. Requests from Agents report only in the log.
@@ -131,7 +193,8 @@ export default function App() {
     if (historyState().returnable) window.history.back();
     else go(fallback, '', {}, replace);
   }
-  function navigate(next: ShellPage): void { go(pathForRoute(next)); }
+  function navigate(next: ShellPage): void { if (next === 'settings') stopUpdateNavigationTracking.current?.(); go(pathForRoute(next)); }
+  function openUpdate(): void { navigate('settings'); setUpdateNavigation((value) => value + 1); }
   const scroller = useCallback(() => content.current, []);
   const listState = parseListState(location.search);
   const onListState = useCallback((next: DocumentListState) => {
@@ -174,7 +237,17 @@ export default function App() {
 
   const themeName = resolveTheme(themePreference, systemDark) === 'light' ? 'silverblue' : 'duskblue';
   if (!themeReady || !vault) return <div className="app-loading" data-theme={themeName}>{vaultLoadError ? <div className="app-load-error" role="alert"><p>{vaultLoadError}</p><button type="button" onClick={() => void loadVault()}>重試</button></div> : <p className="loading" role="status">正在載入…</p>}</div>;
-  if (vault.state === 'not_ready') return <div data-theme={themeName}><VaultOnboarding status={vault} onStatus={setVault} onReady={enterVault} /></div>;
+  if (vault.state === 'not_ready') return <div data-theme={themeName}>{page === 'settings'
+    ? <div className="onboarding-screen" data-testid="device-settings-without-vault">
+      <header className="onboarding-header"><div className="onboarding-brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div>
+        <button type="button" className="onboarding-settings-back" onClick={() => go('/')}>返回知識庫設定</button></header>
+      <main className="onboarding-main"><section className="onboarding-card" aria-labelledby="device-settings-title">
+        <p className="eyebrow">App 設定</p><h1 id="device-settings-title" data-page-heading tabIndex={-1}>App 更新</h1>
+        <p className="onboarding-intro">v{update?.currentVersion ?? '—'}。App 更新屬於這台裝置，不需要先建立或開啟知識庫。</p>
+        <SoftwareUpdate status={update} onStatus={setUpdate} />
+      </section></main>
+    </div>
+    : <VaultOnboarding status={vault} onStatus={setVault} onReady={enterVault} />}</div>;
 
   const active = status.active ?? [];
   const connectivity = status.schedule?.connectivity;
@@ -207,8 +280,9 @@ export default function App() {
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
   } else {
     body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length} revision={status.revision}
-      themePreference={themePreference} onThemePreference={persist} onChanged={announce} />;
+      themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onChanged={announce} />;
   }
+  const updateLabel = update ? sidebarUpdateLabel(update) : null;
 
   return <div className={readerId ? 'shell reader-mode' : 'shell'} data-theme={themeName}>
     <aside className="sidebar" aria-label="主要導覽">
@@ -216,6 +290,8 @@ export default function App() {
       <nav>
         {navigation.map(navItem)}
         <span className="nav-spacer" />
+        {update ? <button type="button" className="sidebar-update" onClick={openUpdate}
+          data-testid="sidebar-update"><span className="nav-label">v{update.currentVersion}{updateLabel ? ` · ${updateLabel}` : ''}</span></button> : null}
         {navItem(settingsNavigation)}
       </nav>
     </aside>

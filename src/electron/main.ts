@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../core/collection-pause.js';
 import { internetProbe } from '../core/connectivity.js';
+import type { BuildInfo } from '../core/types.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
@@ -14,6 +16,16 @@ import { AppTray } from './tray.js';
 import type { TrayAction } from './tray-menu.js';
 import { DesktopLoginStartup, isLoginStartupLaunch, shouldShowForActivation, type LoginItemAdapter } from './login-startup.js';
 import { WindowCreationGate } from './window-creation.js';
+import { UpdateService } from '../updates/update-service.js';
+import { GenericIndexSource, GitHubReleasesSource } from '../updates/sources.js';
+import { UnavailableInstaller } from '../updates/installer.js';
+import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInstaller, prepareMacUpdateRollback } from '../updates/mac-installer.js';
+import { WindowsNativeInstaller } from '../updates/windows-installer.js';
+import type { NativeInstaller, UpdateApplyRequest } from '../updates/types.js';
+import { runUpdateCoordinator } from './update-coordinator.js';
+import { recoverNativeInstallations } from './update-recovery.js';
+import { startUpdateCheckScheduler } from './update-check-scheduler.js';
+import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../updates/config.js';
 import { ElectronSystemNotifications } from './system-notifications.js';
 import { notificationNavigation } from './notification-navigation.js';
 
@@ -22,11 +34,16 @@ let runtime: CollectorRuntime | null = null;
 let themePreference: FileThemePreference | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
+let updateService: UpdateService | null = null;
+let updateCheckScheduler: ReturnType<typeof startUpdateCheckScheduler> | null = null;
+let updateShutdownOwned = false;
+let startupBuildInfo: BuildInfo | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
 let networkWatch: ReturnType<typeof setInterval> | null = null;
 let pendingManualShow = false;
-type DesktopTarget = 'jobs' | 'activity' | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
+type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
+  | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
 let pendingNavigation: DesktopTarget | undefined;
 let pendingNotificationId: string | undefined;
 let rendererReady = false;
@@ -37,6 +54,7 @@ const NETWORK_WATCH_MS = 5_000;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
+const packageMetadata = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')) as Record<string, unknown>;
 
 // Background validation mode, for native acceptance runs only: the window is never shown or
 // focused and macOS shows no Dock icon, so a developer keeps working on the same machine while
@@ -51,7 +69,11 @@ const validationNotifications: { id?: string; title: string; content: string }[]
 
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
-if (process.platform === 'win32') app.setAppUserModelId('com.moneydj.xrcollector');
+if (process.platform === 'win32') {
+  const validationAppId = process.env.XR_COLLECTOR_VALIDATION_APP_ID;
+  app.setAppUserModelId(validationAppId && /^com\.xrcollector\.verify[\w.-]+$/u.test(validationAppId)
+    ? validationAppId : appIdFromPackageMetadata(packageMetadata));
+}
 
 /** An external program's path, by its path under the runtime folder without extension; outside a package an environment variable may name it instead. */
 function runtimePath(name: string, environmentName: string): string {
@@ -141,9 +163,9 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
 }
 
 /** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
-function showWindow(page?: 'jobs' | 'activity' | { notificationId: string }): void {
+function showWindow(page?: DesktopTarget | { notificationId: string }): void {
   pendingManualShow = true;
-  if (typeof page === 'object') {
+  if (typeof page === 'object' && 'notificationId' in page) {
     if (!runtime) { pendingNotificationId = page.notificationId; return; }
     const notificationId = page.notificationId;
     void runtime.resolveNotification(notificationId).then((event) => {
@@ -303,8 +325,31 @@ app.whenReady().then(async () => {
     env: process.env,
     program: runtimePath,
   });
+  const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
+  startupBuildInfo = buildInfo;
+  const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+  const updateRepository = updateRepositoryFromPackageMetadata(packageMetadata);
+  const updateSource = process.env.XR_COLLECTOR_UPDATE_INDEX_URL
+    ? new GenericIndexSource(process.env.XR_COLLECTOR_UPDATE_INDEX_URL, updateRequest)
+    : new GitHubReleasesSource(updateRepository, updateRequest);
+  // Platform adapters replace this unavailable boundary only when the installed package has a
+  // verified native handoff path. Discovery remains useful in development without pretending it can install.
+  const nativeInstaller: NativeInstaller = process.platform === 'darwin'
+    ? new MacNativeInstaller({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, executablePath: process.execPath, current: buildInfo })
+    : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
+  const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: string; message: string; code?: string }> = [];
+  updateService = await UpdateService.open({
+    identity: { version: buildInfo.version, target: buildInfo.target, variant: buildInfo.variant ?? 'official' },
+    currentBuildId: buildInfo.buildId,
+    source: updateSource, installer: nativeInstaller, directory: path.join(app.getPath('userData'), 'updates'), request: updateRequest,
+    event: (severity, type, message, code) => {
+      if (runtime) runtime.recordDeviceEvent(severity, type, message, code);
+      else startupUpdateEvents.push({ severity, type, message, ...(code ? { code } : {}) });
+    },
+    apply: (request) => { void coordinateUpdate(request, nativeInstaller); },
+  });
   runtime = await CollectorRuntime.start({
-    buildInfo: await loadBuildInfo({ packaged: app.isPackaged }),
+    buildInfo,
     profilePath: app.getPath('userData'),
     pause: collectionPause,
     // Electron's client follows the system's proxy settings, as the person's other apps do.
@@ -330,9 +375,11 @@ app.whenReady().then(async () => {
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
     loginStartup,
     startedAtLogin,
+    updates: updateService,
     systemNotifications: new ElectronSystemNotifications((id) => showWindow({ notificationId: id }),
       validationControl ? (notification) => validationNotifications.push(notification) : undefined),
   });
+  for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
   if (pendingNotificationId) {
     const id = pendingNotificationId;
     pendingNotificationId = undefined;
@@ -350,9 +397,10 @@ app.whenReady().then(async () => {
   watchNetwork();
   const showInitially = !startedAtLogin || pendingManualShow;
   await createWindow(showInitially);
-  // A manual request that arrived while a login-startup window was loading was not covered by
-  // ready-to-show. A normal manual first launch already has that one show scheduled.
-  if (startedAtLogin && pendingManualShow && !showInitially) showWindow();
+  // A tray request can arrive while the window is loading. Replay its latest page as
+  // well as the show request after load; otherwise a device-level update click can land on the
+  // default page (especially before a Vault exists).
+  if (pendingNavigation || startedAtLogin && pendingManualShow && !showInitially) showWindow();
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
     serverUrl: runtime.server.url,
@@ -362,8 +410,50 @@ app.whenReady().then(async () => {
   });
   if (validationControl) exposeValidationControl(tray);
   startupWindowState.finished = true;
-}).catch((error) => {
+  const lastAttempt = updateService.status().lastAttempt;
+  const currentNeedsConfirmation = Boolean(lastAttempt && ['pending', 'unknown'].includes(lastAttempt.outcome)
+    && lastAttempt.version === buildInfo.version && lastAttempt.buildId === buildInfo.buildId);
+  let updateLaunchReady = true;
+  if (process.platform === 'darwin') {
+    const acknowledged = !currentNeedsConfirmation || await acknowledgeMacUpdateLaunch(buildInfo)
+      .catch((error) => { console.error('Unable to acknowledge macOS update launch', error); return false; });
+    const recovered = await recoverNativeInstallations(nativeInstaller, updateService,
+      (error) => console.error('Unable to preserve or clean up macOS update result', error))
+      .catch((error) => { console.error('Unable to recover macOS update launch', error); return false; });
+    updateLaunchReady = !currentNeedsConfirmation || acknowledged && recovered;
+  }
+  if (updateLaunchReady) await updateService.confirmRunningBuild();
+  if (nativeInstaller.available) {
+    updateCheckScheduler = startUpdateCheckScheduler({
+      check: () => updateService?.check() ?? Promise.resolve(),
+      lastAttemptAt: () => updateService?.status().lastCheckAttemptAt ?? null,
+      available: () => updateService?.status().installerAvailable === true,
+    });
+  }
+}).catch(async (error) => {
   console.error(error);
+  let safelyStopped = true;
+  try {
+    await updateService?.close();
+    await runtime?.close();
+    runtime = null;
+  } catch (cleanupError) {
+    safelyStopped = false;
+    console.error('Unable to safely stop failed startup before update rollback', cleanupError);
+  }
+  const shutdownAcknowledged = safelyStopped && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
+    ? await acknowledgeMacUpdateShutdown(startupBuildInfo).catch((shutdownError) => {
+      console.error('Unable to acknowledge safe macOS update shutdown', shutdownError); return false;
+    })
+    : false;
+  if (safelyStopped && shutdownAcknowledged && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
+    && await prepareMacUpdateRollback(process.resourcesPath, startupBuildInfo).catch((rollbackError) => {
+      console.error('Unable to prepare macOS startup rollback', rollbackError); return null;
+    })) {
+    isQuitting = true;
+    app.exit(1);
+    return;
+  }
   app.quit();
 });
 
@@ -378,6 +468,34 @@ function pauseForSleep(): void {
 
 function continueAfterSleep(): void {
   collectionPause.set('sleep', false);
+  void updateCheckScheduler?.wake().catch((error: unknown) => console.error('Unable to check for updates after wake', error));
+}
+
+/** Applies one user-confirmed ready package; the two-minute signal spans every Vault drain stage. */
+async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeInstaller): Promise<void> {
+  const activeRuntime = runtime;
+  if (!activeRuntime) return request.failed('update_apply_failed', 'Collector 服務尚未就緒。');
+  await runUpdateCoordinator(request, installer, activeRuntime, {
+    shutdownOwned: () => { updateShutdownOwned = true; },
+    completed: () => { updateCheckScheduler?.stop(); updateCheckScheduler = null; runtime = null; isQuitting = true; app.quit(); },
+    terminalFailure: async (error) => {
+      // A transferred runtime can be partly closed and cannot safely resume collection. The
+      // installer has been cancelled and the durable attempt is failed before this native notice.
+      updateShutdownOwned = false; runtime = null; isQuitting = true;
+      if (networkWatch) clearInterval(networkWatch);
+      updateCheckScheduler?.stop();
+      networkWatch = null; updateCheckScheduler = null;
+      tray?.destroy(); tray = null;
+      const notice: Electron.MessageBoxOptions = {
+        type: 'error', title: 'App 更新未安裝', message: 'App 更新沒有安裝。',
+        detail: `Collector 無法安全完成本次停止，將結束程式。請重新開啟 XR Collector 後再試。\n\n${error.message}`,
+        buttons: ['結束 XR Collector'], defaultId: 0, noLink: true,
+      };
+      await (mainWindow ? dialog.showMessageBox(mainWindow, notice) : dialog.showMessageBox(notice)).catch(() => undefined);
+      mainWindow?.destroy(); mainWindow = null;
+      app.exit(1);
+    },
+  });
 }
 
 /**
@@ -398,12 +516,17 @@ function watchNetwork(): void {
 app.on('before-quit', (event) => {
   if (!runtime) return;
   event.preventDefault();
+  // Once the update lease transfers to shutdown, only its prepared native handoff may terminate
+  // this process. A concurrent menu/OS quit must not win the race and skip installation.
+  if (updateShutdownOwned) return;
   isQuitting = true;
   powerMonitor.removeListener('suspend', pauseForSleep);
   powerMonitor.removeListener('resume', continueAfterSleep);
   powerMonitor.removeListener('unlock-screen', continueAfterSleep);
   powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
   if (networkWatch) clearInterval(networkWatch);
+  updateCheckScheduler?.stop();
+  updateCheckScheduler = null;
   networkWatch = null;
   tray?.destroy();
   tray = null;
@@ -411,8 +534,21 @@ app.on('before-quit', (event) => {
   mainWindow = null;
   const activeRuntime = runtime;
   runtime = null;
-  void activeRuntime.close()
-    .finally(() => app.quit());
+  void (async () => {
+    try {
+      await updateService?.close();
+      await activeRuntime.close();
+      if (app.isPackaged && process.platform === 'darwin' && startupBuildInfo) {
+        await acknowledgeMacUpdateShutdown(startupBuildInfo);
+      }
+    } catch (error) {
+      // Preserve the existing explicit-quit outcome, but without a receipt the helper refuses to
+      // restore A. That prevents a partially closed B and relaunched A from sharing one profile.
+      console.error('Unable to safely close before quitting', error);
+    } finally {
+      app.quit();
+    }
+  })();
 });
 
 function exposeValidationControl(appTray: AppTray): void {
@@ -428,5 +564,6 @@ function exposeValidationControl(appTray: AppTray): void {
       url: mainWindow?.webContents.getURL() ?? null,
     }),
     closeWindow: () => mainWindow?.close(),
+    update: () => updateService?.status() ?? null,
   };
 }

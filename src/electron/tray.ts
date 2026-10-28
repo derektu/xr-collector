@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
-import type { CollectionScheduleView, JobOverview } from '../core/types.js';
+import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview } from '../core/types.js';
 import type { NotificationState } from '../notifications/types.js';
 import { trayMenu } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayState } from './tray-menu.js';
@@ -15,7 +15,7 @@ export interface AppTrayOptions {
   /** Folder of the icon images (see scripts/render-tray-icons.mjs). */
   iconFolder: string;
   /** Opens the window, on a page when given. */
-  show(page?: 'jobs' | 'activity' | { notificationId: string }): void;
+  show(page?: 'jobs' | 'activity' | 'settings' | 'update' | { notificationId: string }): void;
   quit(): void;
 }
 
@@ -59,9 +59,15 @@ export class AppTray {
       case 'open': this.options.show(); return;
       case 'jobs': this.options.show('jobs'); return;
       case 'activity': this.options.show('activity'); return;
+      case 'check_app_update':
+        if (this.state?.update && ['idle', 'up_to_date', 'error'].includes(this.state.update.phase)) {
+          await this.send('POST', '/api/device/updates/check', undefined);
+        }
+        this.options.show('update');
+        break;
       case 'quit': this.options.quit(); return;
       case 'check_now': await this.send('POST', '/api/subscription-checks', {}); break;
-      case 'toggle_auto_check': await this.send('PUT', '/api/schedule', { enabled: !this.state?.schedule.enabled }); break;
+      case 'toggle_auto_check': await this.send('PUT', '/api/schedule', { enabled: !this.state?.schedule?.enabled }); break;
     }
     await this.refresh();
   }
@@ -76,7 +82,7 @@ export class AppTray {
     const key = JSON.stringify(this.menu);
     if (key === this.drawn) return;
     this.drawn = key;
-    this.tray.setImage(this.image(this.menu.icon));
+    this.tray.setImage(this.image(this.menu.icon, this.menu.updateBadge));
     this.tray.setToolTip(this.menu.tooltip);
     this.tray.setContextMenu(Menu.buildFromTemplate(this.menu.items.map((item): MenuItemConstructorOptions => {
       if (item.kind === 'separator') return { type: 'separator' };
@@ -95,12 +101,18 @@ export class AppTray {
   /** The open Vault's work and schedule; null while no Vault is open, the routes then answer 404. */
   private async read(): Promise<TrayState | null> {
     try {
-      const [overview, schedule, notifications] = await Promise.all([
-        this.get<{ overview: JobOverview }>('/api/jobs/overview'),
-        this.get<{ schedule: CollectionScheduleView }>('/api/schedule'),
+      const [update, notifications] = await Promise.all([
+        this.get<{ update: DeviceUpdateStatus }>('/api/device/updates'),
         this.get<{ notifications: NotificationState }>('/api/device/notifications'),
       ]);
-      return { overview: overview.overview, schedule: schedule.schedule, actionable: notifications.notifications.active };
+      try {
+        const [overview, schedule] = await Promise.all([
+          this.get<{ overview: JobOverview }>('/api/jobs/overview'),
+          this.get<{ schedule: CollectionScheduleView }>('/api/schedule'),
+        ]);
+        return { overview: overview.overview, schedule: schedule.schedule, update: update.update,
+          actionable: notifications.notifications.active };
+      } catch { return { update: update.update, actionable: notifications.notifications.active }; }
     } catch {
       return null;
     }
@@ -114,14 +126,15 @@ export class AppTray {
 
   private async send(method: 'POST' | 'PUT', route: string, body: unknown): Promise<void> {
     const response = await fetch(new URL(route, this.options.serverUrl), {
-      method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     });
     if (!response.ok) throw new Error(`${method} ${route} answered ${response.status}: ${await response.text()}`);
   }
 
   /** macOS takes black template images it tints for the menu bar; Windows takes colored ones. */
-  private image(icon: TrayIcon): Electron.NativeImage {
-    const name = process.platform === 'darwin' ? `tray-${icon}Template.png` : `tray-${icon}.png`;
+  private image(icon: TrayIcon, updateBadge = false): Electron.NativeImage {
+    const state = `${icon}${updateBadge ? '-update' : ''}`;
+    const name = process.platform === 'darwin' ? `tray-${state}Template.png` : `tray-${state}.png`;
     return nativeImage.createFromPath(path.join(this.options.iconFolder, name));
   }
 }

@@ -20,7 +20,7 @@ export interface DesktopBridge {
   /** Announces that navigation listeners are attached, so startup targets can drain exactly once. */
   ready(): void;
   /** Calls `listener` when the tray menu opens the window on a page. */
-  onNavigate(listener: (target: DesktopNavigationTarget) => void): void;
+  onNavigate(listener: (target: DesktopNavigationTarget | 'settings' | 'update') => void): void;
 }
 declare global { interface Window { xrCollectorTheme?: ElectronThemeBridge; xrCollectorDesktop?: DesktopBridge; } }
 export {};
