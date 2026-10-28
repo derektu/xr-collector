@@ -59,5 +59,8 @@ describe('CI UI regression contract', () => {
       expect(upload.with.path).toContain('server.log');
       expect(upload.with.path).not.toMatch(/release\/|profile|vault/iu);
     }
+    // stop copies each run's log into the evidence as <run>-server.log.
+    expect(workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name?.startsWith('Save failed')).with.path)
+      .toContain('ci-web/**/*server.log');
   });
 });

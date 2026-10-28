@@ -149,7 +149,7 @@ jobs:
           path: |
             .local/ticket-artifacts/119/ci-web/**/results.json
             .local/ticket-artifacts/119/ci-web/**/*.png
-            .local/ticket-artifacts/119/ci-web/**/server.log
+            .local/ticket-artifacts/119/ci-web/**/*server.log
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: error
