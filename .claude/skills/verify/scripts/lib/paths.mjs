@@ -105,10 +105,11 @@ export function runsRoot(from = process.cwd()) {
 export const SLOT_LOCKS = path.join(os.homedir(), '.xr-collector', 'verify-slots');
 
 /**
- * Ports reserved in the port registry for this skill (xr-collector — verify slot N). Each slot is
- * four consecutive ports: UI/API, Meilisearch, Agent API, synthetic feeds.
+ * Ports reserved in the port registry for this skill (xr-collector — verify slot N), 7250–7289. Each
+ * slot is four consecutive ports: UI/API, Meilisearch, Agent API, synthetic feeds. Ten slots let two
+ * or three tickets each run flows with --jobs 3 and still leave one for a manual launch.
  */
-export const SLOTS = [7250, 7254, 7258, 7262].map((base, slot) => ({
+export const SLOTS = Array.from({ length: 10 }, (_, slot) => 7250 + slot * 4).map((base, slot) => ({
   slot, ui: base, search: base + 1, agent: base + 2, feeds: base + 3,
 }));
 

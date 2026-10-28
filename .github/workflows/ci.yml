@@ -60,8 +60,37 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # A push to main whose tree equals the merged pull request's last commit reuses that commit's
+  # passed Web regression instead of running it again; Verify always runs.
+  web-regression-reuse:
+    name: Web regression reuse
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      reuse: ${{ steps.decide.outputs.reuse }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Compare with the pull request's tested tree
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/web-regression-reuse.mjs
+
   web-regression:
     name: Web regression
+    needs: web-regression-reuse
+    # Runs when the reuse check was skipped (pull requests, manual runs), failed, or found nothing to reuse.
+    if: ${{ !cancelled() && needs.web-regression-reuse.outputs.reuse != 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -110,7 +139,7 @@ jobs:
       - name: Run every registered Web flow
         run: |
           [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
-          node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --checkout "$XR_TESTED_SOURCE"
+          node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --jobs 3 --checkout "$XR_TESTED_SOURCE"
           [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
       - name: Save failed Web evidence
         if: failure()

@@ -2,14 +2,16 @@
 // runs. A flow and this library always come from the checkout the command runs in; --checkout picks
 // only the src/ under test, so a baseline on main and the ticket's version run the same assertions,
 // and a checkout without flows/ can still be the baseline.
-import { readdirSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { existsSync, readdirSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openPage, recorder } from './drive.mjs';
 import { launchElectron } from './electron.mjs';
 import { writeFailureResult } from './failure.mjs';
 import { launchWeb } from './instance.mjs';
-import { checkoutRoot, claimEvidence, commitOf } from './paths.mjs';
+import { checkoutRoot, claimEvidence, commitOf, SLOTS } from './paths.mjs';
 import { apiState } from './state.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -28,12 +30,6 @@ export async function listFlows(dir = FLOWS_DIR) {
   }));
 }
 
-/**
- * Runs the named flows (all when `names` is empty) against `checkout`. The label (default `flows`)
- * names one evidence folder for this whole invocation, `<label>/`, `<label>-2/`… as launch does;
- * each flow launches its own instance and writes into `<label folder>/<flow>/`. Returns
- * { evidence, label, flows: [{ name, passed, evidence, error? }] }.
- */
 export function selectFlows(flows, { names = [], layer = 'all' } = {}) {
   if (!['all', 'web', 'desktop'].includes(layer)) throw new Error(`Unknown flow layer ${layer}`);
   const unknown = names.filter((name) => !flows.some((flow) => flow.name === name));
@@ -42,19 +38,116 @@ export function selectFlows(flows, { names = [], layer = 'all' } = {}) {
     && (layer === 'all' || (layer === 'desktop') === flow.desktop));
 }
 
-export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all' } = {}) {
+/**
+ * The waiting flows to start next, in their listed order: at most `jobs` run at once, and a Desktop
+ * flow runs alone, because it shows its window and uses the machine's one tray and login items. A
+ * Desktop flow waits for every running flow to end, and the flows after it wait for it.
+ */
+export function startable(waiting, running, jobs) {
+  const started = [];
+  for (const flow of waiting) {
+    const busy = [...running, ...started];
+    if (busy.length >= jobs || busy.some((other) => other.desktop)) break;
+    if (flow.desktop) {
+      if (busy.length === 0) started.push(flow);
+      break;
+    }
+    started.push(flow);
+  }
+  return started;
+}
+
+/**
+ * Runs every flow through `runOne`, keeping as many running as `startable` allows, and returns their
+ * outcomes in the flows' order. A flow that throws becomes a failed outcome; the others carry on.
+ */
+export async function runPool(flows, jobs, runOne) {
+  const waiting = [...flows];
+  const running = new Set();
+  const outcomes = new Map();
+  await new Promise((resolve) => {
+    const fill = () => {
+      if (!waiting.length && !running.size) { resolve(); return; }
+      for (const flow of startable(waiting, [...running], jobs)) {
+        waiting.splice(waiting.indexOf(flow), 1);
+        running.add(flow);
+        Promise.resolve().then(() => runOne(flow))
+          .catch((error) => ({ name: flow.name, passed: false, error: error.message }))
+          .then((outcome) => {
+            outcomes.set(flow, outcome);
+            running.delete(flow);
+            fill();
+          });
+      }
+    };
+    fill();
+  });
+  return flows.map((flow) => outcomes.get(flow));
+}
+
+/** The flow whose work is running, so log lines of flows running side by side say which flow wrote them. */
+const currentFlow = new AsyncLocalStorage();
+
+/**
+ * Runs the named flows (all when `names` is empty) against `checkout`, up to `jobs` at once, each on
+ * its own instance and slot. The label (default `flows`) names one evidence folder for this whole
+ * invocation, `<label>/`, `<label>-2/`… as launch does; each flow writes into `<label folder>/<flow>/`.
+ * With more than one job, each log line starts with `[<flow>]`. Prints a table of each flow's
+ * timings at the end. Returns { evidence, label, jobs, wallMs, flows: [{ name, passed, evidence, timings, error? }] }.
+ */
+export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', jobs = 1 } = {}) {
   if (!issue) throw new Error('flows run needs --issue for the evidence folder');
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > SLOTS.length) throw new Error(`--jobs is a whole number from 1 to ${SLOTS.length}, one verify slot per flow`);
   const all = await listFlows();
   const selected = selectFlows(all, { names, layer });
   if (!selected.length) throw new Error(`No ${layer} flows selected`);
   const claimed = claimEvidence(issue, label);
   const source = flowSource();
-  const outcomes = [];
-  for (const flow of selected) {
-    console.log(`flow ${flow.name}: ${flow.title}`);
-    outcomes.push(await runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout, source }));
+  const log = console.log;
+  if (jobs > 1) console.log = (...args) => { const name = currentFlow.getStore(); return name ? log(`[${name}]`, ...args) : log(...args); };
+  const started = performance.now();
+  let outcomes;
+  try {
+    outcomes = await runPool(selected, jobs, (flow) => currentFlow.run(flow.name, () => {
+      console.log(`flow ${flow.name}: ${flow.title}`);
+      return runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout, source });
+    }));
+  } finally {
+    console.log = log;
   }
-  return { evidence: claimed.evidence, label: claimed.label, flows: outcomes };
+  const wallMs = Math.round(performance.now() - started);
+  console.log(timingTable(outcomes, { jobs, wallMs }));
+  return { evidence: claimed.evidence, label: claimed.label, jobs, wallMs, flows: outcomes };
+}
+
+/** The end-of-run table: each flow's result and its prepare, run, cleanup and total seconds. */
+export function timingTable(outcomes, { jobs, wallMs }) {
+  const seconds = (ms) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)}s` : '-');
+  const rows = outcomes.map((outcome) => {
+    const { prepareMs, runMs, cleanupMs } = outcome.timings ?? {};
+    const total = [prepareMs, runMs, cleanupMs].some((ms) => typeof ms === 'number')
+      ? (prepareMs ?? 0) + (runMs ?? 0) + (cleanupMs ?? 0) : undefined;
+    return [outcome.name, outcome.passed ? 'PASSED' : 'FAILED', seconds(prepareMs), seconds(runMs), seconds(cleanupMs), seconds(total)];
+  });
+  const table = [['flow', 'result', 'prepare', 'run', 'cleanup', 'total'], ...rows];
+  const widths = table[0].map((_, column) => Math.max(...table.map((row) => row[column].length)));
+  const lines = table.map((row) => row.map((cell, column) => (column < 2 ? cell.padEnd(widths[column]) : cell.padStart(widths[column]))).join('  '));
+  return [...lines, `${outcomes.length} flows in ${seconds(wallMs)} with --jobs ${jobs}`].join('\n');
+}
+
+/** Milliseconds spent in each phase of one flow: `mark(phase)` closes the phase that began at the previous mark. */
+function phaseClock() {
+  let last = performance.now();
+  const timings = {};
+  return { timings, mark(phase) { const now = performance.now(); timings[`${phase}Ms`] = Math.round(now - last); last = now; } };
+}
+
+/** Adds the flow's timings to its results.json, which the recorder or a failure result wrote before cleanup ended. */
+async function recordTimings(evidence, timings) {
+  const file = path.join(evidence, 'results.json');
+  if (!existsSync(file)) return;
+  const result = JSON.parse(await readFile(file, 'utf8'));
+  await writeFile(file, JSON.stringify({ ...result, timings }, null, 2));
 }
 
 /** Writes the result of a failure before a Web instance and recorder could be created. */
@@ -74,6 +167,7 @@ function flowSource() {
 async function runOne(flow, options) {
   if (flow.desktop) return runDesktop(flow, options);
   const { issue, label, evidence, checkout, source } = options;
+  const clock = phaseClock();
   let instance;
   try {
     // The flow, driver and verification server are one harness revision; only product src comes
@@ -84,10 +178,13 @@ async function runOne(flow, options) {
   } catch (error) {
     // Provisioning can fail before a recorder exists (runtime, browser or server startup). Keep a
     // machine-readable result in the same allowlisted evidence tree instead of leaving only a log.
+    clock.mark('prepare');
     await writeProvisioningFailure({ issue, label, evidence, checkout, flow: flow.name, source, error });
+    await recordTimings(evidence, clock.timings);
     console.log(`FAILED ${flow.name}; provisioning evidence in ${evidence}`);
-    return { name: flow.name, passed: false, evidence, error: error.message };
+    return { name: flow.name, passed: false, evidence, timings: clock.timings, error: error.message };
   }
+  clock.mark('prepare');
   const pages = [];
   const open = async (route = '/') => {
     const opened = await openPage(instance, { route });
@@ -110,13 +207,16 @@ async function runOne(flow, options) {
     const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
     if (record) passed = await record.finish({ flow: flow.name, flowSource: source, consoleErrors, state, ...(error ? { error: error.message } : {}) });
     else if (error) await writeProvisioningFailure({ issue, label, evidence, checkout, flow: flow.name, source, error, phase: 'browser' });
+    clock.mark('run');
     for (const opened of pages) await opened.close().catch(() => undefined);
   } finally {
     // The server and its slot lock never outlive the flow, even when writing results.json fails.
     await instance.stop();
   }
+  clock.mark('cleanup');
+  await recordTimings(evidence, clock.timings);
   console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
-  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+  return { name: flow.name, passed: passed && !error, evidence, timings: clock.timings, ...(error ? { error: error.message } : {}) };
 }
 
 /**
@@ -125,7 +225,9 @@ async function runOne(flow, options) {
  * `instance`, whose `api()` reaches the app's own API, and the window as `page`.
  */
 async function runDesktop(flow, { issue, label, evidence, checkout, source }) {
+  const clock = phaseClock();
   const instance = await launchElectron({ issue, label, evidence, checkout, hidden: false });
+  clock.mark('prepare');
   const record = recorder(instance, () => instance.window);
   let error;
   try {
@@ -138,9 +240,12 @@ async function runDesktop(flow, { issue, label, evidence, checkout, source }) {
   try {
     const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
     passed = await record.finish({ flow: flow.name, flowSource: source, state, ...(error ? { error: error.message } : {}) });
+    clock.mark('run');
   } finally {
     await instance.close({ keep: false }).catch((caught) => { error ??= caught; });
   }
+  clock.mark('cleanup');
+  await recordTimings(evidence, clock.timings);
   console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
-  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+  return { name: flow.name, passed: passed && !error, evidence, timings: clock.timings, ...(error ? { error: error.message } : {}) };
 }

@@ -3,7 +3,7 @@
 // out of the Jobs page's failed section, the fifth failure a day after the first pauses A by itself,
 // and 恢復 clears the failures and checks at once. The flow writes the earlier failures into the
 // Vault file instead of failing four checks over a day; each failing check still takes its three
-// attempts (about 2.5 minutes).
+// attempts, which the verify server spaces 2 and 3 seconds apart with synthetic data.
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
