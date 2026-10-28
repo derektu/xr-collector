@@ -192,6 +192,10 @@ Content-Type: application/json
 
 App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、引擎 variant、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
 
+`lastCheckAttemptAt` 是最近一次檢查開始時間，包含失敗；`checkedAt` 是最近一次成功檢查時間。喚醒補檢查依嘗試時間判斷是否滿 24 小時；連續相同結果不重複記錄 Activity。`update_download_timeout` 表示連線或串流連續 60 秒沒有收到資料，未完成的檔案會刪除；經使用者要求可重試下載。即使版本號相同，新的 `offer.payload.sha256` 仍代表另一份檔案，必須使用目前選定的版本與 SHA。
+
+`lastAttempt.outcome` 為 `failed` 且訊息指出已還原時，表示已讀到對應安裝的原生還原結果；`unknown` 表示結果尚未確認，應先向使用者說明訊息並檢查目前版本，不自行重複安裝。需要人工復原的安裝會保留 helper 記錄與備份。
+
 版本更新不發作業系統通知。可用版本、下載進度與 ready 狀態只從上述 API，以及 App 的設定頁、側欄與原生選單呈現；不要告知使用者會收到版本通知。
 
 套用會結束 App，必須再次取得使用者明確同意，並把 `ready.version`、`ready.payload.sha256` 原樣送到 `POST /api/device/updates/apply`；不能改用目前 `offer` 或自行選新版本。`POST /api/device/updates/cancel` 取消下載或等待安全停止，已驗證檔仍保留，正常關閉 App 不會自動安裝。`update_busy`、`update_offer_changed` 或 `update_not_ready` 時重新讀狀態，不重複送出；`update_integrity_failed` 必須重新下載。所有更新 API 在 Vault 未設定時仍可用。

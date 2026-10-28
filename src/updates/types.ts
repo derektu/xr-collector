@@ -9,13 +9,32 @@ export interface NativeInstaller {
   readonly available: boolean;
   validate(offer: UpdateOffer, packageFile: string, signal?: AbortSignal): Promise<void>;
   prepare(offer: UpdateOffer, packageFile: string, signal: AbortSignal): Promise<PreparedInstall>;
+  /** Reads only installer-owned receipts. The caller persists a result before invoking finalize. */
+  recover?(): Promise<NativeRecoveryResult>;
 }
-export interface PreparedInstall { handoff(): Promise<void>; cancel(): Promise<void> }
+export interface PreparedInstall {
+  /** Opaque native journal identity. When present it becomes the existing install-attempt id. */
+  recoveryToken?: string;
+  handoff(): Promise<void>;
+  cancel(): Promise<void>;
+}
+export interface NativeInstallRecovery {
+  token: string;
+  phase: 'succeeded' | 'rolled_back' | 'failed' | 'recovery_required';
+  previousVersion: string;
+  previousBuildId: string;
+  expectedVersion: string;
+  expectedBuildId: string;
+  reason?: string;
+  /** Removes the exact owned journal only after its result has been durably consumed. */
+  finalize(): Promise<void>;
+}
+export interface NativeRecoveryResult { launchReady: boolean; results: NativeInstallRecovery[] }
 export interface UpdateApplyRequest {
   offer: UpdateOffer;
   packageFile: string;
   signal: AbortSignal;
-  recordAttempt(): Promise<void>;
+  recordAttempt(recoveryToken?: string): Promise<void>;
   installing(): void;
   failed(code: string, message: string): Promise<void>;
 }

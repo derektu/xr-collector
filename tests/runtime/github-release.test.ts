@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createGitHubAdapter, promoteStableRelease, publishPrerelease, uploadDraftRelease, verifyAnonymousRelease, verifyRemoteRelease } from '../../scripts/github-release.mjs';
+import { assertAuthorization, createGitHubAdapter, promoteStableRelease, publishPrerelease, uploadDraftRelease, verifyAnonymousRelease, verifyRemoteRelease } from '../../scripts/github-release.mjs';
 import { assertPublishingHost, parseReleaseArguments } from '../../scripts/release.mjs';
 import { stageReleaseCandidate } from '../../scripts/release-candidate.mjs';
 
@@ -21,6 +21,22 @@ it('resumes an interrupted draft without duplicate uploads and verifies every do
   expect(remote.assets).toHaveLength(fixture.state.assets.length);
   expect(new Set(remote.assets.map((asset) => asset.name)).size).toBe(remote.assets.length);
   expect(remote.hashCalls).toBeGreaterThanOrEqual(fixture.state.assets.length);
+});
+
+it('deletes a starter or wrong-byte asset from a draft and reuploads it, but never overwrites a published release', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  remote.tagCommit = fixture.state.commit;
+  remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
+  remote.assets.push({ id: 42, name: fixture.state.assets[0]!.name, state: 'starter', size: 0, sha256: sha('') });
+
+  await expect(uploadDraftRelease(fixture.root, remote.adapter, fixture.authorization(['draft-upload']))).resolves.toMatchObject({ draft: true });
+  expect(remote.deletedAssets).toEqual([42]);
+  expect(remote.assets.find((asset: any) => asset.name === fixture.state.assets[0]!.name)).toMatchObject({ state: 'uploaded', size: fixture.state.assets[0]!.bytes });
+
+  remote.release.draft = false;
+  remote.assets[0] = { id: 43, name: fixture.state.assets[0]!.name, state: 'starter', size: 0, sha256: sha('') };
+  await expect(uploadDraftRelease(fixture.root, remote.adapter, fixture.authorization(['draft-upload']))).rejects.toThrow(/already public/u);
 });
 
 it('returns the fresh verified release snapshot after uploading every draft asset', async () => {
@@ -46,13 +62,27 @@ it('rejects stale tags, different-byte collisions, and partial remote inventorie
   collision.tagCommit = fixture.state.commit;
   collision.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
   collision.assets.push({ id: 1, name: fixture.state.assets[0]!.name, size: 4, sha256: sha('evil') });
-  await expect(uploadDraftRelease(fixture.root, collision.adapter, fixture.authorization(['draft-upload']))).rejects.toThrow(/collision/u);
+  await expect(uploadDraftRelease(fixture.root, collision.adapter, fixture.authorization(['draft-upload']))).resolves.toMatchObject({ draft: true });
+  expect(collision.deletedAssets).toEqual([1]);
 
   const partial = fakeRemote(fixture.state);
   partial.tagCommit = fixture.state.commit;
   partial.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
   partial.assets.push(assetFromState(fixture.state.assets[0]!, 1));
   await expect(verifyRemoteRelease(fixture.root, partial.adapter, { requireDraft: true })).rejects.toThrow(/partial/u);
+});
+
+it('binds GitHub browser download URLs and rejects authorization that contradicts frozen acceptance', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  remote.tagCommit = fixture.state.commit;
+  remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
+  remote.assets.push(...fixture.state.assets.map((asset, index) => ({ ...assetFromState(asset, index + 1), browser_download_url: new URL(encodeURIComponent(asset.name), fixture.state.sourceBaseUrl).toString() })));
+  remote.assets[0].browser_download_url = 'https://github.com/attacker/repo/releases/download/v0.1.0/release-index.json';
+  await expect(verifyRemoteRelease(fixture.root, remote.adapter, { requireDraft: true })).rejects.toThrow(/URL differs/u);
+
+  const state = { ...fixture.state, acceptance: { scenarios: { 'R35-01': { status: 'failed' } } } };
+  expect(() => assertAuthorization(state, fixture.authorization(['draft-upload'], { 'R35-01': 'passed' }), 'draft-upload')).toThrow(/contradicts/u);
 });
 
 it('keeps prerelease and stable promotion gates separate and never self-requires R35-08', async () => {
@@ -195,6 +225,7 @@ it('rejects a github.com asset source that points at a different repository befo
     gh: async () => ({ private: false, visibility: 'public', permissions: { push: true } }),
   });
   await expect(adapter.assertRepositoryReady('https://github.com/other/project/releases/download/v0.1.0/', 'owner/repo')).rejects.toThrow(/source.*owner\/repo/u);
+  await expect(adapter.assertRepositoryReady('https://evil.example/owner/repo/releases/download/v0.1.0/', 'owner/repo')).rejects.toThrow(/requires.*github\.com/u);
   await expect(adapter.assertRepositoryReady('https://mirror.example.test/v0.1.0/', 'other/project')).rejects.toThrow(/differs from packaged/u);
 });
 
@@ -261,7 +292,7 @@ async function stagedFixture() {
   const state = await stageReleaseCandidate({
     version, tag: `v${version}`, commit,
     updateRepository: 'derektu/xr-collector',
-    sourceBaseUrl: 'https://downloads.example.test/v0.1.0/',
+    sourceBaseUrl: 'https://github.com/derektu/xr-collector/releases/download/v0.1.0/',
     releaseNotes: '# 0.1.0\n', acceptance: { scenarios: acceptance }, candidates,
   }, root);
   const authorization = (actions: string[], scenarios: Record<string, string> = {}, deferredScenarios: string[] = []) => ({
@@ -272,7 +303,7 @@ async function stagedFixture() {
 }
 
 function fakeRemote(state: Awaited<ReturnType<typeof stagedFixture>>['state']) {
-  const remote: any = { tagCommit: null, release: null, createdSnapshot: null, assets: [], failUploadAfter: null, uploadCalls: 0, hashCalls: 0 };
+  const remote: any = { tagCommit: null, release: null, createdSnapshot: null, assets: [], deletedAssets: [], failUploadAfter: null, uploadCalls: 0, hashCalls: 0 };
   remote.adapter = {
     assertRepositoryReady: async () => undefined,
     getTagCommit: async () => remote.tagCommit,
@@ -288,8 +319,9 @@ function fakeRemote(state: Awaited<ReturnType<typeof stagedFixture>>['state']) {
       remote.uploadCalls += 1;
       if (remote.failUploadAfter !== null && remote.uploadCalls > remote.failUploadAfter) throw new Error('simulated interrupted upload');
       const value = await readFile(file);
-      remote.assets.push({ id: remote.assets.length + 1, name, size: value.byteLength, sha256: sha(value) });
+      remote.assets.push({ id: remote.assets.length + 1, name, state: 'uploaded', size: value.byteLength, sha256: sha(value) });
     },
+    deleteAsset: async (asset: any) => { remote.deletedAssets.push(asset.id); remote.assets = remote.assets.filter((entry: any) => entry.id !== asset.id); },
     hashAsset: async (asset: any) => { remote.hashCalls += 1; return asset.sha256; },
     updateRelease: async (_release: object, update: any) => { remote.release = { ...remote.release, ...update, tag_name: state.tag, draft: update.draft === true || update.draft === 'true', prerelease: update.prerelease === true || update.prerelease === 'true' }; return remote.release; },
     getLatestRelease: async () => remote.release?.make_latest === 'true' ? remote.release : null,
@@ -297,7 +329,7 @@ function fakeRemote(state: Awaited<ReturnType<typeof stagedFixture>>['state']) {
   return remote;
 }
 
-function assetFromState(asset: any, id: number) { return { id, name: asset.name, size: asset.bytes, sha256: asset.sha256 }; }
+function assetFromState(asset: any, id: number) { return { id, name: asset.name, state: 'uploaded', size: asset.bytes, sha256: asset.sha256 }; }
 function goodAnonymous(fixture: Awaited<ReturnType<typeof stagedFixture>>) {
   return async (input: URL | RequestInfo) => {
     const name = decodeURIComponent(new URL(input.toString()).pathname.split('/').pop()!);

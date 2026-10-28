@@ -43,6 +43,7 @@ private var request: UpdateRequest?
 private var lockFD: Int32 = -1
 private var launched: OwnedProcess?
 private var swapped = false
+private var replacementLaunchAttempted = false
 private var safeParentExited = false
 private var safeToWrite = false
 private let environmentKeys: Set<String> = [
@@ -228,9 +229,10 @@ private func rollback(_ r: UpdateRequest, reason: String) throws {
     try status("rolled_back", ["reason": reason, "version": r.previousVersion, "restartedPid": original.pid])
 }
 private func main() throws {
-    guard CommandLine.arguments.count == 3, ["--request", "--recover", "--rollback"].contains(CommandLine.arguments[1]) else { throw fail("usage_expected_request_path") }
+    guard CommandLine.arguments.count == 3, ["--request", "--recover", "--rollback", "--cleanup"].contains(CommandLine.arguments[1]) else { throw fail("usage_expected_request_path") }
     let recovering = CommandLine.arguments[1] == "--recover"
     let rollingBack = CommandLine.arguments[1] == "--rollback"
+    let cleaning = CommandLine.arguments[1] == "--cleanup"
     let requestPath = try canonical(CommandLine.arguments[2])
     let attributes = try metadata(requestPath, directory: false)
     guard attributes.st_size > 0, attributes.st_size <= 65536, attributes.st_mode & 0o077 == 0 else { throw fail("request_permissions_or_size_invalid") }
@@ -260,6 +262,19 @@ private func main() throws {
     let old = BuildIdentity(version: r.previousVersion, buildId: r.previousBuildId)
     let new = BuildIdentity(version: r.expectedVersion, buildId: r.expectedBuildId)
     let currentIdentity = try identity(r.currentApp, r)
+    if cleaning {
+        let result = try readObject(r.workDir + "/result.json")
+        guard result["schemaVersion"] as? Int == 1, result["runId"] as? String == r.runId,
+              let phase = result["phase"] as? String, ["succeeded", "rolled_back", "failed"].contains(phase),
+              phase == "succeeded" ? currentIdentity == new : currentIdentity == old else { throw fail("cleanup_terminal_identity_mismatch") }
+        // Keep the journal lock through recursive removal so no recovery helper can enter between
+        // validation and deletion. Suppress catch-path status writes once cleanup begins.
+        safeToWrite = false
+        try fm.removeItem(atPath: r.workDir)
+        synchronizeDirectory(parent)
+        flock(lockFD, LOCK_UN); close(lockFD); lockFD = -1
+        return
+    }
     if rollingBack {
         guard currentIdentity == new, try identity(r.stagedApp, r) == old,
               let handoff = try validateMessage(r.workDir + "/handoff.json", r),
@@ -277,11 +292,17 @@ private func main() throws {
     if recovering {
         // Infer the actual exchange from both bundle identities; a killed helper may not have
         // committed its last journal write. A valid ready B may finish an interrupted attempt.
-        if currentIdentity == new, try acknowledgement(r, process: nil) {
-            if fm.fileExists(atPath: r.stagedApp) {
-                guard try identity(r.stagedApp, r) == old else { throw fail("recovery_backup_identity_mismatch") }
-                try complete(r)
-            } else { try status("succeeded", ["version": r.expectedVersion, "buildId": r.expectedBuildId]) }
+        if currentIdentity == new {
+            if try acknowledgement(r, process: nil) {
+                if fm.fileExists(atPath: r.stagedApp) {
+                    guard try identity(r.stagedApp, r) == old else { throw fail("recovery_backup_identity_mismatch") }
+                    try complete(r)
+                } else { try status("succeeded", ["version": r.expectedVersion, "buildId": r.expectedBuildId]) }
+            } else {
+                // B may still be starting or its candidate ack may have raced with process exit.
+                // Preserve the recovery boundary; never turn this into permission to downgrade.
+                try status("recovery_required", ["reason": "replacement_runtime_not_ready", "backupRetained": true])
+            }
             return
         }
         guard currentIdentity == old, try identity(r.stagedApp, r) == new else { throw fail("recovery_requires_runtime_ready_or_original_application") }
@@ -295,18 +316,19 @@ private func main() throws {
     guard stat(r.currentApp, &currentStat) == 0, stat(r.stagedApp, &stageStat) == 0, currentStat.st_dev == stageStat.st_dev else { throw fail("staging_not_same_filesystem") }
     try status("prepared")
     let originalProcess = OwnedProcess(pid: r.parentPid, startedAt: r.parentStartedAt)
-    let handoff = try waitFor(120) {
+    var handoff = false
+    while !handoff {
         if try validateMessage(r.workDir + "/abort.json", r) != nil { throw fail("update_cancelled") }
-        guard let message = try validateMessage(r.workDir + "/handoff.json", r) else {
+        if let message = try validateMessage(r.workDir + "/handoff.json", r) {
+            guard (message["parentPid"] as? NSNumber)?.int32Value == r.parentPid,
+                  message["expectedVersion"] as? String == r.expectedVersion,
+                  message["expectedBuildId"] as? String == r.expectedBuildId else { throw fail("handoff_identity_mismatch") }
+            handoff = true
+        } else {
             guard sameProcess(originalProcess, appPath: r.currentApp) else { throw fail("parent_exited_without_handoff") }
-            return false
+            Thread.sleep(forTimeInterval: 0.1)
         }
-        guard (message["parentPid"] as? NSNumber)?.int32Value == r.parentPid,
-              message["expectedVersion"] as? String == r.expectedVersion,
-              message["expectedBuildId"] as? String == r.expectedBuildId else { throw fail("handoff_identity_mismatch") }
-        return true
     }
-    guard handoff else { throw fail("handoff_timeout") }
     try status("waiting_for_exit")
     guard try waitFor(30, until: { !sameProcess(originalProcess, appPath: r.currentApp) }) else { throw fail("parent_exit_timeout") }
     safeParentExited = true
@@ -315,9 +337,14 @@ private func main() throws {
     try exchange(r)
     swapped = true
     try status("swapped")
+    replacementLaunchAttempted = true
     launched = try launch(r)
     try status("waiting_for_runtime", ["launchedPid": launched!.pid, "launchedStartedAt": launched!.startedAt])
-    guard try waitFor(Double(r.timeoutMs ?? 60000) / 1000, until: { try acknowledgement(r, process: launched) }) else { throw fail("runtime_acknowledgement_timeout") }
+    let acknowledged = try waitFor(Double(r.timeoutMs ?? 60000) / 1000, until: { try acknowledgement(r, process: launched) })
+    guard try (acknowledged || acknowledgement(r, process: launched)) else {
+        try status("recovery_required", ["reason": "runtime_acknowledgement_timeout", "backupRetained": true])
+        return
+    }
     try complete(r)
     swapped = false
 }
@@ -328,8 +355,15 @@ do {
 } catch {
     let reason = String(describing: error)
     if swapped, let r = request {
-        do { try rollback(r, reason: reason) }
-        catch { try? status("recovery_required", ["reason": reason, "recoveryError": String(describing: error)]) }
+        if replacementLaunchAttempted {
+            do {
+                if try acknowledgement(r, process: launched) { try complete(r); swapped = false }
+                else { try status("recovery_required", ["reason": reason, "backupRetained": true]) }
+            } catch { try? status("recovery_required", ["reason": reason, "recoveryError": String(describing: error), "backupRetained": true]) }
+        } else {
+            do { try rollback(r, reason: reason) }
+            catch { try? status("recovery_required", ["reason": reason, "recoveryError": String(describing: error)]) }
+        }
     } else if safeParentExited, let r = request {
         do {
             guard try identity(r.currentApp, r) == BuildIdentity(version: r.previousVersion, buildId: r.previousBuildId) else { throw fail("original_application_identity_changed") }

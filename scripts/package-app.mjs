@@ -11,6 +11,8 @@ import { stringify as stringifyYaml } from 'yaml';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
+import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
+import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import {
   DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
   signedBuilderEnvironment, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
@@ -59,12 +61,20 @@ export function parsePackageArguments(argv) {
 export async function packageApplication(options, dependencies = {}) {
   const run = dependencies.run ?? runCommand;
   const probeHost = dependencies.probePhysicalHost ?? (() => probePhysicalHost({ run: runForOutput }));
-  return withPackageCheckoutLock(path.join(projectRoot, '.local/package-app.lock'), async () => {
-    const { commit } = await readPackagingGitIdentity(projectRoot);
+  const ownCheckout = dependencies.withPackageCheckoutLock ?? withPackageCheckoutLock;
+  return ownCheckout(path.join(projectRoot, '.local/package-app.lock'), async ({ signal, processTracker }) => {
+    const lifecycleRun = (command, args, runOptions = {}) => run(command, args, {
+      ...runOptions, signal, processTracker, processTrackers: runOptions.processTrackers ?? [processTracker],
+    });
+    const { commit } = await (dependencies.readPackagingGitIdentity ?? readPackagingGitIdentity)(projectRoot);
     const signingConfiguration = options.macSigningMode
       ? await (dependencies.loadMacSigningConfiguration ?? loadMacSigningConfiguration)({ environmentFile: options.macSigningEnv, pathRoot: options.macSigningRoot })
       : null;
     const build = async (signingContext = null) => {
+    const buildProcessTrackers = signingContext?.processTrackers ?? [processTracker];
+    const buildLifecycleRun = (command, args, runOptions = {}) => lifecycleRun(command, args, {
+      ...runOptions, processTrackers: runOptions.processTrackers ?? buildProcessTrackers,
+    });
     const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
     const version = options.validationVersion ?? packageJson.version;
     const outputDir = path.join(projectRoot, options.variant === 'official' ? 'release/official' : 'release');
@@ -74,19 +84,19 @@ export async function packageApplication(options, dependencies = {}) {
     await stat(electronBuilderCli);
     await assertHostTarget(options.target, probeHost);
     const targetArg = options.target === 'darwin-arm64' ? 'mac' : 'win';
-    await run(process.execPath, [path.join(projectRoot, 'scripts/download-runtime.mjs'), targetArg]);
-    await run(process.execPath, [path.join(projectRoot, 'scripts/prepare-meilisearch.mjs'), '--variant', options.variant, '--target', options.target]);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/download-runtime.mjs'), targetArg]);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-meilisearch.mjs'), '--variant', options.variant, '--target', options.target]);
     if (options.target === 'win32-x64' && options.variant === 'official') {
-      await run(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]);
+      await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]);
     } else if (options.target === 'win32-x64') {
       await rm(path.join(projectRoot, 'resources/bin/win/vcruntime140.dll'), { force: true });
     }
-    await run(process.execPath, [npmCli, 'run', 'build']);
-    await run(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
+    await buildLifecycleRun(process.execPath, [npmCli, 'run', 'build']);
+    await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
       ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]);
-    await stageBuildInfoSidecar(projectRoot);
-    if (options.target === 'darwin-arm64') await run(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
-    await clearPreviousArtifactSet(outputDir, [
+    await (dependencies.stageBuildInfoSidecar ?? stageBuildInfoSidecar)(projectRoot);
+    if (options.target === 'darwin-arm64') await buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]);
+    await (dependencies.clearPreviousArtifactSet ?? clearPreviousArtifactSet)(outputDir, [
       expectedArtifactPrefix(version, options.variant, options.target),
       `XR-Collector-${version}-${options.variant}-${options.target}`,
     ]);
@@ -101,28 +111,30 @@ export async function packageApplication(options, dependencies = {}) {
     if (signed) {
       const identityOverride = signedBuilderIdentityOverride(signingContext.identity);
       const firstArgs = [...commonBuilderArgs, '--mac', '--dir', identityOverride];
-      await run(process.execPath, [electronBuilderCli, ...firstArgs], { environment: builderEnvironment });
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...firstArgs], { environment: builderEnvironment });
       const productName = options.validationProductName ?? 'XR Collector';
       const appPath = path.join(outputDir, 'mac-arm64', `${productName}.app`);
-      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId);
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId, { run: buildLifecycleRun });
       const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', `${version}-${options.variant}`);
       const app = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
         kind: 'app', artifactPath: appPath, credentials: signingConfiguration.notary, evidenceDirectory,
-      });
-      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId);
-      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+      }, { signal, processTrackers: signingContext.processTrackers });
+      signal.throwIfAborted();
+      await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId, { run: buildLifecycleRun });
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run: buildLifecycleRun });
       const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, identityOverride];
-      await run(process.execPath, [electronBuilderCli, ...secondArgs], { environment: builderEnvironment });
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...secondArgs], { environment: builderEnvironment });
       const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
       const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
-      const zipInspection = await (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId);
+      const zipInspection = await (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun });
       if (JSON.stringify(zipInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
       const dmg = await (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
         kind: 'dmg', artifactPath: dmgPath, credentials: signingConfiguration.notary, evidenceDirectory,
-      });
-      await (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId);
-      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(dmgPath, 'dmg');
-      const dmgInspection = await (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId);
+      }, { signal, processTrackers: signingContext.processTrackers });
+      signal.throwIfAborted();
+      await (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId, { run: buildLifecycleRun });
+      await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(dmgPath, 'dmg', { run: buildLifecycleRun });
+      const dmgInspection = await (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun });
       if (JSON.stringify(dmgInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
       signingReceipt = {
         policy: DEVELOPER_ID_POLICY,
@@ -134,12 +146,12 @@ export async function packageApplication(options, dependencies = {}) {
     } else {
       const builderArgs = [...commonBuilderArgs, options.target === 'darwin-arm64' ? '--mac' : '--win'];
       if (options.target === 'win32-x64') builderArgs.push('--x64');
-      await run(process.execPath, [electronBuilderCli, ...builderArgs]);
+      await buildLifecycleRun(process.execPath, [electronBuilderCli, ...builderArgs]);
     }
     const expected = { commit, version, target: options.target, variant: options.variant,
       ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
-    const verified = await verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId });
+    const verified = await verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId }, { run: buildLifecycleRun });
     const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
     const host = await probeHost();
     const toolVersions = {
@@ -167,7 +179,7 @@ export async function packageApplication(options, dependencies = {}) {
     });
     };
     if (!signingConfiguration) return build();
-    return (dependencies.withTemporarySigningKeychain ?? withTemporarySigningKeychain)(signingConfiguration, build);
+    return (dependencies.withTemporarySigningKeychain ?? withTemporarySigningKeychain)(signingConfiguration, build, { signal, processTracker });
   });
 }
 
@@ -227,8 +239,8 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     ? path.join(appPath, 'Contents/Resources')
     : path.join(outputDir, 'win-unpacked/resources');
   if (appPath) {
-    if (signingPolicy === DEVELOPER_ID_POLICY) await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
-    else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+    if (signingPolicy === DEVELOPER_ID_POLICY) await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run: dependencies.run });
+    else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath, dependencies.run);
   }
   const asarPath = path.join(resources, 'app.asar');
   const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
@@ -292,11 +304,12 @@ export async function verifyMacBundleSignature(appPath, run = runVerificationCom
 
 export async function verifySignedMacZip(zipPath, productName, expectedTeamId, dependencies = {}) {
   const temporary = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-signed-zip-'));
+  const run = dependencies.run ?? runVerificationCommand;
   try {
-    await (dependencies.run ?? runVerificationCommand)('/usr/bin/ditto', ['-x', '-k', zipPath, temporary]);
+    await run('/usr/bin/ditto', ['-x', '-k', zipPath, temporary]);
     const appPath = await requireOnlyExpectedApplication(temporary, productName);
-    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
-    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run });
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run });
     return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
   } finally { await (dependencies.rm ?? rm)(temporary, { recursive: true, force: true }); }
 }
@@ -312,8 +325,8 @@ export async function verifySignedMacDmgContents(dmgPath, productName, expectedT
     await run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mount, dmgPath]);
     mounted = true;
     const appPath = await requireOnlyExpectedApplication(mount, productName);
-    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId);
-    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
+    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, expectedTeamId, { run });
+    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { run });
     return { appIdentity: await (dependencies.describeArtifact ?? describeArtifact)(appPath) };
   } catch (error) { primaryError = error; throw error; }
   finally {
@@ -420,19 +433,76 @@ function npmCliPath() {
   return value;
 }
 
-export async function withPackageCheckoutLock(lock, work) {
+export async function withPackageCheckoutLock(lock, work, dependencies = {}) {
   await mkdir(path.dirname(lock), { recursive: true });
-  try { await writeFile(lock, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`, { flag: 'wx' }); }
-  catch (error) { if (error.code === 'EEXIST') throw new Error(`Another whole-checkout packaging run owns ${lock}.`); throw error; }
-  try { return await work(); } finally { await rm(lock, { force: true }); }
+  const identity = await (dependencies.processIdentity ?? readPackagingProcessIdentity)(process.pid);
+  if (!identity) throw new Error('Unable to identify the packaging process owner.');
+  const inspect = dependencies.processIdentity ?? readPackagingProcessIdentity;
+  return withOwnedDirectoryLock(lock, async (processTracker) => {
+    const controller = new AbortController();
+    let interruptedSignal = null;
+    const unregister = registerAbortSignals(controller, (signal) => { interruptedSignal ??= signal; }, dependencies);
+    try { return await work({ signal: controller.signal, processTracker }); }
+    finally {
+      unregister();
+      if (interruptedSignal) (dependencies.terminateAfterSignal ?? ((name) => { process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[name]; }))(interruptedSignal);
+    }
+  }, {
+    ownerIdentity: async () => identity,
+    inspectOwner: inspect,
+    inspectUnsafeTree: dependencies.inspectProcessTree ?? inspectOwnedProcessTree,
+    ownerGraceMs: dependencies.lockOwnerGraceMs,
+    waitForBusy: false,
+    busyMessage: `Another whole-checkout packaging run owns ${lock}.`,
+    randomToken: dependencies.randomLockToken,
+  });
+}
+
+export async function readPackagingProcessIdentity(pid, dependencies = {}) {
+  const platform = dependencies.platform ?? process.platform;
+  const query = dependencies.capture ?? capture;
+  try {
+    if (platform === 'win32') {
+      const script = `$p=Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; if($null -eq $p){exit 44}; $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'Unable to resolve process owner SID'}; [Console]::Write(('{0}|{1}|{2}' -f $p.ProcessId,$p.CreationDate.ToUniversalTime().Ticks,$owner.Sid))`;
+      const output = await query('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { environment: process.env });
+      const fields = output.split('|');
+      const [recordedPid, startedAt, uid] = fields;
+      if (fields.length !== 3 || Number(recordedPid) !== pid || !/^\d+$/u.test(startedAt ?? '') || !uid) {
+        throw new Error(`PowerShell returned malformed process identity for ${pid}.`);
+      }
+      return { pid, uid, startedAt };
+    }
+    const output = await query('/bin/ps', ['-o', 'uid=', '-o', 'lstart=', '-p', String(pid)], { environment: { ...process.env, LC_ALL: 'C' } });
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(output);
+    if (!match) throw new Error(`ps returned malformed packaging process identity for ${pid}.`);
+    return { pid, uid: Number(match[1]), startedAt: match[2] };
+  } catch (error) {
+    if (platform === 'win32' && /exited with status 44\b/u.test(String(error?.message))) return null;
+    if (platform !== 'win32' && /exited with status 1\b/u.test(String(error?.message))) return null;
+    if (/malformed (?:packaging )?process identity/u.test(String(error?.message))) throw error;
+    throw new Error(`Unable to inspect packaging process ${pid}.`, { cause: error });
+  }
+}
+
+function registerAbortSignals(controller, onSignal, dependencies) {
+  const target = dependencies.signalTarget ?? process;
+  const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => {
+    onSignal(signal);
+    controller.abort(new Error(`Packaging interrupted by ${signal}.`));
+  }]));
+  for (const [signal, handler] of handlers) target.once(signal, handler);
+  return () => { for (const [signal, handler] of handlers) target.removeListener(signal, handler); };
 }
 
 function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: projectRoot, stdio: 'inherit', env: options.environment ?? packageChildEnvironment() });
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with status ${code}`)));
-  });
+  return runOwnedProcess(command, args, {
+    cwd: projectRoot,
+    stdio: 'inherit',
+    environment: options.environment ?? packageChildEnvironment(),
+    signal: options.signal,
+    processTracker: options.processTracker,
+    processTrackers: options.processTrackers,
+  }).then(() => undefined);
 }
 
 function capture(command, args, options = {}) {

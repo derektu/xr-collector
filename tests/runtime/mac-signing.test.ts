@@ -1,12 +1,16 @@
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   loadMacSigningConfiguration, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList, selectDeveloperIdIdentity, signStagedMacRuntimes,
   signedBuilderEnvironment, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory, withTemporarySigningKeychain,
 } from '../../scripts/mac-signing.mjs';
+import { UnsafeProcessTreeError } from '../../scripts/owned-process.mjs';
 
 const roots: string[] = [];
 const describeStableCodeIdentity = async () => ({ teamId: 'ABCDE12345', cdHash: 'a'.repeat(40), identifier: 'com.moneydj.xrcollector' });
@@ -58,6 +62,147 @@ it('appends its keychain without reordering existing sessions and removes only i
   expect(calls.filter((args) => args[0] === 'list-keychains' && args[3] === '-s')).toHaveLength(1);
   expect(keychains).toEqual([...existingKeychains, path.resolve('fixture/concurrent-session.keychain-db')]);
   expect(parseUserKeychainList(existingKeychains.map((entry) => `    ${JSON.stringify(entry)}`).join('\n'))).toEqual(existingKeychains);
+  expect(calls.find((args) => args[0] === 'set-keychain-settings')).toContain('900');
+  expect(calls.find((args) => args[0] === 'import')).not.toContain('/usr/bin/security');
+});
+
+it('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
+  const stale = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
+  const live = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
+  roots.push(stale, live);
+  await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: 501, startedAt: 'old' }));
+  await writeFile(path.join(stale, 'signing.keychain-db'), 'stale');
+  await writeFile(path.join(live, 'owner.json'), JSON.stringify({ pid: 42, uid: 501, startedAt: 'live' }));
+  await writeFile(path.join(live, 'signing.keychain-db'), 'live');
+  let keychains = [path.join(stale, 'signing.keychain-db'), path.join(live, 'signing.keychain-db')];
+  const run = async (_command: string, args: string[]) => {
+    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
+    if (args[0] === 'delete-keychain') { keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
+    return { stdout: '', stderr: '' };
+  };
+  await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => undefined, {
+    run, randomPassword: () => 'temporary-password', processIdentity: async (pid: number) => pid === 42 ? { pid, uid: 501, startedAt: 'live' } : pid === process.pid ? { pid, uid: 501, startedAt: 'current' } : null,
+  });
+  await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(live)).resolves.toBeDefined();
+  expect(keychains).toEqual([path.join(live, 'signing.keychain-db')]);
+});
+
+it('fails closed when a stale-session process identity cannot be inspected', async () => {
+  const stale = await mkdtemp(path.join(tmpdir(), 'xr-mac-signing-'));
+  roots.push(stale);
+  await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'unknown' }));
+  await writeFile(path.join(stale, 'signing.keychain-db'), 'private-key');
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => undefined, {
+    run: async () => ({ stdout: '', stderr: '' }),
+    processIdentity: async () => { throw new Error('ps unavailable'); },
+  })).rejects.toThrow(/ps unavailable/u);
+  await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
+});
+
+it('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
+  const signalTarget = new EventEmitter();
+  let keychains: string[] = [];
+  let deleted = '';
+  const run = async (_command: string, args: string[]) => {
+    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
+    if (args[0] === 'delete-keychain') { deleted = args[1]!; keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
+    return { stdout: '', stderr: '' };
+  };
+  let owned = '';
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain, signal }) => {
+    owned = keychain;
+    signalTarget.emit('SIGTERM');
+    signal.throwIfAborted();
+  }, { run, signalTarget, terminateAfterSignal: () => {}, randomPassword: () => 'temporary-password' })).rejects.toThrow(/SIGTERM/u);
+  expect(deleted).toBe(owned);
+});
+
+it('preserves its signing session and shared lock when cleanup cannot confirm process-tree termination', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-unsafe-cleanup-'));
+  roots.push(root);
+  const session = path.join(root, 'xr-mac-signing-session');
+  const sharedLock = path.join(root, 'search-list.lock');
+  await mkdir(session, { mode: 0o700 });
+  let keychains: string[] = [];
+  const tree = { platform: 'darwin', pid: 4242, kind: 'posix-process-group' };
+  const run = async (_command: string, args: string[]) => {
+    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
+    if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
+    if (args[0] === 'delete-keychain') throw new UnsafeProcessTreeError('tree is not confirmed stopped', tree);
+    return { stdout: '', stderr: '' };
+  };
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
+    run, mkdtemp: async () => session, realpath: async (value: string) => value,
+    processIdentity: async (pid: number) => ({ pid, uid: process.getuid?.() ?? 501, startedAt: 'current' }),
+    keychainSearchLock: sharedLock, randomPassword: () => 'temporary-password',
+  })).rejects.toMatchObject({ preserveOwnedResources: true, processTree: tree });
+  await expect(stat(session)).resolves.toBeDefined();
+  const [sharedOwner] = await readdir(sharedLock);
+  expect(JSON.parse(await readFile(path.join(sharedLock, sharedOwner!), 'utf8'))).toMatchObject({ unsafeProcessTree: tree });
+});
+
+it('a real packaging subprocess aborts its security child before append and removes keychain plus lock on SIGTERM', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-process-'));
+  roots.push(root);
+  const session = path.join(root, 'xr-mac-signing-session');
+  const lock = path.join(root, 'package.lock');
+  const ready = path.join(root, 'security-started');
+  const appended = path.join(root, 'search-list-appended');
+  const packageModule = pathToFileURL(path.resolve('scripts/package-app.mjs')).href;
+  const signingModule = pathToFileURL(path.resolve('scripts/mac-signing.mjs')).href;
+  const script = `
+    import { spawn } from 'node:child_process';
+    import { mkdir, writeFile } from 'node:fs/promises';
+    import { withPackageCheckoutLock } from ${JSON.stringify(packageModule)};
+    import { withTemporarySigningKeychain } from ${JSON.stringify(signingModule)};
+    const paths = ${JSON.stringify({ session, lock, ready, appended })};
+    const run = async (_command, args, options = {}) => {
+      if (args[0] === 'create-keychain') {
+        await writeFile(args.at(-1), 'private-key');
+        await writeFile(paths.ready, 'ready');
+        await new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { signal: options.signal });
+          child.once('error', reject);
+          child.once('exit', (code, signal) => signal ? reject(new Error('fake security interrupted by ' + signal)) : code === 0 ? resolve() : reject(new Error('fake security failed')));
+        });
+      }
+      if (args[0] === 'list-keychains' && args[3] === '-s') await writeFile(paths.appended, 'appended');
+      if (args[0] === 'list-keychains') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    try {
+      await withPackageCheckoutLock(paths.lock, ({ signal }) => withTemporarySigningKeychain(
+        { certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' },
+        async () => {},
+        { signal, run, mkdtemp: async () => { await mkdir(paths.session, { mode: 0o700 }); return paths.session; }, realpath: async (value) => value,
+          processIdentity: async (pid) => ({ pid, uid: 501, startedAt: 'child' }) }
+      ));
+    } catch (error) {
+      if (!process.exitCode) { console.error(error); process.exitCode = 1; }
+    }
+  `;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try { await stat(ready); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  await stat(ready);
+  child.kill('SIGTERM');
+  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+  expect(exit.signal).toBeNull();
+  expect(exit.code).toBe(143);
+  expect(stderr).toBe('');
+  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(session)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(appended)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
@@ -79,6 +224,7 @@ it('uses one canonical owned keychain path when macOS rewrites /var as /private/
     expect(keychain).toBe(`${canonicalDirectory}/signing.keychain-db`);
   }, {
     run, mkdtemp: async () => requestedDirectory, realpath: async (value: string) => value.replace(/^\/var\//u, '/private/var/'),
+    writeFile: async () => {}, inspectDirectory: async () => ({ isDirectory: () => true, mode: 0o700, uid: process.getuid?.() }),
     randomPassword: () => 'temporary-password', keychainSearchLock: path.join(root, 'search-list.lock'),
   })).resolves.toBeUndefined();
   const append = calls.find((args) => args[0] === 'list-keychains' && args[3] === '-s')!;
@@ -121,8 +267,9 @@ it('reclaims only a shared keychain-list lock whose recorded owner process is go
   const root = await mkdtemp(path.join(tmpdir(), 'xr-stale-keychain-lock-'));
   roots.push(root);
   const lock = path.join(root, 'lock');
-  await mkdir(lock);
-  await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: 424242, token: 'stale-owner' }));
+  const uid = process.getuid?.() ?? 501;
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
   let keychains: string[] = [];
   const run = async (_command: string, args: string[]) => {
     if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
@@ -132,16 +279,17 @@ it('reclaims only a shared keychain-list lock whose recorded owner process is go
     return { stdout: '', stderr: '' };
   };
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, isProcessAlive: () => false,
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock,
+    processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
   })).resolves.toBe('done');
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('reclaims ownerless or malformed shared locks only after their creation grace period', async () => {
+it('reclaims an ownerless shared lock after its creation grace but fails closed on malformed ownership', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-ownerless-keychain-lock-'));
   roots.push(root);
   const lock = path.join(root, 'lock');
-  await mkdir(lock);
+  await mkdir(lock, { mode: 0o700 });
   let keychains: string[] = [];
   const run = async (_command: string, args: string[]) => {
     if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
@@ -154,12 +302,12 @@ it('reclaims ownerless or malformed shared locks only after their creation grace
     run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0,
   })).resolves.toBe('done');
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
-  await mkdir(lock);
-  await writeFile(path.join(lock, 'owner.json'), '{truncated');
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), '{truncated', { mode: 0o600 });
   await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
     run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0,
-  })).resolves.toBe('done');
-  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  })).rejects.toBeInstanceOf(AggregateError);
+  await expect(stat(lock)).resolves.toBeDefined();
 });
 
 it('keeps notarization resumable by persisting the submission before waiting', async () => {

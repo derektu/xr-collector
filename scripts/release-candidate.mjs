@@ -21,7 +21,7 @@ const combinations = [
 const combinationKeys = new Set(combinations.map(([target, variant]) => `${target}/${variant}`));
 
 export async function planReleaseCandidate(options, dependencies = {}) {
-  const expectedVersion = options.version ?? '0.1.0';
+  const expectedVersion = options.version ?? JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8')).version;
   const tag = options.tag ?? `v${expectedVersion}`;
   if (tag !== `v${expectedVersion}`) throw new Error(`Release tag ${tag} must match version ${expectedVersion}.`);
   const sourceBaseUrl = normalizeSourceBaseUrl(options.sourceBaseUrl, tag);
@@ -553,7 +553,13 @@ function normalizeSourceBaseUrl(value, tag) {
   if (url.protocol !== 'https:') throw new Error('Release source base URL must use HTTPS.');
   if (url.username || url.password || url.search || url.hash) throw new Error('Release source base URL must not contain credentials, query parameters, or a fragment.');
   const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  if (segments.includes('latest') || (!segments.includes(tag) && !segments.includes(tag.slice(1)))) throw new Error(`Release source base URL must be pinned to ${tag}.`);
+  if (url.hostname.toLowerCase() === 'github.com') {
+    if (segments.length !== 5 || segments[2] !== 'releases' || segments[3] !== 'download' || segments[4] !== tag) {
+      throw new Error(`GitHub release source URL must use owner/repository/releases/download/${tag}/.`);
+    }
+  } else if (segments.includes('latest') || (!segments.includes(tag) && !segments.includes(tag.slice(1)))) {
+    throw new Error(`Release source base URL must be pinned to ${tag}.`);
+  }
   if (!url.pathname.endsWith('/')) url.pathname += '/';
   return url.toString();
 }
@@ -561,7 +567,7 @@ function githubReleaseRepository(value) {
   const url = new URL(value);
   if (url.hostname.toLowerCase() !== 'github.com') return null;
   const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  if (segments.length < 5 || segments[2] !== 'releases' || segments[3] !== 'download') {
+  if (segments.length !== 5 || segments[2] !== 'releases' || segments[3] !== 'download') {
     throw new Error('GitHub release source URL must use owner/repository/releases/download/tag/.');
   }
   return `${segments[0]}/${segments[1]}`;

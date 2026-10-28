@@ -26,7 +26,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私
 
 1. 直接開 `/settings`，確認沒有 Vault 時仍看到目前版本與「檢查更新」；由這個 run 的 Agent connection 以 Bearer token 檢查，再比對 UI／Agent 都為 `available`、版本 `0.1.1`、來源與版本說明。
 2. 將 payload 分兩段送出，點「下載更新」；62% 時只顯示「取消下載」，Agent 同時要求 apply 回 `update_busy`。取消後回到同一 offer，沒有 ready。
-3. feed 改送同大小但錯誤雜湊的 payload；下載後顯示 integrity error、ready 為 null 且可重新檢查。恢復原 bytes，重新檢查及下載後才顯示「重新啟動以安裝」與「稍後」。
+3. feed 改送同大小但錯誤雜湊的 payload；下載後顯示 integrity error、ready 為 null，但固定 offer 仍可直接重新下載。恢復原 bytes 並重新下載後才顯示「重新啟動以安裝」與「稍後」。
 4. 點「稍後」後同頁仍顯示「重新啟動以安裝」。feed 改為 `0.1.2` 並檢查，確認 ready `0.1.1` 與新版下載按鈕並存；開始新版下載時也不提前取代 ready，取消後仍可套用 `0.1.1`。點套用後停在 `waiting`，只顯示「取消等待」；取消後回 ready。Web 流程不呼叫 installing 或宣稱安裝成功。
    側欄在 available／downloading／ready／waiting 分別顯示「有新版本／下載中／可安裝／等待安裝」；錯誤狀態只顯示版本。verifying／installing 的純狀態對照由 presentation 單元測試覆蓋。
 5. 以已開啟 Vault 的 instance 從文件頁點側欄版本狀態，再送出原生 `update` 導覽訊號；兩者都等「關於」內的更新面板掛載後才捲入可視範圍，普通「設定」入口仍停在頁首。

@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError, type BuildInfo, type UpdateOffer } from '../core/types.js';
-import type { NativeInstaller, PreparedInstall } from './types.js';
+import type { NativeInstaller, NativeInstallRecovery, NativeRecoveryResult, PreparedInstall } from './types.js';
 import yauzl from 'yauzl';
 
 const execFile = promisify(execFileCallback);
@@ -57,20 +57,54 @@ export class MacNativeInstaller implements NativeInstaller {
       }
       try { await waitForPhase(path.join(workDir, 'result.json'), 'prepared', ownedChild, signal, 30_000); }
       catch (error) { abort(); if (await waitForExit(ownedChild, 5_000)) await rm(workDir, { recursive: true, force: true }); throw error; }
-      let finished = false;
-      return {
-        handoff: async () => { if (finished) return; await writeOwnedJson(path.join(workDir, 'handoff.json'), {
-          schemaVersion: 1, runId, nonce, parentPid: process.pid, expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId,
-        }); finished = true; signal.removeEventListener('abort', abort); ownedChild.unref(); },
-        cancel: async () => { if (finished) return; finished = true; signal.removeEventListener('abort', abort); abort();
-          if (await waitForExit(ownedChild, 5_000)) await rm(workDir, { recursive: true, force: true }); },
-      };
+      return preparedMacHandoff({ workDir, runId, nonce, parentPid: process.pid, expectedVersion: offer.version,
+        expectedBuildId: offer.buildInfo.buildId, child: ownedChild, signal, abort });
     } catch (error) {
       if (!child) await rm(workDir, { recursive: true, force: true });
       throw error;
     }
   }
+  recover(): Promise<NativeRecoveryResult> { return recoverMacUpdateResults(this.options.resourcesPath, this.options.current); }
   private helper(): string { return path.join(this.options.resourcesPath, 'bin', 'xr-mac-update-helper'); }
+}
+
+/** @internal Exported so the cross-process protocol can be tested without constructing an App bundle. */
+export function preparedMacHandoff(options: {
+  workDir: string;
+  runId: string;
+  nonce: string;
+  parentPid: number;
+  expectedVersion: string;
+  expectedBuildId: string;
+  child: ReturnType<typeof spawn>;
+  signal: AbortSignal;
+  abort: () => void;
+}): PreparedInstall {
+  let finished = false; let handoffWritten = false;
+  return {
+    recoveryToken: options.runId,
+    handoff: async () => {
+      if (finished) return;
+      await requireHelperPhase(path.join(options.workDir, 'result.json'), 'prepared', options.child);
+      await writeOwnedJson(path.join(options.workDir, 'handoff.json'), {
+        schemaVersion: 1, runId: options.runId, nonce: options.nonce, parentPid: options.parentPid,
+        expectedVersion: options.expectedVersion, expectedBuildId: options.expectedBuildId,
+      });
+      handoffWritten = true;
+      await waitForPhase(path.join(options.workDir, 'result.json'), 'waiting_for_exit', options.child, options.signal, 30_000,
+        'macOS 更新 helper 未確認安裝交接。');
+      finished = true; options.signal.removeEventListener('abort', options.abort); options.child.unref();
+    },
+    cancel: async () => {
+      if (finished) return;
+      finished = true; options.signal.removeEventListener('abort', options.abort);
+      // A committed handoff cannot be cancelled by writing a later abort. The helper owns recovery.
+      if (!handoffWritten) options.abort();
+      if (await waitForExit(options.child, 5_000) && !handoffWritten) {
+        await rm(options.workDir, { recursive: true, force: true });
+      }
+    },
+  };
 }
 
 export async function acknowledgeMacUpdateLaunch(current: BuildInfo): Promise<boolean> {
@@ -105,28 +139,61 @@ export async function acknowledgeMacUpdateShutdown(current: BuildInfo): Promise<
   return true;
 }
 
-/** Finishes an interrupted helper only after the replacement runtime has written its owned ack. */
-export async function recoverMacUpdateLaunch(resourcesPath: string): Promise<boolean> {
-  if (process.platform !== 'darwin') return true;
-  const contexts = await trustedUpdateContexts(); if (contexts.length === 0) return true;
-  let succeeded = false;
-  for (const { workDir } of contexts) {
+/** Finishes an interrupted helper and returns receipts without deleting them. */
+export async function recoverMacUpdateResults(
+  resourcesPath: string,
+  current: BuildInfo,
+  dependencies: {
+    platform?: NodeJS.Platform;
+    contexts?: () => Promise<Array<{ workDir: string; request: Record<string, unknown> }>>;
+    runHelper?: (helper: string, requestFile: string) => Promise<void>;
+  } = {},
+): Promise<NativeRecoveryResult> {
+  if ((dependencies.platform ?? process.platform) !== 'darwin') return { launchReady: true, results: [] };
+  const contexts = await (dependencies.contexts ?? trustedUpdateContexts)();
+  if (contexts.length === 0) return { launchReady: true, results: [] };
+  const results: NativeInstallRecovery[] = []; let launchReady = true; let foundCurrent = false;
+  for (const { workDir, request } of contexts) {
+    const contextIsCurrent = requestMatchesCurrent(request, current);
+    const selectedContext = !foundCurrent && contextIsCurrent;
+    if (selectedContext) { foundCurrent = true; launchReady = false; }
     const resultFile = path.join(workDir, 'result.json'); const requestFile = path.join(workDir, 'request.json');
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const phase = await readFile(resultFile, 'utf8').then((text) => (JSON.parse(text) as { phase?: string }).phase).catch(() => undefined);
-      if (phase === 'succeeded') { succeeded = true; break; }
-      if (['rolled_back', 'failed'].includes(phase ?? '')) break;
+      if (isTerminalRecoveryPhase(phase)) {
+        if (phase !== 'recovery_required' || !contextIsCurrent
+          || request.expectedVersion !== current.version || request.expectedBuildId !== current.buildId
+          || !await hasLateAcknowledgement(workDir, request)) break;
+        await (dependencies.runHelper ?? runRecoveryHelper)(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), requestFile);
+        continue;
+      }
       await new Promise((resolve) => setTimeout(resolve, 2_000));
       const afterWait = await readFile(resultFile, 'utf8').then((text) => (JSON.parse(text) as { phase?: string }).phase).catch(() => undefined);
-      if (afterWait === 'succeeded') { succeeded = true; break; }
-      if (['rolled_back', 'failed'].includes(afterWait ?? '')) break;
-      const child = spawn(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), ['--recover', requestFile], { stdio: 'ignore' });
-      await new Promise<void>((resolve) => { child.once('error', () => resolve()); child.once('exit', () => resolve()); });
+      if (isTerminalRecoveryPhase(afterWait)) continue;
+      await (dependencies.runHelper ?? runRecoveryHelper)(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), requestFile);
     }
-    const finalPhase = await readFile(resultFile, 'utf8').then((text) => (JSON.parse(text) as { phase?: string }).phase).catch(() => undefined);
-    if (finalPhase === 'succeeded') succeeded = true;
+    const raw = await readFile(resultFile, 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>).catch(() => null);
+    const recovery = raw && nativeRecoveryReceipt(workDir, request, raw, resourcesPath);
+    if (!recovery) continue;
+    results.push(recovery);
+    if (selectedContext && recoveryMatchesCurrent(recovery, current)) {
+      launchReady = recovery.phase !== 'recovery_required';
+    }
   }
-  return succeeded;
+  return { launchReady, results };
+}
+
+async function hasLateAcknowledgement(workDir: string, request: Record<string, unknown>): Promise<boolean> {
+  const ack = await readFile(path.join(workDir, 'ack.json'), 'utf8')
+    .then((text) => JSON.parse(text) as Record<string, unknown>).catch(() => null);
+  return Boolean(ack && ack.schemaVersion === 1 && ack.runId === request.runId && ack.nonce === request.nonce
+    && ack.version === request.expectedVersion && ack.buildId === request.expectedBuildId
+    && typeof ack.pid === 'number' && Number.isInteger(ack.pid) && ack.pid > 0 && typeof ack.launchedStartedAt === 'string');
+}
+
+async function runRecoveryHelper(helper: string, requestFile: string): Promise<void> {
+  const child = spawn(helper, ['--recover', requestFile], { stdio: 'ignore' });
+  await new Promise<void>((resolve) => { child.once('error', () => resolve()); child.once('exit', () => resolve()); });
 }
 
 /**
@@ -174,6 +241,57 @@ async function trustedUpdateContexts(): Promise<Array<{ workDir: string; request
   return trusted.sort((left, right) => right.modified - left.modified).map(({ workDir, request }) => ({ workDir, request }));
 }
 
+function isTerminalRecoveryPhase(value: unknown): value is NativeInstallRecovery['phase'] {
+  return ['succeeded', 'rolled_back', 'failed', 'recovery_required'].includes(String(value));
+}
+
+/** @internal Builds a receipt without consuming or deleting its journal. */
+export function nativeRecoveryReceipt(
+  workDir: string,
+  request: Record<string, unknown>,
+  result: Record<string, unknown>,
+  resourcesPath: string,
+): NativeInstallRecovery | null {
+  const phase = result.phase;
+  if (result.schemaVersion !== 1 || !isTerminalRecoveryPhase(phase) || result.runId !== request.runId || typeof request.runId !== 'string'
+    || typeof request.previousVersion !== 'string' || typeof request.previousBuildId !== 'string'
+    || typeof request.expectedVersion !== 'string' || typeof request.expectedBuildId !== 'string') return null;
+  const requestFile = path.join(workDir, 'request.json');
+  return {
+    token: request.runId, phase,
+    previousVersion: request.previousVersion, previousBuildId: request.previousBuildId,
+    expectedVersion: request.expectedVersion, expectedBuildId: request.expectedBuildId,
+    ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
+    finalize: async () => {
+      if (phase === 'recovery_required') throw new CollectorError('update_apply_failed', '需要人工復原的 macOS 更新紀錄不可自動清除。');
+      let lastExit: number | null = null;
+      // A replacement helper may have written the terminal receipt just before releasing its lock.
+      // Retry only the exact cleanup command briefly; every failed attempt leaves the journal intact.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const child = spawn(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), ['--cleanup', requestFile], { stdio: 'ignore' });
+        await waitForSpawn(child); lastExit = await waitForChildExit(child);
+        const remains = await stat(workDir).then(() => true, (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return false; throw error;
+        });
+        if (!remains) return;
+        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new CollectorError('update_apply_failed', `macOS 更新 helper 未清除已消費的紀錄（${lastExit ?? 'signal'}）。`);
+    },
+  };
+}
+
+function recoveryMatchesCurrent(result: NativeInstallRecovery, current: BuildInfo): boolean {
+  return result.phase === 'succeeded'
+    ? current.version === result.expectedVersion && current.buildId === result.expectedBuildId
+    : current.version === result.previousVersion && current.buildId === result.previousBuildId;
+}
+
+function requestMatchesCurrent(request: Record<string, unknown>, current: BuildInfo): boolean {
+  return request.expectedVersion === current.version && request.expectedBuildId === current.buildId
+    || request.previousVersion === current.version && request.previousBuildId === current.buildId;
+}
+
 function enclosingApp(executable: string): string {
   const marker = '.app/Contents/MacOS/'; const index = executable.lastIndexOf(marker);
   if (index < 0) throw new CollectorError('update_install_unavailable', '目前程序不在 macOS App bundle。');
@@ -183,7 +301,20 @@ async function writeOwnedJson(file: string, value: unknown): Promise<void> {
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 }); await rename(temporary, file);
 }
-async function waitForPhase(file: string, expected: string, child: ReturnType<typeof spawn>, signal: AbortSignal, timeout: number): Promise<void> {
+async function requireHelperPhase(file: string, expected: string, child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) throw new CollectorError('update_apply_failed', `macOS 更新 helper 已結束（${child.exitCode}）。`);
+  const value = await readFile(file, 'utf8').then((text) => JSON.parse(text) as { phase?: string; reason?: string })
+    .catch((error: NodeJS.ErrnoException) => { throw new CollectorError('update_apply_failed', '無法確認 macOS 更新 helper 狀態。', { cause: error }); });
+  if (value.phase !== expected) throw new CollectorError('update_apply_failed', value.reason ?? `macOS 更新 helper 狀態不是 ${expected}。`);
+}
+async function waitForPhase(
+  file: string,
+  expected: string,
+  child: ReturnType<typeof spawn>,
+  signal: AbortSignal,
+  timeout: number,
+  timeoutMessage = 'macOS 更新 helper 準備逾時。',
+): Promise<void> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (signal.aborted) throw signal.reason;
@@ -193,7 +324,13 @@ async function waitForPhase(file: string, expected: string, child: ReturnType<ty
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && error instanceof CollectorError) throw error; }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new CollectorError('update_apply_failed', 'macOS 更新 helper 準備逾時。');
+  throw new CollectorError('update_apply_failed', timeoutMessage);
+}
+async function waitForChildExit(child: ReturnType<typeof spawn>): Promise<number | null> {
+  if (child.exitCode !== null) return child.exitCode;
+  return new Promise((resolve, reject) => {
+    child.once('exit', (code) => resolve(code)); child.once('error', reject);
+  });
 }
 async function waitForExit(child: ReturnType<typeof spawn>, timeout: number): Promise<boolean> {
   if (child.exitCode !== null) return true;

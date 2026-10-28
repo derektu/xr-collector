@@ -29,14 +29,14 @@ export async function runUpdateCoordinator(
     if (controller.signal.aborted) throw controller.signal.reason;
     prepared = await installer.prepare(request.offer, request.packageFile, controller.signal);
     if (controller.signal.aborted) throw controller.signal.reason;
-    await request.recordAttempt();
+    await request.recordAttempt(prepared.recoveryToken);
     if (controller.signal.aborted) throw controller.signal.reason;
     lease.transferToShutdown();
     transferred = true;
     hooks.shutdownOwned();
     clearTimeout(timeout);
     request.installing();
-    await runtime.close();
+    await within(runtime.close(), timeoutMs, '關閉資料服務超過兩分鐘，未交接安裝；請重新開啟 App 後再試。');
     await prepared.handoff();
     hooks.completed();
   } catch (error) {
@@ -59,4 +59,14 @@ export async function runUpdateCoordinator(
     clearTimeout(timeout);
     request.signal.removeEventListener('abort', cancelled);
   }
+}
+
+async function within<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
 }

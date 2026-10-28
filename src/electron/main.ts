@@ -19,10 +19,12 @@ import { WindowCreationGate } from './window-creation.js';
 import { UpdateService } from '../updates/update-service.js';
 import { GenericIndexSource, GitHubReleasesSource } from '../updates/sources.js';
 import { UnavailableInstaller } from '../updates/installer.js';
-import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInstaller, prepareMacUpdateRollback, recoverMacUpdateLaunch } from '../updates/mac-installer.js';
+import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInstaller, prepareMacUpdateRollback } from '../updates/mac-installer.js';
 import { WindowsNativeInstaller } from '../updates/windows-installer.js';
 import type { NativeInstaller, UpdateApplyRequest } from '../updates/types.js';
 import { runUpdateCoordinator } from './update-coordinator.js';
+import { recoverNativeInstallations } from './update-recovery.js';
+import { startUpdateCheckScheduler } from './update-check-scheduler.js';
 import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../updates/config.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -31,7 +33,7 @@ let themePreference: FileThemePreference | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
 let updateService: UpdateService | null = null;
-let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
+let updateCheckScheduler: ReturnType<typeof startUpdateCheckScheduler> | null = null;
 let updateShutdownOwned = false;
 let startupBuildInfo: BuildInfo | null = null;
 let isQuitting = false;
@@ -379,14 +381,18 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin') {
     const acknowledged = !currentNeedsConfirmation || await acknowledgeMacUpdateLaunch(buildInfo)
       .catch((error) => { console.error('Unable to acknowledge macOS update launch', error); return false; });
-    const recovered = await recoverMacUpdateLaunch(process.resourcesPath)
+    const recovered = await recoverNativeInstallations(nativeInstaller, updateService,
+      (error) => console.error('Unable to preserve or clean up macOS update result', error))
       .catch((error) => { console.error('Unable to recover macOS update launch', error); return false; });
     updateLaunchReady = !currentNeedsConfirmation || acknowledged && recovered;
   }
   if (updateLaunchReady) await updateService.confirmRunningBuild();
   if (nativeInstaller.available) {
-    setTimeout(() => void updateService?.check(), 30_000);
-    updateCheckTimer = setInterval(() => void updateService?.check(), 24 * 60 * 60 * 1000);
+    updateCheckScheduler = startUpdateCheckScheduler({
+      check: () => updateService?.check() ?? Promise.resolve(),
+      lastAttemptAt: () => updateService?.status().lastCheckAttemptAt ?? null,
+      available: () => updateService?.status().installerAvailable === true,
+    });
   }
 }).catch(async (error) => {
   console.error(error);
@@ -426,8 +432,7 @@ function pauseForSleep(): void {
 
 function continueAfterSleep(): void {
   collectionPause.set('sleep', false);
-  const checked = updateService?.status().checkedAt;
-  if (updateService?.status().installerAvailable && (!checked || Date.now() - Date.parse(checked) >= 24 * 60 * 60 * 1000)) void updateService.check();
+  void updateCheckScheduler?.wake().catch((error: unknown) => console.error('Unable to check for updates after wake', error));
 }
 
 /** Applies one user-confirmed ready package; the two-minute signal spans every Vault drain stage. */
@@ -436,14 +441,14 @@ async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeIn
   if (!activeRuntime) return request.failed('update_apply_failed', 'Collector 服務尚未就緒。');
   await runUpdateCoordinator(request, installer, activeRuntime, {
     shutdownOwned: () => { updateShutdownOwned = true; },
-    completed: () => { runtime = null; isQuitting = true; app.quit(); },
+    completed: () => { updateCheckScheduler?.stop(); updateCheckScheduler = null; runtime = null; isQuitting = true; app.quit(); },
     terminalFailure: async (error) => {
       // A transferred runtime can be partly closed and cannot safely resume collection. The
       // installer has been cancelled and the durable attempt is failed before this native notice.
       updateShutdownOwned = false; runtime = null; isQuitting = true;
       if (networkWatch) clearInterval(networkWatch);
-      if (updateCheckTimer) clearInterval(updateCheckTimer);
-      networkWatch = null; updateCheckTimer = null;
+      updateCheckScheduler?.stop();
+      networkWatch = null; updateCheckScheduler = null;
       tray?.destroy(); tray = null;
       const notice: Electron.MessageBoxOptions = {
         type: 'error', title: 'App 更新未安裝', message: 'App 更新沒有安裝。',
@@ -484,8 +489,8 @@ app.on('before-quit', (event) => {
   powerMonitor.removeListener('unlock-screen', continueAfterSleep);
   powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
   if (networkWatch) clearInterval(networkWatch);
-  if (updateCheckTimer) clearInterval(updateCheckTimer);
-  updateCheckTimer = null;
+  updateCheckScheduler?.stop();
+  updateCheckScheduler = null;
   networkWatch = null;
   tray?.destroy();
   tray = null;

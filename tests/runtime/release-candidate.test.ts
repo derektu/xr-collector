@@ -68,6 +68,14 @@ it('preflights all four identities and stages only sanitized, version-pinned pub
   expect(migrated.assets.find((asset) => asset.name === payload.name)?.sha256).toBe(payload.sha256);
 });
 
+it('requires an exact GitHub owner/repository/releases/download/tag source path', async () => {
+  const fixture = await releaseFixture();
+  await expect(planReleaseCandidate({ ...fixture.options, sourceBaseUrl: 'https://github.com/derektu/xr-collector/releases/download/v0.0.9/v0.1.0/' }, { inspectPackagedPayload: fixture.inspect }))
+    .rejects.toThrow(/owner\/repository\/releases\/download\/v0\.1\.0/u);
+  await expect(planReleaseCandidate({ ...fixture.options, sourceBaseUrl: 'https://github.com/derektu/xr-collector/releases/download/v0.1.0/' }, { inspectPackagedPayload: fixture.inspect }))
+    .resolves.toMatchObject({ sourceBaseUrl: 'https://github.com/derektu/xr-collector/releases/download/v0.1.0/' });
+});
+
 it('fails closed on tampering, mixed identities, missing acceptance, and extra basenames', async () => {
   const fixture = await releaseFixture();
   const first = fixture.records[0]!;
@@ -196,6 +204,12 @@ it('keeps legacy ad-hoc staging independent of signed S35 evidence', async () =>
   for (const id of Object.keys(acceptance.scenarios)) if (id.startsWith('S35-')) delete acceptance.scenarios[id];
   await writeFile(fixture.options.acceptance, JSON.stringify(acceptance));
   await expect(planReleaseCandidate(fixture.options, { inspectPackagedPayload: fixture.inspect })).resolves.toMatchObject({ version: '0.1.0' });
+});
+
+it('defaults the release version from package.json', async () => {
+  const fixture = await releaseFixture();
+  const { version: _version, tag: _tag, ...withoutVersion } = fixture.options;
+  await expect(planReleaseCandidate(withoutVersion, { inspectPackagedPayload: fixture.inspect })).resolves.toMatchObject({ version: '0.1.0', tag: 'v0.1.0' });
 });
 
 it('accepts the signed Mac inventory only after the DMG and signed runtime receipts pass', async () => {

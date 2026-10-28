@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -6,6 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import plist from 'plist';
 import { prepareRuntimeDependencies, verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
+import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
+import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 
 export const DEVELOPER_ID_POLICY = 'developer-id-notarized';
 export const RUNTIME_SIGNING_MANIFEST = 'runtime-signing.json';
@@ -68,63 +69,222 @@ export function parseProtectedEnvironment(source) {
 
 export async function withTemporarySigningKeychain(configuration, work, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
+  const controller = dependencies.signal ? null : new AbortController();
+  const signal = dependencies.signal ?? controller.signal;
+  let interruptedSignal = null;
+  const unregisterSignals = controller
+    ? registerSigningAbortSignals(controller, (name) => { interruptedSignal ??= name; }, dependencies)
+    : () => {};
+  let sessionProcessTracker = null;
+  const lifecycleRun = async (command, args, runOptions = {}) => {
+    signal.throwIfAborted();
+    const processTrackers = [dependencies.processTracker, sessionProcessTracker, ...(runOptions.processTrackers ?? [])].filter(Boolean);
+    const result = await run(command, args, { signal, processTrackers });
+    signal.throwIfAborted();
+    return result;
+  };
   const makeTemp = dependencies.mkdtemp ?? mkdtemp;
   const remove = dependencies.rm ?? rm;
+  const write = dependencies.writeFile ?? writeFile;
   const canonicalize = dependencies.realpath ?? realpath;
   const password = (dependencies.randomPassword ?? (() => randomBytes(32).toString('base64url')))();
+  await recoverStaleSigningKeychains({ ...dependencies, run, remove });
   const directory = await canonicalize(await makeTemp(path.join(tmpdir(), 'xr-mac-signing-')));
+  const directoryInfo = await (dependencies.inspectDirectory ?? stat)(directory);
+  if (!directoryInfo.isDirectory() || (directoryInfo.mode & 0o077) !== 0
+    || (typeof process.getuid === 'function' && directoryInfo.uid !== process.getuid())) {
+    throw new Error('Temporary signing directory must be owned by this user and inaccessible to group or other users.');
+  }
   const keychain = path.join(directory, 'signing.keychain-db');
   let created = false;
+  let cleanupPromise;
   let primaryError;
+  const cleanup = () => cleanupPromise ??= (async () => {
+    const cleanupErrors = [];
+    try {
+      if (created) await withKeychainSearchLock((lockTracker) => run('/usr/bin/security', ['delete-keychain', keychain], {
+        processTrackers: [dependencies.processTracker, sessionProcessTracker, lockTracker].filter(Boolean),
+      }), dependencies);
+    } catch (cleanupError) {
+      if (cleanupError?.preserveOwnedResources) throw cleanupError;
+      cleanupErrors.push(cleanupError);
+      try {
+        await withKeychainSearchLock(async (lockTracker) => {
+          const trackedRun = (command, args) => run(command, args, {
+            processTrackers: [dependencies.processTracker, sessionProcessTracker, lockTracker].filter(Boolean),
+          });
+          const current = parseUserKeychainList((await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+          if (current.includes(keychain)) {
+            await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...current.filter((entry) => entry !== keychain)]);
+            const remaining = parseUserKeychainList((await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+            if (remaining.includes(keychain)) throw new Error('Owned signing keychain remains in the user search list after cleanup fallback.');
+          }
+        }, dependencies);
+      } catch (fallbackError) {
+        if (fallbackError?.preserveOwnedResources) throw fallbackError;
+        cleanupErrors.push(fallbackError);
+      }
+    }
+    try { await remove(directory, { recursive: true, force: true }); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, 'Temporary signing keychain cleanup failed.');
+  })();
   try {
-    await run('/usr/bin/security', ['create-keychain', '-p', password, keychain]);
+    const sessionOwner = await signingOwnerIdentity(dependencies);
+    const sessionOwnerPath = path.join(directory, 'owner.json');
+    await write(sessionOwnerPath, `${JSON.stringify(sessionOwner)}\n`, { flag: 'wx', mode: 0o600 });
+    sessionProcessTracker = createSigningSessionProcessTracker(sessionOwnerPath, sessionOwner);
+    await lifecycleRun('/usr/bin/security', ['create-keychain', '-p', password, keychain]);
     created = true;
-    await run('/usr/bin/security', ['set-keychain-settings', '-lut', '21600', keychain]);
-    await run('/usr/bin/security', ['unlock-keychain', '-p', password, keychain]);
-    await run('/usr/bin/security', ['import', configuration.certificatePath, '-k', keychain, '-P', configuration.certificatePassword,
-      '-T', '/usr/bin/codesign', '-T', '/usr/bin/productbuild', '-T', '/usr/bin/security']);
-    await run('/usr/bin/security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
-    await withKeychainSearchLock(async () => {
-      const userKeychains = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+    signal.throwIfAborted();
+    await lifecycleRun('/usr/bin/security', ['set-keychain-settings', '-lut', '900', keychain]);
+    await lifecycleRun('/usr/bin/security', ['unlock-keychain', '-p', password, keychain]);
+    await lifecycleRun('/usr/bin/security', ['import', configuration.certificatePath, '-k', keychain, '-P', configuration.certificatePassword,
+      '-T', '/usr/bin/codesign', '-T', '/usr/bin/productbuild']);
+    await lifecycleRun('/usr/bin/security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
+    await withKeychainSearchLock(async (lockTracker) => {
+      const tracked = { processTrackers: [lockTracker] };
+      const userKeychains = parseUserKeychainList((await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user'], tracked)).stdout);
       if (userKeychains.includes(keychain)) throw new Error('Owned signing keychain unexpectedly already exists in the user search list.');
-      await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...userKeychains, keychain]);
-      const activeKeychains = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+      await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...userKeychains, keychain], tracked);
+      const activeKeychains = parseUserKeychainList((await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user'], tracked)).stdout);
       if (!userKeychains.every((entry, index) => activeKeychains[index] === entry)
         || activeKeychains.filter((entry) => entry === keychain).length !== 1 || activeKeychains.indexOf(keychain) < userKeychains.length) {
         throw new Error('Temporary signing keychain was not appended without reordering the existing user search list.');
       }
     }, dependencies);
-    const identities = await run('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
+    const identities = await lifecycleRun('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
     const identity = selectDeveloperIdIdentity(identities.stdout, configuration.teamId);
-    return await work({ keychain, identity });
+    return await work({ keychain, identity, signal, processTracker: sessionProcessTracker,
+      processTrackers: [dependencies.processTracker, sessionProcessTracker].filter(Boolean) });
   } catch (error) {
     primaryError = error;
+    if (error?.preserveOwnedResources) {
+      try {
+        const ownerPath = path.join(directory, 'owner.json');
+        const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+        await writeJsonAtomic(ownerPath, { ...owner, unsafeProcessTree: error.processTree });
+      } catch (markError) {
+        const failure = new AggregateError([error, markError], 'Unsafe signing process state could not be recorded for recovery.');
+        failure.preserveOwnedResources = true;
+        failure.processTree = error.processTree;
+        primaryError = failure;
+        throw failure;
+      }
+    }
     throw error;
   } finally {
-    const cleanupErrors = [];
-    try {
-      if (created) await withKeychainSearchLock(() => run('/usr/bin/security', ['delete-keychain', keychain]), dependencies);
-    } catch (cleanupError) {
-      cleanupErrors.push(cleanupError);
-      try {
-        await withKeychainSearchLock(async () => {
-          const current = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
-          if (current.includes(keychain)) {
-            await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...current.filter((entry) => entry !== keychain)]);
-            const remaining = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
-            if (remaining.includes(keychain)) throw new Error('Owned signing keychain remains in the user search list after cleanup fallback.');
+    unregisterSignals();
+    if (!primaryError?.preserveOwnedResources) {
+      try { await cleanup(); }
+      catch (cleanupFailure) {
+        if (primaryError) {
+          const failure = new AggregateError([primaryError, cleanupFailure], 'Signing failed and its temporary keychain cleanup also failed.');
+          if (cleanupFailure?.preserveOwnedResources) {
+            failure.preserveOwnedResources = true;
+            failure.processTree = cleanupFailure.processTree;
           }
-        }, dependencies);
-      } catch (fallbackError) { cleanupErrors.push(fallbackError); }
+          throw failure;
+        }
+        throw cleanupFailure;
+      }
     }
-    try { await remove(directory, { recursive: true, force: true }); }
-    catch (removeError) { cleanupErrors.push(removeError); }
-    if (cleanupErrors.length > 0) {
-      const cleanupFailure = cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, 'Temporary signing keychain cleanup failed.');
-      if (primaryError) throw new AggregateError([primaryError, cleanupFailure], 'Signing failed and its temporary keychain cleanup also failed.');
-      throw cleanupFailure;
-    }
+    if (interruptedSignal) (dependencies.terminateAfterSignal ?? ((name) => { process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[name]; }))(interruptedSignal);
   }
+}
+
+async function signingOwnerIdentity(dependencies) {
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const identity = await inspect(process.pid);
+  if (!identity) throw new Error('Unable to identify the signing process owner.');
+  return identity;
+}
+
+function createSigningSessionProcessTracker(ownerPath, expectedOwner) {
+  const update = async (processState) => {
+    const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+    if (owner.pid !== expectedOwner.pid || owner.uid !== expectedOwner.uid || owner.startedAt !== expectedOwner.startedAt) {
+      throw new Error('Signing session owner changed before process state could be persisted.');
+    }
+    const next = { ...owner };
+    if (processState) next.processState = processState;
+    else delete next.processState;
+    await writeJsonAtomic(ownerPath, next);
+  };
+  return {
+    beforeSpawn: () => update({ status: 'starting' }),
+    started: (processTree) => update({ status: 'active', processTree }),
+    finished: () => update(null),
+  };
+}
+
+async function inspectSigningProcess(pid) {
+  try {
+    const result = await runCaptured('/bin/ps', ['-o', 'uid=', '-o', 'lstart=', '-p', String(pid)], { environment: { ...process.env, LC_ALL: 'C' } });
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(result.stdout);
+    if (!match) throw new Error(`ps returned malformed signing process identity for ${pid}.`);
+    return { pid, uid: Number(match[1]), startedAt: match[2] };
+  } catch (error) {
+    if (/exited with status 1\b/u.test(String(error?.message))) return null;
+    throw new Error(`Unable to inspect signing process ${pid}.`, { cause: error });
+  }
+}
+
+async function recoverStaleSigningKeychains(dependencies) {
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const canonicalTemp = await realpath(tmpdir());
+  const entries = await readdir(tmpdir(), { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('xr-mac-signing-')) continue;
+    const directory = path.join(tmpdir(), entry.name);
+    const info = await lstat(directory);
+    if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0
+      || (typeof process.getuid === 'function' && info.uid !== process.getuid())) continue;
+    const canonicalDirectory = await realpath(directory);
+    const relative = path.relative(canonicalTemp, canonicalDirectory);
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    let owner;
+    try { owner = JSON.parse(await readFile(path.join(directory, 'owner.json'), 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      if (Date.now() - info.mtimeMs < (dependencies.ownerGraceMs ?? 5_000)) continue;
+      try { await stat(path.join(directory, 'signing.keychain-db')); continue; }
+      catch (keychainError) { if (keychainError.code !== 'ENOENT') throw keychainError; }
+      await dependencies.remove(directory, { recursive: true, force: true });
+      continue;
+    }
+    if (owner.uid !== info.uid || typeof owner.startedAt !== 'string') continue;
+    const current = Number.isInteger(owner.pid) ? await inspect(owner.pid) : null;
+    if (current && current.uid === owner.uid && current.startedAt === owner.startedAt) continue;
+    if (owner.processState?.status === 'starting') continue;
+    if (owner.processState?.status === 'active') {
+      const active = await (dependencies.inspectProcessTree ?? inspectOwnedProcessTree)(owner.processState.processTree);
+      if (active !== false) continue;
+    }
+    if (owner.unsafeProcessTree) {
+      const active = await (dependencies.inspectProcessTree ?? inspectOwnedProcessTree)(owner.unsafeProcessTree);
+      if (active !== false) continue;
+    }
+    const keychain = path.join(directory, 'signing.keychain-db');
+    await withKeychainSearchLock(async (lockTracker) => {
+      const run = (command, args) => dependencies.run(command, args, {
+        processTrackers: [dependencies.processTracker, lockTracker].filter(Boolean),
+      });
+      const listed = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+      if (listed.includes(keychain)) await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...listed.filter((item) => item !== keychain)]);
+      try { await run('/usr/bin/security', ['delete-keychain', keychain]); } catch { /* directory removal below is the final recovery */ }
+    }, dependencies);
+    await dependencies.remove(directory, { recursive: true, force: true });
+  }
+}
+
+function registerSigningAbortSignals(controller, onSignal, dependencies) {
+  const target = dependencies.signalTarget ?? process;
+  const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => {
+    onSignal(signal);
+    controller.abort(new Error(`Signing interrupted by ${signal}.`));
+  }]));
+  for (const [signal, handler] of handlers) target.once(signal, handler);
+  return () => { for (const [signal, handler] of handlers) target.removeListener(signal, handler); };
 }
 
 export function selectDeveloperIdIdentity(output, expectedTeamId) {
@@ -321,7 +481,9 @@ export async function verifyDeveloperIdDiskImage(dmgPath, expectedTeamId, depend
 
 export async function notarizeAndStaple({ kind, artifactPath, credentials, evidenceDirectory }, dependencies = {}) {
   if (!['app', 'dmg'].includes(kind)) throw new Error(`Unsupported notarization kind ${kind}.`);
-  const run = dependencies.run ?? runCaptured;
+  const baseRun = dependencies.run ?? runCaptured;
+  const run = (command, args) => baseRun(command, args, { signal: dependencies.signal,
+    processTracker: dependencies.processTracker, processTrackers: dependencies.processTrackers });
   await mkdir(evidenceDirectory, { recursive: true });
   const completedPath = path.join(evidenceDirectory, `${kind}-completed.json`);
   const completed = await readOptionalJson(completedPath);
@@ -460,42 +622,20 @@ function assertDenoEntitlements(actual) {
 }
 
 async function withKeychainSearchLock(work, dependencies = {}) {
-  const make = dependencies.mkdir ?? mkdir;
-  const remove = dependencies.rm ?? rm;
-  const token = randomBytes(16).toString('hex');
   const lockPath = dependencies.keychainSearchLock ?? KEYCHAIN_SEARCH_LOCK;
-  const ownerPath = path.join(lockPath, 'owner.json');
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await make(lockPath);
-      await writeFile(ownerPath, `${JSON.stringify({ pid: process.pid, token })}\n`, { flag: 'wx', mode: 0o600 });
-      break;
-    }
-    catch (error) {
-      if (error.code !== 'EEXIST' || attempt >= 300) throw new Error('Timed out waiting for the shared macOS keychain search-list lock.', { cause: error });
-      try {
-        const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
-        if (!Number.isInteger(owner.pid) || typeof owner.token !== 'string') {
-          const invalid = new Error('Invalid shared keychain search-list lock owner metadata.');
-          invalid.code = 'INVALID_LOCK_OWNER';
-          throw invalid;
-        }
-        const alive = dependencies.isProcessAlive ? dependencies.isProcessAlive(owner.pid) : (() => { try { process.kill(owner.pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } })();
-        if (!alive) await remove(lockPath, { recursive: true });
-      } catch (ownerError) {
-        if (ownerError.code !== 'ENOENT' && ownerError.code !== 'INVALID_LOCK_OWNER' && !(ownerError instanceof SyntaxError)) throw ownerError;
-        const info = await stat(lockPath);
-        const grace = dependencies.keychainOwnerGraceMs ?? 5_000;
-        if (Date.now() - info.mtimeMs >= grace) await remove(lockPath, { recursive: true });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  try { return await work(); } finally {
-    const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
-    if (owner.pid !== process.pid || owner.token !== token) throw new Error('Shared keychain search-list lock ownership changed unexpectedly.');
-    await remove(lockPath, { recursive: true });
-  }
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const identity = await signingOwnerIdentity(dependencies);
+  return withOwnedDirectoryLock(lockPath, (processTracker) => work(processTracker), {
+    ownerIdentity: async () => identity,
+    inspectOwner: inspect,
+    inspectUnsafeTree: dependencies.inspectProcessTree ?? inspectOwnedProcessTree,
+    ownerGraceMs: dependencies.keychainOwnerGraceMs,
+    waitForBusy: true,
+    maxBusyAttempts: 300,
+    retryDelayMs: 100,
+    busyMessage: 'Timed out waiting for the shared macOS keychain search-list lock.',
+    randomToken: dependencies.randomLockToken,
+  });
 }
 
 async function repairPythonFramework(framework) {
@@ -643,13 +783,12 @@ async function preparePersistentAppUpload(appPath, evidenceDirectory, run) {
 async function sha256(file) { const hash = createHash('sha256'); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest('hex'); }
 
 export function runCaptured(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.environment, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = ''; let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve({ stdout, stderr })
-      : reject(new Error(`${path.basename(command)} exited with status ${code}: ${(stderr || stdout).trim() || 'no diagnostic output'}`)));
+  return runOwnedProcess(command, args, {
+    cwd: options.cwd,
+    environment: options.environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    signal: options.signal,
+    processTracker: options.processTracker,
+    processTrackers: options.processTrackers,
   });
 }

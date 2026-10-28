@@ -5,7 +5,7 @@ import type { NativeInstaller, UpdateApplyRequest } from '../../src/updates/type
 function request(events: string[], signal = new AbortController().signal): UpdateApplyRequest {
   return {
     offer: {} as UpdateApplyRequest['offer'], packageFile: '/private/update.zip', signal,
-    recordAttempt: async () => { events.push('attempt'); },
+    recordAttempt: async (token) => { events.push(token ? `attempt:${token}` : 'attempt'); },
     installing: () => { events.push('installing'); },
     failed: async (code, message) => { events.push(`failed:${code}:${message}`); },
   };
@@ -82,6 +82,31 @@ describe('update coordinator terminal boundary', () => {
     ]);
     expect(events).not.toContain('lease-cancel');
     expect(events).not.toContain('completed');
+  });
+
+  it('bounds a runtime close that never settles and never hands off the native installer', async () => {
+    const events: string[] = [];
+    await runUpdateCoordinator(request(events), installer(events), runtime(events, () => new Promise<void>(() => undefined)), {
+      shutdownOwned: () => events.push('owned'), completed: () => events.push('completed'),
+      terminalFailure: async (error) => { events.push(`terminal:${error.message}`); },
+    }, 5);
+    expect(events).toEqual([
+      'attempt', 'transfer', 'owned', 'installing', 'prepared-cancel',
+      'failed:update_apply_failed:關閉資料服務超過兩分鐘，未交接安裝；請重新開啟 App 後再試。',
+      'terminal:關閉資料服務超過兩分鐘，未交接安裝；請重新開啟 App 後再試。',
+    ]);
+    expect(events).not.toContain('handoff');
+    expect(events).not.toContain('completed');
+  });
+
+  it('persists the native recovery token as the existing install-attempt id', async () => {
+    const events: string[] = [];
+    await runUpdateCoordinator(request(events), installer(events, { prepare: async () => ({
+      recoveryToken: 'mac-run-id', handoff: async () => { events.push('handoff'); }, cancel: async () => undefined,
+    }) }), runtime(events), {
+      shutdownOwned: () => events.push('owned'), completed: () => events.push('completed'), terminalFailure: vi.fn(),
+    }, 1_000);
+    expect(events).toEqual(['attempt:mac-run-id', 'transfer', 'owned', 'installing', 'close', 'handoff', 'completed']);
   });
 
   it('hands off only after runtime close and then completes', async () => {

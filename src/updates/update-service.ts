@@ -1,16 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError, type DeviceUpdateStatus, type UpdateInstallAttempt, type UpdateOffer } from '../core/types.js';
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import { compareVersions } from './release-index.js';
-import type { NativeInstaller, UpdateAccess, UpdateApplyRequest, UpdateIdentity, UpdateSelection, UpdateSource } from './types.js';
+import type { NativeInstaller, NativeInstallRecovery, UpdateAccess, UpdateApplyRequest, UpdateIdentity, UpdateSelection, UpdateSource } from './types.js';
 
 interface SavedUpdateState {
   schemaVersion: 1;
   ready: { offer: UpdateOffer; fileName: string } | null;
   attempt: (UpdateInstallAttempt & { previousVersion: string; previousBuildId: string; eventRecorded: boolean }) | null;
+  lastCheckAttemptAt: string | null;
+  checkedAt: string | null;
 }
 
 export interface UpdateServiceOptions {
@@ -23,6 +25,9 @@ export interface UpdateServiceOptions {
   now?: () => Date;
   event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
   apply?: (request: UpdateApplyRequest) => void;
+  downloadIdleTimeoutMs?: number;
+  /** Filesystem seam for deterministic locked-file coverage; production uses fs.rm. */
+  removeCacheEntry?: (target: string, options: { recursive?: boolean; force?: boolean }) => Promise<void>;
 }
 
 /** Owns update discovery and verified cached bytes; native installers only receive a pinned ready file. */
@@ -32,7 +37,8 @@ export class UpdateService implements UpdateAccess {
   private readonly request: typeof fetch;
   private readonly now: () => Date;
   private state: DeviceUpdateStatus;
-  private saved: SavedUpdateState = { schemaVersion: 1, ready: null, attempt: null };
+  private saved: SavedUpdateState = { schemaVersion: 1, ready: null, attempt: null, lastCheckAttemptAt: null, checkedAt: null };
+  private lastCheckEvent: string | null = null;
   private packageFile: string | null = null;
   private checkWork: Promise<DeviceUpdateStatus> | null = null;
   private checkAbort: AbortController | null = null;
@@ -42,6 +48,7 @@ export class UpdateService implements UpdateAccess {
   private applyWork: Promise<DeviceUpdateStatus> | null = null;
   private saves: Promise<void> = Promise.resolve();
   private closed = false;
+  private nativeRecoveryRequired = false;
 
   private constructor(private readonly options: UpdateServiceOptions) {
     this.stateFile = path.join(options.directory, 'state.json');
@@ -51,7 +58,7 @@ export class UpdateService implements UpdateAccess {
     this.state = {
       phase: 'idle', currentVersion: options.identity.version, target: options.identity.target,
       variant: options.identity.variant, installerAvailable: options.installer.available,
-      offer: null, ready: null, lastAttempt: null, progress: null, checkedAt: null,
+      offer: null, ready: null, lastAttempt: null, progress: null, lastCheckAttemptAt: null, checkedAt: null,
       message: options.installer.available ? '尚未檢查更新。' : '此執行環境無法安裝更新。', errorCode: null,
     };
   }
@@ -60,6 +67,7 @@ export class UpdateService implements UpdateAccess {
     const service = new UpdateService(options);
     await mkdir(service.cache, { recursive: true, mode: 0o700 });
     await chmod(options.directory, 0o700).catch(() => undefined);
+    await service.assertOwnedCache();
     await service.restore();
     return service;
   }
@@ -120,9 +128,9 @@ export class UpdateService implements UpdateAccess {
     let attemptId: string | null = null;
     const request: UpdateApplyRequest = {
       offer: ready, packageFile: this.packageFile, signal: abort.signal,
-      recordAttempt: async () => {
+      recordAttempt: async (recoveryToken?: string) => {
         if (this.applyAbort !== abort || abort.signal.aborted) throw abort.signal.reason ?? new CollectorError('update_cancelled', '已取消等待更新。');
-        const attempt = { id: randomUUID(), version: ready.version, buildId: ready.buildInfo.buildId, startedAt: this.now().toISOString(),
+        const attempt = { id: recoveryToken ?? randomUUID(), version: ready.version, buildId: ready.buildInfo.buildId, startedAt: this.now().toISOString(),
           finishedAt: null, outcome: 'pending' as const, message: `正在安裝 ${ready.version}。`,
           previousVersion: this.options.identity.version, previousBuildId: this.options.currentBuildId ?? 'unknown', eventRecorded: false };
         attemptId = attempt.id;
@@ -169,24 +177,31 @@ export class UpdateService implements UpdateAccess {
 
   private async performCheck(): Promise<DeviceUpdateStatus> {
     const abort = new AbortController(); this.checkAbort = abort;
+    const attemptedAt = this.now().toISOString();
+    this.saved.lastCheckAttemptAt = attemptedAt;
+    this.set({ lastCheckAttemptAt: attemptedAt });
+    await this.save();
     this.set({ phase: this.state.ready ? 'ready' : 'checking', message: '正在檢查更新…', errorCode: null });
     try {
       const offer = await this.options.source.check(this.options.identity, abort.signal);
       if (this.closed || abort.signal.aborted) return this.status();
       const checkedAt = this.now().toISOString();
       if (!offer) {
+        this.saved.checkedAt = checkedAt; await this.save();
+        this.lastCheckEvent = 'up_to_date';
         this.set({ checkedAt, offer: null, phase: this.state.ready ? 'ready' : 'up_to_date',
           message: this.state.ready ? `${this.state.ready.version} 已準備好。` : '已是最新版。', errorCode: null });
       } else {
+        this.saved.checkedAt = checkedAt; await this.save();
         this.set({ checkedAt, offer, phase: this.state.ready ? 'ready' : 'available',
           message: this.state.ready ? `${this.state.ready.version} 已準備好；另有 ${offer.version} 可下載。` : `有新版本 ${offer.version}。`, errorCode: null });
-        this.options.event?.('info', 'device.update_available', `有新版本 ${offer.version}。`);
+        this.emitCheckTransition(`available:${offer.version}:${offer.payload.sha256}`, 'info', 'device.update_available', `有新版本 ${offer.version}。`);
       }
     } catch (error) {
       if (this.closed || abort.signal.aborted) return this.status();
       const problem = updateError(error, 'update_source_failed', '無法檢查更新。');
       this.set({ phase: this.state.ready ? 'ready' : 'error', message: problem.message, errorCode: problem.code });
-      this.options.event?.('warning', 'device.update_check_failed', problem.message, problem.code);
+      this.emitCheckTransition(`failed:${problem.code}:${problem.message}`, 'warning', 'device.update_check_failed', problem.message, problem.code);
     }
     if (this.checkAbort === abort) this.checkAbort = null;
     return this.status();
@@ -195,20 +210,31 @@ export class UpdateService implements UpdateAccess {
   private async performDownload(): Promise<DeviceUpdateStatus> {
     const offer = this.state.offer;
     if (!offer) throw new CollectorError('update_not_available', '目前沒有可下載的更新。');
-    if (this.state.ready?.version === offer.version && this.packageFile) return this.status();
+    if (this.state.ready?.version === offer.version && this.state.ready.payload.sha256 === offer.payload.sha256 && this.packageFile) return this.status();
     const abort = new AbortController(); this.downloadAbort = abort;
     const temporary = path.join(this.cache, `${randomUUID()}.part`);
     const destination = path.join(this.cache, `${offer.payload.sha256.slice(0, 16)}-${path.basename(offer.payload.name)}`);
     this.set({ phase: 'downloading', progress: { transferred: 0, total: offer.payload.bytes, percent: 0 }, message: '正在下載更新…', errorCode: null });
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const idleTimeout = this.options.downloadIdleTimeoutMs ?? 60_000;
+    const armIdleTimeout = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abort.abort(new CollectorError('update_download_timeout', '更新下載逾時，請稍後再試。')), idleTimeout);
+    };
+    const aborted = new Promise<never>((_resolve, reject) => abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }));
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
-      const response = await this.request(offer.payload.url, { signal: abort.signal, redirect: 'follow', credentials: 'omit', headers: { Accept: 'application/octet-stream' } });
+      armIdleTimeout();
+      const response = await Promise.race([this.request(offer.payload.url, { signal: abort.signal, redirect: 'follow', credentials: 'omit', headers: { Accept: 'application/octet-stream' } }), aborted]);
+      armIdleTimeout();
       if (!response.ok || !response.body) throw new CollectorError('update_download_failed', `更新下載回應 ${response.status}。`);
       assertSafeDownloadUrl(response.url || offer.payload.url);
       const output = await open(temporary, 'wx', 0o600); const hash = createHash('sha256'); let transferred = 0;
       try {
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         for (;;) {
-          const part = await reader.read(); if (part.done) break;
+          const part = await Promise.race([reader.read(), aborted]); if (part.done) break;
+          armIdleTimeout();
           transferred += part.value.byteLength;
           if (transferred > offer.payload.bytes) throw new CollectorError('update_integrity_failed', '更新檔大小超過索引記錄。');
           const bytes = Buffer.from(part.value); hash.update(bytes);
@@ -220,6 +246,7 @@ export class UpdateService implements UpdateAccess {
           }
           this.set({ progress: { transferred, total: offer.payload.bytes, percent: Math.floor(transferred / offer.payload.bytes * 100) } });
         }
+        if (idleTimer) clearTimeout(idleTimer); idleTimer = undefined;
         await output.sync();
       } finally { await output.close(); }
       this.set({ phase: 'verifying', message: '正在驗證更新檔…' });
@@ -230,13 +257,13 @@ export class UpdateService implements UpdateAccess {
       await rename(temporary, destination);
       await this.options.installer.validate(offer, destination, abort.signal);
       if (abort.signal.aborted) { await rm(destination, { force: true }); throw abort.signal.reason; }
-      const old = this.packageFile;
       this.packageFile = destination; this.saved.ready = { offer, fileName: path.basename(destination) };
       this.set({ phase: 'ready', ready: offer, progress: null, message: `${offer.version} 已準備好。`, errorCode: null });
       await this.save();
-      if (old && old !== destination) await rm(old, { force: true });
+      await this.cleanupCache(path.basename(destination));
       this.options.event?.('info', 'device.update_ready', `版本 ${offer.version} 已下載並驗證。`);
     } catch (error) {
+      if (reader) void reader.cancel(error).catch(() => undefined);
       await rm(temporary, { force: true });
       if (this.packageFile !== destination) await rm(destination, { force: true });
       const problem = updateError(error, 'update_download_failed', '下載更新失敗。');
@@ -245,30 +272,34 @@ export class UpdateService implements UpdateAccess {
         message: this.state.ready ? `${this.state.ready.version} 仍已準備好；${problem.message}` : problem.message,
         errorCode: cancelled ? null : problem.code });
       this.options.event?.(problem.code === 'update_cancelled' ? 'info' : 'error', 'device.update_download_failed', problem.message, problem.code);
-    }
+    } finally { if (idleTimer) clearTimeout(idleTimer); }
     return this.status();
   }
 
   private async restore(): Promise<void> {
     try {
       const value = await readJsonFile(this.stateFile) as Partial<SavedUpdateState> | undefined;
-      if (!value) { await this.save(); return; }
+      if (!value) { await this.save(); await this.cleanupCache(null); return; }
       if (value.schemaVersion !== 1 || !('ready' in value) || !('attempt' in value)
-        || Object.keys(value).some((key) => !['schemaVersion', 'ready', 'attempt'].includes(key))) throw new Error('unsupported state');
-      this.saved = { schemaVersion: 1, ready: value.ready ?? null, attempt: parseAttempt(value.attempt) };
+        || Object.keys(value).some((key) => !['schemaVersion', 'ready', 'attempt', 'lastCheckAttemptAt', 'checkedAt'].includes(key))) throw new Error('unsupported state');
+      this.saved = { schemaVersion: 1, ready: value.ready ?? null, attempt: parseAttempt(value.attempt),
+        lastCheckAttemptAt: validTime(value.lastCheckAttemptAt), checkedAt: validTime(value.checkedAt) };
+      this.set({ lastCheckAttemptAt: this.saved.lastCheckAttemptAt, checkedAt: this.saved.checkedAt });
       await this.reconcileAttempt();
-      if (!this.saved.ready) return;
+      if (!this.saved.ready) { await this.cleanupCache(null); return; }
       const offer = this.saved.ready.offer;
       const file = path.join(this.cache, path.basename(this.saved.ready.fileName));
       if (!sameIdentity(offer, this.options.identity)) throw new Error('ready cache is invalid');
       if (compareVersions(offer.version, this.options.identity.version) <= 0) {
-        this.saved.ready = null; await this.save(); return;
+        this.saved.ready = null; await this.save(); await this.cleanupCache(null); return;
       }
       if (!await verifyFile(file, offer.payload.bytes, offer.payload.sha256)) throw new Error('ready cache is invalid');
       await this.options.installer.validate(offer, file);
       this.packageFile = file; this.set({ phase: 'ready', ready: offer, offer, message: `${offer.version} 已準備好。`, errorCode: null });
+      await this.cleanupCache(path.basename(file));
     } catch {
       this.saved.ready = null; this.packageFile = null; await this.save();
+      await this.cleanupCache(null);
       this.set({ phase: 'idle', ready: null, message: '已清除無效的更新快取，請重新下載。', errorCode: null });
     }
   }
@@ -276,26 +307,96 @@ export class UpdateService implements UpdateAccess {
   private async reconcileAttempt(): Promise<void> {
     const attempt = this.saved.attempt;
     if (!attempt) return;
-    const expectedBuildIsRunning = this.options.identity.version === attempt.version && this.options.currentBuildId === attempt.buildId;
-    if (attempt.outcome === 'pending' && !expectedBuildIsRunning) {
-      this.saved.attempt = { ...attempt, outcome: 'unknown', finishedAt: this.now().toISOString(),
-        message: `無法確認 ${attempt.version} 的安裝結果。`, eventRecorded: false };
-      await this.save();
-    }
     this.set({ lastAttempt: publicAttempt(this.saved.attempt!) });
+  }
+
+  async consumeNativeRecovery(result: NativeInstallRecovery): Promise<boolean> {
+    const attempt = this.saved.attempt;
+    if (!attempt || result.token !== attempt.id
+      || result.previousVersion !== attempt.previousVersion || result.previousBuildId !== attempt.previousBuildId
+      || result.expectedVersion !== attempt.version || result.expectedBuildId !== attempt.buildId) return false;
+    if (result.phase === 'recovery_required') {
+      const message = `安裝 ${attempt.version} 需要人工復原。${result.reason ? ` ${result.reason}` : ''}`;
+      const nextAttempt = { ...attempt, outcome: 'unknown' as const, finishedAt: this.now().toISOString(), message, eventRecorded: true };
+      this.saved.attempt = nextAttempt;
+      try { await this.save(); }
+      catch (error) { this.saved.attempt = attempt; this.set({ lastAttempt: publicAttempt(attempt) }); throw error; }
+      this.nativeRecoveryRequired = true;
+      this.set({ lastAttempt: publicAttempt(nextAttempt), ...(this.state.phase === 'idle' ? { message } : {}) });
+      this.options.event?.('warning', 'device.update_outcome_unknown', message, 'update_recovery_required');
+      return false;
+    }
+    const runningExpected = this.options.identity.version === attempt.version && this.options.currentBuildId === attempt.buildId;
+    const runningPrevious = this.options.identity.version === attempt.previousVersion && this.options.currentBuildId === attempt.previousBuildId;
+    if (result.phase === 'succeeded' ? !runningExpected : !runningPrevious) return false;
+    const succeeded = result.phase === 'succeeded';
+    const expectedOutcome = succeeded ? 'succeeded' : 'failed';
+    if (attempt.outcome === expectedOutcome) return true;
+    if (!['pending', 'unknown'].includes(attempt.outcome)) return false;
+    const message = succeeded ? `已安裝 ${attempt.version}。` : result.phase === 'rolled_back'
+      ? `安裝 ${attempt.version} 失敗，已還原。${result.reason ? ` ${result.reason}` : ''}`
+      : `安裝 ${attempt.version} 失敗。${result.reason ? ` ${result.reason}` : ''}`;
+    const nextAttempt = { ...attempt, outcome: succeeded ? 'succeeded' as const : 'failed' as const,
+      finishedAt: this.now().toISOString(), message, eventRecorded: true };
+    this.saved.attempt = nextAttempt;
+    try { await this.save(); }
+    catch (error) { this.saved.attempt = attempt; this.set({ lastAttempt: publicAttempt(attempt) }); throw error; }
+    this.nativeRecoveryRequired = false;
+    this.set({ lastAttempt: publicAttempt(nextAttempt), ...(this.state.phase === 'idle' ? { message } : {}) });
+    this.options.event?.(succeeded ? 'info' : 'error', succeeded ? 'device.update_installed' : 'device.update_install_failed', message,
+      succeeded ? undefined : 'update_install_failed');
+    return true;
+  }
+
+  private emitCheckTransition(key: string, severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string): void {
+    if (this.lastCheckEvent === key) return;
+    this.lastCheckEvent = key; this.options.event?.(severity, type, message, code);
+  }
+
+  private async assertOwnedCache(): Promise<void> {
+    const info = await lstat(this.cache);
+    if (!info.isDirectory() || info.isSymbolicLink() || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
+      throw new Error('Update cache must be an owned directory, not a symlink.');
+    }
+    await chmod(this.cache, 0o700);
+  }
+
+  private async cleanupCache(keep: string | null): Promise<void> {
+    await this.assertOwnedCache();
+    for (const entry of await readdir(this.cache, { withFileTypes: true })) {
+      if (entry.name === keep && entry.isFile()) continue;
+      const target = path.join(this.cache, entry.name);
+      const info = await lstat(target);
+      try {
+        const remove = this.options.removeCacheEntry ?? rm;
+        if (info.isDirectory() && !info.isSymbolicLink()) await remove(target, { recursive: true, force: true });
+        else await remove(target, { force: true });
+      } catch (error) {
+        // A newly launched Windows build can overlap the exiting NSIS process,
+        // which temporarily owns the previous installer. Cache maintenance is
+        // retried at the next startup/download and must not roll back the app.
+        if (!this.options.identity.target.startsWith('win32-') || !isWindowsFileInUse(error)) throw error;
+      }
+    }
   }
 
   /** Called only after the Collector runtime, UI and native restart acknowledgement are ready. */
   async confirmRunningBuild(): Promise<void> {
     const attempt = this.saved.attempt;
     if (!attempt) return;
-    if ((attempt.outcome === 'pending' || attempt.outcome === 'unknown') && this.options.identity.version === attempt.version
+    if ((attempt.outcome === 'pending' || attempt.outcome === 'unknown' && !this.nativeRecoveryRequired) && this.options.identity.version === attempt.version
       && this.options.currentBuildId === attempt.buildId) {
       this.saved.attempt = { ...attempt, outcome: 'succeeded', finishedAt: this.now().toISOString(),
         message: `已安裝 ${attempt.version}。`, eventRecorded: true };
       await this.save(); this.set({ ...(this.state.phase === 'idle' ? { message: this.saved.attempt.message } : {}),
         lastAttempt: publicAttempt(this.saved.attempt) });
       this.options.event?.('info', 'device.update_installed', this.saved.attempt.message);
+    } else if (attempt.outcome === 'pending') {
+      this.saved.attempt = { ...attempt, outcome: 'unknown', finishedAt: this.now().toISOString(),
+        message: `無法確認 ${attempt.version} 的安裝結果。`, eventRecorded: true };
+      await this.save(); this.set({ ...(this.state.phase === 'idle' ? { message: this.saved.attempt.message } : {}),
+        lastAttempt: publicAttempt(this.saved.attempt) });
+      this.options.event?.('warning', 'device.update_outcome_unknown', this.saved.attempt.message, 'update_outcome_unknown');
     } else if (!attempt.eventRecorded && attempt.outcome === 'unknown') {
       this.saved.attempt = { ...attempt, eventRecorded: true };
       await this.save(); this.set({ lastAttempt: publicAttempt(this.saved.attempt) });
@@ -324,6 +425,16 @@ async function verifyFile(file: string, bytes: number, digest: string): Promise<
   } catch { return false; }
 }
 function sameIdentity(offer: UpdateOffer, identity: UpdateIdentity): boolean { return offer.target === identity.target && offer.variant === identity.variant; }
+function validTime(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Error('invalid check timestamp');
+  return value;
+}
+
+function isWindowsFileInUse(error: unknown): boolean {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  return code === 'EPERM' || code === 'EBUSY';
+}
 function parseAttempt(value: unknown): SavedUpdateState['attempt'] {
   if (value === null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid attempt');

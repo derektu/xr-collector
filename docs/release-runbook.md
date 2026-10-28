@@ -2,6 +2,8 @@
 
 正式 Release 只接收兩台指定本機從同一個乾淨 commit 建置並完成驗收的原產物。publisher 不建置 App、不修改 payload，也不從 CI 取用安裝包。首版使用版本 `0.1.0` 與 tag `v0.1.0`；tag 只在 #36 完成、最終候選凍結且使用者授權後建立。
 
+Developer ID 發布只可在受信任的單人發布 Mac 上執行。macOS `security import` 必須以命令列的 `-P` 傳入 p12 密碼，因此在該命令短暫執行期間，同機其他使用者可能從 process argv 讀到密碼；發布時不得讓其他使用者登入或執行不受信任的程式。流程不授權 `/usr/bin/security` 匯出私鑰，temporary keychain 只解鎖 15 分鐘，SIGINT／SIGTERM／SIGHUP 會先中止目前 child／後續簽章步驟，完成 keychain 清理後才釋放 checkout lock 並結束。SIGKILL 無法即時執行 handler；下一次簽章啟動會驗證目錄 owner／權限，並以 PID、owner UID 與 process start identity 回收確定已死亡 session 的 keychain，process 狀態無法確認或仍存活時不會刪除。`mkdtemp` 到寫入 owner metadata 間若遭 SIGKILL，只會留下尚未建立私鑰的空目錄；啟動 recovery 在五秒 grace 後只移除其中沒有 keychain 的 ownerless 空目錄。
+
 ## 首版工作順序
 
 1. #35 先合併 publisher 工具、拒絕條件、fake transport 測試及本手冊。

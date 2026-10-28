@@ -3,12 +3,20 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NsisUpdater } from 'electron-updater';
+import type { AppAdapter } from 'electron-updater/out/AppAdapter.js';
 import { DownloadedUpdateHelper } from 'electron-updater/out/DownloadedUpdateHelper.js';
 import { CollectorError, type UpdateOffer } from '../core/types.js';
 import type { NativeInstaller, PreparedInstall } from './types.js';
 
 /** Exposes electron-updater's standard verified-cache to silent NSIS install seam. */
-class PinnedNsisUpdater extends NsisUpdater {
+export class PinnedNsisUpdater extends NsisUpdater {
+  private installError: Error | null = null;
+  constructor(app?: AppAdapter) {
+    super(null, app);
+    // electron-updater reports both synchronous validation failures and later spawn failures on
+    // EventEmitter's special "error" channel. Always consume it so a late error is not unhandled.
+    this.on('error', (error: Error) => { this.installError = error; });
+  }
   async accept(offer: UpdateOffer, file: string): Promise<void> {
     // Invoke NsisUpdater's normal publisher policy: unsigned builds have no publisherName, while
     // future signed builds are checked against their packaged app-update.yml identity.
@@ -27,19 +35,34 @@ class PinnedNsisUpdater extends NsisUpdater {
     this.downloadedUpdateHelper ??= new DownloadedUpdateHelper(path.dirname(file));
     await this.downloadedUpdateHelper.setDownloadedFile(file, null, updateInfo, fileInfo, path.basename(file), false);
   }
-  installPinned(): void {
-    if (!this.install(true, true)) throw new CollectorError('update_apply_failed', 'Windows 安裝程式無法啟動。');
+  async installPinned(): Promise<void> {
+    this.installError = null;
+    const accepted = this.install(true, true);
+    // Allow an immediate child-process error to reach the updater before the old App exits. Once
+    // NSIS has started, its eventual install result has no callback and is reconciled next launch.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const problem = this.installError as Error | null;
+    if (problem) throw new CollectorError('update_apply_failed', `Windows 安裝程式無法啟動：${problem.message}`, { cause: problem });
+    if (!accepted) throw new CollectorError('update_apply_failed', 'Windows 安裝程式無法啟動。');
   }
+}
+
+export interface WindowsUpdaterAdapter {
+  accept(offer: UpdateOffer, file: string): Promise<void>;
+  installPinned(): Promise<void>;
 }
 
 /** Uses electron-updater 6.8.3's NSIS path without automatic check, download, quit or install. */
 export class WindowsNativeInstaller implements NativeInstaller {
   readonly available: boolean;
-  private readonly updater: PinnedNsisUpdater;
-  constructor(packaged: boolean) {
-    this.available = process.platform === 'win32' && packaged;
-    this.updater = new PinnedNsisUpdater(null);
-    this.updater.autoDownload = false; this.updater.autoInstallOnAppQuit = false;
+  private readonly updater: WindowsUpdaterAdapter;
+  constructor(packaged: boolean, dependencies: { platform?: NodeJS.Platform; updater?: WindowsUpdaterAdapter } = {}) {
+    this.available = (dependencies.platform ?? process.platform) === 'win32' && packaged;
+    const updater = dependencies.updater ?? new PinnedNsisUpdater();
+    if (updater instanceof PinnedNsisUpdater) {
+      updater.autoDownload = false; updater.autoInstallOnAppQuit = false;
+    }
+    this.updater = updater;
   }
   async validate(offer: UpdateOffer, packageFile: string): Promise<void> {
     if (!this.available || offer.target !== 'win32-x64' || !packageFile.toLowerCase().endsWith('.exe')) {
@@ -51,7 +74,7 @@ export class WindowsNativeInstaller implements NativeInstaller {
     await this.updater.accept(offer, packageFile); if (signal.aborted) throw signal.reason;
     let finished = false;
     return {
-      handoff: async () => { if (finished) return; finished = true; this.updater.installPinned(); },
+      handoff: async () => { if (finished) return; await this.updater.installPinned(); finished = true; },
       cancel: async () => { finished = true; },
     };
   }

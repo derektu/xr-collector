@@ -1199,6 +1199,9 @@ export interface DeviceUpdateStatus {
   ready: UpdateOffer | null;
   lastAttempt: UpdateInstallAttempt | null;
   progress: { transferred: number; total: number; percent: number } | null;
+  /** Most recent check attempt, successful or failed; scheduling uses this to avoid retry storms. */
+  lastCheckAttemptAt: string | null;
+  /** Most recent successful check. */
   checkedAt: string | null;
   message: string;
   errorCode: string | null;

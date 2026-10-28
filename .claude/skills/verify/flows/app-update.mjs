@@ -28,7 +28,7 @@ export async function run({ instance, page, record, waitFor }) {
       phase: 'idle', currentVersion: '0.1.0', target: 'darwin-arm64', variant: 'chinese', installerAvailable: false,
       offer: null, ready: null, lastAttempt: { id: 'fixture', version: '0.1.0', buildId: 'fixture', startedAt: '2026-10-28T00:00:00.000Z',
         finishedAt: '2026-10-28T00:01:00.000Z', outcome: 'unknown', message: '無法確認 0.1.0 的安裝結果。' },
-      progress: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null,
+      progress: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null,
     } }) });
     await page.route('**/api/device/updates', unavailable);
     await page.goto(`${instance.url}/settings`);
@@ -86,16 +86,15 @@ export async function run({ instance, page, record, waitFor }) {
 
     await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 0; value.updates.payloadMode = 'corrupt'; });
     await page.getByTestId('update-download').click();
-    await page.getByTestId('update-check').waitFor();
+    await waitFor(async () => (await update()).phase === 'error', 'integrity error state', { timeout: 8_000 });
+    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action', { timeout: 8_000 });
     const failed = await update();
     expect(failed.phase === 'error' && failed.errorCode === 'update_integrity_failed' && failed.ready === null,
-      '雜湊錯誤不發布 ready，回到可重新檢查的錯誤狀態', {
+      '雜湊錯誤不發布 ready，但保留同一 offer 可直接重新下載', {
         id: 'u36.integrity-error', actual: { phase: failed.phase, code: failed.errorCode, ready: failed.ready },
       });
     await shot('integrity-error');
     await instance.updateCatalog((value) => { value.updates.payloadMode = 'valid'; });
-    await page.getByTestId('update-check').click();
-    await page.getByTestId('update-download').waitFor();
     await page.getByTestId('update-download').click();
     await page.getByTestId('update-apply').waitFor();
     const ready = await update();
@@ -130,7 +129,18 @@ export async function run({ instance, page, record, waitFor }) {
       });
     await page.getByTestId('update-cancel').click();
     await page.getByTestId('update-apply').waitFor();
-    await page.getByTestId('update-apply').click();
+    const retryStatus = { ...(await update()), phase: 'error', errorCode: 'update_apply_failed', message: '準備更新逾時，請重試。' };
+    const retryRoute = '**/api/device/updates';
+    await page.route(retryRoute, (route) => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ update: retryStatus }) }));
+    try {
+      await page.reload();
+      await page.getByText(retryStatus.message, { exact: true }).waitFor();
+      expect(await page.getByTestId('update-apply').isVisible() && await page.getByTestId('update-download').isVisible(),
+        '錯誤後保留 ready 的套用與新版 offer 的下載入口', { id: 'u36.error-retains-actions' });
+      await shot('error-ready-retry');
+      await page.getByTestId('update-apply').click();
+    } finally { await page.unroute(retryRoute); }
     await page.getByTestId('update-cancel').waitFor();
     const waiting = await agent('/api/device/updates');
     expect(waiting.status === 200 && waiting.body.update.phase === 'waiting'

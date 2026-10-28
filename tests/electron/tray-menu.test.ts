@@ -19,7 +19,7 @@ const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionSc
 });
 const update = (overrides: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus => ({ phase: 'up_to_date', currentVersion: '0.1.0',
   target: 'darwin-arm64', variant: 'chinese', installerAvailable: true, offer: null, ready: null, lastAttempt: null, progress: null,
-  checkedAt: '2026-10-24T00:00:00.000Z', message: '已是最新版。', errorCode: null, ...overrides });
+  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '已是最新版。', errorCode: null, ...overrides });
 
 const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
 const actions = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'action' ? [item.label] : []);

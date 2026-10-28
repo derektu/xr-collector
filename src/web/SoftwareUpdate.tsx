@@ -20,6 +20,9 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
     finally { setBusy(false); }
   };
   const phase = status?.phase;
+  const canDownload = Boolean(download && status?.installerAvailable && (phase === 'available' || phase === 'ready' && newerOffer
+    || phase === 'error' && (!ready || newerOffer)));
+  const canApply = Boolean(ready && status?.installerAvailable && (phase === 'ready' || phase === 'error'));
   const attemptProblem = status?.lastAttempt && ['failed', 'unknown'].includes(status.lastAttempt.outcome) ? status.lastAttempt : null;
   const cancel = (label: string) => <button type="button" className="button" data-testid="update-cancel"
     onClick={() => void action(() => api.cancelUpdate())}>{label}</button>;
@@ -28,11 +31,11 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
       <span className={status?.phase === 'available' || ready ? 'update-state available' : 'update-state'}>{status?.message ?? '正在讀取更新狀態…'}</span>
       <div className="software-update-actions">
         {offer?.releaseNotes ? <button type="button" className="release-notes-link" onClick={() => dialog.current?.showModal()}>版本說明</button> : null}
-        {(phase === 'available' || phase === 'ready' && newerOffer) && download && status.installerAvailable ? <button type="button" className="button primary" data-testid="update-download"
+        {canDownload && download ? <button type="button" className="button primary" data-testid="update-download"
           disabled={busy} onClick={() => void action(() => api.downloadUpdate(download.version, download.payload.sha256))}>
           {newerOffer ? `下載 ${newerOffer.version}` : '下載更新'}</button> : null}
         {phase === 'downloading' || (phase === 'verifying' && Boolean(status?.progress)) ? cancel('取消下載') : null}
-        {phase === 'ready' && ready && status.installerAvailable ? <>
+        {canApply && ready ? <>
           <button type="button" className="button primary" data-testid="update-apply" disabled={busy}
             onClick={() => void action(() => api.applyUpdate(ready.version, ready.payload.sha256))}>重新啟動以安裝</button>
           <button type="button" className="button" data-testid="update-later" onClick={() => setDeferredVersion(ready.version)}>稍後</button>

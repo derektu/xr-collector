@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, assertPackagedProductMetadata, packageApplication, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, readPackagingProcessIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -36,6 +37,52 @@ it('requires an explicit complete Developer ID mode only for Mac packaging', () 
     .toThrow(/requires Mac target plus/u);
   expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized',
     '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toThrow(/requires Mac target plus/u);
+});
+
+it('passes both checkout and signing-session trackers to the real signed package builder and verifier path', async () => {
+  const outerTracker = { name: 'checkout' };
+  const sessionTracker = { name: 'signing-session' };
+  const processTrackers = [outerTracker, sessionTracker];
+  const calls: Array<{ command: string; args: string[]; options: any }> = [];
+  const previousNpmExecPath = process.env.npm_execpath;
+  process.env.npm_execpath = process.execPath;
+  try {
+    const stopped = new Error('stop after signed verifier wiring proof');
+    await expect(packageApplication({
+      target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+      macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
+    }, {
+      withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: outerTracker }),
+      readPackagingGitIdentity: async () => ({ commit: 'a'.repeat(40) }),
+      loadMacSigningConfiguration: async () => ({
+        teamId: 'ABCDE12345', notary: { teamId: 'ABCDE12345' }, certificatePath: '/protected/certificate.p12',
+      }),
+      withTemporarySigningKeychain: async (_configuration: any, work: any, dependencies: any) => {
+        expect(dependencies.processTracker).toBe(outerTracker);
+        return work({ keychain: '/tmp/signing.keychain-db', identity: {
+          sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)', teamId: 'ABCDE12345',
+        }, signal: dependencies.signal, processTracker: sessionTracker, processTrackers });
+      },
+      probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
+      stageBuildInfoSidecar: async () => undefined,
+      clearPreviousArtifactSet: async () => undefined,
+      run: async (command: string, args: string[], options: any) => {
+        calls.push({ command, args, options });
+        return { stdout: '', stderr: '' };
+      },
+      verifyDeveloperIdApplication: async (_app: string, _team: string, dependencies: any) => {
+        await dependencies.run('fixture-signed-verifier', []);
+        throw stopped;
+      },
+    } as any)).rejects.toBe(stopped);
+    const builder = calls.find((call) => call.args.some((argument) => argument.endsWith('electron-builder/cli.js')) && call.args.includes('--dir'));
+    const verifier = calls.find((call) => call.command === 'fixture-signed-verifier');
+    expect(builder?.options.processTrackers).toEqual(processTrackers);
+    expect(verifier?.options.processTrackers).toEqual(processTrackers);
+  } finally {
+    if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
+    else process.env.npm_execpath = previousNpmExecPath;
+  }
 });
 
 it('requires an explicit isolated identity for validation version overrides', () => {
@@ -218,6 +265,58 @@ it('rejects a concurrent whole-checkout package run', async () => {
   release();
   await first;
   await expect(withPackageCheckoutLock(lock, async () => 'ok')).resolves.toBe('ok');
+});
+
+it('reclaims only a dead packaging owner and removes its lock on terminal signals', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-package-stale-lock-'));
+  roots.push(root);
+  const lock = path.join(root, 'package.lock');
+  const uid = process.getuid?.() ?? 501;
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 41, uid, startedAt: 'old', token: 'a1' }), { mode: 0o600 });
+  const signalTarget = new EventEmitter();
+  const terminated: string[] = [];
+  const identities = async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' };
+  const running = withPackageCheckoutLock(lock, async ({ signal }) => new Promise<void>((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }), { processIdentity: identities, signalTarget, terminateAfterSignal: (signal: string) => terminated.push(signal) });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const interrupted = expect(running).rejects.toThrow(/SIGHUP/u);
+  signalTarget.emit('SIGHUP');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(terminated).toEqual(['SIGHUP']);
+  await interrupted;
+
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-b2.json'), JSON.stringify({ pid: 42, uid, startedAt: 'live', token: 'b2' }), { mode: 0o600 });
+  await expect(withPackageCheckoutLock(lock, async () => undefined, {
+    processIdentity: async (pid: number) => pid === 42 ? { pid, uid, startedAt: 'live' } : { pid, uid, startedAt: 'current' },
+  })).rejects.toThrow(/another whole-checkout packaging run/iu);
+});
+
+it('queries Windows packaging owners through PowerShell and fails closed when the query is unavailable', async () => {
+  const calls: any[] = [];
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async (...args: any[]) => {
+    calls.push(args);
+    return '4242|638972345678900000|S-1-5-21-1234';
+  } })).resolves.toEqual({ pid: 4242, uid: 'S-1-5-21-1234', startedAt: '638972345678900000' });
+  expect(calls[0][0]).toBe('powershell.exe');
+  expect(calls[0][1]).toContain('-NonInteractive');
+  const script = calls[0][1].at(-1);
+  expect(script).not.toContain('\\"');
+  expect(script).toContain("'{0}|{1}|{2}' -f");
+  expect(script).toContain('Get-CimInstance');
+  expect(script).toContain('GetOwnerSid');
+  expect(script).not.toContain('[Environment]::UserName');
+  expect(calls[0][2].environment).toBe(process.env);
+
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 44'); } })).resolves.toBeNull();
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 1'); } })).rejects.toThrow(/Unable to inspect packaging process/u);
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => '4242||S-1-5-21-1234' })).rejects.toThrow(/malformed process identity/u);
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('PowerShell unavailable'); } })).rejects.toThrow(/Unable to inspect packaging process/u);
+  await expect(readPackagingProcessIdentity(4242, { platform: 'darwin', capture: async () => 'unexpected ps output' })).rejects.toThrow(/malformed packaging process identity/u);
+  await expect(readPackagingProcessIdentity(4242, { platform: 'darwin', capture: async () => { throw new Error('ps exited with status 1'); } })).resolves.toBeNull();
 });
 
 it('verifies BuildInfo and every packaged runtime before accepting an app', async () => {

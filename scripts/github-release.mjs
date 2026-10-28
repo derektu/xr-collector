@@ -25,9 +25,11 @@ export async function uploadDraftRelease(stageDirectory, adapter, authorization)
   for (const expected of state.assets) {
     const existing = remoteByName.get(expected.name);
     if (existing) {
-      const digest = await adapter.hashAsset(existing, { authenticated: true });
-      if (existing.size !== expected.bytes || digest !== expected.sha256) throw new Error(`Remote asset collision has different bytes: ${expected.name}.`);
-      continue;
+      if (existing.state === 'uploaded') {
+        const digest = await adapter.hashAsset(existing, { authenticated: true });
+        if (existing.size === expected.bytes && digest === expected.sha256) continue;
+      }
+      await adapter.deleteAsset(existing);
     }
     await adapter.uploadAsset(release, path.join(stageDirectory, expected.name), expected.name);
   }
@@ -49,6 +51,10 @@ export async function verifyRemoteRelease(stageDirectory, adapter, options = {})
   const expectedByName = new Map(state.assets.map((asset) => [asset.name, asset]));
   await verifyConcurrently(assets, async (asset) => {
     const expected = expectedByName.get(asset.name);
+    if (asset.state && asset.state !== 'uploaded') throw new Error(`Remote release asset is incomplete: ${asset.name}.`);
+    if (asset.browser_download_url && asset.browser_download_url !== new URL(encodeURIComponent(asset.name), state.sourceBaseUrl).toString()) {
+      throw new Error(`Remote release asset URL differs from the frozen release source: ${asset.name}.`);
+    }
     const digest = await adapter.hashAsset(asset, { authenticated: options.authenticated !== false });
     if (asset.size !== expected.bytes || digest !== expected.sha256) throw new Error(`Remote release asset does not match staged bytes: ${asset.name}.`);
   });
@@ -124,6 +130,12 @@ export function assertAuthorization(state, document, action) {
   if (document?.schemaVersion !== 1 || document.version !== state.version || document.tag !== state.tag || document.commit !== state.commit) throw new Error('Release authorization does not match the frozen candidate.');
   if (!Array.isArray(document.actions) || !document.actions.includes(action)) throw new Error(`Release authorization does not allow ${action}.`);
   if (!Number.isFinite(Date.parse(document.confirmedAt))) throw new Error('Release authorization must record when the user confirmed it.');
+  for (const [id, authorized] of Object.entries(document.scenarios ?? {})) {
+    const frozen = state.acceptance?.scenarios?.[id];
+    if ((frozen?.status === 'failed' && authorized?.status !== 'failed') || (frozen?.status === 'passed' && authorized?.status === 'failed')) {
+      throw new Error(`Release authorization scenario ${id} contradicts the frozen acceptance result.`);
+    }
+  }
 }
 
 function assertScenarioGates(authorization, requiredPassed, deferrable) {
@@ -190,6 +202,7 @@ export function createGitHubAdapter(repository, dependencies = {}) {
       const upload = release.upload_url.replace(/\{.*$/u, '');
       return gh(['api', '--method', 'POST', '-H', 'Content-Type: application/octet-stream', '--input', file, `${upload}?name=${encodeURIComponent(name)}`]);
     },
+    deleteAsset(asset) { return gh(['api', '--method', 'DELETE', `repos/${repository}/releases/assets/${asset.id}`]); },
     async hashAsset(asset) {
       const advertised = typeof asset.digest === 'string' && asset.digest.startsWith('sha256:') ? asset.digest.slice(7) : null;
       const root = await mkdtemp(path.join(tmpdir(), 'xr-release-remote-'));
@@ -211,9 +224,10 @@ export function createGitHubAdapter(repository, dependencies = {}) {
 
 function assertGitHubSourceRepository(sourceBaseUrl, repository) {
   const url = new URL(sourceBaseUrl);
-  if (url.hostname.toLowerCase() !== 'github.com') return;
-  const [owner, name, releases, download] = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  if (`${owner}/${name}`.toLowerCase() !== repository.toLowerCase() || releases !== 'releases' || download !== 'download') {
+  if (url.hostname.toLowerCase() !== 'github.com') throw new Error('GitHub publisher requires a source base URL on github.com.');
+  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const [owner, name, releases, download] = segments;
+  if (segments.length !== 5 || `${owner}/${name}`.toLowerCase() !== repository.toLowerCase() || releases !== 'releases' || download !== 'download') {
     throw new Error(`Release source on github.com must belong to ${repository}.`);
   }
 }
