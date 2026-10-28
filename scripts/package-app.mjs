@@ -99,7 +99,8 @@ export async function packageApplication(options, dependencies = {}) {
     const builderEnvironment = signedBuilderEnvironmentForPackage(signingConfiguration, signingContext);
     let signingReceipt = null;
     if (signed) {
-      const firstArgs = [...commonBuilderArgs, '--mac', '--dir', `--config.mac.identity=${signingContext.identity.name}`];
+      const identityOverride = signedBuilderIdentityOverride(signingContext.identity);
+      const firstArgs = [...commonBuilderArgs, '--mac', '--dir', identityOverride];
       await run(process.execPath, [electronBuilderCli, ...firstArgs], { environment: builderEnvironment });
       const productName = options.validationProductName ?? 'XR Collector';
       const appPath = path.join(outputDir, 'mac-arm64', `${productName}.app`);
@@ -110,7 +111,7 @@ export async function packageApplication(options, dependencies = {}) {
       });
       await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, signingConfiguration.teamId);
       await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
-      const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, `--config.mac.identity=${signingContext.identity.name}`];
+      const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, identityOverride];
       await run(process.execPath, [electronBuilderCli, ...secondArgs], { environment: builderEnvironment });
       const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
       const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
@@ -178,6 +179,11 @@ function signedBuilderEnvironmentForPackage(configuration, context) {
     teamId: configuration.teamId,
     sourceRoot: projectRoot,
   });
+}
+
+export function signedBuilderIdentityOverride(identity) {
+  if (!/^[0-9a-f]{40}$/iu.test(identity?.sha1 ?? '')) throw new Error('Signed Mac builder identity requires the selected certificate SHA-1.');
+  return `--config.mac.identity=${identity.sha1}`;
 }
 
 /**

@@ -7,12 +7,19 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertHostTarget, assertPackagedProductMetadata, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+
+it('passes electron-builder the verified certificate hash instead of a prefixed Developer ID name', () => {
+  const sha1 = 'A'.repeat(40);
+  expect(signedBuilderIdentityOverride({ sha1, name: 'Developer ID Application: Example Company (ABCDE12345)' }))
+    .toBe(`--config.mac.identity=${sha1}`);
+  expect(() => signedBuilderIdentityOverride({ sha1: 'Developer ID Application: Example', name: 'ignored' })).toThrow(/certificate SHA-1/u);
+});
 
 it('accepts only the two delivery targets and two explicit variants', () => {
   expect(parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese'])).toEqual({ target: 'darwin-arm64', variant: 'chinese' });
