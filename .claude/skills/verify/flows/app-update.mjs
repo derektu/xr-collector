@@ -26,7 +26,9 @@ export async function run({ instance, page, record, waitFor }) {
     if (!updateApiAvailable) return;
     const unavailable = async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ update: {
       phase: 'idle', currentVersion: '0.1.0', target: 'darwin-arm64', variant: 'chinese', installerAvailable: false,
-      offer: null, ready: null, lastAttempt: null, progress: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null,
+      offer: null, ready: null, lastAttempt: { id: 'fixture', version: '0.1.0', buildId: 'fixture', startedAt: '2026-10-28T00:00:00.000Z',
+        finishedAt: '2026-10-28T00:01:00.000Z', outcome: 'unknown', message: '無法確認 0.1.0 的安裝結果。' },
+      progress: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null,
     } }) });
     await page.route('**/api/device/updates', unavailable);
     await page.goto(`${instance.url}/settings`);
@@ -35,6 +37,10 @@ export async function run({ instance, page, record, waitFor }) {
       id: 'u36.no-vault-ui', actual: (await instance.api('/api/vault/setup')).vault.state,
     });
     expect(await page.getByTestId('update-check').isVisible(), '沒有原生 installer 仍可檢查 metadata', { id: 'u36.check-without-installer' });
+    expect((await page.getByTestId('update-attempt-problem').innerText()).trim() === '無法確認 0.1.0 的安裝結果。'
+      && await page.getByText('最近一次安裝：', { exact: false }).count() === 0, '結果不明仍直接告知，但不顯示安裝歷史標頭', {
+        id: 'u36.attempt-problem-only', actual: await page.getByTestId('software-update').innerText(),
+      });
     await page.unroute('**/api/device/updates', unavailable);
     await page.reload();
     await page.getByTestId('update-check').waitFor();

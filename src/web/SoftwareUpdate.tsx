@@ -20,6 +20,7 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
     finally { setBusy(false); }
   };
   const phase = status?.phase;
+  const attemptProblem = status?.lastAttempt && ['failed', 'unknown'].includes(status.lastAttempt.outcome) ? status.lastAttempt : null;
   const cancel = (label: string) => <button type="button" className="button" data-testid="update-cancel"
     onClick={() => void action(() => api.cancelUpdate())}>{label}</button>;
   return <div className="software-update" id="software-update" data-testid="software-update">
@@ -43,8 +44,7 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
       </div>
     </div>
     {status?.progress ? <progress max={status.progress.total} value={status.progress.transferred} aria-label="更新下載進度" /> : null}
-    {status?.lastAttempt ? <p className={`update-attempt ${status.lastAttempt.outcome}`} data-testid="update-last-attempt">
-      最近一次安裝：{status.lastAttempt.message}</p> : null}
+    {attemptProblem ? <p className="setting-message error" role="alert" data-testid="update-attempt-problem">{attemptProblem.message}</p> : null}
     {error ? <p className="setting-message error" role="alert">{error}</p> : null}
     <ReleaseNotes dialog={dialog} offer={offer} />
   </div>;

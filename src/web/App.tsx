@@ -17,6 +17,7 @@ import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
 import { Settings } from './Settings.js';
 import { SoftwareUpdate } from './SoftwareUpdate.js';
+import { sidebarUpdateLabel } from './update-presentation.js';
 import { SourceDetail } from './SourceDetail.js';
 import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceRouteForPath, type SourceListState } from './source-presentation.js';
 import { Sources } from './Sources.js';
@@ -239,6 +240,7 @@ export default function App() {
     body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length} revision={status.revision}
       themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onChanged={announce} />;
   }
+  const updateLabel = update ? sidebarUpdateLabel(update) : null;
 
   return <div className={readerId ? 'shell reader-mode' : 'shell'} data-theme={themeName}>
     <aside className="sidebar" aria-label="主要導覽">
@@ -247,7 +249,7 @@ export default function App() {
         {navigation.map(navItem)}
         <span className="nav-spacer" />
         {update ? <button type="button" className="sidebar-update" onClick={openUpdate}
-          data-testid="sidebar-update"><span className="nav-label">v{update.currentVersion}{update.installerAvailable ? ` · ${update.ready || update.offer ? '有更新' : update.phase === 'up_to_date' ? '最新版' : '更新'}` : ''}</span></button> : null}
+          data-testid="sidebar-update"><span className="nav-label">v{update.currentVersion}{updateLabel ? ` · ${updateLabel}` : ''}</span></button> : null}
         {navItem(settingsNavigation)}
       </nav>
     </aside>
