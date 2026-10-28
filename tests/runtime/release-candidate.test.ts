@@ -105,6 +105,16 @@ it('fails closed on tampering, mixed identities, missing acceptance, and extra b
   const extra = await releaseFixture();
   await writeFile(path.join(extra.input, 'surprise.txt'), 'not declared');
   await expect(planReleaseCandidate(extra.options, { inspectPackagedPayload: extra.inspect })).rejects.toThrow(/outside the four declared handoffs/u);
+
+  const wrongRecipe = await releaseFixture();
+  const chinese = [...wrongRecipe.inspected.values()].find((candidate: any) => candidate.buildInfo.variant === 'chinese') as any;
+  chinese.meilisearch.recipeRevision += 1;
+  const chineseRecord = wrongRecipe.records.find((candidate) => candidate.variant === 'chinese')!;
+  const chineseManifest = JSON.parse(await readFile(chineseRecord.manifestPath, 'utf8'));
+  chineseManifest.runtimeIdentity.meilisearch.recipeRevision += 1;
+  await writeFile(chineseRecord.manifestPath, JSON.stringify(chineseManifest));
+  await expect(planReleaseCandidate(wrongRecipe.options, { inspectPackagedPayload: wrongRecipe.inspect }))
+    .rejects.toThrow(/recipeRevision does not match the trusted recipe/u);
 });
 
 it('detects a changed frozen byte after staging', async () => {
@@ -329,7 +339,7 @@ async function releaseFixture(validation = false) {
       ],
     };
     const meilisearch = variant === 'official' ? expectedOfficialManifest(officialPins, target) : {
-      schemaVersion: 1, recipeRevision: 1, recipeFingerprint: 'fixture', sourceRepository: recipe.repository, sourceTag: recipe.tag,
+      schemaVersion: recipe.schemaVersion, recipeRevision: recipe.recipeRevision, recipeFingerprint: 'fixture', sourceRepository: recipe.repository, sourceTag: recipe.tag,
       sourceCommit: recipe.sourceCommit, cargoLockSha256: recipe.cargoLockSha256, features: recipe.features, defaultFeatures: recipe.defaultFeatures,
       target, binary: { version: recipe.meilisearchVersion, versionOutput: `meilisearch ${recipe.meilisearchVersion}`, bytes: 5, sha256: sha('meili'), format: target === 'darwin-arm64' ? 'Mach-O 64' : 'PE32+', arch: target === 'darwin-arm64' ? 'arm64' : 'x64' },
     };
