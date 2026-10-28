@@ -349,3 +349,8 @@ export function closeWindow(app) {
 export function notifications(app) {
   return app.evaluate(() => globalThis.__xrCollectorValidation.notifications());
 }
+
+/** Activates one delivered notification by its durable id, through the same routing as an OS click. */
+export function activateNotification(app, id) {
+  return app.evaluate((_electron, notificationId) => globalThis.__xrCollectorValidation.activateNotification(notificationId), id);
+}

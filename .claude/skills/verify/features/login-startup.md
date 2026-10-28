@@ -25,7 +25,7 @@ Preconditions:
 - 程式以 `app.isPackaged` 判定是否能操作 OS；未安裝的 `.app` 與 `win-unpacked` 也具備此能力。隔離 profile 不會隔離作業系統登入項目，本機打包 smoke 不點這個開關；正向案例仍使用 VM 的安裝版。
 - 真登入案例沿用上述 VM 安裝版，會真的登出再登入，只在使用者確認時段後執行。
 
-- **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 必須 disabled，`login-startup-status` 說明只能在安裝版設定。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。
+- **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 必須 disabled，`login-startup-status` 簡短顯示「僅限安裝版 App。」。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。
 - **切換與 read-back。** 安裝版切換後，以兩個 listener 的 GET 比對 OS 實際狀態；製造 adapter 失敗時，開關維持 read-back 值並在卡片顯示錯誤。
 - **背景啟動。** 登入 VM 後不操作，確認視窗不可見、tray 存在、Agent `/api/health` 可達；再手動啟動，現有視窗顯示且 `runtime.instanceId` 不變。
 - **外部停用。** 在 OS 設定關閉後再進設定頁，開關必須顯示關閉，App 不得自行重開。
@@ -40,3 +40,5 @@ Preconditions:
 ## Regression flows
 
 - `login-startup`：斷言 `login-startup-setting`、`login-startup-unavailable`、`login-startup-os-state`。先驗 Web 設定頁停用與兩個 listener 拒絕；再以清楚標示的 run-local 平台 fixture 實際點擊開啟、模擬寫入失敗後 read-back、需要核准、OS 外部停用後 focus 刷新，以及慢速舊 GET 不得蓋掉新 PUT 的競態。fixture 不代表真實 OS 已註冊。
+
+設定頁不常駐背景執行與打包限制的長說明。正常狀態由開關表達；錯誤、系統核准與 App 位置變更的操作指引仍顯示。

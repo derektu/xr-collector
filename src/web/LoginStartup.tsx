@@ -56,9 +56,11 @@ export function LoginStartup({ onChanged }: { onChanged: (message: string) => vo
   };
 
   const unavailable = status?.supported === false;
+  const routineStatus = status?.message === '已在登入電腦時自動啟動。' || status?.message === '登入自啟已關閉。';
+  const message = pending ? '正在更新…' : error ?? (unavailable ? '僅限安裝版 App。'
+    : !status ? '正在讀取…' : routineStatus ? null : status.message);
   return <section className="settings-section" data-testid="settings-login-startup">
     <h2>啟動與背景執行</h2>
-    <p>開啟後，登入電腦時會在背景啟動 XR Collector，繼續排程與 Agent 服務，但不會自動顯示主視窗。</p>
     <div className="login-startup-control">
       <strong>登入電腦時自動啟動</strong>
       <label className="header-switch" data-testid="login-startup-switch">
@@ -67,9 +69,8 @@ export function LoginStartup({ onChanged }: { onChanged: (message: string) => vo
         <span className="switch" aria-hidden="true" />
       </label>
     </div>
-    <p className={error ? 'setting-message error' : 'setting-message'} data-testid="login-startup-status">
-      {pending ? '正在更新…' : error ?? status?.message ?? '正在讀取作業系統設定…'}
-    </p>
-    {unavailable ? <p className="hint">請安裝並開啟打包後的 App，再回到這裡設定。</p> : null}
+    {message ? <p className={error ? 'setting-message error' : 'setting-message'} role={error ? 'alert' : 'status'} data-testid="login-startup-status">
+      {message}
+    </p> : null}
   </section>;
 }

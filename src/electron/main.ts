@@ -14,6 +14,8 @@ import { AppTray } from './tray.js';
 import type { TrayAction } from './tray-menu.js';
 import { DesktopLoginStartup, isLoginStartupLaunch, shouldShowForActivation, type LoginItemAdapter } from './login-startup.js';
 import { WindowCreationGate } from './window-creation.js';
+import { ElectronSystemNotifications } from './system-notifications.js';
+import { notificationNavigation } from './notification-navigation.js';
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorRuntime | null = null;
@@ -24,6 +26,10 @@ let isQuitting = false;
 const collectionPause = new CollectionPause();
 let networkWatch: ReturnType<typeof setInterval> | null = null;
 let pendingManualShow = false;
+type DesktopTarget = 'jobs' | 'activity' | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
+let pendingNavigation: DesktopTarget | undefined;
+let pendingNotificationId: string | undefined;
+let rendererReady = false;
 const windowCreation = new WindowCreationGate();
 let startupWindowState: { startedAtLogin: boolean; finished: boolean } | null = null;
 /** How often the system's own view of the network is read; reading it sends nothing. */
@@ -41,7 +47,7 @@ if (validationHidden) app.dock?.hide();
 // Validation control channel, for native acceptance runs only: Playwright reads and drives the tray
 // and the window through globalThis.__xrCollectorValidation in this process.
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
-const validationNotifications: { title: string; content: string }[] = [];
+const validationNotifications: { id?: string; title: string; content: string }[] = [];
 
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
@@ -98,6 +104,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
       backgroundThrottling: !validationHidden,
     },
   });
+  rendererReady = false;
   // Publish the window before loading so an early second-instance request cannot create another.
   mainWindow = window;
   // The app has no menu commands of its own; macOS keeps the default menu for
@@ -122,6 +129,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
   window.on('session-end', () => { isQuitting = true; });
   window.on('closed', () => {
     mainWindow = null;
+    rendererReady = false;
   });
   try {
     await window.loadURL(serverUrl);
@@ -133,22 +141,37 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
 }
 
 /** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
-function showWindow(page?: 'jobs' | 'activity'): void {
+function showWindow(page?: 'jobs' | 'activity' | { notificationId: string }): void {
   pendingManualShow = true;
+  if (typeof page === 'object') {
+    if (!runtime) { pendingNotificationId = page.notificationId; return; }
+    const notificationId = page.notificationId;
+    void runtime.resolveNotification(notificationId).then((event) => {
+      pendingNavigation = notificationNavigation(event, runtime?.workspace?.activeVaultId() ?? null);
+      showWindow();
+    }).catch((error: unknown) => console.warn('Unable to resolve notification target', error));
+    return;
+  } else if (page) pendingNavigation = page;
   if (windowCreation.current) {
     // The caller that began creation performs the one pending show after loading completes.
     return;
   }
   if (!mainWindow) {
-    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow(page)).catch((error) => console.error(error));
+    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow()).catch((error) => console.error(error));
     return;
   }
-  if (page) mainWindow.webContents.send('xrCollector:navigate', page);
+  deliverPendingNavigation();
   if (validationHidden) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   if (process.platform === 'darwin') app.focus({ steal: true });
   mainWindow.focus();
+}
+
+function deliverPendingNavigation(): void {
+  if (!pendingNavigation || !rendererReady || !mainWindow) return;
+  mainWindow.webContents.send('xrCollector:navigate', pendingNavigation);
+  pendingNavigation = undefined;
 }
 
 /**
@@ -198,6 +221,11 @@ app.whenReady().then(async () => {
   const loginStartup = new DesktopLoginStartup(loginItemAdapter, path.join(app.getPath('userData'), 'login-startup.json'));
   themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
   ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
+  ipcMain.on('xrCollector:renderer:ready', (event) => {
+    if (mainWindow?.webContents !== event.sender) return;
+    rendererReady = true;
+    deliverPendingNavigation();
+  });
   ipcMain.handle('xrCollector:theme:write', (_event, theme: unknown) => {
     if (!isStoredTheme(theme)) throw new Error('Unsupported theme preference');
     return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
@@ -302,7 +330,14 @@ app.whenReady().then(async () => {
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
     loginStartup,
     startedAtLogin,
+    systemNotifications: new ElectronSystemNotifications((id) => showWindow({ notificationId: id }),
+      validationControl ? (notification) => validationNotifications.push(notification) : undefined),
   });
+  if (pendingNotificationId) {
+    const id = pendingNotificationId;
+    pendingNotificationId = undefined;
+    showWindow({ notificationId: id });
+  }
   if (!startedAtLogin) {
     try {
       const repair = await loginStartup.repairMovedRegistration();
@@ -384,6 +419,8 @@ function exposeValidationControl(appTray: AppTray): void {
   (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
     tray: async () => { await appTray.refresh(); return appTray.current(); },
     click: (action: TrayAction) => appTray.run(action),
+    notifications: () => [...validationNotifications],
+    activateNotification: (id: string) => showWindow({ notificationId: id }),
     window: () => ({
       exists: Boolean(mainWindow),
       visible: mainWindow?.isVisible() ?? false,
@@ -391,6 +428,5 @@ function exposeValidationControl(appTray: AppTray): void {
       url: mainWindow?.webContents.getURL() ?? null,
     }),
     closeWindow: () => mainWindow?.close(),
-    notifications: () => [...validationNotifications],
   };
 }

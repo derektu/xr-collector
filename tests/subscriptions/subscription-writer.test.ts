@@ -43,7 +43,7 @@ type FakeType = 'fake' | 'fake2';
  * kept in a directory, a scheduler and a manual clock. `crash()` leaves the running generation as
  * a killed process would and resumes its jobs in a new one on the same Vault and job record.
  */
-async function world() {
+async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionRecord) => void | Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-writer-'));
   const jobsDirectory = await mkdtemp(path.join(tmpdir(), 'xr-subscription-writer-jobs-'));
   roots.push(root, jobsDirectory);
@@ -66,6 +66,7 @@ async function world() {
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
       documents: () => collector.list(),
       now,
+      ...(onAutoPaused ? { onAutoPaused: (subscription: SubscriptionRecord) => onAutoPaused(type, subscription) } : {}),
     });
     services = new SubscriptionServices([service('fake'), service('fake2')]);
     const scheduler = new CollectionScheduler(services.all(), scheduleStore, { now, pollIntervalMs: DAY });
@@ -338,8 +339,13 @@ describe('failed checks in a row', () => {
       .toEqual({ lastCheckedAt: settled.lastCheckedAt, checkFailures: settled.checkFailures });
   });
 
-  it('pauses the subscription once five failures in a row span a day, and a resume clears them and checks', async () => {
-    const w = await world();
+  it('pauses after five failures despite a notification profile write failure, then resumes and checks', async () => {
+    const autoPauses: Array<{ type: FakeType; subscription: SubscriptionRecord }> = [];
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = await world(async (type, subscription) => {
+      autoPauses.push({ type, subscription });
+      throw new Error('notification profile is read-only');
+    });
     w.sources.fake.addFeed('f', w.clock.now, [1]);
     await w.subscribe('fake', 'f');
     const service = w.services.of('fake')!;
@@ -369,6 +375,11 @@ describe('failed checks in a row', () => {
     });
     expect((await w.events()).filter((event) => event.eventType === 'subscription.auto_paused'))
       .toEqual([expect.objectContaining({ severity: 'warning', subscriptionId: 'f', errorCode: 'feed_gone' })]);
+    expect(autoPauses).toEqual([{ type: 'fake', subscription: expect.objectContaining({
+      id: 'f', enabled: false, autoPausedAt: fifth.finishedAt, checkFailures: expect.objectContaining({ count: 5 }),
+    }) }]);
+    expect(warning).toHaveBeenCalledWith('Unable to record auto-pause notification', expect.objectContaining({ message: 'notification profile is read-only' }));
+    warning.mockRestore();
     await expect(service.checkNow('f')).rejects.toMatchObject({ code: 'subscription_paused' });
 
     const resumed = await service.setEnabled('f', true);

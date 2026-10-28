@@ -68,6 +68,8 @@ export interface SubscriptionServiceOptions {
   recordDeletion?: (entry: PendingDeletion) => Promise<unknown>;
   /** Whether the subscription's source needs the user to sign in again; a source without accounts never does. */
   loginRequired?: (subscription: SubscriptionRecord) => boolean;
+  /** Records the exact transition that automatically paused a subscription. */
+  onAutoPaused?: (subscription: SubscriptionRecord) => void | Promise<void>;
   now?: () => Date;
   previewTimeoutMs?: number;
   /** Overrides REMOVAL_SETTLE_MS. */
@@ -517,6 +519,8 @@ export class SubscriptionService {
       message: `「${record.title}」連續 ${record.checkFailures!.count} 次檢查失敗，已自動暫停：${record.checkFailures!.error.message}`,
       errorCode: record.checkFailures!.error.code, ...this.subject(id, record.title),
     });
+    try { await this.options.onAutoPaused?.(record); }
+    catch (error) { console.warn('Unable to record auto-pause notification', error); }
   }
 
   /** Port entry: a collected item no longer counts as failed. */

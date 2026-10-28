@@ -13,6 +13,9 @@ export async function run({ instance, page, record, waitFor }) {
   const focus = () => page.evaluate(() => window.dispatchEvent(new Event('focus')));
   const switchInput = () => page.getByTestId('login-startup-switch').locator('input');
   const statusText = async () => (await page.getByTestId('login-startup-status').innerText()).trim();
+  const settledToggle = (enabled) => waitFor(async () =>
+    !(await switchInput().isDisabled()) && (await switchInput().isChecked()) === enabled &&
+    await page.getByTestId('login-startup-status').count() === 0, `login startup ${enabled ? 'on' : 'off'}`);
   const visualSwitch = () => page.getByTestId('login-startup-switch').evaluate((label) => {
     const input = label.querySelector('input');
     const track = label.querySelector('.switch');
@@ -32,13 +35,13 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('W1', 'Web／開發版只說明，不允許註冊登入自啟', async ({ expect, note, shot }) => {
     await page.getByTestId('nav-settings').click();
     await page.getByTestId('settings-login-startup').waitFor();
-    await page.getByTestId('login-startup-status').filter({ hasText: '只可在已安裝的 macOS 或 Windows App 中設定' }).waitFor();
+    await page.getByTestId('login-startup-status').filter({ hasText: '僅限安裝版 App。' }).waitFor();
     const toggle = switchInput();
     const message = await statusText();
     const disabled = await toggle.isDisabled();
     expect(disabled, '開發版的登入自啟開關停用', { id: 'w1.ui-disabled', expected: true, actual: disabled });
-    expect(message.includes('只可在已安裝的 macOS 或 Windows App 中設定'), '畫面說明只能在安裝版設定',
-      { id: 'w1.ui-message', expected: '只可在已安裝的 macOS 或 Windows App 中設定', actual: message });
+    expect(message.includes('僅限安裝版 App。'), '畫面說明只能在安裝版設定',
+      { id: 'w1.ui-message', expected: '僅限安裝版 App。', actual: message });
     await shot('settings-unavailable');
 
     const uiResponse = await fetch(`${instance.url}/api/device/login-startup`, {
@@ -62,12 +65,12 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('W1-F1', '受控平台 fixture：實際切換成功並採用 OS read-back', async ({ expect, note, shot }) => {
     await fixture('normal', false);
     await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '登入自啟已關閉' }).waitFor();
+    await settledToggle(false);
     expect(!(await switchInput().isDisabled()) && !(await switchInput().isChecked()), 'fixture 可操作且 read-back 為關閉',
       { id: 'w1.fixture-ready', expected: { disabled: false, checked: false }, actual: { disabled: await switchInput().isDisabled(), checked: await switchInput().isChecked() } });
     offBackground = (await settledVisual(false)).background;
     await page.getByTestId('login-startup-switch').click();
-    await page.getByTestId('login-startup-status').filter({ hasText: '已在登入電腦時自動啟動' }).waitFor();
+    await settledToggle(true);
     const stored = JSON.parse(await readFile(fixturePath, 'utf8'));
     const visual = await settledVisual(true);
     expect(await switchInput().isChecked() && stored.enabled === true && visual.transform !== 'none' && visual.background !== offBackground, '點開後 DOM、可見開關與平台 read-back 都是開啟',
@@ -79,7 +82,7 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('W1-F2', '受控平台 fixture：寫入失敗後重讀，不樂觀改掉開關', async ({ expect, shot }) => {
     await fixture('failure', true);
     await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '已在登入電腦時自動啟動' }).waitFor();
+    await settledToggle(true);
     await page.getByTestId('login-startup-switch').click();
     await page.getByTestId('login-startup-status').filter({ hasText: '合成作業系統拒絕更新登入自啟' }).waitFor();
     const visual = await settledVisual(true);
@@ -105,11 +108,11 @@ export async function run({ instance, page, record, waitFor }) {
 
     await fixture('normal', true);
     await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '已在登入電腦時自動啟動' }).waitFor();
+    await settledToggle(true);
     const before = await switchInput().isChecked();
     await fixture('normal', false);
     await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '登入自啟已關閉' }).waitFor();
+    await settledToggle(false);
     const after = await switchInput().isChecked();
     const visual = await settledVisual(false);
     expect(before && !after && visual.background === offBackground, 'OS 外部停用後，視窗 focus 會把開關與可見狀態刷新為關閉',
@@ -120,7 +123,7 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('W1-F4', '受控平台 fixture：較舊的 focus 讀取不得覆蓋較新的切換結果', async ({ expect }) => {
     await fixture('normal', false);
     await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '登入自啟已關閉' }).waitFor();
+    await settledToggle(false);
     let startSlow;
     const slowStarted = new Promise((resolve) => { startSlow = resolve; });
     let releaseSlow;
@@ -155,14 +158,14 @@ export async function run({ instance, page, record, waitFor }) {
       await focus();
       await slowStarted;
       await page.getByTestId('login-startup-switch').click();
-      await page.getByTestId('login-startup-status').filter({ hasText: '已在登入電腦時自動啟動' }).waitFor();
+      await settledToggle(true);
       releaseSlow();
       await slowFinished;
       await new Promise((resolve) => setTimeout(resolve, 100));
-      const actual = { checked: await switchInput().isChecked(), message: await statusText() };
-      expect(actual.checked && actual.message.includes('已在登入電腦時自動啟動'), '較慢的舊 GET 回覆不會蓋掉較新的 PUT read-back', {
+      const actual = { checked: await switchInput().isChecked(), statusMessages: await page.getByTestId('login-startup-status').count() };
+      expect(actual.checked && actual.statusMessages === 0, '較慢的舊 GET 回覆不會蓋掉較新的 PUT read-back', {
         id: 'w1.focus-update-race',
-        expected: { checked: true, message: '已在登入電腦時自動啟動' },
+        expected: { checked: true, statusMessages: 0 },
         actual,
       });
     } finally {

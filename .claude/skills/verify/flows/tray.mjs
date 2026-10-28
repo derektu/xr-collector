@@ -94,6 +94,8 @@ export async function run({ instance, record, waitFor, sleep }) {
       expect(lines[0] === '沒有進行中的工作' && /^下次檢查 (明天 )?\d\d:\d\d$/u.test(lines[1] ?? '') && lines.length === 2, '狀態行為「沒有進行中的工作／下次檢查 HH:MM」', lines);
       expect(JSON.stringify(actionLabels(current)) === JSON.stringify(ACTIONS), '項目依序為開啟、立即檢查、自動檢查、工作、記錄、結束', actionLabels(current));
       expect(autoCheck(current) === true, '自動檢查已勾選', autoCheck(current));
+      await waitFor(async () => /^下次 /u.test((await instance.window.getByTestId('subscription-status').first().innerText()).trim()),
+        'source row shows its scheduled state', { timeout: 10_000 });
       await shot('window');
     });
 

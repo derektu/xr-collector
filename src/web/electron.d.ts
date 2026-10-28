@@ -1,4 +1,5 @@
 import type { ElectronThemeBridge } from './app-shell.js';
+import type { DesktopNavigationTarget } from './desktop-navigation.js';
 /** Native desktop capabilities that business screens cannot get over HTTP. */
 export interface DesktopBridge {
   chooseDirectory(defaultPath?: string): Promise<string | null>;
@@ -16,8 +17,10 @@ export interface DesktopBridge {
   revealExport(): Promise<void>;
   /** Operating system of the desktop app, for labels such as Finder or File Explorer. */
   platform: string;
+  /** Announces that navigation listeners are attached, so startup targets can drain exactly once. */
+  ready(): void;
   /** Calls `listener` when the tray menu opens the window on a page. */
-  onNavigate(listener: (page: 'jobs' | 'activity') => void): void;
+  onNavigate(listener: (target: DesktopNavigationTarget) => void): void;
 }
 declare global { interface Window { xrCollectorTheme?: ElectronThemeBridge; xrCollectorDesktop?: DesktopBridge; } }
 export {};

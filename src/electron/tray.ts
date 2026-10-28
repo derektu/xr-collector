@@ -2,6 +2,7 @@ import path from 'node:path';
 import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
 import type { CollectionScheduleView, JobOverview } from '../core/types.js';
+import type { NotificationState } from '../notifications/types.js';
 import { trayMenu } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayState } from './tray-menu.js';
 
@@ -14,7 +15,7 @@ export interface AppTrayOptions {
   /** Folder of the icon images (see scripts/render-tray-icons.mjs). */
   iconFolder: string;
   /** Opens the window, on a page when given. */
-  show(page?: 'jobs' | 'activity'): void;
+  show(page?: 'jobs' | 'activity' | { notificationId: string }): void;
   quit(): void;
 }
 
@@ -53,6 +54,7 @@ export class AppTray {
   }
 
   async run(action: TrayAction): Promise<void> {
+    if (action.startsWith('subscription:')) { this.options.show({ notificationId: action.slice('subscription:'.length) }); return; }
     switch (action) {
       case 'open': this.options.show(); return;
       case 'jobs': this.options.show('jobs'); return;
@@ -79,6 +81,10 @@ export class AppTray {
     this.tray.setContextMenu(Menu.buildFromTemplate(this.menu.items.map((item): MenuItemConstructorOptions => {
       if (item.kind === 'separator') return { type: 'separator' };
       if (item.kind === 'status') return { label: item.label, enabled: false };
+      if (item.kind === 'submenu') return { label: item.label, submenu: item.items.map((child) => ({
+        id: child.action, label: child.label,
+        click: () => void this.run(child.action).catch((error: unknown) => console.warn(`Tray action ${child.action} failed`, error)),
+      })) };
       const click = () => void this.run(item.action).catch((error: unknown) => console.warn(`Tray action ${item.action} failed`, error));
       return item.checked === undefined
         ? { id: item.action, label: item.label, click }
@@ -89,11 +95,12 @@ export class AppTray {
   /** The open Vault's work and schedule; null while no Vault is open, the routes then answer 404. */
   private async read(): Promise<TrayState | null> {
     try {
-      const [overview, schedule] = await Promise.all([
+      const [overview, schedule, notifications] = await Promise.all([
         this.get<{ overview: JobOverview }>('/api/jobs/overview'),
         this.get<{ schedule: CollectionScheduleView }>('/api/schedule'),
+        this.get<{ notifications: NotificationState }>('/api/device/notifications'),
       ]);
-      return { overview: overview.overview, schedule: schedule.schedule };
+      return { overview: overview.overview, schedule: schedule.schedule, actionable: notifications.notifications.active };
     } catch {
       return null;
     }
