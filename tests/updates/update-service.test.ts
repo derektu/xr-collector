@@ -45,7 +45,7 @@ it('never marks a truncated or modified file ready and keeps an older ready offe
   const readyFile = path.join(directory, 'cache', readyState.ready.fileName);
   await writeFile(readyFile, 'tampered');
   const restarted = await UpdateService.open({ identity, source, installer, directory });
-  expect(restarted.status().ready).toBeNull(); expect(restarted.status().phase).toBe('idle');
+  expect(restarted.status()).toMatchObject({ ready: null, phase: 'idle', message: '已清除無效的更新快取，請重新下載。' });
 });
 
 it('requires a separate explicit apply and cancellation does not consume ready bytes', async () => {
@@ -149,7 +149,36 @@ it('persists an install attempt before handoff and confirms it only from the run
     source: { id: 'test', check: async () => null }, installer: { available: true, validate: async () => undefined }, directory,
     event: (_severity, type) => events.push(type) });
   expect(next.status().lastAttempt).toMatchObject({ version: '0.1.1', outcome: 'pending' });
+  expect(next.status().message).not.toContain('無效');
   await next.confirmRunningBuild();
-  expect(next.status().lastAttempt).toMatchObject({ version: '0.1.1', outcome: 'succeeded' });
+  expect(next.status()).toMatchObject({ message: '已安裝 0.1.1。', ready: null,
+    lastAttempt: { version: '0.1.1', outcome: 'succeeded', message: '已安裝 0.1.1。' } });
+  expect(next.status().message).not.toContain('無效');
   expect(events).toContain('device.update_installed');
+});
+
+it('does not replace a newer ready-version message when confirming the running build', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-service-'));
+  const newerPayload = Buffer.from('newer package bytes');
+  const newer: UpdateOffer = { ...offer, version: '0.1.2',
+    payload: { ...offer.payload, url: 'https://example.test/v0.1.2/app.zip', bytes: newerPayload.length,
+      sha256: createHash('sha256').update(newerPayload).digest('hex') },
+    buildInfo: { ...offer.buildInfo, version: '0.1.2', buildId: 'newer-build' } };
+  const current = { ...identity, version: '0.1.1' };
+  const first = await UpdateService.open({ identity: current, currentBuildId: 'current-build',
+    source: { id: 'test', check: async () => newer }, installer: { available: true, validate: async () => undefined },
+    directory, request: async () => new Response(newerPayload) });
+  await first.check(); await first.download({ version: newer.version, sha256: newer.payload.sha256 });
+  const saved = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8'));
+  saved.attempt = { id: 'current-install', version: current.version, buildId: 'current-build', startedAt: new Date().toISOString(),
+    finishedAt: null, outcome: 'pending', message: `正在安裝 ${current.version}。`, previousVersion: '0.1.0',
+    previousBuildId: 'previous-build', eventRecorded: false };
+  await writeFile(path.join(directory, 'state.json'), JSON.stringify(saved));
+
+  const restarted = await UpdateService.open({ identity: current, currentBuildId: 'current-build',
+    source: { id: 'test', check: async () => newer }, installer: { available: true, validate: async () => undefined }, directory });
+  expect(restarted.status()).toMatchObject({ phase: 'ready', message: '0.1.2 已準備好。', ready: { version: '0.1.2' } });
+  await restarted.confirmRunningBuild();
+  expect(restarted.status()).toMatchObject({ phase: 'ready', message: '0.1.2 已準備好。', ready: { version: '0.1.2' },
+    lastAttempt: { version: '0.1.1', outcome: 'succeeded', message: '已安裝 0.1.1。' } });
 });

@@ -260,8 +260,11 @@ export class UpdateService implements UpdateAccess {
       if (!this.saved.ready) return;
       const offer = this.saved.ready.offer;
       const file = path.join(this.cache, path.basename(this.saved.ready.fileName));
-      if (!sameIdentity(offer, this.options.identity) || compareVersions(offer.version, this.options.identity.version) <= 0
-        || !await verifyFile(file, offer.payload.bytes, offer.payload.sha256)) throw new Error('ready cache is invalid');
+      if (!sameIdentity(offer, this.options.identity)) throw new Error('ready cache is invalid');
+      if (compareVersions(offer.version, this.options.identity.version) <= 0) {
+        this.saved.ready = null; await this.save(); return;
+      }
+      if (!await verifyFile(file, offer.payload.bytes, offer.payload.sha256)) throw new Error('ready cache is invalid');
       await this.options.installer.validate(offer, file);
       this.packageFile = file; this.set({ phase: 'ready', ready: offer, offer, message: `${offer.version} 已準備好。`, errorCode: null });
     } catch {
@@ -290,7 +293,8 @@ export class UpdateService implements UpdateAccess {
       && this.options.currentBuildId === attempt.buildId) {
       this.saved.attempt = { ...attempt, outcome: 'succeeded', finishedAt: this.now().toISOString(),
         message: `已安裝 ${attempt.version}。`, eventRecorded: true };
-      await this.save(); this.set({ lastAttempt: publicAttempt(this.saved.attempt) });
+      await this.save(); this.set({ ...(this.state.phase === 'idle' ? { message: this.saved.attempt.message } : {}),
+        lastAttempt: publicAttempt(this.saved.attempt) });
       this.options.event?.('info', 'device.update_installed', this.saved.attempt.message);
     } else if (!attempt.eventRecorded && attempt.outcome === 'unknown') {
       this.saved.attempt = { ...attempt, eventRecorded: true };

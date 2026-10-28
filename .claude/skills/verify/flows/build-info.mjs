@@ -3,7 +3,7 @@ import path from 'node:path';
 import { launchWeb, openPage } from '../scripts/lib/index.mjs';
 
 export const name = 'build-info';
-export const title = '設定與 Onboarding 的建置資訊和 Agent API 一致';
+export const title = '設定與 Onboarding 顯示版本，Agent API 保留完整建置資訊';
 export const covers = ['build-info-settings', 'build-info-onboarding', 'build-info-api'];
 
 async function readInfo(instance) {
@@ -14,19 +14,16 @@ async function readInfo(instance) {
 async function cardMatches(page, info, expect, prefix) {
   const card = page.getByTestId('build-info');
   await card.getByTestId('build-info-version').waitFor();
-  const values = {
-    version: info.version, time: info.builtAt, commit: info.commit ?? '未知', id: info.buildId,
-    target: info.target, kind: info.kind === 'packaged' ? '安裝版' : '開發版',
-    variant: info.variant === 'chinese' ? '中文精簡' : info.variant === 'official' ? '官方完整版' : '尚未準備',
-  };
+  const values = { version: info.version, kind: info.kind === 'packaged' ? '安裝版' : '開發版' };
   for (const [field, expected] of Object.entries(values)) {
     const actual = (await card.getByTestId(`build-info-${field}`).innerText()).trim();
     expect(actual === expected, `畫面 ${field} 與裝置 API 相同`, { id: `${prefix}.${field}`, expected, actual });
   }
   const text = await card.innerText();
-  const sourceMessage = info.sourceDirty === true ? '有未提交修改' : info.sourceDirty === null ? '原始碼狀態未知' : null;
-  expect(sourceMessage ? text.includes(sourceMessage) : !text.includes('有未提交修改') && !text.includes('原始碼狀態未知'), '原始碼狀態如實顯示',
-    { id: `${prefix}.source`, expected: sourceMessage, actual: text });
+  const debugValues = [info.builtAt, info.commit, info.buildId, info.target, '中文精簡', '官方完整版', '有未提交修改', '原始碼狀態未知'].filter(Boolean);
+  const exposed = debugValues.filter((value) => text.includes(value));
+  expect(exposed.length === 0, '畫面不顯示除錯用建置資訊',
+    { id: `${prefix}.debug-hidden`, expected: [], actual: exposed });
 }
 
 export async function run({ instance, page, record }) {
