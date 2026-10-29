@@ -92,11 +92,115 @@ it('gives the signed verifier a runner that captures output and carries both che
   }
 });
 
+function signedPackageDependencies(outputDir: string, overrides: Record<string, unknown>) {
+  return {
+    outputDir,
+    withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
+    readPackagingGitIdentity: async () => ({ commit: 'a'.repeat(40) }),
+    loadMacSigningConfiguration: async () => ({ teamId: 'ABCDE12345', notary: { teamId: 'ABCDE12345' } }),
+    withTemporarySigningKeychain: async (_configuration: any, work: any, dependencies: any) => work({
+      keychain: '/tmp/signing.keychain-db', identity: { sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)' },
+      signal: dependencies.signal, processTracker: {}, processTrackers: [],
+    }),
+    probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
+    stageBuildInfoSidecar: async () => undefined,
+    clearPreviousArtifactSet: async () => undefined,
+    timingReportDirectory: outputDir,
+    timingLog: () => undefined,
+    log: () => undefined,
+    ...overrides,
+  };
+}
+
+async function withNpmExecPath<T>(work: () => Promise<T>): Promise<T> {
+  const previousNpmExecPath = process.env.npm_execpath;
+  process.env.npm_execpath = process.execPath;
+  try { return await work(); } finally {
+    if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
+    else process.env.npm_execpath = previousNpmExecPath;
+  }
+}
+
+it('notarizes the App once, gates the stapled App, builds the DMG and ZIP from it, notarizes the DMG once and checks each artifact once', async () => {
+  const outputDir = await temporaryRoot('xr-signed-flow-');
+  const stapledApp = { bytes: 16, sha256: 'b'.repeat(64) };
+  const appReceipt = { kind: 'app', submissionId: '12345678-1234-1234-1234-123456789abc', status: 'Accepted', issues: 0, stapled: stapledApp, stapleValidated: true };
+  const dmgReceipt = { kind: 'dmg', submissionId: '87654321-4321-4321-4321-cba987654321', status: 'Accepted', issues: 0, stapled: { bytes: 3, sha256: 'c'.repeat(64) }, stapleValidated: true };
+  const events: string[] = [];
+  const logged: string[] = [];
+  const finished = new Error('stop after the final ZIP check');
+  await withNpmExecPath(() => expect(packageApplication({
+    target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+    macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
+  }, signedPackageDependencies(outputDir, {
+    run: async (_command: string, args: string[]) => {
+      if (!args.some((argument) => argument.endsWith('electron-builder/cli.js'))) return;
+      const targets = args.includes('--prepackaged') ? args.slice(args.indexOf('--mac') + 1, args.indexOf('--prepackaged')) : [];
+      events.push(`build ${args.includes('--dir') ? 'App' : targets.join('+')}`);
+      if (targets.includes('dmg')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-chinese-mac-arm64.dmg'), 'dmg');
+      if (targets.includes('zip')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-chinese-mac-arm64.zip'), 'zip');
+    },
+    verifyDeveloperIdApplication: async (app: string) => { events.push(`verify App Developer ID ${path.relative(outputDir, app)}`); },
+    notarizeAndStaple: async ({ kind, artifactPath }: any) => {
+      events.push(`notarize ${kind} ${path.relative(outputDir, artifactPath)}`);
+      return kind === 'app' ? appReceipt : dmgReceipt;
+    },
+    validateNotarizedApplication: async (_app: string, options: any) => { events.push(`Gatekeeper App${options.stapleValidated ? ' (staple already validated)' : ''}`); },
+    verifyDeveloperIdDiskImage: async (_dmg: string, _team: string, options: any) => {
+      events.push(`verify DMG Developer ID and Gatekeeper${options.stapleValidated ? ' (staple already validated)' : ''}`);
+      return { signature: {}, gatekeeper: { source: 'Notarized Developer ID', output: 'XR.dmg: accepted\nsource=Notarized Developer ID' } };
+    },
+    verifySignedMacDmgContents: async (_dmg: string, _product: string, _team: string, options: any) => {
+      expect(options).toMatchObject({ expectedAppIdentity: stapledApp, verifyDeveloperId: false });
+      events.push('verify DMG contents');
+      return { appIdentity: stapledApp };
+    },
+    verifySignedMacZip: async (zip: string, _product: string, _team: string, options: any) => {
+      expect(options).toMatchObject({ expectedAppIdentity: stapledApp, verifyDeveloperId: false });
+      expect((await stat(zip)).isFile()).toBe(true);
+      events.push('verify ZIP contents');
+      throw finished;
+    },
+    log: (line: string) => { logged.push(line); },
+  }) as any)).rejects.toBe(finished));
+  expect(events).toEqual([
+    'build App',
+    'verify App Developer ID mac-arm64/XR Collector.app',
+    'notarize app mac-arm64/XR Collector.app',
+    'verify App Developer ID mac-arm64/XR Collector.app',
+    'Gatekeeper App (staple already validated)',
+    'build dmg+zip',
+    'notarize dmg XR-Collector-0.1.0-chinese-mac-arm64.dmg',
+    'verify DMG Developer ID and Gatekeeper (staple already validated)',
+    'verify DMG contents',
+    'verify ZIP contents',
+  ]);
+  expect(logged).toEqual(['DMG Gatekeeper assessment (spctl --type open): source=Notarized Developer ID']);
+});
+
+it('builds no installer when the stapled App fails its Gatekeeper gate', async () => {
+  const outputDir = await temporaryRoot('xr-signed-flow-');
+  const built: string[] = [];
+  await withNpmExecPath(() => expect(packageApplication({
+    target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+    macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
+  }, signedPackageDependencies(outputDir, {
+    run: async (_command: string, args: string[]) => {
+      if (args.some((argument) => argument.endsWith('electron-builder/cli.js'))) built.push(args.includes('--dir') ? 'App' : 'installers');
+    },
+    verifyDeveloperIdApplication: async () => undefined,
+    notarizeAndStaple: async () => ({ stapled: { bytes: 16, sha256: 'b'.repeat(64) }, stapleValidated: true }),
+    validateNotarizedApplication: async () => { throw new Error('syspolicy_check distribution failed'); },
+  }) as any)).rejects.toThrow(/syspolicy_check distribution failed/u));
+  expect(built).toEqual(['App']);
+});
+
 it('writes the package timing table and JSON up to a failing electron-builder run, including its hook events', async () => {
   const reportDirectory = await temporaryRoot('xr-package-timings-');
   const previousNpmExecPath = process.env.npm_execpath;
   process.env.npm_execpath = process.execPath;
   const builderCalls: Array<{ args: string[]; environment: Record<string, string> }> = [];
+  const runtimeCalls: string[][] = [];
   const output: string[] = [];
   const failure = new Error('electron-builder exited with status 1');
   try {
@@ -107,6 +211,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
       run: async (_command: string, args: string[], options: any) => {
+        if (args[0]?.endsWith('prepare-runtime.mjs')) runtimeCalls.push(args);
         if (!args.some((argument) => argument.endsWith('electron-builder/cli.js'))) return;
         builderCalls.push({ args, environment: options.environment });
         const events = options.environment.XR_PACKAGE_TIMINGS_FILE;
@@ -128,6 +233,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     else process.env.npm_execpath = previousNpmExecPath;
   }
 
+  expect(runtimeCalls).toEqual([[path.resolve('scripts/prepare-runtime.mjs'), 'mac', '--variant', 'official', '--cache-only']]);
   expect(builderCalls).toHaveLength(1);
   const hookArgs = builderCalls[0]!.args.filter((argument) => argument.startsWith('--config.') && argument.endsWith('package-timing-hook.mjs'));
   expect(hookArgs).toEqual(['beforePack', 'afterPack', 'afterSign', 'artifactBuildStarted', 'artifactBuildCompleted']
@@ -142,8 +248,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
   expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
     ['read commit and require a clean checkout', 'ok'],
     ['check host target', 'ok'],
-    ['runtime: download yt-dlp/Deno', 'ok'],
-    ['runtime: prepare Meilisearch official', 'ok'],
+    ['runtime: install yt-dlp/Deno and Meilisearch official from cache', 'ok'],
     ['build: npm run build', 'ok'],
     ['build: write BuildInfo', 'ok'],
     ['build: stage BuildInfo sidecar', 'ok'],
@@ -235,25 +340,48 @@ it('verifies the complete Mac bundle with strict deep codesign diagnostics', asy
   })).rejects.toThrow(/invalid signature.*no resources.*signature/iu);
 });
 
-it('opens both final Mac containers and rechecks their only App with Developer ID and notarization gates', async () => {
-  const zipCalls: string[] = [];
-  await verifySignedMacZip('/candidate/update.zip', 'XR Collector', 'ABCDE12345', {
-    run: async (_command: string, args: string[]) => { await mkdir(path.join(args[3]!, 'XR Collector.app')); },
-    verifyDeveloperIdApplication: async (_app: string, team: string) => { zipCalls.push(`identity:${team}`); },
-    validateNotarizedArtifact: async (_app: string, kind: string) => { zipCalls.push(`notary:${kind}`); },
+it('opens both final Mac containers and checks that their only App is the stapled App', async () => {
+  const stapledApp = { bytes: 16, sha256: 'b'.repeat(64) };
+  const zipRun = async (_command: string, args: string[]) => { await mkdir(path.join(args[3]!, 'XR Collector.app')); };
+  const dmgRun = (calls: string[]) => async (_command: string, args: string[]) => {
+    if (args[0] === 'attach') { await mkdir(path.join(args[4]!, 'XR Collector.app')); calls.push('attach'); }
+    if (args[0] === 'detach') calls.push('detach');
+  };
+  const gates = (calls: string[], appIdentity = stapledApp, notarized = true) => ({
+    describeArtifact: async () => { calls.push('hash'); return appIdentity; },
+    verifyDeveloperIdApplication: async (_app: string, team: string) => { calls.push(`identity:${team}`); },
+    validateNotarizedApplication: async () => {
+      calls.push('stapler+syspolicy+spctl');
+      if (!notarized) throw new Error('stapler validate: XR Collector.app does not have a ticket stapled to it');
+    },
   });
-  expect(zipCalls).toEqual(['identity:ABCDE12345', 'notary:app']);
 
+  // The publisher passes no expected identity and runs the full Developer ID gate.
+  const zipCalls: string[] = [];
+  await expect(verifySignedMacZip('/candidate/update.zip', 'XR Collector', 'ABCDE12345', { run: zipRun, ...gates(zipCalls) }))
+    .resolves.toEqual({ appIdentity: stapledApp });
+  expect(zipCalls).toEqual(['hash', 'identity:ABCDE12345', 'stapler+syspolicy+spctl']);
+
+  // The packager compares with the stapled App, whose Developer ID gate already passed.
   const dmgCalls: string[] = [];
   await verifySignedMacDmgContents('/candidate/installer.dmg', 'XR Collector', 'ABCDE12345', {
-    run: async (_command: string, args: string[]) => {
-      if (args[0] === 'attach') { await mkdir(path.join(args[4]!, 'XR Collector.app')); dmgCalls.push('attach'); }
-      if (args[0] === 'detach') dmgCalls.push('detach');
-    },
-    verifyDeveloperIdApplication: async (_app: string, team: string) => { dmgCalls.push(`identity:${team}`); },
-    validateNotarizedArtifact: async (_app: string, kind: string) => { dmgCalls.push(`notary:${kind}`); },
+    run: dmgRun(dmgCalls), ...gates(dmgCalls), expectedAppIdentity: stapledApp, verifyDeveloperId: false,
   });
-  expect(dmgCalls).toEqual(['attach', 'identity:ABCDE12345', 'notary:app', 'detach']);
+  expect(dmgCalls).toEqual(['attach', 'hash', 'stapler+syspolicy+spctl', 'detach']);
+
+  const differentApp = { bytes: 10, sha256: 'a'.repeat(64) };
+  const differentCalls: string[] = [];
+  await expect(verifySignedMacDmgContents('/candidate/installer.dmg', 'XR Collector', 'ABCDE12345', {
+    run: dmgRun(differentCalls), ...gates(differentCalls, differentApp), expectedAppIdentity: stapledApp, verifyDeveloperId: false,
+  })).rejects.toThrow(/App inside the DMG differs from the stapled App/u);
+  expect(differentCalls).toEqual(['attach', 'hash', 'detach']);
+  await expect(verifySignedMacZip('/candidate/update.zip', 'XR Collector', 'ABCDE12345', {
+    run: zipRun, ...gates([], differentApp), expectedAppIdentity: stapledApp, verifyDeveloperId: false,
+  })).rejects.toThrow(/App inside the ZIP differs from the stapled App/u);
+
+  await expect(verifySignedMacDmgContents('/candidate/installer.dmg', 'XR Collector', 'ABCDE12345', {
+    run: dmgRun([]), ...gates([], stapledApp, false), expectedAppIdentity: stapledApp, verifyDeveloperId: false,
+  })).rejects.toThrow(/does not have a ticket stapled/u);
 });
 
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
@@ -497,6 +625,22 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   { trustedManifest: meiliManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill,
     runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }), verifyMacBundle: async () => undefined }))
     .resolves.toMatchObject({ packageMetadata: { productName: validationProductName, xrCollectorUpdateRepository: 'derektu/xr-collector-test' } });
+});
+
+it('accepts a Developer ID App only when it is byte-identical to the verified stapled App', async () => {
+  const outputDir = await temporaryRoot('xr-signed-readback-');
+  const stapled = { bytes: 16, sha256: 'b'.repeat(64) };
+  const readBack = (verifiedAppIdentity: unknown, actual = stapled) => verifyPackagedApplication({
+    outputDir, commit: 'a'.repeat(40), version: '0.1.0', target: 'darwin-arm64', variant: 'chinese',
+    signingPolicy: 'developer-id-notarized', expectedTeamId: 'ABCDE12345', verifiedAppIdentity,
+  }, {
+    describeArtifact: async () => actual,
+    verifyDeveloperIdApplication: async () => { throw new Error('the final ZIP already ran the Developer ID gate on these bytes'); },
+  } as any);
+  await expect(readBack(stapled, { bytes: 16, sha256: 'c'.repeat(64) })).rejects.toThrow(/differs from the verified stapled App/u);
+  await expect(readBack(undefined)).rejects.toThrow(/differs from the verified stapled App/u);
+  // Identical bytes pass the identity gate and continue to the resource read-back.
+  await expect(readBack(stapled)).rejects.toThrow(/app\.asar|ENOENT|no such file/iu);
 });
 
 it('writes unique update metadata and an exact artifact inventory', async () => {

@@ -45,9 +45,11 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 ```bash
 npm ci
 # Mac
-npm run download:runtime
-# Windows 改用 npm run download:runtime:win
+npm run prepare:runtime -- mac
+# Windows 改用 npm run prepare:runtime -- win；official 引擎加 --variant official
 ```
+
+`npm run prepare:runtime` 把固定的 yt-dlp／Deno archive 與 Meilisearch 準備到使用者層級的 runtime cache，再安裝到本 checkout 的 `resources/bin`。cache 位在 checkout 之外，同一台機器的所有 checkout 與 worktree 共用：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`，可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 覆寫。條目以 pin 的 SHA-256 或 recipe fingerprint 命名，不同 pin 不會共用。`npm run download:runtime`／`download:runtime:win` 等同於 Chinese 引擎的準備指令。App 執行時只使用 `resources/bin`，不讀 cache。
 
 啟動 Web UI 與 API：
 
@@ -111,9 +113,9 @@ official variant 的交付 target 為 `darwin-arm64` 與 `win32-x64`；要求 `d
 
 Package 可以未簽章；簽署、公證與憑證整合不構成 #34 的完成門檻。App 啟動時要求內含 Meilisearch 的實際 bytes 與 manifest 的大小、SHA-256 完全一致，再決定索引 profile；相同版本、架構但不同 variant 的 binary 也會拒絕。正式簽章的導入需同時提供可測的簽章後 artifact identity 更新流程，不能只放寬成接受任意同版本執行檔。
 
-`npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 ignored 的 `.local/runtime-builds/meilisearch/` 驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
+`npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 runtime cache 的 `meilisearch/` 下驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
 
-正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、準備固定 runtime、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
+正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、從 runtime cache 安裝固定 runtime（打包只讀 cache，不下載也不編譯；缺少或不符 pin／recipe 時失敗並指出要執行的 `npm run prepare:runtime` 指令）、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
 
 ## 資料保存
 

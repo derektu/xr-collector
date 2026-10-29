@@ -176,11 +176,13 @@ jobs:
             target: darwin-arm64
             rust_target: aarch64-apple-darwin
             package_command: package:mac
+            runtime_platform: mac
             app: release/mac-arm64/XR Collector.app
           - runner: windows-2022
             target: win32-x64
             rust_target: x86_64-pc-windows-msvc
             package_command: package:win
+            runtime_platform: win
             app: release/win-unpacked/XR Collector.exe
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
@@ -196,6 +198,8 @@ jobs:
           targets: ${{ matrix.rust_target }}
       - name: Install locked dependencies
         run: npm ci
+      - name: Prepare pinned runtimes in the runtime cache
+        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
       - name: Build unsigned Chinese test package
         run: npm run ${{ matrix.package_command }}
       - name: Run offline packaged-App smoke

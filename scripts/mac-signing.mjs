@@ -11,6 +11,8 @@ import { noStageTimer } from './stage-timings.mjs';
 
 export const DEVELOPER_ID_POLICY = 'developer-id-notarized';
 export const RUNTIME_SIGNING_MANIFEST = 'runtime-signing.json';
+/** Upper bound on concurrent `codesign` processes for runtime Mach-O files. */
+export const RUNTIME_SIGNING_CONCURRENCY = 8;
 export const DENO_TEAM_ID = '2H4KBF436B';
 export const DENO_ENTITLEMENTS = [
   'com.apple.security.cs.allow-dyld-environment-variables', 'com.apple.security.cs.allow-jit',
@@ -337,7 +339,7 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   await timer.time('check runtime provenance (independent archive extraction)', async () => {
     const reconstructed = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-runtime-provenance-'));
     try {
-      await (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target: 'darwin-arm64', outputDir: reconstructed });
+      await (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target: 'darwin-arm64', outputDir: reconstructed, cacheOnly: true });
       const reconstructedManifest = await readJson(path.join(reconstructed, 'runtime-dependencies.json'));
       if (JSON.stringify(dependencyManifest) !== JSON.stringify(reconstructedManifest)
         || JSON.stringify(sourceDependencyManifest) !== JSON.stringify(reconstructedManifest)
@@ -364,16 +366,17 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   const denoPath = path.join(bin, dependencyManifest.executables.deno);
   const codeFiles = (await listMachOFiles(bin)).filter((file) => file !== denoPath).sort(deepestFirst);
   const signArgs = (target) => ['--force', '--sign', identitySha1, '--keychain', keychain, '--options', 'runtime', '--timestamp', target];
-  await timer.time('codesign --timestamp runtime Mach-O files', async () => {
-    for (const file of codeFiles) await run('/usr/bin/codesign', signArgs(file));
-  }, { count: codeFiles.length });
+  // Signing is inside-out: every leaf Mach-O file is signed before the bundle that contains it.
+  // Leaf files do not contain one another, so they are signed concurrently; the framework waits
+  // for all of them.
+  await timer.time('codesign --timestamp runtime Mach-O files', () => mapConcurrent(codeFiles, RUNTIME_SIGNING_CONCURRENCY,
+    (file) => run('/usr/bin/codesign', signArgs(file))), { count: codeFiles.length });
   const framework = path.join(bin, 'yt-dlp/_internal/Python.framework');
   await timer.time('codesign --timestamp Python.framework', () => run('/usr/bin/codesign', signArgs(framework)), { count: 1 });
 
-  const executableSignatures = {};
   const verifiedFiles = [...codeFiles, framework, denoPath];
-  await timer.time('verify signed runtime files', async () => {
-    for (const file of verifiedFiles) {
+  const executableSignatures = await timer.time('verify signed runtime files', async () => {
+    const signatures = await mapConcurrent(verifiedFiles, RUNTIME_SIGNING_CONCURRENCY, async (file) => {
       await run('/usr/bin/codesign', ['--verify', '--strict', file]);
       const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
       const expected = file === denoPath ? DENO_TEAM_ID : expectedTeamId;
@@ -383,8 +386,9 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
         metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
         assertDenoEntitlements(metadata.entitlements);
       }
-      executableSignatures[path.relative(bin, file)] = metadata;
-    }
+      return metadata;
+    });
+    return Object.fromEntries(verifiedFiles.map((file, index) => [path.relative(bin, file), signatures[index]]));
   }, { count: verifiedFiles.length });
   const files = await timer.time('hash signed runtime inventory', () => inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST])));
   const meiliFinal = files.find((entry) => entry.path === 'meilisearch');
@@ -432,8 +436,9 @@ export async function verifySignedRuntimeInventory(bin, expectedTeamId, dependen
     const expectedSignatures = [...await listMachOFiles(bin), framework].map((file) => path.relative(bin, file)).sort();
     const recordedSignatures = Object.keys(signingManifest.executableSignatures ?? {}).sort();
     if (JSON.stringify(recordedSignatures) !== JSON.stringify(expectedSignatures)) throw new Error('Signed runtime signature inventory does not cover every Mach-O file and the Python framework.');
-    await timer.time('codesign verify runtime files', async () => {
-      for (const [relative, recorded] of Object.entries(signingManifest.executableSignatures ?? {})) {
+    // One file at a time: the packaging checkout lock records the single child process it tracks.
+    await timer.time('codesign verify runtime files', () => mapConcurrent(Object.entries(signingManifest.executableSignatures ?? {}), 1,
+      async ([relative, recorded]) => {
         const target = path.join(bin, relative);
         await run('/usr/bin/codesign', ['--verify', '--strict', target]);
         const actualSignature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', target])).stderr);
@@ -444,8 +449,7 @@ export async function verifySignedRuntimeInventory(bin, expectedTeamId, dependen
           assertDenoEntitlements(actualSignature.entitlements);
         }
         if (JSON.stringify(actualSignature) !== JSON.stringify(recorded)) throw new Error(`Runtime signature identity changed: ${relative}.`);
-      }
-    }, { count: recordedSignatures.length });
+      }), { count: recordedSignatures.length });
   }
   return signingManifest;
 }
@@ -489,15 +493,38 @@ async function listNestedApplications(root) {
   return result.sort();
 }
 
+/** Gatekeeper source that `spctl --assess --type open` reports for a notarized Developer ID DMG. */
+export const NOTARIZED_DEVELOPER_ID_SOURCE = 'Notarized Developer ID';
+
+/**
+ * Developer ID and Gatekeeper gate for the notarized, stapled DMG: `codesign --verify --strict`, the
+ * Team and timestamped Developer ID signature, and `spctl --assess --type open` on the DMG's primary
+ * signature, which must exit zero and report `source=Notarized Developer ID`. `stapler validate` runs
+ * unless `stapleValidated` says the caller validated these exact bytes right after stapling. The
+ * spctl output and source are returned for the log.
+ */
 export async function verifyDeveloperIdDiskImage(dmgPath, expectedTeamId, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
-  await run('/usr/bin/codesign', ['--verify', '--strict', dmgPath]);
+  const timer = dependencies.timer ?? noStageTimer;
+  if (!dependencies.stapleValidated) await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', dmgPath]));
+  await timer.time('codesign --verify --strict', () => run('/usr/bin/codesign', ['--verify', '--strict', dmgPath]));
   const signature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', dmgPath])).stderr);
   if (signature.teamId !== expectedTeamId || !signature.authorities.some((value) => value.startsWith('Developer ID Application:'))
     || !signature.secureTimestamp) throw new Error('DMG does not have the expected timestamped Developer ID Application signature.');
-  return signature;
+  const assessment = await timer.time('spctl --assess open', () => run('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '-vv', dmgPath]));
+  // spctl names the assessed file; only its basename is kept so the evidence holds no local path.
+  const output = `${assessment.stdout ?? ''}${assessment.stderr ?? ''}`.split(dmgPath).join(path.basename(dmgPath)).trim();
+  const source = output.split(/\r?\n/u).find((line) => line.startsWith('source='))?.slice('source='.length) ?? null;
+  if (source !== NOTARIZED_DEVELOPER_ID_SOURCE) throw new Error(`DMG Gatekeeper source is ${source ?? 'missing'}, not ${NOTARIZED_DEVELOPER_ID_SOURCE}.`);
+  return { signature, gatekeeper: { source, output } };
 }
 
+/**
+ * Notarizes and staples one signed artifact, `kind` `app` or `dmg`. An App is zipped with `ditto`
+ * for upload; a DMG is uploaded as itself. The submission ID is saved with the exact upload identity
+ * before waiting, so an interrupted run resumes the same submission and never resubmits blindly.
+ * The receipt records the upload, the Apple log and the stapled artifact identity.
+ */
 export async function notarizeAndStaple({ kind, artifactPath, credentials, evidenceDirectory }, dependencies = {}) {
   if (!['app', 'dmg'].includes(kind)) throw new Error(`Unsupported notarization kind ${kind}.`);
   const baseRun = dependencies.run ?? runCaptured;
@@ -519,12 +546,12 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
   const resumable = await timer.time('resume check for an earlier Accepted submission',
     () => resumeStapledOperation({ kind, artifactPath, credentials, evidenceDirectory, completedPath, run }, dependencies));
   if (resumable) return resumable;
-  const submittedPath = kind === 'app'
+  const uploadPath = kind === 'app'
     ? await timer.time('ZIP App for upload (ditto)', () => preparePersistentAppUpload(artifactPath, evidenceDirectory, run))
     : artifactPath;
   const auth = ['--key', credentials.apiKeyPath, '--key-id', credentials.keyId, '--issuer', credentials.issuer];
   const submittedIdentity = await timer.time('hash upload', async (stage) => {
-    const identity = await describeFile(submittedPath);
+    const identity = await describeFile(uploadPath);
     stage.bytes = identity.bytes;
     return identity;
   });
@@ -539,7 +566,7 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
     if (prior.status === 'Accepted' && !prior.signedCodeIdentity) throw new Error(`Existing Accepted ${kind} receipt failed full log validation and cannot be resumed.`);
     submissionId = prior.submissionId;
   } else {
-    const submitted = parseJsonOutput(await timer.time('notarytool submit', () => run('/usr/bin/xcrun', ['notarytool', 'submit', submittedPath, ...auth, '--output-format', 'json']),
+    const submitted = parseJsonOutput(await timer.time('notarytool submit', () => run('/usr/bin/xcrun', ['notarytool', 'submit', uploadPath, ...auth, '--output-format', 'json']),
       { bytes: submittedIdentity.bytes }), 'notarytool submit');
     if (typeof submitted.id !== 'string' || !/^[0-9a-f-]{36}$/iu.test(submitted.id)) throw new Error('notarytool submit did not return a valid submission ID; the result is ambiguous and will not be resubmitted automatically.');
     submissionId = submitted.id;
@@ -570,7 +597,8 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
   if (dependencies.afterStaple) await dependencies.afterStaple();
   const finalReceipt = {
     schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: 'Accepted', issues: 0,
-    logSha256: logIdentity.sha256, submitted: submittedIdentity, signedCodeIdentity, stapled: await describeArtifact(artifactPath), stapleValidated: false,
+    logSha256: logIdentity.sha256, submitted: submittedIdentity, signedCodeIdentity,
+    stapled: await timer.time(`hash stapled ${kind === 'app' ? 'App' : 'DMG'}`, () => describeArtifact(artifactPath)), stapleValidated: false,
   };
   await writeJsonAtomic(completedPath, finalReceipt);
   await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
@@ -607,17 +635,17 @@ async function describeStableCodeIdentity(target, expectedTeamId, run) {
   return { teamId: signature.teamId, cdHash: signature.cdHash.toLowerCase(), identifier: signature.identifier };
 }
 
-export async function validateNotarizedArtifact(artifactPath, kind, dependencies = {}) {
+/**
+ * Notarization and Gatekeeper gate for one stapled App: `stapler validate`, `syspolicy_check
+ * distribution` and `spctl --assess --type execute`. `stapleValidated` skips `stapler validate`
+ * when the caller validated these exact bytes right after stapling.
+ */
+export async function validateNotarizedApplication(appPath, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
   const timer = dependencies.timer ?? noStageTimer;
-  await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
-  if (kind === 'app') {
-    await timer.time('syspolicy_check distribution', () => run('/usr/bin/syspolicy_check', ['distribution', artifactPath]));
-    await timer.time('spctl --assess execute', () => run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=4', artifactPath]));
-  } else if (kind === 'dmg') {
-    await timer.time('codesign --verify --strict', () => run('/usr/bin/codesign', ['--verify', '--strict', artifactPath]));
-    await timer.time('spctl --assess open', () => run('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', artifactPath]));
-  } else throw new Error(`Unsupported notarized artifact kind ${kind}.`);
+  if (!dependencies.stapleValidated) await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', appPath]));
+  await timer.time('syspolicy_check distribution', () => run('/usr/bin/syspolicy_check', ['distribution', appPath]));
+  await timer.time('spctl --assess execute', () => run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath]));
 }
 
 export function parseCodeSignature(output) {
@@ -726,6 +754,27 @@ async function walk(root, includeSymlinks = false) {
   };
   await visit(root);
   return result;
+}
+
+/**
+ * Runs `worker` over `items` with at most `limit` calls in flight and returns the results in item
+ * order. After the first failure no further item starts; the calls already running settle before
+ * that first error is thrown.
+ */
+export async function mapConcurrent(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  let failure = null;
+  const lane = async () => {
+    while (failure === null && next < items.length) {
+      const index = next++;
+      try { results[index] = await worker(items[index], index); }
+      catch (error) { failure ??= { error }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  if (failure) throw failure.error;
+  return results;
 }
 
 function deepestFirst(left, right) { return right.split(path.sep).length - left.split(path.sep).length || left.localeCompare(right); }

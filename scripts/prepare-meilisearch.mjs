@@ -10,10 +10,16 @@ import {
   buildMeilisearch, fileSha256, selectTarget, transactionalReplacePair, validateBuiltBinary, withRuntimeInstallLock,
 } from './build-meilisearch.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
+import { runtimeCacheMiss, runtimeCacheRoot } from './runtime-cache.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pinsPath = path.join(projectRoot, 'src', 'search', 'meilisearch-runtime-pins.json');
 
+/**
+ * Fills the per-user runtime cache with the requested Meilisearch variant and installs it into the
+ * checkout's `resources/bin`. With `cacheOnly` it never downloads or compiles: a missing or
+ * mismatched cache entry fails with the prepare command, and the cache is only read.
+ */
 export async function prepareMeilisearch(options = {}, dependencies = {}) {
   const variant = options.variant ?? 'chinese';
   if (variant !== 'chinese' && variant !== 'official') {
@@ -38,10 +44,13 @@ export async function prepareMeilisearch(options = {}, dependencies = {}) {
     throw new Error(`A supported official Meilisearch v${pins.version} asset is not published for ${target.id}; no download or runtime replacement was attempted.`);
   }
 
-  const cacheRoot = options.cacheRoot ?? path.join(projectRoot, '.local', 'runtime-builds', 'meilisearch');
+  const cacheRoot = options.cacheRoot ?? path.join(runtimeCacheRoot(), 'meilisearch');
   const entry = path.join(cacheRoot, `official-v${pins.version}`, target.id);
-  await mkdir(entry, { recursive: true });
-  return withPrepareLock(path.join(entry, '.prepare.lock'), async () => {
+  if (!options.cacheOnly) await mkdir(entry, { recursive: true });
+  // Readers validate the binary and manifest pair themselves, so cache-only packaging takes no
+  // cache lock and never blocks a concurrent preparation in another checkout.
+  const ownCacheEntry = options.cacheOnly ? (work) => work() : (work) => withPrepareLock(path.join(entry, '.prepare.lock'), work);
+  return ownCacheEntry(async () => {
     const artifactDirectory = path.join(entry, 'artifact');
     const cachedBinary = path.join(artifactDirectory, target.executable);
     const cachedManifestPath = path.join(artifactDirectory, 'meilisearch-build.json');
@@ -53,6 +62,9 @@ export async function prepareMeilisearch(options = {}, dependencies = {}) {
         const binary = await validateOfficialBinary(cachedBinary, target, pin, pins.version, run, hashFile);
         cacheHit = exactJson(binary, expectedManifest.binary);
       } catch { cacheHit = false; }
+    }
+    if (!cacheHit && options.cacheOnly) {
+      throw runtimeCacheMiss(`Official Meilisearch ${pins.version} for ${target.id}`, artifactDirectory, target.id, 'official');
     }
     if (!cacheHit) {
       const staging = await mkdtemp(path.join(entry, '.download-'));
@@ -189,6 +201,7 @@ export function parsePrepareArguments(argv) {
       options.variant = variant;
     } else if (argv[index] === '--target') options.target = argv[++index];
     else if (argv[index] === '--require-native') options.requireNative = true;
+    else if (argv[index] === '--cache-only') options.cacheOnly = true;
     else throw new Error(`Unknown argument ${argv[index]}`);
   }
   return options;

@@ -26,7 +26,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 Web 模式只在 Mac 執行；Windows 用原生 Desktop（見「原生 Desktop」與「平台」）。
 
-前置（每個 checkout 一次，每個 worktree 都要各做一次，`node_modules` 與 `resources/bin` 不共用）：`npm ci`；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno；Windows 是 `npm run download:runtime:win`，下載到 `resources/bin/win`）；`npx playwright install chromium`（Web 模式，只在 doctor 說缺少時）。
+前置（每個 checkout 一次，每個 worktree 都要各做一次，`node_modules` 與 `resources/bin` 不共用）：`npm ci`；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno；Windows 是 `npm run download:runtime:win`，安裝到 `resources/bin/win`；下載與建置結果放在機器共用的 runtime cache，第二個 worktree 只需從 cache 安裝）；`npx playwright install chromium`（Web 模式，只在 doctor 說缺少時）。
 
 ```sh
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91
