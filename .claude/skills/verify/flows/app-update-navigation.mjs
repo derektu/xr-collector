@@ -19,6 +19,10 @@ export async function run({ instance, page, record, waitFor }) {
     expect(await panelIsInViewport(page), '側欄版本狀態開啟設定並把 App 更新區帶進可視範圍', { id: 'u36.sidebar-update-navigation' });
     await page.getByTestId('nav-documents').click();
     await page.getByTestId('nav-settings').click();
+    await page.getByTestId('software-update').waitFor();
+    await page.getByTestId('search-index-state').waitFor();
+    await page.getByTestId('login-startup-status').waitFor();
+    await page.getByTestId('agent-active-url').waitFor();
     expect(await page.locator('main.content').evaluate((element) => element.scrollTop === 0),
       '普通設定入口維持頁首，不沿用更新入口的定位要求', { id: 'u36.ordinary-settings-position' });
 
