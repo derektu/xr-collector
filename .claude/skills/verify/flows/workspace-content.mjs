@@ -204,11 +204,14 @@ export async function run({ instance, page, record, waitFor }) {
     expect((await by('add-url').inputValue()).includes(d.videos[1].id), '切換保留網址');
     await waitFor(async () => await by('add-confirm').isEnabled(), 'switch ready');
     await by('add-confirm').click();
+    await by('add-dialog').waitFor({ state: 'detached' });
+    const collected = await waitFor(
+      async () => ((await docs()).some((x) => x.id === 'youtube:' + d.videos[1].id) ? { value: true } : null),
+      'switched single item collected',
+      { timeout: 30_000 }
+    ).catch(() => ({ value: false }));
     await idle(instance);
-    expect(
-      (await docs()).some((x) => x.id === 'youtube:' + d.videos[1].id),
-      '第二入口產生文件'
-    );
+    expect(collected.value, '第二入口產生文件');
     expect(!(await instance.api('/api/subscriptions')).subscriptions.some((x) => x.id === d.id), '單篇不建立訂閱');
   });
 
