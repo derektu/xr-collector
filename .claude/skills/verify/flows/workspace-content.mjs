@@ -3,14 +3,16 @@ import path from 'node:path';
 import { articles, channel, idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'workspace-content';
-export const title = '單篇收集、工作操作、RSS 設定與文件閱讀搜尋';
+export const title = '設定計數、單篇類型切換、工作操作、RSS 設定與文件分頁搜尋';
+export const tier = 'feature';
 export const covers = [
   'collect-add',
   'collect-mismatch',
   'collect-done',
-  'collect-read',
   'collect-fail',
   'jobs-retry',
+  'jobs-badge',
+  'sub-detail',
   'jobs-dismiss',
   'docs-list',
   'docs-filter',
@@ -189,27 +191,13 @@ export async function run({ instance, page, record, waitFor }) {
     c.youtube.channels.push(channel('E', 1, '工作失敗驗證'));
   });
 
-  await scenario('CONTENT-1', '兩個單篇入口與閱讀', async ({ expect, shot }) => {
-    await go('/documents');
-    await page.locator('[data-testid="documents-empty-vault"], [data-testid="documents-summary"]').waitFor();
-    await by('add-document').click();
-    await by('add-item-url').click();
-    await by('add-url').fill('https://www.youtube.com/watch?v=' + d.videos[0].id);
-    await waitFor(async () => await by('add-confirm').isEnabled(), 'single URL ready');
-    await shot('add-dialog');
-    await by('add-confirm').click();
-    await by('add-dialog').waitFor({ state: 'detached' });
-    await idle(instance);
-    expect((await by('page-documents').count()) === 1, '加入後留在文件頁');
-    await read('youtube:' + d.videos[0].id);
-    expect((await by('reader-body').innerText()).includes('【合成字幕】'), '單篇閱讀顯示字幕');
-    expect((await by('reader-source-link').getAttribute('href')).includes(d.videos[0].id), '來源連結正確');
-    await shot('reader');
+  await scenario('CONTENT-1', '訂閱入口貼影片網址，改為加入一次', async ({ expect, shot }) => {
     await go('/');
     await by('add-subscription').click();
     await by('add-item-youtube-channel').click();
     await by('add-url').fill('https://www.youtube.com/watch?v=' + d.videos[1].id);
     await by('add-mismatch').waitFor();
+    await shot('mismatch');
     expect(await by('add-confirm').isDisabled(), '類型不符時不能直接訂閱');
     expect((await by('add-switch').innerText()).trim() === '改為加入一次', '切換按鈕的完整文字');
     await by('add-switch').click();
@@ -355,49 +343,23 @@ export async function run({ instance, page, record, waitFor }) {
     );
   });
 
-  await scenario('CONTENT-5', '刪除返回入口、已刪除閱讀與 YouTube 重新收集', async ({ expect, shot }) => {
-    const id = 'youtube:' + d.videos[0].id;
-    await read(id);
-    await by('reader-delete').click();
-    await by('confirm-delete-document').getByRole('button', { name: '取消', exact: true }).click();
-    expect((await by('reader-body').count()) === 1, '取消保留閱讀');
-    await by('reader-delete').click();
-    await by('confirm-delete-document').getByRole('button', { name: '刪除', exact: true }).click();
-    await by('page-documents').waitFor();
-    const afterDeleteTotal = (await instance.api('/api/documents?limit=1')).total;
-    await waitFor(
-      async () =>
-        (await by('documents-summary').innerText()) === `共 ${afterDeleteTotal} 份文件` &&
-        (await by('documents-source').locator('option').first().innerText()) === `全部（${afterDeleteTotal}）`,
-      'deleted reader returns to a settled document list'
-    );
-    expect((await by('reader-deleted').count()) === 0, '確認刪除後返回文件入口');
-    await shot('delete-return');
-    const removed = JSON.parse(
-      await readFile(path.join(instance.runDir, 'vault/settings/deleted-documents.json'), 'utf8')
-    );
-    expect(
-      removed.deleted.some((x) => x.sourceType === 'youtube' && x.sourceId === d.videos[0].id),
-      '磁碟刪除紀錄包含文件'
-    );
-    await go('/documents/' + encodeURIComponent(id));
-    await by('reader-deleted').waitFor();
-    expect((await by('reader-recollect').count()) === 1, '重新開啟刪除的 YouTube 可重新收集');
-    await shot('deleted-reader');
-    await by('reader-recollect').click();
-    await by('reader-body').waitFor({ timeout: 60_000 });
-    expect(
-      (await docs()).some((x) => x.id === id),
-      '重新收集後 API 再次有文件'
-    );
+  await scenario('CONTENT-5', '已刪除的 RSS 不提供重新收集，最後一頁刪除後回到前一頁', async ({ expect, shot }) => {
     const rss = (await docs()).find((x) => x.publisher.id === feed.id);
     await read(rss.id);
     await by('reader-delete').click();
     await by('confirm-delete-document').getByRole('button', { name: '刪除', exact: true }).click();
     await by('page-documents').waitFor();
+    const removed = JSON.parse(
+      await readFile(path.join(instance.runDir, 'vault/settings/deleted-documents.json'), 'utf8')
+    );
+    expect(
+      removed.deleted.some((x) => x.sourceType === 'rss' && `rss:${x.sourceId}` === rss.id),
+      '磁碟刪除紀錄包含 RSS 文件'
+    );
     await go('/documents/' + encodeURIComponent(rss.id));
     await by('reader-deleted').waitFor();
     expect((await by('reader-recollect').count()) === 0, '已刪除 RSS 不提供無法還原網址的重新收集');
+    await shot('deleted-rss-reader');
     await go('/documents');
     await by('documents-source').selectOption('rss:' + feed.id);
     await waitFor(async () => (await page.locator('.document-row').count()) === 20, '21 documents first page');

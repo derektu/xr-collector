@@ -2,7 +2,8 @@ import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'feature-navigation';
 export const title = '訂閱入口與篩選、工作診斷、索引重建及 RSS 重試';
-export const covers = ['sub-add', 'sub-status', 'activity-raw', 'activity-summary', 'docs-search', 'rss-failure'];
+export const tier = 'feature';
+export const covers = ['sub-add', 'sub-detail', 'activity-raw', 'activity-summary', 'docs-search', 'rss-failure', 'jobs-sections'];
 
 export async function run({ instance, page, record, waitFor }) {
   const scenario = (id, title, body) => record.scenario(id, title, async ({ expect, ...rest }) => {

@@ -157,26 +157,35 @@ node .local/ticket-artifacts/91/scripts/flow.mjs --label ticket
 
 ```sh
 V=.claude/skills/verify/scripts/verify.mjs
-node $V flows list                                                   # 每支流程與它涵蓋的子功能
+node $V flows list                                                   # 每支流程的層級與它涵蓋的子功能
+node $V flows run --tier core --issue 91 --label core --jobs 2       # 常用路徑與資料安全，幾分鐘內的本機回饋
+node $V flows run --feature subscriptions --web --issue 91 --label subscriptions --jobs 3 # 涵蓋訂閱功能檔子功能的 Web 流程
+node $V flows history --runs 30                                      # 最近 30 次 CI 的每支流程失敗次數、原因與耗時
 node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
 node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
 node $V flows run feature-navigation build-info --issue 91 --label navigation # 入口、診斷、索引及建置資訊
 node $V flows run search-normalization --issue 91 --label search      # 文字等價、詞界／片段、原文、條件／分頁及 Agent 一致性
-node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動態跑全部非 Desktop 流程，同時三支
+node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動態跑全部 Web 流程（Desktop 與真實來源以外），同時三支
 ```
+
+- **層級**：每支流程 export `tier`：`core`（常用路徑與資料安全）、`feature`（功能專項與邊界）、`platform`（Desktop 與打包；Desktop 流程一律是它）、`real`（真實來源，以 `--data real` 啟動）。缺少或不合法時 `flows list`／`flows run` 指名檔案失敗。何時跑哪一層見 [功能地圖](features/README.md#流程層級)。
+- **選取**：名稱、`--web`／`--desktop`、`--tier`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 CI 跑的集合：Desktop 與 `real` 以外的全部流程。
+- **預算**：單支流程在 CI 不超過 60 秒；需要更久的流程 export `overBudget` 寫明理由。耗時表的 `budget` 欄標出超過 60 秒的流程，以及其中沒寫理由的；總時間超過全部 Web 流程的 300 秒預算時，最後一行註明。門檻見 [開發驗證流程](../../../docs/development-validation.md#已收錄流程的門檻與成本)。
+- **歷史**：`flows history` 讀 `--from <資料夾>` 底下每個流程的 `results.json`，沒給時以 `gh` 下載最近 `--runs`（預設 30）次 CI 的 `web-regression-results-*` artifact，列出每支流程的執行次數、失敗次數與原因（流程的 error，或失敗的 `<scenario>: <check id>`）、耗時中位數與最大值，以及超過 60 秒的次數。
 
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的產品 `src/` 與 Web UI；收錄流程同時使用流程來源 checkout 的合成 verification server，才能以候選 harness 重複測固定的乾淨 main。`results.json` 分別記受測 checkout 與 `flowSource`，不可把兩者當成同一版本。票自己的 `.local` 流程若直接呼叫 `launchWeb`，預設仍使用受測 checkout 的 server；需要拆開時明確傳 `server`（見 API 表）。
 - **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
 - **同時執行**：`--jobs <N>`（預設 1，最多等於 slot 數 10）讓最多 N 支流程同時跑，每支仍是自己的 instance 與 slot，依列出順序開始；Desktop 流程獨自執行，前面的流程結束才開始，後面的等它結束。一支失敗或中途丟出例外不影響其他流程跑完。N 大於 1 時每行 log 以 `[<流程名>]` 開頭。slot 被其他 run 佔滿時，拿不到 slot 的流程以 provisioning 失敗記錄，先用 `doctor` 確認空著的 slot。
 - **耗時**：每支流程的 `results.json` 記 `timings`：`prepareMs`（建 Web build、啟動 server 到搜尋就緒，或啟動 Electron）、`runMs`（開頁、流程本身與寫結果）、`cleanupMs`（關頁、停 server 與釋放 slot）。結束時印出每支的耗時表與總時間，輸出的 JSON 另有 `wallMs` 與每支的 `timings`。
-- **內容操作**：`workspace-content` 串接單篇收集、失敗工作重試／移除、RSS 設定、文件分頁／搜尋／刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
-- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID）與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區。
+- **核心旅程**：`core-journey` 一次走過訂閱、文件頁新增單支影片、來源篩選與搜尋、閱讀、列表暫停與恢復、閱讀頁刪除確認；`subscription-remove` 是移除訂閱保留文件的資料安全代表。兩者是 `core` 層，其他流程不重複斷言它們已斷言的操作。
+- **內容操作**：`workspace-content` 串接設定頁計數、訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、文件分頁／搜尋與 RSS 刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
+- **流程的形式**：export `name`、`title`、`tier`、`covers`（涵蓋的功能地圖子功能 ID）、需要時的 `overBudget`，與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
 
 **收錄規則**：
 
-1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑時，同一張票把它收進 `flows/`，隨 PR 一起 commit：斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
+1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑，且符合 [新增流程的門檻](../../../docs/development-validation.md#已收錄流程的門檻與成本) 時，同一張票把它收進 `flows/`，隨 PR 一起 commit：標記層級，斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能，從 `Backlog` 移除已補上的項目。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
 2. 只對本票有意義的步驟，例如重現特定 bug 的資料、一次性的資料檢查，留在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
 3. 票改變了已收錄流程所檢查的行為時，同一張票更新該流程與功能地圖；改過的斷言在基準上失敗、在本票版本通過。
 4. 已收錄流程涵蓋的功能，票不另寫重複的 `.local` 流程；需要多檢查的項目加進已收錄流程。

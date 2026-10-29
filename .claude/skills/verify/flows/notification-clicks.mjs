@@ -13,6 +13,7 @@ import {
 
 export const name = 'notification-clicks';
 export const title = '自動暫停通知的選單、圖示與導頁';
+export const tier = 'platform';
 export const covers = ['notification-events', 'notification-actionable', 'notification-click', 'tray-menu', 'tray-open'];
 export const desktop = true;
 

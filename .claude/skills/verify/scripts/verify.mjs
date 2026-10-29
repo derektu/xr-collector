@@ -2,8 +2,10 @@
 // Command line around the verify library: start, check, seed, capture and stop one Web-mode instance.
 // Ticket flows import lib/index.mjs for everything else. Run from the checkout under test:
 //   node .claude/skills/verify/scripts/verify.mjs <command> [options]
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
@@ -14,7 +16,9 @@ import { environment, exe, WINDOWS } from './lib/platform.mjs';
 import { BIN_PLATFORM, desktopTarget, runtimeBin } from './lib/target.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { evidenceFreshness } from './lib/freshness.mjs';
-import { listFlows, runFlows } from './lib/flows.mjs';
+import { findFeature, readFeatures } from './lib/features.mjs';
+import { listFlows, runFlows, selectFlows } from './lib/flows.mjs';
+import { flowHistory, historyTable, readFlowResults } from './lib/history.mjs';
 import { apiState, readState } from './lib/state.mjs';
 import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
@@ -36,14 +40,22 @@ const USAGE = `verify.mjs <command>
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   sweep                                        remove stale slot locks and scratch folders of runs with no live process
-  flows list                                   the recorded regression flows and the feature-map sub-features each covers
-  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--jobs <N>]
-           runs the named recorded flows (all without names), each on its own instance; --jobs runs up to N
-           at once (default 1, at most one per verify slot; a Desktop flow always runs alone); the flows and this
-           library come from the checkout the command runs in, --checkout picks only the src/ under test;
-           evidence goes to .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows);
-           each results.json records timings (prepareMs, runMs, cleanupMs) and the run ends with a table of them;
-           exit code 1 when any flow fails
+  flows list [--tier <tier>] [--feature <file>]
+           the recorded regression flows: tier, the feature-map sub-features each covers, overBudget
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--tier <tier>] [--feature <file>] [--jobs <N>]
+           runs the named recorded flows (all without names), each on its own instance; --web is every flow
+           neither Desktop nor real-source (what CI runs); --tier keeps core, feature, platform or real;
+           --feature keeps the flows covering a sub-feature of that feature file (subscriptions or
+           subscriptions.md); --jobs runs up to N at once (default 1, at most one per verify slot; a Desktop
+           flow always runs alone); the flows and this library come from the checkout the command runs in,
+           --checkout picks only the src/ under test; evidence goes to
+           .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows); each results.json records
+           timings (prepareMs, runMs, cleanupMs) and the run ends with a table of them, marking flows over the
+           one-flow budget; exit code 1 when any flow fails
+  flows history [--from <dir>] [--runs <N>]
+           each flow's runs, failures with their causes, median and longest total, and runs over the one-flow
+           budget, from every results.json under --from, or else from the Web regression results of the last
+           N (default 30) CI runs, downloaded with gh
   summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
            whether every scenario passed on every given platform (any one platform without --platform), counting
            only results of that commit from a clean checkout; --scenario names a scenario the flow must record;
@@ -56,6 +68,7 @@ const { values: o, positionals } = parseArgs({ allowPositionals: true, options: 
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
   commit: { type: 'string' }, platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
   web: { type: 'boolean' }, desktop: { type: 'boolean' }, jobs: { type: 'string', default: '1' },
+  tier: { type: 'string' }, feature: { type: 'string' }, from: { type: 'string' }, runs: { type: 'string', default: '30' },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -68,6 +81,36 @@ function builtAfterSources(checkout) {
     .map((file) => statSync(path.join(checkout, 'src', 'web', file)).mtimeMs)
     .reduce((a, b) => Math.max(a, b), 0);
   return statSync(built).mtimeMs >= newest;
+}
+
+/**
+ * `flows history`: reads every results.json under --from, or downloads the `web-regression-results-*`
+ * artifacts of the last --runs CI runs with gh (runs without one, such as Markdown-only changes or
+ * reused main pushes, are skipped), and prints each flow's record as JSON and as a table.
+ */
+async function history() {
+  if (!/^\d+$/u.test(o.runs) || Number(o.runs) < 1) throw new Error(`--runs is a whole number of CI runs\n${USAGE}`);
+  let from = o.from && path.resolve(o.from);
+  let scratch;
+  try {
+    if (!from) {
+      scratch = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-history-'));
+      from = scratch;
+      const runs = JSON.parse(execFileSync('gh', ['run', 'list', '--workflow', 'ci.yml', '--limit', o.runs, '--json', 'databaseId'], { encoding: 'utf8' }));
+      for (const { databaseId } of runs) {
+        try {
+          execFileSync('gh', ['run', 'download', String(databaseId), '--pattern', 'web-regression-results-*', '--dir', path.join(scratch, String(databaseId))], { stdio: 'ignore' });
+        } catch {
+          // The run kept no Web regression results.
+        }
+      }
+    }
+    const records = flowHistory(readFlowResults(from));
+    print(records);
+    console.log(historyTable(records));
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
+  }
 }
 
 async function doctor() {
@@ -216,11 +259,16 @@ async function main() {
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
   if (command === 'sweep') return print(sweepStale(mainCheckout()));
   if (command === 'flows') {
-    if (positionals[1] === 'list') return print((await listFlows()).map(({ name, title, covers }) => ({ name, title, covers })));
-    if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
+    if (positionals[1] === 'list') {
+      const listed = selectFlows(await listFlows(), { tier: o.tier, feature: o.feature === undefined ? undefined : findFeature(readFeatures(), o.feature) });
+      return print(listed.map(({ name, title, tier, covers, desktop, overBudget }) => ({ name, title, tier, covers,
+        ...(desktop ? { desktop } : {}), ...(overBudget ? { overBudget } : {}) })));
+    }
+    if (positionals[1] === 'history') return history();
+    if (positionals[1] !== 'run') throw new Error(`flows needs list, run or history\n${USAGE}`);
     if (o.web && o.desktop) throw new Error('Choose only one of --web or --desktop');
     const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout,
-      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
+      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', tier: o.tier, feature: o.feature, jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
     print(outcome);
     if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
     return;

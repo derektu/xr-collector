@@ -11,6 +11,7 @@ import { processTable, programName, WINDOWS } from '../scripts/lib/platform.mjs'
 
 export const name = 'tray';
 export const title = '選單列／系統匣與視窗生命週期';
+export const tier = 'platform';
 export const covers = ['tray-menu', 'tray-hide', 'tray-actions', 'tray-open', 'tray-hint', 'tray-second-launch', 'tray-quit'];
 export const desktop = true;
 

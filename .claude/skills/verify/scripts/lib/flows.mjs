@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openPage, recorder } from './drive.mjs';
 import { launchElectron } from './electron.mjs';
 import { writeFailureResult } from './failure.mjs';
+import { findFeature, readFeatures } from './features.mjs';
 import { launchWeb } from './instance.mjs';
 import { checkoutRoot, claimEvidence, commitOf, SLOTS } from './paths.mjs';
 import { apiState } from './state.mjs';
@@ -17,25 +18,54 @@ import { sleep, waitFor } from './wait.mjs';
 
 export const FLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'flows');
 
-/** Every recorded flow: { name, title, covers, run, file }, by name. */
+/**
+ * The tier of a flow says when it is worth its cost: `core` the common paths and data safety, run
+ * for quick local feedback; `feature` one feature's edges, run when a ticket touches that feature;
+ * `platform` Desktop and packaging, run when the platform layer changes; `real` real sources over
+ * the network, run before delivering collection changes. A pull request's CI runs every Web flow
+ * (`--web`) whatever its tier.
+ */
+export const TIERS = ['core', 'feature', 'platform', 'real'];
+
+/** Seconds one flow may take in CI; a flow that needs longer exports `overBudget` with the reason. */
+export const FLOW_BUDGET_SECONDS = 60;
+
+/** Seconds every Web flow together may take in CI with --jobs 3. */
+export const WEB_BUDGET_SECONDS = 300;
+
+/** Every recorded flow: { name, title, tier, covers, desktop, overBudget, run, file }, by name. */
 export async function listFlows(dir = FLOWS_DIR) {
   const files = readdirSync(dir).filter((file) => file.endsWith('.mjs')).sort();
   return Promise.all(files.map(async (file) => {
     const flow = await import(pathToFileURL(path.join(dir, file)).href);
     if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
-      throw new Error(`${file} must export name, title, covers and run`);
+      throw new Error(`${file} must export name, title, tier, covers and run`);
     }
-    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true, catalog: flow.catalog,
-      vault: flow.vault === 'none' ? 'none' : 'selected', run: flow.run, file: path.join(dir, file) };
+    if (!TIERS.includes(flow.tier)) throw new Error(`${file} must export tier, one of ${TIERS.join(', ')}; got ${flow.tier}`);
+    if (flow.desktop === true && flow.tier !== 'platform') throw new Error(`${file} is a Desktop flow, so its tier is platform; got ${flow.tier}`);
+    if (flow.overBudget !== undefined && (typeof flow.overBudget !== 'string' || !flow.overBudget.trim())) {
+      throw new Error(`${file} overBudget must say why the flow needs more than ${FLOW_BUDGET_SECONDS}s`);
+    }
+    return { name: flow.name, title: flow.title, tier: flow.tier, covers: flow.covers, desktop: flow.desktop === true, catalog: flow.catalog,
+      vault: flow.vault === 'none' ? 'none' : 'selected', overBudget: flow.overBudget, run: flow.run, file: path.join(dir, file) };
   }));
 }
 
-export function selectFlows(flows, { names = [], layer = 'all' } = {}) {
+/**
+ * The flows to run, in their listed order. `names` picks flows by name (strict); `layer` is `web`
+ * (every flow that is neither Desktop nor real-source: the set CI runs), `desktop` or `all`; `tier`
+ * keeps one tier; `feature` (a parsed feature file) keeps the flows covering any of its sub-features.
+ */
+export function selectFlows(flows, { names = [], layer = 'all', tier, feature } = {}) {
   if (!['all', 'web', 'desktop'].includes(layer)) throw new Error(`Unknown flow layer ${layer}`);
+  if (tier !== undefined && !TIERS.includes(tier)) throw new Error(`Unknown tier ${tier}; known: ${TIERS.join(', ')}`);
   const unknown = names.filter((name) => !flows.some((flow) => flow.name === name));
   if (unknown.length) throw new Error(`Unknown flow ${unknown.join(', ')}; known: ${flows.map((flow) => flow.name).join(', ')}`);
+  const inLayer = (flow) => layer === 'all' || (layer === 'desktop' ? flow.desktop : !flow.desktop && flow.tier !== 'real');
   return flows.filter((flow) => (names.length === 0 || names.includes(flow.name))
-    && (layer === 'all' || (layer === 'desktop') === flow.desktop));
+    && inLayer(flow)
+    && (tier === undefined || flow.tier === tier)
+    && (feature === undefined || flow.covers.some((id) => feature.subFeatures.includes(id))));
 }
 
 /**
@@ -89,18 +119,18 @@ export async function runPool(flows, jobs, runOne) {
 const currentFlow = new AsyncLocalStorage();
 
 /**
- * Runs the named flows (all when `names` is empty) against `checkout`, up to `jobs` at once, each on
- * its own instance and slot. The label (default `flows`) names one evidence folder for this whole
+ * Runs the flows `selectFlows` picks (all when nothing narrows them; `feature` names a feature file
+ * of the map) against `checkout`, up to `jobs` at once, each on its own instance and slot. The label (default `flows`) names one evidence folder for this whole
  * invocation, `<label>/`, `<label>-2/`… as launch does; each flow writes into `<label folder>/<flow>/`.
  * With more than one job, each log line starts with `[<flow>]`. Prints a table of each flow's
  * timings at the end. Returns { evidence, label, jobs, wallMs, flows: [{ name, passed, evidence, timings, error? }] }.
  */
-export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', jobs = 1 } = {}) {
+export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', tier, feature, jobs = 1 } = {}) {
   if (!issue) throw new Error('flows run needs --issue for the evidence folder');
   if (!Number.isInteger(jobs) || jobs < 1 || jobs > SLOTS.length) throw new Error(`--jobs is a whole number from 1 to ${SLOTS.length}, one verify slot per flow`);
   const all = await listFlows();
-  const selected = selectFlows(all, { names, layer });
-  if (!selected.length) throw new Error(`No ${layer} flows selected`);
+  const selected = selectFlows(all, { names, layer, tier, feature: feature === undefined ? undefined : findFeature(readFeatures(), feature) });
+  if (!selected.length) throw new Error(`No flows selected (layer ${layer}${tier ? `, tier ${tier}` : ''}${feature ? `, feature ${feature}` : ''})`);
   const claimed = claimEvidence(issue, label);
   const source = flowSource();
   const log = console.log;
@@ -111,7 +141,7 @@ export async function runFlows({ names = [], issue, label = 'flows', checkout = 
     outcomes = await runPool(selected, jobs, (flow) => currentFlow.run(flow.name, () => {
       console.log(`flow ${flow.name}: ${flow.title}`);
       return runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout, source });
-    }));
+    }).then((outcome) => ({ ...outcome, tier: flow.tier, ...(flow.overBudget ? { overBudget: flow.overBudget } : {}) })));
   } finally {
     console.log = log;
   }
@@ -120,19 +150,32 @@ export async function runFlows({ names = [], issue, label = 'flows', checkout = 
   return { evidence: claimed.evidence, label: claimed.label, jobs, wallMs, flows: outcomes };
 }
 
-/** The end-of-run table: each flow's result and its prepare, run, cleanup and total seconds. */
+/** A flow's prepare, run and cleanup milliseconds added up; undefined when none was measured. */
+export function totalMs(timings = {}) {
+  const { prepareMs, runMs, cleanupMs } = timings;
+  return [prepareMs, runMs, cleanupMs].some((ms) => typeof ms === 'number') ? (prepareMs ?? 0) + (runMs ?? 0) + (cleanupMs ?? 0) : undefined;
+}
+
+/**
+ * The end-of-run table: each flow's result, tier, and its prepare, run, cleanup and total seconds.
+ * A flow over the one-flow budget is marked, with whether it declares why; the last line says when
+ * the wall clock is over the budget for every Web flow.
+ */
 export function timingTable(outcomes, { jobs, wallMs }) {
   const seconds = (ms) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)}s` : '-');
   const rows = outcomes.map((outcome) => {
     const { prepareMs, runMs, cleanupMs } = outcome.timings ?? {};
-    const total = [prepareMs, runMs, cleanupMs].some((ms) => typeof ms === 'number')
-      ? (prepareMs ?? 0) + (runMs ?? 0) + (cleanupMs ?? 0) : undefined;
-    return [outcome.name, outcome.passed ? 'PASSED' : 'FAILED', seconds(prepareMs), seconds(runMs), seconds(cleanupMs), seconds(total)];
+    const total = totalMs(outcome.timings);
+    const budget = total !== undefined && total > FLOW_BUDGET_SECONDS * 1000
+      ? (outcome.overBudget ? `over ${FLOW_BUDGET_SECONDS}s (declared)` : `over ${FLOW_BUDGET_SECONDS}s, no overBudget`) : '';
+    return [outcome.name, outcome.passed ? 'PASSED' : 'FAILED', outcome.tier ?? '-', seconds(prepareMs), seconds(runMs), seconds(cleanupMs), seconds(total), budget];
   });
-  const table = [['flow', 'result', 'prepare', 'run', 'cleanup', 'total'], ...rows];
+  const table = [['flow', 'result', 'tier', 'prepare', 'run', 'cleanup', 'total', 'budget'], ...rows];
   const widths = table[0].map((_, column) => Math.max(...table.map((row) => row[column].length)));
-  const lines = table.map((row) => row.map((cell, column) => (column < 2 ? cell.padEnd(widths[column]) : cell.padStart(widths[column]))).join('  '));
-  return [...lines, `${outcomes.length} flows in ${seconds(wallMs)} with --jobs ${jobs}`].join('\n');
+  const right = (column) => column >= 3 && column <= 6;
+  const lines = table.map((row) => row.map((cell, column) => (right(column) ? cell.padStart(widths[column]) : cell.padEnd(widths[column]))).join('  ').trimEnd());
+  const wall = `${outcomes.length} flows in ${seconds(wallMs)} with --jobs ${jobs}`;
+  return [...lines, wallMs > WEB_BUDGET_SECONDS * 1000 ? `${wall}; over the ${WEB_BUDGET_SECONDS}s budget for every Web flow` : wall].join('\n');
 }
 
 /** Milliseconds spent in each phase of one flow: `mark(phase)` closes the phase that began at the previous mark. */
@@ -172,7 +215,7 @@ async function runOne(flow, options) {
   try {
     // The flow, driver and verification server are one harness revision; only product src comes
     // from --checkout. This lets a candidate CI harness repeatedly test a clean main revision.
-    instance = await launchWeb({ issue, label, evidence, checkout, vault: flow.vault,
+    instance = await launchWeb({ issue, label, evidence, checkout, vault: flow.vault, data: flow.tier === 'real' ? 'real' : 'synthetic',
       ...(typeof flow.catalog === 'function' ? { catalog: flow.catalog() } : {}),
       server: path.resolve(FLOWS_DIR, '..', 'scripts', 'server.mts') });
   } catch (error) {

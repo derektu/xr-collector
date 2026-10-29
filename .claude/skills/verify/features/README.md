@@ -4,11 +4,11 @@
 
 | 功能 | 檔案 | 主要層級 | 已收錄流程 |
 | --- | --- | --- | --- |
-| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `workspace-content` |
-| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation` |
+| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `core-journey`、`workspace-content` |
+| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `core-journey`、`subscription-remove`、`subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation`、`workspace-content` |
 | 記錄 | [activity.md](activity.md) | Web | `check-history-summary`、`feature-navigation` |
-| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content` |
-| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization` |
+| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`feature-navigation` |
+| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization` |
 | RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
 | Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`workspace-content` |
 | 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray`、`notification-clicks` |
@@ -17,8 +17,44 @@
 | App 更新 | [app-update.md](app-update.md) | Web 共用狀態；原生 A→B 需兩平台 packaged Desktop | `app-update`、`app-update-navigation` |
 | 登入電腦時自動啟動 | [login-startup.md](login-startup.md) | Web 負向；打包安裝版 VM | `login-startup` |
 | AI 助理連線 | [agent-connection.md](agent-connection.md) | Web；固定埠原生啟動另驗 | `agent-connection` |
+| 外觀主題 | [appearance.md](appearance.md) | Web；Desktop 偏好檔需 Electron | 沒有 |
 
 已收錄流程在 [`../flows/`](../flows/)，以 `verify.mjs flows run` 執行，見 [SKILL.md](../SKILL.md#已收錄流程)。
+
+## 流程層級
+
+每支流程在自己的檔案以 `export const tier` 標記層級，地圖不另列：`flows list` 印出每支流程的層級，`flows list --feature <功能檔>` 只列涵蓋該功能的流程。層級決定流程什麼時候值得花時間跑；PR 的 CI 照樣執行全部 Web 流程，層級不縮減 PR 的驗證。
+
+| 層級 | 內容 | 什麼時候跑 |
+| --- | --- | --- |
+| `core` | 常用路徑與資料安全：`core-journey`（訂閱、新增、查詢、閱讀、暫停恢復、刪除確認）、`subscription-remove` | 本機快速回饋：`flows run --tier core`，runtime 已備妥時 3 分鐘內完成 |
+| `feature` | 一個功能的專項與邊界 | 票改到該功能時：`flows run --feature <功能檔>` |
+| `platform` | Desktop 與打包，視窗會顯示 | 改到平台層、發版前 |
+| `real` | 真實來源，需要網路 | 改到收集、選軌、辨識或 feed 讀取的票交付前；`--web` 不含它 |
+
+## Backlog
+
+每個功能檔最後的 `Backlog` 列出已清點、尚未有流程斷言的項目，以子功能 ID 開頭，寫明待補的行為，以及下層測試已保護的部分。項目沒有實作前不寫進 `Regression flows`，也不寫成已覆蓋。某張票碰到該功能時，先判斷下層測試能否保護，必須經畫面才補進流程，補上後從 Backlog 移到 `Regression flows`。來源是 [#168 的盤點](https://github.com/derektu/xr-collector/issues/168#issuecomment-6470881479)。
+
+## 定期檢討
+
+大約每 10 張票 merge 後，以 `flows history --runs <N>` 讀出 CI 的紀錄，依 [開發驗證流程](../../../../docs/development-validation.md#已收錄流程的門檻與成本) 決定每支流程保留、合併或降級，最新一次放最上面。每次記日期、讀了哪些 run、全部 Web 流程的總時間，以及有決定的流程。
+
+### 2026-10-29（#168）
+
+CI 尚未累積 `results.json`，依據是本機 `--jobs 3` 的兩次完整執行（Mac arm64）與 PR #177 的 CI 耗時表。全部 Web 流程：17 支 191.7 秒 → 19 支 196.2 秒（本機）；CI 上同一批 17 支是 231.1 秒。
+
+| 流程 | 決定 | 依據 |
+| --- | --- | --- |
+| `core-journey`、`subscription-remove` | 新增，`core` | 本機 25.1 秒、10.5 秒 |
+| `offline-recover` | 保留，固定 32 秒等待改為等排程輪詢完成 | 65.8 → 34.1 秒 |
+| `workspace-content` | 保留，單篇新增與閱讀、YouTube 刪除與重新收集交給 `core-journey` 與 `documents-reader-search` | 34.3 → 31.9 秒 |
+| `documents-reader-search` | 保留，搜尋與閱讀的斷言交給 `core-journey` | 26.7 → 26.3 秒 |
+| `subscribe-a-b` | 保留，A 改由 API 訂閱，經畫面訂閱的代表是 `core-journey` | 28.6 → 28.3 秒 |
+| `vault-transfer`、`search-normalization` | 保留，以 `overBudget` 寫明超過 60 秒的理由 | CI 90.4、69.7 秒 |
+| 其他流程 | 保留 | 都在 60 秒內；沒有失敗紀錄可評估不穩定 |
+
+清理階段每支約 5.5 秒（server 正常結束），佔全部流程時間約兩成，是下一次檢討可以看的共同成本。
 
 ## 基準前置狀態
 
@@ -42,7 +78,7 @@
 
 ## 功能檔格式
 
-每個檔案以 H1 標題與一段使用者看得到的行為描述開頭，接著依序五個 H2：`Sub-features`、`How to get to it (user POV)`、`Driving it with verify`（以 `Preconditions:` 開頭，每個步驟配對使用者動作、確切操作與可觀察結果）、`Gotchas`、`Regression flows`。`Regression flows` 每支流程一行，以流程名開頭，列出它斷言的子功能 ID 與範圍；沒有流程時寫「沒有已收錄的流程。」
+每個檔案以 H1 標題與一段使用者看得到的行為描述開頭，接著依序六個 H2：`Sub-features`、`How to get to it (user POV)`、`Driving it with verify`（以 `Preconditions:` 開頭，每個步驟配對使用者動作、確切操作與可觀察結果）、`Gotchas`、`Regression flows`、`Backlog`。`Regression flows` 每支流程一行，以流程名開頭，列出它斷言的子功能 ID 與範圍；沒有流程時寫「沒有已收錄的流程。」`Backlog` 每項一行，以子功能 ID 開頭，不提已收錄流程的名稱；沒有項目時寫「沒有待補項目。」單元測試檢查這兩節與流程的 `covers` 一致。
 
 ## 最近一次維護覆核
 

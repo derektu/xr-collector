@@ -31,4 +31,11 @@ Preconditions:
 ## Regression flows
 
 - `notifications`：斷言 `notification-settings`、`notification-actionable` 的無通知區塊與無規格補充文字、預設值、UI／Agent 契約、內部參數持久、既有自動暫停 active 與不補發。
-- `notification-clicks`：斷言 `notification-events`、`notification-actionable`、`notification-click` 的 attention 圖示與兩筆選單、隱藏／最小化視窗還原聚焦、無 ledger 列導頁、正常重啟去重且不啟動收集、同一詳情移除後重抓不存在、清空 attention，以及其他 Vault 同 ID 拒絕導頁與切換。Desktop 流程，視窗會顯示；activation 不等同 OS toast 實際顯示。
+- `notification-clicks`：斷言 `notification-events`、`notification-actionable`、`notification-click`。事件由流程直接寫進裝置的通知紀錄檔當前置，只斷言正常重啟不重送，不斷言 App 自己寫的欄位；attention 圖示與兩筆選單、隱藏／最小化視窗還原聚焦、無 ledger 列導頁、正常重啟去重且不啟動收集、同一詳情移除後重抓不存在、清空 attention，以及其他 Vault 同 ID 拒絕導頁與切換。Desktop 流程，視窗會顯示；activation 不等同 OS toast 實際顯示。
+
+## Backlog
+
+- `notification-events`：App 在自動暫停時自己寫入的事件欄位（Vault、來源類型、訂閱、次數、原因與 delivery）。
+- `notification-actionable`：恢復訂閱後從需處理清單消失（目前只斷言移除）。
+- `notification-click`：其他 Vault 的通知顯示的說明文字（目前只斷言不導頁、不切換）。
+- `notification-native`：真通知、通知中心重啟後點擊、深淺色、Windows DPI 與 OS 阻擋；OS 畫面屬明確略過的項目，只在打包版登入桌面目視。

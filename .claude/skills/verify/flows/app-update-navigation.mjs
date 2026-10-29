@@ -2,6 +2,7 @@ import { defaultCatalog } from '../scripts/lib/synthetic.mjs';
 
 export const name = 'app-update-navigation';
 export const title = '側欄與原生更新入口定位到設定中的 App 更新區';
+export const tier = 'feature';
 export const covers = ['update-navigation'];
 export const vault = 'selected';
 export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', payloadMode: 'valid', payloadDelayMs: 0 } });

@@ -9,7 +9,8 @@ import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'rss-rate-limit';
 export const title = 'RSS 網站限制連線';
-export const covers = ['rss-add-feed', 'rss-atom', 'rss-check', 'rss-failure'];
+export const tier = 'feature';
+export const covers = ['rss-atom', 'rss-check', 'rss-failure'];
 
 const DAY = 24 * 60 * 60_000;
 // An RSS check takes a few seconds; one that waits for a cooldown takes minutes.

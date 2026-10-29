@@ -1,11 +1,13 @@
-// Subscribing to channels A (5 videos) and B (3) through the screen, B while A downloads: the
-// Subscriptions page's status sequence, the Jobs page's sections, the document counts once both
-// finish, and the documents in the Vault and the search index.
+// Two channels collecting at once: A (5 videos) is subscribed, and B (3) is subscribed through the
+// screen while A downloads. The Subscriptions page's status sequences, the Jobs page's sections,
+// the document counts once both finish, and the documents in the Vault and the search index.
+import { subscribe } from '../scripts/lib/seed.mjs';
 import { distinct, jobSectionChecks, subscriptionSequenceChecks } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscribe-a-b';
-export const title = '訂閱頻道 A 與 B';
+export const title = '兩個頻道同時收集：狀態序列、工作頁分區與資料面';
+export const tier = 'feature';
 export const covers = ['sub-add', 'sub-status', 'jobs-sections', 'jobs-empty', 'jobs-badge'];
 
 /** Every subscription row's status text, by row test ID; runs inside the page. */
@@ -55,10 +57,9 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
   await page.getByTestId('page-sources').waitFor();
   await watch(page, 'status', subscriptionStatuses);
 
-  await record.scenario('SUBAB-1', '經畫面訂閱頻道 A', async ({ expect, shot }) => {
-    await subscribeThroughDialog(a);
-    const onSources = await page.getByTestId('page-sources').count();
-    expect(onSources === 1, '對話框關閉後留在訂閱頁', { id: 'A.dialog.closed', expected: 1, actual: onSources });
+  await record.scenario('SUBAB-1', '頻道 A 開始收集，列出現在訂閱頁', async ({ expect, shot }) => {
+    // core-journey proves subscribing to one channel through the dialog; here A only has to be collecting.
+    await subscribe(instance, `https://www.youtube.com/@${a.handle}`);
     await page.getByTestId(rowOf(a)).waitFor({ timeout: 15_000 });
     const listed = await page.getByTestId(rowOf(a)).count();
     expect(listed === 1, 'A 的訂閱列出現', { id: 'A.row.listed', expected: 1, actual: listed });

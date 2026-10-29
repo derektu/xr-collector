@@ -56,9 +56,20 @@ Preconditions:
 
 ## Regression flows
 
-- `feature-navigation`：斷言 `sub-add`、`sub-status`。空清單與頁首新增入口、名稱無結果／類型篩選，以及詳情暫停與恢復；不取代完整狀態序列流程。
+- `core-journey`：斷言 `sub-add`、`sub-status`、`sub-pause`。經畫面訂閱頻道 A，收完後列為「下次 HH:MM」且文件數 5；從列表暫停，API 與列都是已暫停，恢復後檢查完成、列回到「下次」與暫停按鈕。
+- `subscription-remove`：斷言 `sub-remove`。RSS 訂閱的移除先取消（列、訂閱與文件不變），確認框預設勾「保留 n 份文件」，確認後列消失、API 與 Vault 訂閱檔不再訂閱且記下移除，文件在 API、Vault、索引一份不少，沒有新增刪除紀錄。
+- `feature-navigation`：斷言 `sub-add`、`sub-detail`。空清單與頁首新增入口、名稱無結果／類型篩選，以及在詳情頁暫停與恢復（按鈕文字與 API）；不讀列上的狀態。
 - `check-history-summary`：斷言 `sub-detail`、`sub-failure`。同一訂閱的定時無新內容、網路錯誤與恢復分組，詳情顯示次數與細節入口，現有錯誤狀態不被摘要取代。
 - `offline-recover`：斷言 `sub-status`、`sub-check`、`sub-offline`。A 下載中、B 在斷網期間到期：訊息與停用的按鈕、立即檢查被拒絕、斷網期間沒有派工、失敗與重試、列上從未出現「錯誤」；恢復後訊息消失、定時派工一次、B 一個檢查、A 文件數正確。
 - `subscription-failures`：斷言 `sub-status`、`sub-failure`。A 的列出失敗：重試期間與失敗後的列文字與顏色、API 的連續失敗次數、詳情頁紅條、「上次檢查」與收集紀錄最新一筆檢查一致、失敗的檢查不在工作頁失敗區；第 5 次失敗自動暫停（列、Vault 檔、API、事件、詳情頁）；恢復後歸零並檢查一次。
 - `youtube-cooldown`：斷言 `sub-status`。A 下載中時 YouTube 限流：通道冷卻、A 的列與 API 為等冷卻結束的重試、影片帶冷卻的等待且嘗試次數未用掉、冷卻期間送出的單支影片排隊等待；冷卻結束後自動完成，限流、延後與冷卻結束的事件各一次，沒有重試與失敗。
-- `subscribe-a-b`：斷言 `sub-add`、`sub-status`。經畫面訂閱 A，A 下載中時訂閱 B；A、B 的狀態序列、完成後的文件數，以及 Vault、API 與索引的文件一一對應。不斷言 pending-row、頁尾的上次檢查與失敗的檢查。
+- `subscribe-a-b`：斷言 `sub-add`、`sub-status`。A 經 API 訂閱，A 下載中時經畫面訂閱 B；A、B 的狀態序列、完成後的文件數，以及 Vault、API 與索引的文件一一對應。不斷言 pending-row、頁尾的上次檢查與失敗的檢查。
+- `workspace-content`：斷言 `sub-detail`。RSS 訂閱詳情頁的檢查頻率、時間範圍與數量上限儲存後，API 與重新整理後的欄位一致。
+
+## Backlog
+
+- `sub-auto`：Web 的自動檢查開關：未暫停的列為「自動檢查已關閉」、已暫停的維持「已暫停」，再開回「下次 HH:MM」。狀態計算已有 `tests/subscriptions/subscription-status.test.ts`，畫面串接待補；選單列的切換見 [tray.md](tray.md)。
+- `sub-check`：成功的「立即檢查」：一個啟用、一個暫停的訂閱，只派出啟用者並完成。派工規則已有 `tests/subscriptions/` 與 HTTP 案例，畫面待補一個代表。
+- `sub-status`：pending 列、完整名稱與類型組合，以及頁尾 `check-times` 的上次與下次檢查，可併入既有流程補斷言。
+- `sub-remove`：「一併刪除」的資料安全代表（文件從列表、搜尋與 Vault 消失，刪除紀錄與記錄各一筆），以及空訂閱的確認框形狀，歸訂閱專項。擷取中移除與部分刪除失敗沿用 `tests/sources/`。
+- `sub-detail`：設定的非法值、未儲存、`aria-invalid`、新增時禁止送出、「套用到所有」的確認與已暫停訂閱的結果，集中成設定專項；輸入驗證與套用規則已有下層測試，不列入核心。
