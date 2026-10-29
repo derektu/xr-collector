@@ -6,45 +6,51 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { verifyStagedCandidate } from './release-candidate.mjs';
+import { noStageTimer } from './stage-timings.mjs';
 
 const RELEASE_VERIFICATION_CONCURRENCY = 3;
 
-export async function uploadDraftRelease(stageDirectory, adapter, authorization) {
-  const state = await verifyStagedCandidate(stageDirectory);
+export async function uploadDraftRelease(stageDirectory, adapter, authorization, timer = noStageTimer) {
+  const state = await timer.time('verify staged candidate', () => verifyStagedCandidate(stageDirectory));
   assertAuthorization(state, authorization, 'draft-upload');
-  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
-  await ensureTag(adapter, state, authorization);
-  let release = await adapter.getReleaseByTag(state.tag);
+  await timer.time('check repository', () => adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository));
+  await timer.time('ensure tag', () => ensureTag(adapter, state, authorization));
+  let release = await timer.time('read release', () => adapter.getReleaseByTag(state.tag));
   if (release && !release.draft) throw new Error(`Release ${state.tag} is already public and cannot be overwritten.`);
   if (!release) {
     if (!authorization.actions.includes('create-draft')) throw new Error('Authorization does not allow creating the draft release.');
-    release = await adapter.createDraft({ tag: state.tag, commit: state.commit, version: state.version, notes: state.releaseNotes });
+    release = await timer.time('create draft', () => adapter.createDraft({ tag: state.tag, commit: state.commit, version: state.version, notes: state.releaseNotes }));
   }
-  const remoteAssets = await adapter.listAssets(release);
+  const remoteAssets = await timer.time('list assets', () => adapter.listAssets(release));
   const remoteByName = new Map(remoteAssets.map((asset) => [asset.name, asset]));
   for (const expected of state.assets) {
     const existing = remoteByName.get(expected.name);
     if (existing) {
       if (existing.state === 'uploaded') {
-        const digest = await adapter.hashAsset(existing, { authenticated: true });
+        const digest = await timer.time(`download and hash existing ${expected.name}`, () => adapter.hashAsset(existing, { authenticated: true }), { bytes: existing.size });
         if (existing.size === expected.bytes && digest === expected.sha256) continue;
       }
-      await adapter.deleteAsset(existing);
+      await timer.time(`delete ${expected.name}`, () => adapter.deleteAsset(existing));
     }
-    await adapter.uploadAsset(release, path.join(stageDirectory, expected.name), expected.name);
+    await timer.time(`upload ${expected.name}`, () => adapter.uploadAsset(release, path.join(stageDirectory, expected.name), expected.name), { bytes: expected.bytes });
   }
-  return verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true });
+  return timer.group('remote verify', (child) => verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true, timer: child }));
 }
 
+/**
+ * Checks the remote tag, inventory and every asset's bytes. Each asset is downloaded and hashed;
+ * up to three downloads run at once, so their recorded times overlap.
+ */
 export async function verifyRemoteRelease(stageDirectory, adapter, options = {}) {
-  const state = await verifyStagedCandidate(stageDirectory);
+  const timer = options.timer ?? noStageTimer;
+  const state = await timer.time('verify staged candidate', () => verifyStagedCandidate(stageDirectory));
   await adapter.assertRepositoryIdentity?.(state.sourceBaseUrl, state.updateRepository);
-  const release = await adapter.getReleaseByTag(state.tag);
+  const release = await timer.time('read release', () => adapter.getReleaseByTag(state.tag));
   if (!release) throw new Error(`Remote release ${state.tag} does not exist.`);
   if (options.requireDraft && !release.draft) throw new Error(`Remote release ${state.tag} is not a draft.`);
-  const tagCommit = await adapter.getTagCommit(state.tag);
+  const tagCommit = await timer.time('read tag commit', () => adapter.getTagCommit(state.tag));
   if (tagCommit !== state.commit) throw new Error(`Remote tag ${state.tag} points at stale commit ${tagCommit}.`);
-  const assets = await adapter.listAssets(release);
+  const assets = await timer.time('list assets', () => adapter.listAssets(release));
   const expectedNames = state.assets.map((asset) => asset.name).sort();
   const actualNames = assets.map((asset) => asset.name).sort();
   if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) throw new Error('Remote release inventory is partial or contains unexpected assets.');
@@ -55,15 +61,18 @@ export async function verifyRemoteRelease(stageDirectory, adapter, options = {})
     if (asset.browser_download_url && asset.browser_download_url !== new URL(encodeURIComponent(asset.name), state.sourceBaseUrl).toString()) {
       throw new Error(`Remote release asset URL differs from the frozen release source: ${asset.name}.`);
     }
-    const digest = await adapter.hashAsset(asset, { authenticated: options.authenticated !== false });
-    if (asset.size !== expected.bytes || digest !== expected.sha256) throw new Error(`Remote release asset does not match staged bytes: ${asset.name}.`);
+    await timer.group(`download and hash ${asset.name}`, async (child) => {
+      const digest = await adapter.hashAsset(asset, { authenticated: options.authenticated !== false, timer: child });
+      if (asset.size !== expected.bytes || digest !== expected.sha256) throw new Error(`Remote release asset does not match staged bytes: ${asset.name}.`);
+    }, { bytes: asset.size });
   });
   return release;
 }
 
-export async function verifyAnonymousRelease(stageDirectory, request = fetch) {
-  const state = await verifyStagedCandidate(stageDirectory);
-  await verifyConcurrently(state.assets, async (asset) => {
+/** Downloads every asset without credentials, up to three at once, and checks bytes and SHA-256. */
+export async function verifyAnonymousRelease(stageDirectory, request = fetch, timer = noStageTimer) {
+  const state = await timer.time('verify staged candidate', () => verifyStagedCandidate(stageDirectory));
+  await verifyConcurrently(state.assets, (asset) => timer.time(`anonymous download and hash ${asset.name}`, async (stage) => {
     const response = await request(new URL(encodeURIComponent(asset.name), state.sourceBaseUrl), { redirect: 'follow', headers: { Accept: 'application/octet-stream' } });
     if (!response.ok || !response.body) throw new Error(`Anonymous download failed for ${asset.name}: HTTP ${response.status}.`);
     const contentType = response.headers.get('content-type') ?? '';
@@ -71,8 +80,9 @@ export async function verifyAnonymousRelease(stageDirectory, request = fetch) {
     const hash = createHash('sha256');
     let bytes = 0;
     for await (const chunk of response.body) { hash.update(chunk); bytes += chunk.byteLength; }
+    stage.bytes = bytes;
     if (bytes !== asset.bytes || hash.digest('hex') !== asset.sha256) throw new Error(`Anonymous download bytes do not match ${asset.name}.`);
-  });
+  }));
   return state;
 }
 
@@ -100,28 +110,28 @@ async function verifyConcurrently(items, verify) {
   if (failed) throw firstError;
 }
 
-export async function publishPrerelease(stageDirectory, adapter, authorization) {
-  const state = await verifyStagedCandidate(stageDirectory);
+export async function publishPrerelease(stageDirectory, adapter, authorization, timer = noStageTimer) {
+  const state = await timer.time('verify staged candidate', () => verifyStagedCandidate(stageDirectory));
   assertAuthorization(state, authorization, 'publish-prerelease');
   assertScenarioGates(authorization, ['R35-01', 'R35-02', 'R35-03', 'R35-06'], ['R35-07']);
-  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
-  const release = await verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true });
-  const updated = await adapter.updateRelease(release, { draft: false, prerelease: true, make_latest: 'false' });
+  await timer.time('check repository', () => adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository));
+  const release = await timer.group('remote verify', (child) => verifyRemoteRelease(stageDirectory, adapter, { requireDraft: true, authenticated: true, timer: child }));
+  const updated = await timer.time('publish prerelease', () => adapter.updateRelease(release, { draft: false, prerelease: true, make_latest: 'false' }));
   if (updated.draft || !updated.prerelease) throw new Error('GitHub did not publish the release as a prerelease.');
   return updated;
 }
 
-export async function promoteStableRelease(stageDirectory, adapter, authorization, request = fetch) {
-  const state = await verifyStagedCandidate(stageDirectory);
+export async function promoteStableRelease(stageDirectory, adapter, authorization, request = fetch, timer = noStageTimer) {
+  const state = await timer.time('verify staged candidate', () => verifyStagedCandidate(stageDirectory));
   assertAuthorization(state, authorization, 'promote-stable');
   assertScenarioGates(authorization, ['R35-01', 'R35-02', 'R35-03', 'R35-04', 'R35-05', 'R35-06'], ['R35-07']);
-  await adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository);
-  const release = await verifyRemoteRelease(stageDirectory, adapter, { authenticated: true });
+  await timer.time('check repository', () => adapter.assertRepositoryReady(state.sourceBaseUrl, state.updateRepository));
+  const release = await timer.group('remote verify', (child) => verifyRemoteRelease(stageDirectory, adapter, { authenticated: true, timer: child }));
   if (release.draft || !release.prerelease) throw new Error('Only the already-public prerelease may be promoted.');
-  await verifyAnonymousRelease(stageDirectory, request);
-  const updated = await adapter.updateRelease(release, { draft: false, prerelease: false, make_latest: 'true' });
+  await timer.group('anonymous verify', (child) => verifyAnonymousRelease(stageDirectory, request, child));
+  const updated = await timer.time('promote stable', () => adapter.updateRelease(release, { draft: false, prerelease: false, make_latest: 'true' }));
   if (updated.draft || updated.prerelease) throw new Error('GitHub did not promote the release to stable.');
-  const latest = await adapter.getLatestRelease();
+  const latest = await timer.time('read latest release', () => adapter.getLatestRelease());
   if (!latest || latest.id !== updated.id || latest.tag_name !== state.tag) throw new Error('GitHub did not make the frozen release Latest.');
   return updated;
 }
@@ -203,13 +213,14 @@ export function createGitHubAdapter(repository, dependencies = {}) {
       return gh(['api', '--method', 'POST', '-H', 'Content-Type: application/octet-stream', '--input', file, `${upload}?name=${encodeURIComponent(name)}`]);
     },
     deleteAsset(asset) { return gh(['api', '--method', 'DELETE', `repos/${repository}/releases/assets/${asset.id}`]); },
-    async hashAsset(asset) {
+    async hashAsset(asset, options = {}) {
+      const timer = options.timer ?? noStageTimer;
       const advertised = typeof asset.digest === 'string' && asset.digest.startsWith('sha256:') ? asset.digest.slice(7) : null;
       const root = await mkdtemp(path.join(tmpdir(), 'xr-release-remote-'));
       try {
         const destination = path.join(root, 'asset');
-        await ghDownload(repository, asset.id, destination);
-        const digest = await sha256(destination);
+        await timer.time('download (gh api)', () => ghDownload(repository, asset.id, destination), { bytes: asset.size });
+        const digest = await timer.time('sha256', () => sha256(destination));
         if (advertised && advertised !== digest) throw new Error(`GitHub digest disagrees with downloaded bytes for ${asset.name}.`);
         return digest;
       } finally { await rm(root, { recursive: true, force: true }); }

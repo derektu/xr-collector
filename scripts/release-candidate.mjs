@@ -12,6 +12,7 @@ import { inspectExecutable } from './build-meilisearch.mjs';
 import { verifyMacBundleSignature, verifySignedMacDmgContents } from './package-app.mjs';
 import { DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage } from './mac-signing.mjs';
 import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
+import { noStageTimer } from './stage-timings.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const combinations = [
@@ -21,6 +22,7 @@ const combinations = [
 const combinationKeys = new Set(combinations.map(([target, variant]) => `${target}/${variant}`));
 
 export async function planReleaseCandidate(options, dependencies = {}) {
+  const timer = dependencies.timer ?? noStageTimer;
   const expectedVersion = options.version ?? JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8')).version;
   const tag = options.tag ?? `v${expectedVersion}`;
   if (tag !== `v${expectedVersion}`) throw new Error(`Release tag ${tag} must match version ${expectedVersion}.`);
@@ -46,38 +48,43 @@ export async function planReleaseCandidate(options, dependencies = {}) {
     if (!combinationKeys.has(key) || seen.has(key)) throw new Error(`Unexpected or duplicate release combination ${key}.`);
     seen.add(key);
     validateManifestIdentity(manifest, expectedVersion, key);
-    const directory = path.dirname(item.manifestPath);
-    const artifacts = [];
-    for (const declared of manifest.artifacts) {
-      const basename = assertBasename(declared.path);
-      const artifactPath = path.join(directory, basename);
-      const actual = await describeFile(artifactPath);
-      if (actual.bytes !== declared.bytes || actual.sha256 !== declared.sha256) throw new Error(`Artifact bytes do not match private manifest: ${basename}.`);
-      allowedInputFiles.add(resolvePath(artifactPath));
-      artifacts.push({ basename, path: artifactPath, ...actual });
-    }
-    validateArtifactInventory(manifest, artifacts);
-    await validateUpdateMetadata(manifest, artifacts);
-    const acceptanceRecord = await validateAcceptance(acceptance, options.acceptance, manifest, key);
-    const inspect = dependencies.inspectPackagedPayload ?? inspectPackagedPayload;
-    const primary = artifacts.find((artifact) => manifest.target === 'darwin-arm64' ? artifact.basename.endsWith('.zip') : artifact.basename.endsWith('.exe'));
-    if (!primary) throw new Error(`Missing primary update payload for ${key}.`);
-    if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY) {
-      const dmg = artifacts.find((artifact) => artifact.basename.endsWith('.dmg'));
-      const verifyDmg = dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage;
-      const validateDmg = dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact;
-      const inspectDmg = dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents;
-      await verifyDmg(dmg.path, manifest.signing.teamId);
-      await validateDmg(dmg.path, 'dmg');
-      if (!sameFileIdentity(dmg, manifest.signing.actualVerification.dmg.stapled)) throw new Error('Final DMG bytes differ from the notarization receipt.');
-      const dmgInspection = await inspectDmg(dmg.path, manifest.packageIdentity.productName, manifest.signing.teamId);
-      if (!isDeepStrictEqual(dmgInspection.appIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
-    }
-    const inspected = await inspect(primary.path, manifest.target, manifest.packageIdentity, { signing: manifest.signing });
-    if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY
-      && !isDeepStrictEqual(inspected.notarizedAppIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
-    await validateInspectedIdentity(inspected, manifest);
-    candidates.push({ key, manifestPath: item.manifestPath, manifest, artifacts, acceptance: acceptanceRecord, inspected });
+    await timer.group(`plan ${key}`, async (candidateTimer) => {
+      const directory = path.dirname(item.manifestPath);
+      const artifacts = [];
+      await candidateTimer.time('hash declared artifacts', async (stage) => {
+        for (const declared of manifest.artifacts) {
+          const basename = assertBasename(declared.path);
+          const artifactPath = path.join(directory, basename);
+          const actual = await describeFile(artifactPath);
+          if (actual.bytes !== declared.bytes || actual.sha256 !== declared.sha256) throw new Error(`Artifact bytes do not match private manifest: ${basename}.`);
+          allowedInputFiles.add(resolvePath(artifactPath));
+          artifacts.push({ basename, path: artifactPath, ...actual });
+        }
+        stage.bytes = artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
+      }, { count: manifest.artifacts.length });
+      validateArtifactInventory(manifest, artifacts);
+      await validateUpdateMetadata(manifest, artifacts);
+      const acceptanceRecord = await validateAcceptance(acceptance, options.acceptance, manifest, key);
+      const inspect = dependencies.inspectPackagedPayload ?? inspectPackagedPayload;
+      const primary = artifacts.find((artifact) => manifest.target === 'darwin-arm64' ? artifact.basename.endsWith('.zip') : artifact.basename.endsWith('.exe'));
+      if (!primary) throw new Error(`Missing primary update payload for ${key}.`);
+      if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY) {
+        const dmg = artifacts.find((artifact) => artifact.basename.endsWith('.dmg'));
+        const verifyDmg = dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage;
+        const validateDmg = dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact;
+        const inspectDmg = dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents;
+        await candidateTimer.time('verify: DMG Developer ID signature', () => verifyDmg(dmg.path, manifest.signing.teamId));
+        await candidateTimer.group('verify: DMG notarization and Gatekeeper', (child) => validateDmg(dmg.path, 'dmg', { timer: child }));
+        if (!sameFileIdentity(dmg, manifest.signing.actualVerification.dmg.stapled)) throw new Error('Final DMG bytes differ from the notarization receipt.');
+        const dmgInspection = await candidateTimer.group('verify: DMG contents', (child) => inspectDmg(dmg.path, manifest.packageIdentity.productName, manifest.signing.teamId, { timer: child }));
+        if (!isDeepStrictEqual(dmgInspection.appIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
+      }
+      const inspected = await candidateTimer.group(`inspect update payload ${primary.basename}`, (child) => inspect(primary.path, manifest.target, manifest.packageIdentity, { signing: manifest.signing, timer: child }));
+      if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY
+        && !isDeepStrictEqual(inspected.notarizedAppIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
+      await validateInspectedIdentity(inspected, manifest);
+      candidates.push({ key, manifestPath: item.manifestPath, manifest, artifacts, acceptance: acceptanceRecord, inspected });
+    });
   }
   if (seen.size !== combinationKeys.size) throw new Error('Release candidate does not contain all target and variant combinations.');
   const repositories = new Set(candidates.map((candidate) => candidate.manifest.packageIdentity.updateRepository));
@@ -96,19 +103,22 @@ export async function planReleaseCandidate(options, dependencies = {}) {
   return { schemaVersion: 1, version: expectedVersion, tag, commit, sourceBaseUrl, updateRepository, releaseNotes, acceptance, candidates };
 }
 
-export async function stageReleaseCandidate(plan, output) {
+export async function stageReleaseCandidate(plan, output, timer = noStageTimer) {
   await assertEmptyOrMissing(output);
   await mkdir(output, { recursive: true });
   const staged = [];
   try {
     for (const candidate of plan.candidates) {
-      for (const artifact of candidate.artifacts) {
-        const destination = path.join(output, artifact.basename);
-        await copyFile(artifact.path, destination, constants.COPYFILE_EXCL);
-        const copied = await describeFile(destination);
-        if (copied.sha256 !== artifact.sha256 || copied.bytes !== artifact.bytes) throw new Error(`Staged bytes changed while copying ${artifact.basename}.`);
-        staged.push({ name: artifact.basename, ...copied, kind: artifact.basename.endsWith('-update.yml') ? 'update-metadata' : 'payload' });
-      }
+      await timer.time(`copy and hash ${candidate.key} artifacts`, async (stage) => {
+        for (const artifact of candidate.artifacts) {
+          const destination = path.join(output, artifact.basename);
+          await copyFile(artifact.path, destination, constants.COPYFILE_EXCL);
+          const copied = await describeFile(destination);
+          if (copied.sha256 !== artifact.sha256 || copied.bytes !== artifact.bytes) throw new Error(`Staged bytes changed while copying ${artifact.basename}.`);
+          staged.push({ name: artifact.basename, ...copied, kind: artifact.basename.endsWith('-update.yml') ? 'update-metadata' : 'payload' });
+        }
+        stage.bytes = candidate.artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
+      }, { count: candidate.artifacts.length });
       const publicName = `XR-Collector-${plan.version}-${candidate.manifest.variant}-${candidate.manifest.target}-manifest.json`;
       const publicManifest = sanitizeManifest(plan, candidate, publicName);
       const destination = path.join(output, publicName);
@@ -129,7 +139,7 @@ export async function stageReleaseCandidate(plan, output) {
       acceptance: plan.acceptance.scenarios,
     };
     await writeJson(path.join(output, '.release-state.json'), state);
-    await verifyStagedCandidate(output);
+    await timer.time('verify staged candidate', () => verifyStagedCandidate(output));
     return state;
   } catch (error) {
     await rm(output, { recursive: true, force: true });
@@ -170,7 +180,7 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
     let notarizedAppIdentity = null;
     if (target === 'darwin-arm64') {
       const appPath = await extractMacApplication(payload, root, packageIdentity.productName, inspection);
-      if (inspection.signing?.policy === DEVELOPER_ID_POLICY) notarizedAppIdentity = await (inspection.describeArtifact ?? describeArtifact)(appPath);
+      if (inspection.signing?.policy === DEVELOPER_ID_POLICY) notarizedAppIdentity = await (inspection.timer ?? noStageTimer).time('hash App identity', () => (inspection.describeArtifact ?? describeArtifact)(appPath));
     } else {
       const binary = sevenZip.path7za;
       await chmod(binary, 0o755);
@@ -178,7 +188,7 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
         `${prefix}/app.asar`, `${prefix}/bin/runtime-dependencies.json`, `${prefix}/bin/meilisearch-build.json`,
         `${prefix}/bin/meilisearch.exe`, `${prefix}/bin/deno.exe`, `${prefix}/bin/yt-dlp/yt-dlp.exe`, `${prefix}/bin/vcruntime140.dll`,
       ];
-      await (inspection.run ?? run)(binary, ['x', '-y', `-o${root}`, payload, ...requested], { allowMissingPatterns: true });
+      await (inspection.timer ?? noStageTimer).time('extract NSIS resources (7za)', () => (inspection.run ?? run)(binary, ['x', '-y', `-o${root}`, payload, ...requested], { allowMissingPatterns: true }));
     }
     const asar = path.join(resources, 'app.asar');
     const packageMetadata = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
@@ -204,12 +214,13 @@ export async function inspectPackagedPayload(payload, target, packageIdentity = 
 }
 
 async function extractMacApplication(payload, root, productName, dependencies = {}) {
-  await (dependencies.run ?? run)('/usr/bin/ditto', ['-x', '-k', payload, root]);
+  const timer = dependencies.timer ?? noStageTimer;
+  await timer.time('extract ZIP (ditto)', () => (dependencies.run ?? run)('/usr/bin/ditto', ['-x', '-k', payload, root]));
   const appPath = path.join(root, `${productName}.app`);
   if (dependencies.signing?.policy === DEVELOPER_ID_POLICY) {
-    await (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, dependencies.signing.teamId);
-    await (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app');
-  } else await (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath);
+    await timer.group('App Developer ID', (child) => (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, dependencies.signing.teamId, { timer: child }));
+    await timer.group('App notarization and Gatekeeper', (child) => (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { timer: child }));
+  } else await timer.time('codesign --verify --deep --strict', () => (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath));
   return appPath;
 }
 

@@ -7,6 +7,7 @@ import plist from 'plist';
 import { prepareRuntimeDependencies, verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
 import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
 import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
+import { noStageTimer } from './stage-timings.mjs';
 
 export const DEVELOPER_ID_POLICY = 'developer-id-notarized';
 export const RUNTIME_SIGNING_MANIFEST = 'runtime-signing.json';
@@ -324,6 +325,7 @@ export function signedBuilderEnvironment(base, { keychain, identity, teamId, sou
 
 export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, expectedTeamId, keychain }, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
   const bin = path.join(appPath, 'Contents/Resources/bin');
   const dependencyManifestPath = path.join(bin, 'runtime-dependencies.json');
   const sourceDependencyManifestPath = path.join(sourceBin, 'runtime-dependencies.json');
@@ -332,20 +334,22 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   const [dependencyManifest, sourceDependencyManifest, meiliManifest, sourceMeiliManifest] = await Promise.all([
     readJson(dependencyManifestPath), readJson(sourceDependencyManifestPath), readJson(meiliManifestPath), readJson(sourceMeiliManifestPath),
   ]);
-  const reconstructed = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-runtime-provenance-'));
-  try {
-    await (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target: 'darwin-arm64', outputDir: reconstructed });
-    const reconstructedManifest = await readJson(path.join(reconstructed, 'runtime-dependencies.json'));
-    if (JSON.stringify(dependencyManifest) !== JSON.stringify(reconstructedManifest)
-      || JSON.stringify(sourceDependencyManifest) !== JSON.stringify(reconstructedManifest)
-      || !await verifyRuntimeDependencyInstallation(reconstructed, reconstructedManifest)
-      || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)
-      || !await verifyRuntimeDependencyInstallation(sourceBin, sourceDependencyManifest)) {
-      throw new Error('Staged runtime dependencies do not match an independent extraction of the hash-pinned archives.');
+  await timer.time('check runtime provenance (independent archive extraction)', async () => {
+    const reconstructed = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-runtime-provenance-'));
+    try {
+      await (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target: 'darwin-arm64', outputDir: reconstructed });
+      const reconstructedManifest = await readJson(path.join(reconstructed, 'runtime-dependencies.json'));
+      if (JSON.stringify(dependencyManifest) !== JSON.stringify(reconstructedManifest)
+        || JSON.stringify(sourceDependencyManifest) !== JSON.stringify(reconstructedManifest)
+        || !await verifyRuntimeDependencyInstallation(reconstructed, reconstructedManifest)
+        || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)
+        || !await verifyRuntimeDependencyInstallation(sourceBin, sourceDependencyManifest)) {
+        throw new Error('Staged runtime dependencies do not match an independent extraction of the hash-pinned archives.');
+      }
+    } finally {
+      await (dependencies.rm ?? rm)(reconstructed, { recursive: true, force: true });
     }
-  } finally {
-    await (dependencies.rm ?? rm)(reconstructed, { recursive: true, force: true });
-  }
+  });
   if (JSON.stringify(meiliManifest) !== JSON.stringify(sourceMeiliManifest)) throw new Error('Staged Meilisearch manifest does not match the raw producer identity.');
   const stagedMeili = path.join(bin, 'meilisearch');
   const sourceMeili = path.join(sourceBin, 'meilisearch');
@@ -360,24 +364,29 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   const denoPath = path.join(bin, dependencyManifest.executables.deno);
   const codeFiles = (await listMachOFiles(bin)).filter((file) => file !== denoPath).sort(deepestFirst);
   const signArgs = (target) => ['--force', '--sign', identitySha1, '--keychain', keychain, '--options', 'runtime', '--timestamp', target];
-  for (const file of codeFiles) await run('/usr/bin/codesign', signArgs(file));
+  await timer.time('codesign --timestamp runtime Mach-O files', async () => {
+    for (const file of codeFiles) await run('/usr/bin/codesign', signArgs(file));
+  }, { count: codeFiles.length });
   const framework = path.join(bin, 'yt-dlp/_internal/Python.framework');
-  await run('/usr/bin/codesign', signArgs(framework));
+  await timer.time('codesign --timestamp Python.framework', () => run('/usr/bin/codesign', signArgs(framework)), { count: 1 });
 
   const executableSignatures = {};
-  for (const file of [...codeFiles, framework, denoPath]) {
-    await run('/usr/bin/codesign', ['--verify', '--strict', file]);
-    const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
-    const expected = file === denoPath ? DENO_TEAM_ID : expectedTeamId;
-    assertDeveloperIdSignature(metadata, expected, path.relative(bin, file));
-    if (file === denoPath) {
-      const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', file]);
-      metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
-      assertDenoEntitlements(metadata.entitlements);
+  const verifiedFiles = [...codeFiles, framework, denoPath];
+  await timer.time('verify signed runtime files', async () => {
+    for (const file of verifiedFiles) {
+      await run('/usr/bin/codesign', ['--verify', '--strict', file]);
+      const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
+      const expected = file === denoPath ? DENO_TEAM_ID : expectedTeamId;
+      assertDeveloperIdSignature(metadata, expected, path.relative(bin, file));
+      if (file === denoPath) {
+        const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', file]);
+        metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
+        assertDenoEntitlements(metadata.entitlements);
+      }
+      executableSignatures[path.relative(bin, file)] = metadata;
     }
-    executableSignatures[path.relative(bin, file)] = metadata;
-  }
-  const files = await inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST]));
+  }, { count: verifiedFiles.length });
+  const files = await timer.time('hash signed runtime inventory', () => inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST])));
   const meiliFinal = files.find((entry) => entry.path === 'meilisearch');
   if (!meiliFinal) throw new Error('Signed Meilisearch final identity is missing.');
   const signingManifest = {
@@ -406,7 +415,8 @@ export async function verifySignedRuntimeInventory(bin, expectedTeamId, dependen
     || signingManifest.expectedAppTeamId !== expectedTeamId || !Array.isArray(signingManifest.files)) {
     throw new Error('Signed runtime inventory schema or expected App Team is invalid.');
   }
-  const actual = await inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST]));
+  const timer = dependencies.timer ?? noStageTimer;
+  const actual = await timer.time('hash runtime inventory', () => inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST])));
   if (JSON.stringify(actual) !== JSON.stringify(signingManifest.files)) throw new Error('Signed runtime final bytes do not match the sealed inventory.');
   if (!sameFileIdentity(signingManifest.sourceIdentity?.dependencyManifest, await describeFile(path.join(bin, 'runtime-dependencies.json')))
     || !sameFileIdentity(signingManifest.sourceIdentity?.meilisearchManifest, await describeFile(path.join(bin, 'meilisearch-build.json')))) {
@@ -422,30 +432,36 @@ export async function verifySignedRuntimeInventory(bin, expectedTeamId, dependen
     const expectedSignatures = [...await listMachOFiles(bin), framework].map((file) => path.relative(bin, file)).sort();
     const recordedSignatures = Object.keys(signingManifest.executableSignatures ?? {}).sort();
     if (JSON.stringify(recordedSignatures) !== JSON.stringify(expectedSignatures)) throw new Error('Signed runtime signature inventory does not cover every Mach-O file and the Python framework.');
-    for (const [relative, recorded] of Object.entries(signingManifest.executableSignatures ?? {})) {
-      const target = path.join(bin, relative);
-      await run('/usr/bin/codesign', ['--verify', '--strict', target]);
-      const actualSignature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', target])).stderr);
-      assertDeveloperIdSignature(actualSignature, relative === 'deno' ? DENO_TEAM_ID : expectedTeamId, relative);
-      if (relative === 'deno') {
-        const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', target]);
-        actualSignature.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
-        assertDenoEntitlements(actualSignature.entitlements);
+    await timer.time('codesign verify runtime files', async () => {
+      for (const [relative, recorded] of Object.entries(signingManifest.executableSignatures ?? {})) {
+        const target = path.join(bin, relative);
+        await run('/usr/bin/codesign', ['--verify', '--strict', target]);
+        const actualSignature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', target])).stderr);
+        assertDeveloperIdSignature(actualSignature, relative === 'deno' ? DENO_TEAM_ID : expectedTeamId, relative);
+        if (relative === 'deno') {
+          const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', target]);
+          actualSignature.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
+          assertDenoEntitlements(actualSignature.entitlements);
+        }
+        if (JSON.stringify(actualSignature) !== JSON.stringify(recorded)) throw new Error(`Runtime signature identity changed: ${relative}.`);
       }
-      if (JSON.stringify(actualSignature) !== JSON.stringify(recorded)) throw new Error(`Runtime signature identity changed: ${relative}.`);
-    }
+    }, { count: recordedSignatures.length });
   }
   return signingManifest;
 }
 
 export async function verifyDeveloperIdApplication(appPath, expectedTeamId, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
-  await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
-  const signature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', appPath])).stderr);
-  assertDeveloperIdSignature(signature, expectedTeamId, path.basename(appPath));
-  await assertExactElectronEntitlements(appPath, run);
-  for (const helper of await listNestedApplications(path.join(appPath, 'Contents/Frameworks'))) await assertExactElectronEntitlements(helper, run);
-  const runtime = await verifySignedRuntimeInventory(path.join(appPath, 'Contents/Resources/bin'), expectedTeamId, dependencies);
+  const timer = dependencies.timer ?? noStageTimer;
+  await timer.time('codesign --verify --deep --strict', () => run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]));
+  const signature = await timer.time('App signature and entitlements', async () => {
+    const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', appPath])).stderr);
+    assertDeveloperIdSignature(metadata, expectedTeamId, path.basename(appPath));
+    await assertExactElectronEntitlements(appPath, run);
+    for (const helper of await listNestedApplications(path.join(appPath, 'Contents/Frameworks'))) await assertExactElectronEntitlements(helper, run);
+    return metadata;
+  });
+  const runtime = await timer.group('signed runtime inventory', (child) => verifySignedRuntimeInventory(path.join(appPath, 'Contents/Resources/bin'), expectedTeamId, { ...dependencies, timer: child }));
   return { signature, runtime };
 }
 
@@ -487,6 +503,7 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
   const baseRun = dependencies.run ?? runCaptured;
   const run = (command, args) => baseRun(command, args, { signal: dependencies.signal,
     processTracker: dependencies.processTracker, processTrackers: dependencies.processTrackers });
+  const timer = dependencies.timer ?? noStageTimer;
   await mkdir(evidenceDirectory, { recursive: true });
   const completedPath = path.join(evidenceDirectory, `${kind}-completed.json`);
   const completed = await readOptionalJson(completedPath);
@@ -494,18 +511,23 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
     && completed.status === 'Accepted' && completed.issues === 0 && /^[0-9a-f-]{36}$/iu.test(completed.submissionId ?? '')
     && /^[0-9a-f]{64}$/u.test(completed.logSha256 ?? '') && validNonEmptyFileIdentity(completed.submitted)
     && sameFileIdentity(completed.stapled, await describeArtifact(artifactPath))) {
-    await run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]);
+    await timer.time('stapler validate (completed receipt)', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
     const resumed = { ...completed, stapleValidated: true };
     await writeJsonAtomic(completedPath, resumed);
     return resumed;
   }
-  const resumable = await resumeStapledOperation({ kind, artifactPath, credentials, evidenceDirectory, completedPath, run }, dependencies);
+  const resumable = await timer.time('resume check for an earlier Accepted submission',
+    () => resumeStapledOperation({ kind, artifactPath, credentials, evidenceDirectory, completedPath, run }, dependencies));
   if (resumable) return resumable;
   const submittedPath = kind === 'app'
-    ? await preparePersistentAppUpload(artifactPath, evidenceDirectory, run)
+    ? await timer.time('ZIP App for upload (ditto)', () => preparePersistentAppUpload(artifactPath, evidenceDirectory, run))
     : artifactPath;
   const auth = ['--key', credentials.apiKeyPath, '--key-id', credentials.keyId, '--issuer', credentials.issuer];
-  const submittedIdentity = await describeFile(submittedPath);
+  const submittedIdentity = await timer.time('hash upload', async (stage) => {
+    const identity = await describeFile(submittedPath);
+    stage.bytes = identity.bytes;
+    return identity;
+  });
   const receiptPath = path.join(evidenceDirectory, `${kind}-${submittedIdentity.sha256}-submission.json`);
   const prior = await readOptionalJson(receiptPath);
   let submissionId;
@@ -517,16 +539,17 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
     if (prior.status === 'Accepted' && !prior.signedCodeIdentity) throw new Error(`Existing Accepted ${kind} receipt failed full log validation and cannot be resumed.`);
     submissionId = prior.submissionId;
   } else {
-    const submitted = parseJsonOutput(await run('/usr/bin/xcrun', ['notarytool', 'submit', submittedPath, ...auth, '--output-format', 'json']), 'notarytool submit');
+    const submitted = parseJsonOutput(await timer.time('notarytool submit', () => run('/usr/bin/xcrun', ['notarytool', 'submit', submittedPath, ...auth, '--output-format', 'json']),
+      { bytes: submittedIdentity.bytes }), 'notarytool submit');
     if (typeof submitted.id !== 'string' || !/^[0-9a-f-]{36}$/iu.test(submitted.id)) throw new Error('notarytool submit did not return a valid submission ID; the result is ambiguous and will not be resubmitted automatically.');
     submissionId = submitted.id;
     await writeJsonAtomic(receiptPath, {
       schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: submitted.status ?? 'Submitted', submitted: submittedIdentity,
     });
   }
-  const waited = parseJsonOutput(await run('/usr/bin/xcrun', ['notarytool', 'wait', submissionId, ...auth, '--timeout', '30m', '--output-format', 'json']), 'notarytool wait');
+  const waited = parseJsonOutput(await timer.time('notarytool wait', () => run('/usr/bin/xcrun', ['notarytool', 'wait', submissionId, ...auth, '--timeout', '30m', '--output-format', 'json'])), 'notarytool wait');
   const logPath = path.join(evidenceDirectory, `${kind}-${submissionId}-notary-log.json`);
-  await run('/usr/bin/xcrun', ['notarytool', 'log', submissionId, ...auth, logPath]);
+  await timer.time('notarytool log', () => run('/usr/bin/xcrun', ['notarytool', 'log', submissionId, ...auth, logPath]));
   const log = await readJson(logPath);
   const logIdentity = await describeFile(logPath);
   const issueCount = log.issues === null ? 0 : (Array.isArray(log.issues) ? log.issues.length : null);
@@ -543,14 +566,14 @@ export async function notarizeAndStaple({ kind, artifactPath, credentials, evide
     schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: 'Accepted', submitted: submittedIdentity,
     logSha256: logIdentity.sha256, issues: 0, signedCodeIdentity,
   });
-  await run('/usr/bin/xcrun', ['stapler', 'staple', '-v', artifactPath]);
+  await timer.time('stapler staple', () => run('/usr/bin/xcrun', ['stapler', 'staple', '-v', artifactPath]));
   if (dependencies.afterStaple) await dependencies.afterStaple();
   const finalReceipt = {
     schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: 'Accepted', issues: 0,
     logSha256: logIdentity.sha256, submitted: submittedIdentity, signedCodeIdentity, stapled: await describeArtifact(artifactPath), stapleValidated: false,
   };
   await writeJsonAtomic(completedPath, finalReceipt);
-  await run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]);
+  await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
   const validated = { ...finalReceipt, stapleValidated: true };
   await writeJsonAtomic(completedPath, validated);
   return validated;
@@ -586,13 +609,14 @@ async function describeStableCodeIdentity(target, expectedTeamId, run) {
 
 export async function validateNotarizedArtifact(artifactPath, kind, dependencies = {}) {
   const run = dependencies.run ?? runCaptured;
-  await run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]);
+  const timer = dependencies.timer ?? noStageTimer;
+  await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
   if (kind === 'app') {
-    await run('/usr/bin/syspolicy_check', ['distribution', artifactPath]);
-    await run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=4', artifactPath]);
+    await timer.time('syspolicy_check distribution', () => run('/usr/bin/syspolicy_check', ['distribution', artifactPath]));
+    await timer.time('spctl --assess execute', () => run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=4', artifactPath]));
   } else if (kind === 'dmg') {
-    await run('/usr/bin/codesign', ['--verify', '--strict', artifactPath]);
-    await run('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', artifactPath]);
+    await timer.time('codesign --verify --strict', () => run('/usr/bin/codesign', ['--verify', '--strict', artifactPath]));
+    await timer.time('spctl --assess open', () => run('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', artifactPath]));
   } else throw new Error(`Unsupported notarized artifact kind ${kind}.`);
 }
 

@@ -14,6 +14,7 @@ const exec = promisify(execFile);
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+async function temporaryRoot(prefix: string) { const root = await mkdtemp(path.join(tmpdir(), prefix)); roots.push(root); return root; }
 
 it('passes electron-builder the verified certificate hash instead of a prefixed Developer ID name', () => {
   const sha1 = 'A'.repeat(40);
@@ -74,6 +75,8 @@ it('passes both checkout and signing-session trackers to the real signed package
         await dependencies.run('fixture-signed-verifier', []);
         throw stopped;
       },
+      timingReportDirectory: await temporaryRoot('xr-package-timings-'),
+      timingLog: () => undefined,
     } as any)).rejects.toBe(stopped);
     const builder = calls.find((call) => call.args.some((argument) => argument.endsWith('electron-builder/cli.js')) && call.args.includes('--dir'));
     const verifier = calls.find((call) => call.command === 'fixture-signed-verifier');
@@ -83,6 +86,73 @@ it('passes both checkout and signing-session trackers to the real signed package
     if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
     else process.env.npm_execpath = previousNpmExecPath;
   }
+});
+
+it('writes the package timing table and JSON up to a failing electron-builder run, including its hook events', async () => {
+  const reportDirectory = await temporaryRoot('xr-package-timings-');
+  const previousNpmExecPath = process.env.npm_execpath;
+  process.env.npm_execpath = process.execPath;
+  const builderCalls: Array<{ args: string[]; environment: Record<string, string> }> = [];
+  const output: string[] = [];
+  const failure = new Error('electron-builder exited with status 1');
+  try {
+    await expect(packageApplication({ target: 'darwin-arm64', variant: 'official' }, {
+      withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
+      readPackagingGitIdentity: async () => ({ commit: 'c'.repeat(40) }),
+      probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
+      stageBuildInfoSidecar: async () => undefined,
+      clearPreviousArtifactSet: async () => undefined,
+      run: async (_command: string, args: string[], options: any) => {
+        if (!args.some((argument) => argument.endsWith('electron-builder/cli.js'))) return;
+        builderCalls.push({ args, environment: options.environment });
+        const events = options.environment.XR_PACKAGE_TIMINGS_FILE;
+        const now = Date.now();
+        await writeFile(events, [
+          { event: 'mark', name: 'beforePack', at: now + 1 },
+          { event: 'mark', name: 'afterPack:start', at: now + 10 },
+          { event: 'mark', name: 'afterPack:end', at: now + 10 },
+          { event: 'artifact:start', file: '/release/official/XR-Collector-0.1.0-official-mac-arm64.zip', at: now + 20 },
+          { event: 'artifact:end', file: '/release/official/XR-Collector-0.1.0-official-mac-arm64.zip', at: now + 35, bytes: 9 },
+        ].map((event) => `${JSON.stringify(event)}\n`).join(''));
+        throw failure;
+      },
+      timingReportDirectory: reportDirectory,
+      timingLog: (text: string) => output.push(text),
+    } as any)).rejects.toBe(failure);
+  } finally {
+    if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
+    else process.env.npm_execpath = previousNpmExecPath;
+  }
+
+  expect(builderCalls).toHaveLength(1);
+  const hookArgs = builderCalls[0]!.args.filter((argument) => argument.startsWith('--config.') && argument.endsWith('package-timing-hook.mjs'));
+  expect(hookArgs).toEqual(['beforePack', 'afterPack', 'afterSign', 'artifactBuildStarted', 'artifactBuildCompleted']
+    .map((hook) => `--config.${hook}=./scripts/package-timing-hook.mjs`));
+  expect(builderCalls[0]!.environment.CSC_IDENTITY_AUTO_DISCOVERY).toBe('false');
+  const report = JSON.parse(await readFile(path.join(reportDirectory, 'XR-Collector-0.1.0-official-darwin-arm64-timings.json'), 'utf8'));
+  expect(report).toMatchObject({
+    kind: 'xr-collector-stage-timings', command: 'package', status: 'failed', error: failure.message,
+    version: '0.1.0', commit: 'c'.repeat(40), target: 'darwin-arm64', variant: 'official', signingPolicy: 'ad-hoc',
+  });
+  const builderStage = 'electron-builder --mac (pack, ad-hoc codesign, ZIP, DMG)';
+  expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
+    ['read commit and require a clean checkout', 'ok'],
+    ['check host target', 'ok'],
+    ['runtime: download yt-dlp/Deno', 'ok'],
+    ['runtime: prepare Meilisearch official', 'ok'],
+    ['build: npm run build', 'ok'],
+    ['build: write BuildInfo', 'ok'],
+    ['build: stage BuildInfo sidecar', 'ok'],
+    ['build: macOS update helper', 'ok'],
+    ['clear previous artifacts', 'ok'],
+    [builderStage, 'failed'],
+    [`${builderStage} / pack App (beforePack to afterPack)`, 'ok'],
+    [`${builderStage} / artifact XR-Collector-0.1.0-official-mac-arm64.zip`, 'ok'],
+  ]);
+  expect(report.stages.at(-1)).toMatchObject({ ms: 15, bytes: 9, depth: 1 });
+  expect(output[0]).toMatch(/Stage timings: package failed/u);
+  expect(output[0]).toContain(`${builderStage}`);
+  expect(output[1]).toContain('XR-Collector-0.1.0-official-darwin-arm64-timings.json');
 });
 
 it('requires an explicit isolated identity for validation version overrides', () => {

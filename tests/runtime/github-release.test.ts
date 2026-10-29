@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assertAuthorization, createGitHubAdapter, promoteStableRelease, publishPrerelease, uploadDraftRelease, verifyAnonymousRelease, verifyRemoteRelease } from '../../scripts/github-release.mjs';
-import { assertPublishingHost, parseReleaseArguments } from '../../scripts/release.mjs';
+import { assertPublishingHost, parseReleaseArguments, runReleaseCommand } from '../../scripts/release.mjs';
 import { stageReleaseCandidate } from '../../scripts/release-candidate.mjs';
 
 const roots: string[] = [];
@@ -252,6 +252,49 @@ it('uses typed GitHub booleans and discovers resumable drafts through the authen
   expect(update[update.indexOf('draft=false') - 1]).toBe('-F');
   expect(update[update.indexOf('prerelease=true') - 1]).toBe('-F');
   expect(update[update.indexOf('make_latest=false') - 1]).toBe('-f');
+});
+
+it('times each upload and remote download and writes the release timing report next to the stage', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  const authorizationPath = path.join(path.dirname(fixture.root), 'authorize-draft.json');
+  await writeFile(authorizationPath, JSON.stringify(fixture.authorization(['draft-upload', 'create-tag', 'create-draft'])));
+  const output: string[] = [];
+
+  await runReleaseCommand({ action: 'draft-upload', stage: fixture.root, repo: 'derektu/xr-collector', authorization: authorizationPath },
+    { adapter: remote.adapter, platform: 'darwin', timingLog: (text: string) => output.push(text) });
+
+  const reportPath = output.at(-1)!.replace('Stage timing report: ', '');
+  expect(path.dirname(reportPath)).toBe(path.dirname(fixture.root));
+  expect(path.basename(reportPath)).toMatch(/^release-draft-upload-timings-.+\.json$/u);
+  const report = JSON.parse(await readFile(reportPath, 'utf8'));
+  expect(report).toMatchObject({ command: 'release draft-upload', status: 'passed', version: '0.1.0', tag: 'v0.1.0', commit: fixture.state.commit });
+  expect(report.artifacts).toEqual(fixture.state.assets.map(({ name, bytes, sha256 }) => ({ path: name, bytes, sha256 })));
+  const uploads = report.stages.filter((stage: any) => stage.name.startsWith('upload '));
+  expect(uploads.map((stage: any) => [stage.name, stage.bytes])).toEqual(fixture.state.assets.map((asset) => [`upload ${asset.name}`, asset.bytes]));
+  expect(report.stages.filter((stage: any) => /^remote verify \/ download and hash /u.test(stage.name))).toHaveLength(fixture.state.assets.length);
+  expect(output[0]).toMatch(/Stage timings: release draft-upload passed/u);
+});
+
+it('writes the release timing report up to a failing remote asset check', async () => {
+  const fixture = await stagedFixture();
+  const remote = fakeRemote(fixture.state);
+  remote.tagCommit = fixture.state.commit;
+  remote.release = { id: 1, draft: true, prerelease: false, upload_url: 'fake' };
+  remote.assets = fixture.state.assets.map(assetFromState);
+  const bad = fixture.state.assets[0]!.name;
+  remote.adapter.hashAsset = async (asset: any) => asset.name === bad ? sha('tampered') : asset.sha256;
+  const reportDirectory = path.join(path.dirname(fixture.root), 'timings');
+  const output: string[] = [];
+
+  await expect(runReleaseCommand({ action: 'remote-verify', stage: fixture.root, repo: 'derektu/xr-collector' },
+    { adapter: remote.adapter, timingReportDirectory: reportDirectory, timingLog: (text: string) => output.push(text) })).rejects.toThrow(/does not match staged bytes/u);
+
+  const report = JSON.parse(await readFile(output.at(-1)!.replace('Stage timing report: ', ''), 'utf8'));
+  expect(report).toMatchObject({ command: 'release remote-verify', status: 'failed', error: expect.stringContaining(bad), commit: fixture.state.commit });
+  expect(report.stages.find((stage: any) => stage.name === `remote verify / download and hash ${bad}`)).toMatchObject({ status: 'failed', bytes: fixture.state.assets[0]!.bytes });
+  expect(report.stages.find((stage: any) => stage.name === 'remote verify')).toMatchObject({ status: 'failed', depth: 0 });
+  expect(output[0]).toMatch(/Stage timings: release remote-verify failed/u);
 });
 
 async function stagedFixture() {
