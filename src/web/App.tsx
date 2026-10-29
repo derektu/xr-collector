@@ -112,9 +112,17 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [notice]);
   useEffect(() => {
-    if (!updateNavigation || page !== 'settings') return undefined;
+    if (!updateNavigation) return undefined;
+    // A request lasts one visit to Settings; opening Settings again later keeps the page top.
+    if (page !== 'settings') {
+      handledUpdateNavigation.current = updateNavigation;
+      handledUpdatePanel.current = null;
+      return undefined;
+    }
     const currentPanel = document.getElementById('software-update');
-    if (updateNavigation <= handledUpdateNavigation.current && currentPanel === handledUpdatePanel.current) return undefined;
+    // Within the visit, a panel that mounts again (the Vault finishing setup) is revealed again.
+    const panelUnchanged = handledUpdatePanel.current === null || currentPanel === handledUpdatePanel.current;
+    if (updateNavigation <= handledUpdateNavigation.current && panelUnchanged) return undefined;
     const root = content.current ?? document.body;
     const reveal = () => {
       const panel = document.getElementById('software-update');
