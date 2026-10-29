@@ -141,6 +141,17 @@ jobs:
           [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
           node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --jobs 3 --checkout "$XR_TESTED_SOURCE"
           [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
+      # Every run keeps each flow's results.json, passed or failed, so `flows history` can count
+      # each flow's failures, their causes and its timings across runs.
+      - name: Save Web flow results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-regression-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ticket-artifacts/119/ci-web/**/results.json
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: ignore
       - name: Save failed Web evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

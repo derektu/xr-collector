@@ -4,6 +4,7 @@ import { launchWeb, openPage } from '../scripts/lib/index.mjs';
 
 export const name = 'build-info';
 export const title = '設定與 Onboarding 顯示版本，Agent API 保留完整建置資訊';
+export const tier = 'feature';
 export const covers = ['build-info-settings', 'build-info-onboarding', 'build-info-api'];
 
 async function readInfo(instance) {

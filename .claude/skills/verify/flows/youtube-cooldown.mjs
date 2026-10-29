@@ -7,6 +7,7 @@ import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'youtube-cooldown';
 export const title = 'YouTube 限制連線與冷卻';
+export const tier = 'feature';
 export const covers = ['sub-status', 'jobs-row-text'];
 
 /** Every subscription row's status text, by row test ID; runs inside the page. */

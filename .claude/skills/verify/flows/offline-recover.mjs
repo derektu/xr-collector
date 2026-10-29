@@ -10,6 +10,7 @@ import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'offline-recover';
 export const title = '斷網與恢復';
+export const tier = 'feature';
 export const covers = ['sub-status', 'sub-check', 'sub-offline'];
 
 /** Every subscription row's status text, by row test ID; runs inside the page. */
@@ -22,7 +23,7 @@ const bannerState = () => ({ banner: document.querySelector('[data-testid="offli
 const OFFLINE_REFUSED = '目前沒有網路，恢復後再試。';
 const UNAVAILABLE = '沒有網路時無法使用';
 
-export async function run({ instance, page, openPage, record, waitFor, sleep }) {
+export async function run({ instance, page, openPage, record, waitFor }) {
   const catalog = await instance.catalog();
   const [a, b, d] = ['verify-a', 'verify-b', 'verify-d'].map((handle) => catalog.youtube.channels.find((source) => source.handle === handle));
   const rowOf = (source) => `source-row-${source.id}`;
@@ -109,8 +110,14 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
     expect(after === before, '立即檢查沒有開始工作', { id: 'offline.check-all.no-job', expected: before, actual: after });
     await shot('check-all-refused');
 
-    // Two scheduler polls (every 15 s) pass with B due.
-    await sleep(32_000);
+    // Two scheduler polls finish with B due; the verify server names each finished poll in
+    // schedule-trigger.done.
+    const trigger = path.join(instance.runDir, 'schedule-trigger');
+    for (let poll = 0; poll < 2; poll += 1) {
+      const value = `${Date.now()}-${poll}-${Math.random()}\n`;
+      await writeFile(trigger, value);
+      await waitFor(async () => (await readFile(`${trigger}.done`, 'utf8').catch(() => '')) === value, `scheduler poll ${poll + 1} finished`, { timeout: 15_000 });
+    }
     const during = (await events(offlineAt)).map((event) => ({ eventType: event.eventType, pauseReason: event.pauseReason }));
     note('eventsOffline', during);
     const paused = during.filter((event) => event.eventType === 'collection.paused');

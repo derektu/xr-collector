@@ -6,6 +6,7 @@ import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'notifications';
 export const title = '訂閱自動暫停通知設定與裝置事件';
+export const tier = 'feature';
 export const covers = ['notification-settings', 'notification-actionable'];
 
 export async function run({ instance, page, record, waitFor }) {

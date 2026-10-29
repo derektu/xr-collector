@@ -6,6 +6,8 @@ import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '..
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入、搬移與切換';
+export const tier = 'feature';
+export const overBudget = '另啟動來源知識庫與固定位置兩個 instance；匯出、合併、取代、搬移、切換與收集中匯入依序改變同一份 Vault，拆開的每支都要重建相同前置資料。CI 約 90 秒。';
 export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-move', 'vault-open-other', 'vault-fixed'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {

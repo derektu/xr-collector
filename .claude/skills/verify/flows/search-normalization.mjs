@@ -3,6 +3,8 @@ import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'search-normalization';
 export const title = '搜尋正規化、連續片段、條件與原文摘要';
+export const tier = 'feature';
+export const overBudget = '七個情境共用同一批 34 份文件，含兩次重啟與一次畫面重建索引，每次都等搜尋就緒；拆開的每支都要重新收集與索引相同文件。CI 約 70 秒。';
 export const covers = ['docs-search-normalization', 'docs-search-fragments', 'docs-list', 'docs-filter', 'docs-search', 'reader-view'];
 
 const article = (title, slug, content) => ({

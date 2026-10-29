@@ -38,3 +38,8 @@ Preconditions:
 
 - `feature-navigation`：斷言 `activity-raw`、`activity-summary`。工作限定網址、清除篩選與複製診斷文字，再回摘要等事件載入；Web 攔截 clipboard payload，不驗真 OS 剪貼簿。
 - `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。建立無新內容、網路錯誤與恢復三段，檢查等級與類型篩選、空交集、模式與 URL 保留、DEBUG 原始事件、群組限定與載入數不變。
+
+## Backlog
+
+- `activity-detail`：來源與時間條件有實際資料時的篩選、四個條件往返、逐次展開與收合。
+- `activity-summary`：摘要快照的刷新與固定、過期與重啟提示；UI fixture 與真正重啟／保存期限的證據分開記錄。分組與保存規則已有 `tests/activity/`。

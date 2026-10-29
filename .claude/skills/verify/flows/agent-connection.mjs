@@ -4,6 +4,7 @@ import yauzl from 'yauzl';
 
 export const name = 'agent-connection';
 export const title = 'AI 助理連線、Skill 與連線設定';
+export const tier = 'feature';
 export const covers = ['agent-connection-summary', 'agent-connection-help', 'agent-connection-export', 'agent-connection-settings'];
 export const vault = 'none';
 

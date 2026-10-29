@@ -17,7 +17,7 @@
 
 ## How to get to it (user POV)
 
-- 側欄「設定」（`/settings`）→ 知識庫區塊：「搬移…」「開啟其他…」「匯出…」「匯入…」。
+- 側欄「設定」（`/settings`）→ 知識庫區塊：「開啟其他知識庫…」「搬移…」「匯入…」「匯出…」。
 - Desktop：按鈕開啟原生儲存／開啟／選資料夾對話框。
 
 ## Driving it with verify
@@ -35,9 +35,9 @@ Preconditions:
 - **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`。
 - **搬移。** `vault-move` → `move-dialog`，`move-target` 填 `<runDir>/moved-vault`。等 `move-facts` 顯示檢查結果（`move-check-problem` 不出現）後點 `move-confirm`，完成出現 `move-result-path`。`vault-path` 變成新路徑；舊資料夾不再有文件；`GET /api/vault/status` 的 `vaultPath` 一致；文件頁與搜尋照常。
 - **開啟其他。** `vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-next` → `open-vault-confirm`，`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
-- **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「搬移…」「開啟其他…」disabled。
+- **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「搬移…」「開啟其他知識庫…」disabled。
 - **等待與取消。** 以慢速收集製造進行中的工作，再開始匯入比對。等待時 `transfer-cancel` 可取消並立即釋放鎖，回到可重新比對的輸入階段；工作頁、原始活動與摘要 API 仍可讀。再比對並完成後，確認收集繼續。
-- **Desktop 對話框。** Electron 中 `stubDialogs(desktop.app, { save: <zip 路徑>, open: <zip 或資料夾> })` 後按同樣的按鈕；`globalThis.__dialogCalls` 記錄對話框參數，流程直接進入執行階段。
+- **Desktop 對話框。** Electron 中 `stubDialogs(instance.app, { save: <zip 路徑>, open: <zip 或資料夾> })` 後按同樣的按鈕；`globalThis.__dialogCalls` 記錄對話框參數，流程直接進入執行階段。
 
 ## Gotchas
 
@@ -54,3 +54,8 @@ Preconditions:
 
 - `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `workspace-content`：斷言 `vault-info`。COUNTS-1、COUNTS-2 留在設定頁進行兩次背景 RSS 收集，以文件 API、Vault 檔案、搜尋狀態 API 與實際索引獨立確認 0 → 3 → 5，並檢查知識庫及搜尋卡各自在對應 API 就緒後 6 秒內更新，離開再返回仍為 5。
+
+## Backlog
+
+- `vault-import-merge`：預覽的筆數與同 ID 更新後的確切文件內容，不只比對筆數。
+- `vault-native-dialogs`：原生選檔／選資料夾的參數、取消沒有副作用與完成結果，以 Desktop 控制驗證；reveal 路徑與對話框種類已有斷言，不驗 Finder 與對話框外觀。

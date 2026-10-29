@@ -5,6 +5,7 @@ import path from 'node:path';
 
 export const name = 'login-startup';
 export const title = '登入自啟在開發版不可設定';
+export const tier = 'feature';
 export const covers = ['login-startup-setting', 'login-startup-unavailable', 'login-startup-os-state'];
 
 export async function run({ instance, page, record, waitFor }) {

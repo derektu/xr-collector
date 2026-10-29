@@ -314,7 +314,11 @@ const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
   if (value === scheduleTrigger) return;
   scheduleTrigger = value;
   const schedule = runtime.workspace?.schedule as unknown as { checkNow(): Promise<void> } | undefined;
-  void schedule?.checkNow().catch((error) => console.error('verify schedule trigger failed', error));
+  // `schedule-trigger.done` names the last trigger whose poll has finished, so a flow waits for
+  // the poll itself instead of a fixed time.
+  void schedule?.checkNow()
+    .then(() => writeFileSync(`${scheduleTriggerPath}.done`, value))
+    .catch((error) => console.error('verify schedule trigger failed', error));
 }, 50) : null;
 console.log(`verify server ready at ${runtime.server.url} (${data} data, Vault ${vaultMode})`);
 logFailedRequests(runtime.server.app.server);

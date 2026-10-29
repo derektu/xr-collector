@@ -1,17 +1,17 @@
 // Recorded regression flows: the status sequences they judge, the checks they write to
 // results.json, and the feature map naming, for each feature, the flows that cover it.
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkEntry, failureHint, recorder } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
-import { listFlows, runPool, selectFlows, startable, timingTable, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
+import { FEATURES_DIR, findFeature, parseFeature, readFeatures } from '../../../.claude/skills/verify/scripts/lib/features.mjs';
+import { listFlows, runPool, selectFlows, startable, TIERS, timingTable, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
+import { failureCause, flowHistory, historyTable, readFlowResults } from '../../../.claude/skills/verify/scripts/lib/history.mjs';
 import { checkRecordForJob } from '../../../.claude/skills/verify/flows/subscription-failures.mjs';
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../../.claude/skills/verify/flows/lib/status-sequence.mjs';
-
-const FEATURES = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/features');
 
 type Check = { id: string; ok: boolean; actual: unknown };
 const failed = (checks: Check[]) => checks.filter((check) => !check.ok).map((check) => check.id);
@@ -19,19 +19,69 @@ const sequence = (...values: string[]) => subscriptionSequenceChecks('A', values
 
 describe('CI flow selection', () => {
   const flows = [
-    { name: 'web-a', desktop: false },
-    { name: 'native-a', desktop: true },
-    { name: 'web-b', desktop: false },
+    { name: 'web-a', tier: 'core', desktop: false, covers: ['sub-add'] },
+    { name: 'native-a', tier: 'platform', desktop: true, covers: ['tray-menu'] },
+    { name: 'web-b', tier: 'feature', desktop: false, covers: ['docs-list', 'sub-status'] },
+    { name: 'real-a', tier: 'real', desktop: false, covers: ['collect-add'] },
   ] as Awaited<ReturnType<typeof listFlows>>;
+  const names = (selected: typeof flows) => selected.map((flow) => flow.name);
+  const feature = (subFeatures: string[]) => ({ file: 'x.md', name: 'x', subFeatures, listed: {}, hasBacklog: true, backlog: [] });
 
-  it('discovers every Web flow without maintaining a second fixed list', () => {
-    expect(selectFlows(flows, { layer: 'web' }).map((flow) => flow.name)).toEqual(['web-a', 'web-b']);
-    expect(selectFlows(flows, { layer: 'desktop' }).map((flow) => flow.name)).toEqual(['native-a']);
+  it('discovers every Web flow without maintaining a second fixed list, leaving real-source flows out', () => {
+    expect(names(selectFlows(flows, { layer: 'web' }))).toEqual(['web-a', 'web-b']);
+    expect(names(selectFlows(flows, { layer: 'desktop' }))).toEqual(['native-a']);
+    expect(names(selectFlows(flows, {}))).toEqual(['web-a', 'native-a', 'web-b', 'real-a']);
   });
 
   it('keeps explicit names strict and combines them with the requested layer', () => {
-    expect(selectFlows(flows, { names: ['web-b'], layer: 'web' }).map((flow) => flow.name)).toEqual(['web-b']);
+    expect(names(selectFlows(flows, { names: ['web-b'], layer: 'web' }))).toEqual(['web-b']);
     expect(() => selectFlows(flows, { names: ['missing'], layer: 'web' })).toThrow(/Unknown flow missing/u);
+  });
+
+  it('selects by tier and by the sub-features of a feature file, alone or with the layer', () => {
+    expect(names(selectFlows(flows, { tier: 'core' }))).toEqual(['web-a']);
+    expect(names(selectFlows(flows, { tier: 'real' }))).toEqual(['real-a']);
+    expect(names(selectFlows(flows, { feature: feature(['sub-add', 'sub-status']) }))).toEqual(['web-a', 'web-b']);
+    expect(names(selectFlows(flows, { feature: feature(['sub-status']), tier: 'core' }))).toEqual([]);
+    expect(names(selectFlows(flows, { feature: feature(['collect-add', 'tray-menu']), layer: 'web' }))).toEqual([]);
+    expect(() => selectFlows(flows, { tier: 'smoke' })).toThrow(/Unknown tier smoke; known: core, feature, platform, real/u);
+  });
+
+  it('finds a feature file with or without .md and names the known ones otherwise', () => {
+    const features = readFeatures();
+    expect(findFeature(features, 'subscriptions').subFeatures).toContain('sub-remove');
+    expect(findFeature(features, 'subscriptions.md').name).toBe('subscriptions');
+    expect(() => findFeature(features, 'missing')).toThrow(/Unknown feature missing; known: .*subscriptions/u);
+  });
+
+  it('refuses a flow without a known tier, a Desktop flow outside platform and an empty overBudget', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-tier-'));
+    const flow = (extra: string) => `export const name = 'x'; export const title = 'x'; export const covers = []; export async function run() {}\n${extra}\n`;
+    try {
+      for (const [extra, error] of [
+        ['', /must export tier, one of core, feature, platform, real; got undefined/u],
+        ["export const tier = 'smoke';", /got smoke/u],
+        ["export const tier = 'core'; export const desktop = true;", /Desktop flow, so its tier is platform/u],
+        ["export const tier = 'feature'; export const overBudget = ' ';", /overBudget must say why/u],
+      ] as const) {
+        const file = path.join(dir, `flow-${Math.random().toString(36).slice(2)}.mjs`);
+        await writeFile(file, flow(extra));
+        await expect(listFlows(dir)).rejects.toThrow(error);
+        await rm(file);
+      }
+      await writeFile(path.join(dir, 'ok.mjs'), flow("export const tier = 'feature'; export const overBudget = '理由';"));
+      expect(await listFlows(dir)).toMatchObject([{ name: 'x', tier: 'feature', overBudget: '理由', desktop: false }]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives every recorded flow a tier, and every Desktop flow the platform tier', async () => {
+    for (const flow of await listFlows()) {
+      expect(TIERS, flow.name).toContain(flow.tier);
+      if (flow.desktop) expect(flow.tier, flow.name).toBe('platform');
+    }
+    expect((await listFlows()).filter((flow) => flow.tier === 'core').map((flow) => flow.name).sort()).toEqual(['core-journey', 'subscription-remove']);
   });
 
   it('keeps a machine-readable failed result when provisioning stops before the recorder', async () => {
@@ -102,15 +152,58 @@ describe('parallel flow runs', () => {
     ]);
   });
 
-  it('prints each flow\'s phases and the wall clock', () => {
+  it('prints each flow\'s tier, phases and budget mark, and the wall clock', () => {
     const table = timingTable([
-      { name: 'vault-transfer', passed: true, timings: { prepareMs: 6_100, runMs: 70_300, cleanupMs: 1_000 } },
-      { name: 'build-info', passed: false, timings: { prepareMs: 900 } },
+      { name: 'vault-transfer', passed: true, tier: 'feature', overBudget: '理由', timings: { prepareMs: 6_100, runMs: 70_300, cleanupMs: 1_000 } },
+      { name: 'offline-recover', passed: true, tier: 'feature', timings: { prepareMs: 1_000, runMs: 59_500, cleanupMs: 500 } },
+      { name: 'build-info', passed: false, tier: 'feature', timings: { prepareMs: 900 } },
     ], { jobs: 3, wallMs: 80_000 });
-    expect(table).toContain('vault-transfer  PASSED');
-    expect(table).toMatch(/vault-transfer +PASSED +6\.1s +70\.3s +1\.0s +77\.4s/u);
-    expect(table).toMatch(/build-info +FAILED +0\.9s +- +- +0\.9s/u);
-    expect(table).toContain('2 flows in 80.0s with --jobs 3');
+    expect(table).toMatch(/vault-transfer +PASSED +feature +6\.1s +70\.3s +1\.0s +77\.4s +over 60s \(declared\)/u);
+    expect(table).toMatch(/offline-recover +PASSED +feature +1\.0s +59\.5s +0\.5s +61\.0s +over 60s, no overBudget/u);
+    expect(table).toMatch(/build-info +FAILED +feature +0\.9s +- +- +0\.9s$/mu);
+    expect(table.split('\n').at(-1)).toBe('3 flows in 80.0s with --jobs 3');
+    expect(timingTable([], { jobs: 3, wallMs: 300_100 })).toContain('0 flows in 300.1s with --jobs 3; over the 300s budget for every Web flow');
+  });
+});
+
+describe('flow history across runs', () => {
+  const run = (flow: string, totalSeconds: number, outcome: Record<string, unknown> = { passed: true }) => ({
+    flow, timings: { prepareMs: 1_000, runMs: totalSeconds * 1000 - 2_000, cleanupMs: 1_000 }, ...outcome,
+  });
+  const failedCheck = (scenario: string, id: string) => ({ passed: false, results: [{ id: scenario, checks: [{ id, ok: false, text: 'x' }, { id: 'ok', ok: true, text: 'y' }] }] });
+
+  it('names the cause of a failed run: its error, else its failed checks', () => {
+    expect(failureCause({ passed: true })).toBeNull();
+    expect(failureCause({ passed: false, error: 'Timed out after 60000 ms waiting for A scheduled\n  at x' })).toBe('error: Timed out after 60000 ms waiting for A scheduled');
+    expect(failureCause(failedCheck('CORE-5', 'pause.paused'))).toBe('CORE-5: pause.paused');
+    expect(failureCause({ passed: false, results: [] })).toBe('failed without a failed check');
+  });
+
+  it('counts runs, failures by cause, median and longest totals and runs over the one-flow budget', () => {
+    const history = flowHistory([
+      run('core-journey', 25), run('core-journey', 27), run('core-journey', 61, failedCheck('CORE-5', 'pause.paused')),
+      run('core-journey', 26, failedCheck('CORE-5', 'pause.paused')), run('vault-transfer', 90, { passed: false, error: 'slot busy' }),
+      { passed: true, timings: { runMs: 1 } },
+    ]);
+    expect(history).toEqual([
+      { flow: 'core-journey', runs: 4, failures: 2, causes: { 'CORE-5: pause.paused': 2 }, medianMs: 26_500, maxMs: 61_000, overBudget: 1 },
+      { flow: 'vault-transfer', runs: 1, failures: 1, causes: { 'error: slot busy': 1 }, medianMs: 90_000, maxMs: 90_000, overBudget: 1 },
+    ]);
+    const table = historyTable(history);
+    expect(table).toMatch(/core-journey +4 +2 +26\.5s +61\.0s +1 +CORE-5: pause\.paused ×2/u);
+  });
+
+  it('reads the results.json of recorded flows under a folder and skips the others', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-history-'));
+    try {
+      await writeFile(path.join(dir, 'results.json'), JSON.stringify(run('core-journey', 20)));
+      await mkdir(path.join(dir, 'run-2', 'ticket'), { recursive: true });
+      await writeFile(path.join(dir, 'run-2', 'results.json'), JSON.stringify({ passed: true }));
+      await writeFile(path.join(dir, 'run-2', 'ticket', 'results.json'), '{"flow": "cut sho');
+      expect(readFlowResults(dir).map((result) => result.flow)).toEqual(['core-journey']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -202,24 +295,35 @@ describe('recorder checks', () => {
   });
 });
 
-/** The H2 section `title` of a feature file, up to the next H2. */
-function section(markdown: string, title: string) {
-  const start = markdown.indexOf(`\n## ${title}\n`);
-  if (start < 0) return '';
-  const rest = markdown.slice(start + title.length + 5);
-  const end = rest.indexOf('\n## ');
-  return end < 0 ? rest : rest.slice(0, end);
-}
-const ticked = (text: string) => [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-
 describe('feature map and recorded flows', () => {
-  const files = readdirSync(FEATURES).filter((file) => file.endsWith('.md') && file !== 'README.md');
-  const features = files.map((file) => {
-    const markdown = readFileSync(path.join(FEATURES, file), 'utf8');
-    const subFeatures = section(markdown, 'Sub-features').split('\n').filter((line) => line.startsWith('- `')).map((line) => ticked(line)[0]);
-    const listed = Object.fromEntries(section(markdown, 'Regression flows').split('\n').filter((line) => line.startsWith('- `'))
-      .map((line) => { const [flow, ...ids] = ticked(line); return [flow, ids.sort()]; }));
-    return { file, subFeatures, listed };
+  const features = readFeatures();
+
+  it('parses a feature file\'s sub-features, flows and backlog', () => {
+    const feature = parseFeature('x.md', ['# X', '', '## Sub-features', '', '- `x-a`：A。', '- `x-b`：B。', '',
+      '## Regression flows', '', '- `flow-1`：斷言 `x-b`、`x-a`。', '', '## Backlog', '', '- `x-b` 的空狀態：下層測不到。', ''].join('\n'));
+    expect(feature).toEqual({ file: 'x.md', name: 'x', subFeatures: ['x-a', 'x-b'], listed: { 'flow-1': ['x-a', 'x-b'] },
+      hasBacklog: true, backlog: ['- `x-b` 的空狀態：下層測不到。'] });
+  });
+
+  it('lists every feature file in the map\'s table with the flows its Regression flows names', () => {
+    const readme = readFileSync(path.join(FEATURES_DIR, 'README.md'), 'utf8');
+    const rows = Object.fromEntries(readme.split('\n').map((line) => line.match(/^\| [^|]+ \| \[([^\]]+\.md)\]\([^)]+\) \|[^|]+\| (.+) \|$/u))
+      .filter((match): match is RegExpMatchArray => match !== null)
+      .map((match) => [match[1], [...match[2].matchAll(/`([^`]+)`/gu)].map((code) => code[1]).sort()]));
+    expect(Object.keys(rows).sort()).toEqual(features.map((feature) => feature.file).sort());
+    for (const feature of features) expect(rows[feature.file], feature.file).toEqual(Object.keys(feature.listed).sort());
+  });
+
+  it('gives every feature file a Backlog that never claims a recorded flow covers its items', async () => {
+    const flows = (await listFlows()).map((flow) => flow.name);
+    for (const feature of features) {
+      expect(feature.hasBacklog, feature.file).toBe(true);
+      for (const item of feature.backlog) {
+        expect(feature.subFeatures, `${feature.file}: ${item} starts with one of its sub-feature IDs`).toContain(item.match(/^- `([^`]+)`/u)?.[1]);
+        // An item names sub-feature IDs; naming a flow would read as coverage that the flow does not assert.
+        expect(item.match(/`([^`]+)`/gu)?.map((code) => code.slice(1, -1)).filter((code) => flows.includes(code)) ?? [], `${feature.file}: ${item}`).toEqual([]);
+      }
+    }
   });
 
   it('lets every flow cover only sub-features the feature map defines', async () => {

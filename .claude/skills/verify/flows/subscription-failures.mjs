@@ -11,6 +11,7 @@ import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscription-failures';
 export const title = '訂閱連續失敗與自動暫停';
+export const tier = 'feature';
 export const covers = ['sub-status', 'sub-failure'];
 
 /** Every subscription row's status text and color, by row test ID; runs inside the page. */

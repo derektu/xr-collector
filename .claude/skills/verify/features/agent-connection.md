@@ -34,3 +34,9 @@ Preconditions:
 ## Regression flows
 
 - `agent-connection`：斷言 `agent-connection-summary`、`agent-connection-help`、`agent-connection-export`、`agent-connection-settings`。
+
+## Backlog
+
+- `agent-connection-help`：Onboarding 三個按鈕的實際操作。
+- `agent-connection-summary`：listener 不可用時的顯示與停用，以及設定頁完整的卡片順序（目前只斷言知識庫在連線卡片之前）。
+- `agent-connection-settings`：固定連線埠在下次啟動套用的畫面結果。連線埠的固定、避讓與 bind 失敗已有 `tests/server/agent-access.test.ts`，不重造連線埠矩陣。

@@ -32,3 +32,7 @@ Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none
 ## Regression flows
 
 - `build-info`：斷言 `build-info-settings`、`build-info-onboarding`、`build-info-api`；設定／重新整理、兩 listener、token、Not Ready Onboarding，以及 UI 讀取失敗後點重試恢復。503 是路由注入，不宣稱真實服務故障。
+
+## Backlog
+
+- `build-info-api`：在已有的打包產物上，以共用入口核對 API／DOM 與 asar／artifact 身分；沒有相符產物時明確列為未驗，不以 Web 代替。

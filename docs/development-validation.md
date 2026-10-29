@@ -1,6 +1,6 @@
 # 開發驗證流程
 
-PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式同時三支執行所有已收錄的非 Desktop 回歸流程；push 到 main 的 tree 與 merge 的 PR 最後一個 commit 相同、且那個 commit 的 PR run 已通過 Web 回歸時，main 沿用該結果，不再執行，log 寫出沿用的 PR 與 run。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
+PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式同時三支執行所有已收錄的 Web 回歸流程（Desktop 與真實來源以外的全部層級），並保存每支流程的 `results.json`；push 到 main 的 tree 與 merge 的 PR 最後一個 commit 相同、且那個 commit 的 PR run 已通過 Web 回歸時，main 沿用該結果，不再執行，log 寫出沿用的 PR 與 run。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
 
 ## 驗證層級
 
@@ -32,12 +32,27 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **本機執行**：本機與 CI 分工，本機不重跑 CI 會跑的東西。
 
-- 本機只跑本票的新 scenario，加上功能地圖列出、與本票改動相關的已收錄流程；全部 Web 流程由 PR CI 執行。
+- 本機只跑本票的新 scenario，加上與本票改動相關的已收錄流程：`flows run --feature <功能檔>` 跑涵蓋該功能的流程，`flows run --tier core` 是幾分鐘內的常用路徑回饋；全部 Web 流程由 PR CI 執行。
 - 只改流程腳本（verify skill 的 `flows/` 或票的 `.local/` 腳本）時，不重跑 `npm run verify`，只重跑改到的流程。
 - 執行 `npm run verify` 或流程的指令保留退出碼：不接 `| tee`，或先 `set -o pipefail`。退出碼是判定失敗的依據，被管線吃掉時失敗不會被發現。
 - 需要同時跑多支流程時用 `flows run --jobs <N>`，每支仍是獨立 instance，佔一個 verify slot；`doctor` 列出空著的 slot。
 
 畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；涵蓋功能地圖子功能、可重跑的流程收進 verify skill 的 `flows/`；只對本票有意義的腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
+
+### 已收錄流程的門檻與成本
+
+E2E 的價值集中在驗收單張票的新行為，以及產品穩定後作為畫面回歸的安全網；每支流程在每個 PR 都要跑，成本隨功能累加。已收錄流程因此依 [功能地圖的層級](../.claude/skills/verify/features/README.md#流程層級) 標記 `core`、`feature`、`platform` 或 `real`，並符合以下門檻。
+
+**新增流程的門檻**：
+
+- 流程開頭的註解寫明它保護的使用者路徑，以及下層測試為何測不到。能用元件、單元或 HTTP 測試保護的行為放在下層；只有必須經畫面串起多個 module 才看得到的結果，才寫成流程。
+- 單支流程在 CI 不超過 60 秒（準備、執行與清理合計）。需要更久時，流程以 `export const overBudget` 寫明理由；`flows run` 結束時的耗時表標出超過 60 秒的流程，以及其中沒寫理由的。
+- 等待一律等狀態：`waitFor` 等 DOM、API 或資料面的條件，或 verify server 的完成記號（例如排程輪詢完成時寫的 `schedule-trigger.done`），不用固定的 sleep 等某件事發生。要證明某個狀態在一段時間內維持不變（例如工作結束後徽章不再出現）時，觀察窗寫成具名的取樣並註明為什麼需要。
+- 全部 Web 流程以 `--jobs 3` 平行執行，CI 不超過 5 分鐘。新增流程使總時間超過時，同一張票合併或精簡現有流程，使總時間回到預算內，PR 描述列出前後的耗時。
+
+**不穩定的處理**：程式沒變卻失敗的流程，在發現的那張票查出根因並修好；根因在產品就修產品，例如 #177 修正更新面板重新掛載後又定位一次，而不是拉長流程的等待。當下修不了時，開 issue 追蹤並加入看板。不靠拉長 timeout、重新分類層級或重跑到通過讓失敗消失。CI 每次執行都保存每支流程的 `results.json`（artifact `web-regression-results-*`，保留 90 天），`flows history` 從中累積每支流程的失敗次數、原因與耗時。
+
+**定期檢討**：大約每 10 張票 merge 後，以 `flows history --runs <N>` 讀出這段期間 CI 的紀錄，依每支流程的耗時、不穩定次數與它抓到的真問題（下層測試沒有抓到的產品 bug），決定保留、合併或降級（例如改為 `feature` 專項、把斷言移到下層），結果記在 [功能地圖的定期檢討](../.claude/skills/verify/features/README.md#定期檢討)。
 
 開發主力機器是 Mac；Windows 由另一台機器補驗，見第 5 節。需要 Windows 驗收而那台機器無法使用時（例如 VM 沒有開），暫停並通知使用者，由使用者決定補驗，或只完成 Mac 驗收並將 Windows 標為待補。不自行啟動或關閉 VM。
 

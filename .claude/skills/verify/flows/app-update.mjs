@@ -2,6 +2,7 @@ import { defaultCatalog } from '../scripts/lib/synthetic.mjs';
 
 export const name = 'app-update';
 export const title = 'App 更新的查詢、下載驗證、取消與安全等待';
+export const tier = 'feature';
 export const covers = ['update-discovery', 'update-download', 'update-apply-wait', 'update-agent', 'update-no-vault'];
 export const vault = 'none';
 export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', payloadMode: 'valid', payloadDelayMs: 0 } });

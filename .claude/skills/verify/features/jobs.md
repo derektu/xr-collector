@@ -44,4 +44,12 @@ Preconditions:
 
 - `subscribe-a-b`：斷言 `jobs-sections`、`jobs-empty`、`jobs-badge`。A、B 開始後在進行中且不回到排隊中、沒有失敗區、結束後顯示空狀態，以及工作全部結束、畫面穩定後沒有徽章。
 - `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中並以「YouTube 限制連線」說明等待原因，冷卻期間送出的單支影片在排隊中。
-- `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`。單篇失敗後重新收集及從失敗區移除，以 API 與文件內容確認結果。
+- `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`、`jobs-badge`。只有失敗工作時不顯示徽章；單篇失敗後重新收集及從失敗區移除，以 API 與文件內容確認結果。
+- `feature-navigation`：斷言 `jobs-sections`。RSS 503 後已開始的重試檢查在「進行中」，沒有「排隊中」分區。
+
+## Backlog
+
+- `jobs-badge`：進行中時的非零徽章，以及點徽章進工作頁。
+- `jobs-sections`：可控的排隊中 → 進行中、各區數量與順序、一個訂閱只佔一列；分類與排序的呈現已有 `tests/web/jobs-presentation.test.ts`。
+- `jobs-retry`：重試後該列確實從畫面的失敗區離開（目前以 API 與文件確認）。
+- `jobs-dismiss`：移除後該列確實從畫面離開；沒有網路時仍可移除失敗工作。

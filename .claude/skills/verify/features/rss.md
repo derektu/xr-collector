@@ -29,7 +29,7 @@ Preconditions:
 - **Atom。** 訂閱 `<feedsOrigin>/atom.xml`，收進 3 篇。
 - **新文章。** `updateCatalog(c => { c.feeds['/feed.xml'].articles.unshift({ title: '【合成】RSS 部落格 新文章', guid: 'verify-new', link: 'https://example.com/new', publishedAt: new Date().toISOString(), content: '<p>新文章</p>' }); })`，再按 `check-all`。只多收這一篇。
 - **網路錯誤。** `updateCatalog(c => { c.feeds['/feed.xml'].status = 503; })` 後 `check-all`。已開始的檢查在工作頁「進行中」等待重試，狀態為「錯誤・HH:MM 重試」，網路原因另列在狀態下方；訂閱列也顯示重試時間。把 `status` 拿掉後，到重試時間會完成。
-- **找不到 feed。** `status: 404` 是 `feed_not_found`，這次檢查失敗且計入連續失敗，工作不留在排隊中或失敗區。訂閱列顯示紅色「錯誤（連續 n 次）・HH:MM 重試」，記錄文字含「發生錯誤：找不到這個 feed。」。
+- **找不到 feed。** `status: 404` 是 `feed_not_found`，這次檢查失敗且計入連續失敗，工作不留在排隊中或失敗區。訂閱列顯示紅色「錯誤（連續 n 次）・HH:MM 重試」，記錄的摘要與訂閱的收集紀錄為「發生錯誤：找不到 feed」，「完整事件」的原始文字含「找不到這個 feed。」。
 - **網站限制連線。** 訂閱 `/feed.xml` 與 `/atom.xml`，`updateCatalog(c => { c.feeds['/feed.xml'].status = 429; })` 後按 `/feed.xml` 列的立即檢查。檢查立刻失敗，列為紅色「錯誤（連續 1 次）・HH:MM 重試」；詳情頁紅條「最近一次檢查失敗（連續 1 次）：這個網站暫時限制連線。」，收集紀錄「發生錯誤：網站限制連線」。接著檢查 `/atom.xml` 照常完成，`GET /api/pacing` 的 `rss` 群組不會進入 `cooldown`。
 - **設定。** RSS 詳情的 `detail-settings-intervalMinutes`、`detail-settings-backfillDays`、`detail-settings-backfillMaxItems` 編輯後，等待 `settings-saved` 且 API 讀回新值，再刷新確認三個值及 Vault 設定都保留。
 - **副作用。** `vault/settings/rss-subscriptions.json` 有該訂閱；Vault 內每篇文章一份 `.md`。
@@ -45,6 +45,13 @@ Preconditions:
 
 ## Regression flows
 
-- `feature-navigation`：斷言 `rss-failure`。503 後已開始的檢查在工作頁「進行中」等待重試，恢復 feed 後完成。
-- `rss-rate-limit`：斷言 `rss-add-feed`、`rss-atom`、`rss-check`、`rss-failure`。一個 feed 回 429：該列的連續失敗與紅色、檢查工作失敗、詳情頁紅條與收集紀錄、另一個 feed 的檢查照常完成並收進新文章、RSS 請求通道從未冷卻、記錄沒有 RSS 的限流事件；第 5 次失敗自動暫停；恢復後歸零並檢查一次。
-- `workspace-content`：斷言 `rss-add-feed`、`rss-add-page`、`rss-articles`、`rss-settings`。從畫面辨識網頁宣告的 feed、訂閱與閱讀，修改收集設定後比對刷新及 Vault 資料。
+- `feature-navigation`：斷言 `rss-failure`。503 後已開始的檢查在工作頁「進行中」等待重試，不在排隊中；之後恢復 feed 只為清理，不斷言完成。
+- `rss-rate-limit`：斷言 `rss-atom`、`rss-check`、`rss-failure`；兩個 feed 經 API 訂閱。一個 feed 回 429：該列的連續失敗與紅色、檢查工作失敗、詳情頁紅條與收集紀錄、另一個 feed 的檢查照常完成並收進新文章、RSS 請求通道從未冷卻、記錄沒有 RSS 的限流事件；第 5 次失敗自動暫停；恢復後歸零並檢查一次。
+- `workspace-content`：斷言 `rss-add-feed`、`rss-add-page`、`rss-articles`、`rss-settings`。從畫面辨識網頁宣告的 feed、訂閱與閱讀，修改收集設定後比對 API 與刷新後的欄位，並確認 Vault 的訂閱檔有這個訂閱。
+
+## Backlog
+
+- `rss-failure`：503 恢復後同一工作完成、列回到「下次」；404／410／非 feed 各選一個代表畫面。分類與重試矩陣已有 `tests/plugins/rss/` 與 HTTP 案例。
+- `rss-add-page`：頁面宣告 canonical feed 的辨識，以及文件頁「新增」貼 feed 網址切換為訂閱。
+- `rss-atom`：RDF feed 的實際收集，用少量代表資料；格式解析已有 `tests/plugins/rss/feed.test.ts`。
+- `rss-articles`：閱讀頁的 Markdown 小標與連結代表內容；完整 HTML 轉換矩陣留在 `tests/plugins/rss/html.test.ts`。
