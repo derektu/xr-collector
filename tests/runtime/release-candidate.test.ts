@@ -34,9 +34,9 @@ it('uses the Developer ID, Team, and notarization gates for a signed Mac update 
     signing: { policy: 'developer-id-notarized', teamId: 'ABCDE12345' },
     run: async () => {},
     verifyDeveloperIdApplication: async (_app: string, team: string) => { calls.push(`identity:${team}`); },
-    validateNotarizedArtifact: async (_app: string, kind: string) => { calls.push(`notary:${kind}`); throw new Error('signed gate reached'); },
+    validateNotarizedApplication: async () => { calls.push('notary'); throw new Error('signed gate reached'); },
   })).rejects.toThrow(/signed gate reached/u);
-  expect(calls).toEqual(['identity:ABCDE12345', 'notary:app']);
+  expect(calls).toEqual(['identity:ABCDE12345', 'notary']);
 });
 
 it('preflights all four identities and stages only sanitized, version-pinned public files', async () => {
@@ -222,7 +222,7 @@ it('defaults the release version from package.json', async () => {
   await expect(planReleaseCandidate(withoutVersion, { inspectPackagedPayload: fixture.inspect })).resolves.toMatchObject({ version: '0.1.0', tag: 'v0.1.0' });
 });
 
-it('accepts the signed Mac inventory only after the DMG and signed runtime receipts pass', async () => {
+it('accepts a notarized, stapled DMG only when its receipt, Gatekeeper source and both inner Apps match the stapled App', async () => {
   const fixture = await releaseFixture();
   const record = fixture.records.find((entry) => entry.target === 'darwin-arm64' && entry.variant === 'chinese')!;
   const manifest = JSON.parse(await readFile(record.manifestPath, 'utf8'));
@@ -230,15 +230,19 @@ it('accepts the signed Mac inventory only after the DMG and signed runtime recei
   manifest.artifacts = manifest.artifacts.filter((artifact: any) => artifact !== blockmap);
   await rm(path.join(path.dirname(record.manifestPath), blockmap.path));
   const fileIdentity = { bytes: 1, sha256: '1'.repeat(64) };
+  const stapledAppIdentity = { bytes: 1, sha256: '3'.repeat(64) };
   const dmgArtifact = manifest.artifacts.find((artifact: any) => artifact.path.endsWith('.dmg'));
-  const receipt = (kind: string) => ({ schemaVersion: 1, kind, teamId: 'ABCDE12345', submissionId: '12345678-1234-1234-1234-123456789abc', status: 'Accepted', issues: 0,
-    logSha256: '2'.repeat(64), submitted: fileIdentity, stapled: kind === 'dmg' ? { bytes: dmgArtifact.bytes, sha256: dmgArtifact.sha256 } : fileIdentity, stapleValidated: true });
+  const appReceipt = { schemaVersion: 1, kind: 'app', teamId: 'ABCDE12345', submissionId: '12345678-1234-1234-1234-123456789abc', status: 'Accepted', issues: 0,
+    logSha256: '2'.repeat(64), submitted: fileIdentity, stapled: stapledAppIdentity, stapleValidated: true };
+  const dmgReceipt = { schemaVersion: 1, kind: 'dmg', teamId: 'ABCDE12345', submissionId: '87654321-4321-4321-4321-cba987654321', status: 'Accepted', issues: 0,
+    logSha256: '4'.repeat(64), submitted: { bytes: dmgArtifact.bytes - 1, sha256: '5'.repeat(64) },
+    stapled: { bytes: dmgArtifact.bytes, sha256: dmgArtifact.sha256 }, stapleValidated: true };
   manifest.signing = { policy: 'developer-id-notarized', credentialDiscovery: false, teamId: 'ABCDE12345',
     identity: { sha1: 'a'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)' },
-    actualVerification: { kind: 'developer-id-notarized', app: receipt('app'), dmg: receipt('dmg'), gatekeeperDownload: 'pending-clean-browser-acceptance' } };
+    actualVerification: { kind: 'developer-id-notarized', app: appReceipt, dmg: dmgReceipt, gatekeeperDownload: 'pending-clean-browser-acceptance' } };
   const primary = record.artifactPaths.find((file) => file.endsWith('.zip'))!;
   const inspected = fixture.inspected.get(primary) as any;
-  inspected.notarizedAppIdentity = fileIdentity;
+  inspected.notarizedAppIdentity = stapledAppIdentity;
   const finalFiles = Object.entries(inspected.runtimeFiles).map(([relative, identity]: any) => ({ path: relative, type: 'file', mode: 0o755, ...identity }));
   finalFiles.push({ path: 'yt-dlp/_internal/empty-resource', type: 'file', mode: 0o644, bytes: 0, sha256: createHash('sha256').update('').digest('hex') });
   manifest.runtimeIdentity.signed = inspected.signed = {
@@ -247,38 +251,64 @@ it('accepts the signed Mac inventory only after the DMG and signed runtime recei
     meilisearch: { source: { bytes: inspected.meilisearch.binary.bytes, sha256: inspected.meilisearch.binary.sha256 }, final: inspected.runtimeFiles.meilisearch },
     files: finalFiles, executableSignatures: {},
   };
-  await writeFile(record.manifestPath, JSON.stringify(manifest));
+  const save = () => writeFile(record.manifestPath, JSON.stringify(manifest));
+  await save();
   const dmgChecks: string[] = [];
   const plan = await planReleaseCandidate(fixture.options, {
     inspectPackagedPayload: fixture.inspect,
     verifyDeveloperIdDiskImage: async (_dmg: string, team: string) => { dmgChecks.push(`identity:${team}`); },
-    validateNotarizedArtifact: async (_dmg: string, kind: string) => { dmgChecks.push(`notary:${kind}`); },
-    verifySignedMacDmgContents: async (_dmg: string, product: string, team: string) => { dmgChecks.push(`contents:${product}:${team}`); return { appIdentity: fileIdentity }; },
+    verifySignedMacDmgContents: async (_dmg: string, product: string, team: string) => { dmgChecks.push(`contents:${product}:${team}`); return { appIdentity: stapledAppIdentity }; },
   });
   expect(plan).toMatchObject({ version: '0.1.0' });
-  expect(dmgChecks).toEqual(['identity:ABCDE12345', 'notary:dmg', 'contents:XR Collector:ABCDE12345']);
+  expect(dmgChecks).toEqual(['identity:ABCDE12345', 'contents:XR Collector:ABCDE12345']);
   const stage = path.join(fixture.root, 'signed-stage');
   const state = await stageReleaseCandidate(plan, stage);
   expect(state.assets).toHaveLength(21);
   expect(state.assets.some((asset) => asset.name.endsWith('.dmg.blockmap'))).toBe(true);
   expect(state.assets.some((asset) => asset.name === 'XR-Collector-0.1.0-chinese-mac-arm64.dmg.blockmap')).toBe(false);
   const publicManifest = JSON.parse(await readFile(path.join(stage, 'XR-Collector-0.1.0-chinese-darwin-arm64-manifest.json'), 'utf8'));
-  expect(publicManifest.signing).toMatchObject({ policy: 'developer-id-notarized', teamId: 'ABCDE12345', receipts: { app: { status: 'Accepted' }, dmg: { status: 'Accepted' } } });
+  expect(publicManifest.signing.receipts).toEqual({
+    app: { schemaVersion: 1, kind: 'app', teamId: 'ABCDE12345', submissionId: appReceipt.submissionId, status: 'Accepted', issues: 0,
+      stapleValidated: true, submitted: fileIdentity, stapled: stapledAppIdentity, logSha256: appReceipt.logSha256 },
+    dmg: { schemaVersion: 1, kind: 'dmg', teamId: 'ABCDE12345', submissionId: dmgReceipt.submissionId, status: 'Accepted', issues: 0,
+      stapleValidated: true, submitted: dmgReceipt.submitted, stapled: dmgReceipt.stapled, logSha256: dmgReceipt.logSha256 },
+  });
   await expect(verifyStagedCandidate(stage)).resolves.toMatchObject({ version: '0.1.0' });
 
-  manifest.signing.actualVerification.dmg.stapled.sha256 = '0'.repeat(64);
-  await writeFile(record.manifestPath, JSON.stringify(manifest));
+  const attempt = (dmgAppIdentity = stapledAppIdentity) => planReleaseCandidate(fixture.options, {
+    inspectPackagedPayload: fixture.inspect, verifyDeveloperIdDiskImage: async () => {},
+    verifySignedMacDmgContents: async () => ({ appIdentity: dmgAppIdentity }),
+  });
+  manifest.signing.actualVerification.app = { ...appReceipt, stapleValidated: false };
+  await save();
+  await expect(attempt()).rejects.toThrow(/App notarization receipt is invalid/u);
+  manifest.signing.actualVerification.app = { ...appReceipt, issues: 1 };
+  await save();
+  await expect(attempt()).rejects.toThrow(/App notarization receipt is invalid/u);
+  manifest.signing.actualVerification.app = appReceipt;
+  for (const invalid of [{ status: 'Invalid' }, { issues: 1 }, { stapleValidated: false }, { submissionId: undefined }]) {
+    manifest.signing.actualVerification.dmg = { ...dmgReceipt, ...invalid };
+    await save();
+    await expect(attempt()).rejects.toThrow(/DMG notarization receipt is invalid/u);
+  }
+  const { submissionId: _id, status: _status, issues: _issues, logSha256: _log, submitted: _submitted, stapled: _stapled, stapleValidated: _validated, ...signedOnly } = dmgReceipt;
+  manifest.signing.actualVerification.dmg = { ...signedOnly, notarization: 'not-requested', signed: dmgReceipt.stapled,
+    gatekeeper: { source: 'Unnotarized Developer ID', output: 'XR.dmg: accepted\nsource=Unnotarized Developer ID' } };
+  await save();
+  await expect(attempt()).rejects.toThrow(/DMG notarization receipt is invalid/u);
+  manifest.signing.actualVerification.dmg = { ...dmgReceipt, stapled: { ...dmgReceipt.stapled, sha256: '0'.repeat(64) } };
+  await save();
+  await expect(attempt()).rejects.toThrow(/Final DMG bytes differ/u);
+  manifest.signing.actualVerification.dmg = dmgReceipt;
+  await save();
   await expect(planReleaseCandidate(fixture.options, {
-    inspectPackagedPayload: fixture.inspect, verifyDeveloperIdDiskImage: async () => {}, validateNotarizedArtifact: async () => {},
-    verifySignedMacDmgContents: async () => ({ appIdentity: fileIdentity }),
-  })).rejects.toThrow(/Final DMG bytes differ/u);
-  manifest.signing.actualVerification.dmg.stapled.sha256 = dmgArtifact.sha256;
-  await writeFile(record.manifestPath, JSON.stringify(manifest));
+    inspectPackagedPayload: fixture.inspect,
+    verifyDeveloperIdDiskImage: async () => { throw new Error('DMG Gatekeeper source is Unnotarized Developer ID, not Notarized Developer ID.'); },
+    verifySignedMacDmgContents: async () => ({ appIdentity: stapledAppIdentity }),
+  })).rejects.toThrow(/Unnotarized Developer ID/u);
+  await expect(attempt({ bytes: 1, sha256: 'e'.repeat(64) })).rejects.toThrow(/DMG App identity differs from the stapled App/u);
   inspected.notarizedAppIdentity = { bytes: 1, sha256: 'f'.repeat(64) };
-  await expect(planReleaseCandidate(fixture.options, {
-    inspectPackagedPayload: fixture.inspect, verifyDeveloperIdDiskImage: async () => {}, validateNotarizedArtifact: async () => {},
-    verifySignedMacDmgContents: async () => ({ appIdentity: fileIdentity }),
-  })).rejects.toThrow(/ZIP App identity differs/u);
+  await expect(attempt()).rejects.toThrow(/ZIP App identity differs from the stapled App/u);
 });
 
 async function releaseFixture(validation = false) {

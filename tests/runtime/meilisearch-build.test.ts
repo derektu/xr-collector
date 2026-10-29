@@ -178,6 +178,24 @@ describe('pinned Meilisearch build', () => {
     expect(JSON.parse(await readFile(first.manifestPath, 'utf8'))).toMatchObject({ target: 'darwin-arm64', sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127', features: ['chinese'] });
   });
 
+  it('installs a cached Chinese build in cache-only mode without fetching source or running Cargo', async () => {
+    const at = await root();
+    const fake = harness();
+    const cacheRoot = path.join(at, 'cache');
+    const environment = { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64' };
+    const cacheOnly = (runtimeRoot: string) => buildMeilisearch({ target: 'darwin-arm64', cacheRoot, runtimeRoot, environment, cacheOnly: true },
+      { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
+    await expect(cacheOnly(path.join(at, 'checkout-a'))).rejects.toThrow(/Chinese Meilisearch recipe .* is missing from the runtime cache.*npm run prepare:runtime -- mac first/u);
+    expect(fake.builds()).toBe(0);
+    await buildMeilisearch({ target: 'darwin-arm64', cacheRoot, runtimeRoot: path.join(at, 'checkout-a'), environment },
+      { run: fake.run, fileSha256: fake.hashFile, charabiaOverridePath: fake.charabiaOverridePath });
+    fake.run.mockClear();
+    await expect(cacheOnly(path.join(at, 'checkout-b'))).resolves.toMatchObject({ cacheHit: true });
+    expect(fake.builds()).toBe(1);
+    expect(fake.run.mock.calls.filter(([command]) => command === 'git')).toEqual([]);
+    expect(await readFile(path.join(at, 'checkout-b', 'meilisearch'))).toEqual(await readFile(path.join(at, 'checkout-a', 'meilisearch')));
+  });
+
   it('serializes Chinese and official producers at their shared runtime destination', async () => {
     const at = await root();
     const runtime = path.join(at, 'runtime');

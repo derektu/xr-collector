@@ -31,7 +31,7 @@
 - 產出建置資訊：版本、build 時間、commit／build identifier、平台及引擎 variant。App 的固定可見位置與唯讀業務 API 顯示相同資訊；開發版也有可辨識身分，不能偽裝成乾淨正式 build。API、Agent Skill 與 verify 功能地圖隨實作同步更新。
 - 產物清單記錄完整 commit、版本、兩台建置環境、模擬狀態、實際工具版本、各附件 bytes／SHA-256／架構／簽署狀態，並關聯驗收 evidence。可追溯配方不等於跨機器 bit-for-bit 相同。
 - 更新 metadata 只指向同版本、同架構、同 variant 的已驗證附件；安裝器與 #35／#36 的發布、更新責任分開。
-- 不自動選用公司的 Team 或憑證。Windows 預設未簽署；Mac 預設以 `identity: "-"` 做 ad-hoc 預演。正式候選必須用明確 signing root／env 啟用 `developer-id-notarized`，從指定 p12 的 temporary keychain 精確選取 Team identity，依序完成 staged runtime、App、DMG 簽署與 App／DMG 公證、staple、OS policy gate。raw runtime pin 保持不變；簽署只改 staging copy並建立 final signed inventory，啟動端及 publisher 同時驗 raw producer、final bytes、外層 seal 與 Team。Deno 保留固定 upstream 簽章。任何自動 gate 都不能取代 clean browser download、Finder 安裝與首次開啟實測。
+- 不自動選用公司的 Team 或憑證。Windows 預設未簽署；Mac 預設以 `identity: "-"` 做 ad-hoc 預演。正式候選必須用明確 signing root／env 啟用 `developer-id-notarized`，從指定 p12 的 temporary keychain 精確選取 Team identity，依序完成 staged runtime 與 App 簽署、App 公證一次並 staple、由已 staple 的 App 產出 Developer ID 簽署的 DMG 與 ZIP、DMG 公證一次並 staple，以及 OS policy gate；DMG 與 ZIP 內的 App 都必須與已 staple 的 App bytes 相同。raw runtime pin 保持不變；簽署只改 staging copy並建立 final signed inventory，啟動端及 publisher 同時驗 raw producer、final bytes、外層 seal 與 Team。Deno 保留固定 upstream 簽章。任何自動 gate 都不能取代 clean browser download、Finder 安裝與首次開啟實測。
 - Windows Chinese 維持 static CRT；official 包須完成受支援的 VC++ v14 x64 runtime 前提處理及驗證。實作前查核 redistributable 的固定來源、完整性與安裝方式，並確認乾淨無 CRT 的驗收環境。現有 NSIS 為 per-user／allowElevation=false，不能假設需要系統管理權限的 redistributable 可直接安裝；不能以建置 VM 已裝 Visual Studio 作為乾淨客戶端證據。
 - 不實作 Mac Intel、Windows ARM64 安裝包、Release 上傳、自動更新客戶端或 #150 的共用 HTTP shutdown 修正。
 

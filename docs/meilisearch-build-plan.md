@@ -39,7 +39,7 @@ package script 呼叫一支專用 Node script。預設從 `process.platform/proc
 - Windows x64 recipe 額外固定 `RUSTFLAGS=-C target-feature=+crt-static`，讓 CRT 靜態連結；Mac flags 維持空。這個 target flag 進入 build fingerprint／manifest，但不改 index 語意 profile。產物必須用 PE imports 證明無 VCRUNTIME／MSVCP DLL 依賴，不以 build 機預裝 VS 掩蓋。
 - 不含 `mini-dashboard` 與其他預設斷詞；任何 source、lock、toolchain、recipe 或 target 改變，都產生不同 fingerprint。
 
-原始碼抓取到 gitignored 的 `.local/runtime-builds/meilisearch/<recipe>/<target>/` build cache，不加入產品 source tree。首次執行取得固定 commit；之後可以重用已驗證的 source checkout 與 Cargo cache，但每次仍核對 HEAD、Cargo.lock、tracked/untracked source checkout 是否乾淨與所選 toolchain；source checkout 不得容納其他使用者的修改，髒掉時拒絕並提示清除本指令的 cache。無法取得固定 source 且 cache 不完整時直接失敗，不 fallback 到官方 Meilisearch binary、不同 commit 或既有其他架構產物。
+原始碼抓取到使用者層級 runtime cache 的 `meilisearch/<recipe>/<target>/` build cache（Mac 預設 `~/.cache/xr-collector/runtime`，Windows 為 `%LOCALAPPDATA%\xr-collector\runtime`，可用 `XR_COLLECTOR_RUNTIME_CACHE` 覆寫），不加入產品 source tree，同一台機器的 checkout 共用。打包以 `--cache-only` 只讀這份 cache，不抓 source 也不跑 Cargo。首次執行取得固定 commit；之後可以重用已驗證的 source checkout 與 Cargo cache，但每次仍核對 HEAD、Cargo.lock、tracked/untracked source checkout 是否乾淨與所選 toolchain；source checkout 不得容納其他使用者的修改，髒掉時拒絕並提示清除本指令的 cache。無法取得固定 source 且 cache 不完整時直接失敗，不 fallback 到官方 Meilisearch binary、不同 commit 或既有其他架構產物。
 
 需在開發文件列出：Git、Node/npm、Rust 1.91.1、Xcode Command Line Tools（Mac）或 MSVC Build Tools（Windows）及網路首次抓 source/dependencies。package script 在 build 前呼叫此命令；安裝包執行時不呼叫。完整 Mac runtime 的既有 npm 準備入口明定 darwin-arm64，避免 Intel 主機把 x64 Meili 混入 arm64 Deno／Electron App；Mac Intel 引擎使用獨立 build:meilisearch 入口。
 
@@ -108,7 +108,7 @@ package 與 CI 使用相同 repo builder、固定 source／toolchain／lock。CI
 ## 環境與驗證相依
 
 1. 本機兩個交付環境可用；CI 可追加 `macos-15` 與 `windows-2022` 的引擎檢查，不取代本機 package 操作證據。
-2. source cache 固定在本 repo 的 ignored `.local/runtime-builds/meilisearch/`；清理只限此指令建立的 cache；source URL、commit 與 Cargo.lock SHA 已固定，不把上游 source 提交進 repo。
+2. source cache 固定在 runtime cache 的 `meilisearch/`；清理只限此指令建立的 cache；source URL、commit 與 Cargo.lock SHA 已固定，不把上游 source 提交進 repo。
 3. 本機兩 VM 已完成唯讀 preflight 與本票 owned Rust 1.91.1 工具鏈準備，無 global/default toolchain 修改：UTM macOS arm64 與 Parallels Windows ARM64（x64 Node/MSVC Rust 模擬）。parent commit 後以 crabbox 同步至各自本票獨立 workroot，clean commit 建置／取回 evidence；Windows 原生 x64 仍由 CI 證明。
 4. #34 負責兩平台安裝、建置資訊與 metadata，#35 負責從 Mac 發布；憑證及正式簽章另行安排。
 

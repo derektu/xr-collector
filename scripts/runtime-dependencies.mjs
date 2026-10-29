@@ -7,10 +7,18 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { runtimeCacheMiss, runtimeCacheRoot } from './runtime-cache.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pinsPath = path.join(projectRoot, 'scripts', 'runtime-dependency-pins.json');
 
+/**
+ * Installs the pinned yt-dlp/Deno pair into `outputDir` from archives in the per-user runtime cache.
+ * By default a missing or mismatched archive is downloaded into the cache first; with `cacheOnly`
+ * the call never downloads and fails with the prepare command instead. Cache archives are named
+ * by their pinned SHA-256 and written by atomic rename, so concurrent checkouts can share them; the
+ * install lock belongs to `outputDir`.
+ */
 export async function prepareRuntimeDependencies(options, dependencies = {}) {
   const pins = dependencies.pins ?? JSON.parse(await readFile(pinsPath, 'utf8'));
   const pinnedTarget = pins.targets?.[options.target];
@@ -30,13 +38,19 @@ export async function prepareRuntimeDependencies(options, dependencies = {}) {
     },
   };
   const outputDir = options.outputDir ?? path.join(projectRoot, 'resources', 'bin', target.directory);
-  const cacheRoot = options.cacheRoot ?? path.join(projectRoot, '.local', 'runtime-downloads', options.target);
+  const cacheRoot = options.cacheRoot ?? path.join(runtimeCacheRoot(), 'downloads', options.target);
   const manifestPath = path.join(outputDir, 'runtime-dependencies.json');
   const expected = manifestHeader(pins.schemaVersion, options.target, target);
   await mkdir(outputDir, { recursive: true });
-  await mkdir(cacheRoot, { recursive: true });
+  if (!options.cacheOnly) await mkdir(cacheRoot, { recursive: true });
+  const archive = (name, pin) => verifiedArchive(name, pin, cacheRoot, options.cacheOnly
+    ? () => { throw runtimeCacheMiss(`Pinned ${name} ${pin.version} archive for ${options.target}`, path.join(cacheRoot, archiveName(name, pin)), options.target); }
+    : (dependencies.fetch ?? fetch));
 
-  return withLock(path.join(cacheRoot, '.prepare.lock'), async () => {
+  return withLock(path.join(outputDir, '.runtime-dependencies.lock'), async () => {
+    // Packaging requires the cached archives even when the installed copy is current, because the
+    // signed afterPack check rebuilds the runtime from them.
+    const cachedArchives = options.cacheOnly ? [await archive('yt-dlp', target.ytDlp), await archive('deno', target.deno)] : null;
     const installed = await readJson(manifestPath);
     if (installed && exactJson(withoutFiles(installed), expected) && await verifyInventory(outputDir, installed.files, installed.executables)) {
       if (await versionsMatch(outputDir, target, dependencies.reportsVersion ?? reportsVersion)) {
@@ -45,8 +59,7 @@ export async function prepareRuntimeDependencies(options, dependencies = {}) {
       }
     }
 
-    const ytArchive = await verifiedArchive('yt-dlp', target.ytDlp, cacheRoot, dependencies.fetch ?? fetch);
-    const denoArchive = await verifiedArchive('deno', target.deno, cacheRoot, dependencies.fetch ?? fetch);
+    const [ytArchive, denoArchive] = cachedArchives ?? [await archive('yt-dlp', target.ytDlp), await archive('deno', target.deno)];
     const stage = await mkdtemp(path.join(outputDir, '.runtime-install-'));
     try {
       const extract = dependencies.extractZip ?? extractZip;
@@ -119,10 +132,11 @@ function withoutFiles(manifest) {
   return header;
 }
 
+function archiveName(name, pin) { return `${name}-${pin.sha256}.zip`; }
+
 async function verifiedArchive(name, pin, cacheRoot, request) {
-  const destination = path.join(cacheRoot, `${name}-${pin.sha256}.zip`);
+  const destination = path.join(cacheRoot, archiveName(name, pin));
   if (await exists(destination) && await fileSha256(destination) === pin.sha256) return destination;
-  await rm(destination, { force: true });
   const staging = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     const response = await request(pin.url, { redirect: 'follow' });
@@ -131,7 +145,11 @@ async function verifiedArchive(name, pin, cacheRoot, request) {
     await pipeline(Readable.fromWeb(response.body), createWriteStream(staging, { flags: 'wx' }));
     const actual = await fileSha256(staging);
     if (actual !== pin.sha256) throw new Error(`Runtime dependency checksum mismatch for ${pin.url}: expected ${pin.sha256}, got ${actual}.`);
-    await rename(staging, destination);
+    try { await rename(staging, destination); }
+    catch (error) {
+      // Windows refuses to replace a file another checkout is reading; that file is already the pinned bytes.
+      if (!await exists(destination) || await fileSha256(destination) !== pin.sha256) throw error;
+    }
     return destination;
   } finally {
     await rm(staging, { force: true });
@@ -228,7 +246,7 @@ async function withLock(lockPath, work) {
   try {
     await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`, { flag: 'wx' });
   } catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another runtime dependency preparation owns ${lockPath}.`);
+    if (error.code === 'EEXIST') throw new Error(`Another runtime dependency installation owns ${lockPath}.`);
     throw error;
   }
   try { return await work(); }

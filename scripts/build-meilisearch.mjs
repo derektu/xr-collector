@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { normalizeArch, probePhysicalHost } from './physical-host.mjs';
+import { runtimeCacheMiss, runtimeCacheRoot } from './runtime-cache.mjs';
 
 const exec = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -204,6 +205,12 @@ export async function transactionalReplacePair({
   }
 }
 
+/**
+ * Builds the pinned Chinese Meilisearch into the per-user runtime cache (keyed by recipe
+ * fingerprint and target) and installs it into the checkout's `resources/bin`. With `cacheOnly`
+ * it neither fetches source nor runs Cargo: the cached binary and manifest must already match the
+ * recipe, toolchain and target, and the cache is only read.
+ */
 export async function buildMeilisearch(options = {}, dependencies = {}) {
   const run = dependencies.run ?? runCommand;
   const hashFile = dependencies.fileSha256 ?? fileSha256;
@@ -224,7 +231,7 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
   if (!cargo.stdout.startsWith(`cargo 1.91.1 `)) throw new Error(`Cargo from Rust ${recipe.rustVersion} is required; got ${cargo.stdout.trim()}.`);
   const fingerprint = recipeFingerprint(recipe, target, rustc);
   const recipeDirectory = `recipe-${recipe.recipeRevision}-${fingerprint.slice(0, 12)}`;
-  const cacheRoot = options.cacheRoot ?? path.join(projectRoot, '.local', 'runtime-builds', 'meilisearch');
+  const cacheRoot = options.cacheRoot ?? path.join(runtimeCacheRoot(), 'meilisearch');
   const entry = path.join(cacheRoot, recipeDirectory, target.id);
   const sourceDir = path.join(entry, 'source');
   // cc/MSVC still limits object paths even when Git can check out long snapshot filenames.
@@ -232,13 +239,19 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
   const cargoTargetDir = path.join(cacheRoot, 't', fingerprint.slice(0, 16));
   const cachedBinary = path.join(entry, 'artifact', target.executable);
   const cachedManifestPath = path.join(entry, 'artifact', 'meilisearch-build.json');
-  await mkdir(entry, { recursive: true });
-  return withBuildLock(path.join(entry, '.build.lock'), async () => {
-    await ensureSource({ sourceDir, recipe, run });
-    await verifySource({ sourceDir, recipe, run, hashFile });
-    const charabiaOverride = dependencies.charabiaOverridePath
-      ?? await prepareCharabiaOverride({ recipe, cacheRoot, run, hashFile, request: dependencies.fetch ?? fetch });
-    await assertControlledCargoConfiguration(sourceDir, inheritedEnvironment, run);
+  if (!options.cacheOnly) await mkdir(entry, { recursive: true });
+  // Cache-only readers validate the binary and manifest pair themselves, so they take no build lock
+  // and never block a build of the same recipe in another checkout.
+  const ownCacheEntry = options.cacheOnly ? (work) => work() : (work) => withBuildLock(path.join(entry, '.build.lock'), work);
+  return ownCacheEntry(async () => {
+    let charabiaOverride = null;
+    if (!options.cacheOnly) {
+      await ensureSource({ sourceDir, recipe, run });
+      await verifySource({ sourceDir, recipe, run, hashFile });
+      charabiaOverride = dependencies.charabiaOverridePath
+        ?? await prepareCharabiaOverride({ recipe, cacheRoot, run, hashFile, request: dependencies.fetch ?? fetch });
+      await assertControlledCargoConfiguration(sourceDir, inheritedEnvironment, run);
+    }
     const base = { recipe, target, fingerprint, rustc, cargoVersion: cargo.stdout.trim(), environment };
     let binary;
     let manifest = await readJson(cachedManifestPath);
@@ -249,6 +262,9 @@ export async function buildMeilisearch(options = {}, dependencies = {}) {
         const expected = expectedManifestFields({ ...base, binary });
         cacheHit = manifestMatches(manifest, expected) && await hashFile(cachedBinary) === manifest.binary.sha256;
       } catch { cacheHit = false; }
+    }
+    if (!cacheHit && options.cacheOnly) {
+      throw runtimeCacheMiss(`Chinese Meilisearch recipe ${recipe.recipeRevision} for ${target.id}`, path.dirname(cachedBinary), target.id, 'chinese');
     }
     if (!cacheHit) {
       await mkdir(cargoTargetDir, { recursive: true });

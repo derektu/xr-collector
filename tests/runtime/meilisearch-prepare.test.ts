@@ -91,6 +91,24 @@ describe('Meilisearch runtime preparation', () => {
     });
   });
 
+  it('installs the official asset from the cache in cache-only mode and never downloads', async () => {
+    const at = await root();
+    const binary = machoArm64();
+    const pins = fixturePins(binary);
+    const cacheRoot = path.join(at, 'cache');
+    const noDownload = vi.fn(async () => { throw new Error('cache-only mode must not download'); });
+    const cacheOnly = (runtimeRoot: string) => prepareMeilisearch({ variant: 'official', target: 'darwin-arm64', environment, cacheRoot, runtimeRoot, cacheOnly: true },
+      { fetch: noDownload, pins, run: versionRun });
+    await expect(cacheOnly(path.join(at, 'checkout-a'))).rejects.toThrow(/Official Meilisearch 1\.53\.2 for darwin-arm64 is missing from the runtime cache.*npm run prepare:runtime -- mac --variant official first/u);
+    await prepareMeilisearch({ variant: 'official', target: 'darwin-arm64', environment, cacheRoot, runtimeRoot: path.join(at, 'checkout-a') },
+      { fetch: vi.fn(async () => new Response(binary)), pins, run: versionRun });
+    const installed = await cacheOnly(path.join(at, 'checkout-b'));
+    expect(installed).toMatchObject({ cacheHit: true });
+    expect(await readFile(installed.binaryPath)).toEqual(binary);
+    expect(noDownload).not.toHaveBeenCalled();
+    expect(parsePrepareArguments(['--variant', 'official', '--cache-only'])).toEqual({ variant: 'official', cacheOnly: true });
+  });
+
   it('rejects unsupported official Mac x64 before downloading and preserves the installed pair', async () => {
     const at = await root();
     const runtimeRoot = path.join(at, 'runtime');

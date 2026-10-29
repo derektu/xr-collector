@@ -146,14 +146,34 @@ Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolch
 
 正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
 
-Mac 正式候選另以 `--mac-signing-mode developer-id-notarized --mac-signing-env <absolute-env> --mac-signing-root <absolute-root>` 明確啟用 Developer ID 模式。env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；兩個檔案路徑都相對 signing root，env、p12、p8 必須只允許 owner 讀取。流程以專用 temporary keychain 找到該 p12 唯一且 Team 相符的 identity。因 macOS `codesign --keychain` 仍要求 identity 所在 keychain 可被搜尋，流程在保留既有順序下把自己建立的 keychain 暫時 append 到目前 user search list；正常清理由 `delete-keychain` 移除自己的 keychain，若該命令失敗，fallback 只從當下清單刪除自己的 entry，保留其他 session 同時加入的項目，並讓整次建置以包含主錯與清理錯的診斷失敗，不用舊 snapshot 覆蓋新變更。builder child 不取得 App Store Connect key。它先產 App、簽署 staged runtime、驗 Developer ID Team／hardened runtime／entitlements、送 App 公證並 staple，再由同一 App 產 ZIP／DMG、送 DMG 公證並 staple。notary submit 後立即用 upload SHA、Team 與用途保存 submission ID；中斷後只續查同一 submission，不能盲目重送。`Accepted`、零 issues、staple 與 OS policy gate 全部成立才交接。這些自動 gate 不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。
+**簽章與公證的使用時機**：每次 Developer ID 建置都要送 Apple 公證兩次並等待結果，成本高，只花在最終發布候選上。
+
+- 開發與反覆驗收，包括功能、更新流程 A→B 與兩平台安裝 smoke，一律使用 Mac ad-hoc 包與 Windows 未簽署包，不使用 `--mac-signing-mode developer-id-notarized`。
+- Developer ID 簽章與公證（App 與 DMG 各公證一次）只用於最終發布候選：其他驗收全部通過、使用者確認要建置發布候選之後才執行。
+- 發布候選建置後需要修改程式時，修正先以 ad-hoc／未簽署包驗收，確認後再重建正式候選。
+- 例外：修改簽章、公證或打包流程本身的票，以一次 Developer ID 實跑驗證該流程。
+
+Mac 正式候選另以 `--mac-signing-mode developer-id-notarized --mac-signing-env <absolute-env> --mac-signing-root <absolute-root>` 明確啟用 Developer ID 模式。env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；兩個檔案路徑都相對 signing root，env、p12、p8 必須只允許 owner 讀取。流程以專用 temporary keychain 找到該 p12 唯一且 Team 相符的 identity。因 macOS `codesign --keychain` 仍要求 identity 所在 keychain 可被搜尋，流程在保留既有順序下把自己建立的 keychain 暫時 append 到目前 user search list；正常清理由 `delete-keychain` 移除自己的 keychain，若該命令失敗，fallback 只從當下清單刪除自己的 entry，保留其他 session 同時加入的項目，並讓整次建置以包含主錯與清理錯的診斷失敗，不用舊 snapshot 覆蓋新變更。builder child 不取得 App Store Connect key。Mac Developer ID 產物依下列順序建置與檢查，每份產物只做一次完整檢查：
+
+1. electron-builder `--dir` 產 App；afterPack 簽署 staged runtime，再以 Developer ID 簽署 App。
+2. 公證前對 App 跑完整 Developer ID gate：Team、hardened runtime、entitlements、sealed resources 與 signed runtime inventory。
+3. App 只送公證一次：以 `ditto` 壓成上傳用 ZIP，`notarytool submit` 後立即用 upload SHA、Team 與用途保存 submission ID，再等待結果並取回 log；中斷後只續查同一 submission，不能盲目重送。`Accepted`、零 issues 才 `stapler staple` 並 `stapler validate` App。
+4. 對已 staple 的 App 跑完整 Developer ID gate、`syspolicy_check distribution` 與 `spctl --assess --type execute`；這份 App 的 identity 記為 App 收據的 `stapled`。
+5. electron-builder 以 `--prepackaged` 由已 staple 的 App 一次產出 DMG 與 ZIP。
+6. DMG 只送公證一次：直接上傳 DMG 本身，與 App 共用同一套 submission 保存、續查與收據規則；`Accepted`、零 issues 才 `stapler staple` 並 `stapler validate` DMG。DMG 收據的 `stapled` 是最終 DMG 的 bytes。
+7. DMG gate：`codesign --verify --strict` 與 Team，並以 `spctl --assess --type open --context context:primary-signature -vv` 評估；該命令 exit code 非零，或 `source=` 不是 `Notarized Developer ID`，即失敗。`source=` 行印在 log。
+8. 唯讀掛載 DMG，其中唯一的 App bytes 必須等於 `stapled`，並對它跑 `stapler validate`、`syspolicy_check distribution` 與 `spctl --assess --type execute` 各一次。
+9. 以 `ditto` 解開 ZIP，其中唯一的 App 做與第 8 步相同的比對與檢查。
+10. 讀回 `release/mac-arm64` 的 App：bytes 必須等於 `stapled`，再核對 BuildInfo、runtime 與 resources；步驟 2、4 已驗過相同 bytes，不重跑 Developer ID gate。
+
+這些自動 gate 不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。
 
 ```bash
 npm run package:mac -- --mac-signing-mode developer-id-notarized --mac-signing-env /absolute/signing/root/.env --mac-signing-root /absolute/signing/root
 npm run package:mac:official -- --mac-signing-mode developer-id-notarized --mac-signing-env /absolute/signing/root/.env --mac-signing-root /absolute/signing/root
 ```
 
-Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。publisher 也必須對 DMG 及完整解開的 ZIP 重跑相同 identity、公證與 runtime gate。
+Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。publisher 也必須重驗 DMG 的公證收據與 `Notarized Developer ID` 來源，並對 DMG 內及完整解開的 ZIP 內的 App 重跑相同 identity、公證與 runtime gate。
 
 GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的中文測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
 

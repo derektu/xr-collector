@@ -10,7 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { inspectExecutable } from './build-meilisearch.mjs';
 import { verifyMacBundleSignature, verifySignedMacDmgContents } from './package-app.mjs';
-import { DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage } from './mac-signing.mjs';
+import { DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, validateNotarizedApplication, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage } from './mac-signing.mjs';
 import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
 import { noStageTimer } from './stage-timings.mjs';
 
@@ -71,17 +71,16 @@ export async function planReleaseCandidate(options, dependencies = {}) {
       if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY) {
         const dmg = artifacts.find((artifact) => artifact.basename.endsWith('.dmg'));
         const verifyDmg = dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage;
-        const validateDmg = dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact;
         const inspectDmg = dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents;
-        await candidateTimer.time('verify: DMG Developer ID signature', () => verifyDmg(dmg.path, manifest.signing.teamId));
-        await candidateTimer.group('verify: DMG notarization and Gatekeeper', (child) => validateDmg(dmg.path, 'dmg', { timer: child }));
-        if (!sameFileIdentity(dmg, manifest.signing.actualVerification.dmg.stapled)) throw new Error('Final DMG bytes differ from the notarization receipt.');
+        // The DMG is notarized and stapled itself; the App inside it must be the stapled App.
+        if (!sameFileIdentity(dmg, manifest.signing.actualVerification.dmg.stapled)) throw new Error('Final DMG bytes differ from the DMG notarization receipt.');
+        await candidateTimer.group('verify: DMG Developer ID, notarization and Gatekeeper', (child) => verifyDmg(dmg.path, manifest.signing.teamId, { timer: child }));
         const dmgInspection = await candidateTimer.group('verify: DMG contents', (child) => inspectDmg(dmg.path, manifest.packageIdentity.productName, manifest.signing.teamId, { timer: child }));
-        if (!isDeepStrictEqual(dmgInspection.appIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
+        if (!isDeepStrictEqual(dmgInspection.appIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('DMG App identity differs from the stapled App receipt.');
       }
       const inspected = await candidateTimer.group(`inspect update payload ${primary.basename}`, (child) => inspect(primary.path, manifest.target, manifest.packageIdentity, { signing: manifest.signing, timer: child }));
       if (manifest.target === 'darwin-arm64' && manifest.signing.policy === DEVELOPER_ID_POLICY
-        && !isDeepStrictEqual(inspected.notarizedAppIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
+        && !isDeepStrictEqual(inspected.notarizedAppIdentity, manifest.signing.actualVerification.app.stapled)) throw new Error('ZIP App identity differs from the stapled App receipt.');
       await validateInspectedIdentity(inspected, manifest);
       candidates.push({ key, manifestPath: item.manifestPath, manifest, artifacts, acceptance: acceptanceRecord, inspected });
     });
@@ -219,7 +218,7 @@ async function extractMacApplication(payload, root, productName, dependencies = 
   const appPath = path.join(root, `${productName}.app`);
   if (dependencies.signing?.policy === DEVELOPER_ID_POLICY) {
     await timer.group('App Developer ID', (child) => (dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication)(appPath, dependencies.signing.teamId, { timer: child }));
-    await timer.group('App notarization and Gatekeeper', (child) => (dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact)(appPath, 'app', { timer: child }));
+    await timer.group('App notarization and Gatekeeper', (child) => (dependencies.validateNotarizedApplication ?? validateNotarizedApplication)(appPath, { timer: child }));
   } else await timer.time('codesign --verify --deep --strict', () => (dependencies.verifyMacBundle ?? verifyMacBundleSignature)(appPath));
   return appPath;
 }
@@ -311,7 +310,7 @@ function validateNotaryReceipt(receipt, kind, teamId, key) {
     || !/^[0-9a-f-]{36}$/iu.test(receipt.submissionId ?? '') || receipt.status !== 'Accepted'
     || receipt.issues !== 0 || receipt.stapleValidated !== true || !/^[0-9a-f]{64}$/u.test(receipt.logSha256 ?? '')
     || !validFileIdentity(receipt.submitted) || !validFileIdentity(receipt.stapled)) {
-    throw new Error(`Developer ID ${kind} notarization receipt is invalid for ${key}.`);
+    throw new Error(`Developer ID ${kind === 'app' ? 'App' : 'DMG'} notarization receipt is invalid for ${key}.`);
   }
 }
 
