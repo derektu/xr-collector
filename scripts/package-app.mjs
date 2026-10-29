@@ -16,7 +16,7 @@ import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import { BUILDER_TIMINGS_ENV, createStageTimer, noStageTimer, recordBuilderTimings, runWithTimingReport } from './stage-timings.mjs';
 import {
   DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
-  signedBuilderEnvironment, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
+  runCaptured, signedBuilderEnvironment, validateNotarizedArtifact, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
   withTemporarySigningKeychain,
 } from './mac-signing.mjs';
 
@@ -92,6 +92,10 @@ export async function packageApplication(options, dependencies = {}) {
     const buildLifecycleRun = (command, args, runOptions = {}) => lifecycleRun(command, args, {
       ...runOptions, processTrackers: runOptions.processTrackers ?? buildProcessTrackers,
     });
+    // Verifiers parse codesign, spctl and stapler output, so they get a runner that captures it.
+    const verifyRun = (command, args) => (dependencies.runCaptured ?? runCaptured)(command, args, {
+      signal, processTracker, processTrackers: buildProcessTrackers,
+    });
     const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
     const version = options.validationVersion ?? packageJson.version;
     report.version = version;
@@ -134,28 +138,28 @@ export async function packageApplication(options, dependencies = {}) {
       const appPath = path.join(outputDir, 'mac-arm64', `${productName}.app`);
       const verifyApp = dependencies.verifyDeveloperIdApplication ?? verifyDeveloperIdApplication;
       const validateNotarized = dependencies.validateNotarizedArtifact ?? validateNotarizedArtifact;
-      await timer.group('verify: App Developer ID before notarization', (child) => verifyApp(appPath, signingConfiguration.teamId, { run: buildLifecycleRun, timer: child }));
+      await timer.group('verify: App Developer ID before notarization', (child) => verifyApp(appPath, signingConfiguration.teamId, { run: verifyRun, timer: child }));
       const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', `${version}-${options.variant}`);
       const app = await timer.group('notarize: App', (child) => (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
         kind: 'app', artifactPath: appPath, credentials: signingConfiguration.notary, evidenceDirectory,
       }, { signal, processTrackers: signingContext.processTrackers, timer: child }));
       signal.throwIfAborted();
-      await timer.group('verify: App Developer ID after staple', (child) => verifyApp(appPath, signingConfiguration.teamId, { run: buildLifecycleRun, timer: child }));
-      await timer.group('verify: App notarization and Gatekeeper', (child) => validateNotarized(appPath, 'app', { run: buildLifecycleRun, timer: child }));
+      await timer.group('verify: App Developer ID after staple', (child) => verifyApp(appPath, signingConfiguration.teamId, { run: verifyRun, timer: child }));
+      await timer.group('verify: App notarization and Gatekeeper', (child) => validateNotarized(appPath, 'app', { run: verifyRun, timer: child }));
       const secondArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, identityOverride];
       await timeElectronBuilder(timer, 'electron-builder --prepackaged (ZIP, signed DMG)', { signedAfterPack: true },
         (hookArgs, hookEnvironment) => buildLifecycleRun(process.execPath, [electronBuilderCli, ...secondArgs, ...hookArgs], { environment: { ...builderEnvironment, ...hookEnvironment } }));
       const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
       const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
-      const zipInspection = await timer.group('verify: ZIP contents', (child) => (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun, timer: child }));
+      const zipInspection = await timer.group('verify: ZIP contents', (child) => (dependencies.verifySignedMacZip ?? verifySignedMacZip)(zipPath, productName, signingConfiguration.teamId, { run: verifyRun, timer: child }));
       if (JSON.stringify(zipInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('ZIP App identity differs from the notarized App receipt.');
       const dmg = await timer.group('notarize: DMG', (child) => (dependencies.notarizeAndStaple ?? notarizeAndStaple)({
         kind: 'dmg', artifactPath: dmgPath, credentials: signingConfiguration.notary, evidenceDirectory,
       }, { signal, processTrackers: signingContext.processTrackers, timer: child }));
       signal.throwIfAborted();
-      await timer.time('verify: DMG Developer ID signature', () => (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId, { run: buildLifecycleRun }));
-      await timer.group('verify: DMG notarization and Gatekeeper', (child) => validateNotarized(dmgPath, 'dmg', { run: buildLifecycleRun, timer: child }));
-      const dmgInspection = await timer.group('verify: DMG contents', (child) => (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId, { run: buildLifecycleRun, timer: child }));
+      await timer.time('verify: DMG Developer ID signature', () => (dependencies.verifyDeveloperIdDiskImage ?? verifyDeveloperIdDiskImage)(dmgPath, signingConfiguration.teamId, { run: verifyRun }));
+      await timer.group('verify: DMG notarization and Gatekeeper', (child) => validateNotarized(dmgPath, 'dmg', { run: verifyRun, timer: child }));
+      const dmgInspection = await timer.group('verify: DMG contents', (child) => (dependencies.verifySignedMacDmgContents ?? verifySignedMacDmgContents)(dmgPath, productName, signingConfiguration.teamId, { run: verifyRun, timer: child }));
       if (JSON.stringify(dmgInspection.appIdentity) !== JSON.stringify(app.stapled)) throw new Error('DMG App identity differs from the notarized App receipt.');
       signingReceipt = {
         policy: DEVELOPER_ID_POLICY,
@@ -173,7 +177,7 @@ export async function packageApplication(options, dependencies = {}) {
     const expected = { commit, version, target: options.target, variant: options.variant,
       ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
-    const verified = await timer.group('verify: packaged App (BuildInfo, runtime, resources)', (child) => verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId }, { run: buildLifecycleRun, timer: child }));
+    const verified = await timer.group('verify: packaged App (BuildInfo, runtime, resources)', (child) => verifyPackagedApplication({ outputDir, ...expected, signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId }, { run: verifyRun, timer: child }));
     const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
     const { host, toolVersions } = await timer.time('read host and tool versions', async () => ({
       host: await probeHost(),

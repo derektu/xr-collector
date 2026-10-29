@@ -40,11 +40,12 @@ it('requires an explicit complete Developer ID mode only for Mac packaging', () 
     '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toThrow(/requires Mac target plus/u);
 });
 
-it('passes both checkout and signing-session trackers to the real signed package builder and verifier path', async () => {
+it('gives the signed verifier a runner that captures output and carries both checkout and signing-session trackers', async () => {
   const outerTracker = { name: 'checkout' };
   const sessionTracker = { name: 'signing-session' };
   const processTrackers = [outerTracker, sessionTracker];
   const calls: Array<{ command: string; args: string[]; options: any }> = [];
+  let verifierOutput: unknown;
   const previousNpmExecPath = process.env.npm_execpath;
   process.env.npm_execpath = process.execPath;
   try {
@@ -67,12 +68,14 @@ it('passes both checkout and signing-session trackers to the real signed package
       probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
-      run: async (command: string, args: string[], options: any) => {
+      // Like the real runner, the build runner streams output and resolves without it.
+      run: async (command: string, args: string[], options: any) => { calls.push({ command, args, options }); },
+      runCaptured: async (command: string, args: string[], options: any) => {
         calls.push({ command, args, options });
-        return { stdout: '', stderr: '' };
+        return { stdout: '', stderr: 'Authority=Developer ID Application' };
       },
       verifyDeveloperIdApplication: async (_app: string, _team: string, dependencies: any) => {
-        await dependencies.run('fixture-signed-verifier', []);
+        verifierOutput = await dependencies.run('fixture-signed-verifier', []);
         throw stopped;
       },
       timingReportDirectory: await temporaryRoot('xr-package-timings-'),
@@ -82,6 +85,7 @@ it('passes both checkout and signing-session trackers to the real signed package
     const verifier = calls.find((call) => call.command === 'fixture-signed-verifier');
     expect(builder?.options.processTrackers).toEqual(processTrackers);
     expect(verifier?.options.processTrackers).toEqual(processTrackers);
+    expect(verifierOutput).toEqual({ stdout: '', stderr: 'Authority=Developer ID Application' });
   } finally {
     if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
     else process.env.npm_execpath = previousNpmExecPath;
