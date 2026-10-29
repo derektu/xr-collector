@@ -78,14 +78,35 @@ describe('tray menu (#32 T1)', () => {
     expect(status(queuedOnly)).toEqual(['排隊中 1 項']);
   });
 
-  it('says the device has no network above the work and the next check (#128)', () => {
+  it('shows the offline icon and says what resumes once the network is back (#128, #179)', () => {
     const offline = { state: 'offline' as const, checkedAt: '2026-10-24T02:20:00.000Z' };
-    expect(status(trayMenu({ overview: overview(), schedule: schedule({ connectivity: offline }) }, now)))
-      .toEqual(['目前沒有網路', '沒有進行中的工作', '下次檢查 18:52']);
+    const idle = trayMenu({ overview: overview(), schedule: schedule({ connectivity: offline }) }, now);
+    expect(idle).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
+    expect(status(idle)).toEqual(['目前沒有網路', '恢復後自動檢查']);
+    const off = trayMenu({ overview: overview(), schedule: schedule({ enabled: false, connectivity: offline }) }, now);
+    expect(off).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
+    expect(status(off)).toEqual(['目前沒有網路', '自動檢查已關閉']);
     const running = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
-    const menu = trayMenu({ overview: overview({ running: [running] }), schedule: schedule({ connectivity: offline }) }, now);
-    expect(status(menu)).toEqual(['目前沒有網路', '正在收集：Acquired　3/10']);
-    expect(actions(menu)).toContain('立即檢查所有訂閱');
+    const waiting = trayMenu({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule({ connectivity: offline }) }, now);
+    expect(waiting).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
+    expect(status(waiting)).toEqual(['目前沒有網路', '3 項工作等待中，恢復後自動接續']);
+    expect(actions(waiting)).toContain('立即檢查所有訂閱');
+    const back = trayMenu({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule() }, now);
+    expect(back).toMatchObject({ icon: 'collecting', tooltip: 'XR Collector・收集中 3/10' });
+    expect(status(back)).toEqual(['正在收集：Acquired　3/10', '排隊中 2 項']);
+  });
+
+  it('ranks offline below attention and above an available update, without an update badge (#179)', () => {
+    const offline = schedule({ connectivity: { state: 'offline', checkedAt: '2026-10-24T02:20:00.000Z' } });
+    const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
+    const withAttention = trayMenu({ overview: overview({ queued: [entry({})] }), schedule: offline, actionable: [alert('a', 'A')], update: offered }, now);
+    expect(withAttention).toMatchObject({ icon: 'attention', tooltip: 'XR Collector・1 個訂閱需要處理・沒有網路' });
+    expect(withAttention.updateBadge).toBeUndefined();
+    expect(status(withAttention).slice(0, 2)).toEqual(['目前沒有網路', '1 項工作等待中，恢復後自動接續']);
+    const withUpdate = trayMenu({ overview: overview(), schedule: offline, updateAvailable: true, update: offered }, now);
+    expect(withUpdate).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
+    expect(withUpdate.updateBadge).toBeUndefined();
+    expect(actions(withUpdate)).toContain('App 更新：可下載 0.1.1');
   });
 
   it('counts failed work on the jobs item', () => {

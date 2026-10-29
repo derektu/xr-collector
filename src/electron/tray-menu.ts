@@ -1,8 +1,12 @@
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../core/types.js';
 import type { AutoPauseNotification } from '../notifications/types.js';
 
-/** The three tray icons: nothing to do, work queued or running, automatic checks off. */
-export type TrayIcon = 'idle' | 'collecting' | 'auto_check_off' | 'attention' | 'update_available';
+/**
+ * The tray icon states, highest priority first: subscriptions need attention, the device has no
+ * network, an App update is available, then the work state (work queued or running, nothing to do,
+ * automatic checks off).
+ */
+export type TrayIcon = 'attention' | 'offline' | 'update_available' | 'collecting' | 'idle' | 'auto_check_off';
 
 /** What the menu acts on; the menu's own items use these as their ids. */
 export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'check_app_update' | 'quit'
@@ -50,18 +54,11 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
   }, state.update);
   const { overview, schedule } = state;
   const [current] = overview.running;
-  const busy = overview.running.length > 0 || overview.queued.length > 0;
-  const status: string[] = [];
-  if (schedule.connectivity.state === 'offline') status.push('目前沒有網路');
-  if (current) status.push(runningLine(current));
-  if (overview.queued.length > 0) status.push(`排隊中 ${overview.queued.length} 項`);
-  if (!busy) {
-    status.push('沒有進行中的工作');
-    if (!schedule.enabled) status.push('自動檢查已關閉');
-    else if (schedule.nextCheck) status.push(`下次檢查 ${clockLabel(schedule.nextCheck.at, now)}`);
-  }
-  const operational: TrayIcon = busy ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
-  const icon: TrayIcon = actionable.length > 0 ? 'attention' : state.updateAvailable ? 'update_available' : operational;
+  const waiting = overview.running.length + overview.queued.length;
+  const offline = schedule.connectivity.state === 'offline';
+  const status = offline ? offlineLines(waiting, schedule.enabled) : workLines(overview, schedule, now);
+  const operational: TrayIcon = offline ? 'offline' : waiting > 0 ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
+  const icon: TrayIcon = actionable.length > 0 ? 'attention' : !offline && state.updateAvailable ? 'update_available' : operational;
   const failed = overview.failed.length;
   return withUpdateBadge({
     icon,
@@ -83,9 +80,28 @@ export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayM
   }, state.update);
 }
 
+/** While offline the menu says what resumes once the network is back, not what is running. */
+function offlineLines(waiting: number, autoCheck: boolean): string[] {
+  if (waiting > 0) return ['目前沒有網路', `${waiting} 項工作等待中，恢復後自動接續`];
+  return ['目前沒有網路', autoCheck ? '恢復後自動檢查' : '自動檢查已關閉'];
+}
+
+function workLines(overview: JobOverview, schedule: CollectionScheduleView, now: Date): string[] {
+  const [current] = overview.running;
+  const lines: string[] = [];
+  if (current) lines.push(runningLine(current));
+  if (overview.queued.length > 0) lines.push(`排隊中 ${overview.queued.length} 項`);
+  if (overview.running.length === 0 && overview.queued.length === 0) {
+    lines.push('沒有進行中的工作');
+    if (!schedule.enabled) lines.push('自動檢查已關閉');
+    else if (schedule.nextCheck) lines.push(`下次檢查 ${clockLabel(schedule.nextCheck.at, now)}`);
+  }
+  return lines;
+}
+
 function withUpdateBadge(menu: TrayMenu, update: DeviceUpdateStatus | undefined): TrayMenu {
   const version = (update?.ready ?? update?.offer)?.version;
-  if (menu.icon === 'attention' || menu.icon === 'update_available' || !version || version === update?.currentVersion) return menu;
+  if (['attention', 'offline', 'update_available'].includes(menu.icon) || !version || version === update?.currentVersion) return menu;
   return { ...menu, updateBadge: true, tooltip: `${menu.tooltip} · 有新版本 ${version}` };
 }
 
@@ -128,12 +144,14 @@ function runningLine(entry: JobOverviewEntry): string {
 }
 
 function tooltipFor(icon: TrayIcon, current: JobOverviewEntry | undefined): string {
+  if (icon === 'offline') return 'XR Collector・沒有網路';
   if (icon === 'auto_check_off') return 'XR Collector・自動檢查已關閉';
   if (icon !== 'collecting') return 'XR Collector';
   return current?.progress ? `XR Collector・收集中 ${current.progress.done}/${current.progress.total}` : 'XR Collector・收集中';
 }
 
 function operationalLabel(icon: TrayIcon, current: JobOverviewEntry | undefined): string {
+  if (icon === 'offline') return '沒有網路';
   if (icon === 'auto_check_off') return '自動檢查已關閉';
   if (icon === 'collecting') return current?.progress ? `收集中 ${current.progress.done}/${current.progress.total}` : '收集中';
   return '沒有進行中的工作';
