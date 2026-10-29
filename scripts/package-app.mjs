@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
+import { assertBuildEnvironment } from './build-doctor.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
@@ -103,7 +104,7 @@ export async function packageApplication(options, dependencies = {}) {
     const electronBuilderCli = path.join(projectRoot, 'node_modules/electron-builder/cli.js');
     await stat(npmCli);
     await stat(electronBuilderCli);
-    await timer.time('check host target', () => assertHostTarget(options.target, probeHost));
+    await timer.time('check build environment', () => (dependencies.assertBuildEnvironment ?? assertBuildEnvironment)({ target: options.target, variant: options.variant }));
     const targetArg = options.target === 'darwin-arm64' ? 'mac' : 'win';
     // Packaging installs runtimes only from the per-user cache; `npm run prepare:runtime` fills it.
     await timer.time(`runtime: install yt-dlp/Deno and Meilisearch ${options.variant} from cache`, () => buildLifecycleRun(process.execPath, [
@@ -532,12 +533,6 @@ function manifestVariant(manifest) {
   if (manifest.distribution === 'official') return 'official';
   if (manifest.distribution === undefined && JSON.stringify(manifest.features) === JSON.stringify(['chinese'])) return 'chinese';
   return null;
-}
-
-export async function assertHostTarget(target, probe) {
-  const host = await probe();
-  if (target === 'darwin-arm64' && !(host.platform === 'darwin' && host.hostArch === 'arm64' && host.processArch === 'arm64')) throw new Error('darwin-arm64 packages require a native Apple Silicon process and host.');
-  if (target === 'win32-x64' && !(host.platform === 'win32' && host.processArch === 'x64')) throw new Error('win32-x64 packages require an x64 Windows process; x64 emulation on ARM64 is recorded in the artifact manifest.');
 }
 
 function npmCliPath() {

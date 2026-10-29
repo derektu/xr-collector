@@ -34,11 +34,10 @@ XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者
 
 需求：
 
-- Node.js 22.12 或更新版本
-- npm
+- Node.js：`.nvmrc` 釘住的版本，以及 npm
 - Git，以及 rustup 安裝的 Rust 1.91.1（準備預設的中文精簡 Meilisearch 或建置預設安裝包時需要；官方完整引擎安裝包不從 source build；安裝後的 App 都不需要 Rust）
-- source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 MSVC Build Tools 與可用的本機 PowerShell/CIM；第一次執行需連線抓取固定 source 與 Cargo dependencies
-- 下列 Web 開發範例以 macOS arm64 為準；交付平台為 Mac arm64 與 Windows x64。Mac 安裝包在使用者的 Apple Silicon Mac 建置；Windows 安裝包在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置，產物與驗證證據如實標示 ARM64 host 及 emulated x64 process
+- source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 Visual Studio 2022 Build Tools 的「使用 C++ 的桌面開發」（MSVC x64 工具與 Windows SDK）及可用的本機 PowerShell/CIM；第一次執行需連線抓取固定 source 與 Cargo dependencies
+- 下列 Web 開發範例以 macOS arm64 為準；安裝包的建置見 [建置機](#建置機)
 
 安裝套件：
 
@@ -48,6 +47,32 @@ npm ci
 npm run prepare:runtime -- mac
 # Windows 改用 npm run prepare:runtime -- win；official 引擎加 --variant official
 ```
+
+### 建置機
+
+交付平台為 Mac arm64 與 Windows x64，各平台在自己的機器上建置，不跨平台編譯：Mac 安裝包在 Apple Silicon Mac 建置，Windows 安裝包在 x64 Windows 建置。clone 後依序執行：
+
+```bash
+npm ci
+npm run doctor:build
+npm run prepare:runtime -- mac
+npm run prepare:runtime -- mac --variant official
+npm run package:mac
+```
+
+Windows 把 `mac` 換成 `win`。`npm run doctor:build` 依目前平台逐項檢查建置本平台 Chinese 與 official 安裝包的條件，標示 `ok`、`missing`（附安裝方式）或 `note`，任一項 `missing` 時以非零結束：
+
+| 項目 | Mac | Windows |
+| --- | --- | --- |
+| Host | Apple Silicon 上的 arm64 Node | x64 Node；ARM64 硬體上的 x64 模擬標為 `note` |
+| Node／npm／Git | Node 主版本符合 `.nvmrc`（patch 不同標為 `note`），經 npm script 執行，Git 可用 | 同左 |
+| npm 套件 | 已執行 `npm ci` | 同左 |
+| Rust | rustup 與 Rust 1.91.1，host 為 `aarch64-apple-darwin` | rustup 與 Rust 1.91.1，host 為 `x86_64-pc-windows-msvc` |
+| 平台工具 | Xcode Command Line Tools（`clang`、`swiftc`） | MSVC x64 build tools、含 x64 程式庫的 Windows SDK，以及 official 包附帶、與 pin 相符的 `vcruntime140.dll` |
+| Runtime cache | 只報告狀態：未準備時列出 `prepare:runtime` 指令 | 同左 |
+| Developer ID 簽章 | 只報告狀態：有 `keys/mac/.env` 時檢查設定與檔案權限，沒有時只能建 ad-hoc 包 | 不適用 |
+
+標準 rustup 安裝即可通過檢查，不需要設定 `RUSTUP_HOME`／`CARGO_HOME`。rustup 在 ARM64 Windows 預設安裝 aarch64 host，該機器需改用 `rustup set default-host x86_64-pc-windows-msvc` 後再安裝 1.91.1。`prepare:runtime` 與四個 `package:*` 指令開工前執行同一套檢查（不含 runtime cache 與簽章狀態），缺少必要項時立即停止並列出同樣的修正方式；official 包不需要 Rust，只檢查它用到的項目。VM 與 crabbox 屬於開發者跨平台測試的工具，不在建置流程中。
 
 `npm run prepare:runtime` 把固定的 yt-dlp／Deno archive 與 Meilisearch 準備到使用者層級的 runtime cache，再安裝到本 checkout 的 `resources/bin`。cache 位在 checkout 之外，同一台機器的所有 checkout 與 worktree 共用：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`，可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 覆寫。條目以 pin 的 SHA-256 或 recipe fingerprint 命名，不同 pin 不會共用。`npm run download:runtime`／`download:runtime:win` 等同於 Chinese 引擎的準備指令。App 執行時只使用 `resources/bin`，不讀 cache。
 
@@ -115,7 +140,7 @@ Package 可以未簽章；簽署、公證與憑證整合不構成 #34 的完成�
 
 `npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 runtime cache 的 `meilisearch/` 下驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
 
-正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由使用者的 Mac 產生，Windows x64 產物由指定的 Parallels Windows ARM VM 以 x64 toolchain 產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、從 runtime cache 安裝固定 runtime（打包只讀 cache，不下載也不編譯；缺少或不符 pin／recipe 時失敗並指出要執行的 `npm run prepare:runtime` 指令）、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
+正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由 Mac 建置機產生，Windows x64 產物由 Windows 建置機產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、檢查建置環境、從 runtime cache 安裝固定 runtime（打包只讀 cache，不下載也不編譯；缺少或不符 pin／recipe 時失敗並指出要執行的 `npm run prepare:runtime` 指令）、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
 
 ## 資料保存
 

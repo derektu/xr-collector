@@ -55,10 +55,10 @@ runtime 準備流程明確分兩段：既有 downloader 只處理固定版本的
 
 | 交付目標 | 本機建置環境 | 追加 CI 檢查 | 產物 |
 | --- | --- | --- | --- |
-| Mac arm64 | 使用者 Mac／UTM arm64 VM | `macos-15` | `meilisearch` + manifest |
-| Windows x64 | Parallels Windows ARM VM，x64 toolchain | `windows-2022` | `meilisearch.exe` + manifest |
+| Mac arm64 | Mac 建置機（Apple Silicon） | `macos-15` | `meilisearch` + manifest |
+| Windows x64 | Windows 建置機（x64） | `windows-2022` | `meilisearch.exe` + manifest |
 
-package 與 CI 使用相同 repo builder、固定 source／toolchain／lock。CI 的 `--require-native` 驗證 runner 的實體架構及 API smoke；本機 Windows x64 模擬建置不使用該 native-only gate，manifest 記錄實際 ARM64 host 與 emulated=true。CI artifact 屬額外測試證據，安裝包從使用者電腦建置，#35 從 Mac 上傳同一批已驗收產物。
+package 與 CI 使用相同 repo builder、固定 source／toolchain／lock。CI 的 `--require-native` 驗證 runner 的實體架構及 API smoke；本機建置不使用該 native-only gate；在 ARM64 Windows 上以 x64 模擬建置時，manifest 記錄實際 ARM64 host 與 emulated=true。CI artifact 屬額外測試證據，安裝包從使用者電腦建置，#35 從 Mac 上傳同一批已驗收產物。
 
 兩種引擎都需核對 binary／manifest／版本／架構並跑 API 與 packaged Desktop 驗收；已取得的其他架構研究證據不增加交付平台。安裝包預設未簽署，正式憑證與公證不列本輪門檻。固定 commit 的既有成功結果保留，後續變更只重跑受影響的情境。
 

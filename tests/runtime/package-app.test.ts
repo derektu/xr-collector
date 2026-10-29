@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-import { assertHostTarget, assertPackagedProductMetadata, capture as captureCommandOutput, packageApplication, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, readPackagingProcessIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
+import { assertPackagedProductMetadata, capture as captureCommandOutput, packageApplication, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, readPackagingProcessIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
 
@@ -65,6 +65,7 @@ it('gives the signed verifier a runner that captures output and carries both che
           sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)', teamId: 'ABCDE12345',
         }, signal: dependencies.signal, processTracker: sessionTracker, processTrackers });
       },
+      assertBuildEnvironment: async () => [],
       probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
@@ -102,7 +103,8 @@ function signedPackageDependencies(outputDir: string, overrides: Record<string, 
       keychain: '/tmp/signing.keychain-db', identity: { sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)' },
       signal: dependencies.signal, processTracker: {}, processTrackers: [],
     }),
-    probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
+    assertBuildEnvironment: async () => [],
+      probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
     stageBuildInfoSidecar: async () => undefined,
     clearPreviousArtifactSet: async () => undefined,
     timingReportDirectory: outputDir,
@@ -207,6 +209,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     await expect(packageApplication({ target: 'darwin-arm64', variant: 'official' }, {
       withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
       readPackagingGitIdentity: async () => ({ commit: 'c'.repeat(40) }),
+      assertBuildEnvironment: async () => [],
       probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
@@ -247,7 +250,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
   const builderStage = 'electron-builder --mac (pack, ad-hoc codesign, ZIP, DMG)';
   expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
     ['read commit and require a clean checkout', 'ok'],
-    ['check host target', 'ok'],
+    ['check build environment', 'ok'],
     ['runtime: install yt-dlp/Deno and Meilisearch official from cache', 'ok'],
     ['build: npm run build', 'ok'],
     ['build: write BuildInfo', 'ok'],
@@ -305,11 +308,6 @@ it('accepts the two public update-test identities within the existing validation
       expect(validationBuilderArguments(options)).toContain('--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector-test');
     }
   } finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
-});
-
-it('allows an x64 Windows process on the authorized ARM64 builder and records emulation separately', async () => {
-  await expect(assertHostTarget('win32-x64', async () => ({ platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true }))).resolves.toBeUndefined();
-  await expect(assertHostTarget('win32-x64', async () => ({ platform: 'win32', processArch: 'arm64', hostArch: 'arm64', emulated: false }))).rejects.toThrow(/x64 Windows process/u);
 });
 
 it('removes Git routing and signing credentials from every packaging child environment', () => {

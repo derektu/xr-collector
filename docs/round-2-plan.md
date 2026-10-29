@@ -274,7 +274,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 ### 5.6 CI、Release 與自動檢查更新
 
-本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在使用者的 Mac 建置；Windows x64 正式候選包在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。兩個環境都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及更新 metadata。詳細契約見 [本機安裝包計畫](local-packaging-plan.md)。
+本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在 Mac 建置機（Apple Silicon）建置；Windows x64 正式候選包在 Windows 建置機（x64）建置。兩台建置機都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及更新 metadata。詳細契約見 [本機安裝包計畫](local-packaging-plan.md)。
 
 | 項目 | 開發範圍 | 完成驗證 |
 |---|---|---|
@@ -295,7 +295,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 由公開 repository 的 GitHub Releases 提供免登入下載；#35 確認 repository 已公開及客戶端無登入／token 下載成功。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
 
-macOS arm64 由使用者在自己的 Apple Silicon Mac 建置；Windows x64 由指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。建置證據保留實際 host、process 與產物架構，不能將 emulated x64 描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收這兩個指定本機環境產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
+macOS arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機（x64）建置。clone 後以 `npm run doctor:build` 確認建置條件，見 [README 的建置機](../README.md#建置機)。建置證據保留實際 host、process 與產物架構；在 ARM64 Windows 上以 x64 模擬建置的結果標為 emulated，不描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收兩台建置機產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
 
 ## 6. Tickets、依賴與驗收方式
 
@@ -717,7 +717,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **範圍**：
 
-- Mac arm64 由使用者的 Apple Silicon Mac 建置；Windows x64 由使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置。manifest 與驗證報告記錄實際 ARM64 host、x64 process 與 x64 產物。
+- Mac arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機（x64）建置。manifest 與驗證報告記錄實際 host、process 與產物架構。
 - 內附 yt-dlp、Deno、Meilisearch、Agent Skill 依目標架構打包；版本／完整性與 runtime 路徑驗證。
 - 固定 commit／版本／建置日期，產出安裝包與 updater 所需 metadata；做各目標環境安裝、啟動及基礎收集／搜尋驗證。
 - 未簽章安裝包可通過本票。簽署、公證與憑證整合不屬於完成 gate，建置與驗收不存取使用者的 Apple Team 或 Windows 簽署憑證。
@@ -837,7 +837,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 | 桌面常駐 | 關閉主視窗後最小化／隱藏至常駐入口，服務繼續執行；入口提供進度 UI |
 | 登入自動啟動 | 設定頁提供開關；預設關閉；啟用後登入時背景常駐，不開啟主視窗 |
 | 交付平台 | Windows x64、macOS Apple Silicon（arm64） |
-| 建置環境 | Mac arm64 在使用者的 Apple Silicon Mac 建置；Windows x64 在使用者的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置；CI 只提供補充證據 |
+| 建置環境 | Mac arm64 在 Mac 建置機（Apple Silicon）建置；Windows x64 在 Windows 建置機（x64）建置；CI 只提供補充證據 |
 | 簽署邊界 | 未簽章產物可交付；簽署、公證與憑證整合不構成 #34 驗收 gate，也不在本票存取使用者憑證 |
 | 交付與更新 | 本輪包含 CI、Release、自動及手動檢查更新；發現新版先通知，使用者按下更新後才下載、安裝與重啟 |
 | 發布位置 | 公開 GitHub Releases 管理版本、附件與免登入下載；#35 驗證公開狀態及無登入下載 |

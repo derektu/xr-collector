@@ -138,13 +138,13 @@ summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 p
 
 從沒有桌面的入口執行也能完成開發版與打包版的驗證，例如 SSH 登入的 Windows session 0：背景模式不顯示視窗，Playwright 照常操作頁面與截圖；螢幕大小依該入口而定（Windows session 0 是 1024x768），截圖的視窗大小可能與開發機不同。需要使用者桌面的能力，例如視窗聚焦、系統匣、通知、原生對話框本身、整個螢幕的截圖，在這種入口無法驗證；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
 
-Windows x64 安裝包在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 模擬建置及驗收。doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）如實標示 ARM64 host 與 x64 process，不把結果描述成 Intel／AMD host 原生執行。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
+Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）如實標示 ARM64 host 與 x64 process，不把結果描述成 Intel／AMD host 原生執行。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
 
 ## 6. 平台打包
 
-交付平台固定為 Mac arm64 與 Windows x64。Mac 在使用者的 Apple Silicon Mac 執行 `npm run package:mac`；Windows 在指定的 Parallels Windows ARM VM 以 x64 Node／toolchain 執行 `npm run package:win`。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
+交付平台固定為 Mac arm64 與 Windows x64，各平台在自己的建置機建置：Mac 在 Apple Silicon Mac 執行 `npm run package:mac`，Windows 在 x64 Windows 執行 `npm run package:win`。建置機的準備步驟與 `npm run doctor:build` 的檢查項目見 [README 的建置機](../README.md#建置機)。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
 
-正式候選產物由上述兩個指定本機環境從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
+正式候選產物由兩台建置機從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
 
 **簽章與公證的使用時機**：每次 Developer ID 建置都要送 Apple 公證兩次並等待結果，成本高，只花在最終發布候選上。
 
