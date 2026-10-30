@@ -4,9 +4,9 @@ import path from 'node:path';
 export const RUNTIME_CACHE_ENV = 'XR_COLLECTOR_RUNTIME_CACHE';
 
 /**
- * Per-user cache of pinned runtime inputs (yt-dlp/Deno archives, Meilisearch builds and official
- * assets), shared by every checkout and worktree on this machine. Entries are keyed by pin SHA-256
- * or recipe identity, so different pins never share an entry. The packaged and development App
+ * Per-user cache of pinned runtime inputs (yt-dlp/Deno archives and the Meilisearch release
+ * asset), shared by every checkout and worktree on this machine. Entries are keyed by pin SHA-256
+ * or version, so different pins never share an entry. The packaged and development App
  * never read this cache; they run the copies installed in `resources/bin`.
  */
 export function runtimeCacheRoot(environment = process.env, platform = process.platform, home = homedir()) {
@@ -26,12 +26,11 @@ export function runtimeCacheRoot(environment = process.env, platform = process.p
   return paths.join(home, '.cache', 'xr-collector', 'runtime');
 }
 
-/** The command that fills the runtime cache for one target and Meilisearch variant. */
-export function prepareRuntimeCommand(target, variant = 'chinese') {
-  const platform = target.startsWith('win32') ? 'win' : 'mac';
-  return `npm run prepare:runtime -- ${platform}${variant === 'chinese' ? '' : ` --variant ${variant}`}`;
+/** The command that fills the runtime cache for one target. */
+export function prepareRuntimeCommand(target) {
+  return `npm run prepare:runtime -- ${target.startsWith('win32') ? 'win' : 'mac'}`;
 }
 
-export function runtimeCacheMiss(description, location, target, variant) {
-  return new Error(`${description} is missing from the runtime cache or does not match its pinned identity (${location}). Packaging only reads the cache; run ${prepareRuntimeCommand(target, variant)} first.`);
+export function runtimeCacheMiss(description, location, target) {
+  return new Error(`${description} is missing from the runtime cache or does not match its pinned identity (${location}). Packaging only reads the cache; run ${prepareRuntimeCommand(target)} first.`);
 }

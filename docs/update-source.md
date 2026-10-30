@@ -1,6 +1,6 @@
 # App 更新來源
 
-XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.json` schema 1 所列的固定 manifest 與安裝檔。服務先依目前 `target`、引擎 `variant` 及版本選出候選，再驗證 manifest 和 payload 的大小、SHA-256 與內含 BuildInfo；候選的 payload 必須以同一份描述出現在已驗證 manifest 的產物清單，檔名也必須符合該版本、平台與引擎。檢查、下載及套用是三個分開且由使用者觸發的動作。套用前會保存安裝嘗試，只有新版本的 runtime、畫面與原生啟動確認完成後才記為成功；無法確認時保留 unknown，不用程序退出推測成功。
+XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.json` schema 1 所列的固定 manifest 與安裝檔。服務先依目前 `target` 及版本選出候選，再驗證 manifest 和 payload 的大小、SHA-256 與內含 BuildInfo；候選的 payload 必須以同一份描述出現在已驗證 manifest 的產物清單，檔名也必須符合該版本與平台。檢查、下載及套用是三個分開且由使用者觸發的動作。套用前會保存安裝嘗試，只有新版本的 runtime、畫面與原生啟動確認完成後才記為成功；無法確認時保留 unknown，不用程序退出推測成功。
 
 版本更新不送作業系統通知。可用版本、下載、等待與安裝結果只透過設定頁、側欄、原生選單、裝置更新 API 及持久事件呈現；Windows 第一次關閉視窗的系統匣提示是獨立的關窗行為。
 
@@ -29,6 +29,6 @@ XR_COLLECTOR_VALIDATION_BUILD=1 npm run package:mac -- \
 
 版本、appId 與產品名稱三個 `--validation-*` 參數必須一起提供，且只有明確設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受。repository 是第四個選用參數，未提供時維持正式來源 `derektu/xr-collector`，供既有 loopback 驗收使用；提供時會和 appId、產品名稱一起寫入 ASAR，讓 Windows shell 或 macOS helper 重啟 App、沒有原啟動環境變數時，仍使用隔離的資料目錄、App 身分與 GitHub repository。正式封裝不帶這些參數，仍固定使用 repo 的版本、appId、產品名稱與正式 repository。
 
-公開更新驗收固定使用兩個彼此隔離、A／B 版本內一致的身分：中文版為 `XR Update Verify Chinese`／`com.xrcollector.verify.public.chinese`，官方 engine 版為 `XR Update Verify Official`／`com.xrcollector.verify.public.official`；兩者的 repository 都是 `derektu/xr-collector-test`。發布候選會從實際 ASAR 讀回這三項身分，並和四份 private handoff、GitHub Release URL 與 publisher 的 `--repo` 交叉核對，不接受把驗收 App 發到正式 repository，或把不同 variant 的 package 混在一起。
+公開更新驗收使用 `XR Update Verify Public`／`com.xrcollector.verify.public` 這組隔離身分，repository 為 `derektu/xr-collector-test`；驗收 App 不發到正式 repository。
 
 驗收 A、B 使用同一個隔離 profile、Vault 與 Agent port，不能指向正式資料。原生重啟驗收優先使用唯一驗收產品的預設 profile，將固定 Agent port 與 Vault 選址寫入該 profile，並由同一個登入使用者安裝與更新。使用 `XR_COLLECTOR_PROFILE` 覆寫時，須實測該平台交接確實保留環境；不能假定 Windows shell 會保留。中斷 helper 後先等待並盤點作業系統已排隊的啟動，再決定是否手動啟動。

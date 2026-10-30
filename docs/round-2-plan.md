@@ -295,7 +295,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 由公開 repository 的 GitHub Releases 提供免登入下載；#35 確認 repository 已公開及客戶端無登入／token 下載成功。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
 
-macOS arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機（x64）建置。clone 後以 `npm run doctor:build` 確認建置條件，見 [README 的建置機](../README.md#建置機)。建置證據保留實際 host、process 與產物架構；在 ARM64 Windows 上以 x64 模擬建置的結果標為 emulated，不描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收兩台建置機產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
+macOS arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機（x64）建置。clone 後以 `npm run doctor:build` 確認建置條件，見 [建置、測試與發布](building.md)。建置證據保留實際 host、process 與產物架構；在 ARM64 Windows 上以 x64 模擬建置的結果標為 emulated，不描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收兩台建置機產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
 
 ## 6. Tickets、依賴與驗收方式
 

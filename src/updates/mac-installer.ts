@@ -43,7 +43,7 @@ export class MacNativeInstaller implements NativeInstaller {
       const launchEnvironment = Object.fromEntries(launchKeys.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!] as const]));
       const request = { schemaVersion: 1, runId, nonce, parentPid: process.pid, parentStartedAt: startedAt, currentApp, stagedApp, workDir,
         expectedBundleId: bundleId, previousVersion: this.options.current.version, previousBuildId: this.options.current.buildId,
-        expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, expectedTarget: offer.target, expectedVariant: offer.variant,
+        expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, expectedTarget: offer.target,
         launchEnvironment, timeoutMs: 120_000 };
       const requestFile = path.join(workDir, 'request.json'); await writeOwnedJson(requestFile, request);
       child = spawn(this.helper(), ['--request', requestFile], { detached: false, stdio: 'ignore' });

@@ -49,7 +49,6 @@ export async function startSearchRuntime(
     const process = await startMeilisearchProcess({
       binaryPath: options.binaryPath,
       databasePath: options.databasePath,
-      lexiconPath: lexicon.path,
       ...(options.port ? { port: options.port } : {}),
     });
     const search = new ManagedTranscriptSearch(

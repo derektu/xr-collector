@@ -10,7 +10,7 @@ files:
   - node_modules/**
 asar: true
 mac:
-  artifactName: XR-Collector-${version}-chinese-mac-${arch}.${ext}
+  artifactName: XR-Collector-${version}-mac-${arch}.${ext}
   target:
     - target: dmg
       arch: [arm64]
@@ -46,7 +46,7 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: XR-Collector-${version}-chinese-win-${arch}-setup.${ext}
+  artifactName: XR-Collector-${version}-win-${arch}-setup.${ext}
   extraResources:
     - from: skills
       to: skills

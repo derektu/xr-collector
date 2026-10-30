@@ -133,9 +133,9 @@ jobs:
         run: npm ci
       - name: Install Chromium
         run: npx playwright install chromium
-      - name: Prepare pinned official search engine for Web regression
+      - name: Prepare pinned search engine for Web regression
         working-directory: ${{ env.XR_TESTED_SOURCE }}
-        run: npm run prepare:meilisearch -- --variant official --target darwin-arm64 --require-native
+        run: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
       - name: Run every registered Web flow
         run: |
           [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
@@ -174,13 +174,11 @@ jobs:
         include:
           - runner: macos-15
             target: darwin-arm64
-            rust_target: aarch64-apple-darwin
             package_command: package:mac
             runtime_platform: mac
             app: release/mac-arm64/XR Collector.app
           - runner: windows-2022
             target: win32-x64
-            rust_target: x86_64-pc-windows-msvc
             package_command: package:win
             runtime_platform: win
             app: release/win-unpacked/XR Collector.exe
@@ -192,15 +190,11 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.91.1
-          targets: ${{ matrix.rust_target }}
       - name: Install locked dependencies
         run: npm ci
       - name: Prepare pinned runtimes in the runtime cache
         run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
-      - name: Build unsigned Chinese test package
+      - name: Build unsigned test package
         run: npm run ${{ matrix.package_command }}
       - name: Run offline packaged-App smoke
         shell: bash

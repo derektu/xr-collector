@@ -339,7 +339,7 @@ app.whenReady().then(async () => {
     : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
   const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: string; message: string; code?: string }> = [];
   updateService = await UpdateService.open({
-    identity: { version: buildInfo.version, target: buildInfo.target, variant: buildInfo.variant ?? 'official' },
+    identity: { version: buildInfo.version, target: buildInfo.target },
     currentBuildId: buildInfo.buildId,
     source: updateSource, installer: nativeInstaller, directory: path.join(app.getPath('userData'), 'updates'), request: updateRequest,
     event: (severity, type, message, code) => {

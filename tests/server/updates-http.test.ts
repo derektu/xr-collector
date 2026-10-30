@@ -5,7 +5,7 @@ import type { DeviceUpdateStatus } from '../../src/core/types.js';
 const hash = 'a'.repeat(64);
 const status: DeviceUpdateStatus = {
   phase: 'available', checkedAt: '2026-10-26T00:00:00.000Z',
-  currentVersion: '0.1.0', target: 'darwin-arm64', variant: 'official', installerAvailable: true, lastAttempt: null,
+  currentVersion: '0.1.0', target: 'darwin-arm64', installerAvailable: true, lastAttempt: null,
   offer: null, ready: null, progress: null, message: '有新版本。', errorCode: null,
 };
 

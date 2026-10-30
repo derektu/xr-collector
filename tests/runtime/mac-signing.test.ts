@@ -417,7 +417,7 @@ it('persists the App upload and submission before waiting so a resumed run reuse
 async function signedDmgFixture(prefix: string) {
   const root = await mkdtemp(path.join(tmpdir(), prefix));
   roots.push(root);
-  const dmg = path.join(root, 'XR-Collector-0.1.0-chinese-mac-arm64.dmg');
+  const dmg = path.join(root, 'XR-Collector-0.1.0-mac-arm64.dmg');
   await writeFile(dmg, 'stable-upload');
   return { dmg, evidenceDirectory: path.join(root, 'evidence') };
 }

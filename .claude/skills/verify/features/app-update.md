@@ -7,7 +7,7 @@
 ## Sub-features
 
 - `update-discovery`：檢查固定 release index，區分最新版、未發布與錯誤，顯示版本說明但不自動下載。
-- `update-download`：下載時顯示進度及取消；大小、SHA-256、target、variant 與 manifest 全部吻合才發布 ready。
+- `update-download`：下載時顯示進度及取消；大小、SHA-256、target 與 manifest 全部吻合才發布 ready。
 - `update-apply-wait`：ready 由使用者再次確認後等待工作與寫入安全停止；等待可取消，installing 不提供重複動作。
 - `update-agent`：授權 Agent 與 UI 使用同一組查詢、檢查、下載、套用及取消 API，selection 必須綁定版本與雜湊。
 - `update-no-vault`：更新是裝置資料，Onboarding／Vault 不可用時仍可從 App 設定與 Agent 操作。

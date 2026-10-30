@@ -4,7 +4,7 @@ import { sidebarUpdateLabel } from '../../src/web/update-presentation.js';
 
 const offer = { version: '0.1.3' } as UpdateOffer;
 function status(phase: UpdatePhase, options: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus {
-  return { phase, currentVersion: '0.1.2', target: 'darwin-arm64', variant: 'chinese', installerAvailable: true,
+  return { phase, currentVersion: '0.1.2', target: 'darwin-arm64', installerAvailable: true,
     offer: null, ready: null, lastAttempt: null, progress: null, lastCheckAttemptAt: null, checkedAt: null, message: '', errorCode: null, ...options };
 }
 

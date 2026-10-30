@@ -471,7 +471,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   {
     const unavailableUpdate = (): import('../core/types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
-      target: buildInfo.target, variant: buildInfo.variant, installerAvailable: false, offer: null, ready: null, progress: null,
+      target: buildInfo.target, installerAvailable: false, offer: null, ready: null, progress: null,
       lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null });
     const updates: UpdateAccess = options.updates ?? {
       status: unavailableUpdate, check: async () => unavailableUpdate(), cancel: async () => unavailableUpdate(),

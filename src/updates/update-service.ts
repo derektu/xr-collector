@@ -57,7 +57,7 @@ export class UpdateService implements UpdateAccess {
     this.now = options.now ?? (() => new Date());
     this.state = {
       phase: 'idle', currentVersion: options.identity.version, target: options.identity.target,
-      variant: options.identity.variant, installerAvailable: options.installer.available,
+      installerAvailable: options.installer.available,
       offer: null, ready: null, lastAttempt: null, progress: null, lastCheckAttemptAt: null, checkedAt: null,
       message: options.installer.available ? '尚未檢查更新。' : '此執行環境無法安裝更新。', errorCode: null,
     };
@@ -424,7 +424,7 @@ async function verifyFile(file: string, bytes: number, digest: string): Promise<
     return hash.digest('hex') === digest;
   } catch { return false; }
 }
-function sameIdentity(offer: UpdateOffer, identity: UpdateIdentity): boolean { return offer.target === identity.target && offer.variant === identity.variant; }
+function sameIdentity(offer: UpdateOffer, identity: UpdateIdentity): boolean { return offer.target === identity.target; }
 function validTime(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Error('invalid check timestamp');

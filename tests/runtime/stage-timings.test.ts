@@ -60,8 +60,8 @@ it('writes the JSON report and prints the table when the work succeeds', async (
   const timer = createStageTimer({ now: clock.now });
   const output: string[] = [];
   const file = path.join(root, 'nested', 'report.json');
-  const result = await runWithTimingReport(timer, () => ({ file, command: 'package', version: '0.1.0', commit: 'a'.repeat(40), target: 'darwin-arm64', variant: 'chinese',
-    artifacts: [{ path: 'XR-Collector-0.1.0-chinese-mac-arm64.zip', bytes: 3, sha256: 'b'.repeat(64) }] }), async () => {
+  const result = await runWithTimingReport(timer, () => ({ file, command: 'package', version: '0.1.0', commit: 'a'.repeat(40), target: 'darwin-arm64',
+    artifacts: [{ path: 'XR-Collector-0.1.0-mac-arm64.zip', bytes: 3, sha256: 'b'.repeat(64) }] }), async () => {
     await timer.time('build', async () => { clock.advance(2_000); });
     return 'handoff';
   }, { log: (text: string) => output.push(text) });
@@ -70,7 +70,7 @@ it('writes the JSON report and prints the table when the work succeeds', async (
   const report = JSON.parse(await readFile(file, 'utf8'));
   expect(report).toEqual({
     schemaVersion: 1, kind: 'xr-collector-stage-timings', command: 'package', version: '0.1.0', commit: 'a'.repeat(40),
-    target: 'darwin-arm64', variant: 'chinese', artifacts: [{ path: 'XR-Collector-0.1.0-chinese-mac-arm64.zip', bytes: 3, sha256: 'b'.repeat(64) }],
+    target: 'darwin-arm64', artifacts: [{ path: 'XR-Collector-0.1.0-mac-arm64.zip', bytes: 3, sha256: 'b'.repeat(64) }],
     status: 'passed', startedAt: '2026-10-29T00:00:00.000Z', totalMs: 2_000,
     stages: [{ name: 'build', ms: 2_000, status: 'ok', depth: 0, offsetMs: 0 }],
   });

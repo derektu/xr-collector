@@ -185,13 +185,13 @@ Content-Type: application/json
 
 ## 辨識正在執行的 build
 
-`GET /api/device/build-info` 回傳 `buildInfo`，與設定頁「關於 XR Collector」及 Onboarding 底部相同。欄位為 `schemaVersion: 1`、`kind`（`development`／`packaged`）、`version`、`builtAt`（ISO 時間）、`commit`（完整 SHA 或 null）、`buildId`、`target`、`variant`（`chinese`／`official`／null）、`sourceDirty`（boolean 或 null）。`buildId` 區分同一 commit 的不同 build。
+`GET /api/device/build-info` 回傳 `buildInfo`，與設定頁「關於 XR Collector」及 Onboarding 底部相同。欄位為 `schemaVersion: 1`、`kind`（`development`／`packaged`）、`version`、`builtAt`（ISO 時間）、`commit`（完整 SHA 或 null）、`buildId`、`target`、`sourceDirty`（boolean 或 null）。`buildId` 區分同一 commit 的不同 build。
 
-此唯讀 API 是裝置資料，Vault 尚未設定或正在匯入／搬移時也能讀，Agent 仍須目前的 token。`sourceDirty: true` 表示開發原始碼有未提交修改，null 表示無法確認；不要把 null 說成乾淨版本。`variant: null` 表示開發原始碼尚未準備引擎身分，不表示已通過任何引擎驗證。`packaged` 的 commit、target 與 variant 來自安裝包內固定資訊，不依執行目錄或啟動時 Git 決定。
+此唯讀 API 是裝置資料，Vault 尚未設定或正在匯入／搬移時也能讀，Agent 仍須目前的 token。`sourceDirty: true` 表示開發原始碼有未提交修改，null 表示無法確認；不要把 null 說成乾淨版本。`packaged` 的 commit 與 target 來自安裝包內固定資訊，不依執行目錄或啟動時 Git 決定。
 
 ## App 更新
 
-App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、引擎 variant、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
+App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
 
 `lastCheckAttemptAt` 是最近一次檢查開始時間，包含失敗；`checkedAt` 是最近一次成功檢查時間。喚醒補檢查依嘗試時間判斷是否滿 24 小時；連續相同結果不重複記錄 Activity。`update_download_timeout` 表示連線或串流連續 60 秒沒有收到資料，未完成的檔案會刪除；經使用者要求可重試下載。即使版本號相同，新的 `offer.payload.sha256` 仍代表另一份檔案，必須使用目前選定的版本與 SHA。
 
@@ -220,7 +220,7 @@ App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `upd
 
 | Method 與 path | 輸入／結果 |
 | --- | --- |
-| `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台、引擎 variant 與原始碼狀態；Vault 未就緒／鎖定時可讀 |
+| `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台與原始碼狀態；Vault 未就緒／鎖定時可讀 |
 | `GET /api/device/updates` | 唯讀更新狀態；Vault 未就緒／鎖定時可讀 |
 | `POST /api/device/updates/check` | 檢查穩定版 metadata，不下載；回傳 `update` |
 | `POST /api/device/updates/download` | 經使用者確認後送 `{"version":"...","sha256":"64 位小寫十六進位"}`；下載及驗證固定 offer |

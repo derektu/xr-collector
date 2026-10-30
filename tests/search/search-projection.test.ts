@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OFFICIAL_SEARCH_INDEX_PROFILE, SEARCH_INDEX_PROFILE } from '../../src/search/meilisearch-runtime.js';
+import { SEARCH_INDEX_PROFILE } from '../../src/search/meilisearch-runtime.js';
 import { prepareOwnedSearchProjection, searchDatabasePath, searchProfilePath } from '../../src/search/search-projection.js';
 
 const roots: string[] = [];
@@ -67,25 +67,23 @@ describe('owned search projection profile', () => {
     expect(await readFile(`${context.database}.pid`, 'utf8')).toBe('{broken');
   });
 
-  it.each([
-    ['chinese to official', SEARCH_INDEX_PROFILE, OFFICIAL_SEARCH_INDEX_PROFILE],
-    ['official to chinese', OFFICIAL_SEARCH_INDEX_PROFILE, SEARCH_INDEX_PROFILE],
-  ] as const)('rebuilds only the owned projection when switching %s', async (_name, previous, next) => {
+  it('rebuilds only the owned projection when the engine profile changes', async () => {
     const context = await setup();
+    const previous = { ...SEARCH_INDEX_PROFILE, engine: { version: '1.52.0' } };
     await writeFile(searchProfilePath(context.database), JSON.stringify({ schemaVersion: 1, profile: previous }));
-    const prepared = await prepareOwnedSearchProjection({ ...context, profile: next });
+    const prepared = await prepareOwnedSearchProjection({ ...context, profile: SEARCH_INDEX_PROFILE });
     expect(prepared.forceRebuild).toBe(true);
     await expect(readFile(path.join(context.database, 'old'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(`${context.database}-adjacent`, 'utf8')).toBe('keep');
     expect(await readFile(path.join(context.otherDatabase, 'other'), 'utf8')).toBe('keep');
     await prepared.recordRebuild();
-    expect(JSON.parse(await readFile(searchProfilePath(context.database), 'utf8'))).toEqual({ schemaVersion: 1, profile: next });
+    expect(JSON.parse(await readFile(searchProfilePath(context.database), 'utf8'))).toEqual({ schemaVersion: 1, profile: SEARCH_INDEX_PROFILE });
   });
 
-  it('keeps an official projection when the official profile is unchanged', async () => {
+  it('keeps the projection when the profile is unchanged', async () => {
     const context = await setup();
-    await writeFile(searchProfilePath(context.database), JSON.stringify({ schemaVersion: 1, profile: OFFICIAL_SEARCH_INDEX_PROFILE }));
-    const prepared = await prepareOwnedSearchProjection({ ...context, profile: OFFICIAL_SEARCH_INDEX_PROFILE });
+    await writeFile(searchProfilePath(context.database), JSON.stringify({ schemaVersion: 1, profile: SEARCH_INDEX_PROFILE }));
+    const prepared = await prepareOwnedSearchProjection({ ...context, profile: SEARCH_INDEX_PROFILE });
     expect(prepared.forceRebuild).toBe(false);
     expect(await readFile(path.join(context.database, 'old'), 'utf8')).toBe('projection');
   });

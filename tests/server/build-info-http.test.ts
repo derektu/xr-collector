@@ -14,7 +14,7 @@ afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close(
 const info: BuildInfo = {
   schemaVersion: 1, kind: 'packaged', version: '0.7.0', builtAt: '2026-10-25T09:00:00.000Z',
   commit: '1234567890123456789012345678901234567890', buildId: 'fixture-build',
-  target: 'darwin-arm64', variant: 'chinese', sourceDirty: false,
+  target: 'darwin-arm64', sourceDirty: false,
 };
 
 describe('build information HTTP contract', () => {

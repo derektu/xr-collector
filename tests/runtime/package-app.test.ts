@@ -23,20 +23,20 @@ it('passes electron-builder the verified certificate hash instead of a prefixed 
   expect(() => signedBuilderIdentityOverride({ sha1: 'Developer ID Application: Example', name: 'ignored' })).toThrow(/certificate SHA-1/u);
 });
 
-it('accepts only the two delivery targets and two explicit variants', () => {
-  expect(parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese'])).toEqual({ target: 'darwin-arm64', variant: 'chinese' });
-  expect(() => parsePackageArguments(['--target', 'darwin-x64', '--variant', 'official'])).toThrow(/Unsupported packaging target/u);
-  expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'other'])).toThrow(/Unsupported packaging variant/u);
+it('accepts only the two delivery targets', () => {
+  expect(parsePackageArguments(['--target', 'darwin-arm64'])).toEqual({ target: 'darwin-arm64' });
+  expect(() => parsePackageArguments(['--target', 'darwin-x64'])).toThrow(/Unsupported packaging target/u);
+  expect(() => parsePackageArguments(['--target', 'win32-x64', '--verbose'])).toThrow(/Unknown packaging argument --verbose/u);
 });
 
 it('requires an explicit complete Developer ID mode only for Mac packaging', () => {
-  expect(parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized',
+  expect(parsePackageArguments(['--target', 'darwin-arm64', '--mac-signing-mode', 'developer-id-notarized',
     '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toMatchObject({
     macSigningMode: 'developer-id-notarized', macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
   });
-  expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized']))
+  expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--mac-signing-mode', 'developer-id-notarized']))
     .toThrow(/requires Mac target plus/u);
-  expect(() => parsePackageArguments(['--target', 'win32-x64', '--variant', 'chinese', '--mac-signing-mode', 'developer-id-notarized',
+  expect(() => parsePackageArguments(['--target', 'win32-x64', '--mac-signing-mode', 'developer-id-notarized',
     '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toThrow(/requires Mac target plus/u);
 });
 
@@ -51,7 +51,7 @@ it('gives the signed verifier a runner that captures output and carries both che
   try {
     const stopped = new Error('stop after signed verifier wiring proof');
     await expect(packageApplication({
-      target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+      target: 'darwin-arm64', macSigningMode: 'developer-id-notarized',
       macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
     }, {
       withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: outerTracker }),
@@ -132,15 +132,15 @@ it('notarizes the App once, gates the stapled App, builds the DMG and ZIP from i
   const logged: string[] = [];
   const finished = new Error('stop after the final ZIP check');
   await withNpmExecPath(() => expect(packageApplication({
-    target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+    target: 'darwin-arm64', macSigningMode: 'developer-id-notarized',
     macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
   }, signedPackageDependencies(outputDir, {
     run: async (_command: string, args: string[]) => {
       if (!args.some((argument) => argument.endsWith('electron-builder/cli.js'))) return;
       const targets = args.includes('--prepackaged') ? args.slice(args.indexOf('--mac') + 1, args.indexOf('--prepackaged')) : [];
       events.push(`build ${args.includes('--dir') ? 'App' : targets.join('+')}`);
-      if (targets.includes('dmg')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-chinese-mac-arm64.dmg'), 'dmg');
-      if (targets.includes('zip')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-chinese-mac-arm64.zip'), 'zip');
+      if (targets.includes('dmg')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-mac-arm64.dmg'), 'dmg');
+      if (targets.includes('zip')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-mac-arm64.zip'), 'zip');
     },
     verifyDeveloperIdApplication: async (app: string) => { events.push(`verify App Developer ID ${path.relative(outputDir, app)}`); },
     notarizeAndStaple: async ({ kind, artifactPath }: any) => {
@@ -172,7 +172,7 @@ it('notarizes the App once, gates the stapled App, builds the DMG and ZIP from i
     'verify App Developer ID mac-arm64/XR Collector.app',
     'Gatekeeper App (staple already validated)',
     'build dmg+zip',
-    'notarize dmg XR-Collector-0.1.0-chinese-mac-arm64.dmg',
+    'notarize dmg XR-Collector-0.1.0-mac-arm64.dmg',
     'verify DMG Developer ID and Gatekeeper (staple already validated)',
     'verify DMG contents',
     'verify ZIP contents',
@@ -184,7 +184,7 @@ it('builds no installer when the stapled App fails its Gatekeeper gate', async (
   const outputDir = await temporaryRoot('xr-signed-flow-');
   const built: string[] = [];
   await withNpmExecPath(() => expect(packageApplication({
-    target: 'darwin-arm64', variant: 'chinese', macSigningMode: 'developer-id-notarized',
+    target: 'darwin-arm64', macSigningMode: 'developer-id-notarized',
     macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
   }, signedPackageDependencies(outputDir, {
     run: async (_command: string, args: string[]) => {
@@ -206,7 +206,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
   const output: string[] = [];
   const failure = new Error('electron-builder exited with status 1');
   try {
-    await expect(packageApplication({ target: 'darwin-arm64', variant: 'official' }, {
+    await expect(packageApplication({ target: 'darwin-arm64' }, {
       withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
       readPackagingGitIdentity: async () => ({ commit: 'c'.repeat(40) }),
       assertBuildEnvironment: async () => [],
@@ -223,8 +223,8 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
           { event: 'mark', name: 'beforePack', at: now + 1 },
           { event: 'mark', name: 'afterPack:start', at: now + 10 },
           { event: 'mark', name: 'afterPack:end', at: now + 10 },
-          { event: 'artifact:start', file: '/release/official/XR-Collector-0.1.0-official-mac-arm64.zip', at: now + 20 },
-          { event: 'artifact:end', file: '/release/official/XR-Collector-0.1.0-official-mac-arm64.zip', at: now + 35, bytes: 9 },
+          { event: 'artifact:start', file: '/release/XR-Collector-0.1.0-mac-arm64.zip', at: now + 20 },
+          { event: 'artifact:end', file: '/release/XR-Collector-0.1.0-mac-arm64.zip', at: now + 35, bytes: 9 },
         ].map((event) => `${JSON.stringify(event)}\n`).join(''));
         throw failure;
       },
@@ -236,22 +236,22 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     else process.env.npm_execpath = previousNpmExecPath;
   }
 
-  expect(runtimeCalls).toEqual([[path.resolve('scripts/prepare-runtime.mjs'), 'mac', '--variant', 'official', '--cache-only']]);
+  expect(runtimeCalls).toEqual([[path.resolve('scripts/prepare-runtime.mjs'), 'mac', '--cache-only']]);
   expect(builderCalls).toHaveLength(1);
   const hookArgs = builderCalls[0]!.args.filter((argument) => argument.startsWith('--config.') && argument.endsWith('package-timing-hook.mjs'));
   expect(hookArgs).toEqual(['beforePack', 'afterPack', 'afterSign', 'artifactBuildStarted', 'artifactBuildCompleted']
     .map((hook) => `--config.${hook}=./scripts/package-timing-hook.mjs`));
   expect(builderCalls[0]!.environment.CSC_IDENTITY_AUTO_DISCOVERY).toBe('false');
-  const report = JSON.parse(await readFile(path.join(reportDirectory, 'XR-Collector-0.1.0-official-darwin-arm64-timings.json'), 'utf8'));
+  const report = JSON.parse(await readFile(path.join(reportDirectory, 'XR-Collector-0.1.0-darwin-arm64-timings.json'), 'utf8'));
   expect(report).toMatchObject({
     kind: 'xr-collector-stage-timings', command: 'package', status: 'failed', error: failure.message,
-    version: '0.1.0', commit: 'c'.repeat(40), target: 'darwin-arm64', variant: 'official', signingPolicy: 'ad-hoc',
+    version: '0.1.0', commit: 'c'.repeat(40), target: 'darwin-arm64', signingPolicy: 'ad-hoc',
   });
   const builderStage = 'electron-builder --mac (pack, ad-hoc codesign, ZIP, DMG)';
   expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
     ['read commit and require a clean checkout', 'ok'],
     ['check build environment', 'ok'],
-    ['runtime: install yt-dlp/Deno and Meilisearch official from cache', 'ok'],
+    ['runtime: install yt-dlp/Deno and Meilisearch from cache', 'ok'],
     ['build: npm run build', 'ok'],
     ['build: write BuildInfo', 'ok'],
     ['build: stage BuildInfo sidecar', 'ok'],
@@ -259,16 +259,16 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     ['clear previous artifacts', 'ok'],
     [builderStage, 'failed'],
     [`${builderStage} / pack App (beforePack to afterPack)`, 'ok'],
-    [`${builderStage} / artifact XR-Collector-0.1.0-official-mac-arm64.zip`, 'ok'],
+    [`${builderStage} / artifact XR-Collector-0.1.0-mac-arm64.zip`, 'ok'],
   ]);
   expect(report.stages.at(-1)).toMatchObject({ ms: 15, bytes: 9, depth: 1 });
   expect(output[0]).toMatch(/Stage timings: package failed/u);
   expect(output[0]).toContain(`${builderStage}`);
-  expect(output[1]).toContain('XR-Collector-0.1.0-official-darwin-arm64-timings.json');
+  expect(output[1]).toContain('XR-Collector-0.1.0-darwin-arm64-timings.json');
 });
 
 it('requires an explicit isolated identity for validation version overrides', () => {
-  const args = ['--target', 'darwin-arm64', '--variant', 'chinese', '--validation-version', '0.1.1',
+  const args = ['--target', 'darwin-arm64', '--validation-version', '0.1.1',
     '--validation-app-id', 'com.xrcollector.verify36', '--validation-product-name', 'XR Update Verify 36'];
   expect(() => parsePackageArguments(args)).toThrow(/XR_COLLECTOR_VALIDATION_BUILD/u);
   process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
@@ -276,20 +276,20 @@ it('requires an explicit isolated identity for validation version overrides', ()
     expect(parsePackageArguments(args)).toMatchObject({ validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationUpdateRepository: 'derektu/xr-collector' });
     expect(parsePackageArguments([...args, '--validation-update-repository', 'derektu/xr-collector-test'])).toMatchObject({ validationUpdateRepository: 'derektu/xr-collector-test' });
     expect(() => parsePackageArguments([...args, '--validation-update-repository', 'https://github.com/derektu/xr-collector-test'])).toThrow(/repository/u);
-    expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--variant', 'chinese', '--validation-update-repository', 'derektu/xr-collector-test'])).toThrow(/all validation options/u);
+    expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--validation-update-repository', 'derektu/xr-collector-test'])).toThrow(/all validation options/u);
   }
   finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
 });
 
 it('bakes the validation product name into package metadata so Electron derives an isolated userData folder', () => {
-  const options = { validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationProductName: 'XR Update Verify Mac Chinese' };
+  const options = { validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationProductName: 'XR Update Verify Mac' };
   expect(validationBuilderArguments(options)).toEqual([
     '--config.extraMetadata.version=0.1.1',
-    '--config.extraMetadata.productName=XR Update Verify Mac Chinese',
+    '--config.extraMetadata.productName=XR Update Verify Mac',
     '--config.extraMetadata.xrCollectorAppId=com.xrcollector.verify36',
     '--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector',
     '--config.appId=com.xrcollector.verify36',
-    '--config.productName=XR Update Verify Mac Chinese',
+    '--config.productName=XR Update Verify Mac',
   ]);
   expect(() => assertPackagedProductMetadata({ name: 'xr-collector' }, options.validationProductName, options.validationAppId)).toThrow(/productName/u);
   expect(() => assertPackagedProductMetadata({ name: 'xr-collector', productName: options.validationProductName,
@@ -298,15 +298,13 @@ it('bakes the validation product name into package metadata so Electron derives 
   expect(validationBuilderArguments({})).toEqual([]);
 });
 
-it('accepts the two public update-test identities within the existing validation namespace', () => {
+it('accepts a public update-test identity within the existing validation namespace', () => {
   process.env.XR_COLLECTOR_VALIDATION_BUILD = '1';
   try {
-    for (const [variant, productName] of [['chinese', 'XR Update Verify Chinese'], ['official', 'XR Update Verify Official']]) {
-      const options = parsePackageArguments(['--target', 'darwin-arm64', '--variant', variant,
-        '--validation-version', '0.1.0', '--validation-app-id', `com.xrcollector.verify.public.${variant}`,
-        '--validation-product-name', productName, '--validation-update-repository', 'derektu/xr-collector-test']);
-      expect(validationBuilderArguments(options)).toContain('--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector-test');
-    }
+    const options = parsePackageArguments(['--target', 'darwin-arm64',
+      '--validation-version', '0.1.0', '--validation-app-id', 'com.xrcollector.verify.public',
+      '--validation-product-name', 'XR Update Verify Public', '--validation-update-repository', 'derektu/xr-collector-test']);
+    expect(validationBuilderArguments(options)).toContain('--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector-test');
   } finally { delete process.env.XR_COLLECTOR_VALIDATION_BUILD; }
 });
 
@@ -383,7 +381,7 @@ it('opens both final Mac containers and checks that their only App is the staple
 });
 
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
-  for (const configFile of ['electron-builder.official.yml', 'electron-builder.yml']) {
+  for (const configFile of ['electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
     expect(config.mac, configFile).toMatchObject({ identity: '-', hardenedRuntime: false });
     expect(config.mac?.signIgnore, configFile).toEqual(['/Contents/Resources/bin(?:/|$)']);
@@ -421,7 +419,7 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
 });
 
 it('inherits the runtime resources but switches signed Mac packages to hardened, explicit hook ownership', async () => {
-  for (const configFile of ['electron-builder.signed.yml', 'electron-builder.official.signed.yml']) {
+  for (const configFile of ['electron-builder.signed.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
     expect(config, configFile).toMatchObject({ forceCodeSigning: true, afterPack: './scripts/mac-signing-hook.mjs' });
     expect(config.mac, configFile).toMatchObject({
@@ -542,7 +540,7 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(sourceSkill, 'skill');
   await mkdir(path.join(asarSource, 'dist/node'), { recursive: true });
   const commit = 'b'.repeat(40);
-  const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit, buildId: 'id', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false };
+  const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit, buildId: 'id', target: 'darwin-arm64', sourceDirty: false };
   await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0' }));
   await writeFile(path.join(asarSource, 'dist/node/build-info.json'), JSON.stringify(buildInfo));
   await mkdir(resources, { recursive: true });
@@ -569,9 +567,8 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(path.join(resources, 'bin/meilisearch'), meiliBinary);
   const meiliFile = await fileEntry(path.join(resources, 'bin/meilisearch'), 'meilisearch');
   const meiliManifest = {
-    schemaVersion: 1, recipeRevision: 1, recipeFingerprint: 'fixture', sourceRepository: 'https://github.com/meilisearch/meilisearch.git',
-    sourceTag: 'v1.53.2', sourceCommit: 'ec006cecec6f684b1dcaee093a45ab4c05707127', target: 'darwin-arm64',
-    features: ['chinese'], defaultFeatures: false,
+    schemaVersion: 1, releaseRepository: 'https://github.com/meilisearch/meilisearch', releaseTag: 'v1.53.2',
+    releaseAsset: 'meilisearch-macos-apple-silicon', releaseUrl: 'https://example.test/meilisearch-macos-apple-silicon', target: 'darwin-arm64',
     binary: { version: '1.53.2', versionOutput: 'meilisearch 1.53.2', bytes: meiliFile.bytes, sha256: meiliFile.sha256, format: 'Mach-O 64', arch: 'arm64' },
   };
   await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
@@ -585,7 +582,7 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(path.join(resources, 'search/coct-main.json'), JSON.stringify(lexiconManifest));
 
   const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2', verifyMacBundle = async () => undefined) => verifyPackagedApplication(
-    { outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese' },
+    { outputDir, commit, version: '0.1.0', target: 'darwin-arm64' },
     { trustedManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }), verifyMacBundle },
   );
   await expect(verify()).resolves.toMatchObject({ buildInfo: { buildId: 'id' } });
@@ -597,9 +594,14 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
     throw new Error('code has no resources but signature indicates they must be present');
   })).rejects.toThrow(/no resources.*signature/u);
   await expect(verify(meiliManifest, 'meilisearch 1.52.0')).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
-  const inventedSourceDistribution = { ...meiliManifest, distribution: 'source' };
-  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(inventedSourceDistribution));
-  await expect(verify(inventedSourceDistribution)).rejects.toThrow(/package variant/u);
+  const windowsManifest = { ...meiliManifest, target: 'win32-x64' };
+  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(windowsManifest));
+  await expect(verify(windowsManifest)).rejects.toThrow(/package target/u);
+  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
+  await expect(verify({ ...meiliManifest, releaseTag: 'v1.53.1' })).rejects.toThrow(/prepared producer identity/u);
+  await writeFile(path.join(resources, 'bin/vcruntime140.dll'), 'crt');
+  await expect(verify()).rejects.toThrow(/Only the Windows package contains vcruntime140\.dll/u);
+  await rm(path.join(resources, 'bin/vcruntime140.dll'));
   await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'stale skill');
   await expect(verify()).rejects.toThrow(/Agent Skill/u);
@@ -607,18 +609,18 @@ it('verifies BuildInfo and every packaged runtime before accepting an app', asyn
   await writeFile(path.join(resources, 'search/coct-main.txt'), 'wrong lexicon');
   await expect(verify()).rejects.toThrow(/search lexicon bytes/u);
   await writeFile(path.join(resources, 'search/coct-main.txt'), lexiconBytes);
-  await writeFile(path.join(resources, 'bin/meilisearch'), 'official wrong pair');
+  await writeFile(path.join(resources, 'bin/meilisearch'), 'wrong pair');
   await expect(verify()).rejects.toThrow(/Meilisearch bytes/u);
 
   await writeFile(path.join(resources, 'bin/meilisearch'), meiliBinary);
-  const validationProductName = 'XR Update Verify Chinese';
-  const validationAppId = 'com.xrcollector.verify.public.chinese';
+  const validationProductName = 'XR Update Verify Public';
+  const validationAppId = 'com.xrcollector.verify.public';
   await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0',
     productName: validationProductName, xrCollectorAppId: validationAppId, xrCollectorUpdateRepository: 'derektu/xr-collector-test' }));
   await rm(path.join(resources, 'app.asar'));
   await createPackage(asarSource, path.join(resources, 'app.asar'));
   await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), path.join(outputDir, `mac-arm64/${validationProductName}.app`));
-  await expect(verifyPackagedApplication({ outputDir, commit, version: '0.1.0', target: 'darwin-arm64', variant: 'chinese',
+  await expect(verifyPackagedApplication({ outputDir, commit, version: '0.1.0', target: 'darwin-arm64',
     productName: validationProductName, appId: validationAppId, updateRepository: 'derektu/xr-collector-test' },
   { trustedManifest: meiliManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill,
     runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }), verifyMacBundle: async () => undefined }))
@@ -629,7 +631,7 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   const outputDir = await temporaryRoot('xr-signed-readback-');
   const stapled = { bytes: 16, sha256: 'b'.repeat(64) };
   const readBack = (verifiedAppIdentity: unknown, actual = stapled) => verifyPackagedApplication({
-    outputDir, commit: 'a'.repeat(40), version: '0.1.0', target: 'darwin-arm64', variant: 'chinese',
+    outputDir, commit: 'a'.repeat(40), version: '0.1.0', target: 'darwin-arm64',
     signingPolicy: 'developer-id-notarized', expectedTeamId: 'ABCDE12345', verifiedAppIdentity,
   }, {
     describeArtifact: async () => actual,
@@ -644,22 +646,22 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
 it('writes unique update metadata and an exact artifact inventory', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-package-artifacts-'));
   roots.push(root);
-  const installer = path.join(root, 'XR-Collector-0.1.0-official-win-x64-setup.exe');
+  const installer = path.join(root, 'XR-Collector-0.1.0-win-x64-setup.exe');
   await writeFile(installer, 'installer');
   const result = await writeArtifactHandoff({
-    outputDir: root, target: 'win32-x64', variant: 'official', version: '0.1.0', commit: 'a'.repeat(40),
-    buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'build', target: 'win32-x64', variant: 'official', sourceDirty: false },
+    outputDir: root, target: 'win32-x64', version: '0.1.0', commit: 'a'.repeat(40),
+    buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'build', target: 'win32-x64', sourceDirty: false },
     artifacts: [installer], host: { platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true },
     toolVersions: { node: 'v22' }, signing: { status: 'unsigned' },
   });
-  expect(path.basename(result.updateMetadata)).toBe('XR-Collector-0.1.0-official-win32-x64-update.yml');
-  expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-official-win32-x64-artifacts.json');
+  expect(path.basename(result.updateMetadata)).toBe('XR-Collector-0.1.0-win32-x64-update.yml');
+  expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-win32-x64-artifacts.json');
   const manifest = JSON.parse(await readFile(result.artifactManifest, 'utf8'));
   expect(manifest.packageIdentity).toEqual({ productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' });
   expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual([
-    'XR-Collector-0.1.0-official-win-x64-setup.exe',
-    'XR-Collector-0.1.0-official-win32-x64-update.yml',
+    'XR-Collector-0.1.0-win-x64-setup.exe',
+    'XR-Collector-0.1.0-win32-x64-update.yml',
   ]);
   expect(manifest.artifacts[0].sha256).toBe(createHash('sha256').update('installer').digest('hex'));
-  expect(await readFile(result.updateMetadata, 'utf8')).toContain('XR-Collector-0.1.0-official-win-x64-setup.exe');
+  expect(await readFile(result.updateMetadata, 'utf8')).toContain('XR-Collector-0.1.0-win-x64-setup.exe');
 });

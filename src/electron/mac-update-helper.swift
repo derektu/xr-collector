@@ -22,7 +22,6 @@ private struct UpdateRequest: Decodable {
     let expectedVersion: String
     let expectedBuildId: String
     let expectedTarget: String
-    let expectedVariant: String
     let launchEnvironment: [String: String]?
     let timeoutMs: Int?
 }
@@ -144,7 +143,7 @@ private func identity(_ appPath: String, _ r: UpdateRequest) throws -> BuildIden
     let build = try readObject(appPath + "/Contents/Resources/build-info.json")
     guard build["schemaVersion"] as? Int == 1, build["kind"] as? String == "packaged",
           build["version"] as? String == version, build["target"] as? String == r.expectedTarget,
-          build["variant"] as? String == r.expectedVariant, let buildId = build["buildId"] as? String,
+          let buildId = build["buildId"] as? String,
           !buildId.isEmpty else { throw fail("bundle_build_info_invalid") }
     return BuildIdentity(version: version, buildId: buildId)
 }
@@ -240,7 +239,7 @@ private func main() throws {
     request = r
     guard r.schemaVersion == 1, let uuid = UUID(uuidString: r.runId), uuid.uuidString.lowercased() == r.runId,
           r.nonce.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
-          r.expectedTarget == "darwin-arm64", ["chinese", "official"].contains(r.expectedVariant),
+          r.expectedTarget == "darwin-arm64",
           r.expectedVersion != r.previousVersion, r.expectedBuildId != r.previousBuildId,
           (r.timeoutMs ?? 60000) >= 1000, (r.timeoutMs ?? 60000) <= 120000 else { throw fail("request_identity_invalid") }
     let ownPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path

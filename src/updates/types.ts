@@ -1,6 +1,6 @@
 import type { BuildInfo, DeviceUpdateStatus, UpdateOffer } from '../core/types.js';
 
-export interface UpdateIdentity { version: string; target: string; variant: 'chinese' | 'official' }
+export interface UpdateIdentity { version: string; target: string }
 export interface UpdateSource {
   readonly id: string;
   check(identity: UpdateIdentity, signal?: AbortSignal): Promise<UpdateOffer | null>;

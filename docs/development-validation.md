@@ -142,9 +142,9 @@ Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，doctor 的 `p
 
 ## 6. 平台打包
 
-交付平台固定為 Mac arm64 與 Windows x64，各平台在自己的建置機建置：Mac 在 Apple Silicon Mac 執行 `npm run package:mac`，Windows 在 x64 Windows 執行 `npm run package:win`。建置機的準備步驟與 `npm run doctor:build` 的檢查項目見 [README 的建置機](../README.md#建置機)。預設中文精簡引擎產物在 `release/`。明確需要官方完整 Meilisearch 時使用 `npm run package:mac:official` 或 `npm run package:win:official`，產物分開放在 `release/official/`；每個 App 只包含一種引擎。所有入口都使用 `--publish never`。
+交付平台固定為 Mac arm64 與 Windows x64，各平台在自己的建置機建置：Mac 在 Apple Silicon Mac 執行 `npm run package:mac`，Windows 在 x64 Windows 執行 `npm run package:win`。建置機的準備步驟與 `npm run doctor:build` 的檢查項目見 [建置、測試與發布](building.md)。產物在 `release/`，所有入口都使用 `--publish never`。
 
-正式候選產物由兩台建置機從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、variant、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
+正式候選產物由兩台建置機從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
 
 **簽章與公證的使用時機**：每次 Developer ID 建置都要送 Apple 公證兩次並等待結果，成本高，只花在最終發布候選上。
 
@@ -170,11 +170,10 @@ Mac 正式候選另以 `--mac-signing-mode developer-id-notarized --mac-signing-
 
 ```bash
 npm run package:mac -- --mac-signing-mode developer-id-notarized --mac-signing-env /absolute/signing/root/.env --mac-signing-root /absolute/signing/root
-npm run package:mac:official -- --mac-signing-mode developer-id-notarized --mac-signing-env /absolute/signing/root/.env --mac-signing-root /absolute/signing/root
 ```
 
-Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。publisher 也必須重驗 DMG 的公證收據與 `Notarized Developer ID` 來源，並對 DMG 內及完整解開的 ZIP 內的 App 重跑相同 identity、公證與 runtime gate。
+Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。
 
-GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的中文測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
+GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
 
-#35 提供在使用者 Mac 執行的發布工具與附件來源契約；#36 完成 updater 後才固定首版 commit，並從該 commit 建置、驗收及發布四個正式候選。GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata；#35 在正式發布前確認 repository 已公開，並以無 GitHub 登入／token 的客戶端驗證。具體順序與契約見 [本機安裝包計畫](local-packaging-plan.md)。
+正式 Release 只接收兩台建置機從同一個乾淨 commit 建置並驗收的 Mac 與 Windows 候選；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata。發布步驟見 [建置、測試與發布](building.md#發布)。

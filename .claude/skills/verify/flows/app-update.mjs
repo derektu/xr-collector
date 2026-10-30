@@ -26,7 +26,7 @@ export async function run({ instance, page, record, waitFor }) {
     expect(updateApiAvailable, '裝置更新 API 已由產品提供', { id: 'u36.update-api', actual: initialApi });
     if (!updateApiAvailable) return;
     const unavailable = async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ update: {
-      phase: 'idle', currentVersion: '0.1.0', target: 'darwin-arm64', variant: 'chinese', installerAvailable: false,
+      phase: 'idle', currentVersion: '0.1.0', target: 'darwin-arm64', installerAvailable: false,
       offer: null, ready: null, lastAttempt: { id: 'fixture', version: '0.1.0', buildId: 'fixture', startedAt: '2026-10-28T00:00:00.000Z',
         finishedAt: '2026-10-28T00:01:00.000Z', outcome: 'unknown', message: '無法確認 0.1.0 的安裝結果。' },
       progress: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null,

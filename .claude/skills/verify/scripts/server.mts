@@ -74,21 +74,21 @@ const program = (name: string, environmentName: string) => process.env[environme
 const updateEnabled = () => updateModulesAvailable && data === 'synthetic' && catalog().updates?.enabled === true;
 const sha256 = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', version: '0.1.0', builtAt: '2026-10-27T00:00:00.000Z',
-  commit: '1'.repeat(40), buildId: 'verify-update-0.1.0', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false });
+  commit: '1'.repeat(40), buildId: 'verify-update-0.1.0', target: 'darwin-arm64', sourceDirty: false });
 const updateFixture = (version = String(catalog().updates?.version ?? '0.1.1')) => {
   const prefix = Buffer.from(`XR-COLLECTOR-VERIFY-UPDATE-${version}\n`);
   const payload = Buffer.concat([prefix, Buffer.alloc(100_000 - prefix.byteLength, version.endsWith('.2') ? 0x37 : 0x36)]);
   const base = `http://127.0.0.1:${port('FEEDS')}/updates/v${version}/`;
-  const payloadName = `XR-Collector-${version}-chinese-mac-arm64.zip`;
-  const manifestName = `XR-Collector-${version}-chinese-mac-arm64.manifest.json`;
+  const payloadName = `XR-Collector-${version}-mac-arm64.zip`;
+  const manifestName = `XR-Collector-${version}-mac-arm64.manifest.json`;
   const nextBuildInfo = { ...fixtureBuildInfo, kind: 'packaged', version, buildId: `verify-update-${version}` };
   const payloadAsset = { name: payloadName, url: `${base}${payloadName}`, bytes: payload.byteLength, sha256: sha256(payload) };
-  const manifestBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit: '2'.repeat(40), target: 'darwin-arm64', variant: 'chinese',
+  const manifestBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit: '2'.repeat(40), target: 'darwin-arm64',
     buildInfo: { ...nextBuildInfo, commit: '2'.repeat(40) }, artifacts: [payloadAsset] }));
   const manifestAsset = { name: manifestName, url: `${base}${manifestName}`, bytes: manifestBody.byteLength, sha256: sha256(manifestBody) };
   const indexBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, tag: `v${version}`, commit: '2'.repeat(40),
     releaseNotes: `## 驗證版 ${version}\n\n- 合成更新，只驗證共用下載與等待流程。`, source: { id: 'verify-private-feed', baseUrl: base },
-    candidates: [{ target: 'darwin-arm64', variant: 'chinese', updatePayload: payloadAsset, manifest: manifestAsset }] }));
+    candidates: [{ target: 'darwin-arm64', updatePayload: payloadAsset, manifest: manifestAsset }] }));
   return { version, payload, payloadName, manifestName, manifestBody, indexBody };
 };
 
@@ -242,7 +242,7 @@ const sources = data === 'synthetic'
   ? await syntheticSources()
   : await createSourcePlugins({ profilePath, env: process.env, program });
 const updateService = updateEnabled() ? await UpdateService.open({
-  identity: { version: fixtureBuildInfo.version, target: fixtureBuildInfo.target, variant: fixtureBuildInfo.variant },
+  identity: { version: fixtureBuildInfo.version, target: fixtureBuildInfo.target },
   currentBuildId: fixtureBuildInfo.buildId,
   source: new GenericIndexSource(`http://127.0.0.1:${port('FEEDS')}/updates/release-index.json`),
   installer: {

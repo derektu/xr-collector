@@ -5,14 +5,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileSha256, inspectExecutable } from './build-meilisearch.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
-import { expectedOfficialManifest, readRuntimePins } from './prepare-meilisearch.mjs';
+import { expectedManifest, fileSha256, inspectExecutable, readRuntimePins } from './prepare-meilisearch.mjs';
 
 const options = parseArguments(process.argv.slice(2));
-if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--lexicon <path>] [--require-native]');
+if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--require-native]');
 const binary = path.resolve(options.binary);
-const lexicon = path.resolve(options.lexicon ?? 'resources/search/coct-main.txt');
 const manifestPath = path.resolve(options.manifest ?? path.join(path.dirname(binary), 'meilisearch-build.json'));
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const bytes = await readFile(binary);
@@ -21,20 +19,14 @@ if (await fileSha256(binary) !== manifest.binary?.sha256 || bytes.length !== man
   || inspected.arch !== manifest.binary?.arch || manifest.binary?.version !== '1.53.2') {
   throw new Error('Smoke binary does not match its build manifest.');
 }
-if (manifest.distribution === 'official') {
-  const expected = expectedOfficialManifest(await readRuntimePins(), manifest.target);
-  if (JSON.stringify(manifest) !== JSON.stringify(expected)) throw new Error('Smoke official manifest does not match the pinned release asset.');
+if (JSON.stringify(manifest) !== JSON.stringify(expectedManifest(await readRuntimePins(), manifest.target))) {
+  throw new Error('Smoke manifest does not match the pinned release asset.');
 }
 if (options.requireNative) {
   const expected = manifest.target === 'darwin-arm64' ? ['darwin', 'arm64']
-    : manifest.target === 'darwin-x64' ? ['darwin', 'x64']
-      : manifest.target === 'win32-x64' ? ['win32', 'x64'] : [];
+    : manifest.target === 'win32-x64' ? ['win32', 'x64'] : [];
   const host = await probePhysicalHost();
-  const producerMatches = manifest.distribution === 'official'
-    || (manifest.runner?.platform === host.platform && manifest.runner?.processArch === host.processArch
-      && manifest.runner?.hostArch === host.hostArch && manifest.runner?.emulated === false);
-  if (host.platform !== expected[0] || host.processArch !== expected[1] || host.hostArch !== expected[1]
-    || host.emulated || !producerMatches) {
+  if (host.platform !== expected[0] || host.processArch !== expected[1] || host.hostArch !== expected[1] || host.emulated) {
     throw new Error(`Native smoke for ${manifest.target} cannot run on ${host.platform}/${host.processArch} physical ${host.hostArch}.`);
   }
 }
@@ -44,7 +36,7 @@ const port = await availablePort();
 const key = randomBytes(32).toString('hex');
 let engine;
 try {
-  engine = await start(binary, database, port, key, lexicon);
+  engine = await start(binary, database, port, key);
   const baseUrl = `http://127.0.0.1:${port}`;
   const version = await request(baseUrl, key, '/version');
   if (version.pkgVersion !== '1.53.2') throw new Error(`Smoke engine version is ${version.pkgVersion ?? 'unknown'}, expected 1.53.2.`);
@@ -86,7 +78,7 @@ try {
   if (youtubeOnly.totalHits !== 2 || JSON.stringify(youtubeOnly.hits.map(({ id }) => id).sort()) !== JSON.stringify(['youtube:one', 'youtube:three'])
     || rssOnly.totalHits !== 1 || rssOnly.hits[0]?.id !== 'rss:two') throw new Error('Source filter counterfactual smoke failed.');
   await stop(engine);
-  engine = await start(binary, database, port, key, lexicon);
+  engine = await start(binary, database, port, key);
   const restartedStats = await request(baseUrl, key, '/indexes/documents_v2/stats');
   const restartedSearch = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(searchPayload) });
   const restartedEnglish = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(englishPayload) });
@@ -98,14 +90,9 @@ try {
   await rm(database, { recursive: true, force: true });
 }
 
-async function start(executable, databasePath, portNumber, apiKey, dictionaryPath) {
+async function start(executable, databasePath, portNumber, apiKey) {
   const child = spawn(executable, ['--db-path', databasePath, '--http-addr', `127.0.0.1:${portNumber}`, '--env', 'production', '--no-analytics'], {
-    env: {
-      ...process.env,
-      MEILI_MASTER_KEY: apiKey,
-      XR_COLLECTOR_MEILISEARCH_DICTIONARY_PATH: dictionaryPath,
-      XR_COLLECTOR_MEILISEARCH_DISABLE_SECONDARY_SPLIT: '1',
-    },
+    env: { ...process.env, MEILI_MASTER_KEY: apiKey },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
@@ -163,7 +150,6 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--binary') parsed.binary = argv[++index];
     else if (argv[index] === '--manifest') parsed.manifest = argv[++index];
-    else if (argv[index] === '--lexicon') parsed.lexicon = argv[++index];
     else if (argv[index] === '--require-native') parsed.requireNative = true;
     else throw new Error(`Unknown argument ${argv[index]}`);
   }
