@@ -165,7 +165,7 @@ describe('Agent authenticated HTTP access', () => {
   it.skipIf(!existsSync('resources/bin/mac/meilisearch'))('serves the platform-neutral HTTP contract and keeps credentials across restart', async () => {
     const { root, vault, collector } = await fixture();
     const lexiconPath = path.resolve('resources/search/coct-main.txt');
-    const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search'), lexiconPath });
+    const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search') });
     cleanup.push(() => engine.close());
     const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));

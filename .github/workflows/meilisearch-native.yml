@@ -4,9 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - scripts/build-meilisearch.mjs
       - scripts/prepare-meilisearch.mjs
-      - scripts/meilisearch-build-recipe.json
       - src/search/meilisearch-runtime-pins.json
       - src/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
@@ -17,9 +15,7 @@ on:
       - package.json
   push:
     paths:
-      - scripts/build-meilisearch.mjs
       - scripts/prepare-meilisearch.mjs
-      - scripts/meilisearch-build-recipe.json
       - src/search/meilisearch-runtime-pins.json
       - src/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
@@ -33,23 +29,17 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  smoke:
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-15
             target: darwin-arm64
-            rust_target: aarch64-apple-darwin
             binary: resources/bin/mac/meilisearch
-            manifest: resources/bin/mac/meilisearch-build.json
-            official: true
           - runner: windows-2022
             target: win32-x64
-            rust_target: x86_64-pc-windows-msvc
             binary: resources/bin/win/meilisearch.exe
-            manifest: resources/bin/win/meilisearch-build.json
-            official: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -57,62 +47,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.91.1
-          targets: ${{ matrix.rust_target }}
       - run: npm ci
-      - name: Build Chinese runtime
-        run: npm run prepare:meilisearch -- --variant chinese --target ${{ matrix.target }} --require-native
-      - run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
-      - name: Check Chinese Windows runtime dependencies
+      - name: Download pinned runtime
+        run: npm run prepare:meilisearch -- --target ${{ matrix.target }} --require-native
+      - name: Place the pinned Visual C++ runtime beside Meilisearch
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $dumpbin = & $vswhere -latest -products '*' -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
-          if (-not $dumpbin) { throw 'MSVC dumpbin is required to inspect the Windows artifact.' }
-          $imports = & $dumpbin /dependents '${{ matrix.binary }}'
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the Windows artifact dependencies.' }
-          $imports | Write-Output
-          if ($imports -match '(?i)\b(?:VCRUNTIME|MSVCP|MSVCR)\d[^\s]*\.dll\b') {
-            throw 'The Windows artifact still requires an external Visual C++ runtime.'
-          }
-      - name: Upload Chinese runtime
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: meilisearch-chinese-${{ matrix.target }}
-          path: |
-            ${{ matrix.binary }}
-            ${{ matrix.manifest }}
-          if-no-files-found: error
-      - name: Download official runtime
-        if: matrix.official
-        run: npm run prepare:meilisearch -- --variant official --target ${{ matrix.target }} --require-native
-      - name: Smoke official runtime
-        if: matrix.official
-        run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
-      - name: Record official Windows runtime dependencies
-        if: runner.os == 'Windows' && matrix.official
-        shell: pwsh
-        run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $dumpbin = & $vswhere -latest -products '*' -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
-          if (-not $dumpbin) { throw 'MSVC dumpbin is required to inspect the official Windows artifact.' }
-          $imports = & $dumpbin /dependents '${{ matrix.binary }}'
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the official Windows artifact dependencies.' }
-          $imports | Tee-Object -FilePath official-runtime-dependencies.txt
-          Write-Output '::notice title=Official Windows runtime dependency::The official v1.53.2 binary imports VCRUNTIME140.dll; Microsoft Visual C++ v14 x64 runtime installation and redistribution are tracked by #34.'
-      - name: Record official Mac runtime dependencies
-        if: runner.os == 'macOS' && matrix.official
-        run: echo 'Mach-O runtime; PE dependency inspection is not applicable.' > official-runtime-dependencies.txt
-      - name: Upload official runtime
-        if: matrix.official
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: meilisearch-official-${{ matrix.target }}
-          path: |
-            ${{ matrix.binary }}
-            ${{ matrix.manifest }}
-            official-runtime-dependencies.txt
-          if-no-files-found: error
+        run: node scripts/prepare-windows-crt.mjs
+      - run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native

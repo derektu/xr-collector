@@ -55,7 +55,7 @@ async function withSearch<T>(
   use: (search: ManagedTranscriptSearch, engine: RunningMeilisearch, rebuilds: number) => Promise<T>,
 ): Promise<T> {
   const lexicon = await lexiconPromise;
-  const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath, lexiconPath: bundledLexicon });
+  const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
   running.add(engine);
   try {
     let rebuilds = 0;

@@ -36,7 +36,7 @@
       }
     }
   },
-  "officialWindowsCrt": {
+  "windowsCrt": {
     "fileName": "vcruntime140.dll",
     "bytes": 119888,
     "sha256": "642ae52687a7a6bfb03d0b20dc7e07f4b11ceca634f7eb7ba184d6711ab51a51",

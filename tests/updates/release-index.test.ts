@@ -4,17 +4,17 @@ import { compareVersions, offerFromIndex } from '../../src/updates/release-index
 import { GenericIndexSource, GitHubReleasesSource } from '../../src/updates/sources.js';
 
 const commit = 'a'.repeat(40);
-const identity = { version: '0.1.0', target: 'darwin-arm64', variant: 'chinese' as const };
+const identity = { version: '0.1.0', target: 'darwin-arm64' };
 const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.1', builtAt: '2026-10-26T00:00:00.000Z', commit,
-  buildId: 'build-b', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false };
+  buildId: 'build-b', target: 'darwin-arm64', sourceDirty: false };
 function fixture() {
   const baseUrl = 'https://downloads.example.test/v0.1.1/';
   const descriptor = (name: string, body: Buffer) => ({ name, url: `${baseUrl}${name}`, bytes: body.length, sha256: createHash('sha256').update(body).digest('hex') });
-  const payload = descriptor('XR-Collector-0.1.1-chinese-mac-arm64.zip', Buffer.from('payload'));
-  const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, version: '0.1.1', commit, target: 'darwin-arm64', variant: 'chinese', buildInfo,
+  const payload = descriptor('XR-Collector-0.1.1-mac-arm64.zip', Buffer.from('payload'));
+  const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, version: '0.1.1', commit, target: 'darwin-arm64', buildInfo,
     artifacts: [payload] }));
   const index = { schemaVersion: 1, version: '0.1.1', tag: 'v0.1.1', commit, releaseNotes: 'Fixes', source: { id: 'mirror', baseUrl },
-    candidates: [{ target: 'darwin-arm64', variant: 'chinese', updatePayload: payload, manifest: descriptor('manifest.json', manifest) }] };
+    candidates: [{ target: 'darwin-arm64', updatePayload: payload, manifest: descriptor('manifest.json', manifest) }] };
   return { index, manifest };
 }
 
@@ -23,7 +23,7 @@ describe('release index update source', () => {
     const { index, manifest } = fixture();
     const request = async (input: string | URL | Request) => new Response(manifest, { status: String(input).endsWith('manifest.json') ? 200 : 404 });
     const offer = await offerFromIndex(index, 'https://api.example.test/index.json', identity, request as typeof fetch);
-    expect(offer).toMatchObject({ version: '0.1.1', commit, target: 'darwin-arm64', variant: 'chinese', source: { id: 'mirror' }, buildInfo: { buildId: 'build-b' } });
+    expect(offer).toMatchObject({ version: '0.1.1', commit, target: 'darwin-arm64', source: { id: 'mirror' }, buildInfo: { buildId: 'build-b' } });
     expect(Object.isFrozen(offer)).toBe(true);
   });
 
@@ -32,18 +32,18 @@ describe('release index update source', () => {
   });
   it.each(['0.1.1-test.1', 'v0.1.1', '1.2'])('rejects non-stable version %s', (version) => expect(() => compareVersions(version, '0.1.0')).toThrow(/穩定/u));
 
-  it('rejects a missing variant and altered manifest bytes', async () => {
+  it('rejects a missing target and altered manifest bytes', async () => {
     const { index, manifest } = fixture();
-    await expect(offerFromIndex(index, 'https://example.test/index.json', { ...identity, variant: 'official' }, fetch)).rejects.toThrow(/沒有/u);
+    await expect(offerFromIndex(index, 'https://example.test/index.json', { ...identity, target: 'win32-x64' }, fetch)).rejects.toThrow(/沒有 win32-x64/u);
     const request = async () => new Response(Buffer.concat([manifest, Buffer.from('x')]));
     await expect(offerFromIndex(index, 'https://example.test/index.json', identity, request as typeof fetch)).rejects.toThrow(/大小/u);
   });
 
-  it('rejects a payload from another engine variant even when the index pins its real hash', async () => {
-    const { index, manifest } = fixture(); const body = Buffer.from('official payload');
-    const official = { name: 'XR-Collector-0.1.1-official-mac-arm64.zip', url: 'https://downloads.example.test/v0.1.1/XR-Collector-0.1.1-official-mac-arm64.zip',
+  it('rejects a payload for another platform even when the index pins its real hash', async () => {
+    const { index, manifest } = fixture(); const body = Buffer.from('windows payload');
+    const windows = { name: 'XR-Collector-0.1.1-win-x64-setup.exe', url: 'https://downloads.example.test/v0.1.1/XR-Collector-0.1.1-win-x64-setup.exe',
       bytes: body.length, sha256: createHash('sha256').update(body).digest('hex') };
-    index.candidates[0]!.updatePayload = official;
+    index.candidates[0]!.updatePayload = windows;
     const request = async () => new Response(manifest);
     await expect(offerFromIndex(index, 'https://example.test/index.json', identity, request as typeof fetch)).rejects.toThrow(/manifest/u);
   });

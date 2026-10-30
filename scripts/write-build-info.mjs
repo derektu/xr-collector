@@ -20,10 +20,6 @@ export async function createBuildInfo(options, dependencies = {}) {
   if (packaged && (!packagedTargets.has(options.target) || options.target !== target)) {
     throw new Error(`Packaged target must match the executing Node platform/architecture (${target}).`);
   }
-  if (options.variant !== undefined && options.variant !== 'chinese' && options.variant !== 'official') {
-    throw new Error('Build variant must be chinese or official.');
-  }
-  if (packaged && !options.variant) throw new Error('A packaged build requires an explicit engine variant.');
   const packageInfo = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
   const version = options.versionOverride ?? packageInfo.version;
   if (options.versionOverride !== undefined && (dependencies.sourceEnvironment ?? process.env).XR_COLLECTOR_VALIDATION_BUILD !== '1') {
@@ -49,18 +45,12 @@ export async function createBuildInfo(options, dependencies = {}) {
     sourceDirty = null;
   }
   if (packaged && sourceDirty !== false) throw new Error('A packaged build requires an actual clean Git checkout.');
-  let manifest = null;
-  if (environment.platform === 'darwin' || environment.platform === 'win32') {
+  if (packaged) {
     const directory = environment.platform === 'win32' ? 'win' : 'mac';
+    let manifest;
     try { manifest = JSON.parse(await readFile(path.join(projectRoot, 'resources', 'bin', directory, 'meilisearch-build.json'), 'utf8')); }
-    catch (error) {
-      if (packaged) throw new Error('The prepared runtime manifest is required for a packaged build.', { cause: error });
-    }
-  }
-  const variant = manifest?.distribution === 'official' ? 'official'
-    : manifest?.distribution === undefined && JSON.stringify(manifest?.features) === JSON.stringify(['chinese']) ? 'chinese' : null;
-  if (packaged && (manifest?.target !== options.target || variant !== options.variant)) {
-    throw new Error('Prepared runtime target/variant does not match the packaged build.');
+    catch (error) { throw new Error('The prepared runtime manifest is required for a packaged build.', { cause: error }); }
+    if (manifest?.target !== options.target) throw new Error('Prepared runtime target does not match the packaged build.');
   }
   return {
     schemaVersion: 1,
@@ -70,7 +60,6 @@ export async function createBuildInfo(options, dependencies = {}) {
     commit,
     buildId: randomUUID(),
     target,
-    variant: packaged ? options.variant : variant,
     sourceDirty,
   };
 }
@@ -88,7 +77,6 @@ function argumentsOf(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--kind') options.kind = argv[++i];
     else if (argv[i] === '--target') options.target = argv[++i];
-    else if (argv[i] === '--variant') options.variant = argv[++i];
     else if (argv[i] === '--version-override') options.versionOverride = argv[++i];
     else throw new Error(`Unknown build information argument ${argv[i]}.`);
   }

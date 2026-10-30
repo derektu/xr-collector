@@ -1,4 +1,3 @@
-scripts/meilisearch-patches/*.patch text eol=lf
-scripts/meilisearch-patches/*.rs text eol=lf
 resources/search/*.txt text eol=lf
 resources/search/*.json text eol=lf
+resources/windows/*.dll binary

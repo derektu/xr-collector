@@ -5,7 +5,7 @@ import { loadBuildInfo, validateBuildInfo } from '../../src/runtime/build-info.j
 const artifact = {
   schemaVersion: 1, kind: 'packaged', version: '0.7.0', builtAt: '2026-10-25T09:00:00.000Z',
   commit: '1234567890123456789012345678901234567890', buildId: 'fixture-build',
-  target: 'darwin-arm64', variant: 'chinese', sourceDirty: false,
+  target: 'darwin-arm64', sourceDirty: false,
 };
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof import('node:fs/promises')>();
@@ -25,13 +25,13 @@ describe('serialized build identity', () => {
 
   it.each([
     { sourceDirty: true }, { commit: null, sourceDirty: null }, { target: 'win32-x64' },
-    { kind: 'development' }, { variant: null }, { builtAt: 'yesterday' }, { commit: 'short' },
+    { kind: 'development' }, { builtAt: 'yesterday' }, { commit: 'short' },
   ])('rejects a packaged identity with invalid provenance %j', (change) => {
     expect(() => validateBuildInfo({ ...artifact, ...change }, environment)).toThrow(/valid application artifact/u);
   });
 
   it('preserves unknown development provenance without describing it as clean', () => {
-    const development = { ...artifact, kind: 'development', target: 'linux-x64', commit: null, sourceDirty: null, variant: null };
+    const development = { ...artifact, kind: 'development', target: 'linux-x64', commit: null, sourceDirty: null };
     expect(validateBuildInfo(development)).toMatchObject({ kind: 'development', commit: null, sourceDirty: null });
     expect(() => validateBuildInfo({ ...development, sourceDirty: false })).toThrow();
   });

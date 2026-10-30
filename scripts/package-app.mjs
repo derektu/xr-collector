@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
 import { assertBuildEnvironment } from './build-doctor.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
-import { TARGETS, validateBuiltBinary } from './build-meilisearch.mjs';
+import { TARGETS, validateExecutable } from './prepare-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
 import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
 import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
@@ -28,7 +28,6 @@ export function parsePackageArguments(argv) {
   const result = {};
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--target') result.target = argv[++index];
-    else if (argv[index] === '--variant') result.variant = argv[++index];
     else if (argv[index] === '--validation-version') result.validationVersion = argv[++index];
     else if (argv[index] === '--validation-app-id') result.validationAppId = argv[++index];
     else if (argv[index] === '--validation-product-name') result.validationProductName = argv[++index];
@@ -39,7 +38,6 @@ export function parsePackageArguments(argv) {
     else throw new Error(`Unknown packaging argument ${argv[index]}.`);
   }
   if (!['darwin-arm64', 'win32-x64'].includes(result.target)) throw new Error(`Unsupported packaging target ${result.target ?? 'missing'}; use darwin-arm64 or win32-x64.`);
-  if (!['chinese', 'official'].includes(result.variant)) throw new Error(`Unsupported packaging variant ${result.variant ?? 'missing'}; use chinese or official.`);
   const signingOptions = [result.macSigningMode, result.macSigningEnv, result.macSigningRoot];
   if (signingOptions.some(Boolean)) {
     if (!signingOptions.every(Boolean) || result.macSigningMode !== DEVELOPER_ID_POLICY || result.target !== 'darwin-arm64') {
@@ -61,22 +59,22 @@ export function parsePackageArguments(argv) {
 }
 
 /**
- * Builds, signs, verifies and hands off one target/variant package. Each stage's wall time is
+ * Builds, signs, verifies and hands off one target's package. Each stage's wall time is
  * recorded; once the checkout lock is held, the run prints a timing table and writes
- * `XR-Collector-<version>-<variant>-<target>-timings.json` to the output directory, whether the
+ * `XR-Collector-<version>-<target>-timings.json` to the output directory, whether the
  * run succeeds or fails.
  */
 export async function packageApplication(options, dependencies = {}) {
   const run = dependencies.run ?? runCommand;
   const probeHost = dependencies.probePhysicalHost ?? (() => probePhysicalHost({ run: runForOutput }));
   const ownCheckout = dependencies.withPackageCheckoutLock ?? withPackageCheckoutLock;
-  const outputDir = dependencies.outputDir ?? path.join(projectRoot, options.variant === 'official' ? 'release/official' : 'release');
+  const outputDir = dependencies.outputDir ?? path.join(projectRoot, 'release');
   return ownCheckout(path.join(projectRoot, '.local/package-app.lock'), async ({ signal, processTracker }) => {
     const timer = dependencies.timer ?? createStageTimer();
-    const report = { command: 'package', target: options.target, variant: options.variant,
+    const report = { command: 'package', target: options.target,
       signingPolicy: options.macSigningMode ?? (options.target === 'darwin-arm64' ? 'ad-hoc' : 'unsigned') };
     const describeRun = () => ({
-      file: path.join(dependencies.timingReportDirectory ?? outputDir, `XR-Collector-${report.version ?? 'unknown'}-${options.variant}-${options.target}-timings.json`),
+      file: path.join(dependencies.timingReportDirectory ?? outputDir, `XR-Collector-${report.version ?? 'unknown'}-${options.target}-timings.json`),
       ...report,
     });
     return runWithTimingReport(timer, describeRun, async () => {
@@ -104,30 +102,25 @@ export async function packageApplication(options, dependencies = {}) {
     const electronBuilderCli = path.join(projectRoot, 'node_modules/electron-builder/cli.js');
     await stat(npmCli);
     await stat(electronBuilderCli);
-    await timer.time('check build environment', () => (dependencies.assertBuildEnvironment ?? assertBuildEnvironment)({ target: options.target, variant: options.variant }));
+    await timer.time('check build environment', () => (dependencies.assertBuildEnvironment ?? assertBuildEnvironment)({ target: options.target }));
     const targetArg = options.target === 'darwin-arm64' ? 'mac' : 'win';
     // Packaging installs runtimes only from the per-user cache; `npm run prepare:runtime` fills it.
-    await timer.time(`runtime: install yt-dlp/Deno and Meilisearch ${options.variant} from cache`, () => buildLifecycleRun(process.execPath, [
-      path.join(projectRoot, 'scripts/prepare-runtime.mjs'), targetArg, '--variant', options.variant, '--cache-only']));
-    if (options.target === 'win32-x64' && options.variant === 'official') {
-      await timer.time('runtime: prepare Windows CRT', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]));
-    } else if (options.target === 'win32-x64') {
-      await rm(path.join(projectRoot, 'resources/bin/win/vcruntime140.dll'), { force: true });
+    await timer.time('runtime: install yt-dlp/Deno and Meilisearch from cache', () => buildLifecycleRun(process.execPath, [
+      path.join(projectRoot, 'scripts/prepare-runtime.mjs'), targetArg, '--cache-only']));
+    if (options.target === 'win32-x64') {
+      await timer.time('runtime: verify and install Windows CRT', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/prepare-windows-crt.mjs')]));
     }
     await timer.time('build: npm run build', () => buildLifecycleRun(process.execPath, [npmCli, 'run', 'build']));
-    await timer.time('build: write BuildInfo', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target, '--variant', options.variant,
+    await timer.time('build: write BuildInfo', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target,
       ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]));
     await timer.time('build: stage BuildInfo sidecar', () => (dependencies.stageBuildInfoSidecar ?? stageBuildInfoSidecar)(projectRoot));
     if (options.target === 'darwin-arm64') await timer.time('build: macOS update helper', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]));
     await timer.time('clear previous artifacts', () => (dependencies.clearPreviousArtifactSet ?? clearPreviousArtifactSet)(outputDir, [
-      expectedArtifactPrefix(version, options.variant, options.target),
-      `XR-Collector-${version}-${options.variant}-${options.target}`,
+      expectedArtifactPrefix(version, options.target),
+      `XR-Collector-${version}-${options.target}`,
     ]));
     const signed = signingConfiguration !== null;
-    const config = signed
-      ? (options.variant === 'official' ? 'electron-builder.official.signed.yml' : 'electron-builder.signed.yml')
-      : (options.variant === 'official' ? 'electron-builder.official.yml' : null);
-    const commonBuilderArgs = [...(config ? ['--config', config] : []),
+    const commonBuilderArgs = [...(signed ? ['--config', 'electron-builder.signed.yml'] : []),
       ...validationBuilderArguments(options), '--publish', 'never'];
     const builderEnvironment = signedBuilderEnvironmentForPackage(signingConfiguration, signingContext);
     let signingReceipt = null;
@@ -147,7 +140,7 @@ export async function packageApplication(options, dependencies = {}) {
       // packaged App, are then byte-compared with the stapled App instead of re-running that gate.
       const notarize = dependencies.notarizeAndStaple ?? notarizeAndStaple;
       await timer.group('verify: App Developer ID before notarization', (child) => verifyApp(appPath, signingConfiguration.teamId, { run: verifyRun, timer: child }));
-      const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', `${version}-${options.variant}`);
+      const evidenceDirectory = path.join(projectRoot, '.local/ticket-artifacts/35/notary', version);
       const app = await timer.group('notarize: App', (child) => notarize({
         kind: 'app', artifactPath: appPath, credentials: signingConfiguration.notary, evidenceDirectory,
       }, { signal, processTrackers: signingContext.processTrackers, timer: child }));
@@ -157,8 +150,8 @@ export async function packageApplication(options, dependencies = {}) {
       const installerArgs = [...commonBuilderArgs, '--mac', 'dmg', 'zip', '--prepackaged', appPath, identityOverride];
       await timeElectronBuilder(timer, 'electron-builder --prepackaged (signed DMG, ZIP)', { signedAfterPack: true },
         (hookArgs, hookEnvironment) => buildLifecycleRun(process.execPath, [electronBuilderCli, ...installerArgs, ...hookArgs], { environment: { ...builderEnvironment, ...hookEnvironment } }));
-      const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.dmg');
-      const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.variant, options.target), '.zip');
+      const dmgPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.target), '.dmg');
+      const zipPath = await findUniqueArtifact(outputDir, expectedArtifactPrefix(version, options.target), '.zip');
       const dmg = await timer.group('notarize: DMG', (child) => notarize({
         kind: 'dmg', artifactPath: dmgPath, credentials: signingConfiguration.notary, evidenceDirectory,
       }, { signal, processTrackers: signingContext.processTrackers, timer: child }));
@@ -182,7 +175,7 @@ export async function packageApplication(options, dependencies = {}) {
       await timeElectronBuilder(timer, `electron-builder ${options.target === 'darwin-arm64' ? '--mac (pack, ad-hoc codesign, ZIP, DMG)' : '--win (pack, NSIS)'}`, { signedAfterPack: false },
         (hookArgs, hookEnvironment) => buildLifecycleRun(process.execPath, [electronBuilderCli, ...builderArgs, ...hookArgs], { environment: { ...packageChildEnvironment(), ...hookEnvironment } }));
     }
-    const expected = { commit, version, target: options.target, variant: options.variant,
+    const expected = { commit, version, target: options.target,
       ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
     const verified = await timer.group('verify: packaged App (BuildInfo, runtime, resources)', (child) => verifyPackagedApplication({ outputDir, ...expected,
@@ -195,10 +188,6 @@ export async function packageApplication(options, dependencies = {}) {
         npm: (await capture(process.execPath, [npmCli, '--version'])).trim(),
         electron: packageJson.devDependencies.electron,
         electronBuilder: (await capture(process.execPath, [electronBuilderCli, '--version'])).trim(),
-        ...(options.variant === 'chinese' ? {
-          cargo: (await capture('cargo', ['+1.91.1', '--version'])).trim(),
-          rustc: (await capture('rustc', ['+1.91.1', '--version'])).trim(),
-        } : {}),
       },
     }));
     const handoff = await writeArtifactHandoff({ outputDir, ...expected, timer, buildInfo: verified.buildInfo, artifacts, host,
@@ -207,8 +196,8 @@ export async function packageApplication(options, dependencies = {}) {
         meilisearch: verified.meiliManifest,
         signed: verified.signedRuntimeIdentity ?? null,
         searchLexicon: verified.lexiconManifest,
-        windowsCrt: options.target === 'win32-x64' && options.variant === 'official'
-          ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt
+        windowsCrt: options.target === 'win32-x64'
+          ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).windowsCrt
           : null,
       },
       signing: signingReceipt ?? (options.target === 'darwin-arm64'
@@ -314,7 +303,7 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
  * the stapled App that already passed the Developer ID, runtime signature and notarization gates,
  * so those gates are not repeated.
  */
-export async function verifyPackagedApplication({ outputDir, commit, version, target, variant, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, expectedTeamId, verifiedAppIdentity }, dependencies = {}) {
+export async function verifyPackagedApplication({ outputDir, commit, version, target, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, expectedTeamId, verifiedAppIdentity }, dependencies = {}) {
   const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;
   const resources = appPath
     ? path.join(appPath, 'Contents/Resources')
@@ -332,7 +321,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
   const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
   if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
-  const required = { schemaVersion: 1, kind: 'packaged', version, commit, target, variant, sourceDirty: false };
+  const required = { schemaVersion: 1, kind: 'packaged', version, commit, target, sourceDirty: false };
   for (const [key, value] of Object.entries(required)) if (buildInfo[key] !== value) throw new Error(`Packaged BuildInfo ${key} does not match the packaging request.`);
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');
   const bin = path.join(resources, 'bin');
@@ -344,7 +333,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     signedRuntimeIdentity = await timer.group('signed runtime inventory', (child) => (dependencies.verifySignedRuntimeInventory ?? verifySignedRuntimeInventory)(bin, expectedTeamId, { verifySignatures: false, timer: child }));
   } else if (dependencyManifest.target !== target || !await timer.time('yt-dlp/Deno inventory', () => verifyRuntimeDependencyInstallation(bin, dependencyManifest))) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
   const meiliManifest = JSON.parse(await readFile(path.join(bin, 'meilisearch-build.json'), 'utf8'));
-  if (meiliManifest.target !== target || manifestVariant(meiliManifest) !== variant) throw new Error('Packaged Meilisearch identity does not match the package variant.');
+  if (meiliManifest.target !== target) throw new Error('Packaged Meilisearch target does not match the package target.');
   const runtimeDirectory = target === 'win32-x64' ? 'win' : 'mac';
   const trustedManifest = dependencies.trustedManifest
     ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/bin', runtimeDirectory, 'meilisearch-build.json'), 'utf8'));
@@ -352,7 +341,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   const executable = path.join(bin, target === 'win32-x64' ? 'meilisearch.exe' : 'meilisearch');
   if (signingPolicy !== DEVELOPER_ID_POLICY
     && await timer.time('hash Meilisearch', async () => (await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256)) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
-  const validateBinary = dependencies.validateBinary ?? validateBuiltBinary;
+  const validateBinary = dependencies.validateBinary ?? validateExecutable;
   const binaryIdentity = await timer.time('Meilisearch executable identity', () => validateBinary(executable, TARGETS[target], '1.53.2', dependencies.runBinary ?? runForOutput));
   if (signingPolicy === DEVELOPER_ID_POLICY) {
     if (binaryIdentity.version !== meiliManifest.binary.version || binaryIdentity.versionOutput !== meiliManifest.binary.versionOutput
@@ -380,10 +369,10 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     const helperInfo = await stat(helper);
     if (!helperInfo.isFile() || (helperInfo.mode & 0o111) === 0) throw new Error('Packaged macOS update helper is missing or not executable.');
   }
-  if (target === 'win32-x64' && variant === 'official') {
-    const pins = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8'));
-    if ((await stat(crt)).size !== pins.officialWindowsCrt.bytes || await sha256(crt) !== pins.officialWindowsCrt.sha256) throw new Error('Packaged official Windows CRT does not match its pin.');
-  } else if (await exists(crt)) throw new Error('Only the official Windows package may contain vcruntime140.dll.');
+  if (target === 'win32-x64') {
+    const pin = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).windowsCrt;
+    if ((await stat(crt)).size !== pin.bytes || await sha256(crt) !== pin.sha256) throw new Error('Packaged Windows CRT does not match its pin.');
+  } else if (await exists(crt)) throw new Error('Only the Windows package contains vcruntime140.dll.');
   return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity, lexiconManifest };
 }
 
@@ -474,7 +463,7 @@ export function assertPackagedProductMetadata(metadata, productName, appId = 'co
 }
 
 export async function writeArtifactHandoff(input) {
-  const base = `XR-Collector-${input.version}-${input.variant}-${input.target}`;
+  const base = `XR-Collector-${input.version}-${input.target}`;
   const updateMetadata = path.join(input.outputDir, `${base}-update.yml`);
   const primary = input.artifacts.find((artifact) => input.target === 'darwin-arm64' ? artifact.endsWith('.zip') : artifact.endsWith('.exe'));
   if (!primary) throw new Error(`No primary update artifact exists for ${input.target}.`);
@@ -486,7 +475,7 @@ export async function writeArtifactHandoff(input) {
   const artifacts = [...input.artifacts, updateMetadata];
   const artifactManifest = path.join(input.outputDir, `${base}-artifacts.json`);
   const document = {
-    schemaVersion: 1, version: input.version, commit: input.commit, target: input.target, variant: input.variant,
+    schemaVersion: 1, version: input.version, commit: input.commit, target: input.target,
     packageIdentity: { productName: input.productName ?? 'XR Collector', appId: input.appId ?? 'com.moneydj.xrcollector', updateRepository: input.updateRepository ?? productionUpdateRepository },
     buildInfo: input.buildInfo, builderHost: input.host, toolVersions: input.toolVersions, signing: input.signing,
     runtimeIdentity: input.runtimeIdentity ?? null,
@@ -501,12 +490,12 @@ export async function writeArtifactHandoff(input) {
   return { updateMetadata, artifactManifest, manifest: document };
 }
 
-async function findInstallerArtifacts(outputDir, { version, variant, target }, signingPolicy) {
-  const expectedPrefix = expectedArtifactPrefix(version, variant, target);
+async function findInstallerArtifacts(outputDir, { version, target }, signingPolicy) {
+  const expectedPrefix = expectedArtifactPrefix(version, target);
   const entries = (await readdir(outputDir)).filter((name) => name.startsWith(expectedPrefix) && ['.dmg', '.zip', '.exe', '.blockmap'].includes(path.extname(name)));
   const installers = entries.filter((name) => ['.dmg', '.zip', '.exe'].includes(path.extname(name)));
   const expectedCount = target === 'darwin-arm64' ? 2 : 1;
-  if (installers.length !== expectedCount) throw new Error(`Expected ${expectedCount} uniquely named ${variant} ${target} installer artifacts, found ${installers.length}.`);
+  if (installers.length !== expectedCount) throw new Error(`Expected ${expectedCount} uniquely named ${target} installer artifacts, found ${installers.length}.`);
   if (target === 'darwin-arm64' && signingPolicy === DEVELOPER_ID_POLICY && entries.some((name) => name.endsWith('.dmg.blockmap'))) {
     throw new Error('Developer ID packages publish no DMG blockmap; updates use the ZIP.');
   }
@@ -519,20 +508,14 @@ async function findUniqueArtifact(outputDir, prefix, extension) {
   return path.join(outputDir, matches[0]);
 }
 
-function expectedArtifactPrefix(version, variant, target) {
-  return `XR-Collector-${version}-${variant}-${target === 'darwin-arm64' ? 'mac-arm64' : 'win-x64'}`;
+function expectedArtifactPrefix(version, target) {
+  return `XR-Collector-${version}-${target === 'darwin-arm64' ? 'mac-arm64' : 'win-x64'}`;
 }
 
 async function clearPreviousArtifactSet(outputDir, prefixes) {
   let entries;
   try { entries = await readdir(outputDir); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
   await Promise.all(entries.filter((entry) => prefixes.some((prefix) => entry.startsWith(prefix))).map((entry) => rm(path.join(outputDir, entry), { recursive: true, force: true })));
-}
-
-function manifestVariant(manifest) {
-  if (manifest.distribution === 'official') return 'official';
-  if (manifest.distribution === undefined && JSON.stringify(manifest.features) === JSON.stringify(['chinese'])) return 'chinese';
-  return null;
 }
 
 function npmCliPath() {

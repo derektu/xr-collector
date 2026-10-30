@@ -9,13 +9,13 @@ import type { UpdateApplyRequest } from '../../src/updates/types.js';
 
 const payload = Buffer.from('real package bytes');
 const offer: UpdateOffer = {
-  version: '0.1.1', commit: 'a'.repeat(40), target: 'darwin-arm64', variant: 'chinese', releaseNotes: 'notes',
+  version: '0.1.1', commit: 'a'.repeat(40), target: 'darwin-arm64', releaseNotes: 'notes',
   source: { id: 'test', indexUrl: 'https://example.test/index.json' },
   payload: { name: 'app.zip', url: 'https://example.test/v0.1.1/app.zip', bytes: payload.length, sha256: createHash('sha256').update(payload).digest('hex') },
   manifest: { name: 'manifest.json', url: 'https://example.test/v0.1.1/manifest.json', bytes: 1, sha256: 'b'.repeat(64) },
-  buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.1', builtAt: '2026-10-26T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'b', target: 'darwin-arm64', variant: 'chinese', sourceDirty: false },
+  buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.1', builtAt: '2026-10-26T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'b', target: 'darwin-arm64', sourceDirty: false },
 };
-const identity = { version: '0.1.0', target: 'darwin-arm64', variant: 'chinese' as const };
+const identity = { version: '0.1.0', target: 'darwin-arm64' };
 
 it('checks without downloading, pins an offer, verifies the stream, and restores ready state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-service-'));

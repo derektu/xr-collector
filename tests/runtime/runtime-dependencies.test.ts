@@ -15,13 +15,13 @@ const sha256 = (value: string): string => createHash('sha256').update(value).dig
 it('keeps every production archive and CRT checksum as a full SHA-256 pin', async () => {
   const pins = JSON.parse(await readFile(path.resolve('scripts/runtime-dependency-pins.json'), 'utf8')) as {
     targets: Record<string, { ytDlp: { sha256: string }; deno: { sha256: string } }>;
-    officialWindowsCrt: { sha256: string };
+    windowsCrt: { sha256: string };
   };
   for (const target of Object.values(pins.targets)) {
     expect(target.ytDlp.sha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(target.deno.sha256).toMatch(/^[0-9a-f]{64}$/u);
   }
-  expect(pins.officialWindowsCrt.sha256).toMatch(/^[0-9a-f]{64}$/u);
+  expect(pins.windowsCrt.sha256).toMatch(/^[0-9a-f]{64}$/u);
 });
 
 it('repairs a changed runtime file from the verified archive cache', async () => {
@@ -104,18 +104,18 @@ it('places the shared runtime cache outside the checkout, per user, with an abso
 });
 
 it('parses the prepare command and fills the cache before installing both runtimes', async () => {
-  expect(parsePrepareRuntimeArguments(['mac'])).toEqual({ target: 'darwin-arm64', variant: 'chinese', cacheOnly: false });
-  expect(parsePrepareRuntimeArguments(['win', '--variant', 'official', '--cache-only'])).toEqual({ target: 'win32-x64', variant: 'official', cacheOnly: true });
+  expect(parsePrepareRuntimeArguments(['mac'])).toEqual({ target: 'darwin-arm64', cacheOnly: false });
+  expect(parsePrepareRuntimeArguments(['win', '--cache-only'])).toEqual({ target: 'win32-x64', cacheOnly: true });
   expect(() => parsePrepareRuntimeArguments(['linux'])).toThrow(/prepare:runtime -- <mac\|win>/u);
-  expect(() => parsePrepareRuntimeArguments(['mac', '--variant', 'enterprise'])).toThrow(/chinese or official/u);
+  expect(() => parsePrepareRuntimeArguments(['mac', '--verbose'])).toThrow(/Unknown argument --verbose/u);
   const calls: unknown[] = [];
-  await prepareRuntime({ target: 'darwin-arm64', variant: 'official', cacheOnly: true }, {
+  await prepareRuntime({ target: 'darwin-arm64', cacheOnly: true }, {
     prepareRuntimeDependencies: async (options: unknown) => { calls.push(['dependencies', options]); },
     prepareMeilisearch: async (options: unknown) => { calls.push(['meilisearch', options]); },
   });
   expect(calls).toEqual([
     ['dependencies', { target: 'darwin-arm64', cacheOnly: true }],
-    ['meilisearch', { variant: 'official', target: 'darwin-arm64', cacheOnly: true }],
+    ['meilisearch', { target: 'darwin-arm64', cacheOnly: true }],
   ]);
   const scripts = JSON.parse(await readFile(path.resolve('package.json'), 'utf8')).scripts as Record<string, string>;
   expect(scripts['prepare:runtime']).toBe('node scripts/prepare-runtime.mjs');

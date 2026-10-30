@@ -66,7 +66,7 @@ try {
     const expectedTarget = process.platform === 'darwin' ? 'darwin-arm64' : 'win32-x64';
     note('buildInfo', build);
     note('runtimeVersions', versions);
-    expect(build.kind === 'packaged' && build.variant === 'chinese' && build.sourceDirty === false
+    expect(build.kind === 'packaged' && build.sourceDirty === false
       && build.commit === desktop.commit && build.target === expectedTarget && desktop.target.arch === process.arch,
     `BuildInfo 對應受測 checkout、平台與架構：${JSON.stringify({ build, checkoutCommit: desktop.commit, appArch: desktop.target.arch })}`);
     expect(Boolean(versions.ytdlp) && Boolean(versions.deno), `隨附 yt-dlp 與 Deno 可執行：${JSON.stringify(versions)}`);

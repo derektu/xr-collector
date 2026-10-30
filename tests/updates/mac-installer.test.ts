@@ -121,7 +121,7 @@ it('lets a valid acknowledgement that arrived after the deadline commit recovery
     await writeFile(path.join(workDir, 'result.json'), JSON.stringify({ schemaVersion: 1, runId: request.runId, phase: 'succeeded' }));
   });
   const current = { schemaVersion: 1, kind: 'packaged', version: '0.1.2', buildId: 'build-b', builtAt: new Date().toISOString(),
-    commit: 'a'.repeat(40), target: 'darwin-arm64', variant: 'chinese', sourceDirty: false } as const;
+    commit: 'a'.repeat(40), target: 'darwin-arm64', sourceDirty: false } as const;
   const recovered = await recoverMacUpdateResults('/Applications/XR Collector.app/Contents/Resources', current, {
     platform: 'darwin', contexts: async () => [{ workDir, request }], runHelper,
   });

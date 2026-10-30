@@ -6,7 +6,7 @@ import type { UpdateIdentity } from './types.js';
 interface ReleaseIndex {
   schemaVersion: 1; version: string; tag: string; commit: string; releaseNotes: string;
   source: { id: string; baseUrl: string };
-  candidates: Array<{ target: string; variant: string; updatePayload: unknown; manifest: unknown }>;
+  candidates: Array<{ target: string; updatePayload: unknown; manifest: unknown }>;
 }
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
 const METADATA_TIMEOUT_MS = 15_000;
@@ -15,15 +15,15 @@ export async function offerFromIndex(indexValue: unknown, indexUrl: string, iden
   request: typeof fetch, signal?: AbortSignal): Promise<UpdateOffer | null> {
   const index = parseIndex(indexValue);
   if (compareVersions(index.version, identity.version) <= 0) return null;
-  const candidate = index.candidates.find((entry) => entry.target === identity.target && entry.variant === identity.variant);
-  if (!candidate) throw new CollectorError('update_asset_missing', `版本 ${index.version} 沒有 ${identity.target}/${identity.variant} 的更新檔。`);
+  const candidate = index.candidates.find((entry) => entry.target === identity.target);
+  if (!candidate) throw new CollectorError('update_asset_missing', `版本 ${index.version} 沒有 ${identity.target} 的更新檔。`);
   const payload = parseAsset(candidate.updatePayload, 'update payload');
   const manifest = parseAsset(candidate.manifest, 'manifest');
   assertPinnedAsset(payload, index, indexUrl);
   assertPinnedAsset(manifest, index, indexUrl);
   const buildInfo = parseManifest(await fetchVerifiedJson(manifest, request, signal), index, identity, payload);
   return Object.freeze({
-    version: index.version, commit: index.commit, target: identity.target, variant: identity.variant,
+    version: index.version, commit: index.commit, target: identity.target,
     releaseNotes: index.releaseNotes, source: Object.freeze({ id: index.source.id, indexUrl }),
     payload: Object.freeze(payload), manifest: Object.freeze(manifest), buildInfo,
   });
@@ -130,23 +130,23 @@ function parseManifest(value: unknown, index: ReleaseIndex, identity: UpdateIden
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CollectorError('update_metadata_invalid', '更新 manifest 格式不正確。');
   const manifest = value as Record<string, unknown>;
   if (manifest.schemaVersion !== 1 || manifest.version !== index.version || manifest.commit !== index.commit
-    || manifest.target !== identity.target || manifest.variant !== identity.variant) {
-    throw new CollectorError('update_metadata_invalid', '更新 manifest 與索引的版本、平台或引擎不一致。');
+    || manifest.target !== identity.target) {
+    throw new CollectorError('update_metadata_invalid', '更新 manifest 與索引的版本或平台不一致。');
   }
   if (!Array.isArray(manifest.artifacts)) throw new CollectorError('update_metadata_invalid', '更新 manifest 缺少產物清單。');
   const artifacts = manifest.artifacts.map((asset) => parseAsset(asset, 'manifest artifact'));
   if (new Set(artifacts.map((asset) => asset.name)).size !== artifacts.length) throw new CollectorError('update_metadata_invalid', '更新 manifest 的產物名稱重複。');
   const expectedName = identity.target === 'darwin-arm64'
-    ? `XR-Collector-${index.version}-${identity.variant}-mac-arm64.zip`
-    : `XR-Collector-${index.version}-${identity.variant}-win-x64-setup.exe`;
+    ? `XR-Collector-${index.version}-mac-arm64.zip`
+    : `XR-Collector-${index.version}-win-x64-setup.exe`;
   const declared = artifacts.find((asset) => asset.name === payload.name);
   if (payload.name !== expectedName || !declared || declared.url !== payload.url || declared.bytes !== payload.bytes || declared.sha256 !== payload.sha256) {
-    throw new CollectorError('update_metadata_invalid', '更新檔與 manifest 的平台、引擎或雜湊不一致。');
+    throw new CollectorError('update_metadata_invalid', '更新檔與 manifest 的平台或雜湊不一致。');
   }
   try {
     const [platform, arch] = identity.target.split('-') as [NodeJS.Platform, string];
     const info = validateBuildInfo(manifest.buildInfo, { requirePackaged: true, platform, arch });
-    if (info.version !== index.version || info.commit !== index.commit || info.variant !== identity.variant) throw new Error('identity mismatch');
+    if (info.version !== index.version || info.commit !== index.commit) throw new Error('identity mismatch');
     return info;
   } catch (error) { throw new CollectorError('update_metadata_invalid', '更新 manifest 的 BuildInfo 不一致。', { cause: error }); }
 }

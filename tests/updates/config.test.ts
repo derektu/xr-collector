@@ -13,7 +13,7 @@ describe('packaged update repository', () => {
 
   it('keeps production AUMID unless a validation id is baked into the package', () => {
     expect(appIdFromPackageMetadata({ name: 'xr-collector' })).toBe(PRODUCTION_APP_ID);
-    expect(appIdFromPackageMetadata({ xrCollectorAppId: 'com.xrcollector.verify.public.chinese' })).toBe('com.xrcollector.verify.public.chinese');
+    expect(appIdFromPackageMetadata({ xrCollectorAppId: 'com.xrcollector.verify.public' })).toBe('com.xrcollector.verify.public');
     expect(() => appIdFromPackageMetadata({ xrCollectorAppId: 'com.moneydj.xrcollector.other' })).toThrow(/app id/u);
   });
 });

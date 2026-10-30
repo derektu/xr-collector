@@ -1,354 +1,165 @@
 # XR Collector
 
-程式與 tickets：[GitHub repository](https://github.com/derektu/xr-collector)。執行規劃見 [Round 2 總覽 #24](https://github.com/derektu/xr-collector/issues/24)。
+XR Collector 是 local-first 的內容收集與搜尋工具。它收集 YouTube 影片的字幕與 RSS feed 的文章，保存成本機的 Markdown 文件，並提供瀏覽、全文搜尋與閱讀。使用者可以一次加入單支影片，也可以訂閱 YouTube 頻道或 RSS feed，由 App 定時檢查並收集新內容。
 
-XR Collector 是 local-first 的 YouTube 字幕收集與搜尋工具。使用者可以貼上單支影片網址，或保存一份 YouTube 頻道清單並立即或定時抓取。系統取得影片既有的人工或自動字幕，將 metadata 與整理過的字幕正文保存成 Markdown，並提供瀏覽、全文搜尋與閱讀介面。
+App 以 Mac（Apple Silicon）與 Windows x64 的桌面程式發布，常駐在選單列或系統匣。本機的 AI Agent 可以透過 HTTP API 做與畫面相同的操作。
 
-本 repository 的可執行交付範圍涵蓋單支影片收集、文件保存與搜尋、非同步收集工作與進度、頻道訂閱與每個訂閱各自的收集設定、Agent 完整業務操作，以及匯出檔的匯出、匯入（以較新的為準合併）、知識庫搬移與切換。已收集內容管理由其他 tickets 交付。
+程式與 issue 在 [GitHub repository](https://github.com/derektu/xr-collector)。建置、測試與發布見 [建置文件](docs/building.md)。
 
 ## 從這裡開始閱讀
 
-目前可執行的是第一輪 YouTube 收集／搜尋／資料交換功能，加上 #25 的 CI 與原生驗證工具。Round 2 正在將其擴充成完整產品流程；設計圖與計畫中的能力不等同已交付功能。
-
 | 想了解什麼 | 文件 |
 | --- | --- |
-| 現在做到哪裡、接下來做什麼 | [Round 2 開發計畫與進度](docs/round-2-plan.md) |
-| 產品目標、本輪包含與排除的範圍 | [產品範圍](docs/product-brief.md) |
-| 目前程式如何組成 | [架構](docs/architecture.md) |
+| 怎麼安裝開發環境、建置、測試與發布 | [建置、測試與發布](docs/building.md) |
+| 產品目標與範圍 | [產品範圍](docs/product-brief.md) |
+| 程式如何組成 | [架構](docs/architecture.md) |
 | 收集工作的排程、佇列、等待與錯誤處理 | [收集流程](docs/collection-flow.md) |
-| 文件格式、Vault 與搜尋資料責任 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
-| 如何開發、測試與交付 PR 證據 | 本頁下方操作、[開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
-| 如何從指定本機環境建立正式候選安裝包 | [本機安裝包計畫](docs/local-packaging-plan.md) |
-| 畫面設計參考 | [UI Design Spec](docs/ui-design/README.md)，wireframe 的行為差異依 Round 2 計畫 |
-| App Shell 的路由、新增選單、類型與外觀擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |
-
-以下操作說明描述目前程式；即時 ticket 狀態與驗收證據由 [GitHub #24](https://github.com/derektu/xr-collector/issues/24) 追蹤。
+| 文件格式、Vault 與搜尋資料 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
+| 驗收計畫、驗證層級與 PR 證據 | [開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
+| 發布正式版 | [Release 發布手冊](docs/release-runbook.md)、[更新來源](docs/update-source.md) |
+| 畫面設計 | [UI Design Spec](docs/ui-design/README.md) |
+| App Shell 的路由、新增選單與類型擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |
+| Agent 的操作與 HTTP 契約 | [Agent Skill](skills/xr-collector-agent/SKILL.md) |
 
 ## 執行模式
 
-開發與主要測試使用獨立 Web 模式：一般瀏覽器連到 Web 開發伺服器，前端透過相對路徑 `/api` 呼叫本機 API。這個模式不需要啟動 Electron。
+桌面版由 Electron 啟動本機 Web Server，在應用程式視窗中載入 Web UI；畫面只透過 HTTP API 操作，不使用 Electron IPC。開發時同一套 Web UI 與 API 也能在一般瀏覽器中執行，不需要 Electron。
 
-安裝版由 Electron 啟動同一個 Web Server，並在應用程式視窗中載入同一份 Web UI。Electron 內部使用動態 port；該 port 不構成對一般瀏覽器公開的產品介面。業務畫面不使用 Electron IPC。
+所有 HTTP listener 只監聽 `127.0.0.1`，並只接受 Host 為 `127.0.0.1:<port>` 或 `localhost:<port>` 的請求，其他 Host 回 403，避免其他網站以 DNS rebinding 呼叫 API。
 
-## 本機開發
+## 知識庫
 
-需求：
-
-- Node.js：`.nvmrc` 釘住的版本，以及 npm
-- Git，以及 rustup 安裝的 Rust 1.91.1（準備預設的中文精簡 Meilisearch 或建置預設安裝包時需要；官方完整引擎安裝包不從 source build；安裝後的 App 都不需要 Rust）
-- source build 的平台工具：Mac 使用 Xcode Command Line Tools，Windows 使用 Visual Studio 2022 Build Tools 的「使用 C++ 的桌面開發」（MSVC x64 工具與 Windows SDK）及可用的本機 PowerShell/CIM；第一次執行需連線抓取固定 source 與 Cargo dependencies
-- 下列 Web 開發範例以 macOS arm64 為準；安裝包的建置見 [建置機](#建置機)
-
-安裝套件：
-
-```bash
-npm ci
-# Mac
-npm run prepare:runtime -- mac
-# Windows 改用 npm run prepare:runtime -- win；official 引擎加 --variant official
-```
-
-### 建置機
-
-交付平台為 Mac arm64 與 Windows x64，各平台在自己的機器上建置，不跨平台編譯：Mac 安裝包在 Apple Silicon Mac 建置，Windows 安裝包在 x64 Windows 建置。clone 後依序執行：
-
-```bash
-npm ci
-npm run doctor:build
-npm run prepare:runtime -- mac
-npm run prepare:runtime -- mac --variant official
-npm run package:mac
-```
-
-Windows 把 `mac` 換成 `win`。`npm run doctor:build` 依目前平台逐項檢查建置本平台 Chinese 與 official 安裝包的條件，標示 `ok`、`missing`（附安裝方式）或 `note`，任一項 `missing` 時以非零結束：
-
-| 項目 | Mac | Windows |
-| --- | --- | --- |
-| Host | Apple Silicon 上的 arm64 Node | x64 Node；ARM64 硬體上的 x64 模擬標為 `note` |
-| Node／npm／Git | Node 主版本符合 `.nvmrc`（patch 不同標為 `note`），經 npm script 執行，Git 可用 | 同左 |
-| npm 套件 | 已執行 `npm ci` | 同左 |
-| Rust | rustup 與 Rust 1.91.1，host 為 `aarch64-apple-darwin` | rustup 與 Rust 1.91.1，host 為 `x86_64-pc-windows-msvc` |
-| 平台工具 | Xcode Command Line Tools（`clang`、`swiftc`） | MSVC x64 build tools、含 x64 程式庫的 Windows SDK，以及 official 包附帶、與 pin 相符的 `vcruntime140.dll` |
-| Runtime cache | 只報告狀態：未準備時列出 `prepare:runtime` 指令 | 同左 |
-| Developer ID 簽章 | 只報告狀態：有 `keys/mac/.env` 時檢查設定與檔案權限，沒有時只能建 ad-hoc 包 | 不適用 |
-
-標準 rustup 安裝即可通過檢查，不需要設定 `RUSTUP_HOME`／`CARGO_HOME`。rustup 在 ARM64 Windows 預設安裝 aarch64 host，該機器需改用 `rustup set default-host x86_64-pc-windows-msvc` 後再安裝 1.91.1。`prepare:runtime` 與四個 `package:*` 指令開工前執行同一套檢查（不含 runtime cache 與簽章狀態），缺少必要項時立即停止並列出同樣的修正方式；official 包不需要 Rust，只檢查它用到的項目。VM 與 crabbox 屬於開發者跨平台測試的工具，不在建置流程中。
-
-`npm run prepare:runtime` 把固定的 yt-dlp／Deno archive 與 Meilisearch 準備到使用者層級的 runtime cache，再安裝到本 checkout 的 `resources/bin`。cache 位在 checkout 之外，同一台機器的所有 checkout 與 worktree 共用：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`，可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 覆寫。條目以 pin 的 SHA-256 或 recipe fingerprint 命名，不同 pin 不會共用。`npm run download:runtime`／`download:runtime:win` 等同於 Chinese 引擎的準備指令。App 執行時只使用 `resources/bin`，不讀 cache。
-
-啟動 Web UI 與 API：
-
-```bash
-npm run dev
-```
-
-瀏覽器開啟 `http://127.0.0.1:7176/`。API 使用 `127.0.0.1:7175`；Agent API 的自動模式從 `127.0.0.1:7232` 開始尋找可用 port，實際位址顯示在設定頁（見 [Agent 存取](#agent-存取)）。開發用 Meilisearch 只監聽 `127.0.0.1` 上隨機分配的 port，需要固定時以 `XR_COLLECTOR_MEILISEARCH_PORT` 指定。第一次開啟時在 Onboarding 輸入知識庫目錄的絕對路徑；選擇記錄在 `.data/vault-selection.json`，可重建的搜尋資料保存在 `.data/dev-search-*`。
-
-已完成 production build 時，也可以只啟動單一 Web Server：
-
-```bash
-npm run build
-npm start
-```
-
-此模式由 `http://127.0.0.1:7175/` 同時提供 UI 與 API。
-
-## 測試與建置
-
-GitHub Actions 在 main push、pull request 與手動觸發時，使用 Ubuntu 24.04、`.nvmrc` 指定的 Node 版本執行共用驗證入口：
-
-```bash
-npm ci
-npm run verify
-```
-
-`verify` 執行 Vitest（含 JUnit 報告）、typecheck 與 Node／Web build。CI 以 commit SHA 標示報告與 build artifacts，保留 7 天。缺少 macOS bundled Meilisearch binary 的平台會跳過對應的整合測試；JUnit 的 skipped 數量是驗證邊界，不能視為跨平台 runtime 已通過。CI 不包含 Desktop E2E、畫面截圖或正式 Release 打包；CI artifact 只作補充檢查證據，不是正式安裝包的來源。
-
-測試分類與條件式 skip 見 [測試說明](tests/README.md)。各檢查亦可單獨執行：
-
-```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-單元與 HTTP 整合測試不存取 YouTube。Meilisearch 整合測試使用下載後的本機 binary，驗證索引持久化與重建。真實字幕驗收需連線至 YouTube，並以 Web UI 貼入影片網址或加入頻道操作。
-
-畫面與原生行為的驗證依功能影響選擇平台，共用功能可在開發者的 Mac 或 Windows 完成；缺少的必要平台由其他機器補驗。Mac 與 Windows 都以 [verify skill](.claude/skills/verify/SKILL.md) 啟動隔離的 instance 操作 App；Windows 執行原生 Desktop 模式，Web 模式在 Mac 執行。層級與交付規則見 [開發驗證流程](docs/development-validation.md)。
-
-macOS arm64／Windows x64 的預設安裝產物包含固定版本且通過 SHA-256 驗證的 `yt-dlp`、Deno，以及從固定 upstream commit、Cargo.lock 與 Rust 1.91.1 建置的 Chinese Meilisearch runtime。Windows Chinese runtime 固定使用 Rust static CRT；安裝包同時攜帶 runtime manifest，終端使用者不需安裝 Rust 或另外準備 MSVC runtime。Windows 產物仍須通過計畫中的 PE imports 與目標機驗證；只設定 static CRT flag 不算完成驗收：
-
-```bash
-npm run package:mac  # 在 Mac 執行
-npm run package:win  # 在 Windows 執行
-```
-
-要回復官方 v1.53.2 的完整斷詞能力，可在建置時明確選擇官方完整引擎。每個 App 只攜帶一種引擎，不提供 App 內切換、執行中下載或失敗後 silent fallback；官方產物另放在 `release/official/`，不覆寫 `release/` 的預設產物：
-
-```bash
-npm run package:mac:official  # Mac arm64
-npm run package:win:official  # Windows x64
-```
-
-official variant 的交付 target 為 `darwin-arm64` 與 `win32-x64`；要求 `darwin-x64` 會在下載或替換 runtime 前失敗。兩種 variant 的 runtime manifest 與索引語意 profile 分開；換 variant 時只重建目前 Vault 的可重建搜尋索引，同 variant 重啟沿用索引。
-
-官方 Windows x64 binary 的實物 PE imports 包含 `VCRUNTIME140.dll`。official Windows 安裝包從本機 Visual Studio Redistributable 目錄選取 repo 釘住的 Microsoft 簽署檔，核對版本、bytes、SHA-256、簽署者與憑證 thumbprint 後，將 DLL app-local 放在 Meilisearch 旁；不提高權限，也不修改全域 CRT。預設 Chinese Windows runtime 使用 static CRT，安裝包不含該 DLL。現有 VM 的成功只能證明 app-local 載入；無 CRT 客戶端驗收另行保留，不將已安裝 Visual Studio 的環境描述為乾淨客戶端。
-
-`npm run prepare:meilisearch -- --variant chinese|official --target <target>` 是共同準備入口；省略 variant 時仍是 `chinese`。Chinese 會沿用 `npm run build:meilisearch` 的 source builder；official 只接受 repo 釘住的官方 release URL、大小、SHA-256、header、架構與 `--version`。兩者共用 destination install lock 與原子 binary/manifest replacement，下載或驗證失敗不會替換既有 runtime。
-
-Package 可以未簽章；簽署、公證與憑證整合不構成 #34 的完成門檻。App 啟動時要求內含 Meilisearch 的實際 bytes 與 manifest 的大小、SHA-256 完全一致，再決定索引 profile；相同版本、架構但不同 variant 的 binary 也會拒絕。正式簽章的導入需同時提供可測的簽章後 artifact identity 更新流程，不能只放寬成接受任意同版本執行檔。
-
-`npm run build:meilisearch` 支援 `darwin-arm64`、`darwin-x64`、`win32-x64`，預設依目前 Node 平台選擇 target；產品安裝包只交付 `darwin-arm64` 與 `win32-x64`。它會在 runtime cache 的 `meilisearch/` 下驗證並重用 source/build cache；source HEAD、tracked/untracked 狀態、Cargo.lock、toolchain、target、target-specific rustflags、輸出架構或版本不符就停止，失敗時不替換既有 runtime。這是受控 builder：會固定或移除 Rust compiler、wrapper、rustflags 與 profile 的環境覆寫，checkout 外若存在 Cargo config 也會拒絕並指出路徑；不承諾在任意客製 Cargo 環境中產生 bit-for-bit 相同輸出。Windows 會用本機 CIM CPU architecture 分辨實體 x64 與 ARM64，probe 失敗時不宣稱 native；Windows ARM VM 上的 x64 建置如實標為 emulated。原生 CI 以平台 runner 執行相同指令及 API smoke，結果只補充本機建置證據。
-
-正式候選安裝包都從相同乾淨 commit 建置：Mac arm64 產物由 Mac 建置機產生，Windows x64 產物由 Windows 建置機產生。四個 package 指令共用 checkout 級鎖；依序驗證 Git、檢查建置環境、從 runtime cache 安裝固定 runtime（打包只讀 cache，不下載也不編譯；缺少或不符 pin／recipe 時失敗並指出要執行的 `npm run prepare:runtime` 指令）、產生 packaged BuildInfo、以 `--publish never` 建置，並從實際 `app.asar` 與 resources 讀回核對。`runtime-dependencies.json` 記錄 yt-dlp／Deno 的完整安裝檔案 inventory；固定 archive cache 與最終輸出都通過 SHA-256，輸出被修改時會從已驗 cache 重建。每次建置另產生含 target／variant 的 updater metadata 與 artifact manifest，記錄 host、工具版本、bytes、SHA-256、未簽署政策與待原生檢查的實際簽署狀態。未簽章產物可以完成本階段驗收。#35 從使用者的 Mac 上傳並發布這些已驗證產物，CI 不提供替代的 Release binary。實作順序為 #139 review／merge → #34 → #35；詳見 [本機安裝包計畫](docs/local-packaging-plan.md) 與 [開發驗證流程](docs/development-validation.md)。#35 以公開 repository 的 GitHub Releases 提供免登入下載；repository 已公開是發布前置條件，驗收以無登入／token 的客戶端下載實測。
-
-## 資料保存
-
-每支影片使用 YouTube video ID 作為穩定識別，保存在：
+收集到的內容保存在使用者選擇的資料夾，稱為知識庫（Vault）。知識庫是正式資料，搜尋索引是可以重建的副本。
 
 ```text
-<vault>/documents/youtube/<video-id>.md
+<vault>/xr-collector-vault.json            知識庫標記檔
+<vault>/documents/<type>/<id>.md           每份文件，例如 documents/youtube/<video-id>.md
+<vault>/settings/youtube-channels.json     YouTube 訂閱
+<vault>/settings/rss-subscriptions.json    RSS 訂閱
+<vault>/settings/youtube-schedule.json     自動檢查總開關
+<vault>/settings/deleted-documents.json    刪除紀錄
 ```
 
-文件包含可追溯來源的 YAML frontmatter，以及可直接閱讀及交給其他工具使用的字幕正文。影片 URL 只保存在 frontmatter；正文不包含逐句 timestamp 或重複的來源連結。已存在相同 video ID 時，系統回傳既有文件，不覆寫檔案。
+文件是帶 YAML frontmatter 的 Markdown，frontmatter 記錄來源網址與 metadata，正文可直接閱讀或交給其他工具使用。同一份內容以來源的穩定 ID 識別，已存在時不覆寫。
 
-Vault 位置由使用者在第一次啟動的 Onboarding 選擇，建議位置是「文件」下的 `XR Collector`。每個 Vault 根目錄有 `xr-collector-vault.json` 標記檔；這台電腦使用哪個 Vault 記錄在 profile 的 `vault-selection.json`（Web 開發為 `.data/`，Electron 為 application data 目錄）。
+第一次開啟時，Onboarding 讓使用者選擇知識庫位置（建議「文件」下的 `XR Collector`），或從匯出檔建立新的知識庫。這台電腦使用哪個知識庫、工作紀錄、Agent 設定等裝置資料，存在應用程式資料目錄（profile），不屬於知識庫。
 
-開發或測試可以用 `XR_COLLECTOR_VAULT` 直接指定 Vault，略過 Onboarding；目錄為空或不存在時會自動建立。
+## 新增內容與訂閱
 
-### 搬移與開啟其他知識庫
+文件頁的「新增」選單加入一份之後不再更新的文件；訂閱頁的「新增訂閱」選單加入會定期檢查的訂閱。
 
-設定頁的「知識庫」區塊顯示目前路徑、文件數與訂閱數。桌面程式另有「在 Finder 顯示」（Windows 為「在檔案總管顯示」），顯示的資料夾由主程序讀取目前的 Vault，不接受畫面傳入的路徑。
+| 項目 | 狀態 |
+| --- | --- |
+| 網址（YouTube 單支影片） | 可用 |
+| YouTube 頻道（頻道網址或 `@handle`） | 可用 |
+| RSS（feed 網址，或宣告 feed 的網站網址） | 可用 |
+| 檔案、寫筆記、X 帳號、Facebook 粉專 | 顯示「目前還不支援」 |
 
-設定頁的「啟動與背景執行」可開啟「登入電腦時自動啟動」。這是每台電腦各自的設定，預設關閉，不屬於 Vault，也不隨匯出、匯入、搬移或切換 Vault 改變。只有打包並安裝的 macOS／Windows App 可以修改；Web 與開發版只顯示說明。登入自啟時 App 在背景建立同一套 runtime、排程、選單列／系統匣與 Agent API，不主動顯示主視窗；之後手動開啟會叫出現有視窗，不建立第二套服務。若作業系統從外部停用，以作業系統狀態為準；macOS 要求允許時，畫面會引導到登入項目設定。Windows App 搬到新位置後，只在舊的 XR Collector 登入項目仍可證明為啟用時修復到目前位置，不確定時維持關閉。
+貼上的網址屬於另一個對話框時（例如在「加入網址」貼上頻道），畫面提示並提供切換按鈕，網址保留。沒有網路時兩個新增按鈕停用。
 
-「搬移…」把目前的知識庫搬到不存在或空的資料夾。對話框在輸入時檢查位置，錯誤顯示在對話框內，可接受時顯示所需空間（含 5%、至少 16 MiB 的安全餘量）與可用空間；桌面程式的「選擇位置…」選上層資料夾，目標為「上層資料夾／原資料夾名稱」。搬移先等待執行中的收集步驟完成，排隊工作保留；接著完整複製到目標旁的暫存資料夾、逐檔比對 SHA-256、改名為目標、建立新的搜尋索引，寫入選址後才切換，再清除原位置。搬移期間可以按「在背景繼續」瀏覽文件，新增與設定變更回 `vault_busy`。完成畫面顯示新路徑、原位置是否已清除與接續的工作數；原位置無法清除時列出殘留的資料夾，請確認後手動刪除。切換前任何一步失敗，知識庫留在原位置、資料不變，收集照常繼續。
+訂閱前，確認卡顯示來源名稱、這個訂閱的收集設定與摘要，例如「訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 30 天內最新的 10 支影片，已收集或刪除的不再收集」。設定可在訂閱前調整，確認後才建立訂閱並開始首次收集。
 
-「開啟其他知識庫…」改用另一個已有的知識庫；搬移與匯入的暫存資料夾（`.moving-`、`.moved-`、`.importing-` 開頭的名稱）不能開啟。確認畫面列出它的文件數與會暫停的工作數；兩個知識庫各自保留內容與收集工作，回到原知識庫時它的工作接續。以 `XR_COLLECTOR_VAULT` 啟動時兩個按鈕停用並說明原因。流程、恢復與同庫識別見 [儲存／搜尋](docs/storage-and-search.md#搬移與切換知識庫)。
+### YouTube 的收集規則
 
-### 刪除文件
+- 接受 `youtube.com/watch`、`youtu.be`、`youtube.com/shorts` 與 `youtube.com/embed` 的單支影片網址；帶播放清單參數時只收集該支影片。
+- 字幕語言依序偏好繁體中文、簡體中文、英文，再選其他可用語言。同一語言優先人工字幕；自動字幕只採用影片原始語言，不採用自動翻譯。
+- 正文合併零碎的字幕片段成段落，不摘要或改寫，也不保存逐句 timestamp。
+- 不下載影片或音訊，不做語音轉文字。無字幕、影片無法存取與網路問題以不同原因回報。
 
-文件列表每列的「⋯」選單與 Reader 工具列都可以刪除文件，確認後文件從知識庫、搜尋與 Agent 查詢中移除，訂閱不受影響。刪除紀錄保存在 `<vault>/settings/deleted-documents.json`，之後檢查訂閱時都略過這支影片；要再收集，貼上這支影片的網址，或在已刪除文件的頁面按「重新收集」，保存成功後才解除刪除紀錄。格式與恢復規則見 [儲存／搜尋](docs/storage-and-search.md#刪除文件)。
+RSS 支援 RSS 2.0、RDF 與 Atom，文章的 HTML 轉成 Markdown。
 
-## 匯出與匯入
+## 訂閱
 
-設定頁的「知識庫」區塊有「匯出…」與「匯入…」。兩台電腦不透過雲端同步，以匯出檔來回交換：一台匯出，另一台匯入；回到原來那台時，從另一台匯出再匯入。匯出檔同時是備份。
+訂閱頁列出所有訂閱，可依類型與名稱篩選。每列顯示文件數、最近新增時間與狀態；標題列有「自動檢查」總開關、「立即檢查」與「新增訂閱」，清單下方顯示上次與下次檢查。每列可以暫停或恢復，「⋯」選單有立即檢查與移除。
 
-「匯出…」把目前的知識庫寫成一個 `.zip` 匯出檔，預設位置是「文件」下的 `XR Collector 匯出/XR Collector 匯出 YYYY-MM-DD.zip`（資料夾不存在時建立）。桌面程式以系統的存檔與開檔視窗選擇位置，預設開在這個資料夾，同名檔案由存檔視窗確認是否取代；在瀏覽器開啟時，對話框改為輸入完整路徑，同名檔案先詢問是否覆蓋。完成畫面顯示「匯出完成。」與檔案位置，桌面程式另有「在 Finder 顯示」（Windows 為「在檔案總管顯示」），顯示的檔案由主程序讀取最後一次完成的匯出，不接受畫面傳入的路徑。匯出只讀取知識庫，不寫入任何檔案。舊的匯出檔不會自動清除。
-
-「匯入…」選擇一份 `.zip` 匯出檔，先比對再套用到目前的知識庫，位置不變。合併以較新的為準：
-
-- 每份文件、每個訂閱都帶有修改時間；每次刪除文件或移除訂閱都留下帶時間的紀錄，刪除也是一種狀態。這些時間由程式記錄並寫進匯出檔，不看檔案系統的修改時間。
-- 兩邊同一份文件或同一個訂閱，以時間較新的狀態為準；時間相同時保留本機。匯入檔沒有、也沒有刪除紀錄的項目保留本機。
-- 兩台各自收集同一支影片時，比對忽略收集與修改時間，內容相同就不算變更。
-- 刪除紀錄永久保留，所以另一台還留著的文件不會在下次合併時回來。
-- 合併結果依賴兩台電腦的時鐘，請開啟系統的自動對時。在程式以外（例如其他編輯器）修改文件不會留下修改時間：另一台有較新的修改時以另一台為準，沒有時保留本機。
-
-比對後畫面顯示檔名、匯出時間與合併會做的變更，依類型分開計數，例如「新增 5 份文件、1 個訂閱；更新 2 份文件；刪除 1 份文件」，並提供兩個選項：
-
-- **合併**：依上面的規則逐項處理。
-- **完全取代**：知識庫內容與匯入檔一致，本機有、匯入檔沒有的文件與訂閱移除；選取這個選項時列出會移除的數量，確認畫面列出完整的變更數。
-
-合併沒有任何變更時顯示「沒有需要匯入的內容」；本機有較新的修改或刪除時，同時列出數量（「本機有 N 項較新的修改或刪除」）並提供「完全取代…」。機器名稱不在畫面上顯示，只寫在匯出檔與記錄中供查問題。
-
-套用前先把目前的內容備份到「文件」資料夾中 `XR Collector 備份` 的 `匯入前備份 YYYY-MM-DD HHmmss.zip`（位置記在記錄與 `result.backupPath`）；匯入錯了時，匯入這份檔案並選「完全取代…」即可回到匯入前。自動檢查開關是各台電腦自己的設定，各訂閱的收集進度也維持本機，合併與取代都不改變；知識庫資料夾中不屬於知識庫的檔案不受影響。
-
-第一次在新電腦使用時，Onboarding 的「從匯出檔匯入…」選擇匯出檔與新知識庫的位置（不存在或空的資料夾），完成畫面顯示文件數與位置，按「開始使用」進入主畫面。自動檢查開關沿用匯出檔裡的狀態：匯出的那台開著時，兩台會各自收集同樣的訂閱，需要只由一台收集時在另一台的「訂閱」頁關閉自動檢查。
-
-匯出檔只包含知識庫登記的檔案：`documents/youtube/` 中的文件，以及 `settings/youtube-channels.json`（訂閱與移除紀錄）、`settings/youtube-schedule.json`、`settings/deleted-documents.json`。訂閱、暫停狀態、收集進度、每個訂閱的收集設定與刪除紀錄都保留。知識庫資料夾中的其他檔案（例如自己放的筆記或 `.obsidian/`）不讀取也不打包，記錄註明有幾個這類檔案沒有包含。Meilisearch 資料庫、Agent token、帳號憑證及裝置設定不納入匯出檔。
-
-匯出與匯入開始時先停止派出新的收集步驟，等待執行中的步驟完成（最多 2 分鐘，逾時則放棄並回報），排隊工作留在佇列，結束後繼續。等待期間對話框提供「取消」，取消後不寫入資料。執行期間禁止新的寫入並暫停排程觸發；套用匯入期間文件與搜尋暫時回 `vault_busy`。這個一致性保證涵蓋目前程式管理的操作；請勿讓另一個程式同時寫入同一 vault，兩台電腦也不要同時開啟同一個雲端同步資料夾。
-
-匯出檔是 zip，內附 `manifest.json` 列出每個檔案的路徑、大小與 SHA-256。校驗碼用於偵測損壞，不是來源簽章。匯出與讀取都逐檔串流，匯出檔總大小沒有上限；單一文件或設定檔最多 64 MiB。系統拒絕不是 `.zip` 或 XR Collector 格式的檔案、不安全路徑、重複與大小寫衝突路徑、與 manifest 不符的內容、不支援的版本及格式錯誤，資料不變。
-
-匯入在知識庫資料夾內的暫存資料夾準備好所有新檔案、寫入 journal 後才逐一放到位；中途停止時下次開啟知識庫會完成套用並重建搜尋索引，知識庫只會是匯入前或匯入後的完整內容。比對、套用與恢復規則見 [儲存與搜尋](docs/storage-and-search.md#匯入的比對與套用)。
-
-開發與驗收用 `XR_COLLECTOR_EXPORT_DIR` 指定預設匯出資料夾、`XR_COLLECTOR_BACKUP_DIR` 指定匯入前備份的資料夾、`XR_COLLECTOR_MACHINE_NAME` 指定匯出檔記錄的機器名稱，避免寫入真實的「文件」資料夾。
-
-### 匯出與匯入的驗收
-
-兩台電腦之間的匯出與匯入，以 verify skill 在同一台機器啟動兩個隔離的 instance 模擬：各自有自己的 profile、Vault、匯出與備份目錄，一邊收集或訂閱後匯出，另一邊匯入，合併、完全取代與沒有需要匯入的情形各走一次。操作方式見功能地圖的 [Vault 匯出、匯入與搬移](.claude/skills/verify/features/vault-transfer.md)。
-
-同機的多個 instance 是隔離環境模擬，不能替代實體雙機驗收。自動化的資料完整性、中斷恢復與搜尋測試仍須執行，見 [測試說明](tests/README.md)。
-
-## 收集工作
-
-新增從各頁頁首開始，側欄沒有新增按鈕。文件頁的「新增」選單有網址、檔案、寫筆記，加入的是一份之後不再更新的文件；訂閱頁的「新增訂閱」選單有 YouTube 頻道、X 帳號、Facebook 粉專、RSS，加入的是會定期檢查的訂閱。選單開在按鈕下方，方向鍵移動、Esc 或點選單外關閉，關閉後焦點回到按鈕；兩頁的空狀態按鈕開啟同一份選單。目前可用的是「網址」與「YouTube 頻道」，其他項目標「尚未支援」，點下顯示以該項目為標題的小對話框，例如「訂閱 Facebook 粉專／目前還不支援 Facebook 粉專。」。
-
-「加入網址」只接受 YouTube 單支影片網址，其他網址顯示「目前還不支援這個網址。」且不能送出；「訂閱 YouTube 頻道」接受頻道網址或 `@handle`。兩個對話框使用一般的標題列，開啟時焦點在網址欄位。貼上的網址與對話框類型不符時顯示提示與切換按鈕（「這是 YouTube 頻道，要改為訂閱嗎？」／「這是單支影片，要改為加入一次嗎？」），主要按鈕停用，切換後網址保留並重新辨識；YouTube 冷卻期間無法預覽的頻道同樣提示切換。帶播放清單參數的影片網址只收集該支影片；純播放清單網址不支援。訂閱前的頻道預覽是一次同步查詢（見「頻道訂閱」）；收集本身都在背景工作中進行。
-
-送出後對話框關閉，留在原本的頁面，不跳頁也不顯示提示；服務先把工作寫入裝置資料，再回傳 202 與工作 ID。文件頁不列進行中的單次加入，新訂閱一送出就出現在訂閱列表。記錄頁的「工作」列出目前 Vault 的工作：種類、目標、狀態（排隊中、等待重試、執行中、完成、失敗、已中斷）、執行中的階段、重試與接續說明，以及頻道工作的已處理數量與每支影片結果。工作狀態由服務保存，切換頁面或重新整理後再回到記錄頁，仍看到同一份進度。
-
-- **影片工作**：先檢查 Vault 是否已有該影片，沒有才擷取字幕，接著保存文件、更新搜尋索引。結果分開表示保存與索引；索引失敗時顯示「文件已保存，搜尋更新失敗」，文件可直接閱讀，重建索引即可補上，不需重新下載。
-- **訂閱頻道工作**：解析頻道並加入訂閱，再派出一個首次收集的頻道工作；頻道已在訂閱清單時只回報已存在。
-- **頻道收集工作**：依「頻道訂閱」的收集規則探索影片，為每支影片派出影片工作，等全部結束後彙整為新增、已存在、略過、部分失敗、全部失敗或沒有新影片。工作清單以「首次收集」「恢復後檢查」「定時檢查」「立即檢查」標示它為何執行。
-
-同一 Vault 中，同一支影片或同一個頻道已有排隊或執行中的工作時，新的提交回傳既有工作，不重複擷取。頻道工作探索到的影片若已在其他工作中處理，直接連到那個工作。不同頻道各自有工作與結果。
-
-工作分兩條有上限的佇列執行：頻道解析與探索同時 1 個，影片擷取同時 2 個，排隊中的工作合計最多 500 個，超過時回 503 `queue_full`。影片擷取在提交它的工作之間輪替取用，大頻道的影片不會占住所有名額，手動新增的影片與其他頻道能在大頻道收完前開始。
-
-每個工作綁定提交時的 Vault（標記檔的 ID 與路徑），只寫入該 Vault；搬移後改綁新位置並以同一個 job ID 接續。Vault 匯出、匯入、搬移與開啟其他知識庫先等待執行中的步驟完成，超過 2 分鐘回報 `vault_busy`。
-
-工作狀態與事件屬於裝置資料，不放在 Vault，也不納入匯出檔：
-
-```text
-<profile>/jobs/jobs.json                  目前與最近的工作快照（含接續所需的進度與重試次數），原子寫入；完成的工作最多保留 1000 筆
-<profile>/jobs/events/YYYY-MM-DD.jsonl    記錄，每個 UTC 日一個檔，保留 30 天
-<profile>/jobs/events.jsonl               較早版本的單一記錄檔；照常讀取，同樣依 30 天清除
-```
-
-profile 是 Web 開發的 `.data/`（或 `XR_COLLECTOR_PROFILE`），安裝版為應用程式資料目錄。HTTP 介面為 `POST /api/submissions`、`POST /api/items`、`GET /api/jobs`、`GET /api/jobs/summary`、`GET /api/jobs/:id`、`POST /api/jobs/:id/retry`、`GET /api/activity`，UI 與 Agent 共用；欄位與錯誤碼見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
-
-### 中斷接續與自動重試
-
-服務關閉時等待執行中的步驟完成，其餘工作記為「已中斷」；程式異常結束留下的排隊或執行中工作，在下次啟動時同樣記為已中斷。Vault 開啟時，在排程開始檢查之前，該 Vault 的中斷工作自動接續，畫面標示「服務重新啟動後已接續」，結束後標示「曾中斷後接續」。其他 Vault 的工作等那個 Vault 開啟時再接續。
-
-- **探索時決定範圍**：尚未列出影片的頻道工作，接續時依訂閱當下的設定、以接續時間往前算範圍探索，與當下開始的檢查相同。重啟後第一次檢查遇到同一頻道的接續工作時併入該工作。
-- **不重做已完成的步驟**：已記錄影片清單的頻道工作不重新探索，未完成的影片沿用原本的影片工作；已保存的文件不重新下載，只補搜尋索引。訂閱已寫入但首次收集尚未派出時，接續補派。訂閱的上次檢查時間若還沒寫入，接續時補上，但不會蓋過之後的檢查。
-- **遵守訂閱狀態**：訂閱已暫停或移除的頻道工作及其未完成影片結束為「略過」，訂閱維持原狀；使用者另外直接提交的影片照常完成。
-- **被取代的舊工作**：同一影片或頻道之後已有較新工作時，舊的中斷工作結束為「略過：已由較新的工作接續」。
-- **異常結束上限**：同一工作在執行步驟中遇到異常結束達 3 次後，不再接續，結果為失敗（`interrupted_repeatedly`），避免反覆讓服務當掉。正常關閉不計入。
-
-網路錯誤與 YouTube 限制連線頻率屬於暫時性錯誤：影片擷取、頻道探索與頻道解析遇到時自動重試，每個工作最多嘗試 3 次，失敗後先等 30 秒，再等 2 分鐘。等待期間顯示「等待重試」、原因與下一次時間，不占用執行名額。已失敗次數保存在工作中，服務重啟後延續，不會因重啟而無限重試。無字幕、影片無法存取、超出收集範圍與無法解析的內容不重試，直接記錄原因。
-
-失敗的工作與有影片失敗的頻道工作可在記錄頁按「重試」。手動重試建立新工作，嘗試次數重新計算：影片重新收集；新增訂閱以原本接受的設定重新訂閱；頻道工作若在探索影片時失敗，立即檢查該訂閱，若已列出影片，只重新收集其中失敗的影片，不移動訂閱進度。頻道底下的單支影片隨頻道工作重試。原工作標示「已重試」，每個工作只重試一次；同一目標已有進行中的工作時併入該工作。
-
-### 記錄
-
-記錄頁上方列出工作：進行中的工作附進度，其後是最近結束的工作，每個工作有「查看記錄」，可重試的工作另有「重試」；標題列顯示進行中、今天完成與今天失敗的數量。下方是記錄，可依等級（全部、錯誤、新增）、訂閱與時間（今天、最近 7 天、30 天內）篩選，依工作篩選時可複製診斷資訊；「載入更早的記錄」以 cursor 往前翻頁。訂閱詳情的每筆收集紀錄開啟該工作的記錄，「全部記錄」開啟該訂閱的記錄。
-
-- **事件內容**：每筆事件有時間、`severity`（info／warning／error）、類型與訊息，依事件附上階段、結果（`outcome`）、略過原因、錯誤碼、文件、影片或頻道標題、所屬訂閱、上層工作與觸發原因。嚴重程度與結果分開記錄，略過不是錯誤。記錄涵蓋接受、開始、發現、保存、索引失敗、排定重試、完成、失敗、中斷、接續、手動重試、訂閱與排程異動、定時檢查派工，以及 Vault 匯出、匯入、搬移、開啟其他知識庫與失敗。搬移後仍看得到這份 Vault 搬移前的記錄。
-- **保留**：保留最近 30 天，啟動時與之後每小時清除。日檔以 UTC 日期命名，畫面的「今天」與時間顯示依本機時區，查詢以時間戳記判斷範圍。工作快照與搜尋資料不在清除範圍，中斷工作仍能接續。
-- **遮蔽**：寫入與讀出時把 Authorization、Bearer token、Cookie、帶密鑰的網址參數與 Agent token 換成 `[已遮蔽]`；訊息最多 500 字，外部工具輸出只留結尾 2000 字；不記錄文件正文。
-- **寫入失敗**：無法寫入的事件留在記憶體並每 30 秒補寫，最多 1000 筆，超過時最舊的遺失並計數。記錄頁顯示警示，`GET /api/health` 的 `activityLog` 回報狀態，遺失事件的工作標示記錄不完整。
-- **Vault 鎖**：記錄與工作屬於裝置資料，套用匯入期間與尚未設定 Vault 時仍可查詢。
-
-## 頻道訂閱
-
-在「訂閱 YouTube 頻道」貼上頻道網址或 `@handle`，輸入框下方顯示確認卡：先以 `POST /api/url-recognitions` 同步解析頻道（逾時 60 秒），再顯示頻道名稱、這個訂閱的收集設定與摘要，例如「訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 30 天內最新的 10 支影片，已收集或刪除的不再收集」。設定以 YouTube 類型的預設值開始，可在訂閱前調整，摘要隨之更新；確認後才建立訂閱並開始首次收集。已訂閱的頻道顯示「已訂閱」，暫停中的頻道提供「恢復訂閱」並說明恢復後用它自己的收集設定檢查。
-
-訂閱保存在 `<vault>/settings/youtube-channels.json`，含暫停狀態、收集設定、上次檢查時間、超出收集範圍的影片與下一次檢查時間，隨匯出檔交換。訂閱頁只列訂閱，不列單次加入的文件。每列顯示文件數、最近新增時間與狀態欄；標題列有「自動檢查」總開關、「立即檢查」與「新增訂閱」，清單下方顯示「上次檢查 時間（名稱）· 下次檢查 時間（名稱）」。側欄依序為訂閱、文件、記錄，設定在底部；有工作進行時側欄底部顯示「更新中」，其他時候不顯示。
-
-狀態欄由服務計算（`checkStatus`），UI 與 Agent 讀到同一個值，原因與細節寫在記錄頁：
+狀態由服務計算，畫面與 Agent 讀到同一個值：
 
 | 情況 | 顯示 |
 | --- | --- |
-| 正在檢查或收集 | 更新中；已知要收集的數量時「更新中 3/10」 |
-| 該更新但還沒輪到：排在其他訂閱之後、YouTube 冷卻、等待重試、已到期尚未派工 | 排隊中 |
-| 沒有進行中的事 | 下次 18:52／下次 明天 08:00／下次 10-24 08:00 |
-| 最近一次檢查失敗，沒有進行中的事 | 錯誤（連續 3 次）・19:44 重試 |
+| 正在檢查或收集 | 更新中；已知數量時「更新中 3/10」 |
+| 該檢查但還沒輪到（排隊、YouTube 冷卻、等待重試） | 排隊中 |
+| 沒有進行中的事 | 下次 18:52 |
+| 最近一次檢查失敗 | 錯誤（連續 3 次）・19:44 重試 |
 | 使用者暫停 | 已暫停 |
-| 連續失敗 5 次且第一次失敗滿 24 小時，自動暫停 | 已暫停・連續失敗 5 次 |
+| 連續失敗 5 次且第一次失敗已滿 24 小時 | 已暫停・連續失敗 5 次 |
 | 自動檢查總開關關閉 | 自動檢查已關閉 |
-| 需要重新登入（之後的 X、Facebook） | 需要重新登入 |
 
-連續失敗只計入列出頻道或讀取 feed 本身的失敗；沒有網路、YouTube 或網站限制連線，以及需要重新登入不計入，單支影片收集失敗也不改變狀態。一次檢查成功即歸零，按「恢復」也歸零並立即檢查。訂閱詳情顯示最近一次失敗的原因，自動暫停時加上暫停時間；「上次檢查」在檢查整個結束時才更新，成功或失敗都更新。新增訂閱一送出就出現在列表，頻道解析失敗時該列消失並顯示錯誤提示。
+連續失敗只計列出頻道或讀取 feed 本身的失敗；沒有網路、來源限制連線頻率與單篇收集失敗不計入。一次檢查成功或按「恢復」即歸零。自動暫停時桌面版發出系統通知，點通知開啟該訂閱。
 
-- **收集規則**：每次檢查都用同一條規則，不分首次訂閱、定時檢查、立即檢查、恢復訂閱、長時間未檢查、中斷接續或上次檢查失敗之後。頻道工作開始探索時，讀取訂閱當時的收集設定，以當下時間往前推時間範圍的天數，例如最近 30 天；頻道清單中範圍內最新的 N 支影片（N 為數量上限，直播預告不算）是候選，候選中已收集或已刪除的影片不收，其餘收集。不往更早的影片找替代品補足 N 支，所以一次檢查期間新影片超過上限時，較早的那些不收。
-- **範圍邊界**：範圍起點是檢查當下往前推 N 天（每天 24 小時）；只有日期的發布時間視為該日 UTC 00:00。頻道清單只提供概略發布時間，沒有時間的影片視為在範圍內；擷取時再以影片的精確時間檢查，早於範圍起點的在下載字幕前略過（「超出收集範圍」），仍佔候選名額。訂閱記下這些影片與當時的範圍起點；發布時間不會變，之後範圍起點不早於它的檢查不再為這支影片向 YouTube 查詢，影片不再是候選時移除紀錄。
-- **重複與失敗**：同一頻道已有排隊或執行中的工作時，新的檢查併入該工作，不重複收集。候選中收集失敗的影片，下一次檢查仍是候選時會再試。
-- **暫停與移除**：排隊中的頻道工作與尚未開始的影片結束為「略過」，正在擷取的影片完成並保存。移除時選「保留 N 份文件」（預設）或「一併刪除 N 份文件」；頻道有文件或還有收集在進行時才問。一併刪除先替這個頻道正在擷取的影片（包括已暫停的檢查）寫入刪除紀錄，這些影片之後擷取完成也不會保存；再等這些擷取與單支影片的加入完成（最多約 30 秒），逐份刪除頻道的文件，與一般刪除相同，留下刪除紀錄、從搜尋排除並記錄刪除事件。超過時間還在進行的單支影片加入，完成時若屬於這個頻道就刪除。個別文件刪不掉時移除照常完成，記錄與提示會寫明幾份無法刪除。保留的文件在文件頁的頻道篩選顯示「名稱・已移除（n）」。恢復時立即檢查一次。暫停與移除保存在 Vault，重新啟動後維持原狀。
-- **設定生效時間**：修改收集設定後，之後開始探索的檢查都用新設定，包含已排隊、尚未開始探索的工作；已列出影片的工作照原本的影片完成。
+訂閱詳情顯示收集設定、下次檢查時間與收集紀錄，每筆紀錄的「查看細節」開啟記錄頁。移除訂閱時可選擇保留或一併刪除它的文件；保留的文件在文件頁的篩選標示「・已移除」。
 
-範圍外或超出上限的影片可以用單支影片網址收集，不受收集範圍限制。無字幕影片以可辨認的失敗項目呈現，不啟動語音轉寫。
+### 收集設定
 
-## 收集設定
+每個訂閱有自己的設定，在確認卡或訂閱詳情修改，變更立即儲存：
 
-每個訂閱有自己的收集設定，在訂閱確認卡設定，訂閱後在訂閱詳情的「收集設定」修改。選項變更立即儲存，數字在停止輸入後儲存；數字不在範圍內或不是整數時，欄位下方顯示錯誤，不儲存也不能訂閱或套用：
+| 設定 | 可用的值 | YouTube 預設 | RSS 預設 |
+| --- | --- | --- | --- |
+| 檢查頻率 | 每 15 分鐘、30 分鐘、1、3、6、12 小時、每天 | 每 30 分鐘 | 每 1 小時 |
+| 時間範圍 | 1–60 天 | 30 天 | 7 天 |
+| 數量上限 | 1–100 | 10 支影片 | 30 篇文章 |
 
-| 設定 | 可用的值 | 新訂閱的預設 |
-| --- | --- | --- |
-| 檢查頻率 | 每 15 分鐘、30 分鐘、1 小時、3 小時、6 小時、12 小時、每天 | YouTube 每 30 分鐘，RSS 每 1 小時 |
-| 時間範圍 | 1–60 天 | YouTube 30 天，RSS 7 天 |
-| 數量上限 | 1–100 則 | YouTube 10 支影片，RSS 30 篇文章 |
+「套用到所有 YouTube 頻道」（或其他類型）把這組設定給同類型的所有訂閱。
 
-上下限所有類型相同，由核心定義；預設值由各類型宣告。畫面與 API 依同一份欄位宣告檢查，API 對其他值回 `invalid_request` 並說明允許範圍。訂閱詳情的「套用到所有 YouTube 頻道」先確認，再把這組設定給其他所有 YouTube 訂閱；暫停中的訂閱也會套用並保持暫停，恢復後的檢查使用這組設定。套用與修改都不開始收集。修改頻率時，下一次檢查從這個訂閱上次派工時間重新計算，已過就立即檢查；修改收集範圍從下一次開始探索的檢查生效。訂閱詳情顯示這個訂閱的新增時間與下次檢查時間。
+每次檢查都用同一條規則：從檢查當下往前推時間範圍，範圍內最新的 N 則是候選，候選中已收集或已刪除的不收，其餘收集。不往更早的內容找替代品補足 N 則。範圍外的影片仍可用單支影片網址收集。
 
-每個訂閱的設定存在 `<vault>/settings/youtube-channels.json` 的該訂閱中。程式只開啟現行格式的知識庫；設定檔是其他版本、或標記檔沒有識別碼時，知識庫不開啟並說明原因。
+自動檢查只在 App 執行且電腦醒著時進行。每個訂閱依自己的頻率排定下一次檢查；漏過的多個週期只檢查一次。關閉總開關只停止定時檢查，首次收集與「立即檢查」照常執行。
 
-自動檢查總開關在訂閱頁標題列，保存在 `<vault>/settings/youtube-schedule.json`。自動檢查只在 XR Collector 執行且電腦醒著時進行，不建立背景系統服務。排程依每個訂閱自己的頻率計算下一次檢查；同時到期的訂閱一起派工，每個訂閱一個頻道工作，提交後立即返回，不等待收集完成。定時檢查派工後，下一次檢查是到期時間加上整數倍頻率、第一個晚於派工時間的時刻，輪詢延遲不會累積；「立即檢查」、首次訂閱與恢復則從派工時間起算一個頻率。同一頻道還有進行中的工作時沿用該工作，下一次檢查照樣往後排。漏過的多個週期只派工一次，那次檢查同樣依「頻道訂閱」的收集規則，從檢查當下往前算範圍。修改設定、套用到全部與派工對同一份訂閱資料依序寫入，不互相覆蓋。關閉總開關只停止定時檢查，新訂閱的首次收集與「立即檢查」照常執行；重新開啟時每個訂閱從當下起算自己的頻率。
+## 文件、搜尋與閱讀
 
-## 搜尋與索引
+文件頁把列表與搜尋放在同一個畫面。沒有關鍵字時依收集時間新到舊列出，每頁 20 份，可依類型與來源篩選。輸入關鍵字約 300ms 後開始搜尋，結果依關聯性排序，顯示命中片段與「找到 N 份」；搜尋涵蓋標題、來源名稱與正文。
 
-Markdown vault 是正式資料，Meilisearch 是每台裝置上可重建的搜尋投影。收集流程先保存 vault，再更新該份文件的索引。索引更新失敗不會刪除或回滾已保存的 Markdown；畫面會顯示錯誤並提供重建操作。
+點選文件進入 Reader，以 Markdown 排版全文，有「開啟原始內容」與刪除。返回時恢復查詢、篩選、頁碼與捲動位置。
 
-「文件」頁把列表與搜尋放在同一個畫面。沒有查詢字串時，列表直接讀 Vault，依收集時間新到舊、每頁 20 份，頻道選單（全部、各類型的全部、各頻道及篇數）以穩定的類型與頻道 ID 篩選；已移除訂閱的頻道標示「・已移除」並沿用移除紀錄的名稱，只單次加入過的頻道不標示。輸入關鍵字約 300ms 後開始搜尋，結果依 Meilisearch 關聯性排序並以頁碼分頁，顯示命中片段與「找到 N 份」。搜尋索引包含標題、頻道名稱與字幕正文。點選文件進入 `/documents/:id` 的 Reader，以 Markdown 排版全文；返回時恢復查詢、頻道、頁碼與捲動位置。
+刪除文件後，文件從知識庫、搜尋與 Agent 查詢中移除，並留下刪除紀錄，之後的檢查不再收集它。要再收集時，貼上它的網址，或在已刪除文件的頁面按「重新收集」。
 
-Desktop 啟動時自動啟動只監聽 loopback 的 Meilisearch process，並追蹤「啟動中、更新中、重建中、已就緒、錯誤」狀態。啟動時逐筆比對索引與 vault 的文件 ID 及內容雜湊，有任何差異就全量重建，一致時沿用持久化索引。搜尋無法使用時，文件頁顯示警示並改列 vault 文件，Reader 照常可讀；設定頁的「搜尋索引」卡顯示狀態、已索引與知識庫篇數、上次重建時間、錯誤原因及「重建索引」按鈕。繁簡轉換與進階中文調校不屬於 Issue #4 搜尋契約。
+搜尋引擎是隨 App 附帶的 Meilisearch，只監聽 loopback。App 啟動時比對索引與知識庫，有差異就全量重建；搜尋無法使用時，文件頁顯示警示並改列知識庫的文件，Reader 照常可讀。設定頁的「搜尋」卡顯示狀態、已索引與知識庫篇數、上次重建時間與「重建索引」。
+
+## 工作與記錄
+
+收集在背景工作中進行。送出後對話框關閉，服務先保存工作再回應，畫面不跳頁。
+
+- **工作頁**列出進行中（附進度）、排隊中與失敗的工作；失敗的工作可以重試或移除。側欄的「工作」顯示未完成的數量。
+- **記錄頁**預設顯示摘要：重複的定時檢查合併成一組，「查看細節」展開每次事件。切換「完整事件」看每一筆事件。可依紀錄類型、最低等級（DEBUG、INFO、WARN、ERROR）、訂閱與時間篩選；依工作篩選時可複製診斷資訊。記錄保留 30 天，寫入與讀出時遮蔽 token、Cookie 與帶密鑰的網址參數。
+
+工作的處理規則：
+
+- **不重複**：同一影片或同一來源已有排隊或執行中的工作時，新的提交回傳既有工作。
+- **有上限的佇列**：探索同時 1 個、擷取同時 2 個，排隊合計最多 500 個。擷取在不同工作之間輪替，大頻道不會占住所有名額。
+- **自動重試**：網路錯誤與來源限制連線頻率時自動重試，每個工作最多嘗試 3 次，間隔 30 秒與 2 分鐘。無字幕、無法存取等不重試。
+- **中斷接續**：App 結束時等待執行中的步驟完成，其餘工作記為「已中斷」，下次開啟知識庫時自動接續，不重做已完成的步驟。同一工作異常結束 3 次後不再接續。
+- **離線**：沒有網路時，收集暫停等待，App 每 30 秒確認一次，恢復後自動接續；畫面顯示「目前沒有網路，恢復後自動檢查」。
+
+工作與記錄屬於裝置資料，存在 profile 的 `jobs/`，不放在知識庫，也不隨匯出檔交換。
+
+## 知識庫管理
+
+設定頁的「知識庫」區塊顯示路徑、文件數與訂閱數，並提供以下操作。桌面版另有「在 Finder 顯示」（Windows 為「在檔案總管顯示」）。
+
+- **搬移**：把知識庫搬到不存在或空的資料夾。先等執行中的步驟完成，完整複製並逐檔比對 SHA-256，建立新的搜尋索引後才切換，再清除原位置。切換前任何一步失敗，知識庫留在原位置、資料不變。
+- **開啟其他知識庫**：改用另一個已有的知識庫。兩個知識庫各自保留內容與工作，回到原知識庫時它的工作接續。
+- **匯出**：把知識庫寫成一個 `.zip`，預設在「文件」下的 `XR Collector 匯出`。匯出檔包含文件、訂閱、自動檢查開關與刪除紀錄，以及每個檔案的 SHA-256；不包含搜尋索引、Agent 金鑰與裝置設定。
+- **匯入**：比對匯出檔與目前的知識庫，顯示會新增、更新與刪除的數量，再選擇「合併」或「完全取代」。套用前把目前內容備份到「文件」下的 `XR Collector 備份`。
+
+兩台電腦以匯出檔交換資料，不透過雲端同步。合併以較新的為準：每份文件、每個訂閱與每筆刪除都帶程式記錄的修改時間，兩邊都有時以時間較新的為準，時間相同時保留本機；刪除紀錄永久保留，另一台還留著的文件不會在合併時回來。合併依賴兩台電腦的時鐘，請開啟系統的自動對時。
+
+匯入先在暫存資料夾準備好所有檔案並寫入 journal，才逐一放到位；中途停止時，下次開啟知識庫會完成套用。知識庫因此只會是匯入前或匯入後的完整內容。比對與套用規則見 [儲存與搜尋](docs/storage-and-search.md#匯入的比對與套用)。
+
+## 桌面 App
+
+- **選單列／系統匣**：關閉視窗後 App 繼續在背景執行，從選單列或系統匣結束。選單顯示目前狀態、需要處理的訂閱，以及「開啟 XR Collector」「立即檢查所有訂閱」「自動檢查」「工作」「記錄」、版本與更新、「結束 XR Collector」。圖示依狀態變化：閒置、收集中、自動檢查已關閉、離線、需要處理、有可用更新。
+- **單一 instance**：再次開啟 App 時叫出現有的視窗，不建立第二套服務。
+- **登入時自動啟動**：設定頁的「啟動與背景執行」開關，每台電腦各自設定，預設關閉。登入時 App 在背景啟動，不顯示主視窗。只有安裝版可以修改。
+- **外觀**：跟隨系統、深色或淺色。
+- **自動更新**：App 啟動時與之後每 24 小時，從 GitHub Releases 檢查新版本。有新版時，選單、側欄與設定頁的「關於 XR Collector」顯示更新與版本說明；下載與安裝由使用者按下才開始，安裝前先等收集安全停止。
 
 ## Agent 存取
 
-應用程式由共用 Collector runtime 建立單一 VaultWorkspace、scheduler 與搜尋 process，再提供 UI 與 Agent 兩個 loopback HTTP listener。兩個 listener 只接受 Host 為 `127.0.0.1:<port>` 或 `localhost:<port>` 的請求，其他 Host 回 403，避免其他網站以 DNS rebinding 呼叫 UI 的 API；Web 開發模式的 Vite proxy 以 `changeOrigin` 轉送目標位址。Agent listener 需要 Bearer token，並提供與 UI 相同的既有業務 API：收集、頻道、排程、文件、搜尋重建及 Vault 匯出／匯入／搬移／開啟。兩個入口使用同一個 active Vault 與操作鎖；用戶端斷線不取消已接受的操作，runtime 停止時會等待操作完成再關閉搜尋 process。
+App 另外提供一個給本機 AI Agent 用的 HTTP listener，以 Bearer token 驗證，提供與畫面相同的業務 API：收集、訂閱、排程、文件、搜尋與知識庫操作。畫面與 Agent 共用同一個知識庫與操作鎖；Agent 斷線不取消已接受的操作。
 
-尚未設定 Vault 或已記錄的 Vault 不存在時，health 顯示 runtime `not_ready` 與原因；業務 API 回傳 503 `vault_not_ready`，且不自動建立替代 Vault。使用者需透過 #20 的 Onboarding 設定 Vault。Agent token 驗證在 Not Ready 狀態仍然生效。
+設定頁與 Onboarding 的「AI 助理連線」提供：
 
-Agent 金鑰與 port 模式保存在 profile 的 `agent-settings.json`，不屬於 Vault，也不隨匯出、匯入、搬移或切換 Vault 改變。金鑰跨重啟維持，只有使用者在設定頁確認重設時才更新。macOS／其他 POSIX 環境將設定檔 mode 設為 0600；Windows 依應用程式資料目錄繼承的 ACL 保護。
+- **下載 Skill**：`xr-collector-agent.zip`，內含 `SKILL.md` 與記錄目前網址和金鑰的 `connection.json`。把 `xr-collector-agent` 資料夾安裝到 Agent 支援的 Skill 位置後，Agent 就能連上這台電腦的 XR Collector。
+- **複製連線資料**：手動設定或診斷用。
+- **連線設定**：port 預設自動（桌面版從 `7222` 開始，依序嘗試 10 個），也可指定固定 port，下次啟動生效。可重設連線金鑰。
 
-port 預設為自動模式：安裝版與 Electron 從 `7222` 開始，Web 開發模式從 `7232` 開始；起始 port 被佔用時依序嘗試十個候選，仍無可用位置時交由作業系統配置。使用者也可以在設定頁指定 `1` 到 `65535` 的固定 port。port 模式的修改先保存，於下次啟動套用，不會中斷目前 listener 或已接受的工作。固定 port 無法綁定時，Agent 連線顯示無法使用，但 UI、Vault 與背景工作照常啟動，使用者可改回自動模式後重新啟動。
-
-設定頁與首次 Onboarding 都能開啟「AI 助理連線」面板。面板顯示目前 active URL，並提供下載 Skill、複製連線資料及修改連線設定；固定 port 尚待重新啟動時，active URL 仍代表目前真正監聽的位置。Skill 下載包是 `xr-collector-agent.zip`，內含通用的 `xr-collector-agent/SKILL.md` 與同層 `connection.json`；連線資料只包含目前 active URL 與金鑰。產品不發布作業系統固定 discovery file，也不以安裝位置、Vault 路徑或 runtime instance ID 尋址。
-
-Skill 以標準 HTTP/JSON 定義操作，不包含可執行腳本，也不要求用戶端安裝 Python、Node.js 或其他 runtime。使用者把 `xr-collector-agent` 目錄安裝到本機 Agent 支援的 Skill 位置，開啟新的 Agent session，再要求 Agent 依 Skill 使用同層 `connection.json` 連線；Agent 先以 authenticated health 確認服務，再呼叫業務 API。`connection.json` 已在下載當下包含連線資料，因此一般使用不必在每個 session 重新貼上 port 或金鑰；「複製連線資料」供手動設定與診斷使用。只有雲端瀏覽能力、無法存取本機檔案或 localhost 的 Agent 不適用。
-
-repository 內的通用 Skill 位於 `skills/xr-collector-agent`；操作與 HTTP 契約見該目錄的 [Agent Skill](skills/xr-collector-agent/SKILL.md)。macOS／Windows 使用同一份 Skill 與 API 契約；平台安裝版仍需各自完成原生驗證。
-
-Skill 已安裝到 Agent 時可直接交付以下要求；從 repository 試用時，將 `<Skill 目錄>` 換成此 checkout 的 `skills/xr-collector-agent`：
-
-```text
-請使用 <Skill 目錄>/SKILL.md，自動尋找這台電腦上的 XR Collector。
-先列出已保存文件，再搜尋 math，讀取一份命中文件並附上來源。
-```
-
-列表預設每頁 50 份，回傳下一頁 offset；收集期間列表可能移動，跨頁使用穩定文件 ID 去重。列表與搜尋以 `sourceType`／`publisherId` 篩選，`GET /api/documents/sources` 回傳各類型與頻道的篇數。搜尋與 UI 使用相同關聯性排序及篩選，支援 offset/limit，回傳精確命中總數（最多計到 10000）。索引未就緒時搜尋回報 503，列表與全文仍直接讀取 vault。第一版不提供 MCP；完整操作契約見 Agent Skill。
-
-## 收集規則
-
-- 接受 `youtube.com/watch`、`youtu.be`、`youtube.com/shorts` 與 `youtube.com/embed` 的單支影片網址。
-- 語言依序偏好繁體中文、簡體中文、英文，再選其他可用語言。
-- 同一語言優先使用人工字幕；自動字幕只採用影片原始語言，不採用 YouTube 自動翻譯軌。
-- 正規化字幕中的多餘空白，並將來源的零碎字幕片段合併成段落；不摘要或改寫內容，原本重複的文字仍會保留。
-- Timestamp 只用於擷取過程，不寫入正式文件。產品不提供 Player UI 或逐句時間跳轉。
-- 不下載影片或音訊，也不執行語音轉文字。
-- 無字幕、影片無法存取、網路問題與一般擷取失敗以不同錯誤回報。
-
-目前範圍見 [產品範圍](docs/product-brief.md)，本輪交付依 [Round 2 計畫](docs/round-2-plan.md)。技術現況見 [架構](docs/architecture.md)、[文件格式](docs/document-format.md) 與 [儲存／搜尋](docs/storage-and-search.md)。
+金鑰與 port 設定存在 profile，不屬於知識庫，跨重啟維持。Skill 只用標準 HTTP/JSON，不需要在 Agent 端安裝其他 runtime。操作與 API 契約見 [Agent Skill](skills/xr-collector-agent/SKILL.md)。

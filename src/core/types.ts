@@ -1155,7 +1155,6 @@ export interface BuildInfo {
   commit: string | null;
   buildId: string;
   target: string;
-  variant: 'chinese' | 'official' | null;
   /** Null means source identity could not be determined; it never means a clean checkout. */
   sourceDirty: boolean | null;
 }
@@ -1170,7 +1169,6 @@ export interface UpdateOffer {
   version: string;
   commit: string;
   target: string;
-  variant: 'chinese' | 'official';
   releaseNotes: string;
   source: { id: string; indexUrl: string };
   payload: UpdateAsset;
@@ -1193,7 +1191,6 @@ export interface DeviceUpdateStatus {
   phase: UpdatePhase;
   currentVersion: string;
   target: string;
-  variant: 'chinese' | 'official' | null;
   installerAvailable: boolean;
   offer: UpdateOffer | null;
   ready: UpdateOffer | null;

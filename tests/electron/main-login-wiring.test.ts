@@ -253,11 +253,11 @@ describe('Electron main login-startup wiring', () => {
     const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     restorePlatform = () => platform.mockRestore();
     harness.packageMetadata = { name: 'xr-collector', xrCollectorUpdateRepository: 'derektu/xr-collector-test',
-      xrCollectorAppId: 'com.xrcollector.verify.public.chinese' };
+      xrCollectorAppId: 'com.xrcollector.verify.public' };
 
     await loadMain(false);
     await vi.waitFor(() => expect(harness.updateRepositories).toEqual(['derektu/xr-collector-test']));
-    expect(harness.appIds).toEqual(['com.xrcollector.verify.public.chinese']);
+    expect(harness.appIds).toEqual(['com.xrcollector.verify.public']);
   });
 
   it('keeps a notification target clicked while loading until the renderer listener is ready', async () => {

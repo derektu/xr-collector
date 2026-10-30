@@ -45,17 +45,16 @@ export function validateBuildInfo(
     || (info.commit !== null && (typeof info.commit !== 'string' || !/^[a-f0-9]{40}$/u.test(info.commit)))
     || typeof info.buildId !== 'string' || info.buildId.length === 0
     || typeof info.target !== 'string' || !/^[a-z\d]+-[a-z\d]+$/u.test(info.target)
-    || (info.variant !== null && info.variant !== 'chinese' && info.variant !== 'official')
     || (info.sourceDirty !== null && typeof info.sourceDirty !== 'boolean')
     || (info.commit === null) !== (info.sourceDirty === null)) return fail();
   if (options.requirePackaged && info.kind !== 'packaged') return fail();
   if (info.kind === 'packaged') {
     const target = `${options.platform ?? process.platform}-${options.arch ?? process.arch}`;
     if (!['darwin-arm64', 'win32-x64'].includes(String(info.target)) || info.target !== target
-      || info.commit === null || info.sourceDirty !== false || info.variant === null) return fail();
+      || info.commit === null || info.sourceDirty !== false) return fail();
   }
   return Object.freeze({
     schemaVersion: 1, kind: info.kind, version: info.version, builtAt: info.builtAt,
-    commit: info.commit, buildId: info.buildId, target: info.target, variant: info.variant, sourceDirty: info.sourceDirty,
+    commit: info.commit, buildId: info.buildId, target: info.target, sourceDirty: info.sourceDirty,
   }) as BuildInfo;
 }

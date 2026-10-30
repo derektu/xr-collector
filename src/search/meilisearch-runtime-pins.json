@@ -3,7 +3,7 @@
   "version": "1.53.2",
   "releaseRepository": "https://github.com/meilisearch/meilisearch",
   "releaseTag": "v1.53.2",
-  "official": {
+  "assets": {
     "darwin-arm64": {
       "asset": "meilisearch-macos-apple-silicon",
       "url": "https://github.com/meilisearch/meilisearch/releases/download/v1.53.2/meilisearch-macos-apple-silicon",
