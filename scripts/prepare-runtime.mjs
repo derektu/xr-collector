@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertBuildEnvironment } from './build-doctor.mjs';
 import { prepareMeilisearch } from './prepare-meilisearch.mjs';
 import { prepareRuntimeDependencies } from './runtime-dependencies.mjs';
 
@@ -34,7 +35,10 @@ export async function prepareRuntime({ target, variant, cacheOnly }, dependencie
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    await prepareRuntime(parsePrepareRuntimeArguments(process.argv.slice(2)));
+    const options = parsePrepareRuntimeArguments(process.argv.slice(2));
+    // Packaging runs the cache-only install after its own environment check.
+    if (!options.cacheOnly) await assertBuildEnvironment(options);
+    await prepareRuntime(options);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

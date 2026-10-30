@@ -17,6 +17,7 @@
     "electron": "npm run build && electron .",
     "build:meilisearch": "node scripts/build-meilisearch.mjs",
     "prepare:meilisearch": "node scripts/prepare-meilisearch.mjs",
+    "doctor:build": "node scripts/build-doctor.mjs",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "download:runtime": "node scripts/prepare-runtime.mjs mac",
     "package:mac": "node scripts/package-app.mjs --target darwin-arm64 --variant chinese",

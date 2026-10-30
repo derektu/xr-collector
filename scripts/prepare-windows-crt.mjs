@@ -10,30 +10,36 @@ import { fileURLToPath } from 'node:url';
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export async function prepareWindowsCrt(options = {}, dependencies = {}) {
-  const pins = options.pin
-    ? { officialWindowsCrt: options.pin }
-    : JSON.parse(await readFile(path.join(projectRoot, 'scripts', 'runtime-dependency-pins.json'), 'utf8'));
-  const pin = pins.officialWindowsCrt;
-  const destination = options.destination ?? path.join(projectRoot, 'resources', 'bin', 'win', pin.fileName);
-  const inspect = dependencies.inspectSignature ?? inspectSignature;
-  const valid = async (candidate) => {
-    const info = await stat(candidate);
-    if (info.size !== pin.bytes || await sha256(candidate) !== pin.sha256) return false;
-    const identity = await inspect(candidate);
-    return identity.status === 'Valid'
-      && identity.fileVersion === pin.fileVersion
-      && identity.subject === pin.signerSubject
-      && identity.thumbprint.toUpperCase() === pin.signerThumbprint.toUpperCase();
-  };
-  try {
-    if (await valid(destination)) return { destination, cacheHit: true, pin };
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+export async function readWindowsCrtPin() {
+  return JSON.parse(await readFile(path.join(projectRoot, 'scripts', 'runtime-dependency-pins.json'), 'utf8')).officialWindowsCrt;
+}
+
+/** The first Visual Studio Redist `vcruntime140.dll` that matches the pin's bytes, version and Microsoft signer, or null. */
+export async function findTrustedWindowsCrt(pin, dependencies = {}) {
   const candidates = await (dependencies.findCandidates ?? findCandidates)();
-  let source = null;
   for (const candidate of candidates) {
-    try { if (await valid(candidate)) { source = candidate; break; } } catch { /* examine the next VS Redist candidate */ }
+    try { if (await isTrustedCrt(candidate, pin, dependencies)) return candidate; } catch { /* examine the next VS Redist candidate */ }
   }
+  return null;
+}
+
+async function isTrustedCrt(candidate, pin, dependencies) {
+  const info = await stat(candidate);
+  if (info.size !== pin.bytes || await sha256(candidate) !== pin.sha256) return false;
+  const identity = await (dependencies.inspectSignature ?? inspectSignature)(candidate);
+  return identity.status === 'Valid'
+    && identity.fileVersion === pin.fileVersion
+    && identity.subject === pin.signerSubject
+    && identity.thumbprint.toUpperCase() === pin.signerThumbprint.toUpperCase();
+}
+
+export async function prepareWindowsCrt(options = {}, dependencies = {}) {
+  const pin = options.pin ?? await readWindowsCrtPin();
+  const destination = options.destination ?? path.join(projectRoot, 'resources', 'bin', 'win', pin.fileName);
+  try {
+    if (await isTrustedCrt(destination, pin, dependencies)) return { destination, cacheHit: true, pin };
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const source = await findTrustedWindowsCrt(pin, dependencies);
   if (!source) throw new Error(`No trusted pinned Microsoft Visual C++ v14 x64 ${pin.fileName} ${pin.fileVersion} was found; the existing runtime was preserved.`);
   await mkdir(path.dirname(destination), { recursive: true });
   const temp = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;

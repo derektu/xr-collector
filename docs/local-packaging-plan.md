@@ -18,8 +18,8 @@
 
 | 交付目標 | 建置位置 | 安裝產物 | 實際執行證據 |
 | --- | --- | --- | --- |
-| macOS arm64 | 使用者 Mac；UTM macOS arm64 VM 補安裝與隔離驗收 | DMG、ZIP、更新 metadata | ARM64 原生 |
-| Windows x64 | 使用者 Mac 上的 Parallels Windows ARM VM，使用 x64 Node／Rust／MSVC | NSIS EXE、更新 metadata | x64-on-ARM64，明列 emulated |
+| macOS arm64 | Mac 建置機（Apple Silicon）；UTM macOS arm64 VM 補安裝與隔離驗收 | DMG、ZIP、更新 metadata | ARM64 原生 |
+| Windows x64 | Windows 建置機（x64），使用 x64 Node／Rust／MSVC | NSIS EXE、更新 metadata | x64 原生；在 ARM64 VM 建置時明列 emulated |
 
 兩種 Meilisearch bundle 均涵蓋上述平台：預設 Chinese 與明確選用的 official。它們是引擎 variant，不增加平台。各包只含一個引擎，輸出與 metadata 分開，不能互相覆蓋或混用。同一 GitHub Release 的附件 basename 必須全域唯一，安裝檔與 metadata 的名稱都須區分平台、架構與 variant，不能只用本機子目錄隔開。入口沿用 `package:mac`、`package:win` 及其 `:official` 版本。
 
