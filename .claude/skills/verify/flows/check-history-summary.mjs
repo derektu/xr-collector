@@ -1,6 +1,6 @@
 // Routine scheduled checks collapse into result runs on subscription detail and the Activity page;
 // detail keeps exact per-check events, raw mode stays available, and back preserves filters.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
 
@@ -88,16 +88,26 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   });
   if (!summaryAvailable) return;
 
+  const subscriptionRow = async () => JSON.parse(await readFile(subscriptionsFile, 'utf8'))
+    .channels.find((candidate) => candidate.id === source.id);
+  // The App rewrites the subscriptions file once more after a check's job settles, to record when
+  // the check ended. A check counts as settled only once that time is in the file, so the next
+  // check's edit cannot land between the App's read and write and be overwritten. The edit goes
+  // through a temporary file and a rename, as the App's own writes do, so the App never reads half a file.
   const scheduledCheck = async () => {
     const before = new Set((await jobs()).map((job) => job.id));
     const file = JSON.parse(await readFile(subscriptionsFile, 'utf8'));
     const row = file.channels.find((candidate) => candidate.id === source.id);
     row.nextCheckAt = new Date(Date.now() - 1_000).toISOString();
-    await writeFile(subscriptionsFile, `${JSON.stringify(file, null, 2)}\n`);
+    const temporary = `${subscriptionsFile}.verify.tmp`;
+    await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`);
+    await rename(temporary, subscriptionsFile);
     await writeFile(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
     return waitFor(async () => {
       const job = (await jobs()).find((candidate) => !before.has(candidate.id) && candidate.scope?.trigger === 'scheduled');
-      return job && (job.state === 'completed' || job.state === 'failed') ? job : null;
+      if (!job || (job.state !== 'completed' && job.state !== 'failed')) return null;
+      const { lastCheckedAt } = await subscriptionRow();
+      return lastCheckedAt && lastCheckedAt >= job.finishedAt ? job : null;
     }, 'scheduled check settled', { timeout: CHECK_TIMEOUT });
   };
 
