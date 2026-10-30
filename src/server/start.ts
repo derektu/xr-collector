@@ -1,3 +1,5 @@
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import type { VaultWorkspace } from '../vault/workspace.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
@@ -66,6 +68,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';
+  const connections = trackConnections(app.server);
   try {
     await app.listen({ host, port: options.port });
   } catch (error) {
@@ -79,8 +82,40 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     url: `http://${host}:${address.port}`,
     port: address.port,
     close: async () => {
+      connections.drain();
       await app.close();
       await waitForHttpAppIdle(app);
+    },
+  };
+}
+
+/**
+ * The server's close waits for every open connection, and a browser keeps connections it opened
+ * ahead of need, or after a response, without a request on them. Draining ends each connection
+ * that carries no request at once, and each other one once its response is sent.
+ */
+function trackConnections(server: Server): { drain(): void } {
+  const responding = new Map<Socket, number>();
+  let draining = false;
+  server.on('connection', (socket: Socket) => {
+    if (draining) { socket.destroy(); return; }
+    responding.set(socket, 0);
+    socket.once('close', () => responding.delete(socket));
+  });
+  server.on('request', (request: IncomingMessage, response: ServerResponse) => {
+    const socket = request.socket;
+    responding.set(socket, (responding.get(socket) ?? 0) + 1);
+    response.once('close', () => {
+      if (!responding.has(socket)) return;
+      const remaining = responding.get(socket)! - 1;
+      responding.set(socket, remaining);
+      if (draining && remaining === 0) socket.end();
+    });
+  });
+  return {
+    drain() {
+      draining = true;
+      for (const [socket, count] of responding) if (count === 0) socket.destroy();
     },
   };
 }
