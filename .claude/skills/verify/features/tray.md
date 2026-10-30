@@ -1,6 +1,6 @@
 # 選單列／系統匣
 
-macOS 選單列與 Windows 系統匣的 XR Collector 圖示，以及主視窗的關閉與結束。關閉視窗只隱藏，收集與 Agent API 照常；選單上方依連線與工作狀態顯示灰字，項目有開啟、立即檢查所有訂閱、自動檢查、工作、記錄與結束。Windows 第一次關閉視窗時跳一次「仍在系統匣執行」的提示。
+macOS 選單列與 Windows 系統匣的 XR Collector 圖示，以及主視窗的關閉與結束。關閉視窗只隱藏，收集與 Agent API 照常；選單上方依連線與工作狀態顯示灰字，項目有開啟、立即檢查所有訂閱、自動檢查、工作、記錄、版本與 App 更新（閒置時為「檢查 App 更新」）及結束。Windows 第一次關閉視窗時跳一次「仍在系統匣執行」的提示。
 
 ## Sub-features
 
@@ -43,7 +43,7 @@ Preconditions:
 
 ## Regression flows
 
-- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的狀態行與項目、關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的狀態序列與文件數、自動檢查的切換、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。Desktop 流程，視窗會顯示。
+- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的狀態行、項目與順序（含這次啟動 App 的「版本 X」與「檢查 App 更新」）、關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的狀態序列與文件數、自動檢查的切換、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。Desktop 流程，視窗會顯示。
 - `notification-clicks`：斷言 `tray-menu`、`tray-open` 的 attention 優先圖示、需處理子選單、從隱藏／最小化還原聚焦及訂閱入口；移除最後一筆後清除。Desktop 流程，視窗會顯示。
 
 更新提示以向上箭頭疊在原有閒置／收集中／自動檢查關閉圖示上，保留原狀態；Mac 使用單色 Template 與 2x 素材，Windows 使用有輪廓的箭頭與 2x 素材。開啟選單或設定不清除更新標記，執行新版後才消失。訂閱需要處理的 attention 圖示與離線圖示都優先於版本更新標記，版本選單仍保留完整狀態。離線圖示在 Mac 是 Template 加 × 角標，Windows 是灰底加 × 角標。
