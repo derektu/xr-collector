@@ -15,7 +15,7 @@ export const tier = 'platform';
 export const covers = ['tray-menu', 'tray-hide', 'tray-actions', 'tray-open', 'tray-hint', 'tray-second-launch', 'tray-quit'];
 export const desktop = true;
 
-const ACTIONS = ['開啟 XR Collector', '立即檢查所有訂閱', '自動檢查', '工作', '記錄', '結束 XR Collector'];
+const ACTIONS = ['開啟 XR Collector', '立即檢查所有訂閱', '自動檢查', '工作', '記錄', '檢查 App 更新', '結束 XR Collector'];
 const statusLines = (menu) => menu.items.filter((item) => item.kind === 'status').map((item) => item.label);
 const actionLabels = (menu) => menu.items.filter((item) => item.kind === 'action').map((item) => item.label);
 const autoCheck = (menu) => menu.items.find((item) => item.action === 'toggle_auto_check')?.checked;
@@ -92,8 +92,12 @@ export async function run({ instance, record, waitFor, sleep }) {
       note('menu', current);
       expect(current.icon === 'idle', '圖示為閒置', current.icon);
       const lines = statusLines(current);
-      expect(lines[0] === '沒有進行中的工作' && /^下次檢查 (明天 )?\d\d:\d\d$/u.test(lines[1] ?? '') && lines.length === 2, '狀態行為「沒有進行中的工作／下次檢查 HH:MM」', lines);
-      expect(JSON.stringify(actionLabels(current)) === JSON.stringify(ACTIONS), '項目依序為開啟、立即檢查、自動檢查、工作、記錄、結束', actionLabels(current));
+      expect(lines[0] === '沒有進行中的工作' && /^下次檢查 (明天 )?\d\d:\d\d$/u.test(lines[1] ?? ''), '上方狀態行為「沒有進行中的工作／下次檢查 HH:MM」', lines);
+      const version = await instance.app.evaluate(({ app }) => app.getVersion());
+      expect(lines[2] === `版本 ${version}` && lines.length === 3, `下方狀態行為這次啟動的「版本 ${version}」`, lines);
+      expect(JSON.stringify(actionLabels(current)) === JSON.stringify(ACTIONS), '項目依序為開啟、立即檢查、自動檢查、工作、記錄、檢查 App 更新、結束', actionLabels(current));
+      const labels = current.items.filter((item) => item.kind !== 'separator').map((item) => item.label);
+      expect(labels.indexOf(`版本 ${version}`) === labels.indexOf('檢查 App 更新') - 1, '版本行緊接在「檢查 App 更新」上方', labels);
       expect(autoCheck(current) === true, '自動檢查已勾選', autoCheck(current));
       await waitFor(async () => /^下次 /u.test((await instance.window.getByTestId('subscription-status').first().innerText()).trim()),
         'source row shows its scheduled state', { timeout: 10_000 });
