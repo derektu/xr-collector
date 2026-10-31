@@ -37,7 +37,12 @@ export function parseFeature(file, markdown) {
 /** Every feature file of the map, by file name. */
 export function readFeatures(dir = FEATURES_DIR) {
   return readdirSync(dir).filter((file) => file.endsWith('.md') && file !== 'README.md').sort()
-    .map((file) => parseFeature(file, readFileSync(path.join(dir, file), 'utf8')));
+    .map((file) => parseFeature(file, readMarkdown(path.join(dir, file))));
+}
+
+/** A Markdown file of the skill with LF line endings, as a Windows checkout with core.autocrlf may hold it in CRLF. */
+export function readMarkdown(file) {
+  return readFileSync(file, 'utf8').replace(/\r\n/gu, '\n');
 }
 
 /** The feature named `name` (with or without .md); an unknown name lists the known ones. */

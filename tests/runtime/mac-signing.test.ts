@@ -42,7 +42,9 @@ it.skipIf(process.platform === 'win32')('loads only the exact protected credenti
   await expect(loadMacSigningConfiguration({ environmentFile, pathRoot: root })).rejects.toThrow(/only by its owner/u);
 });
 
-it('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
+// This and the following temporary signing keychain cases skip Windows: they depend on POSIX
+// behavior it lacks, owner-only directory permissions, process identity through /bin/ps and POSIX signals.
+it.skipIf(process.platform === 'win32')('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
   const tempRoot = await privateSigningRoot();
   const calls: string[][] = [];
   const existingKeychains = [path.resolve('fixture/login.keychain-db'), path.resolve('fixture/other-session.keychain-db')];
@@ -75,7 +77,7 @@ it('appends its keychain without reordering existing sessions and removes only i
   expect(calls.find((args) => args[0] === 'import')).not.toContain('/usr/bin/security');
 });
 
-it('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
+it.skipIf(process.platform === 'win32')('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
   const universe = await privateSigningRoot('xr-mac-signing-scope-');
   const tempRoot = path.join(universe, 'chosen-root');
   await mkdir(tempRoot, { mode: 0o700 });
@@ -115,7 +117,7 @@ it('recovers a SIGKILL-stale signing keychain without touching a live session', 
   expect(keychains).toEqual([path.join(live, 'signing.keychain-db'), path.join(external, 'signing.keychain-db')]);
 });
 
-it('fails closed when a stale-session process identity cannot be inspected', async () => {
+it.skipIf(process.platform === 'win32')('fails closed when a stale-session process identity cannot be inspected', async () => {
   const tempRoot = await privateSigningRoot();
   const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
   await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'unknown' }));
@@ -128,7 +130,7 @@ it('fails closed when a stale-session process identity cannot be inspected', asy
   await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
 });
 
-it('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
+it.skipIf(process.platform === 'win32')('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-'));
   roots.push(root);
   const signalTarget = new EventEmitter();
@@ -151,7 +153,7 @@ it('deletes its temporary keychain when the terminal sends SIGTERM', async () =>
   expect(deleted).toBe(owned);
 });
 
-it('preserves its signing session and shared lock when cleanup cannot confirm process-tree termination', async () => {
+it.skipIf(process.platform === 'win32')('preserves its signing session and shared lock when cleanup cannot confirm process-tree termination', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-unsafe-cleanup-'));
   roots.push(root);
   const session = path.join(root, 'xr-mac-signing-session');
@@ -176,7 +178,7 @@ it('preserves its signing session and shared lock when cleanup cannot confirm pr
   expect(JSON.parse(await readFile(path.join(sharedLock, sharedOwner!), 'utf8'))).toMatchObject({ unsafeProcessTree: tree });
 });
 
-it('a real packaging subprocess aborts its security child before append and removes keychain plus lock on SIGTERM', async () => {
+it.skipIf(process.platform === 'win32')('a real packaging subprocess aborts its security child before append and removes keychain plus lock on SIGTERM', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-process-'));
   roots.push(root);
   const session = path.join(root, 'xr-mac-signing-session');
@@ -236,7 +238,7 @@ it('a real packaging subprocess aborts its security child before append and remo
   await expect(stat(appended)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
+it.skipIf(process.platform === 'win32')('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-keychain-alias-test-'));
   roots.push(root);
   const requestedDirectory = '/var/folders/fixture/xr-mac-signing-alias';
@@ -264,7 +266,7 @@ it('uses one canonical owned keychain path when macOS rewrites /var as /private/
   expect(keychains).toEqual(['/Users/example/Library/Keychains/login.keychain-db']);
 });
 
-it('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
+it.skipIf(process.platform === 'win32')('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
   const tempRoot = await privateSigningRoot();
   const existing = path.resolve('fixture/login.keychain-db');
   const concurrent = path.resolve('fixture/concurrent-session.keychain-db');
@@ -296,7 +298,7 @@ it('preserves concurrent keychains and aggregates the work and owned-keychain de
   expect(run.mock.calls.filter(([, args]) => args[0] === 'list-keychains' && args[3] === '-s')).toHaveLength(2);
 });
 
-it('reclaims only a shared keychain-list lock whose recorded owner process is gone', async () => {
+it.skipIf(process.platform === 'win32')('reclaims only a shared keychain-list lock whose recorded owner process is gone', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-stale-keychain-lock-'));
   roots.push(root);
   const lock = path.join(root, 'lock');
@@ -318,7 +320,7 @@ it('reclaims only a shared keychain-list lock whose recorded owner process is go
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('reclaims an ownerless shared lock after its creation grace but fails closed on malformed ownership', async () => {
+it.skipIf(process.platform === 'win32')('reclaims an ownerless shared lock after its creation grace but fails closed on malformed ownership', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-ownerless-keychain-lock-'));
   roots.push(root);
   const lock = path.join(root, 'lock');

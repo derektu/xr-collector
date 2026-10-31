@@ -35,6 +35,8 @@
 
 平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 
+依賴 POSIX 行為的案例（檔案權限位元、`/bin/ps`、POSIX signal、以 shebang 啟動的程式）以 `it.skipIf(process.platform === 'win32')` 在 Windows 略過，在 Mac 與 Linux 照常執行；Windows 沒有這些行為，不以 mock 冒充通過。Windows 的一般帳號不能建 symlink，symlink 防護的案例在 Windows 改建 junction（lstat 也把它讀成 symlink），在 Mac 與 Linux 照常建 symlink。比對 Git 回報的路徑時，暫存目錄先經 `realpathSync.native`，展開 macOS 的 `/var` symlink 與 Windows 的 8.3 短檔名。這些邊界要在另一個平台跑完整 `npm run verify` 才看得到，時機見 [開發驗證流程](../docs/development-validation.md#另一個平台的完整驗證)。
+
 verify skill 的整合 smoke（`npm run test:verify-skill:mac`）啟動真的 Web 模式 instance 與 headless Chromium，只在 Mac 本機執行，不在 `npm run verify` 與 CI 中；Desktop smoke（Mac 是 `npm run test:verify-skill:desktop:mac`，Windows 是 `npm run test:verify-skill:desktop:win`）啟動開發版 Electron 或 `--app` 指定的打包版，收集一支真實影片，在 Mac 或 Windows 本機執行。內容見 [verify skill](../.claude/skills/verify/SKILL.md#自我測試)。
 
 ## Round 2 修改原則

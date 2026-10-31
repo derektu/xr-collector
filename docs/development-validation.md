@@ -39,6 +39,18 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；涵蓋功能地圖子功能、可重跑的流程收進 verify skill 的 `flows/`；只對本票有意義的腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 
+### 另一個平台的完整驗證
+
+CI 的 `npm run verify` 只在 Linux 執行，開發機只跑自己的平台；路徑、權限與換行這類差異，只有在另一個平台跑完整測試才會發現。所以開發者在另一個平台跑完整 `npm run verify`：Mac 開發者跑 Windows，Windows 開發者跑 Mac。這裡說的是自動檢查；另一個平台的原生 Desktop 驗收依 scenario 決定，見第 5 節。完整 `npm run verify` 有兩個時機：每個發布候選前跑一次；修改涉及以下平台差異時，交付前必跑：
+
+- 路徑：分隔符號、大小寫、Windows 的 8.3 短檔名
+- 檔案權限與 symlink
+- 程序與 lock
+- 簽署、打包與更新
+- 換行：Windows 的 Git 以 `core.autocrlf` 把文字檔 checkout 成 CRLF
+
+另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替；`npm ci` 後執行 `npm run verify`。逾時與 teardown error 保留並診斷，不以重跑抵銷。只在一個平台成立的行為依 [測試說明的平台邊界](../tests/README.md#真實搜尋與平台邊界) 以平台條件 skip，不用 mock 冒充另一個平台通過。
+
 ### 已收錄流程的門檻與成本
 
 E2E 的價值集中在驗收單張票的新行為，以及產品穩定後作為畫面回歸的安全網；每支流程在每個 PR 都要跑，成本隨功能累加。已收錄流程因此依 [功能地圖的層級](../.claude/skills/verify/features/README.md#流程層級) 標記 `core`、`feature`、`platform` 或 `real`，並符合以下門檻。
@@ -123,6 +135,7 @@ E2E 的價值集中在驗收單張票的新行為，以及產品穩定後作為�
 證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。同一個 label 重跑時，verify skill 改用下一個編號的子目錄，先前的證據保留；回報引用證據時寫實際的子目錄名。PR 描述的驗證段落列出：
 
 - 需求平台與實際驗證的平台、OS 與架構
+- 在另一個平台跑的完整 `npm run verify`：OS、host 與 Node 的架構（ARM64 上模擬的 x64 Node 照實標示）、通過／失敗／略過數與耗時
 - 每個 scenario 的層級、資料模式、結果（pass／fail／blocked）與實際觀察
 - 精確的 HEAD，以及 CI 結果（含 skipped）
 - 證據的本機路徑
@@ -145,7 +158,7 @@ node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked
 
 票的流程腳本與 smoke 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。
 
-另一個平台的實機驗證是選擇性的：開發機沒有的平台，由另一台機器、另一位開發者或 VM 補驗。怎麼連到那台機器、怎麼把程式碼送過去、怎麼取回證據，由開發者自選工具，不屬於共同前置條件。補驗的機器 checkout 受驗的 commit，不放未提交修改。兩個平台的結果以 summary 彙整：
+另一個平台的原生 Desktop 驗收依 scenario 需要決定（另一個平台的完整 `npm run verify` 何時必跑，見 [另一個平台的完整驗證](#另一個平台的完整驗證)）：開發機沒有的平台，由另一台機器、另一位開發者或 VM 補驗。怎麼連到那台機器、怎麼把程式碼送過去、怎麼取回證據，由開發者自選工具，不屬於共同前置條件。補驗的機器 checkout 受驗的 commit，不放未提交修改。兩個平台的結果以 summary 彙整：
 
 ```sh
 node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 <mac>/results.json <windows>/results.json

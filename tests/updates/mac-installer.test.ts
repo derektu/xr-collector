@@ -82,7 +82,8 @@ it('removes an uncommitted staging directory after cancellation stops its helper
   await expect(stat(workDir)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('keeps a terminal journal until finalize and never finalizes recovery-required evidence', async () => {
+// Finalize runs the packaged helper as an executable `#!/usr/bin/env node` script, which only a POSIX host can start.
+it.skipIf(process.platform === 'win32')('keeps a terminal journal until finalize and never finalizes recovery-required evidence', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'xr-mac-recovery-'));
   const resources = path.join(root, 'resources'); const workDir = path.join(root, '.xr-update-run');
   await mkdir(path.join(resources, 'bin'), { recursive: true }); await mkdir(workDir);

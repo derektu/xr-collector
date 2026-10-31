@@ -3,6 +3,10 @@ import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, unlink, writeFile }
 import path from 'node:path';
 
 const OWNER_FILE = /^owner-([0-9a-f]+)\.json$/u;
+// Windows reports EPERM for a path whose deletion another handle has begun but not finished, as when
+// a competing process reclaims the same stale owner. That state clears within milliseconds, so the
+// attempt repeats up to this many times before the error stands.
+const PENDING_DELETE_ATTEMPTS = 50;
 
 export async function withOwnedDirectoryLock(lockPath, work, options) {
   const token = (options.randomToken ?? (() => randomBytes(16).toString('hex')))();
@@ -46,6 +50,12 @@ async function acquire(lockPath, owner, options) {
   const ownerName = `owner-${owner.token}.json`;
   const ownerPath = path.join(lockPath, ownerName);
   let busyAttempts = 0;
+  let pendingDeleteAttempts = 0;
+  const waitOutPendingDelete = async (error) => {
+    if ((options.platform ?? process.platform) !== 'win32' || (error?.code ?? error?.cause?.code) !== 'EPERM'
+      || ++pendingDeleteAttempts > PENDING_DELETE_ATTEMPTS) throw error;
+    await (options.delay ?? delay)(10);
+  };
   for (;;) {
     try {
       await mkdir(lockPath, { mode: 0o700 });
@@ -60,10 +70,12 @@ async function acquire(lockPath, owner, options) {
         throw error;
       }
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (error.code !== 'EEXIST') { await waitOutPendingDelete(error); continue; }
     }
 
-    const state = await inspectExisting(lockPath, options);
+    let state;
+    try { state = await inspectExisting(lockPath, options); }
+    catch (error) { await waitOutPendingDelete(error); continue; }
     if (state === 'retry') continue;
     if (state === 'busy') {
       if (!options.waitForBusy || busyAttempts >= (options.maxBusyAttempts ?? 0)) throw new Error(options.busyMessage);

@@ -28,8 +28,11 @@ const harness = vi.hoisted(() => ({
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
+  const { default: path } = await import('node:path');
+  // main joins the app path with the host's separator, so the fake package.json is matched by resolved path.
+  const packageJson = path.resolve('/tmp/xr-main-wiring/app/package.json');
   return { ...actual, readFileSync: (file: Parameters<typeof actual.readFileSync>[0], options?: Parameters<typeof actual.readFileSync>[1]) =>
-    String(file) === '/tmp/xr-main-wiring/app/package.json' ? JSON.stringify(harness.packageMetadata) : actual.readFileSync(file, options as never) };
+    path.resolve(String(file)) === packageJson ? JSON.stringify(harness.packageMetadata) : actual.readFileSync(file, options as never) };
 });
 
 vi.mock('electron', () => {
