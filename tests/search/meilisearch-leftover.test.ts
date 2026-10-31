@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -149,9 +149,10 @@ describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app'
 
   it('stops a proven leftover even when the installed binary path changed', async () => {
     const databasePath = await tempDatabase();
+    // A symlink gives the leftover its own command-line path. A copy is a new executable that macOS
+    // scans on its first launch for about two seconds; the symlink launches the already-scanned binary.
     const previousBinary = path.join(path.dirname(databasePath), 'previous-meilisearch');
-    await copyFile(bundledBinary, previousBinary);
-    await chmod(previousBinary, 0o755);
+    await symlink(bundledBinary, previousBinary);
     const leftover = await leaveEngineBehind(databasePath, previousBinary);
 
     const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });

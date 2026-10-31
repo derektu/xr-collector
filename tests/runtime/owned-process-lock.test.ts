@@ -61,6 +61,64 @@ it('allows only one of two synchronized stale-owner reapers to acquire the repla
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+const pendingDeleteRoots = async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-lock-pending-delete-'));
+  roots.push(root);
+  return root;
+};
+/** A lock in `root` whose recorded owner is dead, as a killed run leaves it. */
+async function staleLock(root: string, name: string, uid: number) {
+  const lock = path.join(root, name);
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 41, uid, startedAt: 'dead', token: 'a1' }), { mode: 0o600 });
+  return lock;
+}
+/**
+ * Lock options whose first `failures` owner inspections fail with EPERM, as when a competing reaper is
+ * mid-way through deleting the stale owner; `delays` records every wait between attempts.
+ */
+function pendingDeleteOptions(platform: string, uid: number, failures: number, delays: number[]) {
+  let inspected = 0;
+  return {
+    platform,
+    ownerIdentity: async () => ({ pid: process.pid, uid, startedAt: 'current' }),
+    inspectOwner: async () => {
+      inspected += 1;
+      if (inspected <= failures) throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+      return null;
+    },
+    inspectUnsafeTree: async () => false,
+    delay: async (milliseconds: number) => { delays.push(milliseconds); },
+    waitForBusy: false,
+    busyMessage: 'busy',
+    randomToken: () => 'b2',
+  };
+}
+
+it('waits out a bounded number of Windows pending-delete EPERM failures', async () => {
+  const root = await pendingDeleteRoots();
+  const uid = process.getuid?.() ?? 501;
+  const recovered: number[] = [];
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'recovers', uid), async () => 'acquired',
+    pendingDeleteOptions('win32', uid, 3, recovered))).resolves.toBe('acquired');
+  expect(recovered).toEqual([10, 10, 10]);
+
+  const persistent: number[] = [];
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'persistent', uid), async () => 'acquired',
+    pendingDeleteOptions('win32', uid, Infinity, persistent))).rejects.toMatchObject({ code: 'EPERM' });
+  expect(persistent).toHaveLength(50);
+});
+
+// A POSIX lock checks owner-only permission bits, which a Windows directory does not carry.
+it.skipIf(process.platform === 'win32')('fails on EPERM at once outside Windows', async () => {
+  const root = await pendingDeleteRoots();
+  const uid = process.getuid?.() ?? 501;
+  const delays: number[] = [];
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'posix', uid), async () => 'acquired',
+    pendingDeleteOptions('darwin', uid, 1, delays))).rejects.toMatchObject({ code: 'EPERM' });
+  expect(delays).toEqual([]);
+});
+
 it('records an unverified process tree and refuses stale-owner recovery while it may still write', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-lock-unsafe-'));
   roots.push(root);

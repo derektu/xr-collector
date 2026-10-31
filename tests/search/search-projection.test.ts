@@ -54,7 +54,8 @@ describe('owned search projection profile', () => {
     const outside = path.join(context.root, 'outside');
     await mkdir(outside);
     await rm(context.database, { recursive: true });
-    await symlink(outside, context.database, 'dir');
+    // A junction on Windows, which needs no symlink privilege and which lstat reports as a symlink.
+    await symlink(outside, context.database, 'junction');
     await expect(prepareOwnedSearchProjection({ ...context, profile: SEARCH_INDEX_PROFILE })).rejects.toThrow(/symlinked/u);
     expect(await readFile(`${context.database}-adjacent`, 'utf8')).toBe('keep');
   });

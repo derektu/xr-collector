@@ -1,13 +1,12 @@
 // Recorded regression flows: the status sequences they judge, the checks they write to
 // results.json, and the feature map naming, for each feature, the flows that cover it.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkEntry, failureHint, recorder } from '../../../.claude/skills/verify/scripts/lib/drive.mjs';
-import { FEATURES_DIR, findFeature, parseFeature, readFeatures } from '../../../.claude/skills/verify/scripts/lib/features.mjs';
+import { FEATURES_DIR, findFeature, parseFeature, readFeatures, readMarkdown } from '../../../.claude/skills/verify/scripts/lib/features.mjs';
 import { listFlows, runPool, selectFlows, startable, TIERS, timingTable, writeProvisioningFailure } from '../../../.claude/skills/verify/scripts/lib/flows.mjs';
 import { failureCause, flowHistory, historyTable, readFlowResults } from '../../../.claude/skills/verify/scripts/lib/history.mjs';
 import { checkRecordForJob } from '../../../.claude/skills/verify/flows/subscription-failures.mjs';
@@ -305,8 +304,18 @@ describe('feature map and recorded flows', () => {
       hasBacklog: true, backlog: ['- `x-b` 的空狀態：下層測不到。'] });
   });
 
+  it('reads a feature file that a Windows checkout holds with CRLF line endings', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'xr-feature-crlf-'));
+    try {
+      await writeFile(path.join(dir, 'x.md'), ['# X', '', '## Sub-features', '', '- `x-a`：A。', '',
+        '## Regression flows', '', '- `flow-1`：斷言 `x-a`。', '', '## Backlog', '', '- `x-a` 的空狀態。', ''].join('\r\n'));
+      expect(readFeatures(dir)).toEqual([{ file: 'x.md', name: 'x', subFeatures: ['x-a'], listed: { 'flow-1': ['x-a'] },
+        hasBacklog: true, backlog: ['- `x-a` 的空狀態。'] }]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('lists every feature file in the map\'s table with the flows its Regression flows names', () => {
-    const readme = readFileSync(path.join(FEATURES_DIR, 'README.md'), 'utf8');
+    const readme = readMarkdown(path.join(FEATURES_DIR, 'README.md'));
     const rows = Object.fromEntries(readme.split('\n').map((line) => line.match(/^\| [^|]+ \| \[([^\]]+\.md)\]\([^)]+\) \|[^|]+\| (.+) \|$/u))
       .filter((match): match is RegExpMatchArray => match !== null)
       .map((match) => [match[1], [...match[2].matchAll(/`([^`]+)`/gu)].map((code) => code[1]).sort()]));

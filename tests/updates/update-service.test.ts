@@ -16,6 +16,19 @@ const offer: UpdateOffer = {
 };
 const identity = { version: '0.1.0', target: 'darwin-arm64' };
 
+/**
+ * A file `keep` outside the cache, reached through `link`: a symlink to the file, or on Windows,
+ * where a symlink needs privilege, a junction to its directory, which lstat also reports as a
+ * symlink. Returns the path of `keep`.
+ */
+async function linkedOutsideFile(directory: string, link: string) {
+  const outside = path.join(directory, 'outside'); await mkdir(outside);
+  const keep = path.join(outside, 'keep'); await writeFile(keep, 'keep');
+  if (process.platform === 'win32') await symlink(outside, link, 'junction');
+  else await symlink(keep, link);
+  return keep;
+}
+
 it('checks without downloading, pins an offer, verifies the stream, and restores ready state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-service-'));
   const source = { id: 'test', check: vi.fn(async () => offer) };
@@ -197,8 +210,7 @@ it('cleans orphan, partial, directory and symlink cache entries while preserving
   await writeFile(path.join(cache, 'orphan.bin'), 'orphan');
   await writeFile(path.join(cache, 'interrupted.part'), 'partial');
   await mkdir(path.join(cache, 'orphan-dir')); await writeFile(path.join(cache, 'orphan-dir/file'), 'orphan');
-  const outside = path.join(directory, 'outside'); await writeFile(outside, 'keep');
-  await symlink(outside, path.join(cache, 'outside-link'));
+  const outside = await linkedOutsideFile(directory, path.join(cache, 'outside-link'));
 
   await UpdateService.open({ identity, source: { id: 'test', check: async () => offer }, installer, directory });
   expect(await readdir(cache)).toEqual([saved.ready.fileName]);
@@ -210,8 +222,7 @@ it('cleans an ownerless cache inventory on first start even when state.json does
   const cache = path.join(directory, 'cache'); await mkdir(cache, { mode: 0o700 });
   await writeFile(path.join(cache, 'orphan.bin'), 'orphan');
   await writeFile(path.join(cache, 'interrupted.part'), 'partial');
-  const outside = path.join(directory, 'outside'); await writeFile(outside, 'keep');
-  await symlink(outside, path.join(cache, 'outside-link'));
+  const outside = await linkedOutsideFile(directory, path.join(cache, 'outside-link'));
 
   await UpdateService.open({ identity, source: { id: 'test', check: async () => null },
     installer: { available: true, validate: async () => undefined }, directory });

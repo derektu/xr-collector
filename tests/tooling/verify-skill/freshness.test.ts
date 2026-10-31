@@ -80,6 +80,8 @@ describe('evidenceFreshness', () => {
 });
 
 describe('doctor --issue', () => {
+  // Two doctor runs, like the other doctor CLI cases: on Windows each run starts PowerShell for the
+  // process table, about a second idle and over two under the full suite's load.
   it('lists the evidence and leaves the exit code alone', async () => {
     const { worktree, root } = checkout();
     results(root, 'old', { checkout: worktree, commit: 'b'.repeat(40), sourceHash: commitOf(worktree).sourceHash });
@@ -94,5 +96,5 @@ describe('doctor --issue', () => {
     expect(withIssue.code).toBe(plain.code);
     expect(report.healthy).toBe(JSON.parse(plain.stdout).healthy);
     expect(report.evidence).toMatchObject({ issue: '118', root, stale: 1, folders: [{ status: 'STALE' }] });
-  });
+  }, 30_000);
 });

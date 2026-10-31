@@ -11,9 +11,12 @@ export const LIB = path.resolve(import.meta.dirname, '../../../.claude/skills/ve
 const roots: string[] = [];
 const children: ChildProcess[] = [];
 
-/** A new empty directory, real path (macOS tmpdir is a symlink, Git reports real paths). */
+/**
+ * A new empty directory, by the real path Git reports: macOS tmpdir is a symlink, and a Windows
+ * tmpdir can hold an 8.3 short name (`C:\Users\DEREKT~1.INH`), which only the native realpath expands.
+ */
 export function temp(prefix: string) {
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), `xr-verify-${prefix}-`)));
+  const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), `xr-verify-${prefix}-`)));
   roots.push(dir);
   return dir;
 }
@@ -40,7 +43,7 @@ export function repository() {
  * test file, so remove it in afterAll.
  */
 export function isolateHome() {
-  const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'xr-verify-home-')));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'xr-verify-home-')));
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   return home;
