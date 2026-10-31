@@ -274,7 +274,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 ### 5.6 CI、Release 與自動檢查更新
 
-本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在 Mac 建置機（Apple Silicon）建置；Windows x64 正式候選包在 Windows 建置機（x64）建置。兩台建置機都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及更新 metadata。詳細契約見 [本機安裝包計畫](local-packaging-plan.md)。
+本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在 Mac 建置機（Apple Silicon）建置；Windows x64 正式候選包在 Windows 建置機以 x64 Node 建置，x64 硬體或 ARM64 硬體上的 x64 模擬都可以。兩台建置機都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及該平台的 release index。建置與發布見 [建置、測試與發布](building.md)，打包的檢查見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
 
 | 項目 | 開發範圍 | 完成驗證 |
 |---|---|---|
@@ -295,7 +295,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 版本與工作追蹤使用 GitHub。安裝檔及更新 metadata 由公開 repository 的 GitHub Releases 提供免登入下載；#35 確認 repository 已公開及客戶端無登入／token 下載成功。更新來源與業務功能分開設定，來源變更須讓已安裝版本能接續取得更新。
 
-macOS arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機（x64）建置。clone 後以 `npm run doctor:build` 確認建置條件，見 [建置、測試與發布](building.md)。建置證據保留實際 host、process 與產物架構；在 ARM64 Windows 上以 x64 模擬建置的結果標為 emulated，不描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收兩台建置機產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。#35 的發布操作同樣在使用者的 Mac 執行。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
+macOS arm64 由 Mac 建置機（Apple Silicon）建置；Windows x64 由 Windows 建置機以 x64 Node 建置，x64 硬體或 ARM64 硬體上的 x64 模擬都可以。clone 後以 `npm run doctor:build` 確認建置條件，見 [建置、測試與發布](building.md)。建置證據保留實際 host、process 與產物架構；在 ARM64 Windows 上以 x64 模擬建置的結果標為 emulated，不描述為 Intel／AMD host 原生結果。CI 共用檢查與本機封裝入口使用相同版本來源，但正式 Release 只接收兩台建置機產生並驗證的產物。簽署、公證與憑證整合屬後續能力，#34 不存取憑證，也不以簽章作為完成條件。每個平台由自己的建置機上傳到同一個 Release，App 只讀自己平台的 release index，見 [建置、測試與發布的發布一節](building.md#發布)。驗收時由沒有 GitHub 登入狀態或 token 的客戶端，在約定的可達網路內完成版本檢查與安裝檔下載；網路不可達時，更新檢查失敗不影響收集。
 
 ## 6. Tickets、依賴與驗收方式
 
@@ -727,7 +727,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **責任分工**：不等所有功能才首次打包；後續票沿用 pipeline。#35 提供 Mac publisher 與發布來源契約，#36 實作客戶端更新；#36 完成後從同一個首版 commit 重建並驗收四包，再由 #35 的工具發布，最終整合由 #10。
 
-**開工時收斂**：本機工具前置、target 格式、版本與建置日期來源、更新包相容要求及可重跑的封裝 manifest。詳細驗收計畫見 [本機安裝包計畫](local-packaging-plan.md)，並依 6.1 記錄在 issue。
+**開工時收斂**：本機工具前置、target 格式、版本與建置日期來源、更新包相容要求及可重跑的封裝 manifest。建置與打包的檢查見 [建置、測試與發布](building.md) 與 [開發驗證流程的平台打包](development-validation.md#6-平台打包)，驗收計畫依 6.1 記錄在 issue。
 
 #### [#35](https://github.com/derektu/xr-collector/issues/35) 版本 Release 與免登入下載來源
 

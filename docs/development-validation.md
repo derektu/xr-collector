@@ -142,9 +142,9 @@ Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，doctor 的 `p
 
 ## 6. 平台打包
 
-交付平台固定為 Mac arm64 與 Windows x64，各平台在自己的建置機建置：Mac 在 Apple Silicon Mac 執行 `npm run package:mac`，Windows 在 x64 Windows 執行 `npm run package:win`。建置機的準備步驟與 `npm run doctor:build` 的檢查項目見 [建置、測試與發布](building.md)。產物在 `release/`，所有入口都使用 `--publish never`。
+交付平台固定為 Mac arm64 與 Windows x64，各平台在自己的建置機建置：Mac 在 Apple Silicon Mac 執行 `npm run package:mac`，Windows 以 x64 Node 執行 `npm run package:win`，x64 硬體或 ARM64 硬體上的 x64 模擬都可以。建置機的準備步驟與 `npm run doctor:build` 的檢查項目見 [建置、測試與發布](building.md)。產物在 `release/`，所有入口都使用 `--publish never`。
 
-正式候選產物由兩台建置機從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar`、resources、updater metadata 與 artifact manifest 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、bytes 與 SHA-256；任一不一致都不交付。#34 同時記錄實際 host／process 架構、工具版本及安裝與操作驗收；未提交預演產物不視為正式版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
+正式候選產物由兩台建置機從相同乾淨 commit／版本建置。package 入口持有整個 checkout 的獨占鎖，拒絕 dirty checkout，並在完成後從實際 `app.asar` 與 resources 讀回版本、BuildInfo、runtime inventory、Agent Skill、完整 commit、target、bytes 與 SHA-256，任一不一致都不交付；通過後寫出該平台的 release index 與 artifact manifest。artifact manifest 記錄實際 host／process 架構與工具版本。Windows 可以未簽章；Mac 預設仍為 ad-hoc，package gate 以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources，不能把它描述成 Developer ID 或 Gatekeeper 信任。
 
 **簽章與公證的使用時機**：每次 Developer ID 建置都要送 Apple 公證兩次並等待結果，成本高，只花在最終發布候選上。
 
@@ -176,4 +176,4 @@ Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy�
 
 GitHub Actions 的打包 smoke 只在手動觸發時建置未簽章的測試包，使用隔離的離線文件檢查實際打包 App、隨附 Meilisearch 搜尋與 yt-dlp／Deno 可執行。它不連真實 YouTube、不保存安裝包，失敗時只保留 `results.json`、截圖與 log 七天。
 
-正式 Release 只接收兩台建置機從同一個乾淨 commit 建置並驗收的 Mac 與 Windows 候選；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與更新 metadata。發布步驟見 [建置、測試與發布](building.md#發布)。
+正式 Release 只接收兩台建置機從同一個乾淨 commit 建置並驗收的 Mac 與 Windows 候選，各平台由自己的建置機以 `npm run release:upload` 上傳；GitHub Actions 與原生 CI 只提供補充檢查，不建置或供應正式 Release 安裝包。公開 repository 的 GitHub Releases 提供免登入下載與各平台的 release index。發布步驟見 [建置、測試與發布](building.md#發布) 與 [Release 發布手冊](release-runbook.md)。

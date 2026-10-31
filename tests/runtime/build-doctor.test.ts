@@ -76,12 +76,12 @@ it('requires swiftc on a Mac and Git everywhere', async () => {
     .toMatchObject({ status: 'missing', fix: expect.stringContaining('git-scm.com') });
 });
 
-it('fails a wrong Node major or architecture and notes a patch mismatch or x64 emulation', async () => {
+it('fails a wrong Node major or architecture, notes a patch mismatch and accepts x64 emulation', async () => {
   expect(byLabel(await check('darwin-arm64', { nodeVersion: '24.1.0' }), 'Node')).toMatchObject({ status: 'missing', fix: 'nvm install 22.22.3 && nvm use 22.22.3' });
   expect(byLabel(await check('win32-x64', { nodeVersion: '22.22.0' }), 'Node')).toMatchObject({ status: 'note' });
   expect(byLabel(await check('darwin-arm64', { host: { ...MAC_HOST, processArch: 'x64', emulated: true } }), 'Host')).toMatchObject({ status: 'missing' });
   expect(byLabel(await check('win32-x64', { host: { ...WINDOWS_HOST, processArch: 'arm64' } }), 'Host')).toMatchObject({ status: 'missing' });
-  expect(byLabel(await check('win32-x64', { host: { ...WINDOWS_HOST, hostArch: 'arm64', emulated: true } }), 'Host')).toMatchObject({ status: 'note' });
+  expect(byLabel(await check('win32-x64', { host: { ...WINDOWS_HOST, hostArch: 'arm64', emulated: true } }), 'Host')).toMatchObject({ status: 'ok', detail: expect.stringContaining('emulated on arm64') });
   expect(byLabel(await check('win32-x64', { root: await checkout({ installed: false }) }), 'npm dependencies')).toMatchObject({ status: 'missing', fix: 'npm ci' });
 });
 

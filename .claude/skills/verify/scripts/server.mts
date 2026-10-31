@@ -78,18 +78,14 @@ const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', 
 const updateFixture = (version = String(catalog().updates?.version ?? '0.1.1')) => {
   const prefix = Buffer.from(`XR-COLLECTOR-VERIFY-UPDATE-${version}\n`);
   const payload = Buffer.concat([prefix, Buffer.alloc(100_000 - prefix.byteLength, version.endsWith('.2') ? 0x37 : 0x36)]);
-  const base = `http://127.0.0.1:${port('FEEDS')}/updates/v${version}/`;
   const payloadName = `XR-Collector-${version}-mac-arm64.zip`;
-  const manifestName = `XR-Collector-${version}-mac-arm64.manifest.json`;
-  const nextBuildInfo = { ...fixtureBuildInfo, kind: 'packaged', version, buildId: `verify-update-${version}` };
-  const payloadAsset = { name: payloadName, url: `${base}${payloadName}`, bytes: payload.byteLength, sha256: sha256(payload) };
-  const manifestBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit: '2'.repeat(40), target: 'darwin-arm64',
-    buildInfo: { ...nextBuildInfo, commit: '2'.repeat(40) }, artifacts: [payloadAsset] }));
-  const manifestAsset = { name: manifestName, url: `${base}${manifestName}`, bytes: manifestBody.byteLength, sha256: sha256(manifestBody) };
-  const indexBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, tag: `v${version}`, commit: '2'.repeat(40),
-    releaseNotes: `## 驗證版 ${version}\n\n- 合成更新，只驗證共用下載與等待流程。`, source: { id: 'verify-private-feed', baseUrl: base },
-    candidates: [{ target: 'darwin-arm64', updatePayload: payloadAsset, manifest: manifestAsset }] }));
-  return { version, payload, payloadName, manifestName, manifestBody, indexBody };
+  const commit = '2'.repeat(40);
+  const buildInfo = { ...fixtureBuildInfo, kind: 'packaged', version, commit, buildId: `verify-update-${version}` };
+  const payloadFile = { name: payloadName, bytes: payload.byteLength, sha256: sha256(payload) };
+  const indexBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit, target: 'darwin-arm64', buildInfo,
+    installer: payloadFile, update: payloadFile }));
+  const notesBody = Buffer.from(`## 驗證版 ${version}\n\n- 合成更新，只驗證共用下載與等待流程。`);
+  return { version, payload, payloadName, indexBody, notesBody };
 };
 
 type LoginStartupFixture = {
@@ -131,17 +127,16 @@ function syntheticFeedServer() {
     if (offline()) { request.socket.destroy(); return; }
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (pathname === '/connectivity') { response.writeHead(204).end(); return; }
-    if (updateEnabled() && pathname === '/updates/release-index.json') {
+    if (updateEnabled() && pathname === '/updates/release-darwin-arm64.json') {
       const { indexBody } = updateFixture();
       const status = Number(catalog().updates.indexStatus ?? 200);
       response.writeHead(status, { 'content-type': 'application/json', 'content-length': status === 200 ? indexBody.byteLength : 0 }).end(status === 200 ? indexBody : undefined); return;
     }
     const fixture = updateEnabled() ? updateFixture() : null;
-    if (fixture && pathname === `/updates/v${fixture.version}/${fixture.manifestName}`) {
-      const { manifestBody } = fixture;
-      response.writeHead(200, { 'content-type': 'application/json', 'content-length': manifestBody.byteLength }).end(manifestBody); return;
+    if (fixture && pathname === '/updates/release-notes.md') {
+      response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-length': fixture.notesBody.byteLength }).end(fixture.notesBody); return;
     }
-    if (fixture && pathname === `/updates/v${fixture.version}/${fixture.payloadName}`) {
+    if (fixture && pathname === `/updates/${fixture.payloadName}`) {
       const settings = catalog().updates;
       const body = settings.payloadMode === 'corrupt' ? Buffer.from(fixture.payload) : fixture.payload;
       if (settings.payloadMode === 'corrupt') body[body.length - 1] ^= 0xff;
@@ -244,7 +239,7 @@ const sources = data === 'synthetic'
 const updateService = updateEnabled() ? await UpdateService.open({
   identity: { version: fixtureBuildInfo.version, target: fixtureBuildInfo.target },
   currentBuildId: fixtureBuildInfo.buildId,
-  source: new GenericIndexSource(`http://127.0.0.1:${port('FEEDS')}/updates/release-index.json`),
+  source: new GenericIndexSource(`http://127.0.0.1:${port('FEEDS')}/updates/`),
   installer: {
     available: true,
     validate: async (_offer: unknown, packageFile: string, signal?: AbortSignal) => {
