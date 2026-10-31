@@ -14,6 +14,8 @@ XR Collector 是 Node.js／TypeScript 專案：Fastify 提供 API 與 Web UI，E
 
 Mac 的 Xcode Command Line Tools 同時提供 `swiftc`，用來編譯 App 內附的 macOS 更新 helper。Windows 不需要 Visual Studio 或其他 C++ 工具。
 
+`swiftc` 使用 `xcrun --show-sdk-path` 選出的 SDK，也就是 `/Library/Developer/CommandLineTools/SDKs/` 裡版本最新的一份。這個目錄留有比編譯器新的 SDK（例如裝過 beta 版工具留下的 `MacOSX27.0.sdk`）時，打包停在「macOS update helper」，錯誤是 `this SDK is not supported by the compiler`。刪除那份 SDK 與指向它的 symlink，或重新安裝 Command Line Tools，讓 `xcrun --show-sdk-path` 指向和 `swiftc --version` 相符的版本。
+
 Mac 的 Node 是原生 arm64（不經 Rosetta），Windows 的 Node 是 x64。`node -p process.arch` 應印出 `arm64`（Mac）或 `x64`（Windows）。Windows 可以是 x64 硬體，也可以是 ARM64 硬體上以 x64 模擬執行的 Node，兩者建置的安裝包都可以發布；artifact manifest 記錄建置機的 host 與 process 架構。
 
 **nvm-windows 與 PowerShell**：PowerShell 預設的執行原則不允許 `npm.ps1`，打 `npm` 會失敗。使用 cmd，或在 PowerShell 打 `npm.cmd`。
@@ -29,6 +31,8 @@ npm run prepare:runtime -- mac
 ```
 
 Windows 的最後一行是 `npm run prepare:runtime -- win`。
+
+`npm ci` 結尾列出的 deprecated 與 vulnerabilities 警告不影響建置。不要在建置機執行 `npm audit fix`：它會改寫 `package.json` 與 `package-lock.json`，套件版本不再是 lock 檔驗證過的版本，checkout 也不再乾淨，`package:*` 會拒絕打包。已經改了時，以 `git checkout -- package.json package-lock.json` 還原後重跑 `npm ci`。相依套件的升級在 repo 裡以一般修改進行。
 
 ### `npm run doctor:build`
 
@@ -126,8 +130,8 @@ Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dl
 
 ### 簽章
 
-- **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key，以 `--mac-signing-mode developer-id-notarized` 啟用，每次送 Apple 公證兩次（App 與 DMG）。
-- **Windows**：未簽章。
+- **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任。從瀏覽器下載的 ad-hoc 包帶有隔離屬性，macOS 會拒絕開啟；測試時以 `xattr -dr com.apple.quarantine "/Applications/<App 名稱>.app"` 移除，或在「系統設定 → 隱私權與安全性」選「強制打開」。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key（檔案與設定方式見 [簽署設定](../config/README.md)），以 `--mac-signing-mode developer-id-notarized` 啟用，每次送 Apple 公證兩次（App 與 DMG）。
+- **Windows**：未簽章。預期的簽署設定格式見 [簽署設定](../config/README.md#windows)。
 
 開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選。使用時機與 Developer ID 的建置步驟見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
 
@@ -229,7 +233,9 @@ Mac 正式版以 Developer ID 簽章並送 Apple 公證，建置機需要這三�
 | --- | --- |
 | `Developer ID Application` 憑證的 `.p12` | 簽章用的憑證與私鑰，匯出時設定的密碼 |
 | App Store Connect API key 的 `.p8` | 公證用的金鑰 |
-| `.env` | `CSC_LINK`（p12 相對 `keys/mac` 的路徑）、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`（p8 的相對路徑）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID` |
+| `.env` | `CSC_LINK`（p12 相對 `keys/mac` 的路徑）、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`（p8 的相對路徑）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；由 [`config/mac-signing.env.example`](../config/mac-signing.env.example) 複製後填入 |
+
+目錄結構、權限與各欄位的說明見 [簽署設定](../config/README.md)。
 
 交接給新的 Mac 建置者時，由持有 Apple Developer 帳號的人提供 p12 與其密碼、p8 與它的 Key ID 和 Issuer ID，以及 Team ID；這些檔案與密碼以不經過 Git、聊天紀錄的方式傳遞。放好後執行 `npm run doctor:build`，`Mac Developer ID signing` 一項為 `ok` 並顯示 Team 時即可建置。沒有這些檔案時，`package:mac` 只能產生 ad-hoc 簽章的包，適合開發與驗收，不適合發布。Windows 版不簽章，不需要憑證。
 

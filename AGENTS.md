@@ -2,7 +2,7 @@
 
 寫驗收計畫、建立或更新 PR、操作 App 驗收、或建置安裝包時，先讀 [開發驗證流程](docs/development-validation.md)。該文件定義驗證層級、平台選擇、回歸與真實資料的要求、不符合預期的觀察怎麼處理，以及證據交付。實際操作 App 用 [verify skill](.claude/skills/verify/SKILL.md)。
 
-新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為 [Round 2 計畫](docs/round-2-plan.md)、[產品範圍](docs/product-brief.md)、當前 issue 及其引用的規格。`docs/history/mvp-plan.md` 是第一輪歷史，`docs/research/README.md` 只供後續選型查閱。驗收 scenario 在實作前記錄於 issue；依 scenario 實際操作與比對，不能用 build 成功取代行為驗收。
+新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為 [Round 2 計畫](docs/round-2-plan.md)、[產品範圍](docs/product-brief.md)、當前 issue 及其引用的規格。`docs/history/mvp-plan.md` 是第一輪歷史。驗收 scenario 在實作前記錄於 issue；依 scenario 實際操作與比對，不能用 build 成功取代行為驗收。
 
 issue 只寫本票特有的內容：問題、預期行為、本票的驗收計畫與相依關係。適用每張票的規則寫在本檔與 [開發驗證流程](docs/development-validation.md)，不複製進 issue 或派工說明；規則改變時只改這兩處。
 
