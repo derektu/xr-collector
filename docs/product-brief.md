@@ -14,6 +14,6 @@ XR Collector 是 macOS／Windows 的本機資料收集與存取工具。使用�
 
 來源、文件、工作與搜尋採可擴充的責任分工，但本輪只承諾 YouTube 來源。只取得人工或自動字幕與 metadata，沒有字幕時回報結果，不啟動影音下載或語音轉寫。
 
-RSS／一般網頁、XQ、Browser／Extension、Facebook、手動 Markdown 及無字幕轉寫由 [後續票 #11–#16](research/README.md) 追蹤。正文編輯、草稿審核、垃圾桶、Derived／Evidence／Claims 生成與完整 XR 整合不屬於本輪交付。
+RSS／一般網頁、XQ、Browser／Extension、Facebook、手動 Markdown 及無字幕轉寫由 後續票 #11–#16 追蹤。正文編輯、草稿審核、垃圾桶、Derived／Evidence／Claims 生成與完整 XR 整合不屬於本輪交付。
 
 架構見 [architecture.md](architecture.md)，現行儲存格式見 [document-format.md](document-format.md)。第一輪範圍紀錄見 [mvp-plan.md](history/mvp-plan.md)。

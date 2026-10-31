@@ -6,3 +6,5 @@ resources/bin/
 *.log
 .DS_Store
 /.local/
+/keys/
+/docs/research/
