@@ -33,6 +33,8 @@ interface LockDependencies {
   hold(signal: AbortSignal): Promise<() => void>;
   idle(): Promise<void>;
   suspend(value: boolean): void;
+  /** Hears each change of the status once `status()` returns it. */
+  changed?: () => void;
 }
 
 interface RunContext {
@@ -63,9 +65,14 @@ class StoppedOperation extends Error {
  * after collection and ordinary writes can resume, except for an explicitly stopped operation.
  */
 export class VaultOperationLock {
-  private value: OperationStatus = {
+  private current: OperationStatus = {
     state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
   };
+  private get value(): OperationStatus { return this.current; }
+  private set value(next: OperationStatus) {
+    this.current = next;
+    this.dependencies.changed?.();
+  }
   private lifecycle: Lifecycle = { kind: 'idle' };
   private writes = 0;
   private readonly writeWaiters = new Set<() => void>();

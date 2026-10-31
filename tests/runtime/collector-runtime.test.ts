@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Change } from '../../src/core/changes.js';
 import type { TranscriptSearch } from '../../src/core/types.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
@@ -906,9 +907,14 @@ describe('CollectorRuntime Vault setup', () => {
     const savedAgentSettings = await readFile(setup.value.agentSettingsFile, 'utf8');
     const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-moved`);
     cleanups.push(() => rm(target, { recursive: true, force: true }));
+    const changes: Change[] = [];
+    first.changes.subscribe((batch) => changes.push(...batch.changes));
     const moved = await agent('/api/vault/move', { targetPath: target });
     expect(moved.status).toBe(202);
     await expect.poll(async () => (await (await agent('/api/vault/status')).json()).state, { timeout: 10_000 }).toBe('completed');
+    // Readers follow the move's progress, then read everything again from the new location.
+    await expect.poll(() => changes.filter((change) => change.kind === 'vault').map((change) => 'scope' in change && change.scope).at(-1)).toBe('contents');
+    expect(changes).toContainEqual({ kind: 'vault', scope: 'transfer' });
     expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));
     expect((await connectionOf(first)).token).toBe(firstConnection.token);
     expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);

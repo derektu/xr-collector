@@ -220,7 +220,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
 | `launchElectron({ issue, label, evidence, app, vault, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
-| `trayMenu(app)`、`clickTray(app, action)`、`windowState(app)`、`closeWindow(app)`、`notifications(app)`；handle 的 `api()`、`launchAgain()`、`exited()` | 選單列／系統匣與視窗（驗證通道，見 [features/tray.md](features/tray.md)） |
+| `trayMenu(app)`、`trayShown(app)`、`clickTray(app, action)`、`windowState(app)`、`closeWindow(app)`、`notifications(app)`；handle 的 `api()`、`launchAgain()`、`exited()` | 選單列／系統匣與視窗（驗證通道，見 [features/tray.md](features/tray.md)） |
 
 ### CLI 單步操作
 

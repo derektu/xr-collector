@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { settingsErrors } from '../core/collection-settings.js';
 import type { CollectionSchedule, SubscriptionDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
 import { ApiError, api } from './api-client.js';
+import { useLiveRead } from './use-changes.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { ConfirmApplySettings } from './ConfirmApplySettings.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
@@ -16,6 +17,7 @@ import {
   shortTimeLabel,
 } from './source-presentation.js';
 import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
+import { useDay } from './use-day.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
@@ -29,17 +31,18 @@ const TYPED_SAVE_DELAY_MS = 600;
  * saves at once and a typed number once typing pauses; settings with an invalid value are not
  * saved, and applying them to the other subscriptions waits until they are.
  */
-export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack, onOpenDocument, onChanged, onRemoved }: {
+export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDocument, onChanged, onRemoved }: {
   type: string;
   id: string;
   sourceTypes: SourceTypeInfo[];
   schedule: CollectionSchedule | null;
-  revision: number;
   onBack: () => void;
   onOpenDocument: (documentId: string) => void;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
   onRemoved: (message: string) => void;
 }) {
+  // Day-relative labels ("今天", "明天") draw again at midnight.
+  useDay();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -56,19 +59,23 @@ export function SourceDetail({ type, id, sourceTypes, schedule, revision, onBack
   /** Saves go out one at a time in the order made, so a later change is never overwritten by an earlier one. */
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
+  // A subscription that no longer exists is an answer, so the screen counts as caught up with it.
+  const read = useLiveRead(['subscriptions'], (signal) => api.subscriptionDetail(type, id, signal).then((detail) => ({ detail }), (error: unknown) => {
+    if (error instanceof ApiError && error.code === 'subscription_not_found') return { detail: null };
+    throw error;
+  }), [type, id, reload]);
   useEffect(() => {
-    const controller = new AbortController();
-    api.subscriptionDetail(type, id, controller.signal).then((detail) => {
-      setState({ kind: 'ready', detail });
-      // A reload that answers before the save finished still holds the previous settings.
-      if (!saveInFlight.current) setPending(null);
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted) return;
-      if (error instanceof ApiError && error.code === 'subscription_not_found') setState({ kind: 'missing' });
-      else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
-    });
-    return () => controller.abort();
-  }, [type, id, revision, reload]);
+    const error = read.error;
+    if (error) {
+      setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
+      return;
+    }
+    if (!read.value) return;
+    if (!read.value.detail) { setState({ kind: 'missing' }); return; }
+    setState({ kind: 'ready', detail: read.value.detail });
+    // A reload that answers before the save finished still holds the previous settings.
+    if (!saveInFlight.current) setPending(null);
+  }, [read.value, read.error]);
 
   // Leaving the page sends a typed number that is still waiting.
   useEffect(() => () => {

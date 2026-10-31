@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SavedDocument } from '../core/types.js';
 import { sourceDeclaration } from '../core/source-registry.js';
 import { ApiError, api } from './api-client.js';
@@ -7,6 +7,7 @@ import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } 
 import { Icon } from './icons.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { sourcePath } from './source-presentation.js';
+import { readUntil, useChanges } from './use-changes.js';
 
 type ReaderState =
   | { kind: 'loading' }
@@ -17,8 +18,6 @@ type ReaderState =
 
 /** How collecting a deleted document again is going. */
 type Recollect = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string };
-
-const RECOLLECT_POLL_MS = 1000;
 
 /** Full-width reading view for one document; the shell collapses its sidebar while this is open. */
 /** `backLabel` names the page the Back control returns to. */
@@ -34,53 +33,50 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   const [subscribed, setSubscribed] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [recollect, setRecollect] = useState<Recollect>({ kind: 'idle' });
-  /** Bumped to read the document again after it was collected again. */
-  const [revision, setRevision] = useState(0);
+  const subscriptionChanges = useChanges(['documents'], (change) => change.kind === 'subscription');
+  const documentChanges = useChanges(['documents'], (change) => change.kind === 'document' && change.id === id);
+  const shownId = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    api.listSubscriptions(controller.signal).then((list) => setSubscribed(new Set(list.subscriptions.map((source) => `${source.type}:${source.id}`)))).catch(() => undefined);
+    subscriptionChanges.track(api.listSubscriptions(controller.signal)
+      .then((list) => setSubscribed(new Set(list.subscriptions.map((source) => `${source.type}:${source.id}`)))));
     return () => controller.abort();
-  }, []);
+  }, [subscriptionChanges.tick]);
 
+  // A change to the document reads it again in place; another document starts from the loading state.
   useEffect(() => {
     const controller = new AbortController();
-    setState({ kind: 'loading' });
-    api.readDocument(id, controller.signal).then((document) => setState({ kind: 'ready', document })).catch((error: unknown) => {
+    if (shownId.current !== id) setState({ kind: 'loading' });
+    shownId.current = id;
+    documentChanges.track(api.readDocument(id, controller.signal).then((document) => setState({ kind: 'ready', document })).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       if (error instanceof ApiError && error.code === 'document_not_found') setState({ kind: 'missing' });
       else if (error instanceof ApiError && error.code === 'document_deleted') setState({ kind: 'deleted' });
-      else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這份文件。' });
-    });
+      else { setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這份文件。' }); throw error; }
+    }));
     return () => controller.abort();
-  }, [id, revision]);
+  }, [id, documentChanges.tick]);
 
   // An explicit single-address collection, the one way a deleted document comes back.
   useEffect(() => {
     if (recollect.kind !== 'running') return undefined;
     let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const following = new AbortController();
     const url = sourceUrlOfDocumentId(id);
     const type = id.slice(0, Math.max(0, id.indexOf(':')));
     const item = sourceDeclaration(type)?.item;
-    const finish = (next: Recollect, reload: boolean) => {
-      if (!active) return;
-      setRecollect(next);
-      if (reload) setRevision((value) => value + 1);
-    };
-    const poll = (jobId: string) => {
-      timer = setTimeout(() => {
-        api.getJob(jobId).then((job) => {
-          if (job.state === 'queued' || job.state === 'running') poll(jobId);
-          else if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' }, true);
-          else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` }, false);
-        }).catch(() => poll(jobId));
-      }, RECOLLECT_POLL_MS);
-    };
-    if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' }, false);
-    else api.collect(url).then((submission) => poll(submission.job.id))
-      .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }, false));
-    return () => { active = false; if (timer) clearTimeout(timer); };
+    const finish = (next: Recollect) => { if (active) setRecollect(next); };
+    // The collected document's own change reads it again; this only reports how the job ended.
+    const follow = (jobId: string) => readUntil(() => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
+      (change) => change.kind === 'job' && change.id === jobId, following.signal).then((job) => {
+      if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' });
+      else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });
+    });
+    if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' });
+    else api.collect(url).then((submission) => follow(submission.job.id))
+      .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }));
+    return () => { active = false; following.abort(); };
   }, [recollect.kind, id]);
 
   return <div className="reader" data-testid="reader">

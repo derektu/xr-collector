@@ -5,27 +5,26 @@ function actions() {
   return {
     navigate: vi.fn(),
     openSource: vi.fn(),
-    refresh: vi.fn(),
     announce: vi.fn(),
   };
 }
 
 describe('desktop navigation', () => {
-  it('refreshes a source detail reopened by a notification after an external change', () => {
+  it('opens the source a notification names', () => {
     const next = actions();
 
-    handleDesktopNavigation({ kind: 'source', type: 'youtube', id: 'subscription-a' }, '/sources/youtube/subscription-a', next);
+    handleDesktopNavigation({ kind: 'source', type: 'youtube', id: 'subscription-a' }, next);
 
     expect(next.openSource).toHaveBeenCalledWith('youtube', 'subscription-a');
-    expect(next.refresh).toHaveBeenCalledOnce();
+    expect(next.navigate).not.toHaveBeenCalled();
   });
 
-  it('does not add a redundant refresh when navigation mounts another source detail', () => {
+  it('shows a message instead of navigating', () => {
     const next = actions();
 
-    handleDesktopNavigation({ kind: 'source', type: 'youtube', id: 'subscription-b' }, '/sources/youtube/subscription-a', next);
+    handleDesktopNavigation({ kind: 'message', message: '這個訂閱已移除。' }, next);
 
-    expect(next.openSource).toHaveBeenCalledWith('youtube', 'subscription-b');
-    expect(next.refresh).not.toHaveBeenCalled();
+    expect(next.announce).toHaveBeenCalledWith('這個訂閱已移除。');
+    expect(next.openSource).not.toHaveBeenCalled();
   });
 });

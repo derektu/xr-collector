@@ -330,6 +330,11 @@ export function trayMenu(app) {
   return app.evaluate(() => globalThis.__xrCollectorValidation.tray());
 }
 
+/** The tray as drawn now, without reading again, and how many state reads it has made: { menu, reads }. */
+export function trayShown(app) {
+  return app.evaluate(() => globalThis.__xrCollectorValidation.trayShown());
+}
+
 /** Runs a tray menu item by its action: open, check_now, toggle_auto_check, jobs, activity, quit. */
 export function clickTray(app, action) {
   return app.evaluate((_electron, name) => { void globalThis.__xrCollectorValidation.click(name); }, action);

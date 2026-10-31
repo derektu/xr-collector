@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { MoveCheck, TransferStatus } from '../core/types.js';
 import { api } from './api-client.js';
 import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
+import { useLiveRead } from './use-changes.js';
 import { moveTargetIn, relocates, revealLabel, sizeLabel, transferRunning } from './transfer-presentation.js';
 
 const CHECK_DELAY_MS = 350;
-const POLL_MS = 1000;
 
 type Open = { kind: 'move' | 'open'; resume: boolean };
 
@@ -28,36 +28,22 @@ export function VaultLocationSection({ vaultPath, activeJobs, counts, onChanged 
   onChanged: (message: string) => void;
 }) {
   const desktop = window.xrCollectorDesktop;
-  const [status, setStatus] = useState<TransferStatus | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
+  // Follows the status while no dialog is open, so a move or switch running in the background shows its progress here.
+  const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: !open });
   const [problem, setProblem] = useState<string | null>(null);
   const current = status?.vaultPath ?? vaultPath;
   const unavailable = status?.relocationUnavailable ?? null;
   const running = relocates(status) && transferRunning(status);
 
-  // Follows the status while no dialog is open and a move or switch runs, so its progress shows here.
+  /** The status read before the dialog went to the background; only a newer one can tell that the operation ended. */
+  const shownBefore = useRef<TransferStatus | null>(null);
   useEffect(() => {
-    if (open) return undefined;
-    let alive = true;
-    void (async () => {
-      while (alive) {
-        try {
-          const next = await api.vaultTransferStatus();
-          if (!alive) return;
-          setStatus(next);
-          if (background && relocates(next) && !transferRunning(next)) {
-            // The background operation ended: show its outcome in its own dialog.
-            setOpen({ kind: background, resume: true });
-            background = null;
-            return;
-          }
-          if (!relocates(next) || !transferRunning(next)) return;
-        } catch { /* the next look at Settings reads the status again */ }
-        await new Promise((resolve) => window.setTimeout(resolve, POLL_MS));
-      }
-    })();
-    return () => { alive = false; };
-  }, [open]);
+    if (open || !background || !status || status === shownBefore.current || !relocates(status) || transferRunning(status)) return;
+    // The background operation ended: show its outcome in its own dialog.
+    setOpen({ kind: background, resume: true });
+    background = null;
+  }, [status, open]);
 
   async function reveal(): Promise<void> {
     setProblem(null);
@@ -95,9 +81,9 @@ export function VaultLocationSection({ vaultPath, activeJobs, counts, onChanged 
     </div> : null}
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
     {open?.kind === 'move' && current ? <MoveDialog vaultPath={current} resume={open.resume}
-      onBackground={() => { background = 'move'; setOpen(null); }} onClose={close} /> : null}
+      onBackground={() => { background = 'move'; shownBefore.current = status; setOpen(null); }} onClose={close} /> : null}
     {open?.kind === 'open' && current ? <OpenOtherDialog vaultPath={current} activeJobs={activeJobs} resume={open.resume}
-      onBackground={() => { background = 'open'; setOpen(null); }} onClose={close} /> : null}
+      onBackground={() => { background = 'open'; shownBefore.current = status; setOpen(null); }} onClose={close} /> : null}
   </section>;
 }
 

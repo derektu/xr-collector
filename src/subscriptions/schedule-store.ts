@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { NoteChange } from '../core/change-feed.js';
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import { scheduleFile } from '../core/source-registry.js';
 import type { ScheduleStore, StoredSchedule } from './scheduler.js';
@@ -12,7 +13,8 @@ export class JsonScheduleStore implements ScheduleStore {
   private readonly filePath: string;
   private mutation: Promise<void> = Promise.resolve();
 
-  constructor(vaultRoot: string) {
+  /** `noteChange` hears each saved switch once the file holds it. */
+  constructor(vaultRoot: string, private readonly noteChange: NoteChange = () => undefined) {
     this.filePath = path.join(vaultRoot, scheduleFile());
   }
 
@@ -27,6 +29,7 @@ export class JsonScheduleStore implements ScheduleStore {
       const kept = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored as object : {};
       const file: ScheduleFile = { ...kept, version: 2, enabled: schedule.enabled };
       await writeJsonFile(this.filePath, file);
+      this.noteChange({ kind: 'schedule' });
     };
     const operation = this.mutation.then(write, write);
     this.mutation = operation.then(() => undefined, () => undefined);

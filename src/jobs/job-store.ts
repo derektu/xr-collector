@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
 import { jobRole } from '../core/source-registry.js';
+import type { NoteChange } from '../core/change-feed.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
 const JOBS_FILE = 'jobs.json';
@@ -22,6 +23,8 @@ export type NewJobEvent = Omit<JobEvent, 'eventId' | 'timestamp'>;
 
 /** Activity log settings a job store passes on; the store supplies the clock, job lookup and drop handling. */
 export type JobActivityOptions = Pick<ActivityLogOptions, 'setTimer' | 'append'>;
+/** `noteChange` hears every job change and every recorded event once readers can see it. */
+export type JobStoreOptions = JobActivityOptions & { noteChange?: NoteChange };
 
 /**
  * Device-side record of collection jobs and their timeline. Jobs live in one JSON snapshot that is
@@ -38,11 +41,12 @@ export class JobStore {
   private constructor(
     private readonly directory: string | null,
     private readonly now: () => Date,
+    private readonly noteChange: NoteChange = () => undefined,
   ) {}
 
   /** Keeps everything in memory; for tests and runtimes without a device profile. */
-  static memory(now: () => Date = () => new Date()): JobStore {
-    const store = new JobStore(null, now);
+  static memory(now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
+    const store = new JobStore(null, now, noteChange);
     store.activityLog = ActivityLog.memory(store.activityOptions({}));
     return store;
   }
@@ -55,8 +59,9 @@ export class JobStore {
    * without closing, so they become interrupted with their scope and progress kept; a job caught in
    * the middle of a step counts an unclean stop.
    */
-  static async open(directory: string, now: () => Date = () => new Date(), activity: JobActivityOptions = {}): Promise<JobStore> {
-    const store = new JobStore(directory, now);
+  static async open(directory: string, now: () => Date = () => new Date(), options: JobStoreOptions = {}): Promise<JobStore> {
+    const { noteChange, ...activity } = options;
+    const store = new JobStore(directory, now, noteChange);
     store.activityLog = await ActivityLog.open(directory, store.activityOptions(activity));
     let contents: string | null = null;
     try {
@@ -120,6 +125,7 @@ export class JobStore {
     this.jobs.set(job.id, structuredClone(job));
     this.prune();
     this.scheduleFlush();
+    this.noteChange({ kind: 'job', id: job.id, parentId: job.parentId, state: job.state });
   }
 
   /** Marks an unfinished job interrupted, as a stopped service leaves it; the job resumes when its Vault opens. */
@@ -142,6 +148,7 @@ export class JobStore {
         ? { ...item, state: 'interrupted' } : item) ?? null,
     };
     this.jobs.set(job.id, interrupted);
+    this.noteChange({ kind: 'job', id: job.id, parentId: job.parentId, state: 'interrupted' });
     // A crash is the only unexpected interruption. Shutdowns and Vault operations resume normally.
     const planned = options.stop !== 'crash';
     const role = jobRole(job.kind)?.role;
@@ -161,6 +168,7 @@ export class JobStore {
   event(entry: NewJobEvent): void {
     const eventId = `${String(++this.eventSequence).padStart(12, '0')}-${randomUUID()}`;
     this.activityLog.record({ eventId, timestamp: this.now().toISOString(), ...entry });
+    this.noteChange({ kind: 'activity' });
   }
 
   /** Resolves once every change so far is on disk, or the activity log reported why it is not. */

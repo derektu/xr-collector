@@ -3,6 +3,7 @@ import type { CollectionSchedule, PendingSubscription, SubscriptionEntry, Subscr
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
+import { useLiveRead } from './use-changes.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
 import { useFloatingMenu } from './floating-menu.js';
@@ -17,14 +18,13 @@ import {
   type SourceListState,
 } from './source-presentation.js';
 import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
+import { useDay } from './use-day.js';
 
 export interface SourcesProps {
   state: SourceListState;
   onState: (state: SourceListState) => void;
   sourceTypes: SourceTypeInfo[];
   schedule: CollectionSchedule | null;
-  /** Changes whenever background work changes, so the list reloads. */
-  revision: number;
   /** The device has no network: adding is unavailable, and checking confirms the network first. */
   offline: boolean;
   /** Opens the add dialog the menu item names. */
@@ -38,20 +38,15 @@ export interface SourcesProps {
  * Every subscription in one list, with type and name filters and per-row pause, resume and more
  * actions. A subscription request appears at once and becomes its subscription row when resolved.
  */
-export function Sources({ state, onState, sourceTypes, schedule, revision, offline, onAdd, onOpenSource, onChanged }: SourcesProps) {
-  const [list, setList] = useState<SubscriptionList | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd, onOpenSource, onChanged }: SourcesProps) {
+  // Day-relative labels ("今天", "明天") draw again at midnight.
+  useDay();
+  const read = useLiveRead(['subscriptions'], (signal) => api.listSubscriptions(signal), []);
+  const list: SubscriptionList | null = read.value;
+  const loadError = read.error ? (read.error instanceof Error ? read.error.message : '無法讀取訂閱。') : null;
   const [checking, setChecking] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [draft, setDraft] = useState(state.query);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api.listSubscriptions(controller.signal).then((next) => { setList(next); setLoadError(null); }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取訂閱。');
-    });
-    return () => controller.abort();
-  }, [revision]);
 
   useEffect(() => { setDraft(state.query); }, [state.query]);
 

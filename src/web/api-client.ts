@@ -120,8 +120,8 @@ export const api = {
     })).loginStartup;
   },
 
-  async getVaultSetup(): Promise<VaultSetupStatus> {
-    return (await request<{ vault: VaultSetupStatus }>('/api/vault/setup')).vault;
+  async getVaultSetup(signal?: AbortSignal): Promise<VaultSetupStatus> {
+    return (await request<{ vault: VaultSetupStatus }>('/api/vault/setup', signal ? { signal } : undefined)).vault;
   },
 
   async inspectVault(path: string): Promise<VaultInspection> {
@@ -225,8 +225,8 @@ export const api = {
     return request<JobPageView>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
   },
 
-  async getJob(id: string): Promise<JobView> {
-    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`)).job;
+  async getJob(id: string, signal?: AbortSignal): Promise<JobView> {
+    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`, signal ? { signal } : undefined)).job;
   },
 
   async jobSummary(since: string, signal?: AbortSignal): Promise<JobSummary> {
@@ -348,8 +348,8 @@ export const api = {
     return request<SubscriptionDetail>(subscriptionPath(type, id), signal ? { signal } : undefined);
   },
 
-  async getSearchStatus(): Promise<SearchStatusReport> {
-    const result = await request<{ status: SearchStatusReport }>('/api/search/status');
+  async getSearchStatus(signal?: AbortSignal): Promise<SearchStatusReport> {
+    const result = await request<{ status: SearchStatusReport }>('/api/search/status', signal ? { signal } : undefined);
     return result.status;
   },
 
@@ -360,8 +360,8 @@ export const api = {
     return result.status;
   },
 
-  vaultTransferStatus(): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/status');
+  vaultTransferStatus(signal?: AbortSignal): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/status', signal ? { signal } : undefined);
   },
 
   /** The export folder and today's export file in it. */

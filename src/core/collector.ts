@@ -1,3 +1,4 @@
+import type { NoteChange } from './change-feed.js';
 import type {
   DocumentDeletion,
   DocumentFilter,
@@ -65,6 +66,8 @@ export interface SaveResult {
 export interface CollectorOptions {
   /** Records a Vault-level event, such as a deletion, in the device activity log. */
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
+  /** Hears each document saved, indexed or deleted, once reads return the change. */
+  noteChange?: NoteChange;
 }
 
 /**
@@ -107,7 +110,11 @@ export class Collector {
     const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
       const deletion = await this.vault.deletions?.get(id);
-      if (!deletion) return { document: await this.vault.add(captured), recollected: false };
+      if (!deletion) {
+        const document = await this.vault.add(captured);
+        this.noted(id);
+        return { document, recollected: false };
+      }
       if (!explicitAfter(intent, deletion.deletedAt)) {
         const target = sourceDeclaration(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
         throw new CollectorError('document_deleted', `這份文件已刪除，自動與${target}收集會略過。`);
@@ -116,6 +123,7 @@ export class Collector {
       const after = new Date(Date.parse(deletion.deletedAt) + 1);
       const document = await this.vault.add(captured, { collectedAt: now > after ? now : after });
       await this.vault.deletions!.clear(id);
+      this.noted(id);
       this.options.recordEvent?.({
         severity: 'info', eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
         documentId: id, sourceId: document.sourceId, sourceTitle: document.title,
@@ -135,6 +143,7 @@ export class Collector {
       if (!this.search) return { indexed: false, message: '搜尋服務尚未啟用。' };
       try {
         await this.search.index(current);
+        this.noted(current.id);
         return { indexed: true };
       } catch (error) {
         console.error('Search index update failed', error);
@@ -188,6 +197,8 @@ export class Collector {
           });
         });
       }
+      // Noted once searches exclude the document, so a reader searching again after it no longer finds it.
+      this.noted(id);
       this.options.recordEvent?.({ severity: 'info', eventType: 'document.deleted', message: `已刪除「${document.title}」。`, ...event });
       return {
         deleted: { id, sourceType: record.sourceType, sourceId: record.sourceId, title: record.title, deletedAt: record.deletedAt },
@@ -210,6 +221,10 @@ export class Collector {
       if (await this.vault.read(id) || await deletions.get(id)) return;
       await deletions.record(entry);
     });
+  }
+
+  private noted(id: string): void {
+    this.options.noteChange?.({ kind: 'document', id });
   }
 
   /** Runs `work` after every earlier operation on the same item has finished. */

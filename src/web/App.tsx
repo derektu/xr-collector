@@ -23,8 +23,10 @@ import { SourceDetail } from './SourceDetail.js';
 import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceRouteForPath, type SourceListState } from './source-presentation.js';
 import { Sources } from './Sources.js';
 import { targetNoun } from './subscription-presentation.js';
+import { useChangeStream, useLiveRead } from './use-changes.js';
 import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
+import { useDay } from './use-day.js';
 
 const onboardingPreviewRequested = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'onboarding';
 const DevelopmentOnboardingPreview = onboardingPreviewRequested ? lazy(() => import('./dev/OnboardingPreview.js')) : null;
@@ -54,6 +56,8 @@ function useSystemDark(): boolean {
 export default function App() {
   if (DevelopmentOnboardingPreview) return <Suspense fallback={<p className="loading">正在載入開發預覽…</p>}><DevelopmentOnboardingPreview /></Suspense>;
 
+  // Day-relative labels ("今天", "明天") draw again at midnight.
+  useDay();
   const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
   const page = routeForPath(location.pathname);
   const readerId = page === 'documents' ? readerIdForPath(location.pathname) : null;
@@ -78,7 +82,9 @@ export default function App() {
   const handledUpdatePanel = useRef<HTMLElement | null>(null);
   const stopUpdateNavigationTracking = useRef<(() => void) | null>(null);
   const ready = vault?.state === 'ready';
+  useChangeStream();
   const status = useCollectionStatus(ready);
+  const updateRead = useLiveRead(['update'], (signal) => api.updateStatus(signal), []);
 
   useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setThemePreference(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
@@ -87,20 +93,14 @@ export default function App() {
   useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
     if (next === 'update') { openUpdate(); return; }
     if (next === 'settings') { navigate('settings'); return; }
-    handleDesktopNavigation(next, window.location.pathname, {
+    handleDesktopNavigation(next, {
       navigate,
       openSource,
-      refresh: status.announce,
       announce: (message) => announce(message, 'error'),
     });
   }); desktopBridge?.ready(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
-  useEffect(() => {
-    let active = true;
-    const load = () => void api.updateStatus().then((value) => { if (active) setUpdate(value); }).catch(() => undefined);
-    load(); const timer = window.setInterval(load, 5000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  useEffect(() => { if (updateRead.value) setUpdate(updateRead.value); }, [updateRead.value]);
   // Focus the page heading after navigation so keyboard and screen reader users start at the new page.
   useEffect(() => {
     const frame = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[data-page-heading], .reader-title')?.focus({ preventScroll: true }));
@@ -228,14 +228,12 @@ export default function App() {
   }, []);
   function announce(text: string, tone: 'ok' | 'error' = 'ok'): void {
     setNotice({ tone, text, key: Date.now() });
-    status.announce();
   }
   /** An add dialog's action was accepted: the dialog closes and the current page stays, without a notice. */
   function added(response: unknown): void {
     setAdding(null);
     const job = (response as { job?: { id?: unknown; kind?: unknown } } | null)?.job;
     if (typeof job?.kind === 'string' && jobRole(job.kind)?.role === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
-    status.announce();
   }
   function persist(next: ThemePreference): void {
     setThemePreference(next);
@@ -273,21 +271,21 @@ export default function App() {
     body = <Reader key={readerId} id={readerId} backLabel={fromSource ? '訂閱' : '文件'} onBack={() => back('/documents')} onOpenSource={openSource}
       onDeleted={(message) => { announce(message); back('/documents', true); }} />;
   } else if (sourceRoute) {
-    body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
+    body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule}
       onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onChanged={announce}
       onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
-    body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} schedule={status.schedule} revision={status.revision}
+    body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} schedule={status.schedule}
       offline={offline} onAdd={setAdding} onOpenSource={openSource} onChanged={announce} />;
   } else if (page === 'documents') {
-    body = <Documents state={listState} revision={status.documentsRevision} offline={offline} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onChanged={announce} />;
+    body = <Documents state={listState} offline={offline} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onChanged={announce} />;
   } else if (page === 'jobs') {
-    body = <Jobs revision={status.revision} offline={offline} onChanged={announce} />;
+    body = <Jobs offline={offline} onChanged={announce} />;
   } else if (page === 'activity') {
-    body = <Activity revision={status.revision} busy={active.length > 0} search={location.search} onState={onActivityState}
+    body = <Activity search={location.search} onState={onActivityState}
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
   } else {
-    body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length} revision={status.revision}
+    body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length}
       themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onChanged={announce} />;
   }
   const updateLabel = update ? sidebarUpdateLabel(update) : null;

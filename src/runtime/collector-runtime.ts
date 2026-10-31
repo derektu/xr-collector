@@ -11,6 +11,7 @@ import {
   type VaultSetupStatus,
 } from '../core/types.js';
 import { loadBuildInfo } from './build-info.js';
+import { ChangeFeed } from '../core/change-feed.js';
 import { CollectionPause } from '../core/collection-pause.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
@@ -84,6 +85,8 @@ export class CollectorRuntime {
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
   readonly notifications: NotificationCenter;
+  /** The process's change stream, which both listeners serve. */
+  readonly changes: ChangeFeed;
   private workspaceValue: VaultWorkspace | null;
   private failure: { path: string; reason: string } | null;
   private stateValue: CollectorRuntimeState;
@@ -104,7 +107,10 @@ export class CollectorRuntime {
     pause: CollectionPause,
     connectivity: Connectivity,
     notifications: NotificationCenter,
+    changes: ChangeFeed,
+    private readonly stopFollowing: () => void,
   ) {
+    this.changes = changes;
     this.pause = pause;
     this.connectivity = connectivity;
     this.notifications = notifications;
@@ -150,7 +156,8 @@ export class CollectorRuntime {
       vaultPath: initial.workspace?.status().vaultPath ?? null, message: '服務啟動中。',
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
-    const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs')) : null;
+    const changes = new ChangeFeed();
+    const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs'), undefined, { noteChange: changes.note }) : null;
     const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: string, message: string, errorCode?: string) => {
       jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
     };
@@ -158,9 +165,18 @@ export class CollectorRuntime {
     const pause = options.pause ?? new CollectionPause();
     const connectivity = new Connectivity({ ...options.connectivity, pause });
     const notifications = await NotificationCenter.open(options.profilePath, options.systemNotifications);
+    const following = [
+      pause.subscribe(() => changes.note({ kind: 'connectivity' })),
+      ...(options.workspace?.pacing ?? []).map((gate) => gate.subscribe(() => changes.note({ kind: 'pacing', group: gate.group }))),
+      options.updates?.subscribe?.(() => changes.note({ kind: 'update' })) ?? (() => undefined),
+    ];
+    const stopFollowing = () => { for (const stop of following) stop(); };
     const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? {
-      ...options.workspace, jobStore, pause, connectivity,
-      onAutoPaused: (vaultId, sourceType, record) => notifications.recordAutoPause(vaultId, sourceType, record),
+      ...options.workspace, jobStore, pause, connectivity, noteChange: changes.note,
+      onAutoPaused: async (vaultId, sourceType, record) => {
+        await notifications.recordAutoPause(vaultId, sourceType, record);
+        changes.note({ kind: 'notifications' });
+      },
     } : null;
     // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
     const activity: ActivityAccess | undefined = jobStore ? {
@@ -199,9 +215,9 @@ export class CollectorRuntime {
     } : undefined;
     const notificationAccess = {
       read: async () => { const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
-      update: async (enabled: boolean) => { await notifications.update(enabled); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+      update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
     };
-    const shared = { ...services, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
+    const shared = { ...services, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
@@ -232,13 +248,15 @@ export class CollectorRuntime {
         agentConnection: agentAccess,
         runtimeStatus, notReady, vaultSetup,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity, notifications);
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, jobStore, pause, connectivity,
+        notifications, changes, stopFollowing);
       return runtime;
     } catch (error) {
       await agentAccess?.close().catch(() => undefined);
       await initial.workspace?.close().catch(() => undefined);
       await jobStore?.close().catch(() => undefined);
       connectivity.close();
+      stopFollowing();
       throw error;
     }
   }
@@ -348,6 +366,7 @@ export class CollectorRuntime {
       this.failure = null;
       this.stateValue = 'ready';
       this.message = '服務已就緒。';
+      this.changes.note({ kind: 'vault', scope: 'contents' });
       return { vault: this.vaultStatus(), documentCount };
     } finally {
       this.settingUp = false;
@@ -408,6 +427,7 @@ export class CollectorRuntime {
     // including work whose client disconnected, before the workspace stops.
     // A confirmation under way is given up, so no job waits on it while the workspace stops.
     this.connectivity.close();
+    this.stopFollowing();
     const listeners = await Promise.allSettled([this.server.close(), this.agentAccess.close()]);
     const workspace = this.workspaceValue ? await Promise.allSettled([this.workspaceValue.close()]) : [];
     // Jobs and activity close last; the workspace records interrupted jobs into them while it stops.

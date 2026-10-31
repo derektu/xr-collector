@@ -7,6 +7,7 @@
 // covered by tests/sources/ and the HTTP tests.
 import { idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
+import { screenAt } from './lib/revision.mjs';
 
 export const name = 'subscription-remove';
 export const title = '移除訂閱：取消、預設保留文件、確認後文件仍可閱讀';
@@ -27,7 +28,9 @@ export async function run({ instance, page, record, waitFor }) {
   const ledgerBefore = deletedIds(before) ?? [];
   const row = by(`source-row-${feed.id}`);
   const dialog = by('confirm-remove');
+  // The dialog states the document count the list shows, so the list must show the server's current revision first.
   const openRemove = async () => {
+    await screenAt(page, instance);
     await waitFor(async () => (await by('notice').count()) === 0, 'no toast over the page', { timeout: 15_000 });
     await page.getByRole('button', { name: `${feed.title} 的更多動作`, exact: true }).click();
     await page.getByRole('menuitem', { name: '移除', exact: true }).click();

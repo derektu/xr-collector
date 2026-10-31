@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { NoteChange } from '../core/change-feed.js';
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import { requireDefinition } from '../core/source-registry.js';
 import type { SubscriptionRecord } from '../core/types.js';
@@ -47,8 +48,12 @@ export class JsonSubscriptionStore implements SubscriptionStore {
   /** Whether this store has written the file once, with the Vault format its type needs in place. */
   private formatEnsured = false;
 
-  /** `type` names a registered source type with subscriptions; `now` stamps `updatedAt` and `removedAt`. */
-  constructor(private readonly root: string, readonly type: string, private readonly now: () => Date = () => new Date()) {
+  /**
+   * `type` names a registered source type with subscriptions; `now` stamps `updatedAt` and
+   * `removedAt`; `noteChange` hears each subscription a write changed, once the file holds it.
+   */
+  constructor(private readonly root: string, readonly type: string, private readonly now: () => Date = () => new Date(),
+    private readonly noteChange: NoteChange = () => undefined) {
     this.spec = requireDefinition(type);
     if (!this.spec.storage) throw new Error(`Source type ${type} has no subscriptions`);
     this.filePath = path.join(root, this.spec.storage.subscriptionsFile);
@@ -73,7 +78,7 @@ export class JsonSubscriptionStore implements SubscriptionStore {
       const added = { ...subscription, updatedAt: subscription.updatedAt ?? subscription.addedAt };
       subscriptions.push(added);
       const removed = removalsFromJson(this.spec, await this.readFile()).filter((record) => record.id !== subscription.id);
-      await this.write(subscriptions, removed);
+      await this.write([added.id], subscriptions, removed);
       return added;
     });
   }
@@ -85,7 +90,7 @@ export class JsonSubscriptionStore implements SubscriptionStore {
       if (!subscription) return false;
       const removed = removalsFromJson(this.spec, await this.readFile()).filter((record) => record.id !== id);
       removed.push({ id, title: subscription.title, url: subscription.url, removedAt: this.now().toISOString() });
-      await this.write(subscriptions.filter((candidate) => candidate.id !== id), removed);
+      await this.write([id], subscriptions.filter((candidate) => candidate.id !== id), removed);
       return true;
     });
   }
@@ -103,7 +108,7 @@ export class JsonSubscriptionStore implements SubscriptionStore {
       if (!current) return null;
       const updated = this.stamped(current, { ...current, ...patch });
       subscriptions[index] = updated;
-      await this.write(subscriptions);
+      await this.write([id], subscriptions);
       return updated;
     });
   }
@@ -124,7 +129,7 @@ export class JsonSubscriptionStore implements SubscriptionStore {
         updated.push(changed);
         return changed;
       });
-      if (updated.length > 0) await this.write(next);
+      if (updated.length > 0) await this.write(updated.map((subscription) => subscription.id), next);
       return updated;
     });
   }
@@ -147,12 +152,13 @@ export class JsonSubscriptionStore implements SubscriptionStore {
    * Writes the subscriptions, and the removal records when given, keeping the other top-level fields
    * of the file, so a file written by a newer program keeps what this one does not define.
    */
-  private async write(subscriptions: SubscriptionRecord[], removed?: SubscriptionRemoval[]): Promise<void> {
+  private async write(changed: readonly string[], subscriptions: SubscriptionRecord[], removed?: SubscriptionRemoval[]): Promise<void> {
     if (!this.formatEnsured) {
       await ensureVaultFormat(this.root, [this.type]);
       this.formatEnsured = true;
     }
     await writeJsonFile(this.filePath, subscriptionsToJson(this.spec, await this.readFile(), subscriptions, removed));
+    for (const id of changed) this.noteChange({ kind: 'subscription', type: this.type, id });
   }
 
   /** A changed subscription, with `updatedAt` set to now when what the person sets on it differs. */

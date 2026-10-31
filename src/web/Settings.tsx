@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { api } from './api-client.js';
 import { radioIndexForKey, themePreferences, type ThemePreference } from './app-shell.js';
 import { SearchIndexCard } from './SearchIndexCard.js';
@@ -6,6 +6,7 @@ import { VaultLocationSection } from './VaultLocation.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { LoginStartup } from './LoginStartup.js';
 import { AgentConnection } from './AgentConnection.js';
+import { useLiveRead } from './use-changes.js';
 import type { DeviceUpdateStatus } from '../core/types.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
@@ -14,11 +15,9 @@ const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', d
  * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
-export function Settings({ vaultPath, activeJobs, revision, themePreference, update, onUpdate, onThemePreference, onChanged }: {
+export function Settings({ vaultPath, activeJobs, themePreference, update, onUpdate, onThemePreference, onChanged }: {
   vaultPath: string | null;
   activeJobs: number;
-  /** Changes when collection work or its schedule changes, prompting the Vault totals to reload. */
-  revision: number;
   themePreference: ThemePreference;
   update: DeviceUpdateStatus | null;
   onUpdate: (status: DeviceUpdateStatus) => void;
@@ -26,21 +25,14 @@ export function Settings({ vaultPath, activeJobs, revision, themePreference, upd
   onChanged: (message: string) => void;
 }) {
   const themeOptions = useRef<Array<HTMLButtonElement | null>>([]);
-  const [counts, setCounts] = useState<{ documents: number; sources: number } | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([api.documentSources(controller.signal), api.listSubscriptions(controller.signal)])
-      .then(([documents, sources]) => setCounts({ documents: documents.total, sources: sources.subscriptions.length }))
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [revision]);
+  const { value: counts } = useLiveRead(['documents'], (signal) => Promise.all([api.documentSources(signal), api.listSubscriptions(signal)])
+    .then(([documents, sources]) => ({ documents: documents.total, sources: sources.subscriptions.length })), []);
 
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
       <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} onChanged={onChanged} />
-      <SearchIndexCard revision={revision} />
+      <SearchIndexCard />
       <LoginStartup onChanged={onChanged} />
       <AgentConnection />
       <section className="settings-section" data-testid="settings-appearance">

@@ -962,6 +962,7 @@ export type CollectorErrorCode = CoreErrorCode | (string & {});
 
 /** The error codes the core raises, each with a fixed HTTP status. */
 export type CoreErrorCode =
+  | 'too_many_streams'
   | 'vault_busy'
   | 'vault_not_ready'
   | 'vault_invalid'

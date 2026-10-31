@@ -1,19 +1,22 @@
 import path from 'node:path';
 import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
+import type { ChangeBatch } from '../core/changes.js';
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview } from '../core/types.js';
 import type { NotificationState } from '../notifications/types.js';
-import { trayMenu } from './tray-menu.js';
+import { menuStaleAfter, trayMenu } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayState } from './tray-menu.js';
 
-const BUSY_POLL_MS = 1500;
-const IDLE_POLL_MS = 2000;
+/** The shortest time between the starts of two state reads; changes meanwhile share the next read. */
+export const READ_GAP_MS = 1000;
 
 export interface AppTrayOptions {
   /** The app's own UI/API origin; the menu reads and changes state through the same API as the page. */
   serverUrl: string;
   /** Folder of the icon images (see scripts/render-tray-icons.mjs). */
   iconFolder: string;
+  /** The runtime's change stream; the menu reads its state again after each change to what it shows. */
+  changes: { subscribe(listener: (batch: ChangeBatch) => void): () => void };
   /** Opens the window, on a page when given. */
   show(page?: 'jobs' | 'activity' | 'settings' | 'update' | { notificationId: string }): void;
   quit(): void;
@@ -21,36 +24,65 @@ export interface AppTrayOptions {
 
 /**
  * The macOS menu bar item or Windows notification area icon: the open Vault's work at a glance and
- * the actions that do not need the window. It polls the app's API as the page does, quickly while
- * work runs.
+ * the actions that do not need the window. It reads the app's API as the page does, after each change
+ * to what it shows, at most once per `READ_GAP_MS`. At local midnight it draws the last state again,
+ * so "明天" turns into today without a read.
  */
 export class AppTray {
   private readonly tray: Tray;
   private menu: TrayMenu = trayMenu(null);
   private state: TrayState | null = null;
   private drawn = '';
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private reading: Promise<void> | null = null;
+  private again = false;
+  private lastRead = 0;
   private stopped = false;
+  private midnight: ReturnType<typeof setTimeout> | undefined;
+  private readonly stopFollowing: () => void;
+  /** State reads since the tray was created; validation compares it across an idle period. */
+  reads = 0;
 
   constructor(private readonly options: AppTrayOptions) {
     this.tray = new Tray(this.image('idle'));
     // Windows opens the window on a click and the menu on a right click; macOS opens the menu on a click.
     if (process.platform === 'win32') this.tray.on('click', () => options.show());
     this.draw();
+    this.stopFollowing = options.changes.subscribe((batch) => { if (menuStaleAfter(batch.changes)) void this.refresh(); });
     void this.refresh();
+    this.atMidnight();
   }
 
   /** The menu as last drawn. */
   current(): TrayMenu { return this.menu; }
 
-  /** Reads the state now and redraws; the regular polling continues from here. */
-  async refresh(): Promise<void> {
-    clearTimeout(this.timer);
-    this.state = await this.read();
-    if (this.stopped) return;
-    this.menu = trayMenu(this.state);
-    this.draw();
-    this.timer = setTimeout(() => void this.refresh(), this.menu.icon === 'collecting' ? BUSY_POLL_MS : IDLE_POLL_MS);
+  /**
+   * Reads the state and redraws. One read runs at a time, starting at least `READ_GAP_MS` after the
+   * previous one; a call during a read reads once more after it, and resolves once the menu shows a
+   * state read after the call.
+   */
+  refresh(): Promise<void> {
+    if (this.reading) { this.again = true; return this.reading; }
+    this.reading = (async () => {
+      try {
+        do {
+          const wait = this.lastRead + READ_GAP_MS - Date.now();
+          if (wait > 0) await new Promise((resolve) => { setTimeout(resolve, wait); });
+          if (this.stopped) return;
+          // The read below starts after every change so far, including those during the wait.
+          this.again = false;
+          this.lastRead = Date.now();
+          const state = await this.read();
+          if (this.stopped) return;
+          this.state = state;
+          this.menu = trayMenu(state);
+          this.draw();
+        } while (this.again);
+      } finally {
+        // Cleared in the same step as the last check of `again`, so a later call starts a new read.
+        this.reading = null;
+      }
+    })();
+    return this.reading;
   }
 
   async run(action: TrayAction): Promise<void> {
@@ -74,8 +106,19 @@ export class AppTray {
 
   destroy(): void {
     this.stopped = true;
-    clearTimeout(this.timer);
+    clearTimeout(this.midnight);
+    this.stopFollowing();
     this.tray.destroy();
+  }
+
+  private atMidnight(): void {
+    const next = new Date();
+    next.setHours(24, 0, 1, 0);
+    this.midnight = setTimeout(() => {
+      this.menu = trayMenu(this.state);
+      this.draw();
+      this.atMidnight();
+    }, next.getTime() - Date.now());
   }
 
   private draw(): void {
@@ -100,6 +143,7 @@ export class AppTray {
 
   /** The open Vault's work and schedule; null while no Vault is open, the routes then answer 404. */
   private async read(): Promise<TrayState | null> {
+    this.reads += 1;
     try {
       const [update, notifications] = await Promise.all([
         this.get<{ update: DeviceUpdateStatus }>('/api/device/updates'),

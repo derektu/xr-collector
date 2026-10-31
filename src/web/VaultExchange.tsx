@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ImportMode, ImportPreview, TransferResult, TransferStatus } from '../core/types.js';
 import { api, ApiError } from './api-client.js';
+import { readUntil, useLiveRead } from './use-changes.js';
 import {
   changeText, hasChanges, localNewerText, progressText, removalText, revealLabel, sourceText, transferRunning,
 } from './transfer-presentation.js';
 
-const POLL_MS = 400;
-const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 export const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
 
 type Open = { kind: 'export'; file?: { path: string; overwrite: boolean } } | { kind: 'import'; file?: string };
@@ -75,30 +74,13 @@ export interface TransferProgress {
 
 /** Progress of the running transfer, read from the status while `active`. */
 export function useTransferProgress(active: boolean): TransferProgress {
-  const [progress, setProgress] = useState<TransferProgress>({ text: '', waiting: false });
-  useEffect(() => {
-    if (!active) { setProgress({ text: '', waiting: false }); return undefined; }
-    let alive = true;
-    void (async () => {
-      while (alive) {
-        try {
-          const status = await api.vaultTransferStatus();
-          if (alive && transferRunning(status)) setProgress({ text: progressText(status), waiting: status.state === 'waiting' });
-        } catch { /* the request in flight reports its own failure */ }
-        await sleep(POLL_MS);
-      }
-    })();
-    return () => { alive = false; };
-  }, [active]);
-  return progress;
+  const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: active });
+  return active && status && transferRunning(status) ? { text: progressText(status), waiting: status.state === 'waiting' } : { text: '', waiting: false };
 }
 
-export async function followTransfer(): Promise<TransferStatus> {
-  for (;;) {
-    const status = await api.vaultTransferStatus();
-    if (!transferRunning(status)) return status;
-    await sleep(POLL_MS);
-  }
+/** The transfer's status once it no longer runs. */
+export function followTransfer(): Promise<TransferStatus> {
+  return readUntil(() => api.vaultTransferStatus(), (status) => !transferRunning(status), (change) => change.kind === 'vault');
 }
 
 /** The progress line; while the transfer waits for collection steps it offers to cancel. */

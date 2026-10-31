@@ -404,6 +404,7 @@ app.whenReady().then(async () => {
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
     serverUrl: runtime.server.url,
+    changes: runtime.changes,
     iconFolder: path.join(app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'), 'tray'),
     show: showWindow,
     quit: () => app.quit(),
@@ -554,6 +555,7 @@ app.on('before-quit', (event) => {
 function exposeValidationControl(appTray: AppTray): void {
   (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
     tray: async () => { await appTray.refresh(); return appTray.current(); },
+    trayShown: () => ({ menu: appTray.current(), reads: appTray.reads }),
     click: (action: TrayAction) => appTray.run(action),
     notifications: () => [...validationNotifications],
     activateNotification: (id: string) => showWindow({ notificationId: id }),

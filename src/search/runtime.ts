@@ -21,6 +21,8 @@ interface StartSearchRuntimeOptions {
   databasePath: string;
   port?: number;
   prepareProjection(profile: SearchIndexProfile): Promise<PreparedSearchProjection>;
+  /** Hears each change of the search status. */
+  statusChanged?: () => void;
 }
 
 export interface SearchRuntime {
@@ -60,7 +62,7 @@ export async function startSearchRuntime(
       () => loadAllDocuments(options.vault),
       fileSearchStateStore(`${options.databasePath}-state.json`),
       () => new Date(),
-      { forceRebuild: projection.forceRebuild, afterRebuild: projection.recordRebuild },
+      { forceRebuild: projection.forceRebuild, afterRebuild: projection.recordRebuild, ...(options.statusChanged ? { statusChanged: options.statusChanged } : {}) },
     );
     const initialization = search.start();
     // The search object records the failure state; attach a handler now so a later close can await

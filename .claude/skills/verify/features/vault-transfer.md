@@ -54,6 +54,7 @@ Preconditions:
 
 - `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、搬移後搜尋、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `workspace-content`：斷言 `vault-info`。COUNTS-1、COUNTS-2 留在設定頁進行兩次背景 RSS 收集，以文件 API、Vault 檔案、搜尋狀態 API 與實際索引獨立確認 0 → 3 → 5，並檢查知識庫及搜尋卡各自在對應 API 就緒後 6 秒內更新，離開再返回仍為 5。
+- `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，知識庫計數與 API 相同。
 
 ## Backlog
 

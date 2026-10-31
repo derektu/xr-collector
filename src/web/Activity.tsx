@@ -17,10 +17,10 @@ import {
   summaryRange,
   type ActivityViewState,
 } from './activity-presentation.js';
-import { api } from './api-client.js';
+import { api, ApiError } from './api-client.js';
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import { Icon } from './icons.js';
-import { ACTIVE_POLL_MS } from './use-collection-status.js';
+import { useChanges } from './use-changes.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
 import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
@@ -40,10 +40,7 @@ interface LogState {
  * The persistent log, filtered by level, source, time and job. Filters live in the address so
  * other pages can open the log already filtered.
  */
-export function Activity({ revision, busy, search, onState, onOpenDocument, onOpenSource, onChanged }: {
-  revision: number;
-  /** Whether work is queued or running; the log then refreshes itself. */
-  busy: boolean;
+export function Activity({ search, onState, onOpenDocument, onOpenSource, onChanged }: {
   search: string;
   onState: (next: ActivityViewState) => void;
   onOpenDocument: (id: string) => void;
@@ -60,22 +57,17 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
   const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
   const summaryLocked = useRef(false);
   const logGeneration = useRef(0);
-  // The shell's status poll can miss a job that starts and ends between two polls, such as one an
-  // Agent submitted; while this page shows work in progress, it refreshes itself as well.
-  const [tick, setTick] = useState(0);
-  const refresh = `${revision}:${tick}`;
-  useEffect(() => {
-    if (!busy) return undefined;
-    const timer = setTimeout(() => setTick((value) => value + 1), ACTIVE_POLL_MS);
-    return () => clearTimeout(timer);
-  }, [busy, tick]);
+  const subscriptionChanges = useChanges(['subscriptions']);
+  const logChanges = useChanges(['activity']);
+  const jobChanges = useChanges(['jobs']);
+  /** The log request in flight; a change meanwhile reads the log once more when it ends. */
+  const logFlight = useRef<{ filter: string; again: boolean } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    api.listSubscriptions(controller.signal)
-      .then((list) => setSubscriptions(list.subscriptions)).catch(() => undefined);
+    subscriptionChanges.track(api.listSubscriptions(controller.signal).then((list) => setSubscriptions(list.subscriptions)));
     return () => controller.abort();
-  }, [revision]);
+  }, [subscriptionChanges.tick]);
 
   // A changed filter starts over. Raw refreshes add new entries above loaded history. Summary refreshes
   // replace the whole snapshot until an older page is requested; pagination then keeps that snapshot
@@ -89,6 +81,7 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
   useEffect(() => {
     summaryLocked.current = false;
     logGeneration.current += 1;
+    logFlight.current = null;
     setLog(null);
     setLogError(null);
     setLoadingOlder(false);
@@ -96,12 +89,24 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
 
   useEffect(() => {
     const requested = filter;
-    if (effectiveMode === 'summary' && summaryLocked.current) return;
+    if (effectiveMode === 'summary' && summaryLocked.current) { logChanges.track(Promise.resolve()); return; }
+    if (logFlight.current?.filter === requested) { logFlight.current.again = true; return; }
     if (filterQuery.current?.filter !== requested) filterQuery.current = { filter: requested, query: activityQuery(state, new Date()) };
-    const request = effectiveMode === 'summary'
-      ? api.activitySummary({ ...filterQuery.current.query, limit: LOG_PAGE })
-      : api.activity({ ...filterQuery.current.query, limit: LOG_PAGE });
-    request.then((page) => {
+    const query = filterQuery.current.query;
+    const load = (): void => {
+      const flight = { filter: requested, again: false };
+      logFlight.current = flight;
+      const reading = read();
+      logChanges.track(reading);
+      void reading.catch(() => undefined).then(() => {
+        if (logFlight.current !== flight) return;
+        logFlight.current = null;
+        if (flight.again) load();
+      });
+    };
+    const read = () => (effectiveMode === 'summary'
+      ? api.activitySummary({ ...query, limit: LOG_PAGE })
+      : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
       if (currentFilter.current !== requested) return;
       if (effectiveMode === 'summary' && summaryLocked.current) return;
       const events = 'events' in page ? page.events : [];
@@ -114,15 +119,21 @@ export function Activity({ revision, busy, search, onState, onOpenDocument, onOp
       if (currentFilter.current === requested && !(effectiveMode === 'summary' && summaryLocked.current)) {
         setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
       }
+      throw error;
     });
-  }, [filter, refresh, effectiveMode]);
+    load();
+  }, [filter, logChanges.tick, effectiveMode]);
 
   useEffect(() => {
-    if (!state.job) { setFilteredJob(null); return undefined; }
+    if (!state.job) { setFilteredJob(null); jobChanges.track(Promise.resolve()); return undefined; }
     let alive = true;
-    api.getJob(state.job).then((job) => { if (alive) setFilteredJob(job); }).catch(() => { if (alive) setFilteredJob(null); });
+    // A job no longer kept is an answer; other failures leave the filter behind until reads work again.
+    jobChanges.track(api.getJob(state.job).then((job) => { if (alive) setFilteredJob(job); }, (error: unknown) => {
+      if (alive) setFilteredJob(null);
+      if (!(error instanceof ApiError && error.code === 'job_not_found')) throw error;
+    }));
     return () => { alive = false; };
-  }, [state.job, refresh]);
+  }, [state.job, jobChanges.tick]);
 
   function change(patch: Partial<ActivityViewState>): void {
     onState({ ...state, ...patch });

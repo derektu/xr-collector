@@ -81,7 +81,7 @@ describe('CI flow selection', () => {
       expect(TIERS, flow.name).toContain(flow.tier);
       if (flow.desktop) expect(flow.tier, flow.name).toBe('platform');
     }
-    expect((await listFlows()).filter((flow) => flow.tier === 'core').map((flow) => flow.name).sort()).toEqual(['core-journey', 'subscription-remove']);
+    expect((await listFlows()).filter((flow) => flow.tier === 'core').map((flow) => flow.name).sort()).toEqual(['core-journey', 'live-updates', 'subscription-remove']);
   });
 
   it('keeps a machine-readable failed result when provisioning stops before the recorder', async () => {
