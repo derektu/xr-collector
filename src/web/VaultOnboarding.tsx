@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { api, ApiError } from './api-client.js';
+import { useLiveRead } from './use-changes.js';
 import { ImportDone, ImportOnboarding, Onboarding, type VaultAction, type VaultInspection } from './Onboarding.js';
-
-/** How often a waiting Onboarding checks whether an Agent finished setup through the API. */
-const STATUS_POLL_MS = 3000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '發生未預期的錯誤，請重試。';
@@ -29,13 +27,11 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   const sequence = useRef(0);
   const desktop = window.xrCollectorDesktop;
 
+  // An Agent can finish setup through the API while Onboarding waits.
+  const { value: setup } = useLiveRead(['vaultSetup'], (signal) => api.getVaultSetup(signal), [], { enabled: !busy && !imported });
   useEffect(() => {
-    if (busy || imported) return undefined;
-    const timer = window.setInterval(() => {
-      void api.getVaultSetup().then((next) => { if (next.state === 'ready') onStatus(next); }).catch(() => undefined);
-    }, STATUS_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [busy, imported, onStatus]);
+    if (!busy && !imported && setup?.state === 'ready') onStatus(setup);
+  }, [setup, busy, imported, onStatus]);
 
   async function inspect(path: string, clearError = true): Promise<void> {
     const current = ++sequence.current;

@@ -1,5 +1,14 @@
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { Change } from '../core/changes.js';
 import type { AutoPauseNotification } from '../notifications/types.js';
+
+/** What the menu shows comes from jobs and their pacing, the network, the schedule and subscriptions, updates and notifications, and the open Vault. */
+const MENU_STALE_AFTER: ReadonlySet<Change['kind']> = new Set(['job', 'pacing', 'connectivity', 'schedule', 'subscription', 'update', 'notifications', 'vault']);
+
+/** True when the menu must read its state again after these changes. */
+export function menuStaleAfter(changes: readonly Change[]): boolean {
+  return changes.some((change) => MENU_STALE_AFTER.has(change.kind));
+}
 
 /**
  * The tray icon states, highest priority first: subscriptions need attention, the device has no

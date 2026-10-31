@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
-import { trayMenu } from '../../src/electron/tray-menu.js';
+import { menuStaleAfter, trayMenu } from '../../src/electron/tray-menu.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';
 import type { AutoPauseNotification } from '../../src/notifications/types.js';
 
@@ -174,6 +174,20 @@ describe('tray menu (#32 T1)', () => {
     expect(attentionWithUpdate.icon).toBe('attention');
     expect(attentionWithUpdate.updateBadge).toBeUndefined();
     expect(actions(attentionWithUpdate)).toContain('App 更新：可下載 0.1.1');
+  });
+});
+
+describe('tray menu refresh', () => {
+  it('reads again after changes to what the menu shows, not after document, search or activity changes', () => {
+    expect(menuStaleAfter([{ kind: 'job', id: 'j', parentId: null, state: 'running' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'connectivity' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'pacing', group: 'youtube' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'subscription', type: 'rss', id: 's' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'schedule' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'update' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'notifications' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'vault', scope: 'contents' }])).toBe(true);
+    expect(menuStaleAfter([{ kind: 'document', id: 'd' }, { kind: 'search' }, { kind: 'activity' }])).toBe(false);
   });
 });
 

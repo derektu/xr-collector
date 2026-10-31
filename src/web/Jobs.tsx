@@ -1,40 +1,26 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { JobOverview, JobOverviewEntry } from '../core/types.js';
 import { api } from './api-client.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { jobEntryLabel } from './jobs-presentation.js';
-import { ACTIVE_POLL_MS, IDLE_POLL_MS } from './use-collection-status.js';
+import { useLiveRead } from './use-changes.js';
 
 /**
  * Everything the app is doing now: work that started with what it is doing, work queued in the
- * order it starts, and failed single items with retry and remove. It refreshes itself, quickly while any work is unfinished.
+ * order it starts, and failed single items with retry and remove. It reads the work again after each change to it.
  */
-export function Jobs({ revision, offline, onChanged }: {
-  revision: number;
+export function Jobs({ offline, onChanged }: {
   /** The device has no network, so a failed item cannot be retried now. */
   offline: boolean;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
-  const [overview, setOverview] = useState<JobOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api.jobOverview(controller.signal).then((next) => { setOverview(next); setError(null); }).catch((reason: unknown) => {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '無法讀取工作。');
-    });
-    return () => controller.abort();
-  }, [revision, tick]);
+  const read = useLiveRead(['jobs'], (signal) => api.jobOverview(signal), []);
+  const overview: JobOverview | null = read.value;
+  const error = read.error ? (read.error instanceof Error ? read.error.message : '無法讀取工作。') : null;
 
   const unfinished = overview ? overview.running.length + overview.queued.length : 0;
-  useEffect(() => {
-    if (!overview) return undefined;
-    const timer = setTimeout(() => setTick((value) => value + 1), unfinished > 0 ? ACTIVE_POLL_MS : IDLE_POLL_MS);
-    return () => clearTimeout(timer);
-  }, [unfinished, overview]);
 
   async function act(entry: JobOverviewEntry, action: 'retry' | 'dismiss'): Promise<void> {
     setActing(entry.jobId);
@@ -42,7 +28,6 @@ export function Jobs({ revision, offline, onChanged }: {
       if (action === 'retry') await api.retryJob(entry.jobId);
       else await api.dismissJob(entry.jobId);
       onChanged(action === 'retry' ? `已重新排入「${jobEntryLabel(entry).title}」。` : `已移除「${jobEntryLabel(entry).title}」。`);
-      setTick((value) => value + 1);
     } catch (reason) {
       onChanged(reason instanceof Error ? reason.message : '操作失敗，請稍後再試。', 'error');
     } finally {

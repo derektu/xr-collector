@@ -118,7 +118,7 @@ export async function startAgentAccess(options: {
   pacing?: StartServerOptions['pacing']; connectivity?: StartServerOptions['connectivity']; preferredPort: number; settingsFile: string; skillPath: string;
   runtimeStatus?: StartServerOptions['runtimeStatus']; notReady?: StartServerOptions['notReady']; vaultSetup?: StartServerOptions['vaultSetup'];
   loginStartup?: StartServerOptions['loginStartup']; event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
-  updates?: StartServerOptions['updates'];
+  updates?: StartServerOptions['updates']; changes?: StartServerOptions['changes'];
 }): Promise<AgentConnectionService> {
   const service = new AgentConnectionService(options.settingsFile, options.skillPath, options.preferredPort, options.protectSecret, options.event);
   try { await service.open(); }

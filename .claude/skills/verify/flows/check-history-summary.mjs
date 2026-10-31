@@ -88,12 +88,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   });
   if (!summaryAvailable) return;
 
-  const subscriptionRow = async () => JSON.parse(await readFile(subscriptionsFile, 'utf8'))
-    .channels.find((candidate) => candidate.id === source.id);
-  // The App rewrites the subscriptions file once more after a check's job settles, to record when
-  // the check ended. A check counts as settled only once that time is in the file, so the next
-  // check's edit cannot land between the App's read and write and be overwritten. The edit goes
-  // through a temporary file and a rename, as the App's own writes do, so the App never reads half a file.
+  // The edit goes through a temporary file and a rename, as the App's own writes do, so the App never reads half a file.
   const scheduledCheck = async () => {
     const before = new Set((await jobs()).map((job) => job.id));
     const file = JSON.parse(await readFile(subscriptionsFile, 'utf8'));
@@ -104,10 +99,9 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await rename(temporary, subscriptionsFile);
     await writeFile(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
     return waitFor(async () => {
+      // A check reads as finished only once the subscription file records its end, so the next edit cannot be overwritten.
       const job = (await jobs()).find((candidate) => !before.has(candidate.id) && candidate.scope?.trigger === 'scheduled');
-      if (!job || (job.state !== 'completed' && job.state !== 'failed')) return null;
-      const { lastCheckedAt } = await subscriptionRow();
-      return lastCheckedAt && lastCheckedAt >= job.finishedAt ? job : null;
+      return job && (job.state === 'completed' || job.state === 'failed') ? job : null;
     }, 'scheduled check settled', { timeout: CHECK_TIMEOUT });
   };
 

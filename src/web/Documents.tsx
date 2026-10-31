@@ -23,6 +23,7 @@ import {
   type DocumentListState,
 } from './document-presentation.js';
 import { createLatestRequest } from './latest-request.js';
+import { useChanges } from './use-changes.js';
 import { useFloatingMenu } from './floating-menu.js';
 import { Icon } from './icons.js';
 
@@ -43,10 +44,8 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, revision, offline, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
+export function Documents({ state, offline, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
   state: DocumentListState;
-  /** Changes when a job ends or saves a document, so documents collected meanwhile show up. */
-  revision: number;
   /** The device has no network, so adding is unavailable. */
   offline: boolean;
   /** The scrolling element whose position is saved before opening the Reader. */
@@ -68,17 +67,20 @@ export function Documents({ state, revision, offline, scroller, onState, onOpen,
   /** Bumped after a deletion, so the sources and the current page load again. */
   const [deletions, setDeletions] = useState(0);
   const requests = useMemo(createLatestRequest, []);
+  const sourceChanges = useChanges(['documents']);
+  const listChanges = useChanges(['documents', 'search']);
   const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
 
   useEffect(() => { setDraft((current) => draftForQuery(current, state.query)); }, [state.query]);
 
   useEffect(() => {
     const controller = new AbortController();
-    api.documentSources(controller.signal).then(setSources).catch((error: unknown) => {
+    sourceChanges.track(api.documentSources(controller.signal).then(setSources, (error: unknown) => {
       if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取頻道清單。');
-    });
+      throw error;
+    }));
     return () => controller.abort();
-  }, [revision, deletions]);
+  }, [sourceChanges.tick, deletions]);
 
   // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
@@ -95,7 +97,7 @@ export function Documents({ state, revision, offline, scroller, onState, onOpen,
     const browse = (signal: AbortSignal) => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
       .then((page): Results => ({ mode: 'browse', rows: page.documents.map((document) => ({ document, excerpt: document.excerpt })), total: page.total }));
     setLoading(true);
-    void requests.run(async (signal) => {
+    listChanges.track(requests.run(async (signal) => {
       if (!state.query) return { results: await browse(signal), problem: null };
       try {
         const found = await api.searchDocuments({ query: state.query, ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal);
@@ -123,9 +125,10 @@ export function Documents({ state, revision, offline, scroller, onState, onOpen,
       if (!active || (error instanceof DOMException && error.name === 'AbortError')) return;
       setLoadError(error instanceof Error ? error.message : '無法讀取文件。');
       setLoading(false);
-    });
+      throw error;
+    }));
     return () => { active = false; };
-  }, [state.query, state.source, state.page, requests, revision, deletions]);
+  }, [state.query, state.source, state.page, requests, listChanges.tick, deletions]);
 
   useEffect(() => () => requests.cancel(), [requests]);
 

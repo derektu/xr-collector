@@ -1,3 +1,4 @@
+import type { NoteChange } from '../core/change-feed.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -81,7 +82,8 @@ export interface WorkspaceOptions {
   searchLexicon?: string;
   searchData: string;
   searchPort?: number;
-  createSearch?: (root: string) => Promise<SearchRuntime>;
+  /** Replaces the search engine; `statusChanged` is called on each change of its status. */
+  createSearch?: (root: string, statusChanged: () => void) => Promise<SearchRuntime>;
   /** Device record of collection jobs; defaults to an in-memory store. */
   jobStore?: JobStore;
   jobLimits?: Partial<JobLimits>;
@@ -112,6 +114,8 @@ export interface WorkspaceOptions {
    * or a stop before that write still lets the import be taken back.
    */
   pendingImport?: boolean;
+  /** Hears each change of the Vault's data and of its operation status, once reads return it. */
+  noteChange?: NoteChange;
   /** Device-profile notification sink; Vault data never contains notification delivery state. */
   onAutoPaused?: (vaultId: string, sourceType: string, subscription: import('../core/types.js').SubscriptionRecord) => void | Promise<void>;
 }
@@ -192,8 +196,16 @@ export class VaultWorkspace {
       hold: (signal) => this.current.jobs.hold(this.holdTimeoutMs, signal),
       idle: () => this.current.schedule.idle(),
       suspend: (value) => this.current.schedule.setSuspended(value),
+      changed: () => {
+        const status = this.operationLock.status();
+        this.noteChange({ kind: 'vault', scope: 'transfer' });
+        // A finished import, move or switch replaced what every page shows.
+        if (status.state === 'completed' && status.operation !== 'export') this.noteChange({ kind: 'vault', scope: 'contents' });
+      },
     });
   }
+
+  private readonly noteChange: NoteChange = (change) => this.options.noteChange?.(change);
 
   /** Active Vault subscription rows for device-profile notification reconciliation. */
   async notificationSubscriptions(): Promise<Array<{ vaultId: string; sourceType: string; subscription: import('../core/types.js').SubscriptionRecord }>> {
@@ -828,7 +840,7 @@ export class VaultWorkspace {
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
     for (const service of this.current.subscriptions.all()) await service.planChecks({ overdue: false });
-    this.current.schedule = makeScheduler(this.current, this.options.pause);
+    this.current.schedule = makeScheduler(this.current, this.options.pause, this.noteChange);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
   }
@@ -872,7 +884,8 @@ export class VaultWorkspace {
     // Deletions a stop left unfinished are settled before the search index is compared with the Vault.
     const recovery = await vault.recoverDeletions();
     const databasePath = this.searchPath(root);
-    const runtime = this.options.createSearch ? await this.options.createSearch(root) : await startSearchRuntime({
+    const searchChanged = () => this.noteChange({ kind: 'search' });
+    const runtime = this.options.createSearch ? await this.options.createSearch(root, searchChanged) : await startSearchRuntime({
       vault, binaryPath: this.options.searchBinary, databasePath,
       lexiconPath: this.options.searchLexicon ?? path.resolve('resources/search/coct-main.txt'),
       prepareProjection: (profile) => prepareOwnedSearchProjection({
@@ -882,12 +895,13 @@ export class VaultWorkspace {
         profile,
       }),
       ...(port ? { port } : {}),
+      statusChanged: searchChanged,
     });
-    const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry) });
+    const collector = new Collector(vault, runtime.search, { recordEvent: (entry) => jobs.recordEvent(entry), noteChange: this.noteChange });
     const plugins = this.options.plugins;
     const recentTargets = new RecentTargets();
     const stores: Record<string, SubscriptionStore> = {};
-    for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(root, plugin.id);
+    for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(root, plugin.id, undefined, this.noteChange);
     // The scheduler is replaced after a merge, so switch reads go through the bundle.
     const autoCollection = () => bundle.schedule.isEnabled();
     // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
@@ -946,7 +960,7 @@ export class VaultWorkspace {
       });
     }
     const partial = { root, vaultId, runtime, collector, subscriptions, jobs };
-    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options.pause) };
+    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options.pause, this.noteChange) };
     return bundle;
   }
 
@@ -981,8 +995,8 @@ function changeSummary(counts: ChangeCounts): string {
 /** Free space that never runs out, for a check that has already reserved its space. */
 const unlimitedSpace: StatFs = async () => ({ bavail: Number.MAX_SAFE_INTEGER, bsize: 1 });
 
-function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined): CollectionScheduler {
-  return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root), {
+function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined, noteChange: NoteChange): CollectionScheduler {
+  return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root, noteChange), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
     ...(pause ? { pause } : {}),
   });

@@ -4,6 +4,7 @@ import type { VaultWorkspace } from '../vault/workspace.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
+import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
 import type { BuildInfo, TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -13,6 +14,7 @@ import type { UpdateAccess } from '../updates/types.js';
 
 export interface StartServerOptions {
   buildInfo?: BuildInfo;
+  changes?: ChangeFeed;
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
@@ -46,6 +48,7 @@ export interface RunningServer {
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
     ...(options.buildInfo ? { buildInfo: options.buildInfo } : {}),
+    ...(options.changes ? { changes: options.changes } : {}),
     ...(options.collector ? { collector: options.collector } : {}),
     ...(options.jobs ? { jobs: options.jobs } : {}),
     ...(options.activity ? { activity: options.activity } : {}),

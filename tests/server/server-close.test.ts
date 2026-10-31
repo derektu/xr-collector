@@ -1,6 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ChangeFeed } from '../../src/core/change-feed.js';
 import type { BuildInfo, TranscriptSearch } from '../../src/core/types.js';
 import { startServer, type RunningServer } from '../../src/server/start.js';
 
@@ -102,5 +103,18 @@ describe('HTTP server close', () => {
     await openSocket(running.port);
     await openSocket(running.port, 'GET /api/search/status HTTP/1.1\r\nHost: 127.0.0.1\r\n');
     await running.close();
+  }, 3000);
+
+  it('closes while event streams and waiting change reads are open', async () => {
+    const changes = new ChangeFeed();
+    const running = await startServer({ buildInfo: info, port: 0, changes });
+    const stream = await fetch(`${running.url}/api/events`);
+    expect(stream.status).toBe(200);
+    const ended = stream.text();
+    const waiting = fetch(`${running.url}/api/changes?after=${changes.revision}&wait=30`).then((response) => response.json());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await running.close();
+    expect(await ended).toContain('event: hello');
+    expect(await waiting).toMatchObject({ batches: [] });
   }, 3000);
 });

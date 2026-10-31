@@ -65,6 +65,7 @@ Preconditions:
 - `youtube-cooldown`：斷言 `sub-status`。A 下載中時 YouTube 限流：通道冷卻、A 的列與 API 為等冷卻結束的重試、影片帶冷卻的等待且嘗試次數未用掉、冷卻期間送出的單支影片排隊等待；冷卻結束後自動完成，限流、延後與冷卻結束的事件各一次，沒有重試與失敗。
 - `subscribe-a-b`：斷言 `sub-add`、`sub-status`。A 經 API 訂閱，A 下載中時經畫面訂閱 B；A、B 的狀態序列、完成後的文件數，以及 Vault、API 與索引的文件一一對應。不斷言 pending-row、頁尾的上次檢查與失敗的檢查。
 - `workspace-content`：斷言 `sub-detail`。RSS 訂閱詳情頁的檢查頻率、時間範圍與數量上限儲存後，API 與重新整理後的欄位一致。
+- `live-updates`：斷言 `sub-status`、`sub-pause`、`sub-detail`、`sub-remove`。訂閱頁與詳情開著時由 Agent 埠訂閱、暫停、恢復與移除，畫面等到根元素的 data-revision 跟上後與 API 相同；閒置 10 秒沒有請求；網路中斷時重讀失敗的畫面維持落後並在恢復後補讀；伺服器重啟後未重新載入的畫面跟上。
 
 ## Backlog
 

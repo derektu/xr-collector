@@ -1,46 +1,29 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { SearchStatusReport } from '../core/types.js';
 import { api } from './api-client.js';
 import { dateTimeLabel } from './document-presentation.js';
+import { useLiveRead } from './use-changes.js';
 
-const BUSY_POLL_MS = 1500;
 const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
   starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用',
 };
 
 /** Settings section that shows whether the search index matches the Vault and lets the user rebuild it. */
-export function SearchIndexCard({ revision }: { revision: number }) {
-  const [status, setStatus] = useState<SearchStatusReport | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export function SearchIndexCard() {
+  const read = useLiveRead(['search'], (signal) => api.getSearchStatus(signal), []);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildError, setRebuildError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setStatus(await api.getSearchStatus());
-      setLoadError(null);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '無法讀取搜尋索引狀態。');
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load, revision]);
+  const status: SearchStatusReport | null = read.value;
+  const loadError = read.error ? (read.error instanceof Error ? read.error.message : '無法讀取搜尋索引狀態。') : null;
   const busy = rebuilding || (status !== null && status.state !== 'ready' && status.state !== 'error');
-  useEffect(() => {
-    if (!busy) return undefined;
-    const timer = setInterval(() => void load(), BUSY_POLL_MS);
-    return () => clearInterval(timer);
-  }, [busy, load]);
 
   async function rebuild(): Promise<void> {
     setRebuilding(true);
     setRebuildError(null);
-    setStatus((current) => current ? { ...current, state: 'rebuilding' } : current);
     try {
-      setStatus(await api.rebuildSearch());
+      await api.rebuildSearch();
     } catch (error) {
       setRebuildError(error instanceof Error ? error.message : '重建搜尋索引失敗。');
-      await load();
     } finally {
       setRebuilding(false);
     }

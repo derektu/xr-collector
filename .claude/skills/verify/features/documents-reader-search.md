@@ -59,6 +59,7 @@ Preconditions:
 - `documents-reader-search`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁、來源篩選；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集並在重啟後再次搜尋。
 - `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回保留分頁、已刪除 RSS 不提供重新收集、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支；COUNTS-1、COUNTS-2 另比對搜尋狀態 API、實際索引與設定頁搜尋卡在背景收集後的 3／3、5／5。
 - `search-normalization`：斷言 `docs-search-normalization`、`docs-search-fragments`、`docs-list`、`docs-filter`、`docs-search`、`reader-view`。NORM-1～4 用五份 RSS 文件驗等價文字、純空白 browse、地區詞、原文摘要、片段與重啟；NORM-5～7 擴充至 34 份，驗散字／空白／標點／跨欄位負例、COCT 多詞 AND 與引號、Latin typo／prefix、固定完整詞優先案例、Reader 原文、來源／日期／20＋1 分頁、授權 Agent 完整回應，以及畫面重建與重啟後 Vault／結果不變。均為 Mac Web 合成資料；不代表兩平台封裝資源、換詞庫或壞資源啟動驗收。
+- `live-updates`：斷言 `docs-list`、`reader-view`。文件頁開著時 Agent 刪除文件，總數與 API 相同；閱讀頁開著時 Agent 刪除同一份，顯示已刪除。
 
 ## Backlog
 

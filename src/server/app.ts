@@ -6,7 +6,9 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
+import { registerChangeRoutes } from './change-routes.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
@@ -127,7 +129,7 @@ export interface VaultSetup {
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
-  '/api/health', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+  '/api/health', '/api/events', '/api/changes', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
   '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
   '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
   '/api/device/updates', '/api/device/updates/check', '/api/device/updates/download',
@@ -141,6 +143,8 @@ export interface NotificationAccess {
 
 export interface HttpAppOptions {
   buildInfo?: BuildInfo;
+  /** The process's change stream; every API response names its revision and `/api/events` serves it. */
+  changes?: ChangeFeed;
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
@@ -198,6 +202,7 @@ export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
 }
 
 const ERROR_STATUS: Record<CoreErrorCode, number> = {
+  too_many_streams: 503,
   vault_busy: 409,
   vault_not_ready: 503,
   vault_invalid: 422,
@@ -358,6 +363,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
     });
   }
+
+  if (options.changes) registerChangeRoutes(app, options.changes, deviceData);
 
   if (options.vaultSetup) {
     const vaultSetup = options.vaultSetup;

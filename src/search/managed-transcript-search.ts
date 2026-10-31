@@ -37,14 +37,22 @@ export interface SearchProjectionLifecycle {
   forceRebuild?: boolean;
   /** Commits the semantic profile only after a complete replacement succeeds. */
   afterRebuild?: () => Promise<void>;
+  /** Hears each status change once `status()` returns it. */
+  statusChanged?: () => void;
 }
 
 export class ManagedTranscriptSearch implements TranscriptSearch {
-  private currentStatus: SearchStatus = {
+  private statusValue: SearchStatus = {
     state: 'starting',
     indexedDocuments: 0,
     lastRebuiltAt: null,
   };
+
+  private get currentStatus(): SearchStatus { return this.statusValue; }
+  private set currentStatus(next: SearchStatus) {
+    this.statusValue = next;
+    this.lifecycle.statusChanged?.();
+  }
 
   private operationTail: Promise<void> = Promise.resolve();
   /** Deleted documents not yet confirmed gone from the index; searches exclude them. */

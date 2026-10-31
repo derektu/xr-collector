@@ -1,12 +1,12 @@
 // The menu bar item (macOS) or notification area icon (Windows) and the window's lifecycle, in the
 // development Electron with its window shown: the menu while idle, closing the window while
 // collection and the Agent API go on, checking and switching automatic checks from the menu,
-// opening pages from it, the first-close hint once per device, a second launch, and quitting from
+// the menu following changes made elsewhere without reading while idle, opening pages from it, the first-close hint once per device, a second launch, and quitting from
 // the menu in the middle of a check. The flow serves its own RSS feed on the run's feeds port.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { clickTray, closeWindow, notifications, trayMenu, windowState } from '../scripts/lib/electron.mjs';
+import { clickTray, closeWindow, notifications, trayMenu, trayShown, windowState } from '../scripts/lib/electron.mjs';
 import { processTable, programName, WINDOWS } from '../scripts/lib/platform.mjs';
 
 export const name = 'tray';
@@ -15,6 +15,10 @@ export const tier = 'platform';
 export const covers = ['tray-menu', 'tray-hide', 'tray-actions', 'tray-open', 'tray-hint', 'tray-second-launch', 'tray-quit'];
 export const desktop = true;
 
+/** Long enough for the reads the previous scenario's changes may still start: one read gap (1 s) and a margin. */
+const SETTLE_MS = 1500;
+/** Long enough to catch reading on a timer, which happened every 2 s or faster. */
+const IDLE_MS = 10_000;
 const ACTIONS = ['開啟 XR Collector', '立即檢查所有訂閱', '自動檢查', '工作', '記錄', '檢查 App 更新', '結束 XR Collector'];
 const statusLines = (menu) => menu.items.filter((item) => item.kind === 'status').map((item) => item.label);
 const actionLabels = (menu) => menu.items.filter((item) => item.kind === 'action').map((item) => item.label);
@@ -148,6 +152,38 @@ export async function run({ instance, record, waitFor, sleep }) {
       expect(on.icon === 'idle' && autoCheck(on) === true && /^下次檢查/u.test(statusLines(on)[1] ?? ''), '再開啟後恢復閒置與下次檢查', on);
     });
 
+    await scenario('TRAY-D9', '選單跟著別處的變動更新，閒置時不讀', async ({ expect, note }) => {
+      const shown = () => trayShown(instance.app);
+      await sleep(SETTLE_MS);
+      const before = await shown();
+      await sleep(IDLE_MS);
+      const after = await shown();
+      note('idleReads', { before: before.reads, after: after.reads });
+      expect(Number.isInteger(before.reads) && after.reads === before.reads, `閒置 ${IDLE_MS / 1000} 秒，選單沒有讀取狀態`, { before: before.reads, after: after.reads });
+      await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: false }) });
+      await waitFor(async () => (await shown()).menu.icon === 'auto_check_off', 'the drawn menu shows automatic checks off', { timeout: 5000 });
+      expect(autoCheck((await shown()).menu) === false, '經 API 關閉自動檢查後，畫出的選單自己更新', (await shown()).menu.icon);
+      await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: true }) });
+      await waitFor(async () => (await shown()).menu.icon === 'idle', 'the drawn menu shows automatic checks on', { timeout: 5000 });
+      const total = await documentsTotal();
+      feed.add(1);
+      feed.delay = 3000;
+      const icons = [];
+      try {
+        await instance.api('/api/subscription-checks', { method: 'POST', body: '{}' });
+        await waitFor(async () => {
+          const icon = (await shown()).menu.icon;
+          if (icons.at(-1) !== icon) icons.push(icon);
+          return icons.includes('collecting') && icon === 'idle';
+        }, 'the drawn menu shows the check start and end', { timeout: 30_000, interval: 100 });
+      } finally {
+        feed.delay = 0;
+      }
+      note('icons', icons);
+      expect(icons.includes('collecting') && icons.at(-1) === 'idle', '經 API 開始的檢查，畫出的選單顯示收集中再回到閒置', icons);
+      await waitFor(async () => await documentsTotal() === total + 1 && await idle(), 'the check collected one document', { timeout: 30_000 });
+    });
+
     await scenario('TRAY-D5', '從選單開啟工作、記錄與主視窗', async ({ expect, note, shot }) => {
       const opened = async (action, pathname) => {
         await clickTray(instance.app, action);
@@ -205,6 +241,7 @@ export async function run({ instance, record, waitFor, sleep }) {
     });
 
     await scenario('TRAY-D8', '檢查中從選單結束，再啟動接續', async ({ expect, note }) => {
+      const total = await documentsTotal();
       feed.add(2);
       feed.delay = 8000;
       await clickTray(instance.app, 'check_now');
@@ -217,8 +254,8 @@ export async function run({ instance, record, waitFor, sleep }) {
       expect(search.length === 0, '程序結束，Meilisearch 也結束', search.map((entry) => entry.pid));
       feed.delay = 0;
       await instance.relaunch();
-      await waitFor(async () => await documentsTotal() === 7 && await idle(), 'the interrupted check finishes after relaunch', { timeout: 90_000 });
-      expect(await documentsTotal() === 7, '重啟後接續的檢查完成，文件由 5 份變成 7 份', await documentsTotal());
+      await waitFor(async () => await documentsTotal() === total + 2 && await idle(), 'the interrupted check finishes after relaunch', { timeout: 90_000 });
+      expect(await documentsTotal() === total + 2, `重啟後接續的檢查完成，文件由 ${total} 份變成 ${total + 2} 份`, await documentsTotal());
     });
   } finally {
     await feed.close();

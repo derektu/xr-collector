@@ -37,6 +37,7 @@ export class UpdateService implements UpdateAccess {
   private readonly request: typeof fetch;
   private readonly now: () => Date;
   private state: DeviceUpdateStatus;
+  private readonly listeners = new Set<() => void>();
   private saved: SavedUpdateState = { schemaVersion: 1, ready: null, attempt: null, lastCheckAttemptAt: null, checkedAt: null };
   private lastCheckEvent: string | null = null;
   private packageFile: string | null = null;
@@ -73,6 +74,11 @@ export class UpdateService implements UpdateAccess {
   }
 
   status(): DeviceUpdateStatus { return structuredClone(this.state); }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   check(): Promise<DeviceUpdateStatus> {
     if (this.closed) return Promise.resolve(this.status());
@@ -244,7 +250,9 @@ export class UpdateService implements UpdateAccess {
             if (written.bytesWritten === 0) throw new CollectorError('update_download_failed', '無法寫入更新檔。');
             offset += written.bytesWritten;
           }
-          this.set({ progress: { transferred, total: offer.payload.bytes, percent: Math.floor(transferred / offer.payload.bytes * 100) } });
+          // Readers follow each status change, so progress is reported once per percent.
+          const percent = Math.floor(transferred / offer.payload.bytes * 100);
+          if (percent !== this.state.progress?.percent) this.set({ progress: { transferred, total: offer.payload.bytes, percent } });
         }
         if (idleTimer) clearTimeout(idleTimer); idleTimer = undefined;
         await output.sync();
@@ -409,7 +417,10 @@ export class UpdateService implements UpdateAccess {
       throw new CollectorError('update_offer_changed', '可用更新已改變，請重新確認版本後再操作。');
     }
   }
-  private set(patch: Partial<DeviceUpdateStatus>): void { this.state = { ...this.state, ...patch }; }
+  private set(patch: Partial<DeviceUpdateStatus>): void {
+    this.state = { ...this.state, ...patch };
+    for (const listener of [...this.listeners]) listener();
+  }
   private save(): Promise<void> {
     const snapshot = structuredClone(this.saved);
     const next = this.saves.then(() => writeJsonFile(this.stateFile, snapshot));

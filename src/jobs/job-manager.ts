@@ -203,7 +203,7 @@ export class JobManager {
   /** Items a check job queued that the user then submitted directly; pausing never skips them. */
   private readonly manualClaims = new Set<string>();
   /** Finished check jobs whose end the subscription has not recorded yet; their waiters wait for it. */
-  private readonly endingChecks = new Set<string>();
+  private readonly endingChecks = new Map<string, CollectionJob>();
   private closed = false;
   private resuming = false;
   /** Number of holds in force; while any is, no queued step starts. */
@@ -521,6 +521,12 @@ export class JobManager {
    * in progress sees the change before accepting any item.
    */
   stopSubscription(type: string, id: string, reason: SkipReason): void {
+    // A check recording its end takes no more work; its source is free for the next check at once.
+    for (const job of this.endingChecks.values()) {
+      if (!isRole(job, type, 'check') || job.source.id !== id) continue;
+      const key = this.keys.get(job.id);
+      if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
+    }
     for (const job of [...this.jobs.values()]) {
       if (!isRole(job, type, 'check') || job.source.id !== id) continue;
       if (job.state === 'queued') {
@@ -1544,7 +1550,30 @@ export class JobManager {
   }
 
   private finish(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, detail?: string): void {
-    this.update(job, { state, result, error, finishedAt: this.now().toISOString() });
+    const finishedAt = this.now().toISOString();
+    const end = this.checkEnd({ ...job, state, result, error, finishedAt });
+    if (!end) {
+      this.settle(job, state, result, error, finishedAt, detail);
+      return;
+    }
+    // The subscription records the check's end before the job reads as finished anywhere, so whoever
+    // sees the job finished reads its subscription with the end recorded. Meanwhile the job takes no
+    // more work, but a submission for the same source still joins it.
+    const key = this.keys.get(job.id);
+    this.release(job);
+    if (key) { this.keys.set(job.id, key); this.activeByKey.set(key, job.id); }
+    this.endingChecks.set(job.id, job);
+    this.track(Promise.resolve()
+      .then(() => this.subscriptions.checkEnded(job.source.type, job.source.id!, end))
+      .catch((reason: unknown) => console.error('Subscription check record update failed', reason))
+      .then(() => {
+        this.endingChecks.delete(job.id);
+        this.settle(job, state, result, error, finishedAt, detail);
+      }));
+  }
+
+  private settle(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, finishedAt: string, detail?: string): void {
+    this.update(job, { state, result, error, finishedAt });
     const progress = job.progress ?? { total: 0, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
     const check = roleOf(job) === 'check' && job.scope ? {
       trigger: job.scope.trigger,
@@ -1571,23 +1600,10 @@ export class JobManager {
         ...(check ? { check } : {}),
         ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });
-    const end = this.checkEnd(job);
     this.release(job);
     const settled = this.options.store.get(job.id)!;
     this.onItemSettled(settled);
-    if (!end) {
-      this.notifySettled(settled);
-      return;
-    }
-    // Whoever waits for the check reads its subscription with the end recorded.
-    this.endingChecks.add(job.id);
-    this.track(Promise.resolve()
-      .then(() => this.subscriptions.checkEnded(job.source.type, job.source.id!, end))
-      .catch((reason: unknown) => console.error('Subscription check record update failed', reason))
-      .then(() => {
-        this.endingChecks.delete(job.id);
-        this.notifySettled(settled);
-      }));
+    this.notifySettled(settled);
   }
 
   /**

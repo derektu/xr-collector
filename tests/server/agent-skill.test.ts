@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ChangeFeed } from '../../src/core/change-feed.js';
 import { describe, expect, it } from 'vitest';
 import { createHttpApp, type HttpAppOptions } from '../../src/server/app.js';
 
@@ -46,7 +47,7 @@ describe('Agent Skill', () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
       collector: stub, jobs: stub, activity: stub, transfer: stub, subscriptions: [{ type: 'youtube' } as never], schedule: stub, search: stub, vaultSetup: stub,
-      pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test',
+      pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test', changes: new ChangeFeed(),
       agentConnection: {
         status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:1', activePort: 1, configured: { mode: 'auto' }, restartRequired: false, message: 'test' }),
         connection: () => ({ url: 'http://127.0.0.1:1', token: 'test' }), authorize: () => true,

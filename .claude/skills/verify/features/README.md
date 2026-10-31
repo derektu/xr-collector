@@ -5,12 +5,12 @@
 | 功能 | 檔案 | 主要層級 | 已收錄流程 |
 | --- | --- | --- | --- |
 | 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `core-journey`、`workspace-content` |
-| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `core-journey`、`subscription-remove`、`subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation`、`workspace-content` |
+| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `core-journey`、`subscription-remove`、`subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation`、`workspace-content`、`live-updates` |
 | 記錄 | [activity.md](activity.md) | Web | `check-history-summary`、`feature-navigation` |
-| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`feature-navigation` |
-| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization` |
+| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`feature-navigation`、`live-updates` |
+| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization`、`live-updates` |
 | RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
-| Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`workspace-content` |
+| Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`workspace-content`、`live-updates` |
 | 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray`、`notification-clicks` |
 | 訂閱自動暫停通知 | [notifications.md](notifications.md) | Web＋原生 Desktop | `notifications`、`notification-clicks` |
 | 建置資訊 | [build-info.md](build-info.md) | Web；安裝身分需 packaged Desktop | `build-info` |
@@ -27,7 +27,7 @@
 
 | 層級 | 內容 | 什麼時候跑 |
 | --- | --- | --- |
-| `core` | 常用路徑與資料安全：`core-journey`（訂閱、新增、查詢、閱讀、暫停恢復、刪除確認）、`subscription-remove` | 本機快速回饋：`flows run --tier core`，runtime 已備妥時 3 分鐘內完成 |
+| `core` | 常用路徑與資料安全：`core-journey`（訂閱、新增、查詢、閱讀、暫停恢復、刪除確認）、`subscription-remove`、`live-updates`（Agent 的變動即時反映在開著的畫面，閒置不發請求） | 本機快速回饋：`flows run --tier core`，runtime 已備妥時 3 分鐘內完成 |
 | `feature` | 一個功能的專項與邊界 | 票改到該功能時：`flows run --feature <功能檔>` |
 | `platform` | Desktop 與打包，視窗會顯示 | 改到平台層、發版前 |
 | `real` | 真實來源，需要網路 | 改到收集、選軌、辨識或 feed 讀取的票交付前；`--web` 不含它 |
