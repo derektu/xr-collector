@@ -329,8 +329,8 @@ app.whenReady().then(async () => {
   startupBuildInfo = buildInfo;
   const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
   const updateRepository = updateRepositoryFromPackageMetadata(packageMetadata);
-  const updateSource = process.env.XR_COLLECTOR_UPDATE_INDEX_URL
-    ? new GenericIndexSource(process.env.XR_COLLECTOR_UPDATE_INDEX_URL, updateRequest)
+  const updateSource = process.env.XR_COLLECTOR_UPDATE_BASE_URL
+    ? new GenericIndexSource(process.env.XR_COLLECTOR_UPDATE_BASE_URL, updateRequest)
     : new GitHubReleasesSource(updateRepository, updateRequest);
   // Platform adapters replace this unavailable boundary only when the installed package has a
   // verified native handoff path. Discovery remains useful in development without pretending it can install.

@@ -643,7 +643,31 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   await expect(readBack(stapled)).rejects.toThrow(/app\.asar|ENOENT|no such file/iu);
 });
 
-it('writes unique update metadata and an exact artifact inventory', async () => {
+it('writes the platform release index and an exact artifact inventory', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-package-artifacts-'));
+  roots.push(root);
+  const names = ['XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.dmg.blockmap', 'XR-Collector-0.1.0-mac-arm64.zip', 'XR-Collector-0.1.0-mac-arm64.zip.blockmap'];
+  await Promise.all(names.map((name) => writeFile(path.join(root, name), name)));
+  const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'build', target: 'darwin-arm64', sourceDirty: false };
+  const result = await writeArtifactHandoff({
+    outputDir: root, target: 'darwin-arm64', version: '0.1.0', commit: 'a'.repeat(40), buildInfo,
+    artifacts: names.map((name) => path.join(root, name)), host: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false },
+    toolVersions: { node: 'v22' }, signing: { status: 'ad-hoc' },
+  });
+  const digest = (name: string) => createHash('sha256').update(name).digest('hex');
+  expect(path.basename(result.releaseIndex)).toBe('release-darwin-arm64.json');
+  expect(JSON.parse(await readFile(result.releaseIndex, 'utf8'))).toEqual({
+    schemaVersion: 1, version: '0.1.0', commit: 'a'.repeat(40), target: 'darwin-arm64', buildInfo,
+    installer: { name: names[0], bytes: Buffer.byteLength(names[0]!), sha256: digest(names[0]!) },
+    update: { name: names[2], bytes: Buffer.byteLength(names[2]!), sha256: digest(names[2]!) },
+  });
+  expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-darwin-arm64-artifacts.json');
+  const manifest = JSON.parse(await readFile(result.artifactManifest, 'utf8'));
+  expect(manifest.packageIdentity).toEqual({ productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' });
+  expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual([...names, 'release-darwin-arm64.json']);
+});
+
+it('indexes one Windows setup as both the installer and the update', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-package-artifacts-'));
   roots.push(root);
   const installer = path.join(root, 'XR-Collector-0.1.0-win-x64-setup.exe');
@@ -654,14 +678,9 @@ it('writes unique update metadata and an exact artifact inventory', async () => 
     artifacts: [installer], host: { platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true },
     toolVersions: { node: 'v22' }, signing: { status: 'unsigned' },
   });
-  expect(path.basename(result.updateMetadata)).toBe('XR-Collector-0.1.0-win32-x64-update.yml');
-  expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-win32-x64-artifacts.json');
-  const manifest = JSON.parse(await readFile(result.artifactManifest, 'utf8'));
-  expect(manifest.packageIdentity).toEqual({ productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' });
-  expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual([
-    'XR-Collector-0.1.0-win-x64-setup.exe',
-    'XR-Collector-0.1.0-win32-x64-update.yml',
-  ]);
-  expect(manifest.artifacts[0].sha256).toBe(createHash('sha256').update('installer').digest('hex'));
-  expect(await readFile(result.updateMetadata, 'utf8')).toContain('XR-Collector-0.1.0-win-x64-setup.exe');
+  const index = JSON.parse(await readFile(result.releaseIndex, 'utf8'));
+  expect(path.basename(result.releaseIndex)).toBe('release-win32-x64.json');
+  expect(index.installer).toEqual(index.update);
+  expect(index.update).toEqual({ name: 'XR-Collector-0.1.0-win-x64-setup.exe', bytes: 9, sha256: createHash('sha256').update('installer').digest('hex') });
+  expect(JSON.parse(await readFile(result.artifactManifest, 'utf8')).builderHost).toMatchObject({ hostArch: 'arm64', emulated: true });
 });

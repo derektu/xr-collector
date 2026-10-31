@@ -88,9 +88,7 @@ async function checkHost({ target, probePhysicalHost: probe }) {
   if (host.platform !== 'win32' || host.processArch !== 'x64') {
     return missing(label, `${describe}; win32-x64 packages need an x64 Node on Windows`, 'Install the x64 build of Node for Windows.');
   }
-  if (host.hostArch !== 'x64') {
-    return note(label, `${describe}; the build runs under x64 emulation and the artifact manifest records it`);
-  }
+  if (host.hostArch !== 'x64') return ok(label, `Windows x64 (emulated on ${host.hostArch}; the artifact manifest records it)`);
   return ok(label, 'Windows x64');
 }
 

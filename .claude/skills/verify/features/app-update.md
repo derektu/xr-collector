@@ -39,7 +39,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私
 - `lastAttempt` 保留在裝置 API 與活動紀錄；成功與 pending 不在設定頁重複佔一行，failed 與 unknown 仍直接顯示錯誤。
 - 版本更新任何 phase 都不送 OS notification；用設定頁、側欄或原生選單確認狀態。
 - ready 綁定已下載 offer；後來檢查到更新版本不能默默改掉使用者準備安裝的版本。
-- 官方 GitHub adapter 只讀公開 latest stable release 的 `release-index.json`；私人或公司服務可提供相同 index 合約，不抓 HTML。
+- 官方 GitHub adapter 只讀公開 latest stable release 中本平台的 `release-<target>.json`；Release 沒有本平台 index 時是「已是最新版」。私人或公司服務以同一個 base URL 提供 index、更新檔與選用的 `release-notes.md`，不抓 HTML。
 - 未簽章 Mac 更新需走產品內附 helper 的驗證、備份、ack 與 rollback；Windows 走 electron-updater 的標準 NSIS 路徑。兩者失敗都不能報成功。
 
 ## Regression flows

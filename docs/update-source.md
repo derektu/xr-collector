@@ -1,17 +1,35 @@
 # App 更新來源
 
-XR Collector 的更新服務只認一種可攜式契約：#35 `release-index.json` schema 1 所列的固定 manifest 與安裝檔。服務先依目前 `target` 及版本選出候選，再驗證 manifest 和 payload 的大小、SHA-256 與內含 BuildInfo；候選的 payload 必須以同一份描述出現在已驗證 manifest 的產物清單，檔名也必須符合該版本與平台。檢查、下載及套用是三個分開且由使用者觸發的動作。套用前會保存安裝嘗試，只有新版本的 runtime、畫面與原生啟動確認完成後才記為成功；無法確認時保留 unknown，不用程序退出推測成功。
+XR Collector 的更新服務讀取每個平台各自的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，由 `package:*` 與安裝檔一起產生、隨該平台上傳到 Release。服務只讀自己 `target` 的 index，版本高於目前版本時，以 index 記錄的檔名、大小與 SHA-256 下載更新檔並驗證。檢查、下載及套用是三個分開且由使用者觸發的動作。套用前會保存安裝嘗試，只有新版本的 runtime、畫面與原生啟動確認完成後才記為成功；無法確認時保留 unknown，不用程序退出推測成功。
+
+release index 的內容：
+
+```json
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "commit": "40 個字元的完整 commit",
+  "target": "win32-x64",
+  "buildInfo": { "kind": "packaged", "version": "0.1.0", "commit": "…", "buildId": "…", "target": "win32-x64", "…": "…" },
+  "installer": { "name": "XR-Collector-0.1.0-win-x64-setup.exe", "bytes": 123456789, "sha256": "64 個字元" },
+  "update": { "name": "XR-Collector-0.1.0-win-x64-setup.exe", "bytes": 123456789, "sha256": "64 個字元" }
+}
+```
+
+`installer` 是給使用者下載安裝的檔案，`update` 是 App 內更新下載的檔案：Mac 分別是 DMG 與 ZIP，Windows 都是同一個 NSIS 安裝檔。index 只記錄檔名，不記錄網址，網址由來源依 index 所在的位置決定，所以同一份 index 放在 GitHub Release 或鏡像站都成立。服務要求 index 的 `target` 等於自己的平台、更新檔名符合該版本與平台，且 `buildInfo` 是同一版本與 commit 的 packaged BuildInfo。
+
+正式預設來源透過 GitHub 公開 Releases JSON API 讀取最新的穩定 Release，在它的 asset 中尋找自己平台的 index，更新檔的網址取自同一個 Release 的 asset，版本說明取自 Release 的說明文字。index 的版本必須等於 Release 的 tag。Release 沒有這個平台的 index 時視為沒有新版，所以兩個平台可以分批上傳，先上傳的平台不會讓另一個平台的 App 報錯。這個來源不解析 HTML、不使用 token。
+
+開發與公司的鏡像環境可設定 `XR_COLLECTOR_UPDATE_BASE_URL`，指向一個以 `/` 結尾的目錄網址：服務讀取其下的 `release-<target>.json`、index 指定的更新檔，以及選用的 `release-notes.md`（不存在時沒有版本說明）。URL 必須是 HTTPS，只有隔離驗收允許 `127.0.0.1` 或 `localhost` 的 HTTP。
 
 版本更新不送作業系統通知。可用版本、下載、等待與安裝結果只透過設定頁、側欄、原生選單、裝置更新 API 及持久事件呈現；Windows 第一次關閉視窗的系統匣提示是獨立的關窗行為。
 
-正式預設來源透過 GitHub 公開 Releases JSON API 讀取最新穩定 release，並只從該 release 尋找 `release-index.json` asset。它不解析 HTML、不使用 token，也不直接信任 latest download URL。開發與公司的鏡像環境可設定 `XR_COLLECTOR_UPDATE_INDEX_URL`，直接提供同一份 schema 1 index；URL 必須是 HTTPS，只有隔離驗收允許 `127.0.0.1` 或 `localhost` 的 HTTP。
-
 公司日後若改用自己的檢查 API，有兩條相容路徑：
 
-1. 最小遷移：在公司的 HTTPS 主機原樣提供 `release-index.json`、manifest 與安裝檔，再把環境設定指向 index。
+1. 最小遷移：在公司的 HTTPS 主機的一個目錄原樣提供各平台的 release index、更新檔與 `release-notes.md`，再把環境設定指向這個目錄。
 2. 自訂發現：實作 `UpdateSource`，把公司 API 的結果轉成不可變的 `UpdateOffer`。下載、雜湊驗證、持久 cache、UI／Agent API 與原生安裝器不需要改動。
 
-來源在 Electron 啟動入口組裝，`XR_COLLECTOR_UPDATE_INDEX_URL` 是啟動時覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動腳本的環境變數；公司的發行版本應在組裝入口選用公司的預設 adapter，或由部署環境持續提供來源設定。
+來源在 Electron 啟動入口組裝，`XR_COLLECTOR_UPDATE_BASE_URL` 是啟動時覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動腳本的環境變數；公司的發行版本應在組裝入口選用公司的預設 adapter，或由部署環境持續提供來源設定。
 
 啟動依賴要特別處理：App 必須先能找到下一份 index，才能透過更新改用新來源。因此來源搬移至少要讓舊 URL 在一個發布週期內仍提供 index，或先發布同時認得新來源的過渡版，再關閉舊來源。不要只在新來源發布一個舊 App 不知道的位置。
 

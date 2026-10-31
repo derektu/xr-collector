@@ -1172,7 +1172,6 @@ export interface UpdateOffer {
   releaseNotes: string;
   source: { id: string; indexUrl: string };
   payload: UpdateAsset;
-  manifest: UpdateAsset;
   buildInfo: BuildInfo;
 }
 

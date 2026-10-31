@@ -10,10 +10,11 @@ XR Collector 是 Node.js／TypeScript 專案：Fastify 提供 API 與 Web UI，E
 | --- | --- | --- |
 | Git | Xcode Command Line Tools 內附（`xcode-select --install`） | [Git for Windows](https://git-scm.com) |
 | Node.js 22.22.3 | [nvm](https://github.com/nvm-sh/nvm)：`nvm install` 讀取 repo 的 `.nvmrc` | [nvm-windows](https://github.com/coreybutler/nvm-windows)：`nvm install 22.22.3 64`，再以系統管理員執行 `nvm use 22.22.3` |
+| GitHub CLI（只有發布需要） | `brew install gh` | [GitHub CLI](https://cli.github.com) 的 Windows 安裝檔，或 `winget install GitHub.cli` |
 
 Mac 的 Xcode Command Line Tools 同時提供 `swiftc`，用來編譯 App 內附的 macOS 更新 helper。Windows 不需要 Visual Studio 或其他 C++ 工具。
 
-Node 必須是原生架構：Mac 是 arm64（不經 Rosetta），Windows 是 x64。`node -p process.arch` 應印出 `arm64`（Mac）或 `x64`（Windows）。ARM64 Windows 上安裝 x64 Node 時，建置跑在 x64 模擬下，`doctor:build` 與 artifact manifest 都標為 emulated。
+Mac 的 Node 是原生 arm64（不經 Rosetta），Windows 的 Node 是 x64。`node -p process.arch` 應印出 `arm64`（Mac）或 `x64`（Windows）。Windows 可以是 x64 硬體，也可以是 ARM64 硬體上以 x64 模擬執行的 Node，兩者建置的安裝包都可以發布；artifact manifest 記錄建置機的 host 與 process 架構。
 
 **nvm-windows 與 PowerShell**：PowerShell 預設的執行原則不允許 `npm.ps1`，打 `npm` 會失敗。使用 cmd，或在 PowerShell 打 `npm.cmd`。
 
@@ -35,7 +36,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 
 | 項目 | Mac | Windows |
 | --- | --- | --- |
-| Host | Apple Silicon 上的 arm64 Node | x64 Node；ARM64 硬體上的 x64 模擬標為 `note` |
+| Host | Apple Silicon 上的 arm64 Node | x64 Node；ARM64 硬體上的 x64 模擬是 `ok` 並註明 emulated |
 | Node／npm／Git | Node 主版本符合 `.nvmrc`（patch 不同標為 `note`），Git 可用 | 同左 |
 | npm 套件 | 已執行 `npm ci` | 同左 |
 | Xcode Command Line Tools | `swiftc` 可用 | 不適用 |
@@ -116,7 +117,10 @@ CI 不建置正式安裝包，也不跑 Electron 桌面流程。
 | `npm run package:mac` | DMG 與 ZIP，在 `release/` |
 | `npm run package:win` | NSIS 安裝檔，在 `release/` |
 
-打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256。每次建置另產生 updater metadata 與 artifact manifest。
+打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256。每次建置另在 `release/` 寫出兩份檔案：
+
+- 該平台的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，記錄版本、完整 commit、BuildInfo，以及安裝檔與更新檔的檔名、大小與 SHA-256。它和安裝檔一起上傳，App 靠它找到自己平台的更新檔。
+- artifact manifest：`XR-Collector-<版本>-<target>-artifacts.json`，記錄這次建置的所有產物、runtime、簽章、工具版本與建置機架構，留在建置機，不上傳。
 
 Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dll`。repo 在 `resources/windows/` 放一份釘住版本的 DLL，`package:win` 核對它的 SHA-256、檔案版本與 Microsoft 簽章後放在 Meilisearch 旁邊，因此安裝到沒有 Visual C++ Redistributable 的 Windows 也能啟動搜尋。
 
@@ -127,8 +131,106 @@ Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dl
 
 開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選。使用時機與 Developer ID 的建置步驟見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
 
+
 ## 發布
 
-正式 Release 只接收兩台建置機從同一個乾淨 commit 建置、並完成驗收的產物；CI 不提供安裝包。一次發布有兩個候選：Mac arm64 與 Windows x64 各一份。App 從公開 repository 的 GitHub Releases 讀取更新，更新索引的契約見 [更新來源](update-source.md)。
+一個版本是一個 GitHub Release，tag 是 `v` 加上 `package.json` 的版本（例如 `v0.1.0`）。Mac 與 Windows 各在自己的建置機，從同一個乾淨 commit 打包，再以 `npm run release:upload` 上傳到這個 tag 的 draft Release。兩個平台可以由不同的人、在不同時間、以任意順序上傳；兩個平台都到齊後，以 `gh release edit` 公開。CI 不提供安裝包。
 
-repo 還沒有把候選上傳到 GitHub Releases 的發布指令；各平台上傳與各平台更新索引由 [#195](https://github.com/derektu/xr-collector/issues/195) 定義。
+每個平台上傳三類檔案：
+
+| 平台 | 安裝檔 | App 內更新檔 | release index |
+| --- | --- | --- | --- |
+| Mac | `XR-Collector-<版本>-mac-arm64.dmg` | `XR-Collector-<版本>-mac-arm64.zip` | `release-darwin-arm64.json` |
+| Windows | `XR-Collector-<版本>-win-x64-setup.exe`（同時是更新檔） | 同左 | `release-win32-x64.json` |
+
+App 從 GitHub 最新的穩定 Release（不是 draft、不是 prerelease）讀取自己平台的 release index，再下載 index 指定的更新檔並核對大小與 SHA-256。Release 沒有某個平台的 index 時，那個平台的 App 回報已是最新版。index 的格式見 [更新來源](update-source.md)。blockmap 與 artifact manifest 不上傳。
+
+### 第一次：登入 GitHub CLI
+
+每台要上傳的機器（含 Windows VM 裡執行上傳的帳號）各登入一次，帳號要能寫入發布的 repository：
+
+```sh
+gh auth login
+gh auth status
+```
+
+`gh auth login` 選 GitHub.com 與 HTTPS，依畫面以瀏覽器授權；在沒有桌面的 SSH 連線中，它印出一次性代碼與網址，在任一台電腦的瀏覽器輸入即可。
+
+### 上傳一個平台
+
+1. 要發布的版本寫在 `package.json` 的 `version`，該 commit 已 push 到 GitHub。
+2. 在建置機 checkout 這個 commit，不留任何修改或未追蹤的檔案，然後打包並上傳：
+
+   ```sh
+   npm ci
+   npm run prepare:runtime -- mac
+   npm run package:mac -- --mac-signing-mode developer-id-notarized --mac-signing-env "$PWD/keys/mac/.env" --mac-signing-root "$PWD/keys/mac"
+   npm run release:upload -- v0.1.0
+   ```
+
+   Windows（cmd）：
+
+   ```bat
+   npm ci
+   npm run prepare:runtime -- win
+   npm run package:win
+   npm run release:upload -- v0.1.0
+   ```
+
+`release:upload` 只上傳這台機器 `release/` 裡本平台的檔案，目標 repository 是安裝包內建的更新 repository（正式包是 `derektu/xr-collector`）。它依序確認：
+
+- checkout 沒有未 commit 的修改，HEAD 是 release index 記錄的建置 commit；
+- 本機若有同名 tag，它指向 HEAD；
+- 安裝檔與更新檔的大小與 SHA-256 等於 release index；
+- GitHub 上的 tag 指向 HEAD。tag 不存在時，以 HEAD 在 GitHub 建立；GitHub 沒有這個 commit 時停止，要先 push；
+- 這個 tag 只有一個 Release，而且是 draft。Release 不存在時建立 draft；已公開時停止。
+
+接著上傳 draft 裡還沒有的檔案。draft 已有同名且 SHA-256 相同的檔案時略過，所以重跑不會重複上傳；同名但內容不同時停止，並印出移除那個檔案的 `gh release delete-asset` 指令，由發布者確認後自行執行。上傳後把每個檔案從 draft 下載回來核對 SHA-256，最後列出 draft 目前收齊的平台。任一項不符都會停止並說明原因，不修改已上傳的檔案。
+
+### 在 Parallels 的 Windows VM 建置與上傳
+
+Mac 開發者可以在 Parallels 的 Windows 11（ARM64）VM 建置 Windows 版：VM 裡安裝 x64 Node，建置跑在 x64 模擬下，產出的安裝包可以發布。VM 需要開啟 OpenSSH Server、裝好 Git、x64 Node 與 GitHub CLI，並以 SSH 帳號完成一次 `gh auth login`。
+
+[crabbox](https://github.com/openclaw/crabbox)（`brew install openclaw/tap/crabbox`）把 Mac 上的 repository 同步到 VM 並執行指令。發布用的建置要從乾淨的 checkout 開始，所以先在 Mac commit 並 push，再以 `--full-resync` 讓 VM 重建整個 checkout（它也清掉 VM 裡的 `node_modules` 與建置產物，因此會重新安裝；runtime cache 在 checkout 外，不受影響）：
+
+```sh
+crabbox run --provider ssh --target windows --windows-mode normal \
+  --static-host <VM 的 IP> --static-user <SSH 帳號> --static-port 22 \
+  --static-work-root 'C:\projects\crabbox-work' \
+  --git-seed-source local --full-resync \
+  -- cmd /c "git status --porcelain && npm ci && npm run prepare:runtime -- win && npm run package:win && npm run release:upload -- v0.1.0"
+```
+
+- `--git-seed-source local` 從 Mac 帶過去 Git 歷史，VM 的 checkout 因此有真正的 HEAD，`package:win` 與 `release:upload` 才能核對 commit。
+- 指令以 `cmd /c` 執行，不經 PowerShell；`--script` 會在 checkout 留下 `.crabbox/scripts/`，使 checkout 不乾淨，所以用 inline 指令。
+- VM 的 IP 可用 `prlctl list -i "Windows 11"` 查詢。執行失敗時 crabbox 會在 Mac 的 repository 留下 `.crabbox/`，下一次執行前刪除。
+
+### 公開
+
+兩個平台都上傳後，先確認 draft 收齊兩份 release index：
+
+```sh
+gh release view v0.1.0 --repo derektu/xr-collector --json isDraft,assets --jq '.isDraft, [.assets[].name]'
+```
+
+寫好版本說明（Markdown，App 內「版本說明」顯示的就是這段文字），再公開並設為 Latest：
+
+```sh
+gh release edit v0.1.0 --repo derektu/xr-collector --draft=false --latest --notes-file release-notes.md
+```
+
+公開後，已安裝的 App 在下一次檢查更新時看到這一版。GitHub 對 Latest Release 的回應最多快取 60 秒，App 也沿用這個快取，所以公開後一分鐘內的檢查可能仍回報已是最新版。`release:upload` 不會公開 Release，也不會上傳到已公開的 Release；公開之後若要換掉某個平台的檔案，就發布下一個版本。
+
+### Mac 版的 Developer ID 憑證
+
+Mac 正式版以 Developer ID 簽章並送 Apple 公證，建置機需要這三個檔案，放在 checkout 的 `keys/mac/`（已列在 `.gitignore`），每個檔案的權限只允許擁有者讀取（`chmod 600`）：
+
+| 檔案 | 內容 |
+| --- | --- |
+| `Developer ID Application` 憑證的 `.p12` | 簽章用的憑證與私鑰，匯出時設定的密碼 |
+| App Store Connect API key 的 `.p8` | 公證用的金鑰 |
+| `.env` | `CSC_LINK`（p12 相對 `keys/mac` 的路徑）、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`（p8 的相對路徑）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID` |
+
+交接給新的 Mac 建置者時，由持有 Apple Developer 帳號的人提供 p12 與其密碼、p8 與它的 Key ID 和 Issuer ID，以及 Team ID；這些檔案與密碼以不經過 Git、聊天紀錄的方式傳遞。放好後執行 `npm run doctor:build`，`Mac Developer ID signing` 一項為 `ok` 並顯示 Team 時即可建置。沒有這些檔案時，`package:mac` 只能產生 ad-hoc 簽章的包，適合開發與驗收，不適合發布。Windows 版不簽章，不需要憑證。
+
+完整的發布前檢查與出錯時的處理見 [Release 發布手冊](release-runbook.md)。

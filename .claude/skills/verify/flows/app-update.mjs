@@ -52,7 +52,7 @@ export async function run({ instance, page, record, waitFor }) {
     });
     await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'available update UI', { timeout: 8_000 });
     const status = await update();
-    expect(status.offer?.version === '0.1.1' && status.offer.source.id === 'verify-private-feed', 'GenericIndexSource 保留固定版本與來源身分', {
+    expect(status.offer?.version === '0.1.1' && status.offer.source.id === 'generic-index' && status.offer.source.indexUrl.endsWith('/updates/release-darwin-arm64.json'), 'GenericIndexSource 讀取本平台的 index', {
       id: 'u36.generic-source', actual: status.offer && { version: status.offer.version, source: status.offer.source },
     });
     await page.getByRole('button', { name: '版本說明' }).click();

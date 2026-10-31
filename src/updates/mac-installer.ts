@@ -10,7 +10,7 @@ import yauzl from 'yauzl';
 const execFile = promisify(execFileCallback);
 const updateWorkName = /^\.xr-update-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const launchKeys = ['XR_COLLECTOR_PROFILE', 'XR_COLLECTOR_VAULT', 'XR_COLLECTOR_AGENT_PORT', 'XR_COLLECTOR_VALIDATION_HIDDEN',
-  'XR_COLLECTOR_VALIDATION_CONTROL', 'XR_COLLECTOR_VALIDATION_WINDOW_SIZE', 'XR_COLLECTOR_UPDATE_INDEX_URL',
+  'XR_COLLECTOR_VALIDATION_CONTROL', 'XR_COLLECTOR_VALIDATION_WINDOW_SIZE', 'XR_COLLECTOR_UPDATE_BASE_URL',
   'XR_COLLECTOR_EXPORT_DIR', 'XR_COLLECTOR_BACKUP_DIR'] as const;
 
 /** Unprivileged two-phase macOS App replacement. The Swift helper owns swap, launch verification and rollback. */

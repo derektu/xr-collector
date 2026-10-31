@@ -7,7 +7,6 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stringify as stringifyYaml } from 'yaml';
 import { assertBuildEnvironment } from './build-doctor.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateExecutable } from './prepare-meilisearch.mjs';
@@ -118,6 +117,7 @@ export async function packageApplication(options, dependencies = {}) {
     await timer.time('clear previous artifacts', () => (dependencies.clearPreviousArtifactSet ?? clearPreviousArtifactSet)(outputDir, [
       expectedArtifactPrefix(version, options.target),
       `XR-Collector-${version}-${options.target}`,
+      releaseIndexName(options.target),
     ]));
     const signed = signingConfiguration !== null;
     const commonBuilderArgs = [...(signed ? ['--config', 'electron-builder.signed.yml'] : []),
@@ -462,32 +462,45 @@ export function assertPackagedProductMetadata(metadata, productName, appId = 'co
   }
 }
 
+/**
+ * Writes the platform release index, `release-<target>.json`, that the updater and
+ * `release:upload` read, and the private artifact manifest that records the build.
+ */
 export async function writeArtifactHandoff(input) {
   const base = `XR-Collector-${input.version}-${input.target}`;
-  const updateMetadata = path.join(input.outputDir, `${base}-update.yml`);
-  const primary = input.artifacts.find((artifact) => input.target === 'darwin-arm64' ? artifact.endsWith('.zip') : artifact.endsWith('.exe'));
-  if (!primary) throw new Error(`No primary update artifact exists for ${input.target}.`);
+  const isMac = input.target === 'darwin-arm64';
+  const installer = input.artifacts.find((artifact) => artifact.endsWith(isMac ? '.dmg' : '.exe'));
+  const update = input.artifacts.find((artifact) => artifact.endsWith(isMac ? '.zip' : '.exe'));
+  if (!installer || !update) throw new Error(`No installer and update artifact exist for ${input.target}.`);
   const timer = input.timer ?? noStageTimer;
-  const primaryInfo = { bytes: (await stat(primary)).size };
-  const releaseDate = input.buildInfo.builtAt;
-  const primarySha512 = await timer.time('hash: update payload sha512', () => sha512Base64(primary), { count: 1, bytes: primaryInfo.bytes });
-  await timer.time('manifest: write update metadata', () => writeFile(updateMetadata, stringifyYaml({ version: input.version, files: [{ url: path.basename(primary), sha512: primarySha512, size: primaryInfo.bytes }], path: path.basename(primary), sha512: primarySha512, releaseDate })));
-  const artifacts = [...input.artifacts, updateMetadata];
+  const described = await timer.time('hash: artifact sha256 inventory', async (stage) => {
+    const files = await Promise.all(input.artifacts.map(async (artifact) => ({ path: path.basename(artifact), ...await describeFile(artifact) })));
+    stage.bytes = files.reduce((total, artifact) => total + artifact.bytes, 0);
+    return files;
+  }, { count: input.artifacts.length });
+  const entry = (artifact) => {
+    const { path: name, bytes, sha256: digest } = described.find((file) => file.path === path.basename(artifact));
+    return { name, bytes, sha256: digest };
+  };
+  const releaseIndex = path.join(input.outputDir, releaseIndexName(input.target));
+  const index = { schemaVersion: 1, version: input.version, commit: input.commit, target: input.target,
+    buildInfo: input.buildInfo, installer: entry(installer), update: entry(update) };
+  await timer.time('manifest: write release index', () => writeFile(releaseIndex, `${JSON.stringify(index, null, 2)}\n`));
   const artifactManifest = path.join(input.outputDir, `${base}-artifacts.json`);
   const document = {
     schemaVersion: 1, version: input.version, commit: input.commit, target: input.target,
     packageIdentity: { productName: input.productName ?? 'XR Collector', appId: input.appId ?? 'com.moneydj.xrcollector', updateRepository: input.updateRepository ?? productionUpdateRepository },
     buildInfo: input.buildInfo, builderHost: input.host, toolVersions: input.toolVersions, signing: input.signing,
     runtimeIdentity: input.runtimeIdentity ?? null,
-    artifacts: await timer.time('hash: artifact sha256 inventory', async (stage) => {
-      const described = await Promise.all(artifacts.map(async (artifact) => ({ path: path.basename(artifact), ...await describeFile(artifact) })));
-      stage.bytes = described.reduce((total, artifact) => total + artifact.bytes, 0);
-      return described;
-    }, { count: artifacts.length }),
+    artifacts: [...described, { path: path.basename(releaseIndex), ...await describeFile(releaseIndex) }],
     acceptanceEvidence: [],
   };
   await timer.time('manifest: write artifact manifest', () => writeFile(artifactManifest, `${JSON.stringify(document, null, 2)}\n`));
-  return { updateMetadata, artifactManifest, manifest: document };
+  return { releaseIndex, artifactManifest, manifest: document };
+}
+
+export function releaseIndexName(target) {
+  return `release-${target}.json`;
 }
 
 async function findInstallerArtifacts(outputDir, { version, target }, signingPolicy) {
@@ -657,7 +670,6 @@ function samePath(left, right) {
 
 async function describeFile(filePath) { const info = await stat(filePath); return { bytes: info.size, sha256: await sha256(filePath) }; }
 async function sha256(filePath) { const hash = createHash('sha256'); for await (const chunk of createReadStream(filePath)) hash.update(chunk); return hash.digest('hex'); }
-async function sha512Base64(filePath) { const hash = createHash('sha512'); for await (const chunk of createReadStream(filePath)) hash.update(chunk); return hash.digest('base64'); }
 async function exists(target) { try { await stat(target); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
