@@ -33,10 +33,10 @@
     "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts tests/search/meilisearch-integration.test.ts tests/search/meilisearch-leftover.test.ts tests/server/agent-access.test.ts tests/vault/vault-transfer.test.ts tests/vault/vault-exchange.test.ts tests/vault/vault-move.test.ts"
   },
   "dependencies": {
-    "@fastify/static": "10.1.4",
-    "electron-updater": "6.8.3",
+    "@fastify/static": "10.1.8",
+    "electron-updater": "6.8.12",
     "fast-xml-parser": "5.11.2",
-    "fastify": "5.12.5",
+    "fastify": "5.12.7",
     "opencc-js": "1.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -58,14 +58,14 @@
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
     "@vitejs/plugin-react": "6.1.1",
-    "concurrently": "10.0.5",
-    "electron": "44.4.1",
+    "concurrently": "10.0.6",
+    "electron": "44.10.0",
     "electron-builder": "26.15.3",
     "playwright": "1.64.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
-    "vite": "8.3.0",
-    "vitest": "5.0.1"
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   },
   "engines": {
     "node": ">=22.12.0"
