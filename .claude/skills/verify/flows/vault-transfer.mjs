@@ -5,10 +5,10 @@ import path from 'node:path';
 import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'vault-transfer';
-export const title = '知識庫匯出、匯入、搬移與切換';
+export const title = '知識庫匯出、匯入與切換';
 export const tier = 'feature';
-export const overBudget = '另啟動來源知識庫與固定位置兩個 instance；匯出、合併、取代、搬移、切換與收集中匯入依序改變同一份 Vault，拆開的每支都要重建相同前置資料。CI 約 90 秒。';
-export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-move', 'vault-open-other', 'vault-fixed'];
+export const overBudget = '另啟動來源知識庫與固定位置兩個 instance；匯出、合併、取代、切換與收集中匯入依序改變同一份 Vault，拆開的每支都要重建相同前置資料。CI 約 90 秒。';
+export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other', 'vault-fixed'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const button = (id) => page.getByTestId(id);
@@ -68,12 +68,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       expect((await button('vault-path').innerText()).trim() === path.join(instance.runDir, 'vault'), '設定顯示目前 Vault 路徑');
       expect((await button('vault-counts').innerText()).includes('1'), '設定顯示一份文件');
       const order = await button('settings-vault').locator('button').allTextContents();
-      expect(JSON.stringify(order) === JSON.stringify(['開啟其他知識庫…', '搬移…', '匯入…', '匯出…']), '知識庫操作順序：開啟在左，搬移、匯入、匯出在右',
-        { id: 'vault.actions.order', expected: ['開啟其他知識庫…', '搬移…', '匯入…', '匯出…'], actual: order });
-      const frames = await Promise.all(['vault-open-other', 'vault-move', 'vault-import', 'vault-export'].map((id) => button(id).boundingBox()));
+      const labels = ['建立新的知識庫…', '開啟既有知識庫…', '匯入…', '匯出…'];
+      expect(JSON.stringify(order) === JSON.stringify(labels), '知識庫操作順序：建立、開啟在左，匯入、匯出在右',
+        { id: 'vault.actions.order', expected: labels, actual: order });
+      const frames = await Promise.all(['vault-create', 'vault-open-other', 'vault-import', 'vault-export'].map((id) => button(id).boundingBox()));
       expect(frames.every((frame) => frame && Math.abs(frame.y - frames[0].y) < 1), '一般寬度的知識庫操作按鈕同一排',
         { id: 'vault.actions.row', expected: 'same y', actual: frames });
-      expect(frames[1].x > frames[0].x + frames[0].width + 32, '開啟與資料操作群組分居左右',
+      expect(frames[2].x > frames[1].x + frames[1].width + 32, '建立／開啟與資料操作群組分居左右',
         { id: 'vault.actions.groups', expected: 'separated groups', actual: frames });
       await themed('vault-actions');
       await click('vault-export');
@@ -131,27 +132,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await click('import-close');
     });
 
-    await record.scenario('R102-3', '搬移、搜尋與開啟其他知識庫', async ({ expect, shot }) => {
-      const oldRoot = (await instance.api('/api/vault/status')).vaultPath;
-      const target = path.join(instance.runDir, 'moved-vault');
-      await click('vault-move');
-      await button('move-target').fill(target);
-      await waitFor(() => button('move-confirm').isEnabled(), 'move check accepted');
-      await shot('move-input');
-      await click('move-confirm');
-      await visible('move-result-path');
-      expect((await button('move-result-path').innerText()).trim() === target, '完成顯示新路徑');
-      await shot('move-done');
-      await click('transfer-close');
-      await waitFor(async () => (await button('vault-path').innerText()).trim() === target, 'settings path updated');
-      expect((await instance.api('/api/vault/status')).vaultPath === target, '設定與 API 新路徑一致');
-      expect((await readdir(oldRoot).catch(() => [])).length === 0, '原位置已清除');
-      await documents(expect, 1);
+    await record.scenario('R102-3', '開啟其他知識庫', async ({ expect, shot }) => {
       await click('vault-open-other');
       await button('open-vault-path').fill(donorRoot);
-      await click('open-vault-next');
-      await visible('open-vault-facts');
-      await shot('open-confirm');
+      await shot('open-path');
       await click('open-vault-confirm');
       await visible('open-vault-result-path');
       expect((await button('open-vault-result-path').innerText()).trim() === donorRoot, '切換到其他 Vault');
@@ -215,13 +199,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await shot('collection-resumed');
     });
 
-    await record.scenario('R102-5', '固定位置禁止搬移與開啟其他知識庫', async ({ expect, shot }) => {
+    await record.scenario('R102-5', '固定位置禁止建立或開啟其他知識庫', async ({ expect, shot }) => {
       fixed = await launchWeb({ issue: instance.issue, checkout: instance.checkout, vault: 'fixed', label: `${instance.label ?? 'transfer'}-fixed` });
       fixedView = await openWebPage(fixed, { route: '/settings' });
       const fixedPage = fixedView.page;
       await fixedPage.getByTestId('vault-relocation-unavailable').waitFor();
-      expect(await fixedPage.getByTestId('vault-move').isDisabled(), '固定位置的搬移停用');
       expect(await fixedPage.getByTestId('vault-open-other').isDisabled(), '固定位置的開啟其他停用');
+      expect(await fixedPage.getByTestId('vault-create').isDisabled(), '固定位置的建立新的知識庫停用');
       await shot('fixed', fixedPage);
     });
   } finally {

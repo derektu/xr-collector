@@ -252,20 +252,27 @@ app.whenReady().then(async () => {
     if (!isStoredTheme(theme)) throw new Error('Unsupported theme preference');
     return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
   });
-  const suggestedVaultPath = path.join(app.getPath('documents'), 'XR Collector');
-  ipcMain.handle('xrCollector:desktop:chooseDirectory', async (event, defaultPath: unknown) => {
+  /**
+   * A folder picker for one purpose, starting at the existing folder nearest `start`. macOS shows
+   * `message` above the panel, because its open panel shows no title.
+   */
+  const chooseFolder = async (event: Electron.IpcMainInvokeEvent, start: unknown, text: { title: string; buttonLabel: string; message: string },
+    properties: NonNullable<Electron.OpenDialogOptions['properties']>): Promise<string | null> => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options: Electron.OpenDialogOptions = {
-      title: '選擇知識庫目錄',
-      buttonLabel: '選擇',
-      defaultPath: await existingDirectory(
-        typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? defaultPath : app.getPath('documents'),
-      ),
-      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+      ...text,
+      defaultPath: await existingDirectory(typeof start === 'string' && path.isAbsolute(start) ? start : app.getPath('documents')),
+      properties,
     };
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] ?? null;
-  });
+  };
+  ipcMain.handle('xrCollector:desktop:chooseVaultLocation', (event, start: unknown) => chooseFolder(event, start, {
+    title: '選擇位置', buttonLabel: '選擇位置', message: '選擇新的知識庫要建立在哪個資料夾裡。',
+  }, ['openDirectory', 'createDirectory']));
+  ipcMain.handle('xrCollector:desktop:chooseVault', (event, start: unknown) => chooseFolder(event, start, {
+    title: '選擇知識庫資料夾', buttonLabel: '開啟', message: '選擇 XR Collector 知識庫資料夾。',
+  }, ['openDirectory']));
   // Exports go to this folder unless the person picks another place; the import dialog opens here too.
   const exports = exportFolder(app.getPath('documents'));
   const exportFilters: Electron.FileFilter[] = [{ name: 'XR Collector 匯出檔', extensions: ['zip'] }];
@@ -293,6 +300,7 @@ app.whenReady().then(async () => {
     const options: Electron.OpenDialogOptions = {
       title: '選擇匯出檔',
       buttonLabel: '選擇',
+      message: '選擇 XR Collector 匯出的 .zip 檔。',
       defaultPath: exports,
       filters: exportFilters,
       properties: ['openFile'],
@@ -366,7 +374,7 @@ app.whenReady().then(async () => {
       backupFolder: backupFolder(app.getPath('documents')),
     },
     ...(process.env.XR_COLLECTOR_VAULT ? { explicitVaultPath: path.resolve(process.env.XR_COLLECTOR_VAULT) } : {}),
-    suggestedVaultPath,
+    newVaultLocation: app.getPath('documents'),
     createdBy: `XR Collector ${app.getVersion()}`,
     agentSettingsFile: path.join(app.getPath('userData'), 'agent-settings.json'),
     skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),

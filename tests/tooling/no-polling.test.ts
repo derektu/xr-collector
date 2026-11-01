@@ -29,9 +29,8 @@ describe('screens without polling', () => {
       'src/web/AgentConnectionHelp.tsx', // closes the hover help after the pointer leaves
       'src/web/App.tsx', // hides a notice
       'src/web/Documents.tsx', // searches after a pause in typing
+      'src/web/NewVaultFields.tsx', // checks a typed name or location after a pause in typing
       'src/web/SourceDetail.tsx', // saves a typed setting after a pause in typing
-      'src/web/VaultLocation.tsx', // checks a typed location after a pause in typing
-      'src/web/dev/OnboardingPreview.tsx', // simulates a slow inspection in the design preview
       'src/web/use-changes.ts', // spaces reads after changes; opens the change stream again after the server refused it
       'src/web/use-day.ts', // draws day-relative labels again at midnight
     ]);

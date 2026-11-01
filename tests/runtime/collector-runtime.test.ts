@@ -40,11 +40,15 @@ async function options(
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const closeSearch = vi.fn(async () => undefined);
   const vaultPath = path.join(root, 'vault');
+  // Vaults go beside the profile, never inside it.
+  const profilePath = path.join(root, 'profile');
+  await mkdir(profilePath);
   return {
     closeSearch,
+    root,
     vaultPath,
     value: {
-      profilePath: root,
+      profilePath,
       explicitVaultPath: vaultPath,
       workspace: withYouTube({
         capture,
@@ -140,32 +144,23 @@ describe('CollectorRuntime', () => {
     } });
     cleanups.push(() => runtime.close());
     const settingUp = fetch(`${runtime.server.url}/api/vault/setup`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', path: setup.vaultPath }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', location: setup.root, name: 'vault' }),
     });
     await started;
     await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
     release(); expect((await settingUp).status).toBe(200);
   });
 
-  it('refuses update preparation while a Vault move or import owns the operation lock', async () => {
+  it('refuses update preparation while a Vault import owns the operation lock', async () => {
     const base = await options({ capture: vi.fn() }); const { explicitVaultPath: _explicit, ...value } = base.value;
     await writeVaultMarker(await mkdir(base.vaultPath, { recursive: true }).then(() => base.vaultPath), 'XR Collector test');
     await writeFile(path.join(value.profilePath, 'vault-selection.json'), JSON.stringify({ path: base.vaultPath }));
-    let entered!: () => void; const moving = new Promise<void>((resolve) => { entered = resolve; });
-    let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
     let importEntered!: () => void; const importing = new Promise<void>((resolve) => { importEntered = resolve; });
     let releaseImport!: () => void; const importHeld = new Promise<void>((resolve) => { releaseImport = resolve; });
     const runtime = await CollectorRuntime.start({ ...value, workspace: { ...value.workspace!,
-      moveFaults: async (phase) => { if (phase === 'copying') { entered(); await held; } },
       importFaults: async (phase) => { if (phase === 'staged') { importEntered(); await importHeld; } },
     } });
     cleanups.push(() => runtime.close());
-    const target = path.join(value.profilePath, '..', `${path.basename(value.profilePath)}-update-move`);
-    cleanups.push(() => rm(target, { recursive: true, force: true }));
-    await runtime.workspace!.move(target); await moving;
-    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
-    release(); await runtime.workspace!.operationFinished();
-
     const source = path.join(value.profilePath, 'incoming-vault');
     await new MarkdownVault(source).add(transcriptDocument({
       videoId: 'updatehold1', sourceUrl: 'https://www.youtube.com/watch?v=updatehold1', title: 'Import hold',
@@ -590,7 +585,7 @@ describe('CollectorRuntime Vault setup', () => {
   async function selected(capture = vi.fn()) {
     const setup = await options({ capture });
     const { explicitVaultPath: _explicit, ...value } = setup.value;
-    return { ...setup, value, suggested: path.join(setup.value.profilePath, 'Suggested') };
+    return { ...setup, value, suggested: path.join(setup.root, 'Suggested') };
   }
   async function agentClient(runtime: CollectorRuntime) {
     const connection = await connectionOf(runtime);
@@ -691,22 +686,26 @@ describe('CollectorRuntime Vault setup', () => {
 
   it('lets an Agent create a Vault while Not Ready, serves the UI immediately and reopens it after restart', async () => {
     const setup = await selected();
-    const runtime = await CollectorRuntime.start({ ...setup.value, suggestedVaultPath: setup.suggested });
+    const runtime = await CollectorRuntime.start({ ...setup.value, newVaultLocation: setup.suggested });
     const agent = await agentClient(runtime);
     expect((await (await agent('/api/vault/setup')).json()).vault).toEqual({
-      state: 'not_ready', vaultPath: null, suggestedPath: setup.suggested, failure: null,
+      state: 'not_ready', vaultPath: null, newVault: { location: setup.suggested, name: 'XR Collector' }, failure: null,
     });
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(503);
     const activeConnection = await connectionOf(runtime);
     expect((await fetch(`${activeConnection.url}/api/vault/setup`, { method: 'POST' })).status).toBe(401);
 
-    expect((await (await agent('/api/vault/inspect', { path: setup.vaultPath })).json()).inspection)
-      .toEqual({ kind: 'empty', path: setup.vaultPath, exists: false });
-    const created = await agent('/api/vault/setup', { action: 'create', path: setup.vaultPath });
+    expect((await (await agent('/api/vault/new/check', { location: setup.root, name: 'vault' })).json()).check)
+      .toEqual({ path: setup.vaultPath, problem: null });
+    expect((await (await agent('/api/vault/new/check', { location: setup.value.profilePath, name: 'vault' })).json()).check)
+      .toEqual({ path: path.join(setup.value.profilePath, 'vault'), problem: '不能建立在程式資料目錄裡。' });
+    const created = await agent('/api/vault/setup', { action: 'create', location: setup.root, name: 'vault' });
     expect(created.status).toBe(200);
     expect(await created.json()).toEqual({
-      vault: { state: 'ready', vaultPath: setup.vaultPath, suggestedPath: setup.suggested, failure: null }, documentCount: 0,
+      vault: { state: 'ready', vaultPath: setup.vaultPath, newVault: { location: setup.root, name: 'XR Collector' }, failure: null }, documentCount: 0,
     });
+    expect((await (await agent('/api/vault/new/check', { location: setup.vaultPath, name: 'inside' })).json()).check)
+      .toMatchObject({ problem: '不能建立在目前的知識庫裡。' });
     expect(runtime.status()).toMatchObject({ state: 'ready', vaultPath: setup.vaultPath });
     expect((await fetch(`${runtime.server.url}/api/documents`)).status).toBe(200);
     expect((await fetch(`${runtime.server.url}/api/vault/setup`)).status).toBe(200);
@@ -740,22 +739,29 @@ describe('CollectorRuntime Vault setup', () => {
     const ui = (body: unknown) => fetch(`${runtime.server.url}/api/vault/setup`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    const other = path.join(setup.value.profilePath, 'other');
+    const other = path.join(setup.root, 'other');
     await mkdir(other);
     await writeFile(path.join(other, 'notes.txt'), 'keep');
-    for (const body of [{ action: 'open', path: other }, { action: 'create', path: other }, { action: 'open', path: setup.vaultPath }]) {
+    for (const [body, message] of [
+      [{ action: 'open', path: other }, '「other」不是 XR Collector 知識庫。'],
+      [{ action: 'create', location: setup.root, name: 'other' }, '這個位置已經有「other」，請換個名稱。'],
+      [{ action: 'create', location: setup.root, name: 'a/b' }, '名稱不能包含'],
+      [{ action: 'create', location: setup.value.profilePath, name: 'vault' }, '不能建立在程式資料目錄裡。'],
+      [{ action: 'open', path: setup.vaultPath }, '「vault」不是 XR Collector 知識庫。'],
+    ] as const) {
       const response = await ui(body);
       expect(response.status).toBe(422);
-      expect((await response.json()).error.code).toBe('vault_invalid');
+      expect((await response.json()).error).toMatchObject({ code: 'vault_invalid', message: expect.stringContaining(message) });
     }
     expect((await ui({ action: 'open', path: 'relative' })).status).toBe(400);
+    expect((await ui({ action: 'create', path: setup.vaultPath })).status).toBe(400);
     expect((await ui({ action: 'move', path: other })).status).toBe(400);
     expect(await readdir(other)).toEqual(['notes.txt']);
     await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(path.join(setup.value.profilePath, 'vault-selection.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(runtime.status().state).toBe('not_ready');
 
-    const existing = path.join(setup.value.profilePath, 'existing');
+    const existing = path.join(setup.root, 'existing');
     await mkdir(path.join(existing, 'documents', 'youtube'), { recursive: true });
     await writeVaultMarker(existing, 'XR Collector test');
     await writeFile(path.join(existing, 'documents', 'youtube', 'video.md'), '---\n---\n');
@@ -772,9 +778,9 @@ describe('CollectorRuntime Vault setup', () => {
     expect((await (await fetch(`${runtime.server.url}/api/vault/setup`)).json()).vault).toMatchObject({
       state: 'not_ready', failure: { path: setup.vaultPath, reason: expect.stringContaining('找不到') },
     });
-    const replacement = path.join(setup.value.profilePath, 'replacement');
+    const replacement = path.join(setup.root, 'replacement');
     const created = await fetch(`${runtime.server.url}/api/vault/setup`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', path: replacement }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', location: setup.root, name: 'replacement' }),
     });
     expect(created.status).toBe(200);
     expect((await created.json()).vault).toMatchObject({ state: 'ready', vaultPath: replacement, failure: null });
@@ -784,50 +790,53 @@ describe('CollectorRuntime Vault setup', () => {
 
   it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (X77-A15)', async () => {
     const setup = await selected();
-    const source = path.join(setup.value.profilePath, 'source');
+    const source = path.join(setup.root, 'source');
     await new MarkdownVault(source).add(transcriptDocument({
       videoId: 'runtime0001', sourceUrl: 'https://www.youtube.com/watch?v=runtime0001', title: 'Runtime', channelId: 'UC-runtime', channelTitle: 'Runtime',
       publishedAt: null, languageCode: 'en', languageName: 'English', subtitleKind: 'manual', bodyMarkdown: 'Body.',
     }));
     await new JsonScheduleStore(source).save({ enabled: true });
-    const file = path.join(setup.value.profilePath, 'export.zip');
+    const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
     const ui = (body: unknown) => fetch(`${runtime.server.url}/api/vault/setup`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    const empty = path.join(setup.value.profilePath, 'Empty');
+    const empty = path.join(setup.root, 'Empty');
     await mkdir(empty);
-    for (const [body, code] of [
-      [{ action: 'import', path: empty }, 'invalid_request'],
-      [{ action: 'import', path: empty, packagePath: path.join(setup.value.profilePath, 'none.zip') }, 'invalid_request'],
-      [{ action: 'import', path: empty, packagePath: path.join(setup.value.profilePath, 'export.xr-vault') }, 'invalid_request'],
+    const target = path.join(setup.root, 'New');
+    for (const [body, status, code] of [
+      [{ action: 'import', location: setup.root, name: 'New' }, 400, 'invalid_request'],
+      [{ action: 'import', location: setup.root, name: 'New', packagePath: path.join(setup.root, 'none.zip') }, 400, 'invalid_request'],
+      [{ action: 'import', location: setup.root, name: 'New', packagePath: path.join(setup.root, 'export.xr-vault') }, 400, 'invalid_request'],
+      [{ action: 'import', location: setup.root, name: 'Empty', packagePath: file }, 422, 'vault_invalid'],
     ] as const) {
       const response = await ui(body);
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(status);
       expect((await response.json()).error.code).toBe(code);
     }
     expect(await readdir(empty)).toEqual([]);
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(runtime.status().state).toBe('not_ready');
 
-    const imported = await ui({ action: 'import', path: empty, packagePath: file });
+    const imported = await ui({ action: 'import', location: setup.root, name: 'New', packagePath: file });
     expect(imported.status).toBe(200);
-    expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: empty }, documentCount: 1 });
-    expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: empty });
+    expect(await imported.json()).toMatchObject({ vault: { state: 'ready', vaultPath: target }, documentCount: 1 });
+    expect(JSON.parse(await readFile(path.join(setup.value.profilePath, 'vault-selection.json'), 'utf8'))).toEqual({ path: target });
     expect((await (await fetch(`${runtime.server.url}/api/schedule`)).json()).schedule.enabled).toBe(true);
-    expect(await readdir(empty)).not.toContain('xr-collector-sync.json');
+    expect(await readdir(target)).not.toContain('xr-collector-sync.json');
     await expect(readFile(path.join(setup.value.profilePath, 'vault-import-journal.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('takes back a Vault an import from Onboarding left before the selection named it', async () => {
     const setup = await selected();
-    const source = path.join(setup.value.profilePath, 'source');
+    const source = path.join(setup.root, 'source');
     await mkdir(source);
     await writeVaultMarker(source, 'XR Collector test');
-    const file = path.join(setup.value.profilePath, 'export.zip');
+    const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
-    const target = path.join(setup.value.profilePath, 'Imported');
+    const target = path.join(setup.root, 'Imported');
     await importNewVault({ packageFile: file, folder: target, profilePath: setup.value.profilePath, createdBy: 'XR Collector test' });
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
@@ -838,12 +847,12 @@ describe('CollectorRuntime Vault setup', () => {
 
   it('takes back the imported Vault when its search cannot start or its location cannot be saved (X77-A15)', async () => {
     const setup = await selected();
-    const source = path.join(setup.value.profilePath, 'source');
+    const source = path.join(setup.root, 'source');
     await mkdir(source);
     await writeVaultMarker(source, 'XR Collector test');
-    const file = path.join(setup.value.profilePath, 'export.zip');
+    const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
-    const target = path.join(setup.value.profilePath, 'Imported');
+    const target = path.join(setup.root, 'Imported');
     let searchFails = true;
     const createSearch = setup.value.workspace.createSearch;
     const runtime = await CollectorRuntime.start({
@@ -860,7 +869,7 @@ describe('CollectorRuntime Vault setup', () => {
     const journal = path.join(setup.value.profilePath, 'vault-import-journal.json');
     const selection = path.join(setup.value.profilePath, 'vault-selection.json');
     const importing = () => fetch(`${runtime.server.url}/api/vault/setup`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import', path: target, packagePath: file }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import', location: setup.root, name: 'Imported', packagePath: file }),
     });
 
     const failedSearch = await importing();
@@ -886,7 +895,46 @@ describe('CollectorRuntime Vault setup', () => {
     await expect(readFile(journal)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('lets an Agent move the Vault, reopens the new location after restart and keeps the Agent entry (A-11)', async () => {
+  it('removes the new Vault folder when its search cannot start or its location cannot be saved, so the same name can be used again', async () => {
+    const setup = await selected();
+    const target = path.join(setup.root, 'Fresh');
+    let searchFails = true;
+    const createSearch = setup.value.workspace.createSearch;
+    const runtime = await CollectorRuntime.start({
+      ...setup.value,
+      workspace: {
+        ...setup.value.workspace,
+        createSearch: async (root: string) => {
+          if (searchFails && root === target) throw new Error('search stopped');
+          return createSearch(root);
+        },
+      },
+    });
+    cleanups.push(() => runtime.close());
+    const creating = () => fetch(`${runtime.server.url}/api/vault/setup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create', location: setup.root, name: 'Fresh' }),
+    });
+
+    const failedSearch = await creating();
+    expect(failedSearch.status).toBe(422);
+    expect((await failedSearch.json()).error.message).toContain('無法啟動');
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    searchFails = false;
+    const write = vi.spyOn(VaultSelection.prototype, 'write').mockRejectedValueOnce(new Error('disk full'));
+    const failedSelection = await creating();
+    expect(failedSelection.status).toBe(422);
+    expect((await failedSelection.json()).error.message).toContain('無法保存知識庫位置');
+    write.mockRestore();
+    await expect(readdir(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runtime.status().state).toBe('not_ready');
+
+    const created = await creating();
+    expect(created.status).toBe(200);
+    expect(runtime.status()).toMatchObject({ state: 'ready', vaultPath: target });
+  });
+
+  it('lets an Agent open another Vault, reopens it after restart and keeps the Agent entry (A-11)', async () => {
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
       rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
@@ -905,14 +953,15 @@ describe('CollectorRuntime Vault setup', () => {
     });
     expect(configured.status).toBe(200);
     const savedAgentSettings = await readFile(setup.value.agentSettingsFile, 'utf8');
-    const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-moved`);
+    const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-other`);
     cleanups.push(() => rm(target, { recursive: true, force: true }));
+    await writeVaultMarker(await mkdir(target, { recursive: true }).then(() => target), 'XR Collector test');
     const changes: Change[] = [];
     first.changes.subscribe((batch) => changes.push(...batch.changes));
-    const moved = await agent('/api/vault/move', { targetPath: target });
-    expect(moved.status).toBe(202);
+    const opened = await agent('/api/vault/open', { path: target });
+    expect(opened.status).toBe(202);
     await expect.poll(async () => (await (await agent('/api/vault/status')).json()).state, { timeout: 10_000 }).toBe('completed');
-    // Readers follow the move's progress, then read everything again from the new location.
+    // Readers follow the switch's progress, then read everything again from the other Vault.
     await expect.poll(() => changes.filter((change) => change.kind === 'vault').map((change) => 'scope' in change && change.scope).at(-1)).toBe('contents');
     expect(changes).toContainEqual({ kind: 'vault', scope: 'transfer' });
     expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));
@@ -928,10 +977,10 @@ describe('CollectorRuntime Vault setup', () => {
     const secondConnection = await connectionOf(second);
     expect(secondConnection).toEqual({ url: `http://127.0.0.1:${fixedPort}`, token: firstConnection.token });
     expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
-    await expect(readdir(setup.vaultPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(setup.vaultPath)).toContain('xr-collector-vault.json');
   }, 20_000);
 
-  it('refuses to move or switch a Vault the app was started with (A-10)', async () => {
+  it('refuses to open another Vault when the app was started with a fixed one (A-10)', async () => {
     const setup = await options({ capture: vi.fn() });
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
@@ -968,11 +1017,11 @@ describe('CollectorRuntime Vault setup', () => {
     expect(await readdir(setup.vaultPath)).toContain('xr-collector-vault.json');
     await runtime.close();
 
-    const unrecognized = path.join(setup.value.profilePath, 'unrecognized');
+    const unrecognized = path.join(setup.root, 'unrecognized');
     await mkdir(path.join(unrecognized, 'documents'), { recursive: true });
     const refused = await CollectorRuntime.start({ ...setup.value, explicitVaultPath: unrecognized });
     cleanups.push(() => refused.close());
-    expect(refused.status()).toMatchObject({ state: 'not_ready', message: expect.stringContaining('無法辨識') });
+    expect(refused.status()).toMatchObject({ state: 'not_ready', message: expect.stringContaining('「unrecognized」不是 XR Collector 知識庫。') });
     expect(await readdir(unrecognized)).toEqual(['documents']);
   });
 });

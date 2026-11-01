@@ -13,7 +13,6 @@ import type {
   JobPageView,
   JobSubmissionView,
   JobView,
-  MoveCheck,
   TransferStatus,
   SavedDocument,
   SearchQuery,
@@ -28,7 +27,9 @@ import type {
   SourceTypeInfo,
   UrlRecognition,
   VaultInspection,
-  VaultSetupAction,
+  NewVaultCheck,
+  PackageDescription,
+  VaultSetupRequest,
   ExportSuggestion,
   ImportMode,
   ImportPreview,
@@ -125,17 +126,21 @@ export const api = {
   },
 
   async inspectVault(path: string): Promise<VaultInspection> {
-    return (await request<{ inspection: VaultInspection }>('/api/vault/inspect', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    })).inspection;
+    return (await request<{ inspection: VaultInspection }>('/api/vault/inspect', { method: 'POST', body: JSON.stringify({ path }) })).inspection;
   },
 
-  setupVault(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult> {
-    return request<VaultSetupResult>('/api/vault/setup', {
-      method: 'POST',
-      body: JSON.stringify({ action, path, ...(packagePath ? { packagePath } : {}) }),
-    });
+  setupVault(setup: VaultSetupRequest): Promise<VaultSetupResult> {
+    return request<VaultSetupResult>('/api/vault/setup', { method: 'POST', body: JSON.stringify(setup) });
+  },
+
+  async checkNewVault(location: string, name: string, signal?: AbortSignal): Promise<NewVaultCheck> {
+    return (await request<{ check: NewVaultCheck }>('/api/vault/new/check', {
+      method: 'POST', body: JSON.stringify({ location, name }), ...(signal ? { signal } : {}),
+    })).check;
+  },
+
+  async describePackage(path: string): Promise<PackageDescription> {
+    return (await request<{ package: PackageDescription }>('/api/vault/package/describe', { method: 'POST', body: JSON.stringify({ path }) })).package;
   },
 
   async getAgentConnectionStatus(): Promise<AgentConnectionStatus> {
@@ -388,19 +393,13 @@ export const api = {
     await request('/api/vault/import/cancel', { method: 'POST', body: JSON.stringify({ id }) });
   },
 
-  /** Checks a new location for the active Vault without moving it; refusals arrive as `ApiError`. */
-  checkVaultMove(targetPath: string, signal?: AbortSignal): Promise<MoveCheck> {
-    return request<MoveCheck>('/api/vault/move/check', { method: 'POST', body: JSON.stringify({ targetPath }), signal });
-  },
-
-  /** Moves the active Vault to `targetPath` and continues its work there; follow `vaultTransferStatus`. */
-  moveVault(targetPath: string): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/move', { method: 'POST', body: JSON.stringify({ targetPath }) });
-  },
-
   /** Switches to another existing Vault; follow `vaultTransferStatus`. */
   openOtherVault(path: string): Promise<TransferStatus> {
     return request<TransferStatus>('/api/vault/open', { method: 'POST', body: JSON.stringify({ path }) });
+  },
+
+  createVault(location: string, name: string): Promise<TransferStatus> {
+    return request<TransferStatus>('/api/vault/create', { method: 'POST', body: JSON.stringify({ location, name }) });
   },
 
   /** Cancels a Vault operation that is still waiting for collection steps. */

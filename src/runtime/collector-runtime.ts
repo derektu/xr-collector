@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -6,7 +7,8 @@ import {
   type BuildInfo,
   type TranscriptSearch,
   type VaultInspection,
-  type VaultSetupAction,
+  type NewVaultCheck,
+  type VaultSetupRequest,
   type VaultSetupResult,
   type VaultSetupStatus,
 } from '../core/types.js';
@@ -22,7 +24,8 @@ import type { UpdateAccess } from '../updates/types.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
 import { startServer, type RunningServer } from '../server/start.js';
 import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
-import { createVaultDirectory, inspectVaultDirectory } from '../vault/vault-directory.js';
+import { createVaultDirectory, inspectVaultDirectory, notAVault } from '../vault/vault-directory.js';
+import { checkNewVault, createNewVault, DEFAULT_VAULT_NAME, describePackage, newVaultFolder, type AppFolders } from '../vault/new-vault.js';
 import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
@@ -53,8 +56,8 @@ export interface CollectorRuntimeOptions {
   pause?: CollectionPause;
   /** Uses this Vault instead of the device selection; an empty directory becomes a new Vault. */
   explicitVaultPath?: string;
-  /** Location Onboarding proposes for a new Vault. */
-  suggestedVaultPath?: string;
+  /** Folder a new Vault goes in while none is active; the Documents folder by default. */
+  newVaultLocation?: string;
   /** Application name and version recorded in Vaults this runtime creates. */
   createdBy?: string;
   agentSettingsFile: string;
@@ -222,7 +225,9 @@ export class CollectorRuntime {
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
       inspect: (vaultPath) => inspectVaultDirectory(vaultPath),
-      setup: (action, vaultPath, packagePath) => runtime!.setup(action, vaultPath, packagePath),
+      checkNew: (location, name) => runtime!.checkNew(location, name),
+      describePackage: (file) => describePackage(file),
+      setup: (request) => runtime!.setup(request),
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
     try {
@@ -301,47 +306,68 @@ export class CollectorRuntime {
     return unusable(selected, inspection.reason);
   }
 
+  /** Checks a new Vault folder before it is created; see `checkNewVault`. */
+  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
+    return checkNewVault(location, name, this.appFolders());
+  }
+
+  private appFolders(): AppFolders {
+    return { vaultRoot: this.workspaceValue?.status().vaultPath, profilePath: this.profilePath };
+  }
+
   vaultStatus(): VaultSetupStatus {
     return {
       state: this.workspaceValue ? 'ready' : 'not_ready',
       vaultPath: this.workspaceValue?.status().vaultPath ?? null,
-      suggestedPath: this.options.suggestedVaultPath ?? path.join(homedir(), 'Documents', 'XR Collector'),
+      newVault: {
+        location: this.workspaceValue ? path.dirname(this.workspaceValue.status().vaultPath)
+          : this.options.newVaultLocation ?? path.join(homedir(), 'Documents'),
+        name: DEFAULT_VAULT_NAME,
+      },
       failure: this.workspaceValue ? null : this.failure,
     };
   }
 
   /**
    * Creates, opens or imports a Vault while Not Ready, then starts its services and remembers the
-   * location. An import creates the Vault in `vaultPath` (missing or empty) from the export file
-   * `packagePath`; the automatic collection switch is the one the export file holds.
+   * location. A new Vault, empty or imported, is the new folder `name` in `location`; an import
+   * fills it from the export file `packagePath` and keeps the automatic collection switch the
+   * export file holds.
    */
-  async setup(action: VaultSetupAction, vaultPath: string, packagePath?: string): Promise<VaultSetupResult> {
+  async setup(request: VaultSetupRequest): Promise<VaultSetupResult> {
     if (!this.services) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');
     if (this.closing) throw new CollectorError('vault_busy', '服務正在停止。');
-    if (this.workspaceValue) throw new CollectorError('vault_already_set', '已經有使用中的知識庫。更換位置請使用搬移功能。');
+    if (this.workspaceValue) {
+      throw new CollectorError('vault_already_set', '已經有使用中的知識庫。要建立或開啟其他知識庫，請使用 POST /api/vault/create 或 POST /api/vault/open。');
+    }
     if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等待目前的操作完成。');
     if (this.preparingUpdate) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能變更知識庫。');
-    if (!path.isAbsolute(vaultPath)) throw new CollectorError('invalid_request', '請提供完整的絕對路徑。');
     this.settingUp = true;
+    const action = request.action;
     try {
       const createdBy = this.options.createdBy ?? 'XR Collector';
       let root: string;
       let documentCount = 0;
-      if (action === 'create') {
-        root = await createVaultDirectory(vaultPath, createdBy);
-      } else if (action === 'import') {
+      if (request.action === 'create') {
+        root = await createNewVault(request.location, request.name, createdBy, this.appFolders());
+      } else if (request.action === 'import') {
         root = await importNewVault({
-          packageFile: packagePath, folder: vaultPath, profilePath: this.profilePath, createdBy,
+          packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, this.appFolders()), profilePath: this.profilePath, createdBy,
           ...(this.services.statfs ? { statfs: this.services.statfs } : {}),
         });
         documentCount = (await inspectVaultDirectory(root).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
       } else {
-        const inspection: VaultInspection = await inspectVaultDirectory(vaultPath);
-        if (inspection.kind === 'empty') throw new CollectorError('vault_invalid', '這個目錄還不是知識庫，請改用建立。');
-        if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
+        if (!path.isAbsolute(request.path)) throw new CollectorError('invalid_request', '請提供完整的絕對路徑。');
+        const inspection: VaultInspection = await inspectVaultDirectory(request.path);
+        if (inspection.kind !== 'existing') throw new CollectorError('vault_invalid', notAVault(inspection));
         root = inspection.path;
         documentCount = inspection.documentCount;
       }
+      // A Vault this request created is removed again when it cannot become the one in use.
+      const discard = async () => {
+        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
+        if (action === 'create') await rm(root, { recursive: true, force: true }).catch(() => undefined);
+      };
       let workspace: VaultWorkspace;
       try {
         // An imported Vault keeps its import journal until the selection names it, so a failure or a
@@ -351,14 +377,14 @@ export class CollectorRuntime {
         });
       } catch (error) {
         console.error('Vault services failed to start', error);
-        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
+        await discard();
         throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });
       }
       try {
         await this.selection.write(root);
       } catch (error) {
         await workspace.close().catch(() => undefined);
-        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
+        await discard();
         throw new CollectorError('vault_invalid', '無法保存知識庫位置，請確認程式資料目錄可寫入後重試。', { cause: error });
       }
       if (action === 'import') await clearImportJournal(this.profilePath);

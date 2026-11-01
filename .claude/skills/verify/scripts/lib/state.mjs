@@ -95,7 +95,7 @@ async function readApi(record, processes) {
   });
 }
 
-/** The Vault the profile selects (it follows a move or a switch), or the run's own vault/ folder. */
+/** The Vault the profile selects (it follows a switch), or the run's own vault/ folder. */
 function vaultPath(runDir, profile) {
   try {
     const selected = JSON.parse(readFileSync(path.join(profile, 'vault-selection.json'), 'utf8')).path;

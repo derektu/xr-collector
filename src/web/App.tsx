@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DeviceUpdateStatus, SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
 import { jobRole } from '../core/source-registry.js';
 import { Activity } from './Activity.js';
@@ -28,9 +28,6 @@ import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
 import { useDay } from './use-day.js';
 
-const onboardingPreviewRequested = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'onboarding';
-const DevelopmentOnboardingPreview = onboardingPreviewRequested ? lazy(() => import('./dev/OnboardingPreview.js')) : null;
-
 const NOTICE_MS = 5000;
 
 /**
@@ -54,7 +51,6 @@ function useSystemDark(): boolean {
 }
 
 export default function App() {
-  if (DevelopmentOnboardingPreview) return <Suspense fallback={<p className="loading">正在載入開發預覽…</p>}><DevelopmentOnboardingPreview /></Suspense>;
 
   // Day-relative labels ("今天", "明天") draw again at midnight.
   useDay();
@@ -285,7 +281,7 @@ export default function App() {
     body = <Activity search={location.search} onState={onActivityState}
       onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
   } else {
-    body = <Settings vaultPath={vault.vaultPath} activeJobs={active.length}
+    body = <Settings vaultPath={vault.vaultPath}
       themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onChanged={announce} />;
   }
   const updateLabel = update ? sidebarUpdateLabel(update) : null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  changeText, hasChanges, localNewerText, moveTargetIn, progressText, relocates, removalText, revealLabel, sizeLabel, sourceText,
+  changeText, hasChanges, localNewerText, progressText, relocates, removalText, revealLabel, sizeLabel, sourceText,
   transferRunning,
 } from '../../src/web/transfer-presentation.js';
 
@@ -34,15 +34,12 @@ describe('export and import presentation', () => {
     expect(sourceText({ exportedAt: null })).toBeNull();
   });
 
-  it('names move targets, the file manager and the operations that switch Vaults', () => {
-    expect(moveTargetIn('/Volumes/Backup', '/Users/a/Documents/XR Collector')).toBe('/Volumes/Backup/XR Collector');
-    expect(moveTargetIn('/Volumes/Backup/', '/Users/a/XR Collector/')).toBe('/Volumes/Backup/XR Collector');
-    expect(moveTargetIn('D:\\Data', 'C:\\Users\\a\\XR Collector')).toBe('D:\\Data\\XR Collector');
+  it('names the file manager and the operations that switch Vaults', () => {
     expect(revealLabel('darwin')).toBe('在 Finder 顯示');
     expect(revealLabel('win32')).toBe('在檔案總管顯示');
-    expect(relocates({ operation: 'move' })).toBe(true);
+    expect(relocates({ operation: 'open' })).toBe(true);
     expect(relocates({ operation: 'import' })).toBe(false);
-    expect(progressText({ state: 'copying', message: '正在複製檔案…', completedFiles: 4, totalFiles: 10 })).toBe('正在複製檔案…（4／10）');
+    expect(progressText({ state: 'extracting', message: '正在套用匯入的內容…', completedFiles: 4, totalFiles: 10 })).toBe('正在套用匯入的內容…（4／10）');
     expect(sizeLabel(3 * 1024 ** 3)).toBe('3.0 GB');
   });
 });

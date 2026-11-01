@@ -111,16 +111,6 @@ export class JobStore {
       .map((job) => structuredClone(job));
   }
 
-  /** Records the jobs of the Vault with `vaultId` at its new location after a move. */
-  rebind(fromPath: string, toPath: string, vaultId: string): number {
-    let count = 0;
-    for (const job of this.jobs.values()) {
-      if (job.vaultPath === fromPath && job.vaultId === vaultId) { job.vaultPath = toPath; count += 1; }
-    }
-    if (count) this.scheduleFlush();
-    return count;
-  }
-
   put(job: CollectionJob): void {
     this.jobs.set(job.id, structuredClone(job));
     this.prune();

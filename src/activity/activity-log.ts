@@ -52,24 +52,22 @@ export interface ActivityLogOptions {
 /**
  * Which Vault's activity a query reads: one Vault (with Vault-less events), or every event when
  * `vaultPath` is null. An event that carries a Vault ID belongs to the Vault with that ID wherever it
- * was recorded; an event without one belongs to the Vault at its path, which includes the locations
- * the Vault was moved from (`previousPaths`). `vaultId` null means the Vault has no ID, so events of
- * Vaults with IDs are not its own; leaving it out compares paths only.
+ * was recorded; an event without one belongs to the Vault at its path. `vaultId` null means the
+ * Vault has no ID, so events of Vaults with IDs are not its own; leaving it out compares paths only.
  */
 export interface ActivityScope {
   vaultPath: string | null;
   vaultId?: string | null;
-  previousPaths?: readonly string[];
 }
 
 function inScope(event: JobEvent, scope: ActivityScope): boolean {
   if (scope.vaultPath === null || event.vaultPath === null) return true;
   if (scope.vaultId !== undefined && event.vaultId) return event.vaultId === scope.vaultId;
-  return event.vaultPath === scope.vaultPath || (scope.previousPaths ?? []).includes(event.vaultPath);
+  return event.vaultPath === scope.vaultPath;
 }
 
 function scopeKey(scope: ActivityScope): string {
-  return JSON.stringify({ vaultPath: scope.vaultPath, vaultId: scope.vaultId ?? null, previousPaths: [...(scope.previousPaths ?? [])].sort() });
+  return JSON.stringify({ vaultPath: scope.vaultPath, vaultId: scope.vaultId ?? null });
 }
 
 interface CachedFile {

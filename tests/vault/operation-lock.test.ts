@@ -86,7 +86,7 @@ describe('Vault operation lock', () => {
       },
     });
     const first = held.value.start({
-      operation: 'move', failed: failure,
+      operation: 'open', failed: failure,
       body: async () => ({ value: undefined, message: 'old done' }),
       cancelled: firstCancelled,
     });
@@ -118,7 +118,7 @@ describe('Vault operation lock', () => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       }),
     });
-    const running = held.value.start({ operation: 'move', failed: failure, body });
+    const running = held.value.start({ operation: 'open', failed: failure, body });
     expect(held.value.status().state).toBe('waiting');
     expect(held.value.cancelWait()).toMatchObject({ state: 'idle', operation: null, message: expect.stringContaining('已取消') });
     await expect(running).rejects.toMatchObject({ code: 'transfer_cancelled' });
@@ -133,7 +133,7 @@ describe('Vault operation lock', () => {
     const idleStarted = deferred();
     const body = vi.fn(async () => ({ value: undefined, message: 'must not run' }));
     const held = lock({ idle: () => { idleStarted.resolve(); return idle.promise; } });
-    const running = held.value.start({ operation: 'move', failed: failure, body });
+    const running = held.value.start({ operation: 'open', failed: failure, body });
     await idleStarted.promise;
 
     // Promise resolution queues the settle continuation; cancelling in this same turn must still
@@ -183,7 +183,7 @@ describe('Vault operation lock', () => {
     const gate = deferred();
     const held = lock();
     const running = held.value.start({
-      operation: 'move', failed: failure,
+      operation: 'open', failed: failure,
       body: async () => { await gate.promise; return { value: undefined, message: 'done' }; },
     });
     expect(() => held.value.start({
@@ -204,7 +204,7 @@ describe('Vault operation lock', () => {
     const releaseWrite = held.value.enter('vault-write');
     const prepared = held.value.prepareUpdate(new AbortController().signal);
     expect(() => held.value.enter('vault-write')).toThrowError(/更新/u);
-    expect(() => held.value.start({ operation: 'move', failed: failure,
+    expect(() => held.value.start({ operation: 'open', failed: failure,
       body: async () => ({ value: undefined, message: 'must not run' }) })).toThrowError(/更新/u);
     let settled = false; void prepared.then(() => { settled = true; });
     await Promise.resolve(); expect(settled).toBe(false);

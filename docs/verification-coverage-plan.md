@@ -107,7 +107,7 @@
 | 活動記錄 | 摘要／完整事件、等級、群組 10＋2 分頁、診斷與部分篩選已有 | 核心只看代表操作記錄；保留既有專項。 | 來源／時間有效資料、四條件往返、展開／收合、摘要快照刷新／固定、過期／重啟提示依記錄功能變更補。UI fixture 與真正重啟／retention 證據分開。 |
 | 文件與 Reader | 分頁、閱讀返回、取消／刪除、tombstone、重收、RSS 無重收已有 | 核心重複的瀏覽／閱讀／搜尋與刪除確認合併；移除訂閱但保留文件的閱讀接在移除流程。 | 訂閱／Activity 連到 Reader、發布者實際點回來源、索引 N≠M 提示可補入口／UI 分支；最後頁與重收保留文件專項。 |
 | 搜尋 | PR #167 已含七情境：文字等價、詞界、片段、AND／quote、Latin、原文、條件／分頁、Agent、重建／重啟 | 沿用已有實作，挑少量常用代表放核心；引擎或搜尋程式變更選完整搜尋專項。 | 外置詞庫載入／替換／壞資源已有 #162 一次性驗收；整理為參數化共用 smoke，使用資源副本，無須放進一般文件 UI 流程。 |
-| 知識庫 | 匯出、merge／replace／nothing、搬移、切庫、fixed、等待取消及背景計數有 UI＋檔案／索引斷言 | 保留資料交換專項；補 preview 數與同 ID 更新後的精確文件內容，避免只看筆數。 | 原生選檔／選目錄的參數、取消無副作用、完成結果、reveal IPC 用 Desktop 控制驗證；不驗 Finder／對話框外觀。 |
+| 知識庫 | 匯出、merge／replace／nothing、切庫、fixed、等待取消及背景計數有 UI＋檔案／索引斷言 | 保留資料交換專項；補 preview 數與同 ID 更新後的精確文件內容，避免只看筆數。 | 原生選檔／選目錄的參數、取消無副作用、完成結果、reveal IPC 用 Desktop 控制驗證；不驗 Finder／對話框外觀。 |
 | Agent 連線 | Settings ZIP／複製 payload／設定／重設已有 Web；port bind、重啟生效與 profile 隔離有真 TCP／runtime 測試 | 核心保留一個基本下載／可達性代表；修正未證明的標記。 | Onboarding 三按鈕實際操作、unavailable 顯示／停用、卡片順序、重設 identity 屬 Agent 專項；不重造 port／移轉矩陣。 |
 | Tray | D1～D8 已有 Desktop：隱藏、Agent 同 instance、背景收集、開關、頁面不 reload、提示、第二啟動、退出與接續 | 保留 Desktop 專項，不建立另一套相同流程。 | 若聚焦列為必要結果，將現有 note 補為斷言；offline／retry／queue 等純選單狀態留在模型單元測試。 |
 | 建置資訊 | Web 設定／Onboarding、UI／Agent 身分及 503 重試已有；打包 smoke 讀取實際產物 API | 保留廉價身分檢查，沿用已有 smoke。 | 在已有打包產物補 API／DOM與 asar／artifact identity 的共用核對入口；缺匹配產物明確列未驗，不用 Web 代替。 |
@@ -204,9 +204,10 @@ Desktop bridge 與詞庫資源 smoke 使用獨立資料／資源副本，不修�
 | `jobs.md` | `jobs-empty`、`jobs-sections`、`jobs-retry`、`jobs-dismiss`、`jobs-badge`、`jobs-row-text` |
 | `documents-reader-search.md` | `docs-list`、`docs-filter`、`docs-search`、`docs-search-normalization`、`docs-search-fragments`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect` |
 | `rss.md` | `rss-add-feed`、`rss-add-page`、`rss-atom`、`rss-articles`、`rss-check`、`rss-failure`、`rss-settings` |
-| `vault-transfer.md` | `vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-move`、`vault-open-other`、`vault-fixed` |
+| `vault-transfer.md` | `vault-info`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-create`、`vault-open-other`、`vault-fixed` |
 | `tray.md` | `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit` |
 | `build-info.md` | `build-info-settings`、`build-info-onboarding`、`build-info-api` |
+| `onboarding.md` | `onboarding-home`、`onboarding-create`、`onboarding-open`、`onboarding-missing`、`onboarding-from-export`、`onboarding-native-pickers` |
 | `login-startup.md` | `login-startup-setting`、`login-startup-unavailable`、`login-startup-background`、`login-startup-single-instance`、`login-startup-os-state` |
 | `agent-connection.md` | `agent-connection-summary`、`agent-connection-help`、`agent-connection-export`、`agent-connection-settings` |
 

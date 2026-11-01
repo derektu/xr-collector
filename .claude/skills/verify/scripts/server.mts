@@ -21,7 +21,7 @@
 // Environment: XR_VERIFY_CHECKOUT, XR_VERIFY_RUN, XR_VERIFY_DATA, XR_VERIFY_VAULT_MODE (selected | fixed | none),
 // XR_VERIFY_UI_PORT, XR_VERIFY_SEARCH_PORT, XR_VERIFY_AGENT_PORT, XR_VERIFY_FEEDS_PORT.
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -255,11 +255,12 @@ const updateService = updateEnabled() ? await UpdateService.open({
   apply: () => undefined,
 }) : null;
 
-// `selected` opens the Vault the way a user's chosen one opens, so moving it and opening another stay
-// available; `fixed` is the XR_COLLECTOR_VAULT path, where the location cannot change. The Vault is
-// created on the run's first start only; a restart finds the profile's vault-selection.json and opens
-// whatever Vault it names, as the app does after the user moved or switched it.
+// `selected` opens the Vault the way a user's chosen one opens, so opening another stays available;
+// `fixed` is the XR_COLLECTOR_VAULT path, where the location cannot change. The Vault is created on the
+// run's first start only; a restart finds the profile's vault-selection.json and opens whatever Vault
+// it names, as the app does after the user switched it.
 const selectionFile = path.join(profilePath, 'vault-selection.json');
+mkdirSync(path.join(run, 'documents'), { recursive: true });
 if (vaultMode === 'selected' && !existsSync(selectionFile)) {
   await createVaultDirectory(vaultPath, createdBy);
   await new VaultSelection(selectionFile).write(vaultPath);
@@ -289,8 +290,8 @@ const runtime = await CollectorRuntime.start({
     ...(data === 'synthetic' ? { jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] } } : {}),
   },
   ...(vaultMode === 'fixed' ? { explicitVaultPath: vaultPath } : {}),
-  // Onboarding suggests this folder; inside the run, so accepting the suggestion stays isolated.
-  suggestedVaultPath: vaultPath,
+  // A new Vault goes in the run's Documents folder unless another place is picked, so accepting the default stays isolated.
+  newVaultLocation: path.join(run, 'documents'),
   createdBy,
   agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
   skillPath: path.join(checkout, 'skills', 'xr-collector-agent'),

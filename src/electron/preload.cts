@@ -7,7 +7,8 @@ contextBridge.exposeInMainWorld('xrCollectorTheme', {
 });
 
 contextBridge.exposeInMainWorld('xrCollectorDesktop', {
-  chooseDirectory: (defaultPath?: string) => ipcRenderer.invoke('xrCollector:desktop:chooseDirectory', defaultPath),
+  chooseVaultLocation: (start?: string) => ipcRenderer.invoke('xrCollector:desktop:chooseVaultLocation', start),
+  chooseVault: (start?: string) => ipcRenderer.invoke('xrCollector:desktop:chooseVault', start),
   chooseExportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseExportFile'),
   chooseImportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseImportFile'),
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),

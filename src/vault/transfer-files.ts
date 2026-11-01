@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
-import { inspectVaultDirectory, VAULT_MARKER } from './vault-directory.js';
+import { VAULT_MARKER } from './vault-directory.js';
 
 /**
  * Local files of Vault export and import: export files a person or Agent names by path, the export
@@ -12,20 +12,17 @@ import { inspectVaultDirectory, VAULT_MARKER } from './vault-directory.js';
 
 const invalid = (message: string): never => { throw new CollectorError('invalid_request', message); };
 
-/** Resolves symbolic links of an existing path, as `fs.realpath` does; tests replace it to stand for another file system. */
-export type RealPath = (target: string) => Promise<string>;
-
 /**
  * The real location of a path, resolving symbolic links of whichever ancestors exist. On a
  * case-insensitive volume the real path also carries the spelling stored on disk, so two spellings
  * of one folder resolve to the same location.
  */
-export async function resolved(target: string, real: RealPath = realpath): Promise<string> {
+async function resolved(target: string): Promise<string> {
   const missing: string[] = [];
   let current = path.resolve(target);
   for (;;) {
     try {
-      return path.join(await real(current), ...missing.reverse());
+      return path.join(await realpath(current), ...missing.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = path.dirname(current);
@@ -37,20 +34,19 @@ export async function resolved(target: string, real: RealPath = realpath): Promi
 }
 
 /** Whether `target` is `folder` or inside it, after resolving symbolic links. */
-export async function isWithin(target: string, folder: string, real: RealPath = realpath): Promise<boolean> {
-  const relative = path.relative(await resolved(folder, real), await resolved(target, real));
+export async function isWithin(target: string, folder: string): Promise<boolean> {
+  const relative = path.relative(await resolved(folder), await resolved(target));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-const WORK_FOLDER = /\.(?:moving|moved|importing)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const STAGING = /\.importing-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /**
- * Whether a folder carries the name of a move's or import's working folder (`.moving-<UUID>`,
- * `.moved-<UUID>`, `.importing-<UUID>`). Recovery at startup deletes such folders, so they never
- * become a Vault in use, a move target or an import target.
+ * Whether a folder carries the name of an import's working folder (`.importing-<UUID>`). Recovery
+ * at startup deletes such folders, so they never become a Vault in use or an import target.
  */
 export function isWorkFolder(folder: string): boolean {
-  return WORK_FOLDER.test(path.basename(path.resolve(folder)));
+  return STAGING.test(path.basename(path.resolve(folder)));
 }
 
 /** Folders an export file may not be placed in: the active Vault and the profile. */
@@ -135,7 +131,7 @@ export function backupFileName(now: Date): string {
 }
 
 /** Writes a file through a temporary file beside it, so the named file is either whole or untouched. */
-export async function writeAtomically(file: string, bytes: Buffer): Promise<void> {
+async function writeAtomically(file: string, bytes: Buffer): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
@@ -147,18 +143,22 @@ export async function writeAtomically(file: string, bytes: Buffer): Promise<void
 
 /**
  * Checks the folder an import from Onboarding creates its Vault in: an absolute path that does not
- * exist yet or is an empty folder, and not a working folder of a move or import.
+ * exist yet, in an existing folder, and not a working folder of an import.
  */
 export async function checkImportFolder(value: unknown): Promise<string> {
   const folder = absolute(value, '請提供新知識庫的完整路徑。');
-  if (isWorkFolder(folder)) invalid('這是搬移或匯入使用的暫存資料夾，請選擇其他位置。');
-  const inspection = await inspectVaultDirectory(folder);
-  if (inspection.kind === 'invalid') invalid(inspection.reason);
-  if (inspection.kind !== 'empty') invalid('這個資料夾已經有內容，請選擇不存在或空的資料夾。');
-  return inspection.path;
+  if (isWorkFolder(folder)) invalid('這是匯入使用的暫存資料夾，請選擇其他位置。');
+  try {
+    await lstat(folder);
+    invalid(`這個位置已經有「${path.basename(folder)}」，請換個名稱。`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let parent;
+  try { parent = await stat(path.dirname(folder)); } catch { invalid('找不到新知識庫所在的資料夾。'); }
+  if (!parent!.isDirectory()) invalid('找不到新知識庫所在的資料夾。');
+  return folder;
 }
-
-const STAGING = /\.importing-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** The temporary folder an import from Onboarding unpacks into, beside the folder it becomes. */
 export function stagingFolder(folder: string): string {
@@ -168,11 +168,10 @@ export function stagingFolder(folder: string): string {
 /**
  * Profile record of an import from Onboarding in progress, kept until the device selection names
  * the new Vault:
- * `{ "staging": "<path>", "target": "<path>", "placed": <boolean>, "marker": "<sha256>", "emptyTarget": <boolean> }`.
+ * `{ "staging": "<path>", "target": "<path>", "placed": <boolean>, "marker": "<sha256>" }`.
  * The import unpacks into the staging folder and renames it to the target once it is complete.
  * `placed` is set just before that rename; `marker` is the digest of the Vault marker the import
- * wrote, which tells the new folder apart from anything else at the target path, and `emptyTarget`
- * says the target was an empty folder the import replaced.
+ * wrote, which tells the new folder apart from anything else at the target path.
  */
 export const IMPORT_JOURNAL = 'vault-import-journal.json';
 
@@ -181,7 +180,6 @@ export interface ImportJournal {
   target: string;
   placed: boolean;
   marker: string | null;
-  emptyTarget: boolean;
 }
 
 export async function writeImportJournal(profilePath: string, journal: ImportJournal): Promise<void> {
@@ -206,8 +204,7 @@ export async function markerDigest(folder: string): Promise<string | null> {
 /**
  * Takes back an import from Onboarding a stop interrupted, unless `kept` names its target (the
  * device selection and the Vault being opened): the staging folder is removed, and a target folder
- * whose marker is the one the import wrote is renamed back to a staging name and removed, leaving
- * an empty folder where the import found one. Only folders named like an import's staging folder
+ * whose marker is the one the import wrote is renamed back to a staging name and removed. Only folders named like an import's staging folder
  * and a target carrying the import's own marker are touched; a journal naming anything else is
  * dropped without touching it. Returns the folders removed.
  */
@@ -230,7 +227,6 @@ export async function recoverImport(profilePath: string, kept: readonly (string 
       && typeof journal.marker === 'string' && await markerDigest(target) === journal.marker) {
       await rename(target, staging);
       await rm(staging, { recursive: true, force: true });
-      if (journal.emptyTarget === true) await mkdir(target);
       removed.push(target);
     }
   }

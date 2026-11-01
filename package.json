@@ -30,7 +30,7 @@
     "test:verify-skill:mac": "npm run download:runtime && node .claude/skills/verify/scripts/smoke.mjs",
     "test:verify-skill:desktop:mac": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
     "test:verify-skill:desktop:win": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
-    "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts tests/search/meilisearch-integration.test.ts tests/search/meilisearch-leftover.test.ts tests/server/agent-access.test.ts tests/vault/vault-transfer.test.ts tests/vault/vault-exchange.test.ts tests/vault/vault-move.test.ts"
+    "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts tests/search/meilisearch-integration.test.ts tests/search/meilisearch-leftover.test.ts tests/server/agent-access.test.ts tests/vault/vault-transfer.test.ts tests/vault/vault-exchange.test.ts"
   },
   "dependencies": {
     "@fastify/static": "10.1.8",
