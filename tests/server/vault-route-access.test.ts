@@ -13,7 +13,7 @@ describe('Vault access declared by routes', () => {
     const transfer = {
       enterRequest(access: VaultAccess) { accesses.push(access); return () => undefined; },
       status: () => ({ state: 'idle' }),
-      checkMove: async () => ({ targetPath: '/tmp/next', requiredBytes: 1, availableBytes: 2 }),
+      exportSuggestion: () => ({ folder: '/tmp', path: '/tmp/export.zip' }),
     } as unknown as VaultWorkspace;
     const app = await createHttpApp({
       transfer,
@@ -51,7 +51,7 @@ describe('Vault access declared by routes', () => {
     await app.inject({ method: 'GET', url: '/api/activity?view=summary' });
     await app.inject({ method: 'GET', url: '/api/activity/groups/locked-group' });
     await app.inject({ method: 'GET', url: '/api/vault/status' });
-    await app.inject({ method: 'POST', url: '/api/vault/move/check', payload: { targetPath: '/tmp/next' } });
+    await app.inject({ method: 'GET', url: '/api/vault/export/suggestion' });
 
     expect(accesses).toEqual([
       'vault-read', 'vault-write', 'vault-operation',

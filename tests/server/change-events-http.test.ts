@@ -129,7 +129,7 @@ async function start(options: { vault?: boolean } = {}) {
   const send = (method: string, route: string, body?: unknown) => fetch(`${ui}${route}`, {
     method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
-  return { runtime, ui, send, pacing, updates, listed };
+  return { runtime, ui, send, pacing, updates, listed, outside };
 }
 
 describe('change events', () => {
@@ -264,7 +264,7 @@ describe('change events', () => {
   });
 
   it('serves the stream to an authorized Agent and to the UI only under its own host name, before a Vault is set', async () => {
-    const { runtime, ui } = await start({ vault: false });
+    const { runtime, ui, outside } = await start({ vault: false });
     const connection = (await (await fetch(`${ui}/api/device/agent/connection`)).json()).connection as { url: string; token: string };
     const refused = (await openEvents(connection.url)).response;
     expect(refused.status).toBe(401);
@@ -287,7 +287,7 @@ describe('change events', () => {
 
     const setup = await fetch(`${ui}/api/vault/setup`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'create', path: path.join(runtime.profilePath, 'new-vault') }),
+      body: JSON.stringify({ action: 'create', location: outside, name: 'new-vault' }),
     });
     expect(setup.status).toBe(200);
     await agent.change((change) => change.kind === 'vault' && change.scope === 'contents', 'vault set up');

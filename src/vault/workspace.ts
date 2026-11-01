@@ -4,8 +4,8 @@ import { lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Collector } from '../core/collector.js';
 import {
-  CollectorError, type ChangeCounts, type ExportSuggestion, type ImportMode, type ImportPreview, type JobStopKind,
-  type MoveCheck, type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
+  CollectorError, type ChangeCounts, type ExportSuggestion, type ImportMode, type ImportPreview,
+  type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
 } from '../core/types.js';
 import { subscriptionDefinitions } from '../core/source-registry.js';
 import { SubscriptionService, SubscriptionServices } from '../subscriptions/subscription-service.js';
@@ -21,9 +21,8 @@ import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
 import type { SourcePlugin } from '../plugins/types.js';
 import { JobStore } from '../jobs/job-store.js';
-import { pidFilePath } from '../search/meilisearch-process.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
-import { prepareOwnedSearchProjection, searchDatabasePath, searchProfilePath } from '../search/search-projection.js';
+import { prepareOwnedSearchProjection, searchDatabasePath } from '../search/search-projection.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { deletionId } from './deleted-documents.js';
 import { changeTotal, chosenKeys, compareItems, itemStates, planChanges, type Comparison, type ImportPlan, type ItemStates } from './vault-merge.js';
@@ -33,13 +32,11 @@ import {
 } from './vault-package.js';
 import { documentIdFromPath } from './document-paths.js';
 import {
-  checkExportFile, checkPackageFile, exportFileName, isWithin, isWorkFolder, markerDigest, backupFileName, recoverImport,
+  checkExportFile, checkPackageFile, exportFileName, isWithin, isWorkFolder, backupFileName, recoverImport,
 } from './transfer-files.js';
-import { inspectVaultDirectory, readVaultId } from './vault-directory.js';
-import {
-  belongsToMove, checkMoveTarget, clearMoveJournal, copyTree, formatBytes, hasMoveJournal, moveMargin, movingFolder, nearestExisting, previousLocations,
-  recordPreviousLocation, recoverMove, removeOriginal, scanVault, treeBytes, verifyTree, writeMoveJournal, type MoveJournal, type StatFs,
-} from './vault-move.js';
+import { inspectVaultDirectory, notAVault, readVaultId } from './vault-directory.js';
+import { createNewVault, newVaultFolder } from './new-vault.js';
+import type { StatFs } from './disk-space.js';
 import type { VaultSelection } from './vault-selection.js';
 import {
   VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type UpdateLease, type VaultAccess,
@@ -58,12 +55,9 @@ interface Bundle {
 export interface WorkspaceOptions {
   /** Absolute path of a Vault that the caller has already inspected. */
   root: string;
-  /** Device record of the active Vault; writing it is the commit point of a move or switch. */
+  /** Device record of the active Vault; writing it is the commit point of a switch. */
   selection: VaultSelection;
-  /**
-   * Device profile folder: the journals of a move or an import from Onboarding in progress, and the
-   * locations each Vault was moved from live here.
-   */
+  /** Device profile folder, where the journal of an import from Onboarding in progress lives. */
   profilePath: string;
   /** Folder exports go to when no other place is chosen. */
   exportFolder: string;
@@ -96,16 +90,11 @@ export interface WorkspaceOptions {
   jobRetry?: Partial<RetryPolicy>;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
-   * that location again, so the Vault is neither moved nor switched for another one.
+   * that location again, so no other Vault is created or opened.
    */
   fixedLocation?: boolean;
   /** Free space of a volume; defaults to `fs.statfs`. */
   statfs?: StatFs;
-  /**
-   * Called at each step of a move; for tests that make a step fail (by throwing) or stop there
-   * (by never settling). `copying` is called after each copied entry with its count.
-   */
-  moveFaults?: (phase: MoveFault, count?: number) => void | Promise<void>;
   /** Called at each step of an in-place import, for tests that make a step fail or stop there; see `ImportFault`. */
   importFaults?: (phase: ImportFault, count?: number) => void | Promise<void>;
   /**
@@ -119,15 +108,6 @@ export interface WorkspaceOptions {
   /** Device-profile notification sink; Vault data never contains notification delivery state. */
   onAutoPaused?: (vaultId: string, sourceType: string, subscription: import('../core/types.js').SubscriptionRecord) => void | Promise<void>;
 }
-
-/**
- * Steps of a move a test can stop at. `selected` comes right after the device selection names the
- * new location and before the journal records the switch.
- */
-export type MoveFault = 'copying' | 'copied' | 'verified' | 'placed' | 'prepared' | 'committing' | 'selected' | 'committed' | 'cleaning';
-
-/** How long `checkMove` reuses the size of the active Vault while a person types a location. */
-const SIZE_REUSE_MS = 60_000;
 
 /**
  * An import comparison waiting to be applied: the export file it compared, what it found, and a
@@ -183,10 +163,6 @@ export class VaultWorkspace {
   readonly search = forwarding<TranscriptSearch>(() => this.current.runtime.search);
   private readonly jobStore: JobStore;
   private readonly holdTimeoutMs: number | undefined;
-  /** Locations the active Vault was moved from; activity recorded there without a Vault ID is its own. */
-  private previousPaths: string[] = [];
-  /** Size of the active Vault from the last move check, reused briefly so typing a location stays cheap. */
-  private sizeCache: { root: string; bytes: number; at: number } | null = null;
 
   private constructor(private readonly options: WorkspaceOptions) {
     this.jobStore = options.jobStore ?? JobStore.memory();
@@ -199,7 +175,7 @@ export class VaultWorkspace {
       changed: () => {
         const status = this.operationLock.status();
         this.noteChange({ kind: 'vault', scope: 'transfer' });
-        // A finished import, move or switch replaced what every page shows.
+        // A finished import or switch replaced what every page shows.
         if (status.state === 'completed' && status.operation !== 'export') this.noteChange({ kind: 'vault', scope: 'contents' });
       },
     });
@@ -222,23 +198,12 @@ export class VaultWorkspace {
     const workspace = new VaultWorkspace(options);
     const root = options.root;
     const selected = await options.selection.read().catch(() => null);
-    // The selected Vault and the one being opened are never taken back, whatever the journals say.
-    if (options.fixedLocation && await hasMoveJournal(options.profilePath)) {
-      // A fixed location ignores the selection, so the journal cannot tell which side is in use;
-      // the next start without a fixed location settles the move.
-      workspace.jobStore.event({
-        severity: 'warning', eventType: 'vault.move_pending', vaultPath: null, jobId: null,
-        message: '有尚未完成的知識庫搬移；這次啟動指定了固定的知識庫位置，搬移留待下次一般啟動時處理。',
-      });
-    } else {
-      await workspace.recoverMove(selected, root);
-    }
+    // The selected Vault and the one being opened are never taken back, whatever the journal says.
     if (!options.pendingImport) await recoverImport(options.profilePath, [selected, root]);
     // An import a stop interrupted after its commit point is finished before anything reads the Vault.
     const finished = await finishInPlaceImports(root);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
     try {
-      workspace.previousPaths = await previousLocations(options.profilePath, workspace.current.vaultId);
       if (finished) await workspace.current.runtime.search.rebuild();
       // Interrupted jobs continue before the scheduler can submit a check of the same subscription.
       await workspace.current.jobs.resume();
@@ -259,15 +224,15 @@ export class VaultWorkspace {
     };
   }
 
-  /** Which activity belongs to the active Vault: its ID, its path, and the locations it was moved from. */
-  activityScope(): { vaultPath: string; vaultId: string; previousPaths: string[] } {
-    return { vaultPath: this.current.root, vaultId: this.current.vaultId, previousPaths: this.previousPaths };
+  /** Which activity belongs to the active Vault: its ID and its path. */
+  activityScope(): { vaultPath: string; vaultId: string } {
+    return { vaultPath: this.current.root, vaultId: this.current.vaultId };
   }
 
-  /** Why the active Vault can be neither moved nor switched for another one; null when it can. */
+  /** Why no other Vault can be created or opened in place of the active one; null when it can. */
   private relocationProblem(): CollectorError | null {
     if (this.options.fixedLocation) {
-      return new CollectorError('vault_location_fixed', '這次啟動指定了固定的知識庫位置，無法搬移或開啟其他知識庫。');
+      return new CollectorError('vault_location_fixed', '這次啟動指定了固定的知識庫位置，無法建立或開啟其他知識庫。');
     }
     return null;
   }
@@ -304,10 +269,9 @@ export class VaultWorkspace {
   }
 
   /** Runs one transfer step under the lock; the lock is released whether it succeeds or fails. */
-  private run<T>(operation: TransferOperation, label: string, body: (reporter: OperationReporter) => Promise<OperationCompletion<T>>,
-    failed: (error: unknown) => OperationTerminal = (error) => this.failure(error, label)): Promise<T> {
+  private run<T>(operation: TransferOperation, label: string, body: (reporter: OperationReporter) => Promise<OperationCompletion<T>>): Promise<T> {
     return this.operationLock.start({
-      operation, body, failed,
+      operation, body, failed: (error) => this.failure(error, label),
       cancelled: () => this.record('info', 'vault.transfer_cancelled', `已取消${label}，資料未變更。`),
     });
   }
@@ -351,7 +315,7 @@ export class VaultWorkspace {
   private async pack(file: string, exportedAt: Date, reporter: OperationReporter): Promise<WrittenPackage> {
     reporter.progress('exporting', '正在匯出…');
     return writePackage(this.current.root, file, {
-      createdBy: this.options.createdBy, exportedAt, source: { vaultId: this.current.vaultId, machine: this.machine },
+      createdBy: this.options.createdBy, exportedAt, source: { vaultId: this.current.vaultId, machine: this.machine, folderName: path.basename(this.current.root) },
     });
   }
 
@@ -370,200 +334,17 @@ export class VaultWorkspace {
   /**
    * Settles a committed switch: stops the previous Vault's scheduler, jobs and search, then continues
    * the unfinished jobs of the Vault now in use and starts its scheduler. The previous jobs are
-   * recorded as interrupted with `reason`; after a move (`moved`) they are recorded at the new
-   * location first, so they continue there as the same jobs. Each step that fails is logged and the
-   * switch still completes, because the selection already names the new Vault.
+   * recorded as interrupted with `reason`. Each step that fails is logged and the switch still
+   * completes, because the selection already names the new Vault.
    */
-  private async switchTo(previous: Bundle, how: { reason: string; stop: JobStopKind; moved: boolean }): Promise<{ interruptedJobs: number; resumedJobs: number }> {
+  private async switchTo(previous: Bundle, reason: string): Promise<{ interruptedJobs: number; resumedJobs: number }> {
     const interruptedJobs = previous.jobs.unfinishedCount();
-    if (!how.moved) {
-      // The original of an unfinished move is in use again; its removal must never run.
-      await step('Releasing the move journal failed', async () => {
-        if (await belongsToMove(this.options.profilePath, this.current.root)) await clearMoveJournal(this.options.profilePath);
-      });
-    }
     await step('Previous schedule shutdown failed', () => previous.schedule.close());
-    await step('Previous jobs shutdown failed', () => previous.jobs.close(how.reason, how.stop));
-    if (how.moved && this.current.vaultId) {
-      const vaultId = this.current.vaultId;
-      await step('Moving jobs to the new location failed', async () => {
-        this.jobStore.rebind(previous.root, this.current.root, vaultId);
-        await this.jobStore.flush();
-      });
-    }
+    await step('Previous jobs shutdown failed', () => previous.jobs.close(reason, 'vault_switch'));
     await step('Previous search shutdown failed', () => previous.runtime.close());
     await step('Resuming jobs failed', () => this.current.jobs.resume());
     await step('Schedule start failed', () => this.current.schedule.start());
-    this.previousPaths = await previousLocations(this.options.profilePath, this.current.vaultId);
     return { interruptedJobs, resumedJobs: this.current.jobs.unfinishedCount() };
-  }
-
-  /** Checks a move of the active Vault to `target` without starting it. */
-  async checkMove(target: unknown): Promise<MoveCheck> {
-    const problem = this.relocationProblem();
-    if (problem) throw problem;
-    if (this.operationLock.isLocked()) throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
-    try {
-      const checked = await checkMoveTarget(target, this.folders, await this.vaultBytes(), { free: this.options.statfs });
-      return { targetPath: checked.target, requiredBytes: checked.requiredBytes, availableBytes: checked.availableBytes };
-    } catch (error) {
-      if (error instanceof CollectorError) throw error;
-      console.error('Checking a move location failed', error);
-      throw new CollectorError('invalid_request', '無法檢查新位置或目前的知識庫，請確認位置存在且有權限讀取後重試。');
-    }
-  }
-
-  /** Size of the active Vault; the move itself scans again, so a briefly reused size only guides the check. */
-  private async vaultBytes(): Promise<number> {
-    const root = this.current.root;
-    const now = Date.now();
-    if (this.sizeCache?.root === root && now - this.sizeCache.at < SIZE_REUSE_MS) return this.sizeCache.bytes;
-    const bytes = treeBytes(await scanVault(root));
-    this.sizeCache = { root, bytes, at: now };
-    return bytes;
-  }
-
-  /**
-   * Moves the active Vault to `target` and continues its work there; progress is in `status`. The
-   * location is checked before anything stops, so a refused location leaves collection running.
-   */
-  async move(target: unknown): Promise<TransferStatus> {
-    const checked = await this.checkMove(target);
-    this.dropPreview();
-    const source = this.current.root;
-    void this.run('move', '搬移', (reporter) => this.moveOnce(checked.targetPath, reporter),
-      (error) => this.moveFailure(error, source)).catch(() => undefined);
-    return this.status();
-  }
-
-  private async fault(phase: MoveFault, count?: number): Promise<void> {
-    await this.options.moveFaults?.(phase, count);
-  }
-
-  private async moveOnce(target: string, reporter: OperationReporter): Promise<OperationCompletion<void>> {
-    const profile = this.options.profilePath;
-    const source = this.current.root;
-    const vaultId = this.current.vaultId!;
-    let journal: MoveJournal | null = null;
-    let placed = false;
-    let candidate: Bundle | null = null;
-    let previous: Bundle | null = null;
-    try {
-      this.record('info', 'vault.move_started', `開始把知識庫從 ${source} 搬移到 ${target}。`);
-      reporter.progress('validating', '正在檢查新位置…');
-      const entries = await scanVault(source);
-      await checkMoveTarget(target, this.folders, treeBytes(entries), { free: this.options.statfs });
-      journal = {
-        version: 1, vaultId, source, target, staging: movingFolder(target), phase: 'copying', marker: null, emptyTarget: false, removal: null,
-      };
-      await writeMoveJournal(profile, journal);
-      await mkdir(journal.staging, { mode: 0o700 });
-      reporter.progress('copying', '正在複製檔案…', { completed: 0, total: entries.length });
-      await copyTree(source, journal.staging, entries, async (done) => {
-        reporter.files(done);
-        await this.fault('copying', done);
-      });
-      await this.fault('copied');
-      reporter.progress('verifying', '正在檢查複製結果…');
-      await verifyTree(source, journal.staging, entries);
-      await this.fault('verified');
-      // The location may have changed while copying; space is already taken by the copy itself.
-      await checkMoveTarget(target, this.folders, 0, { free: unlimitedSpace });
-      journal = { ...journal, phase: 'placed', marker: await markerDigest(journal.staging), emptyTarget: await exists(target) };
-      await writeMoveJournal(profile, journal);
-      if (journal.emptyTarget) await rm(target, { recursive: true });
-      await rename(journal.staging, target);
-      placed = true;
-      await this.fault('placed');
-      reporter.progress('indexing', '正在新位置建立搜尋索引…');
-      candidate = await this.makeBundle(target);
-      if (candidate.vaultId !== vaultId) throw new Error('The moved Vault does not carry the ID of the original');
-      await candidate.runtime.search.rebuild();
-      await candidate.schedule.getSchedule();
-      await this.fault('prepared');
-      await this.fault('committing');
-      previous = await this.commit(candidate);
-      reporter.discardHold();
-      candidate = null;
-      placed = false;
-    } catch (error) {
-      if (previous) throw error;
-      try {
-        if (candidate) {
-          await candidate.schedule.close();
-          await candidate.jobs.close();
-          await candidate.runtime.close();
-        }
-        // A move that fails before the switch takes its copy back, leaving the new location as it was.
-        if (placed && journal) await rename(target, journal.staging);
-        if (journal?.emptyTarget && !await exists(target)) await mkdir(target);
-        if (journal) {
-          await rm(journal.staging, { recursive: true, force: true });
-          await this.removeSearchData(target);
-          await clearMoveJournal(profile);
-        }
-      } catch (cleanupError) {
-        console.error('Move cleanup failed', cleanupError);
-      }
-      throw error;
-    }
-    return this.finishMove(previous, journal!, reporter);
-  }
-
-  /** Continues the moved Vault's work at its new location, then removes the original location. */
-  private async finishMove(previous: Bundle, placedJournal: MoveJournal, reporter: OperationReporter): Promise<OperationCompletion<void>> {
-    const profile = this.options.profilePath;
-    const { source, target, vaultId } = placedJournal;
-    let journal: MoveJournal = { ...placedJournal, phase: 'switched' };
-    await step('Move fault', () => this.fault('selected'));
-    await step('Move journal update failed', () => writeMoveJournal(profile, journal));
-    await step('Move fault', () => this.fault('committed'));
-    const { resumedJobs } = await this.switchTo(previous, {
-      reason: '搬移知識庫時暫停；搬移完成後在新位置接續。', stop: 'vault_move', moved: true,
-    });
-    await this.settleRelocation(vaultId, source, target);
-    this.previousPaths = await previousLocations(profile, this.current.vaultId);
-    reporter.progress('cleaning', '正在清除原位置…');
-    let leftover: string | null = source;
-    try {
-      const removal = await removeOriginal(profile, journal, () => this.fault('cleaning'));
-      journal = removal.journal;
-      leftover = removal.leftover;
-    } catch (error) {
-      console.error('Removing the original location failed', error);
-    }
-    const jobs = resumedJobs ? `${resumedJobs} 個收集工作已接續。` : '';
-    const message = leftover
-      ? `已搬移到 ${target} 並開始使用，但原位置未能清除：${leftover}。請確認後手動刪除這個資料夾。${jobs}`
-      : `已搬移到 ${target} 並開始使用，原位置已清除。${jobs}`;
-    const result: TransferResult = { previousVaultPath: source, resumedJobs, ...(leftover ? { leftoverPath: leftover } : {}) };
-    this.record('info', 'vault.moved', `已把知識庫從 ${source} 搬移到 ${target}。${jobs}`);
-    if (leftover) {
-      this.record('warning', 'vault.move_cleanup_failed', `原位置未能清除：${leftover}。請確認後手動刪除這個資料夾。`);
-    }
-    return { value: undefined, message, result };
-  }
-
-  /**
-   * Device records that follow a committed move, in the running app and in recovery at startup: the
-   * previous location joins the Vault's history and the search database of the previous path is
-   * removed. Each step that fails is logged.
-   */
-  private async settleRelocation(vaultId: string, source: string, target: string): Promise<void> {
-    const profile = this.options.profilePath;
-    await step('Recording the previous location failed', () => recordPreviousLocation(profile, vaultId, source, target));
-    await step('Previous search database removal failed', () => this.removeSearchData(source));
-  }
-
-  private moveFailure(error: unknown, source: string): OperationTerminal {
-    if (error instanceof CollectorError && error.code === 'transfer_cancelled') {
-      return this.failure(error, '搬移');
-    }
-    const reason = error instanceof CollectorError ? error.message : '無法完成複製或準備新位置，請確認磁碟空間、權限與搜尋服務後重試。';
-    const message = `搬移失敗：${reason}知識庫仍在原位置 ${source}，資料未變更，收集已恢復。`;
-    if (!(error instanceof CollectorError)) console.error('Move failed', error);
-    this.record('error', 'vault.move_failed', message, undefined, error instanceof CollectorError ? error.code : undefined);
-    return { message, result: null, errorCode: error instanceof CollectorError ? error.code : null };
   }
 
   /**
@@ -578,7 +359,7 @@ export class VaultWorkspace {
     }
     const root = path.resolve(value);
     if (isWorkFolder(root)) {
-      throw new CollectorError('invalid_request', '這是搬移或匯入使用的暫存資料夾，不能當作知識庫開啟。請開啟搬移後的新位置。');
+      throw new CollectorError('invalid_request', '這是匯入使用的暫存資料夾，不能當作知識庫開啟。');
     }
     if (await isWithin(root, this.current.root)) {
       throw new CollectorError('invalid_request', await isWithin(this.current.root, root)
@@ -586,14 +367,39 @@ export class VaultWorkspace {
     }
     if (await isWithin(root, this.options.profilePath)) throw new CollectorError('invalid_request', '不能開啟程式資料目錄裡的資料夾。');
     const inspection = await inspectVaultDirectory(root);
-    if (inspection.kind === 'empty') throw new CollectorError('vault_invalid', '這個資料夾還不是知識庫，請選擇已有的知識庫。');
-    if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
+    if (inspection.kind !== 'existing') throw new CollectorError('vault_invalid', notAVault(inspection));
     this.dropPreview();
     void this.run('open', '開啟其他知識庫', (reporter) => this.openOnce(inspection.path, reporter)).catch(() => undefined);
     return this.status();
   }
 
-  private async openOnce(root: string, reporter: OperationReporter): Promise<OperationCompletion<void>> {
+  /**
+   * Creates the new Vault folder `name` in `location` and switches to it; progress is in `status`.
+   * The folder is checked before anything stops, and a switch that fails removes the new folder, so
+   * the active Vault stays in use and the location stays as it was.
+   */
+  async createNew(location: unknown, name: unknown): Promise<TransferStatus> {
+    const problem = this.relocationProblem();
+    if (problem) throw problem;
+    const folders = { vaultRoot: this.current.root, profilePath: this.options.profilePath };
+    await newVaultFolder(location, name, folders);
+    this.dropPreview();
+    void this.run('create', '建立知識庫', async (reporter) => {
+      const root = await createNewVault(location, name, this.options.createdBy, folders);
+      try {
+        return await this.openOnce(root, reporter, 'created');
+      } catch (error) {
+        // Once the switch committed, the new Vault is the one in use and stays.
+        if (this.current.root !== root) {
+          await rm(root, { recursive: true, force: true }).catch((cleanup: unknown) => console.error('Removing the new Vault failed', cleanup));
+        }
+        throw error;
+      }
+    }).catch(() => undefined);
+    return this.status();
+  }
+
+  private async openOnce(root: string, reporter: OperationReporter, how: 'opened' | 'created' = 'opened'): Promise<OperationCompletion<void>> {
     let candidate: Bundle | null = null;
     let previous: Bundle | null = null;
     try {
@@ -618,37 +424,14 @@ export class VaultWorkspace {
       }
       throw failure;
     }
-    const { interruptedJobs, resumedJobs } = await this.switchTo(previous, {
-      reason: '切換到其他知識庫時工作尚未完成；回到這個知識庫時接續。', stop: 'vault_switch', moved: false,
-    });
+    const { interruptedJobs, resumedJobs } = await this.switchTo(previous, '切換到其他知識庫時工作尚未完成；回到這個知識庫時接續。');
     const paused = interruptedJobs ? `它的 ${interruptedJobs} 個收集工作已暫停，回到原知識庫時接續。` : '';
     const resumed = resumedJobs ? `這個知識庫有 ${resumedJobs} 個收集工作接續。` : '';
-    const message = `已開啟知識庫 ${root}。原知識庫保留在 ${previous.root}。${paused}${resumed}`;
+    const message = `已${how === 'created' ? '建立並開啟' : '開啟'}知識庫 ${root}。原知識庫保留在 ${previous.root}。${paused}${resumed}`;
     const result: TransferResult = { previousVaultPath: previous.root, interruptedJobs, resumedJobs };
     // Device-level, so both Vaults show the switch.
-    this.record('info', 'vault.opened', message, null);
+    this.record('info', how === 'created' ? 'vault.created' : 'vault.opened', message, null);
     return { value: undefined, message, result };
-  }
-
-  /** Takes a move interrupted by a stop forward or back before the Vault opens; see `recoverMove`. */
-  private async recoverMove(selected: string | null, root: string): Promise<void> {
-    const recovery = await recoverMove(this.options.profilePath, {
-      selected, kept: [selected, root], jobStore: this.jobStore, removeSearch: (folder) => this.removeSearchData(folder),
-    });
-    if (!recovery || recovery.released) return;
-    const base = { vaultPath: recovery.committed ? recovery.target : recovery.source, vaultId: recovery.vaultId, jobId: null };
-    if (!recovery.committed) {
-      this.jobStore.event({ ...base, severity: 'warning', eventType: 'vault.move_failed',
-        message: `搬移在完成前中斷；知識庫仍在原位置 ${recovery.source}，資料未變更。` });
-      return;
-    }
-    await this.settleRelocation(recovery.vaultId, recovery.source, recovery.target);
-    this.jobStore.event({ ...base, severity: 'info', eventType: 'vault.moved',
-      message: `已完成上次中斷的搬移：知識庫在 ${recovery.target}。` });
-    if (recovery.leftover) {
-      this.jobStore.event({ ...base, severity: 'warning', eventType: 'vault.move_cleanup_failed',
-        message: `原位置未能清除：${recovery.leftover}。請確認後手動刪除這個資料夾。` });
-    }
   }
 
   /**
@@ -867,16 +650,6 @@ export class VaultWorkspace {
     return searchDatabasePath(this.options.searchData, root);
   }
 
-  /** Removes the search database of a Vault path, its state record and its process record; used when the path stops being a Vault. */
-  private async removeSearchData(root: string): Promise<void> {
-    if (this.options.createSearch) return;
-    const database = this.searchPath(root);
-    await rm(database, { recursive: true, force: true });
-    await rm(`${database}-state.json`, { force: true });
-    await rm(pidFilePath(database), { force: true });
-    await rm(searchProfilePath(database), { force: true });
-  }
-
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
     const vaultId = await readVaultId(root);
     if (!vaultId) throw new CollectorError('vault_invalid', '知識庫標記檔沒有識別碼，不是目前支援的知識庫格式，無法開啟。');
@@ -992,23 +765,10 @@ function changeSummary(counts: ChangeCounts): string {
   return [part('文件', counts.documents), part('訂閱', counts.subscriptions)].filter(Boolean).join('；') || '沒有變更';
 }
 
-/** Free space that never runs out, for a check that has already reserved its space. */
-const unlimitedSpace: StatFs = async () => ({ bavail: Number.MAX_SAFE_INTEGER, bsize: 1 });
-
 function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined, noteChange: NoteChange): CollectionScheduler {
   return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root, noteChange), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
     ...(pause ? { pause } : {}),
-  });
-}
-
-/** Settles with `work`, or rejects with the signal's reason once it is aborted. */
-function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason as Error);
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason as Error);
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 }
 

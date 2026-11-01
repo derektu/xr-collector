@@ -512,11 +512,8 @@ export interface JobRecovery {
   lastStop?: JobStopKind;
 }
 
-/**
- * How a job stopped: the service closed normally, ended abnormally, moved the Vault to another
- * location, or switched to another Vault.
- */
-export type JobStopKind = 'shutdown' | 'crash' | 'vault_move' | 'vault_switch';
+/** How a job stopped: the service closed normally, ended abnormally, or switched to another Vault. */
+export type JobStopKind = 'shutdown' | 'crash' | 'vault_switch';
 
 /** What a restart needs to continue a job without repeating finished steps. Internal to the service. */
 export interface JobCheckpoint {
@@ -1015,13 +1012,44 @@ export type VaultInspection =
   | { kind: 'existing'; path: string; documentCount: number }
   | { kind: 'invalid'; path: string; reason: string };
 
-export type VaultSetupAction = 'create' | 'open' | 'import';
+/**
+ * How Onboarding and Agents make a Vault active while none is: `create` a new Vault folder named
+ * `name` in the folder `location`, `open` the existing Vault at `path`, or `import`: create the new
+ * folder from the export file at `packagePath`.
+ */
+export type VaultSetupRequest =
+  | { action: 'create'; location: string; name: string }
+  | { action: 'open'; path: string }
+  | { action: 'import'; location: string; name: string; packagePath: string };
+
+/** A new Vault folder checked before it is created: its path, and why it cannot be created (null when it can). */
+export interface NewVaultCheck {
+  /** `<location>/<name>`; null when the location or name names no folder. */
+  path: string | null;
+  problem: string | null;
+}
+
+/** What an export file holds, for choosing it before a Vault is created from it. */
+export interface PackageDescription {
+  path: string;
+  fileName: string;
+  exportedAt: string | null;
+  documents: number;
+  subscriptions: number;
+  /** Name of the Vault folder the export came from, which a Vault created from it starts with. */
+  folderName: string;
+}
 
 /** Device-side Vault location state shared by Onboarding, Settings and Agents. */
 export interface VaultSetupStatus {
   state: 'ready' | 'not_ready';
   vaultPath: string | null;
-  suggestedPath: string;
+  /**
+   * Where a new Vault goes unless the person picks another place, and the name it starts with: the
+   * folder holding the active Vault, or the Documents folder while none is active. Choosing an
+   * existing Vault starts in the same folder.
+   */
+  newVault: { location: string; name: string };
   /** The previously selected Vault that could not be opened at startup. */
   failure: { path: string; reason: string } | null;
 }
@@ -1047,16 +1075,15 @@ export class CollectorError extends Error {
   }
 }
 
-export type TransferOperation = 'export' | 'import' | 'move' | 'open';
+export type TransferOperation = 'export' | 'import' | 'open' | 'create';
 
 /**
- * Progress of the one Vault export, import, move or switch that runs at a time. `waiting` means the
+ * Progress of the one Vault export, import or switch that runs at a time. `waiting` means the
  * operation waits for the collection steps already running to finish; queued collection waits until
  * the operation ends.
  */
 export interface TransferStatus {
-  state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'copying' | 'verifying' | 'indexing' | 'cleaning'
-    | 'completed' | 'error';
+  state: 'idle' | 'waiting' | 'exporting' | 'validating' | 'extracting' | 'indexing' | 'completed' | 'error';
   operation: TransferOperation | null;
   message: string;
   completedFiles: number;
@@ -1066,7 +1093,7 @@ export interface TransferStatus {
   result: TransferResult | null;
   /** The error code of a failed operation, such as `vault_busy`; null unless `state` is `error`. */
   errorCode: CollectorErrorCode | null;
-  /** Why the active Vault cannot be moved or another Vault opened; null when both are possible. */
+  /** Why no other Vault can be created or opened in place of the active one; null when it can. */
   relocationUnavailable: { code: CollectorErrorCode; message: string } | null;
 }
 
@@ -1089,17 +1116,8 @@ export interface TransferResult {
    */
   previousVaultPath?: string;
   interruptedJobs?: number;
-  /** Move and open: unfinished jobs of the Vault now in use that continue after the switch. */
+  /** Open: unfinished jobs of the Vault now in use that continue after the switch. */
   resumedJobs?: number;
-  /** Move: a part of the previous location that could not be removed and is left for the person to delete. */
-  leftoverPath?: string;
-}
-
-/** Where a move would place the active Vault and the space it needs there. */
-export interface MoveCheck {
-  targetPath: string;
-  requiredBytes: number;
-  availableBytes: number;
 }
 
 /** Where an export goes when no other place is chosen: the export folder and a file name of today. */

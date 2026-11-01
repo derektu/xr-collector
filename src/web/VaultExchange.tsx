@@ -49,16 +49,19 @@ export function ExchangeActions({ onChanged }: { onChanged: (message: string) =>
   </>;
 }
 
-/** A modal dialog that cannot be dismissed with Escape while `busy`. */
-export function Modal({ title, wide, busy, onDismiss, children, testId }: {
-  title: string; wide?: boolean; busy: boolean; onDismiss: () => void; children: ReactNode; testId: string;
+/**
+ * A modal dialog that cannot be dismissed with Escape while `busy`. `width` widens it from a short
+ * message: `form` fits the new Vault form at the size Onboarding shows it, `wide` fits a comparison.
+ */
+export function Modal({ title, width, busy, onDismiss, children, testId }: {
+  title: string; width?: 'form' | 'wide'; busy: boolean; onDismiss: () => void; children: ReactNode; testId: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open) element.showModal();
   }, []);
-  return <dialog ref={dialog} className={wide ? 'confirm-dialog transfer-dialog wide' : 'confirm-dialog transfer-dialog'}
+  return <dialog ref={dialog} className={width ? `confirm-dialog transfer-dialog ${width}` : 'confirm-dialog transfer-dialog'}
     aria-labelledby={`${testId}-title`} data-testid={testId}
     onCancel={(event) => { event.preventDefault(); if (!busy) onDismiss(); }}>
     <h2 id={`${testId}-title`}>{title}</h2>
@@ -268,7 +271,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const removal = preview ? removalText(preview.replace) : null;
   const done = result?.result;
 
-  return <Modal title="匯入" wide busy={phase === 'comparing' || phase === 'applying' || recording}
+  return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying' || recording}
     onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="import-dialog">
     {phase === 'input' ? <>
       <PathField label="匯出檔" value={source} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />

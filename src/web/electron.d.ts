@@ -2,7 +2,10 @@ import type { ElectronThemeBridge } from './app-shell.js';
 import type { DesktopNavigationTarget } from './desktop-navigation.js';
 /** Native desktop capabilities that business screens cannot get over HTTP. */
 export interface DesktopBridge {
-  chooseDirectory(defaultPath?: string): Promise<string | null>;
+  /** Native folder picker for where a new Vault goes, starting at `start`; null when cancelled. */
+  chooseVaultLocation(start?: string): Promise<string | null>;
+  /** Native folder picker for an existing Vault, starting at `start`; null when cancelled. */
+  chooseVault(start?: string): Promise<string | null>;
   /**
    * Native save dialog for an export file, starting at today's file in the export folder (created
    * when missing); null when cancelled. `overwrite` is true when the dialog itself confirmed

@@ -10,7 +10,8 @@
 | 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`feature-navigation`、`live-updates` |
 | 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization`、`live-updates` |
 | RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
-| Vault 匯出、匯入與搬移 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`workspace-content`、`live-updates` |
+| 開始使用 | [onboarding.md](onboarding.md) | Web；原生選擇器需 Electron | `onboarding` |
+| Vault 建立、開啟、匯出與匯入 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`onboarding`、`workspace-content`、`live-updates` |
 | 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray`、`notification-clicks` |
 | 訂閱自動暫停通知 | [notifications.md](notifications.md) | Web＋原生 Desktop | `notifications`、`notification-clicks` |
 | 建置資訊 | [build-info.md](build-info.md) | Web；安裝身分需 packaged Desktop | `build-info` |
@@ -92,7 +93,7 @@ CI 尚未累積 `results.json`，依據是本機 `--jobs 3` 的兩次完整執�
 | 工作頁 | `workspace-content` 的單篇失敗重試與移除；503 feed 檢查在「進行中」等待重試；原生選單可導覽工作頁 |
 | 文件、閱讀與搜尋 | `workspace-content` 的 22 篇分頁、來源篩選、搜尋、閱讀返回、刪除與重新收集、搜尋不可用 UI fixture；另驗重建索引保持 Vault 文件不變 |
 | RSS | `workspace-content` 的網頁辨識、文章閱讀與設定持久化；503 重試、恢復後完成；未重跑 429／自動暫停流程 |
-| Vault 匯出匯入與搬移 | 設定頁背景計數 0 → 3 → 5；實際匯出及同包無變更匯入，ZIP 不含 Agent 設定、連線資料不變；未重跑整套搬移／合併／取代及原生對話框 |
+| Vault 匯出匯入與切換 | 設定頁背景計數 0 → 3 → 5；實際匯出及同包無變更匯入，ZIP 不含 Agent 設定、連線資料不變；未重跑整套合併／取代／切換及原生對話框 |
 | 選單列／系統匣 | Mac 原生開發版背景模式的選單模型、自動檢查切換、工作／記錄導覽、關窗後授權 Agent 可達、第二次啟動沿用 runtime 與正常退出；未驗實體圖示、視窗顯示／聚焦及 Windows |
 | 建置資訊 | Onboarding／設定／授權 Agent 的同一 buildId；503 UI fixture 後點重試恢復；收錄 `build-info` W3。本次未重建或重驗安裝版身分 |
 | 登入自啟 | Web `login-startup` 的真開發版拒絕與受控 fixture 分支；未操作 OS 登入項目，真實登入仍需 VM 與確認時段 |

@@ -19,7 +19,7 @@ export async function run({ instance, page, record }) {
     expect(await panel.getByRole('button', { name: '複製連線資料' }).isEnabled(), 'Not Ready 時可複製連線資料', { id: 'a44.onboarding-copy' });
     expect(await panel.getByRole('button', { name: '連線設定…' }).isEnabled(), 'Not Ready 時可開啟連線設定', { id: 'a44.onboarding-settings' });
     await shot('onboarding-agent-panel');
-    await instance.api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ action: 'create', path: `${instance.runDir}/vault` }) });
+    await instance.api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ action: 'create', location: instance.runDir, name: 'vault' }) });
     await page.getByTestId('nav-settings').waitFor({ timeout: 10_000 });
   });
 

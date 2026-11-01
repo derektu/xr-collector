@@ -135,7 +135,7 @@ export class CollectionScheduler {
 
   /** Checks every enabled subscription of every type now, whether or not automatic collection is on. */
   async runNow(): Promise<JobSubmission[]> {
-    if (this.suspended) throw new CollectorError('vault_busy', '資料搬移進行中，請稍後再檢查。');
+    if (this.suspended) throw new CollectorError('vault_busy', '正在進行知識庫操作，請稍後再檢查。');
     const lists = await Promise.all(this.runners.map((runner) => runner.list()));
     const runners = this.runners.filter((_runner, index) => lists[index]!.some((subscription) => subscription.enabled));
     // With nothing to check, the service of the first type answers as a manual check of nothing does.

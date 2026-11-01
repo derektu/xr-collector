@@ -676,7 +676,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     expect(await scheduleOn(c.vault)).toBe(false);
   });
 
-  it('refuses an invalid file, a folder with content or a working folder, leaving the folder as it was', async () => {
+  it('refuses an invalid file, an existing folder or a working folder, leaving the location as it was', async () => {
     const { root, a, first } = await pair();
     const c = await machine('C', root);
     const empty = path.join(root, 'Empty');
@@ -685,15 +685,18 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     await mkdir(full); await writeFile(path.join(full, 'note.txt'), 'mine');
     const bad = await fileOf(root, 'bad.zip', await tampered(await readFile(first), `documents/youtube/${D1}.md`, 'changed'));
     const options = { profilePath: c.profile, createdBy: 'XR Collector test' };
+    const fresh = path.join(root, 'New');
     for (const [packageFile, folder, message] of [
-      [bad, empty, '不一致'], [path.join(root, 'old.xr-vault'), empty, '.zip'], [path.join(root, 'none.zip'), empty, '找不到'],
-      [first, full, '其他檔案'], [first, `${empty}.importing-${randomUUID()}`, '暫存資料夾'], [first, 'relative', '完整路徑'],
+      [bad, fresh, '不一致'], [path.join(root, 'old.xr-vault'), fresh, '.zip'], [path.join(root, 'none.zip'), fresh, '找不到'],
+      [first, full, '已經有「Full」'], [first, empty, '已經有「Empty」'], [first, path.join(root, 'missing', 'New'), '找不到新知識庫所在的資料夾'],
+      [first, `${fresh}.importing-${randomUUID()}`, '暫存資料夾'], [first, 'relative', '完整路徑'],
     ] as const) {
       await expect(importNewVault({ ...options, packageFile, folder }), `${packageFile} → ${folder}`)
         .rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining(message) });
     }
     expect(await readdir(empty)).toEqual(['.DS_Store']);
     expect(await readdir(full)).toEqual(['note.txt']);
+    expect(existsSync(fresh)).toBe(false);
     expect((await readdir(root)).filter((name) => name.includes('.importing-'))).toEqual([]);
     expect(existsSync(path.join(c.profile, IMPORT_JOURNAL))).toBe(false);
     expect(await readVaultId(a.vault)).toBeTruthy();
@@ -708,15 +711,12 @@ describe('creating a Vault from an export file (X77-A15)', () => {
       await importNewVault({ packageFile: first, folder: target, profilePath: c.profile, createdBy: 'XR Collector test' });
       return JSON.parse(await readFile(journalFile, 'utf8'));
     };
-    await mkdir(target);
-    expect(await stoppedAfterRename()).toMatchObject({ placed: true, emptyTarget: true, marker: await markerDigest(target) });
+    expect(await stoppedAfterRename()).toMatchObject({ placed: true, marker: await markerDigest(target) });
     await using(c, async () => undefined);
-    // The import had replaced an empty folder, which comes back.
-    expect(await readdir(target)).toEqual([]);
+    expect(existsSync(target)).toBe(false);
     expect(existsSync(journalFile)).toBe(false);
 
     // A folder at the target that the import did not write is left alone.
-    await rm(target, { recursive: true });
     await stoppedAfterRename();
     await rm(path.join(target, VAULT_MARKER));
     await writeVaultMarker(target, 'another program');
@@ -801,7 +801,7 @@ describe('export and import over HTTP (X77-A14)', () => {
     const file = await exportFrom(a, 'a-2');
     expect(await listing()).toEqual(before);
     const manifest = await manifestOf(await readFile(file));
-    expect(manifest.source).toEqual({ vaultId: await readVaultId(a.vault), machine: 'A' });
+    expect(manifest.source).toEqual({ vaultId: await readVaultId(a.vault), machine: 'A', folderName: path.basename(a.vault) });
     expect(manifest).not.toHaveProperty('sync');
   });
 

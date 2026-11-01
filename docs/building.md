@@ -67,7 +67,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | `npm run electron` | build 後以 Electron 開啟桌面版 |
 | `npm run build` 後 `npm start` | 單一 Web Server 在 `http://127.0.0.1:7175/` 同時提供 UI 與 API |
 
-第一次開啟時在 Onboarding 選擇知識庫（Vault）目錄。Web 開發模式的裝置資料放在 checkout 的 `.data/`；`XR_COLLECTOR_VAULT` 直接指定 Vault 並略過 Onboarding，`XR_COLLECTOR_PROFILE` 指定裝置資料目錄。
+第一次開啟時在開始使用畫面建立或開啟知識庫（Vault）。Web 開發模式的裝置資料放在 checkout 的 `.data/`；`XR_COLLECTOR_VAULT` 直接指定 Vault 並略過 Onboarding，`XR_COLLECTOR_PROFILE` 指定裝置資料目錄。
 
 ### 測試
 

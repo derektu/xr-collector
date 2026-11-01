@@ -123,7 +123,7 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
     return { kind: 'empty', path: root, exists: true };
   }
   if (!entries.includes(VAULT_MARKER)) {
-    return { kind: 'invalid', path: root, reason: '這個目錄包含其他檔案，無法辨識為 XR Collector 知識庫。' };
+    return { kind: 'invalid', path: root, reason: notAVaultReason(root) };
   }
 
   let marker: unknown;
@@ -153,6 +153,16 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   } catch (error) {
     return { kind: 'invalid', path: root, reason: unreadableReason(error, '知識庫的文件目錄') };
   }
+}
+
+/** A folder that holds other files, or nothing, is named as not being a Vault. */
+function notAVaultReason(root: string): string {
+  return `「${path.basename(root) || root}」不是 XR Collector 知識庫。`;
+}
+
+/** Why a directory chosen to open is no Vault; a Vault that cannot be read gives its own reason. */
+export function notAVault(inspection: Exclude<VaultInspection, { kind: 'existing' }>): string {
+  return inspection.kind === 'empty' ? notAVaultReason(inspection.path) : inspection.reason;
 }
 
 /** Writes the marker that turns an empty directory into a Vault, with a new Vault ID. */

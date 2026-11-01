@@ -1,5 +1,6 @@
 .build-info-version { font-variant-numeric:tabular-nums; }
-.onboarding-with-build-info .onboarding-screen { min-height:0; }
-.onboarding-with-build-info .onboarding-main { min-height:calc(100vh - 165px); }
+.onboarding-with-build-info { min-height:100vh; display:flex; flex-direction:column; background:var(--base); }
+.onboarding-with-build-info .onboarding-screen { min-height:0; flex:1 0 auto; }
+.onboarding-with-build-info .onboarding-main { min-height:0; }
 .build-info-compact { padding:12px clamp(20px,4vw,54px) 18px; color:var(--secondary); background:var(--base); font-size:11px; line-height:1.6; }
 .build-info-compact p { margin:0; }

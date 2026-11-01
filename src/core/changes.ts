@@ -2,7 +2,7 @@ import type { JobState } from './types.js';
 
 /**
  * What changed, without the data itself: readers fetch the resource again. `vault` with `scope:
- * 'contents'` means the Vault's data was replaced as a whole (import, move, another Vault opened,
+ * 'contents'` means the Vault's data was replaced as a whole (import, another Vault opened,
  * setup), so every resource reads again.
  */
 export type Change =

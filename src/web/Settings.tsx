@@ -15,9 +15,8 @@ const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', d
  * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
-export function Settings({ vaultPath, activeJobs, themePreference, update, onUpdate, onThemePreference, onChanged }: {
+export function Settings({ vaultPath, themePreference, update, onUpdate, onThemePreference, onChanged }: {
   vaultPath: string | null;
-  activeJobs: number;
   themePreference: ThemePreference;
   update: DeviceUpdateStatus | null;
   onUpdate: (status: DeviceUpdateStatus) => void;
@@ -31,7 +30,7 @@ export function Settings({ vaultPath, activeJobs, themePreference, update, onUpd
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
-      <VaultLocationSection vaultPath={vaultPath} activeJobs={activeJobs} counts={counts} onChanged={onChanged} />
+      <VaultLocationSection vaultPath={vaultPath} counts={counts} onChanged={onChanged} />
       <SearchIndexCard />
       <LoginStartup onChanged={onChanged} />
       <AgentConnection />

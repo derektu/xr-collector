@@ -23,13 +23,14 @@ import type { FileSource } from './vault-merge.js';
  * ```json
  * { "format": "xr-collector-package", "formatVersion": 1,
  *   "exportedAt": "<ISO time>", "createdBy": "<program>",
- *   "source": { "vaultId": "<UUID>", "machine": "<name>" },
+ *   "source": { "vaultId": "<UUID>", "machine": "<name>", "folderName": "<name>" },
  *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
  *   "files": [{ "path": "documents/<source type>/<ID>.md", "size": 0, "sha256": "<hex>" }] }
  * ```
  *
- * `source` names the Vault and the machine the export came from, for diagnosis; an import compares
- * the files themselves, whose documents, subscriptions and records carry their own times.
+ * `source` names the Vault, the machine and the Vault folder the export came from: the ID and machine
+ * for diagnosis, the folder name as the name a Vault created from the export starts with. An import
+ * compares the files themselves, whose documents, subscriptions and records carry their own times.
  *
  * The registered files are the documents `MarkdownVault.list` returns and the settings files:
  * the subscriptions file each registered source type declares, the schedule file and the deletion
@@ -84,7 +85,7 @@ export function supportedPackageFormatVersion(): number {
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
 export interface ManifestFile { path: string; size: number; sha256: string }
-export interface PackageSource { vaultId: string; machine: string }
+export interface PackageSource { vaultId: string; machine: string; folderName?: string }
 export interface PackageManifest {
   format: typeof PACKAGE_FORMAT;
   formatVersion: number;
@@ -406,7 +407,9 @@ function parseManifest(bytes: Buffer): PackageManifest {
     format: PACKAGE_FORMAT, formatVersion: formatVersion!,
     ...(typeof value.exportedAt === 'string' ? { exportedAt: value.exportedAt } : {}),
     ...(typeof value.createdBy === 'string' ? { createdBy: value.createdBy } : {}),
-    ...(sourceValid ? { source: { vaultId: source.vaultId!, machine: source.machine! } } : {}),
+    ...(sourceValid ? { source: {
+      vaultId: source.vaultId!, machine: source.machine!, ...(typeof source.folderName === 'string' ? { folderName: source.folderName } : {}),
+    } } : {}),
     ...(summary && typeof summary === 'object' && [summary.documents, summary.subscriptions, summary.deletions].every(Number.isSafeInteger)
       ? { summary: { documents: summary.documents, subscriptions: summary.subscriptions, deletions: summary.deletions } } : {}),
     files: (value.files as ManifestFile[]).map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })),

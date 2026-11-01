@@ -281,8 +281,7 @@ export class VaultOperationLock {
   private busyWrite(): CollectorError {
     if (this.updateContext) return new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
     const operation = this.value.operation;
-    return new CollectorError('vault_busy', operation === 'move' ? '正在搬移知識庫，請等搬移完成後再操作。'
-      : operation === 'open' ? '正在開啟其他知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
+    return new CollectorError('vault_busy', operation === 'open' || operation === 'create' ? '正在切換知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
   }
 
   private releaseUpdate(context: UpdateContext): void {

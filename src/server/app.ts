@@ -47,7 +47,9 @@ import {
   type SearchStatusReport,
   type TranscriptSearch,
   type VaultInspection,
-  type VaultSetupAction,
+  type NewVaultCheck,
+  type PackageDescription,
+  type VaultSetupRequest,
   type VaultSetupResult,
   type VaultSetupStatus,
   type PendingSubscription,
@@ -124,12 +126,34 @@ const OFFLINE_MESSAGE = '目前沒有網路，恢復後再試。';
 export interface VaultSetup {
   status(): VaultSetupStatus;
   inspect(path: string): Promise<VaultInspection>;
-  setup(action: VaultSetupAction, path: string, packagePath?: string): Promise<VaultSetupResult>;
+  /** Checks the new Vault folder `name` in `location` before it is created. */
+  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck>;
+  /** Reads what an export file holds before a Vault is created from it. */
+  describePackage(file: unknown): Promise<PackageDescription>;
+  setup(request: VaultSetupRequest): Promise<VaultSetupResult>;
+}
+
+const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+
+/** Reads the body of `POST /api/vault/setup`; see `VaultSetupRequest`. */
+function setupRequest(body: Record<string, unknown>): VaultSetupRequest {
+  const { action, location, name, path: vaultPath, packagePath } = body;
+  if (action === 'open') {
+    if (!text(vaultPath)) throw new CollectorError('invalid_request', '開啟知識庫時，請提供知識庫資料夾的完整路徑 path。');
+    return { action, path: vaultPath };
+  }
+  if (action !== 'create' && action !== 'import') throw new CollectorError('invalid_request', 'action 必須是 create、open 或 import。');
+  if (!text(location) || typeof name !== 'string') {
+    throw new CollectorError('invalid_request', '建立知識庫時，請提供位置 location（完整路徑）與名稱 name。');
+  }
+  if (action === 'create') return { action, location, name };
+  if (!text(packagePath)) throw new CollectorError('invalid_request', '從匯出檔建立知識庫時，請提供匯出檔的完整路徑 packagePath。');
+  return { action, location, name, packagePath };
 }
 
 /** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
 const NOT_READY_ROUTES = new Set([
-  '/api/health', '/api/events', '/api/changes', '/api/vault/setup', '/api/vault/inspect', '/api/activity', '/api/pacing',
+  '/api/health', '/api/events', '/api/changes', '/api/vault/setup', '/api/vault/inspect', '/api/vault/new/check', '/api/vault/package/describe', '/api/activity', '/api/pacing',
   '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
   '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
   '/api/device/updates', '/api/device/updates/check', '/api/device/updates/download',
@@ -375,15 +399,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       return { inspection: await vaultSetup.inspect(request.body.path) };
     });
-    app.post<{ Body: { action?: unknown; path?: unknown; packagePath?: unknown } }>('/api/vault/setup', deviceData(), async (request) => {
-      const { action, path: vaultPath, packagePath } = request.body ?? {};
-      if ((action !== 'create' && action !== 'open' && action !== 'import') || typeof vaultPath !== 'string' || vaultPath.trim() === '') {
-        throw new CollectorError('invalid_request', '請提供 action（create、open 或 import）與知識庫目錄路徑。');
-      }
-      if (action === 'import' && (typeof packagePath !== 'string' || packagePath.trim() === '')) {
-        throw new CollectorError('invalid_request', '從匯出檔建立知識庫時，請提供匯出檔的完整路徑 packagePath。');
-      }
-      return vaultSetup.setup(action, vaultPath, typeof packagePath === 'string' ? packagePath : undefined);
+    app.post<{ Body: { location?: unknown; name?: unknown } | undefined }>('/api/vault/new/check', deviceData(), async (request) => ({
+      check: await vaultSetup.checkNew(request.body?.location, request.body?.name),
+    }));
+    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/package/describe', deviceData(), async (request) => ({
+      package: await vaultSetup.describePackage(request.body?.path),
+    }));
+    app.post<{ Body: Record<string, unknown> | undefined }>('/api/vault/setup', deviceData(), async (request) => {
+      return vaultSetup.setup(setupRequest(request.body ?? {}));
     });
   }
 
@@ -416,12 +439,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { cancelled: true };
     });
     app.post('/api/vault/cancel', vaultOperation(), async () => transfer.cancelWait());
-    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move/check', vaultOperation(), async (request) => transfer.checkMove(request.body?.targetPath));
-    app.post<{ Body: { targetPath?: unknown } | undefined }>('/api/vault/move', vaultOperation(), async (request, reply) => {
-      return reply.code(202).send(await transfer.move(request.body?.targetPath));
-    });
     app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', vaultOperation(), async (request, reply) => {
       return reply.code(202).send(await transfer.openOther(request.body?.path));
+    });
+    app.post<{ Body: { location?: unknown; name?: unknown } | undefined }>('/api/vault/create', vaultOperation(), async (request, reply) => {
+      return reply.code(202).send(await transfer.createNew(request.body?.location, request.body?.name));
     });
   }
 
@@ -758,7 +780,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       await confirmOnline();
       if (listed === undefined) {
-        // Checking every subscription goes through the scheduler, which refuses while the Vault is moving.
+        // Checking every subscription goes through the scheduler, which refuses while a Vault operation runs.
         if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
         const submissions = await options.schedule.runNow();
         return reply.code(202).send({ submissions: submissions.map(submissionView) });

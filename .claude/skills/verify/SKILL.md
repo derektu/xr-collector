@@ -47,7 +47,7 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --evidence /tmp/
 | `synthetic`（預設） | 合成頻道，讀 `catalog.json`，不連網 | 真的 RSS plugin，讀這個 instance 在 feeds port 提供的合成 feed |
 | `real` | yt-dlp＋Deno，連 YouTube | 真的 plugin 讀網路上的 feed |
 
-**Vault 模式**：`selected`（預設）建立 Vault 並寫進 profile 的 `vault-selection.json`，與使用者選過 Vault 的狀態相同，搬移與開啟其他知識庫可用。`fixed` 走 `XR_COLLECTOR_VAULT`，搬移與開啟其他知識庫顯示「這次啟動指定了固定的知識庫位置」。`none` 不建立 Vault，畫面從 Onboarding 開始。
+**Vault 模式**：`selected`（預設）建立 Vault 並寫進 profile 的 `vault-selection.json`，與使用者選過 Vault 的狀態相同，開啟其他知識庫可用。`fixed` 走 `XR_COLLECTOR_VAULT`，開啟其他知識庫顯示「這次啟動指定了固定的知識庫位置」。`none` 不建立 Vault，畫面從 Onboarding 開始。
 
 **合成資料**（`scripts/lib/synthetic.mjs` 的 `defaultCatalog()`，標題都有【合成】）：
 
@@ -123,7 +123,7 @@ try {
 | 來源 | 內容 |
 | --- | --- |
 | `api` | `apiState`：`/api/vault/status`、`/api/subscriptions`、`/api/jobs/overview`、`/api/documents`、`/api/search/status`；`documents` 依 `nextOffset` 讀完所有分頁，為 `{ documents, total, pages }`，`nextOffset` 缺少或沒有往前時停止並附 `error`。只在 run 自己的 server 程序存活時才發請求：run 停止後同一個 port 可能已經是取得這個 slot 的另一個 run。run 停止、或是 Electron run（沒有 HTTP 位址）時 unavailable |
-| `vault` | profile 的 `vault-selection.json` 選的 Vault（流程中搬移或換過時跟著換），沒有時為 run 目錄的 `vault/`。`documents`：每個 `.md` 的 `path`、`bytes`、`frontmatter`（解析後的物件，沒有時為 null）、`contentHash`（frontmatter 之後正文的 sha256）；`files`：每個 `.json` 解析後的內容、`.jsonl` 逐行解析的陣列；`other`：其他檔案的 `path`、`bytes`、`sha256` |
+| `vault` | profile 的 `vault-selection.json` 選的 Vault（流程中換過時跟著換），沒有時為 run 目錄的 `vault/`。`documents`：每個 `.md` 的 `path`、`bytes`、`frontmatter`（解析後的物件，沒有時為 null）、`contentHash`（frontmatter 之後正文的 sha256）；`files`：每個 `.json` 解析後的內容、`.jsonl` 逐行解析的陣列；`other`：其他檔案的 `path`、`bytes`、`sha256` |
 | `profile` | 與 `vault` 相同的結構，讀 run 的 profile，例如 `jobs/jobs.json`、`vault-selection.json`、工作事件的 `.jsonl`；Meilisearch 自己的檔案（`search*`）不列，由 `index` 讀 |
 | `index` | run 自己的 Meilisearch：`url`、每個 index 的 `uid`、`primaryKey`、`numberOfDocuments`、`isIndexing`、`keys`（所有文件的主鍵，排序），以及 `tasks` 的 `enqueued`／`processing`／`failed` 數 |
 
@@ -200,7 +200,7 @@ await instance.restart({ crash: true, page });   // 非正常結束：SIGKILL ru
 const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例如 crash 後 recovery.lastStop 為 crash
 ```
 
-`restart` 等到重啟的 server ready（health 成功、search 為 `ready`）才回傳，之後 `api`、`openPage`、`snapshot` 照常可用；傳入 `page` 時，重啟期間它停在 `about:blank`，完成後回到原本的路由，沒傳的頁面自己 `reload()`。Vault 只在 run 第一次啟動時建立，重啟時從 profile 的 `vault-selection.json` 開回同一個 Vault（流程中搬移或換過 Vault 時開的是換過的那個）。重啟期間 slot lock 由流程程序持有，其他 session 這時執行的 `sweep` 不會清掉這個 run；新的 server 起來後，`run.json` 與 slot lock 換成它的 PID。server 已經死掉、slot 被其他 run 取得時，`restart` 拒絕並報錯，改用新的 `launch`。server.log 是同一個檔案，往後附加，兩段之間以一行 `--- verify restart (graceful|crash) <時間> ---` 分隔。
+`restart` 等到重啟的 server ready（health 成功、search 為 `ready`）才回傳，之後 `api`、`openPage`、`snapshot` 照常可用；傳入 `page` 時，重啟期間它停在 `about:blank`，完成後回到原本的路由，沒傳的頁面自己 `reload()`。Vault 只在 run 第一次啟動時建立，重啟時從 profile 的 `vault-selection.json` 開回同一個 Vault（流程中換過 Vault 時開的是換過的那個）。重啟期間 slot lock 由流程程序持有，其他 session 這時執行的 `sweep` 不會清掉這個 run；新的 server 起來後，`run.json` 與 slot lock 換成它的 PID。server 已經死掉、slot 被其他 run 取得時，`restart` 拒絕並報錯，改用新的 `launch`。server.log 是同一個檔案，往後附加，兩段之間以一行 `--- verify restart (graceful|crash) <時間> ---` 分隔。
 
 函式庫：
 

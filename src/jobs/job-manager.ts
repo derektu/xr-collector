@@ -906,8 +906,7 @@ export class JobManager {
       severity: job.parentId ? 'debug' : 'info', eventType: 'job.resumed', stopReason,
       message: stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
         : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。'
-          : stopReason === 'vault_move' ? '知識庫搬移完成，接續收集工作。'
-            : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。',
+          : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。',
     });
     if (waitsForItems || !options.queue) return job;
     this.markWaiting(job);

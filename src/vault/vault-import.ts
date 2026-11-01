@@ -4,7 +4,7 @@ import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
 import { ensureVaultFormat, writeVaultMarker } from './vault-directory.js';
-import { formatBytes, moveMargin, nearestExisting, type StatFs } from './vault-move.js';
+import { formatBytes, nearestExisting, spaceMargin, type StatFs } from './disk-space.js';
 import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, sourceTypesOf, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
 import type { FileChanges } from './vault-merge.js';
 
@@ -15,9 +15,9 @@ import type { FileChanges } from './vault-merge.js';
  */
 export type ImportFault = 'staged' | 'renaming';
 
-/** Refuses work whose files would not fit on the disk of `folder`, with the same margin as a move. */
+/** Refuses work whose files would not fit on the disk of `folder`, keeping the margin of `spaceMargin` free. */
 export async function checkFreeSpace(folder: string, bytes: number, statfsOf: StatFs = statfs): Promise<void> {
-  const required = bytes + moveMargin(bytes);
+  const required = bytes + spaceMargin(bytes);
   const space = await statfsOf(await nearestExisting(folder));
   const available = Number(space.bavail) * Number(space.bsize);
   if (available < required) {
@@ -123,9 +123,9 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
 }
 
 /**
- * Creates a Vault in `folder` (missing or empty) from an export file, for a machine that has no
- * Vault yet. The files unpack into a staging folder beside the target, which becomes the Vault
- * once complete; the profile journal lets the next start take back an import a stop interrupted.
+ * Creates a Vault in the new folder `folder` from an export file. The files unpack into a staging
+ * folder beside the target, which becomes the Vault once complete; the profile journal lets the
+ * next start take back an import a stop interrupted.
  * The new Vault gets its own ID and keeps the automatic collection switch the export file holds.
  */
 export async function importNewVault(options: {
@@ -134,11 +134,10 @@ export async function importNewVault(options: {
   const target = await checkImportFolder(options.folder);
   const reader = await openPackage(await checkPackageFile(options.packageFile));
   let journal: ImportJournal | null = null;
-  let placed = false;
   try {
     await checkPackageContent(reader);
     await checkFreeSpace(path.dirname(target), unpackedBytes(reader), options.statfs);
-    journal = { staging: stagingFolder(target), target, placed: false, marker: null, emptyTarget: false };
+    journal = { staging: stagingFolder(target), target, placed: false, marker: null };
     await writeImportJournal(options.profilePath, journal);
     await mkdir(journal.staging, { mode: 0o700 });
     await unpackPackage(reader, journal.staging, () => undefined);
@@ -146,23 +145,16 @@ export async function importNewVault(options: {
     await writeVaultMarker(journal.staging, options.createdBy);
     await ensureVaultFormat(journal.staging, sourceTypesOf(reader.manifest.files.map((row) => row.path)));
     await checkImportFolder(target);
-    journal = { ...journal, placed: true, marker: await markerDigest(journal.staging), emptyTarget: await isFolder(target) };
+    journal = { ...journal, placed: true, marker: await markerDigest(journal.staging) };
     await writeImportJournal(options.profilePath, journal);
-    if (journal.emptyTarget) await rm(target, { recursive: true });
     await rename(journal.staging, target);
-    placed = true;
     return target;
   } catch (error) {
     reader.close();
     if (journal) {
       await rm(journal.staging, { recursive: true, force: true }).catch(() => undefined);
-      if (journal.emptyTarget && !placed) await mkdir(target, { recursive: true }).catch(() => undefined);
       await clearImportJournal(options.profilePath).catch(() => undefined);
     }
     throw error;
   }
-}
-
-async function isFolder(target: string): Promise<boolean> {
-  try { return (await readdir(target)) !== null; } catch { return false; }
 }

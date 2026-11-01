@@ -245,6 +245,7 @@ dialog::backdrop { background:var(--overlay); }
 .vault-actions .vault-exchange-actions { margin-top:0; }
 .vault-actions-secondary > .add-problem { flex-basis:100%; }
 .transfer-dialog[open] { display:flex; flex-direction:column; gap:4px; }
+.transfer-dialog.form { width:min(568px, calc(100vw - 32px)); }
 .transfer-dialog.wide { width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 48px); }
 .transfer-dialog code { overflow-wrap:anywhere; font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
 .transfer-dialog .hint { color:var(--text-muted); font-size:12px; }
@@ -506,6 +507,5 @@ span.reader-publisher { color:var(--text-muted); }
 .source-detail { display:flex; flex-direction:column; gap:20px; }
 .source-detail .back-link { margin-bottom:-6px; }
 .vault-background { margin-top:12px; color:var(--secondary); font-size:13px; }
-.confirm-dialog p.move-leftover { color:var(--warning); }
 .offline-banner { display:flex; align-items:center; gap:10px; margin:0 0 16px; padding:10px 14px; border:1px solid var(--banner-border); border-radius:10px; background:var(--banner); color:var(--primary); font-size:13px; line-height:1.5; }
 .offline-banner svg { flex:none; }
