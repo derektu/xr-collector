@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CollectorError, type LoginStartupStatus } from '../core/types.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
+import { replaceFile } from '../core/json-file.js';
 
 export const LOGIN_STARTUP_ARGUMENT = '--login-startup';
 /** Matches the AppUserModelID so Electron's Windows openAtLogin read-back addresses this value. */
@@ -196,7 +197,7 @@ export class DesktopLoginStartup implements LoginStartupAccess {
     const temporary = `${this.recordPath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
-      await rename(temporary, this.recordPath);
+      await replaceFile(temporary, this.recordPath);
     } catch (error) {
       await rm(temporary, { force: true });
       throw error;

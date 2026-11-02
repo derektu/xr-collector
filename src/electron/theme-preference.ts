@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { replaceFile } from '../core/json-file.js';
 
 /** `system` follows the operating system's light or dark appearance; it is also the value for a missing or invalid file. */
 export type StoredTheme = 'system' | 'dark' | 'light';
@@ -28,6 +29,6 @@ export class FileThemePreference {
     await mkdir(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify({ theme }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(temporary, this.file);
+    await replaceFile(temporary, this.file);
   }
 }

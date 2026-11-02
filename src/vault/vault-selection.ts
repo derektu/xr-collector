@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { replaceFile } from '../core/json-file.js';
 
 /** Device-local record of which Vault this profile uses; never stored inside a Vault. */
 export class VaultSelection {
@@ -27,7 +28,7 @@ export class VaultSelection {
     const temporary = `${this.file}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, `${JSON.stringify({ path: vaultPath }, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-      await rename(temporary, this.file);
+      await replaceFile(temporary, this.file);
     } finally {
       await rm(temporary, { force: true });
     }
