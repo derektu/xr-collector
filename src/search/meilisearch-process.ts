@@ -246,10 +246,11 @@ async function stopChild(child: ChildProcess): Promise<void> {
     child.once('error', () => resolve());
   });
   child.kill('SIGTERM');
+  let timer: NodeJS.Timeout | undefined;
   const stopped = await Promise.race([
     exited.then(() => true),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
-  ]);
+    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5_000); }),
+  ]).finally(() => clearTimeout(timer));
   if (!stopped && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGKILL');
     await exited;

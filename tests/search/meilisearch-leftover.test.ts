@@ -1,13 +1,14 @@
 // Starting the search engine after a crash: an engine a killed app left on the same database is
 // stopped before a new one starts, and a process record that cannot be verified stops startup
-// without killing another process or clearing search data. The killed-app cases run the real
-// engine.
+// without killing another process or clearing search data. Stopping the engine leaves no timer
+// behind, so the server and the Desktop app exit as soon as the engine has. The killed-app and
+// stopping cases run the real engine.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   pidFilePath,
   startMeilisearchProcess,
@@ -163,5 +164,18 @@ describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app'
     cleanups.push(() => engine.close());
     expect(alive(leftover)).toBe(false);
     expect(await healthy(engine)).toBe(true);
+  });
+});
+
+describe.skipIf(!existsSync(bundledBinary))('stopping the engine', () => {
+  it('leaves no timer behind once the engine has exited, so the app can quit at once', async () => {
+    const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath: await tempDatabase() });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await engine.close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
