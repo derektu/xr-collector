@@ -2,7 +2,7 @@
 // however often it is submitted, captures rotate between jobs so one large channel does not hold up
 // the rest, the status reads queued, checking, downloading or retrying, and on a stop running work
 // finishes, unfinished work reads interrupted and an unreadable jobs file is set aside.
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -449,6 +449,7 @@ describe('JobStore', () => {
     source.release(videoId(0, 's'));
     await eventually(() => expect(manager.get(accepted.job.id).progress?.done).toBe(1));
     await store.flush();
+    await store.activity.flush();
 
     // A process that stops without closing leaves running and queued jobs on disk.
     const reopened = await JobStore.open(directory);
@@ -457,6 +458,7 @@ describe('JobStore', () => {
     expect(channelJob.items?.map((item) => item.state)).toEqual(['completed', 'interrupted']);
     expect(reopened.list(VAULT).filter((job) => job.state === 'interrupted').length).toBeGreaterThanOrEqual(2);
 
+    await reopened.activity.flush();
     const events = await readEventFiles(directory);
     expect(events.map((event) => event.eventType)).toEqual(expect.arrayContaining([
       'job.accepted', 'job.started', 'channel.discovered', 'document.saved', 'job.completed', 'job.interrupted',
@@ -464,6 +466,33 @@ describe('JobStore', () => {
     expect(events[0]).toEqual(expect.objectContaining({ eventId: expect.any(String), timestamp: expect.any(String), vaultPath: VAULT }));
     source.release(videoId(1, 's'));
     await manager.close();
+  });
+
+  it('writes the events of a busy job in one append per second, however often its state is saved', async () => {
+    directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
+    const flushTimers: Array<() => void> = [];
+    let appends = 0;
+    const store = await JobStore.open(directory, undefined, {
+      setTimer: (callback, ms) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; },
+      append: async (file, data) => { appends += 1; await appendFile(file, data); },
+    });
+    const { manager, source, collect } = setup({ store, limits: { discovery: 1, capture: 1 } });
+    source.channelVideos.set('UC-BUSY', videos(2, 'b'));
+    const accepted = await collect(channel('UC-BUSY', '忙碌的頻道'));
+    await source.holds.reach([videoId(0, 'b')]);
+    source.release(videoId(0, 'b'));
+    await source.holds.reach([videoId(1, 'b')]);
+    source.release(videoId(1, 'b'));
+    await manager.whenSettled(accepted.job.id);
+    await store.flush();
+    expect(appends).toBe(0);
+
+    for (const fire of flushTimers.splice(0)) fire();
+    await store.activity.flush();
+    expect(appends).toBe(1);
+    expect((await readEventFiles(directory)).map((event) => event.eventType)).toEqual(expect.arrayContaining(['job.accepted', 'document.saved', 'job.completed']));
+    await manager.close();
+    await store.close();
   });
 
   it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
