@@ -113,7 +113,9 @@ export function PathField({ label, value, onChange, testId, hint }: {
 }
 
 function ExportDialog({ file, onClose }: { file: { path: string; overwrite: boolean } | undefined; onClose: () => void }) {
-  const [target, setTarget] = useState(file?.path ?? '');
+  // Null until the suggested path is back: the field appears already filled, and the suggestion
+  // never changes it afterwards.
+  const [target, setTarget] = useState<string | null>(file?.path ?? null);
   const [phase, setPhase] = useState<'input' | 'running' | 'exists' | 'done' | 'failed'>(file ? 'running' : 'input');
   const [result, setResult] = useState<TransferResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -129,7 +131,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
 
   useEffect(() => {
     if (file) return;
-    api.exportSuggestion().then((suggestion) => setTarget((current) => current || suggestion.path)).catch(() => undefined);
+    api.exportSuggestion().then((suggestion) => setTarget((current) => current ?? suggestion.path)).catch(() => setTarget((current) => current ?? ''));
   }, [file]);
 
   async function run(path: string, overwrite: boolean): Promise<void> {
@@ -151,7 +153,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
   }, [file]);
 
   return <Modal title="匯出知識庫" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">
-    {phase === 'input' ? <>
+    {phase === 'input' && target !== null ? <>
       <PathField label="匯出檔位置" value={target} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .zip 結尾。" />
     </> : null}
     {phase === 'running' ? <Progress progress={progress} fallback="處理中…" /> : null}
@@ -167,7 +169,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={onClose}>取消</button>
-        <button type="button" className="button primary" disabled={!target.trim()} onClick={() => void run(target.trim(), false)} data-testid="export-confirm">匯出</button>
+        <button type="button" className="button primary" disabled={!target?.trim()} onClick={() => void run(target?.trim() ?? '', false)} data-testid="export-confirm">匯出</button>
       </> : null}
       {phase === 'exists' ? <>
         <button type="button" className="button" onClick={() => { if (file) onClose(); else setPhase('input'); }} data-testid="export-keep">取消</button>
@@ -182,7 +184,8 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
 type ImportPhase = 'input' | 'comparing' | 'preview' | 'replace' | 'applying' | 'done';
 
 function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (imported: boolean) => void }) {
-  const [source, setSource] = useState(file ?? '');
+  // Null until the suggested folder is back, as the export path is.
+  const [source, setSource] = useState<string | null>(file ?? null);
   const [phase, setPhase] = useState<ImportPhase>(file ? 'comparing' : 'input');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mode, setMode] = useState<ImportMode>('merge');
@@ -194,7 +197,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
 
   useEffect(() => {
     if (file) return;
-    api.exportSuggestion().then((suggestion) => setSource((current) => current || `${suggestion.folder}/`)).catch(() => undefined);
+    api.exportSuggestion().then((suggestion) => setSource((current) => current ?? `${suggestion.folder}/`)).catch(() => setSource((current) => current ?? ''));
   }, [file]);
 
   async function compare(path: string): Promise<void> {
@@ -273,7 +276,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
 
   return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying' || recording}
     onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="import-dialog">
-    {phase === 'input' ? <>
+    {phase === 'input' && source !== null ? <>
       <PathField label="匯出檔" value={source} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
     </> : null}
     {phase === 'comparing' ? <Progress progress={progress} fallback="正在比對…" /> : null}
@@ -311,7 +314,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={() => onClose(false)}>取消</button>
-        <button type="button" className="button primary" disabled={!source.trim()} onClick={() => void compare(source.trim())} data-testid="import-compare">比對</button>
+        <button type="button" className="button primary" disabled={!source?.trim()} onClick={() => void compare(source?.trim() ?? '')} data-testid="import-compare">比對</button>
       </> : null}
       {phase === 'preview' && !mergeable ? <>
         {replaceable ? <button type="button" className="button" disabled={recording} onClick={() => setPhase('replace')}

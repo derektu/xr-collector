@@ -211,6 +211,21 @@ describe('portable subscription settings (S-T10, A4)', () => {
   });
 });
 
+describe('the export folder', () => {
+  it('is created for an export into it, as the suggestion the UI fills in, while another missing folder is refused', async () => {
+    const a = await machine('A'); await seed(a.vault);
+    const workspace = await open(a);
+    const suggested = workspace.exportSuggestion().path;
+    expect(existsSync(a.exports)).toBe(false);
+    await expect(workspace.exportTo(suggested)).resolves.toMatchObject({ state: 'completed', result: { exportPath: suggested } });
+    expect(existsSync(suggested)).toBe(true);
+
+    const mistyped = path.join(a.root, 'no-such-folder', 'export.zip');
+    await expect(workspace.exportTo(mistyped)).rejects.toMatchObject({ code: 'invalid_request', message: '匯出檔所在的資料夾不存在。' });
+    expect(existsSync(path.dirname(mistyped))).toBe(false);
+  });
+});
+
 describe('deletion records in export files (A6)', () => {
   const deletedId = 'gone0000001';
   const record = {
