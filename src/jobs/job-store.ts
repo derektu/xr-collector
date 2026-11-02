@@ -162,9 +162,11 @@ export class JobStore {
     this.noteChange({ kind: 'activity' });
   }
 
-  /** Resolves once every change so far is on disk, or the activity log reported why it is not. */
+  /**
+   * Resolves once every job change so far is on disk. Activity events keep their one-second batch;
+   * `activity.flush()` writes them at once.
+   */
   async flush(): Promise<void> {
-    await this.activityLog.flush();
     while (this.dirty || this.flushing) {
       if (this.flushing) await this.flushing;
       else this.scheduleFlush();

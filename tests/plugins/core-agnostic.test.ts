@@ -142,14 +142,14 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     },
     async restart() {
       await current.jobs.close();
-      await current.store.flush();
+      await current.store.close();
       current = await build();
       await current.jobs.resume();
     },
     async close() {
       await current.scheduler.close();
       await current.jobs.close();
-      await current.store.flush();
+      await current.store.close();
     },
   };
   return w;

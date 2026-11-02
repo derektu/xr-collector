@@ -167,7 +167,10 @@ async function world(options: { waitMs?: number } = {}) {
     processes.push({ gate, store, manager });
     return { gate, store, source, manager };
   };
-  const events = async () => (await readEventFiles(jobsPath)).filter((event) => event.vaultPath === VAULT);
+  const events = async () => {
+    for (const { store } of processes) await store.activity.flush();
+    return (await readEventFiles(jobsPath)).filter((event) => event.vaultPath === VAULT);
+  };
   return { boot, advance, clock: () => now, vault, subs, events };
 }
 

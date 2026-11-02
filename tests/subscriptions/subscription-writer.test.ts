@@ -77,7 +77,7 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
   return {
     clock, sources,
     async events() {
-      await current.store.flush();
+      await current.store.activity.flush();
       return readEventFiles(jobsDirectory);
     },
     get jobs() { return current.jobs; },

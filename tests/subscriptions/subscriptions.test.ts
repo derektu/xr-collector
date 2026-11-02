@@ -609,7 +609,7 @@ describe('subscription events (S-T12)', () => {
     const resumed = await w.channels.setEnabled(id, true);
     await w.jobs.whenSettled(resumed.submission!.job.id);
     await w.channels.remove(id);
-    await w.store.flush();
+    await w.store.activity.flush();
     const events = await readEventFiles(directory);
     expect(events.filter((event) => event.eventType.startsWith('subscription.'))).toEqual([
       expect.objectContaining({ eventType: 'subscription.added', sourceId: syntheticChannelId('events'), jobId: null, severity: 'info' }),

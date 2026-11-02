@@ -149,7 +149,7 @@ interface Generation {
 let directories: string[] = [];
 let stores: JobStore[] = [];
 afterEach(async () => {
-  for (const store of stores) await store.flush();
+  for (const store of stores) await store.close();
   for (const directory of directories) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   directories = [];
   stores = [];
@@ -221,7 +221,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     async events(): Promise<Array<{
       eventType: string; jobId: string | null; errorCode?: string; attempt?: number; nextAttemptAt?: string; stopReason?: string; message: string;
     }>> {
-      for (const store of stores) await store.flush();
+      for (const store of stores) await store.activity.flush();
       return readEventFiles(directory);
     },
   };
