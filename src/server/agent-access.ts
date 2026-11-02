@@ -1,11 +1,12 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import yazl from 'yazl';
 import { CollectorError } from '../core/types.js';
 import { AGENT_PORT_RANGE } from '../runtime/agent-connection-defaults.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
+import { replaceFile } from '../core/json-file.js';
 
 export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
 export interface AgentConnection { url: string; token: string }
@@ -107,7 +108,7 @@ class AgentConnectionService implements AgentConnectionAccess {
   private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.writes.then(work, work); this.writes = result.then(() => undefined, () => undefined); return result; }
   private async save(settings: SavedAgentSettings): Promise<void> {
     const temporary = `${this.settingsFile}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
-    try { await mkdir(path.dirname(this.settingsFile), { recursive: true }); await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: 'wx' }); await rename(temporary, this.settingsFile); }
+    try { await mkdir(path.dirname(this.settingsFile), { recursive: true }); await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: 'wx' }); await replaceFile(temporary, this.settingsFile); }
     catch (error) { await rm(temporary, { force: true }); throw error; }
   }
 }

@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { SubscriptionRecord } from '../core/types.js';
 import type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
 import { limitText, redact } from '../activity/redact.js';
+import { replaceFile } from '../core/json-file.js';
 export type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
 
 export interface SystemNotificationAdapter {
@@ -78,7 +79,7 @@ export class NotificationCenter {
     await mkdir(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.tmp`;
     await writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8');
-    await rename(temporary, this.file);
+    await replaceFile(temporary, this.file);
   }
   private serial(work: () => Promise<void>): Promise<void> {
     const result = this.writes.then(work);

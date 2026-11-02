@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { removalsFromJson, scheduleEnabledFromJson } from '../subscriptions/subscription-files.js';
 import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
+import { replaceFile } from '../core/json-file.js';
 
 /** Root file that marks a directory as a self-contained XR Collector Vault. */
 export const VAULT_MARKER = 'xr-collector-vault.json';
@@ -197,7 +198,7 @@ export async function ensureVaultFormat(root: string, types: Iterable<string>): 
   if (markerProblem(marker) || marker.formatVersion >= required) return;
   const temporary = `${file}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: required }, null, 2)}\n`, { flag: 'wx' });
-  await rename(temporary, file);
+  await replaceFile(temporary, file);
 }
 
 /** Creates a Vault only in a missing or empty directory. */

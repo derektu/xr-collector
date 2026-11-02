@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DocumentVault } from '../core/collector.js';
 import type { SavedDocument, TranscriptSearch } from '../core/types.js';
@@ -13,6 +13,7 @@ import { startMeilisearchProcess } from './meilisearch-process.js';
 import { validateMeilisearchRuntime, type SearchIndexProfile } from './meilisearch-runtime.js';
 import { loadSearchLexicon } from './search-lexicon.js';
 import type { PreparedSearchProjection } from './search-projection.js';
+import { replaceFile } from '../core/json-file.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
@@ -100,7 +101,7 @@ export function fileSearchStateStore(filePath: string): SearchStateStore {
       await mkdir(path.dirname(filePath), { recursive: true });
       const temporary = `${filePath}.${process.pid}.tmp`;
       await writeFile(temporary, JSON.stringify(state), 'utf8');
-      await rename(temporary, filePath);
+      await replaceFile(temporary, filePath);
     },
   };
 }
