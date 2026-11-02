@@ -147,12 +147,13 @@ async function inspectExisting(lockPath, options) {
   let recorded;
   try {
     await assertOwnerFile(path.join(lockPath, ownerName), options.expectedUid, options);
-    recorded = JSON.parse(await readFile(path.join(lockPath, ownerName), 'utf8'));
+    const content = await readFile(path.join(lockPath, ownerName), 'utf8');
+    // A contender that has just created the directory opens its owner file before writing it.
+    if (content === '' && withinOwnerGrace) return 'busy';
+    recorded = JSON.parse(content);
   } catch (error) {
     // The holder releasing the lock removes its owner file between the listing and this read.
     if (error.code === 'ENOENT') return 'retry';
-    // A contender that has just created the directory opens its owner file before writing it.
-    if (error instanceof SyntaxError && withinOwnerGrace) return 'busy';
     throw new Error(`Owned lock ${lockPath} has invalid owner metadata.`, { cause: error });
   }
   assertOwner(recorded, token);

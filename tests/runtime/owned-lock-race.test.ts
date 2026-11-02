@@ -215,9 +215,13 @@ it('reports busy while a live holder replaces its owner file, and fails on an up
   expect((await readdir(interrupted)).sort()).toEqual(['owner-a1.json', 'owner-a1.json.update-ff']);
 });
 
-it('reports busy for an owner file not yet written, and fails on one that stays empty past the grace period', async () => {
+it('reports busy for an owner file not yet written, and fails on one that stays empty past the grace period or is corrupt', async () => {
   const opening = await heldLock([], '');
-  await expect(withOwnedDirectoryLock(opening, async () => 'acquired', lockOptions('b2', holderAlive))).rejects.toThrow(/^busy$/u);
+  await expect(withOwnedDirectoryLock(opening, async () => 'acquired', { ...lockOptions('b2', holderAlive), ownerGraceMs: 60_000 }))
+    .rejects.toThrow(/^busy$/u);
+  const corrupt = await heldLock([], '{"pid":');
+  await expect(withOwnedDirectoryLock(corrupt, async () => 'acquired', { ...lockOptions('b2', holderAlive), ownerGraceMs: 60_000 }))
+    .rejects.toThrow(/invalid owner metadata/u);
   const abandoned = await heldLock([], '');
   const longAgo = new Date(Date.now() - 60_000);
   await utimes(abandoned, longAgo, longAgo);
