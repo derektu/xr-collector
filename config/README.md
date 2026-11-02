@@ -23,7 +23,7 @@ keys/
 - `APPLE_API_KEY` 是 App Store Connect API 的 `.p8` 私鑰，用於公證。
 - 檔案路徑相對於 `keys/mac/`。Key ID、Issuer ID、Team ID 不是秘密，可以留在範例；密碼只放 `keys/mac/.env`。`.env` 是資料檔，不當 shell 腳本執行。
 
-`npm run doctor:build` 會檢查 `keys/mac/.env` 的欄位與檔案權限；沒有這個檔案時只能建 ad-hoc 包。準備好之後的打包與上傳指令見 [建置說明的發布](../docs/building.md#上傳一個平台)。
+`npm run doctor:build` 會檢查 `keys/mac/.env` 的欄位與檔案權限，並確認 p12 在這台機器上是有效的簽章身分；沒有這個檔案時只能建 ad-hoc 包。新建置機還要匯入 Apple 的 Developer ID G2 中繼憑證，見 [建置說明的 Mac 版的 Developer ID 憑證](../docs/building.md#mac-版的-developer-id-憑證)。準備好之後的打包與上傳指令見 [建置說明的發布](../docs/building.md#上傳一個平台)。
 
 ## Windows
 

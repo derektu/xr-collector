@@ -21,6 +21,10 @@ export const DENO_ENTITLEMENTS = [
 ];
 const KEYCHAIN_SEARCH_LOCK = path.join(tmpdir(), 'xr-collector-mac-keychain-search.lock');
 
+/** Installs the Apple intermediate that links Developer ID Application certificates to the Apple root. */
+export const DEVELOPER_ID_INTERMEDIATE_FIX = 'curl -fsSLo ~/Downloads/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer'
+  + ' && security import ~/Downloads/DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db';
+
 const ENV_KEYS = new Set(['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER', 'APPLE_TEAM_ID']);
 
 export async function loadMacSigningConfiguration({ environmentFile, pathRoot }, dependencies = {}) {
@@ -70,7 +74,23 @@ export function parseProtectedEnvironment(source) {
   return result;
 }
 
-export async function withTemporarySigningKeychain(configuration, work, dependencies = {}) {
+/**
+ * Imports the configured p12 into an owned temporary keychain and confirms it holds exactly one
+ * valid Developer ID Application identity for the configured Team. The keychain never enters the
+ * user search list, and it is deleted before this returns. Stale keychains from interrupted
+ * signing runs stay for the next signing run to recover, because recovering them rewrites the
+ * user search list.
+ */
+export function checkDeveloperIdIdentity(configuration, dependencies = {}) {
+  return withTemporarySigningKeychain(configuration, async ({ identity }) => identity, dependencies, { appendToSearchList: false });
+}
+
+/**
+ * Runs `work` with the configured identity in an owned temporary keychain. Signing appends the
+ * keychain to the user search list so electron-builder and codesign can find it; the identity check
+ * passes `appendToSearchList: false`.
+ */
+export async function withTemporarySigningKeychain(configuration, work, dependencies = {}, { appendToSearchList = true } = {}) {
   const run = dependencies.run ?? runCaptured;
   const controller = dependencies.signal ? null : new AbortController();
   const signal = dependencies.signal ?? controller.signal;
@@ -92,7 +112,7 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
   const canonicalize = dependencies.realpath ?? realpath;
   const tempRoot = dependencies.tempRoot ?? tmpdir();
   const password = (dependencies.randomPassword ?? (() => randomBytes(32).toString('base64url')))();
-  await recoverStaleSigningKeychains({ ...dependencies, run, remove, tempRoot });
+  if (appendToSearchList) await recoverStaleSigningKeychains({ ...dependencies, run, remove, tempRoot });
   const directory = await canonicalize(await makeTemp(path.join(tempRoot, 'xr-mac-signing-')));
   const directoryInfo = await (dependencies.inspectDirectory ?? stat)(directory);
   if (!directoryInfo.isDirectory() || (directoryInfo.mode & 0o077) !== 0
@@ -142,10 +162,18 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
     signal.throwIfAborted();
     await lifecycleRun('/usr/bin/security', ['set-keychain-settings', '-lut', '900', keychain]);
     await lifecycleRun('/usr/bin/security', ['unlock-keychain', '-p', password, keychain]);
-    await lifecycleRun('/usr/bin/security', ['import', configuration.certificatePath, '-k', keychain, '-P', configuration.certificatePassword,
-      '-T', '/usr/bin/codesign', '-T', '/usr/bin/productbuild']);
+    try {
+      await lifecycleRun('/usr/bin/security', ['import', configuration.certificatePath, '-k', keychain, '-P', configuration.certificatePassword,
+        '-T', '/usr/bin/codesign', '-T', '/usr/bin/productbuild']);
+    } catch (error) {
+      if (!signal.aborted && /MAC verification failed|wrong password/iu.test(String(error?.message))) {
+        throw signingIdentityError('CSC_KEY_PASSWORD does not open the CSC_LINK certificate',
+          'Set CSC_KEY_PASSWORD in keys/mac/.env to the password chosen when the p12 was exported.', error);
+      }
+      throw error;
+    }
     await lifecycleRun('/usr/bin/security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
-    await withKeychainSearchLock(async (lockTracker) => {
+    if (appendToSearchList) await withKeychainSearchLock(async (lockTracker) => {
       const tracked = { processTrackers: [lockTracker] };
       const userKeychains = parseUserKeychainList((await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user'], tracked)).stdout);
       if (userKeychains.includes(keychain)) throw new Error('Owned signing keychain unexpectedly already exists in the user search list.');
@@ -156,8 +184,10 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
         throw new Error('Temporary signing keychain was not appended without reordering the existing user search list.');
       }
     }, dependencies);
-    const identities = await lifecycleRun('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
-    const identity = selectDeveloperIdIdentity(identities.stdout, configuration.teamId);
+    const valid = await lifecycleRun('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
+    const matching = parseDeveloperIdIdentities(valid.stdout).some(({ teamId }) => teamId === configuration.teamId)
+      ? '' : (await lifecycleRun('/usr/bin/security', ['find-identity', '-p', 'codesigning', keychain])).stdout;
+    const identity = selectDeveloperIdIdentity(valid.stdout, configuration.teamId, matching);
     return await work({ keychain, identity, signal, processTracker: sessionProcessTracker,
       processTrackers: [dependencies.processTracker, sessionProcessTracker].filter(Boolean) });
   } catch (error) {
@@ -293,13 +323,53 @@ function registerSigningAbortSignals(controller, onSignal, dependencies) {
   return () => { for (const [signal, handler] of handlers) target.removeListener(signal, handler); };
 }
 
-export function selectDeveloperIdIdentity(output, expectedTeamId) {
-  const identities = output.split(/\r?\n/u).flatMap((line) => {
-    const match = /^\s*\d+\)\s+([0-9A-F]{40})\s+"(Developer ID Application: .+ \(([A-Z0-9]{10})\))"/u.exec(line);
-    return match ? [{ sha1: match[1], name: match[2], teamId: match[3] }] : [];
-  }).filter((identity) => identity.teamId === expectedTeamId);
-  if (identities.length !== 1) throw new Error(`Temporary keychain must contain exactly one Developer ID Application identity for Team ${expectedTeamId}; found ${identities.length}.`);
-  return identities[0];
+/**
+ * Picks the one valid Developer ID Application identity for `expectedTeamId` from
+ * `security find-identity -v` output. When there is none, `matchingOutput` (the same query without
+ * `-v`, which also lists identities macOS does not trust) explains why: an untrusted identity, an
+ * identity for another Team, or no identity at all.
+ */
+export function selectDeveloperIdIdentity(validOutput, expectedTeamId, matchingOutput = '') {
+  const valid = parseDeveloperIdIdentities(validOutput);
+  const forTeam = valid.filter((identity) => identity.teamId === expectedTeamId);
+  if (forTeam.length === 1) return forTeam[0];
+  if (forTeam.length > 1) {
+    throw signingIdentityError(`CSC_LINK holds ${forTeam.length} valid Developer ID Application identities for Team ${expectedTeamId}; signing needs exactly one`,
+      'Export only the one Developer ID Application certificate and its private key into the p12.');
+  }
+  const validSha1 = new Set(valid.map((identity) => identity.sha1));
+  const listed = [...new Map(parseDeveloperIdIdentities(matchingOutput).map((identity) => [identity.sha1, identity])).values()];
+  const untrusted = listed.find((identity) => identity.teamId === expectedTeamId && !validSha1.has(identity.sha1));
+  if (untrusted) {
+    // A certificate whose chain stops short of the Apple root is listed with no reason or with
+    // CSSMERR_TP_NOT_TRUSTED; any other reason, such as an expired certificate, names its own fault.
+    const { problem } = untrusted;
+    if (!problem || /NOT_TRUSTED/u.test(problem)) {
+      throw signingIdentityError(`the Developer ID Application identity for Team ${expectedTeamId} is not trusted${problem ? ` (${problem})` : ''}; `
+        + 'this Mac lacks the Apple Developer ID G2 intermediate certificate', DEVELOPER_ID_INTERMEDIATE_FIX);
+    }
+    throw signingIdentityError(`the Developer ID Application identity for Team ${expectedTeamId} is invalid (${problem})`,
+      'Export a current Developer ID Application certificate and its private key into the p12.');
+  }
+  const otherTeams = [...new Set(listed.concat(valid).map((identity) => identity.teamId))];
+  if (otherTeams.length > 0) {
+    throw signingIdentityError(`CSC_LINK holds a Developer ID Application identity for Team ${otherTeams.join(', ')}, but APPLE_TEAM_ID is ${expectedTeamId}`,
+      'Use the p12 for the APPLE_TEAM_ID Team, or set APPLE_TEAM_ID in keys/mac/.env to the certificate Team.');
+  }
+  throw signingIdentityError(`CSC_LINK holds no Developer ID Application identity for Team ${expectedTeamId}`,
+    'Export the Developer ID Application certificate with its private key as the p12; Apple Development and Apple Distribution certificates cannot sign.');
+}
+
+function parseDeveloperIdIdentities(output) {
+  return output.split(/\r?\n/u).flatMap((line) => {
+    const match = /^\s*\d+\)\s+([0-9A-F]{40})\s+"(Developer ID Application: .+ \(([A-Z0-9]{10})\))"(?:\s+\(([^)]+)\))?/u.exec(line);
+    return match ? [{ sha1: match[1], name: match[2], teamId: match[3], ...(match[4] ? { problem: match[4] } : {}) }] : [];
+  });
+}
+
+/** A signing-identity failure whose `detail` and `fix` the build doctor reports as separate fields. */
+function signingIdentityError(detail, fix, cause) {
+  return Object.assign(new Error(`Developer ID signing: ${detail}. Fix: ${fix}`, cause ? { cause } : undefined), { detail: `${detail[0].toUpperCase()}${detail.slice(1)}.`, fix });
 }
 
 export function parseUserKeychainList(output) {
