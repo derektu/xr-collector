@@ -284,14 +284,17 @@ export class VaultWorkspace {
 
   /**
    * Writes the export of the active Vault to `file`, or to the suggested file in the export folder
-   * when `file` is left out; an existing file is replaced only with `overwrite`. The export only
-   * reads the Vault.
+   * when `file` is left out; an existing file is replaced only with `overwrite`. A missing export
+   * folder is created for a file inside it, such as the suggested file the export dialog fills in;
+   * any other folder must exist, so a mistyped path is reported instead of creating a folder. The
+   * export only reads the Vault.
    */
   async exportTo(file?: unknown, overwrite = false): Promise<TransferStatus> {
-    let requested = file;
-    if (requested === undefined || requested === null) {
+    const requested = file ?? this.exportSuggestion().path;
+    const intoExportFolder = typeof requested === 'string' && path.isAbsolute(requested)
+      && path.dirname(path.resolve(requested)) === path.resolve(this.options.exportFolder);
+    if (intoExportFolder) {
       await mkdir(this.options.exportFolder, { recursive: true });
-      requested = this.exportSuggestion().path;
     }
     const target = await checkExportFile(requested, overwrite, this.folders);
     await this.run('export', '匯出', async (reporter) => {
