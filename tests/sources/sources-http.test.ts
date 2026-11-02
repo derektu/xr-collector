@@ -1,3 +1,7 @@
+// The source list and source detail over HTTP: document counts per subscription with the rest under
+// single items, an error status that the next success clears, one newest-first record of a
+// channel's documents and checks, the Agent token on every route, and per-subscription settings
+// that are validated, changed, applied to the rest and kept.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,6 +16,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MemoryDocuments, SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { eventually } from '../support/wait.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -200,7 +205,7 @@ describe('source detail (T-07, T-08)', () => {
       method: 'POST', url: '/api/url-recognitions', payload: { url: '@alpha' }, headers: { authorization: 'Bearer agent-token' },
     });
     expect(recognized.json().recognition).toMatchObject({ status: 'ready', kind: 'channel', actions: [{ id: 'subscribe' }] });
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     await w.app.close();
   });
 });
@@ -224,7 +229,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     expect(first.progress).toMatchObject({ total: 5 });
     await send('POST', '/api/subscriptions', { url: '@beta' });
     await send('POST', '/api/subscriptions', { url: '@gamma', settings: { backfillMaxItems: 20 } });
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
 
     for (const settings of [{ intervalMinutes: 45 }, { backfillDays: 1.5 }, { backfillMaxItems: 101 }, { backfillDays: 0 }, { backfillWindow: '1m' }, { cadence: 30 }, 'often']) {
       const rejected = await send('POST', '/api/subscriptions', { url: '@beta', settings });
@@ -273,7 +278,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     // A resume and a settings change in one request check with the new range.
     const resumed = await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
     expect(resumed.body).toMatchObject({ subscription: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     await w.app.close();
   });
 });

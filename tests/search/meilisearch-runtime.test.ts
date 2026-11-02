@@ -1,3 +1,6 @@
+// Search runs only on the pinned Meilisearch release for the platform: a binary or manifest that
+// does not match, another engine version or an unsealed byte change leaves search in an error state
+// before any search data is prepared or cleared.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

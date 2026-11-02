@@ -1,3 +1,7 @@
+// The installers a package run produces: only the Mac and Windows delivery targets, a Mac App
+// notarized and Gatekeeper-checked before its DMG and ZIP are built from it, verified BuildInfo and
+// runtimes inside, an isolated identity for validation packages, a release index and inventory, and
+// one package run per checkout.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -468,8 +472,7 @@ it('rejects a concurrent whole-checkout package run', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-package-lock-'));
   roots.push(root);
   const lock = path.join(root, 'package.lock');
-  // This process's real identity, read once: a PowerShell query takes a second or more on Windows.
-  const identity = await readPackagingProcessIdentity(process.pid);
+  const identity = { pid: process.pid, uid: process.getuid?.() ?? 501, startedAt: 'current' };
   const owners = { processIdentity: async (pid: number) => pid === process.pid ? identity : null };
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -535,6 +538,11 @@ it('queries Windows packaging owners through PowerShell and fails closed when th
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('PowerShell unavailable'); } })).rejects.toThrow(/Unable to inspect packaging process/u);
   await expect(readPackagingProcessIdentity(4242, { platform: 'darwin', capture: async () => 'unexpected ps output' })).rejects.toThrow(/malformed packaging process identity/u);
   await expect(readPackagingProcessIdentity(4242, { platform: 'darwin', capture: async () => { throw new Error('ps exited with status 1'); } })).resolves.toBeNull();
+});
+
+// The query itself, against this platform's real process table: ps on Mac and Linux, PowerShell on Windows.
+it('reads the identity of this process from the process table', async () => {
+  await expect(readPackagingProcessIdentity(process.pid)).resolves.toMatchObject({ pid: process.pid, startedAt: expect.any(String) });
 });
 
 // The Mac update helper check reads POSIX execute bits, which Windows does not report.

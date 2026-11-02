@@ -13,6 +13,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { withYouTube } from '../support/youtube-sources.js';
+import { eventually } from '../support/wait.js';
 
 // The activity and job query routes: device data readable while an import holds the Vault and before
 // one is chosen, the same contract for the UI and Agents, and parameter validation.
@@ -67,11 +68,11 @@ function services(failures: CollectorError[] = []) {
 }
 
 async function settled(app: Awaited<ReturnType<typeof createHttpApp>>, id: string, headers: Record<string, string> = {}): Promise<CollectionJob> {
-  for (;;) {
+  return eventually(async () => {
     const job = (await app.inject({ method: 'GET', url: `/api/jobs/${id}`, headers })).json().job as CollectionJob;
-    if (job.state !== 'queued' && job.state !== 'running') return job;
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
+    expect(job.state).not.toMatch(/^(queued|running)$/u);
+    return job;
+  });
 }
 
 describe('activity and job routes (A-T8, A-T10)', () => {

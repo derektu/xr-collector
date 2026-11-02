@@ -7,6 +7,7 @@ import { limitText, redact } from '../../src/activity/redact.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
 import { localDayStart } from '../../src/web/activity-presentation.js';
 import { readEventFiles } from './event-files.js';
+import { eventually } from '../support/wait.js';
 
 // The device activity log: day files with a 30-day retention, the earlier single file read along,
 // newest-first cursor pages, filters, masking and write failures that are reported, not lost.
@@ -135,11 +136,11 @@ describe('retention (A-T2)', () => {
     // A day later the boundary day has fully expired and the hourly purge removes its file.
     clock.advance(DAY);
     timers.fire(3_600_000);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The next hourly purge is set once this one has finished.
+    await eventually(() => expect(timers.waiting.some((entry) => entry.ms === 3_600_000)).toBe(true));
     expect(await readdir(segments)).toEqual([`${daysAgo(29).slice(0, 10)}.jsonl`]);
     messages = (await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['舊檔保留', '29 天前']);
-    expect(timers.waiting.some((entry) => entry.ms === 3_600_000)).toBe(true);
 
     // Once every line of the earlier file expired, the file goes.
     clock.advance(30 * DAY);

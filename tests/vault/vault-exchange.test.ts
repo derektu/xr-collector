@@ -1,3 +1,7 @@
+// Exchanging Vaults between two machines through export files: merge or replace of documents,
+// deletions and subscriptions by the newer change, the backup before an import, an interrupted
+// import opening as a whole state, a Vault created from an export, and the same over HTTP for the
+// app and an Agent. One case runs the real search engine.
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -23,6 +27,7 @@ import type { YouTubeTestSources } from '../support/youtube-sources.js';
 import { manifestOf, packageOf, tampered } from './package-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 afterEach(cleanUp);
 
@@ -569,7 +574,7 @@ describe('an import stopped while it applies (X77-A12)', () => {
       try {
         const preview = await workspace.previewImport(file);
         workspace.applyImport(preview.id, 'merge');
-        await expect.poll(() => reached).toBe(true);
+        await eventually(() => expect(reached).toBe(true));
         const read = await app.inject('/api/documents');
         expect(read.statusCode).toBe(409);
         expect(read.json()).toMatchObject({ error: { code: 'vault_busy' } });
@@ -592,7 +597,7 @@ describe('collection during an import (X77-A12)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       const job = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=bbbbbbbbbb1');
-      await expect.poll(() => workspace.jobs.get(job.job.id)?.state).toBe('running');
+      await eventually(() => expect(workspace.jobs.get(job.job.id)?.state).toBe('running'));
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');
       expect(workspace.cancelWait()).toMatchObject({ state: 'idle' });
@@ -615,7 +620,7 @@ describe('collection during an import (X77-A12)', () => {
     await using(a, async (workspace) => {
       const preview = await workspace.previewImport(file);
       const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', subscriptionIds: ['UC123', 'UC456'] });
-      await expect.poll(() => listed).toEqual(['UC123']);
+      await eventually(() => expect(listed).toEqual(['UC123']));
       workspace.applyImport(preview.id, 'merge');
       expect(workspace.status().state).toBe('waiting');
       release();
@@ -821,7 +826,8 @@ describe('export and import over HTTP (X77-A14)', () => {
 describe('subscription change and removal times', () => {
   it('stamps a subscription when a person changes its name, address, pause or settings, and not for collection progress', async () => {
     const root = await temp();
-    const store = new JsonSubscriptionStore(root, 'youtube');
+    let day = 1;
+    const store = new JsonSubscriptionStore(root, 'youtube', () => new Date(at(day)));
     await store.add(channel('UC123'));
     expect((await store.list())[0]!.updatedAt).toBe('2026-09-18T00:00:00.000Z');
     const stamp = async () => (await store.list())[0]!.updatedAt;
@@ -832,7 +838,7 @@ describe('subscription change and removal times', () => {
       () => store.update('UC123', { title: '新名稱' }), () => store.update('UC123', { url: 'https://www.youtube.com/@new' }),
       () => store.setEnabled('UC123', false), () => store.update('UC123', { settings: { ...settings, backfillMaxItems: 5 } }),
     ]) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      day += 1;
       await change();
       const now = await stamp();
       expect(now! > previous!).toBe(true);
@@ -899,16 +905,16 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('updates r
   const real = { searchBinary: path.resolve('resources/bin/mac/meilisearch'), createSearch: undefined };
   const ids = async (workspace: VaultWorkspace, query: string) => (await workspace.search.search({ query })).hits.map((hit) => hit.id);
   await using(a, async (workspace) => {
-    await expect.poll(() => workspace.search.status().state, { timeout: 15_000 }).toBe('ready');
+    await eventually(() => expect(workspace.search.status().state).toBe('ready'));
     expect(await ids(workspace, `${D2}`)).toContain(`youtube:${D2}`);
     await importFile(workspace, file);
     expect(workspace.status().state).toBe('completed');
-    await expect.poll(() => ids(workspace, '珊瑚觀察'), { timeout: 10_000 }).toEqual([`youtube:${D3}`]);
-    await expect.poll(() => ids(workspace, `${D5} 的字幕`), { timeout: 10_000 }).toContain(`youtube:${D5}`);
-    await expect.poll(() => ids(workspace, `${D2} 的字幕`), { timeout: 10_000 }).not.toContain(`youtube:${D2}`);
+    await eventually(async () => expect(await ids(workspace, '珊瑚觀察')).toEqual([`youtube:${D3}`]));
+    await eventually(async () => expect(await ids(workspace, `${D5} 的字幕`)).toContain(`youtube:${D5}`));
+    await eventually(async () => expect(await ids(workspace, `${D2} 的字幕`)).not.toContain(`youtube:${D2}`));
   }, real);
   await using(a, async (workspace) => {
-    await expect.poll(() => workspace.search.status().state, { timeout: 15_000 }).toBe('ready');
+    await eventually(() => expect(workspace.search.status().state).toBe('ready'));
     expect(await ids(workspace, '珊瑚觀察')).toEqual([`youtube:${D3}`]);
   }, real);
-}, 90_000);
+});

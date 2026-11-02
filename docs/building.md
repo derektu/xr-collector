@@ -108,6 +108,7 @@ GitHub Actions（`.github/workflows/`）在 pull request 與 main push 時執行
 | Verify | Ubuntu 24.04 | `npm ci` 與 `npm run verify`，保存 JUnit 報告與 build |
 | Web regression | macOS 15 | 執行全部已收錄的 Web 流程，保存每支流程的 `results.json` |
 | Meilisearch native runtimes | Mac arm64、Windows x64 | 改到 Meilisearch 準備或 pin 時，下載釘住的 release 並跑 API smoke |
+| Search with the real engine | macOS 15 | 改到 `src/` 中視窗與 Electron 以外的程式、`test:meilisearch:mac` 的測試檔或 runtime 的 pin 時，以真實 Meilisearch 跑 `npm run test:meilisearch:mac` |
 | Packaged smoke | Mac、Windows | 手動觸發時建置未簽章的測試包並檢查打包 App |
 
 CI 不建置正式安裝包，也不跑 Electron 桌面流程。

@@ -1,3 +1,7 @@
+// The source types and URL recognition the UI and Agents read: YouTube's kinds and setting options,
+// and the answer for a pasted address (collect a video, subscribe to or resume a channel, subscribe
+// to a site's feed, or why it is unsupported, unavailable or needs a login), so the add box offers
+// the one action that fits.
 import { describe, expect, it, vi } from 'vitest';
 import { INTERVAL_OPTIONS } from '../../src/core/collection-settings.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';

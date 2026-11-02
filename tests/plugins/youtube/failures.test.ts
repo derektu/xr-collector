@@ -1,3 +1,5 @@
+// How a check handles each YouTube capture error (retry now, retry at the next check, rate limit or
+// skip) and the short label the user sees for it.
 import { describe, expect, it } from 'vitest';
 import { youtubeDeclaration } from '../../../src/plugins/youtube/shared.js';
 import { youtubeDefinition } from '../../../src/plugins/youtube/server.js';

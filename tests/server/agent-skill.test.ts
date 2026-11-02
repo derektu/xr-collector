@@ -1,3 +1,7 @@
+// The Agent Skill (skills/xr-collector-agent/SKILL.md) matches the server: every route in its
+// HTTP contract table is registered, and it names the connection recovery steps, filters,
+// settings, statuses and error codes the server uses. A stale Skill sends an Agent to routes or
+// fields that do not exist.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ChangeFeed } from '../../src/core/change-feed.js';

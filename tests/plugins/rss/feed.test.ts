@@ -1,3 +1,6 @@
+// Reading RSS 2.0, RSS 1.0 and Atom feeds into articles with titles, links, dates and full or
+// summary content, and the key each article gets: an article keeps its key across reads of its
+// feed, so a later check does not collect it twice.
 import { describe, expect, it } from 'vitest';
 import { looksLikeFeed, parseFeed } from '../../../src/plugins/rss/feed.js';
 import { articleKey, subscriptionId } from '../../../src/plugins/rss/server.js';

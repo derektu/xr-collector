@@ -7,7 +7,6 @@ import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '..
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';
 export const tier = 'feature';
-export const overBudget = '另啟動來源知識庫與固定位置兩個 instance；匯出、合併、取代、切換與收集中匯入依序改變同一份 Vault，拆開的每支都要重建相同前置資料。CI 約 90 秒。';
 export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other', 'vault-fixed'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
@@ -150,7 +149,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     });
 
     await record.scenario('R102-4', '收集中匯入：等待、裝置資料可讀、恢復收集', async ({ expect, shot }) => {
-      await instance.updateCatalog((catalog) => { catalog.youtube.captureDelayMs = 6000; });
+      await instance.updateCatalog((catalog) => { catalog.youtube.holdCaptures = true; catalog.youtube.captureDelayMs = 0; });
       await subscribe(instance, 'https://www.youtube.com/@verify-a');
       await waitFor(async () => {
         const stored = JSON.parse(await readFile(path.join(instance.runDir, 'profile', 'jobs', 'jobs.json'), 'utf8'));
@@ -174,9 +173,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await visible('import-compare');
       await shot('cancelled-wait');
       await click('import-compare');
+      await waitFor(async () => (await instance.api('/api/vault/status')).state === 'waiting', 'import waiting again');
       const jobsPage = await openPage('/jobs');
       expect(await jobsPage.getByTestId('page-jobs').count() === 1, '等待期間工作頁可讀');
       await shot('jobs-during-wait', jobsPage);
+      // The capture is held through every waiting check; once released, the channel is captured
+      // without delay and the comparison goes ahead when the running capture ends.
+      await instance.updateCatalog((catalog) => { catalog.youtube.holdCaptures = false; });
       await visible('import-preview');
       // Collection resumes after comparison and changes the local items. Compare those finished
       // items again before applying, as required by the import's stale-comparison contract.

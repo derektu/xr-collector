@@ -1,3 +1,7 @@
+// What a Mac user receives from a signed build: the App and the DMG each notarized once and stapled,
+// passing Gatekeeper with the expected Team, hardened runtime and a sealed runtime inventory. The
+// signing credentials and temporary keychain never disturb other sessions and are cleaned up after a
+// kill or signal; those cases skip Windows.
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -12,6 +16,7 @@ import {
   verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory, withTemporarySigningKeychain,
 } from '../../scripts/mac-signing.mjs';
 import { UnsafeProcessTreeError } from '../../scripts/owned-process.mjs';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 const describeStableCodeIdentity = async () => ({ teamId: 'ABCDE12345', cdHash: 'a'.repeat(40), identifier: 'com.moneydj.xrcollector' });
@@ -223,11 +228,7 @@ it.skipIf(process.platform === 'win32')('a real packaging subprocess aborts its 
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'ignore', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try { await stat(ready); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
-  }
-  await stat(ready);
+  await eventually(() => stat(ready));
   child.kill('SIGTERM');
   const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
   expect(exit.signal).toBeNull();

@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // The Windows process start watcher of the desktop smoke. Its PowerShell process is ended once, and
 // only while it still runs: after it exits its PID may belong to another program, whose whole tree
 // taskkill would end. A fake watcher process stands in for PowerShell, so this runs on every platform.

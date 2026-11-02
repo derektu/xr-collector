@@ -1,3 +1,6 @@
+// The time range and item limit of a subscription: shared limits with per-type defaults, the
+// message for each invalid value, and the publish date a check reaches back to, so a subscription
+// collects exactly the range the user set.
 import { describe, expect, it } from 'vitest';
 import {
   BACKFILL_DAYS,

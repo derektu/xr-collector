@@ -1,3 +1,6 @@
+// Which App update a user is offered: only a stable newer version from a release index for the
+// user's own platform whose files, BuildInfo and tag agree, read from GitHub Releases without
+// credentials or from a generic index URL; no published release is told apart from up to date.
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { compareVersions, offerFromIndex } from '../../src/updates/release-index.js';

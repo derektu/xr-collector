@@ -2,7 +2,7 @@
 // listens on a port, how to end a process tree, and the machine's own architecture. macOS answers
 // through ps, lsof and sysctl; Windows has none of them, so it answers through PowerShell (CIM and
 // Get-NetTCPConnection), taskkill and the registry. Callers see the same shapes on both.
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -86,12 +86,37 @@ export function commandOf(pid) {
  * even after the PID is reused.
  */
 export function processStart(pid) {
+  return processStarts([pid]).get(Number(pid)) ?? null;
+}
+
+/**
+ * When each of `pids` started, by PID, in the form `processStart` gives; a PID that is not running
+ * is left out. One process query answers all of them, which matters on Windows, where each
+ * PowerShell start costs a second or more.
+ */
+export function processStarts(pids) {
+  const wanted = [...new Set(pids.map(Number).filter((pid) => Number.isInteger(pid) && pid > 0))];
+  const starts = new Map();
+  if (wanted.length === 0) return starts;
+  let stdout = '';
   try {
-    if (WINDOWS) return powershell(`(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`).trim() || null;
-    return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim() || null;
+    // A PID that is not running is left out of both answers. macOS ps prints nothing at all when one
+    // PID is beyond the largest it allows, so then each PID is asked on its own.
+    if (WINDOWS) {
+      stdout = powershell(`Get-Process -Id ${wanted.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) $($_.StartTime.ToUniversalTime().ToString('o'))" }; exit 0`);
+    } else {
+      const ps = (list) => spawnSync('ps', ['-p', list.join(','), '-o', 'pid=,lstart='], { encoding: 'utf8' });
+      const all = ps(wanted);
+      stdout = all.stdout || all.status === 0 || wanted.length === 1 ? all.stdout ?? '' : wanted.map((pid) => ps([pid]).stdout ?? '').join('\n');
+    }
   } catch {
-    return null;
+    return starts;
   }
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = /^\s*(\d+)\s+(\S.*?)\s*$/u.exec(line);
+    if (match) starts.set(Number(match[1]), match[2]);
+  }
+  return starts;
 }
 
 /** PIDs listening on a TCP port, sorted; empty when nothing listens. */
@@ -169,11 +194,18 @@ export function endWindowsTree(pid) {
 /** Architecture names as Node spells them. */
 const ARCH = { amd64: 'x64', x86_64: 'x64', x64: 'x64', arm64: 'arm64', aarch64: 'arm64', x86: 'ia32' };
 
+let host;
+
 /**
  * The machine's own architecture, which differs from Node's when Node runs under emulation: x64
- * Node on Windows ARM64, or under Rosetta on an Apple silicon Mac.
+ * Node on Windows ARM64, or under Rosetta on an Apple silicon Mac. Read once per process.
  */
 export function hostArch() {
+  host ??= readHostArch();
+  return host;
+}
+
+function readHostArch() {
   try {
     if (WINDOWS) {
       const stdout = execFileSync('reg.exe', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', '/v', 'PROCESSOR_ARCHITECTURE'],
@@ -193,9 +225,9 @@ export function hostArch() {
  * version, Node's architecture, the machine's own architecture, and whether Node is emulated.
  */
 export function environment() {
-  const host = hostArch();
+  const machine = hostArch();
   return {
     platform: process.platform, osRelease: os.release(), osVersion: os.version(), node: process.version,
-    nodeArch: process.arch, hostArch: host, emulated: Boolean(host) && host !== process.arch,
+    nodeArch: process.arch, hostArch: machine, emulated: Boolean(machine) && machine !== process.arch,
   };
 }

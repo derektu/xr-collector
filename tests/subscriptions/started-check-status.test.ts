@@ -1,7 +1,9 @@
+// A started check never reads as queued again while its videos wait for the capture slot another
+// subscription holds, so a running subscription does not look like it fell back to waiting.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
@@ -10,6 +12,7 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -44,8 +47,8 @@ describe('a check that started (#108)', () => {
     const first = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
     const second = await w.jobs.whenSettled((await w.channels.add('@beta')).job.id);
     const betaCheck = second.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.jobs.get(betaCheck).items).toHaveLength(1));
-    expect(w.source.running()).toEqual([alphaVideos[0]]);
+    await eventually(() => expect(w.jobs.get(betaCheck).items).toHaveLength(1));
+    expect(w.source.holds.running()).toEqual([alphaVideos[0]]);
 
     expect((await w.status(beta)).state).not.toBe('queued');
     const overview = await w.jobs.overview();
@@ -53,10 +56,10 @@ describe('a check that started (#108)', () => {
     expect(overview.queued.map((entry) => entry.jobId)).not.toContain(betaCheck);
 
     w.source.release(alphaVideos[0]!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([alphaVideos[1]]));
+    await w.source.holds.reach([alphaVideos[1]]);
     expect((await w.status(beta)).state).not.toBe('queued');
     w.source.release(alphaVideos[1]!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([betaVideos[0]]));
+    await w.source.holds.reach([betaVideos[0]]);
     w.source.release(betaVideos[0]!);
     await w.jobs.whenSettled(first.result!.followUpJobId!);
     await w.jobs.whenSettled(betaCheck);

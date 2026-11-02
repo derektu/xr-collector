@@ -1,3 +1,7 @@
+// The subscription and schedule files in a Vault: a file of another version or with invalid values
+// is refused and left untouched rather than guessed at or converted, saves keep the fields they do
+// not manage, and subscriptions, failed items and the automatic collection switch survive a
+// restart.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

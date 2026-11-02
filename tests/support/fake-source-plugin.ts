@@ -10,6 +10,7 @@ import type {
   SourcePlugin,
   SubscriptionTarget,
 } from '../../src/plugins/types.js';
+import { HeldCaptures } from './held-captures.js';
 
 /**
  * Source plugins for tests that hold the core to its contract without YouTube: two types, `fake`
@@ -162,7 +163,7 @@ export class FakeSource {
   readonly listFailures: CollectorError[] = [];
   /** Captures of these keys wait until the test releases them. */
   readonly held = new Set<string>();
-  private readonly waiting = new Map<string, () => void>();
+  readonly holds = new HeldCaptures();
   signedIn = true;
   listings = 0;
 
@@ -196,16 +197,9 @@ export class FakeSource {
     this.captureFailures.set(key, [...(this.captureFailures.get(key) ?? []), ...errors]);
   }
 
-  running(): string[] {
-    return [...this.waiting.keys()];
-  }
-
   release(key: string): void {
-    const resolve = this.waiting.get(key);
-    if (!resolve) throw new Error(`capture ${key} is not waiting`);
-    this.waiting.delete(key);
+    this.holds.release(key);
     this.held.delete(key);
-    resolve();
   }
 
   async resolve(url: string): Promise<SubscriptionTarget> {
@@ -235,7 +229,7 @@ export class FakeSource {
     if (context.publishedNotBefore && item.publishedAt && item.publishedAt < context.publishedNotBefore) {
       throw new CollectorError('out_of_range', '這篇文章的發布時間早於收集範圍。');
     }
-    if (this.held.has(ref.key)) await new Promise<void>((resolve) => this.waiting.set(ref.key, resolve));
+    if (this.held.has(ref.key)) await this.holds.hold(ref.key);
     const feed = [...this.feeds.values()].find((candidate) => candidate.items.some((entry) => entry.key === ref.key));
     const details: FakeDetails = { rating: ref.key.length, note: feed ? `來自 ${feed.title}` : null };
     return {

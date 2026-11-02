@@ -3,6 +3,7 @@
 // the document counts once both finish, and the documents in the Vault and the search index.
 import { subscribe } from '../scripts/lib/seed.mjs';
 import { distinct, jobSectionChecks, subscriptionSequenceChecks } from './lib/status-sequence.mjs';
+import { screenAt } from './lib/revision.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscribe-a-b';
@@ -29,7 +30,7 @@ const fromIndexKey = (key) => Buffer.from(key, 'base64url').toString('utf8');
 
 const difference = (a, b) => [...a].filter((value) => !b.has(value)).sort();
 
-export async function run({ instance, page, openPage, record, waitFor, sleep }) {
+export async function run({ instance, page, openPage, record, waitFor }) {
   // Slower capture keeps A downloading while B is subscribed, so 下載中 is always sampled.
   await instance.updateCatalog((catalog) => { catalog.youtube.captureDelayMs = 1500; });
   const catalog = await instance.catalog();
@@ -129,13 +130,11 @@ export async function run({ instance, page, openPage, record, waitFor, sleep }) 
     }
     await shot('jobs-empty', jobsPage);
 
-    // The badge is judged only once every job has ended and the screen has stayed the same for 3 s.
-    const stable = await waitFor(async () => {
-      const seen = new Set();
-      for (let sample = 0; sample < 6; sample += 1) { seen.add(await badgeText(page)); await sleep(500); }
-      return seen.size === 1 ? { value: [...seen][0] } : null;
-    }, 'badge stable', { timeout: 30_000 });
-    expect(stable.value === '', '工作全部結束後側欄沒有工作徽章', { id: 'jobs.badge.none', expected: '', actual: stable.value });
+    // The jobs page shows no work at the revision it reached; once the main window has read that
+    // revision too, its badge counts the same jobs.
+    await screenAt(page, instance, await screenAt(jobsPage, instance));
+    const badge = await badgeText(page);
+    expect(badge === '', '工作全部結束後側欄沒有工作徽章', { id: 'jobs.badge.none', expected: '', actual: badge });
   });
 
   await record.scenario('SUBAB-4', '資料面：Vault、API、索引與工作紀錄', async ({ expect, note }) => {

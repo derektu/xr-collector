@@ -1,7 +1,11 @@
+// What a YouTube subscription collects from subscribing through pause, resume and removal: the
+// newest uncollected videos within its range and limit, the same at every kind of check, failed
+// videos tried again, unstarted work skipped on a pause while a running capture finishes, and
+// paused and removed subscriptions kept as they are after a restart.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { DEFAULT_POLICY, type CollectionPolicy } from '../../src/plugins/youtube/settings.js';
@@ -14,6 +18,7 @@ import { MemoryDocuments, SyntheticYouTube, syntheticChannelId } from './synthet
 import { readEventFiles } from '../activity/event-files.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { eventually } from '../support/wait.js';
 
 const DAY = 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
@@ -214,7 +219,7 @@ describe('checks after the first (R-02, R-03, R-07, R-09)', () => {
     w.source.holdCaptures = true;
     const firstNew = w.source.publish(id, 'b', w.clock.now, [0.01]);
     const [running] = await w.channels.startRun({ trigger: 'scheduled' });
-    await vi.waitFor(() => expect(w.source.running()).toEqual(firstNew));
+    await w.source.holds.reach(firstNew);
 
     w.advance(30 * 60_000);
     const meanwhile = w.source.publish(id, 'c', w.clock.now, [0.001], 10);
@@ -268,15 +273,15 @@ describe('full queue', () => {
     const ids = w.source.publish(id, 'q', w.clock.now, [1, 2, 3, 4, 5]);
     w.source.holdCaptures = true;
     const first = w.jobs.whenSettled((await w.jobs.whenSettled((await w.channels.add('@crowded')).job.id)).result!.followUpJobId!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
     w.source.holdCaptures = false;
-    for (const video of w.source.running()) w.source.release(video);
+    for (const video of w.source.holds.running()) w.source.release(video);
     const settled = await first;
     expect(settled.items!.filter((item) => item.error?.code === 'queue_full')).toHaveLength(2);
 
     w.advance(30 * 60_000);
     await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect(collectedIds(w)).toEqual([...ids].sort());
   });
 });
@@ -343,7 +348,7 @@ describe('settings when discovery starts (S-T7, A3)', () => {
     let release!: () => void;
     w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
     const [held] = await w.channels.startRun({ trigger: 'manual', subscriptionIds: [blocker] });
-    await vi.waitFor(() => expect(w.jobs.get(held!.job.id).phase).toBe('discover'));
+    await eventually(() => expect(w.jobs.get(held!.job.id).phase).toBe('discover'));
     const [queued] = await w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] });
     expect(queued!.job.state).toBe('queued');
 
@@ -404,7 +409,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@pausing')).job.id);
     const jobId = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
 
     await w.channels.setEnabled(id, false);
     w.source.release(ids[0]!);
@@ -430,7 +435,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
     w.advance(HOUR);
     const [during] = await w.channels.startRun({ trigger: 'manual' });
-    await vi.waitFor(() => expect(w.jobs.get(during!.job.id).phase).toBe('discover'));
+    await eventually(() => expect(w.jobs.get(during!.job.id).phase).toBe('discover'));
     await w.channels.setEnabled(id, false);
     w.source.holdDiscovery = null;
     release();
@@ -444,7 +449,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@quick')).job.id);
     const oldJobId = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
 
     await w.channels.setEnabled(id, false);
     const resumed = await w.channels.setEnabled(id, true);
@@ -456,7 +461,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.release(ids[0]!);
     expect((await w.jobs.whenSettled(oldJobId)).items!.map((item) => item.outcome)).toEqual(['created', 'skipped', 'skipped', 'skipped']);
     await w.jobs.whenSettled(resumed.submission!.job.id);
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect(collectedIds(w)).toEqual([...ids].sort());
   });
 
@@ -467,7 +472,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@again2')).job.id);
     const oldJobId = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
 
     await w.channels.remove(id);
     const again = await w.jobs.whenSettled((await w.channels.add('@again2')).job.id);
@@ -478,7 +483,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.release(ids[0]!);
     const first = await w.jobs.whenSettled(again.result!.followUpJobId!);
     expect(first).toMatchObject({ scope: { trigger: 'subscribe' } });
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect(collectedIds(w)).toEqual([...ids].sort());
   });
 
@@ -492,7 +497,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.advance(HOUR);
     const fresh = w.source.publish(id, 'n', w.clock.now, [0.01], 5);
     const [old] = await w.channels.startRun({ trigger: 'manual' });
-    await vi.waitFor(() => expect(w.jobs.get(old!.job.id).phase).toBe('discover'));
+    await eventually(() => expect(w.jobs.get(old!.job.id).phase).toBe('discover'));
 
     await w.channels.setEnabled(id, false);
     const resumed = await w.channels.setEnabled(id, true);
@@ -513,7 +518,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@claimed')).job.id);
     const jobId = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
 
     const manual = await w.jobs.submitItem('youtube', `https://www.youtube.com/watch?v=${ids[2]}`);
     expect(manual.deduplicated).toBe(true);
@@ -535,9 +540,9 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     const ids = w.source.publish(id, 'l', w.clock.now, [1, 2, 3]);
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@leaving')).job.id);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
     w.source.release(ids[0]!);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[1]]));
+    await w.source.holds.reach([ids[1]]);
 
     expect(await w.channels.remove(id)).toEqual({ documentsKept: 1, documentsDeleted: 0, documentsFailed: 0 });
     w.source.release(ids[1]!);
@@ -578,13 +583,13 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     const ids = w.source.publish(id, 'v', w.clock.now, [1, 2]);
     w.source.holdCaptures = true;
     await w.channels.add('@listed');
-    await vi.waitFor(() => expect(w.source.running()).toEqual([ids[0]]));
+    await w.source.holds.reach([ids[0]]);
     expect((await w.channels.listSubscriptions())[0]).toMatchObject({
       id, status: 'collecting', activeJob: { done: 0, total: 2 }, documentCount: 0, lastCollectedAt: null,
     });
     w.source.holdCaptures = false;
     w.source.release(ids[0]!);
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect((await w.channels.listSubscriptions())[0]).toMatchObject({
       status: 'tracking', activeJob: null, documentCount: 2, lastCollectedAt: w.clock.now.toISOString(),
     });

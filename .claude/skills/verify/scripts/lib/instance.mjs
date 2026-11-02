@@ -12,8 +12,9 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
-import { commandOf, endWindowsTree, processStart, processTable, WINDOWS } from './platform.mjs';
+import { commandOf, endWindowsTree, processStart, processStarts, processTable, WINDOWS } from './platform.mjs';
 import { readState } from './state.mjs';
+import { runtimeBin } from './target.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -22,16 +23,20 @@ const OWN_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 export const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 export { processTable };
 
-const groupMembers = (pgids) => processTable().filter((entry) => pgids.has(entry.pgid));
+/**
+ * Whether any process of the group remains, asked of the kernel with signal 0; EPERM is a member
+ * owned by another user. Polling it costs a system call, where a process table costs two ps runs.
+ */
+const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 
 /**
  * Processes the run started: its Web server or Electron (run marker) and Meilisearch. On Windows the
  * app counts by the executable run.json records as the run's target.
  */
-function runMembers(runDir) {
+function runMembers(runDir, table = processTable()) {
   const record = readRecord(runDir);
   const apps = record?.target?.executable ? [record.target.executable] : [];
-  return processTable().filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable, { apps }));
+  return table.filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable, { apps }));
 }
 
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
@@ -79,10 +84,21 @@ function readLock(slot) {
   }
 }
 
-/** Whether the lock's holder is the process that wrote it. An unreadable lock counts as held for a minute. */
-export const lockLive = (lock) => Boolean(lock) && (lock.unreadable
+/**
+ * Whether the lock's holder is the process that wrote it, by the start time `startOf` reads for its
+ * PID. An unreadable lock counts as held for a minute.
+ */
+export const lockLive = (lock, startOf = processStart) => Boolean(lock) && (lock.unreadable
   ? Date.now() - lock.writtenAt < 60_000
-  : Boolean(lock.start) && processStart(lock.pid) === lock.start);
+  : Boolean(lock.start) && startOf(lock.pid) === lock.start);
+
+/** The slot locks with whether each is live, with one process query for all their holders. */
+function readLocks() {
+  const locks = SLOTS.map((ports) => readLock(ports.slot));
+  const starts = processStarts(locks.filter((lock) => lock && !lock.unreadable).map((lock) => lock.pid));
+  const startOf = (pid) => starts.get(Number(pid)) ?? null;
+  return locks.map((lock) => lock && { ...lock, live: lockLive(lock, startOf) });
+}
 
 const writeLock = (slot, content) => writeJsonAtomic(lockPath(slot), content);
 
@@ -114,16 +130,16 @@ async function withClaimMutex(body) {
 
 /** The state of each slot lock: { slot, runDir, pid, live }. */
 export function slotHolders() {
-  return SLOTS.map((ports) => readLock(ports.slot)).filter(Boolean).map((lock) => ({ ...lock, live: lockLive(lock) }));
+  return readLocks().filter(Boolean);
 }
 
 /** Takes the first slot with no live lock and all four ports free, held by this process for `runDir`. */
 export async function claimSlot(runDir) {
   await mkdir(SLOT_LOCKS, { recursive: true });
   return withClaimMutex(async () => {
-    for (const ports of SLOTS) {
-      const lock = readLock(ports.slot);
-      if (lockLive(lock)) continue;
+    const locks = readLocks();
+    for (const [index, ports] of SLOTS.entries()) {
+      if (locks[index]?.live) continue;
       const free = await Promise.all([ports.ui, ports.search, ports.agent, ports.feeds].map(portFree));
       if (!free.every(Boolean)) continue;
       holdSlot(ports.slot, runDir, process.pid);
@@ -182,6 +198,10 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   if (process.platform !== 'darwin') throw new Error(`Web mode runs on macOS; on ${process.platform} use the Desktop runs (launchElectron)`);
   checkout = path.resolve(checkout);
+  // server.mts runs the checkout's Meilisearch; without it search never becomes ready, so the run
+  // fails here, before it holds an evidence folder or a slot.
+  const meilisearch = path.join(runtimeBin(checkout), 'meilisearch');
+  if (!existsSync(meilisearch)) throw new Error(`${meilisearch} is missing; run npm run download:runtime in ${checkout}`);
   const claimed = claimEvidence(issue, label, { evidence });
   let run;
   try {
@@ -338,10 +358,10 @@ const holderLive = (record) => record.kind === 'electron' && Boolean(record.star
 /**
  * The live processes of a run, found by their command line: the Web server or Electron with the run
  * marker, and Meilisearch with its data in the run. An Electron run also counts its flow process
- * while that flow is running.
+ * while that flow is running. `table` is a process table the caller already read (processTable).
  */
-export function runProcesses(record) {
-  const members = runMembers(record.runDir);
+export function runProcesses(record, table) {
+  const members = runMembers(record.runDir, table);
   if (holderLive(record)) members.push({ pid: record.pid, pgid: null, command: commandOf(record.pid), holder: true });
   return members;
 }
@@ -361,8 +381,12 @@ export async function terminateRun(runDir, { kill = false } = {}) {
   const members = runMembers(runDir);
   if (!members.length) return;
   if (WINDOWS) {
-    for (const member of members) endWindowsTree(member.pid);
-    await waitFor(() => members.every((member) => !alive(member.pid)) && runMembers(runDir).length === 0, 'run kill', { timeout: 10_000 });
+    // Each process-table read is a CIM query of a second or more, so the wait watches the known
+    // PIDs and reads the table again only once they have exited, for a process started meanwhile.
+    for (let left = members; left.length; left = runMembers(runDir)) {
+      for (const member of left) endWindowsTree(member.pid);
+      await waitFor(() => left.every((member) => !alive(member.pid)), 'run kill', { timeout: 10_000 });
+    }
     return;
   }
   const groups = new Set(members.filter((member) => member.pid === member.pgid).map((member) => member.pgid));
@@ -371,7 +395,7 @@ export async function terminateRun(runDir, { kill = false } = {}) {
     for (const pgid of groups) { try { process.kill(-pgid, name); } catch { /* group gone */ } }
     for (const pid of loose) { try { process.kill(pid, name); } catch { /* gone */ } }
   };
-  const gone = () => groupMembers(groups).length === 0 && loose.every((pid) => !alive(pid));
+  const gone = () => [...groups].every((pgid) => !groupAlive(pgid)) && loose.every((pid) => !alive(pid));
   if (!kill) {
     signal('SIGTERM');
     if (await waitFor(gone, 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
@@ -416,13 +440,16 @@ export function sweepStale(from) {
   const result = { removed: [], live: [], unreadable: [] };
   if (!existsSync(root)) return result;
   const held = new Set(holders.filter((lock) => lock.live).map((lock) => lock.runDir));
+  // One process table for every run folder: on Windows each read is a CIM query of seconds.
+  let table;
+  const processes = () => { table ??= processTable(); return table; };
   for (const name of readdirSync(root)) {
     const runDir = path.join(root, name);
     if (held.has(runDir)) continue;
     const record = readRecord(runDir);
     if (record?.unreadable) { result.unreadable.push(name); continue; }
-    if (record && runProcesses(record).length) { result.live.push(name); continue; }
-    if (!record && runMembers(runDir).length) { result.live.push(name); continue; }
+    if (record && runProcesses(record, processes()).length) { result.live.push(name); continue; }
+    if (!record && runMembers(runDir, processes()).length) { result.live.push(name); continue; }
     if (!record && Date.now() - statSync(runDir).mtimeMs < 10 * 60_000) continue;
     rmSync(runDir, { recursive: true, force: true });
     result.removed.push(name);

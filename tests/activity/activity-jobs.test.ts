@@ -25,6 +25,8 @@ import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/typ
 import type { DocumentKey } from '../../src/vault/document-paths.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
+import { HeldCaptures } from '../support/held-captures.js';
+import { eventually } from '../support/wait.js';
 
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
 
@@ -63,7 +65,7 @@ class ScriptedSource implements YouTubeSource {
   readonly discoverFailures: CollectorError[] = [];
   readonly resolveFailures: CollectorError[] = [];
   readonly channelVideos = new Map<string, DiscoveredYouTubeVideo[]>();
-  readonly held = new Map<string, () => void>();
+  readonly holds = new HeldCaptures();
   hold = new Set<string>();
 
   async resolveChannel(url: string): Promise<ResolvedYouTubeChannel> {
@@ -81,7 +83,7 @@ class ScriptedSource implements YouTubeSource {
   }
 
   async capture(video: YouTubeVideoRef): Promise<CapturedTranscript> {
-    if (this.hold.has(video.videoId)) await new Promise<void>((resolve) => this.held.set(video.videoId, resolve));
+    if (this.hold.has(video.videoId)) await this.holds.hold(video.videoId);
     const failure = this.captureFailures.get(video.videoId)?.shift();
     if (failure) throw failure;
     return {
@@ -107,8 +109,13 @@ function build(subscriptions: SubscriptionPort, store: JobStore, limits: { captu
     setTimer: (callback) => { timers.push(callback); return () => undefined; },
   });
   const runTimers = () => { for (const callback of timers.splice(0)) callback(); };
+  /** Runs the timers once the manager has set one. */
+  const runNextTimers = async () => {
+    await eventually(() => expect(timers).not.toHaveLength(0));
+    runTimers();
+  };
   const events = async (query: Parameters<typeof store.activity.query>[0] = {}) => (await store.activity.query(query, { vaultPath: VAULT })).events;
-  return { manager, store, source, vault, runTimers, events };
+  return { manager, store, source, vault, runTimers, runNextTimers, events };
 }
 
 /** Jobs whose subscriptions are an in-memory recorder of what the jobs report. */
@@ -173,13 +180,11 @@ describe('manual retry (A-T9)', () => {
   });
 
   it('gives a job whose automatic retries ran out a fresh attempt budget', async () => {
-    const { manager, source, runTimers, events } = setup();
+    const { manager, source, runNextTimers, events } = setup();
     source.captureFailures.set('bbbbbbbbbbb', [network(), network(), network()]);
     const id = (await manager.submitItem('youtube', watchUrl('bbbbbbbbbbb'))).job.id;
-    for (let round = 0; round < 3; round += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      runTimers();
-    }
+    // Three attempts: the first and two automatic retries.
+    for (let retry = 0; retry < 2; retry += 1) await runNextTimers();
     const failed = await manager.whenSettled(id);
     expect(failed).toMatchObject({ state: 'failed', retry: { attempts: 3 } });
     const failure = (await events({ jobId: id, eventType: ['job.failed'] }))[0]!;
@@ -203,7 +208,8 @@ describe('manual retry (A-T9)', () => {
     const retried = await manager.retry(failed.id);
     expect(retried).toMatchObject({ deduplicated: true, job: { id: active.job.id } });
     expect(manager.get(failed.id).retriedBy).toBe(active.job.id);
-    source.held.get('ccccccccccc')?.();
+    await source.holds.started('ccccccccccc');
+    source.holds.release('ccccccccccc');
   });
 
   it('subscribes again with the settings a failed subscription request was accepted with', async () => {
@@ -363,7 +369,8 @@ describe('job summary and event fields', () => {
     await manager.whenSettled(retried.job.id);
     expect(manager.summary('2026-10-15T00:00:00+08:00')).toMatchObject({ active: 1, completed: 2, failed: 1 });
     expect(manager.summary('2026-10-16T00:00:00+08:00')).toMatchObject({ active: 1, completed: 0, failed: 0 });
-    source.held.get('hhhhhhhhhhh')?.();
+    await source.holds.started('hhhhhhhhhhh');
+    source.holds.release('hhhhhhhhhhh');
   });
 
   it('records title, subscription, parent and trigger on the events of a channel job and its videos', async () => {
@@ -421,7 +428,7 @@ describe('retention leaves job records alone (A-T3)', () => {
     const first = setup(store);
     first.source.hold.add('jjjjjjjjjjj');
     const interrupted = (await first.manager.submitItem('youtube', watchUrl('jjjjjjjjjjj'))).job.id;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await first.source.holds.started('jjjjjjjjjjj');
     await store.flush();
     // The process stops while the capture runs; reopening marks the job interrupted.
     now = new Date(T0.getTime() + 40 * 86_400_000);

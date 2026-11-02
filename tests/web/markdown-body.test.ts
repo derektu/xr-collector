@@ -1,3 +1,5 @@
+// The Reader's document body: headings, lists, emphasis and links render as Markdown, links open
+// outside the app, and no body content becomes a script, image, event handler or javascript: link.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';

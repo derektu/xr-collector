@@ -1,3 +1,6 @@
+// GET /api/device/build-info: the UI and an authorized Agent read the same build identity before a
+// Vault is set up and while a Vault operation blocks reads, through the real UI and Agent listeners
+// with their Host and key checks.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

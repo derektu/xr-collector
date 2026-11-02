@@ -1,3 +1,6 @@
+// Turning article HTML into the Markdown body an RSS article is saved with: headings, lists,
+// tables, code and quotes, links and images resolved against the article address, and scripts,
+// forms and links that lead nowhere left out.
 import { describe, expect, it } from 'vitest';
 import { htmlToMarkdown, htmlToText } from '../../../src/plugins/rss/html.js';
 

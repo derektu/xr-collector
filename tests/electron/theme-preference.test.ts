@@ -1,3 +1,5 @@
+// The theme the user picks (system, dark or light) survives a restart: a missing or invalid file
+// follows the system, and rapid changes leave the last choice on disk.
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

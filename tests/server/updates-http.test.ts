@@ -1,3 +1,5 @@
+// The device update API (/api/device/updates) works without a Vault, and a download names the exact
+// offer by version and sha256 with no extra fields, so the UI or an Agent gets the update it chose.
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../src/server/app.js';
 import type { DeviceUpdateStatus } from '../../src/core/types.js';

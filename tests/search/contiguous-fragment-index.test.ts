@@ -1,3 +1,6 @@
+// The index of Chinese fragments search filters by: a query group matches only when its characters
+// appear together inside one field, so searching 半導 skips documents where the characters are
+// scattered, and updates and deletions leave no stale matches.
 import { describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../src/core/types.js';
 import { ContiguousFragmentIndex } from '../../src/search/contiguous-fragment-index.js';

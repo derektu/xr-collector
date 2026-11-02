@@ -35,6 +35,16 @@ export async function screenAt(page, instance, revision, { timeout = 15_000 } = 
 }
 
 /**
+ * Resolves once the page has handled every response that reached it before the call. The page sends
+ * a request of its own and waits for the answer; the page runs the tasks already queued for the
+ * earlier responses, and the renders they schedule, before an answer that needs a round trip to the
+ * server. A flow that proves a late response changed nothing checks the screen after this.
+ */
+export async function pageTurn(page) {
+  await page.evaluate(async () => { await (await fetch('/api/health', { cache: 'no-store' })).text(); });
+}
+
+/**
  * The Agent port, with the run's own token. Each call returns the JSON body and the revision its
  * response named; an error status throws with the body. The token never goes into evidence.
  */

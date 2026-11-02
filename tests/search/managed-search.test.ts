@@ -1,3 +1,7 @@
+// Keeping the search index in step with the Vault, against a fake engine and recorded engine
+// requests: rebuilding a stale index at start, reporting a failed rebuild, the settings, filters
+// and pages a search sends, and keeping a deleted document out of results even when its removal
+// failed.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { MAX_PENDING_REMOVALS } from '../../src/search/managed-transcript-search.js';

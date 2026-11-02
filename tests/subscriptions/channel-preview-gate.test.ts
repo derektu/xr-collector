@@ -28,7 +28,9 @@ describe('channel preview through the YouTube request channel', () => {
     expect(gate.status().state).toBe('busy');
     finishRunning();
     await running;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Requests run one at a time in queue order and an interactive one goes first, so a preview still
+    // queued would run before this one.
+    await gate.run('background', async () => undefined);
     expect(previewRequests).toBe(0);
     expect(gate.status().state).toBe('idle');
   });

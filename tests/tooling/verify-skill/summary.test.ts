@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // Whether results.json files from several machines complete one version: every scenario passes on
 // every required platform, only results of the commit under test from a clean checkout count, and a
 // failure is never hidden by a pass. The CLI reads the files and exits 2 while incomplete.
@@ -92,5 +93,5 @@ describe('verify.mjs summary', () => {
 
     expect(await run(mac)).toBe(2);
     expect(await run(mac, windows)).toBe(0);
-  }, 30_000);
+  });
 });

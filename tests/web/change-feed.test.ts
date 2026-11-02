@@ -1,3 +1,6 @@
+// How the window follows the server's change stream: a screen reloads only after changes to what
+// it shows, and every screen after the Vault's contents change; batches already received are
+// skipped, and a reset or another server instance reloads everything.
 import { describe, expect, it } from 'vitest';
 import { caughtUp, receive, staleAfter } from '../../src/web/change-feed.js';
 

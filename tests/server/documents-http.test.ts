@@ -1,3 +1,7 @@
+// The documents HTTP contract the UI and authorized Agents share: listing and reading documents
+// with their publisher, paging newest first with an exact total, filters by source type and
+// publisher ID, the source list with subscription state, and search status against the Vault count.
+// Browse and read keep working while search is unavailable, and reading never rewrites a file.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,7 +30,7 @@ interface Fixture {
   extra?: Record<string, unknown>;
 }
 
-/** Writes a document file in the Vault format directly, as a first-round or newer writer would. */
+/** Writes a document file in the Vault format directly, with or without the optional fields. */
 async function writeDocument(root: string, fixture: Fixture): Promise<void> {
   const directory = path.join(root, 'documents', 'youtube');
   await mkdir(directory, { recursive: true });
@@ -75,9 +79,9 @@ function channels(list: SubscriptionRecord[]) {
 }
 
 describe('documents HTTP contract', () => {
-  it('reads first-round and newer documents through the shared contract', async () => {
+  it('reads documents with and without a publisher ID through the shared contract', async () => {
     const root = await vaultRoot();
-    await writeDocument(root, { videoId: 'legacy00001', collectedAt: '2026-09-01T00:00:00.000Z', publisher: '舊頻道' });
+    await writeDocument(root, { videoId: 'nopubid0001', collectedAt: '2026-09-01T00:00:00.000Z', publisher: '未記錄 ID 的頻道' });
     await writeDocument(root, {
       videoId: 'current0001', publisherId: 'UC-a', collectedAt: '2026-10-01T00:00:00.000Z', publishedAt: '2026-09-30T00:00:00.000Z',
       extra: { aliases: ['未知欄位'], collector_extension: { note: 'kept' } },
@@ -99,7 +103,7 @@ describe('documents HTTP contract', () => {
       youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' },
       excerpt: '段落標題 這是 current0001 的字幕正文。',
     });
-    expect(page.documents[1]).toMatchObject({ publisher: { id: null, name: '舊頻道' }, publishedAt: null });
+    expect(page.documents[1]).toMatchObject({ publisher: { id: null, name: '未記錄 ID 的頻道' }, publishedAt: null });
     for (const document of page.documents) {
       expect(document).not.toHaveProperty('channelTitle');
       expect(document).not.toHaveProperty('languageCode');
@@ -137,7 +141,7 @@ describe('documents HTTP contract', () => {
     await writeDocument(root, { videoId: 'samename002', publisherId: 'UC-a', publisher: '同名頻道', collectedAt: '2026-10-02T00:00:00.000Z' });
     await writeDocument(root, { videoId: 'samename003', publisherId: 'UC-b', publisher: '同名頻道', collectedAt: '2026-10-03T00:00:00.000Z' });
     await writeDocument(root, { videoId: 'removed0001', publisherId: 'UC-gone', publisher: '已移除頻道', collectedAt: '2026-10-04T00:00:00.000Z' });
-    await writeDocument(root, { videoId: 'legacy00001', publisher: '舊頻道', collectedAt: '2026-10-05T00:00:00.000Z' });
+    await writeDocument(root, { videoId: 'nopubid0001', publisher: '未記錄 ID 的頻道', collectedAt: '2026-10-05T00:00:00.000Z' });
     const app = await createHttpApp({
       collector: new Collector(new MarkdownVault(root)),
       subscriptions: [channels([channel('UC-a', '同名頻道'), channel('UC-b', '同名頻道'), channel('UC-empty', '沒有文件的頻道')])],
@@ -146,7 +150,7 @@ describe('documents HTTP contract', () => {
     const ids = async (query: string) => (await app.inject(`/api/documents?${query}`)).json().documents.map((document: SavedDocument) => document.id);
     expect(await ids('sourceType=youtube&publisherId=UC-a')).toEqual(['youtube:samename002', 'youtube:samename001']);
     expect(await ids('sourceType=youtube&publisherId=UC-b')).toEqual(['youtube:samename003']);
-    expect(await ids('sourceType=youtube&publisherId=none')).toEqual(['youtube:legacy00001']);
+    expect(await ids('sourceType=youtube&publisherId=none')).toEqual(['youtube:nopubid0001']);
     expect(await ids('sourceType=youtube')).toHaveLength(5);
 
     expect((await app.inject('/api/documents/sources')).json().sources).toEqual({

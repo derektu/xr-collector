@@ -16,7 +16,7 @@ export async function run({ instance, page, record, waitFor }) {
     });
     await page.getByTestId('sidebar-update').click();
     await page.getByTestId('software-update').waitFor();
-    await waitFor(() => panelIsInViewport(page), 'sidebar update panel in viewport', { timeout: 8_000 });
+    await waitFor(() => panelIsInViewport(page), 'sidebar update panel in viewport');
     expect(await panelIsInViewport(page), '側欄版本狀態開啟設定並把 App 更新區帶進可視範圍', { id: 'u36.sidebar-update-navigation' });
     await page.getByTestId('nav-documents').click();
     await page.getByTestId('nav-settings').click();
@@ -64,27 +64,27 @@ export async function run({ instance, page, record, waitFor }) {
     await page.route('**/api/device/agent', holdAgent);
     try {
       await page.goto(`${instance.url}/documents`);
-      await waitFor(() => page.evaluate(() => window.__verifyDesktopReady()), 'desktop navigation handshake', { timeout: 8_000 });
+      await waitFor(() => page.evaluate(() => window.__verifyDesktopReady()), 'desktop navigation handshake');
       expect(await page.evaluate(() => window.__verifyDesktopReady()), 'renderer 完成註冊導覽 listener 後向 preload 回報 ready', {
         id: 'u36.native-navigation-handshake', expected: true, actual: await page.evaluate(() => window.__verifyDesktopReady()),
       });
-      await waitFor(() => vaultHeld, 'Vault setup request held', { timeout: 8_000 });
+      await waitFor(() => vaultHeld, 'Vault setup request held');
       await page.evaluate(() => window.__verifyOpenUpdate());
       releaseVault();
       await page.getByTestId('software-update').waitFor();
-      await waitFor(() => heldSettings.size === 2 && agentHeld, 'Settings async requests held', { timeout: 8_000 });
-      await waitFor(() => panelIsInViewport(page), 'native update panel initially in viewport', { timeout: 8_000 });
+      await waitFor(() => heldSettings.size === 2 && agentHeld, 'Settings async requests held');
+      await waitFor(() => panelIsInViewport(page), 'native update panel initially in viewport');
       releaseSettings();
       await page.getByTestId('search-index-state').waitFor();
       await page.getByTestId('login-startup-status').waitFor();
-      await waitFor(() => panelIsInViewport(page), 'native update panel stable after Settings layout', { timeout: 8_000 });
+      await waitFor(() => panelIsInViewport(page), 'native update panel stable after Settings layout');
       expect(await panelIsInViewport(page), '選單列／系統匣的 update 導覽訊號在 Vault 與上方設定載入後仍保持面板可見', { id: 'u36.native-update-navigation' });
       await shot('update-panel-navigation');
 
       const content = page.locator('main.content');
       await content.hover();
       await page.mouse.wheel(0, -10_000);
-      await waitFor(() => content.evaluate((element) => element.scrollTop === 0), 'manual scroll returns to Settings top', { timeout: 8_000 });
+      await waitFor(() => content.evaluate((element) => element.scrollTop === 0), 'manual scroll returns to Settings top');
       releaseAgent();
       await page.getByTestId('agent-active-url').waitFor();
       expect(await content.evaluate((element) => element.scrollTop === 0), '使用者離開更新區後，上方卡片延遲載入不會搶回捲動位置', {
@@ -102,14 +102,14 @@ export async function run({ instance, page, record, waitFor }) {
 
   await record.scenario('U36-W5', '側欄只顯示目前真正的更新動作', async ({ expect, shot }) => {
     await instance.api('/api/device/updates/check', { method: 'POST' });
-    await waitFor(async () => await sidebarLabel(page) === 'v0.1.0 · 有新版本', 'sidebar available label', { timeout: 8_000 });
+    await waitFor(async () => await sidebarLabel(page) === 'v0.1.0 · 有新版本', 'sidebar available label');
     expect(await sidebarLabel(page) === 'v0.1.0 · 有新版本', '確定有 offer 後才提示新版本', {
       id: 'u36.sidebar-available', expected: 'v0.1.0 · 有新版本', actual: await sidebarLabel(page),
     });
 
     await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 10_000; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => await sidebarLabel(page) === 'v0.1.0 · 下載中', 'sidebar downloading label', { timeout: 8_000 });
+    await waitFor(async () => await sidebarLabel(page) === 'v0.1.0 · 下載中', 'sidebar downloading label');
     expect(await sidebarLabel(page) === 'v0.1.0 · 下載中', '下載時顯示下載中', {
       id: 'u36.sidebar-downloading', expected: 'v0.1.0 · 下載中', actual: await sidebarLabel(page),
     });
