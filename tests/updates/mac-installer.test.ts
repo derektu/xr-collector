@@ -1,3 +1,7 @@
+// Installing a Mac update: the downloaded ZIP must hold one App with no escaping link or path, the
+// handoff completes only once a live helper waits for the App to exit, a cancel removes its staging,
+// and the next start finalizes a finished result, even one acknowledged late, but never one that
+// needs recovery.
 import { createWriteStream } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -7,6 +11,7 @@ import { pipeline } from 'node:stream/promises';
 import { expect, it, vi } from 'vitest';
 import yazl from 'yazl';
 import { nativeRecoveryReceipt, preparedMacHandoff, recoverMacUpdateResults, validateMacUpdateArchive } from '../../src/updates/mac-installer.js';
+import { eventually } from '../support/wait.js';
 
 async function archive(entries: Array<{ name: string; body?: string; mode?: number }>): Promise<string> {
   const folder = await mkdtemp(path.join(os.tmpdir(), 'xr-mac-update-archive-')); const file = path.join(folder, 'app.zip');
@@ -52,17 +57,19 @@ it('refuses handoff when the prepared helper process has already died', async ()
 it('does not complete handoff until a live helper acknowledges waiting for parent exit', async () => {
   const workDir = await mkdtemp(path.join(os.tmpdir(), 'xr-mac-handoff-live-'));
   await writeFile(path.join(workDir, 'result.json'), JSON.stringify({ phase: 'prepared' }));
+  // The helper acknowledges once it has the handoff and the test lets it.
   const child = spawn(process.execPath, ['-e', `
     const fs=require('node:fs'), path=require('node:path'), root=process.argv[1];
-    const timer=setInterval(()=>{if(fs.existsSync(path.join(root,'handoff.json'))){
-      setTimeout(()=>{fs.writeFileSync(path.join(root,'result.json'),JSON.stringify({phase:'waiting_for_exit'}));setTimeout(()=>process.exit(0),200)},80);
+    const timer=setInterval(()=>{if(fs.existsSync(path.join(root,'handoff.json'))&&fs.existsSync(path.join(root,'acknowledge'))){
+      fs.writeFileSync(path.join(root,'result.json'),JSON.stringify({phase:'waiting_for_exit'}));setTimeout(()=>process.exit(0),200);
       clearInterval(timer);
     }},5);
   `, workDir]);
   const prepared = preparedMacHandoff({ workDir, runId: 'run', nonce: 'n'.repeat(64), parentPid: process.pid,
     expectedVersion: '0.1.2', expectedBuildId: 'build-b', child, signal: new AbortController().signal, abort: vi.fn() });
   let completed = false; const handingOff = prepared.handoff().then(() => { completed = true; });
-  await new Promise((resolve) => setTimeout(resolve, 30)); expect(completed).toBe(false);
+  await eventually(() => stat(path.join(workDir, 'handoff.json'))); expect(completed).toBe(false);
+  await writeFile(path.join(workDir, 'acknowledge'), '');
   await handingOff; expect(completed).toBe(true);
   await new Promise((resolve) => child.once('exit', resolve));
   await rm(workDir, { recursive: true, force: true });

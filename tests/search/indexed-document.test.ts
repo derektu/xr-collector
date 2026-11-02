@@ -1,3 +1,5 @@
+// The indexed form of a YouTube document stays fixed, pinned by its content hash: a change would
+// make every existing search index look stale and rebuild it at the next start.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

@@ -1,3 +1,7 @@
+// A deleted document is gone from every read, the search index and later channel checks, and stays
+// deleted through a stop mid-deletion, a restart and every race with a capture or index update.
+// Only an explicit request to collect it again brings it back, so a video the user deleted never
+// returns on its own.
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,7 +25,9 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
+import { HeldCaptures } from '../support/held-captures.js';
 import { youtubeKey } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
 const CHANNEL = 'UCdeletiontestchannel000';
@@ -56,7 +62,7 @@ class Source implements YouTubeSource {
   readonly captures: string[] = [];
   readonly failures = new Map<string, CollectorError>();
   readonly held = new Set<string>();
-  private readonly waiting = new Map<string, () => void>();
+  readonly holds = new HeldCaptures();
 
   async resolveChannel(): Promise<ResolvedYouTubeChannel> { throw new Error('unused'); }
   async discover(_channel: SubscriptionTarget, page: { offset: number; limit: number }): Promise<DiscoveredYouTubeVideo[]> {
@@ -65,18 +71,17 @@ class Source implements YouTubeSource {
   }
   async capture(video: YouTubeVideoRef): Promise<CapturedTranscript> {
     this.captures.push(video.videoId);
-    if (this.held.has(video.videoId)) await new Promise<void>((resolve) => this.waiting.set(video.videoId, resolve));
+    if (this.held.has(video.videoId)) await this.holds.hold(video.videoId);
     const failure = this.failures.get(video.videoId);
     if (failure) throw failure;
     return captured(video.videoId);
   }
-  async capturing(id: string): Promise<void> {
-    await expect.poll(() => this.waiting.has(id)).toBe(true);
+  capturing(id: string): Promise<void> {
+    return this.holds.started(id);
   }
   release(id: string): void {
     this.held.delete(id);
-    this.waiting.get(id)?.();
-    this.waiting.delete(id);
+    if (this.holds.has(id)) this.holds.release(id);
   }
 }
 
@@ -195,9 +200,9 @@ describe('deleting a document (A1)', () => {
 
     expect(result).toMatchObject({ indexed: true });
     expect(await w.collector.list()).toEqual([]);
-    await expect.poll(() => w.events.map((event) => [event.eventType, event.severity])).toEqual([
+    await eventually(() => expect(w.events.map((event) => [event.eventType, event.severity])).toEqual([
       ['document.deleted', 'info'], ['document.index_remove_failed', 'warning'],
-    ]);
+    ]));
     expect(await w.vault.deletions.get(`youtube:${a}`)).not.toBeNull();
   });
 
@@ -214,7 +219,7 @@ describe('deleting a document (A1)', () => {
     expect(w.removed).toEqual([`youtube:${a}`]);
     expect(w.indexed.has(`youtube:${a}`)).toBe(true);
     open();
-    await expect.poll(() => w.indexed.has(`youtube:${a}`)).toBe(false);
+    await eventually(() => expect(w.indexed.has(`youtube:${a}`)).toBe(false));
   });
 
   it('reports no search exclusion when no search service runs', async () => {
@@ -416,7 +421,7 @@ describe('deletion races (A5)', () => {
     const a = vid('alpha');
     w.holdAdd();
     const submission = await manager.submitItem('youtube', watchUrl(a));
-    await expect.poll(async () => exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true);
+    await eventually(async () => expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true));
     w.tick();
     const deletion = w.collector.delete(`youtube:${a}`);
     w.releaseAdd();
@@ -520,7 +525,7 @@ describe('deletion races (A5)', () => {
     await second.manager.resume();
     w.source.release(a);
     expect((await second.manager.whenSettled(explicit.job.id)).result).toMatchObject({ outcome: 'skipped', skipReason: 'deleted' });
-    await expect.poll(() => second.manager.isBusy()).toBe(false);
+    await eventually(() => expect(second.manager.isBusy()).toBe(false));
     expect(await w.collector.list()).toEqual([]);
     expect(w.indexed.size).toBe(0);
   });

@@ -1,3 +1,5 @@
+// Telling what a pasted YouTube input is: one video (playlist parameters dropped), a channel by
+// handle or address, a playlist, refused as unsupported, or an invalid address.
 import { describe, expect, it } from 'vitest';
 import { classifyYouTubeInput } from '../../../src/plugins/youtube/url.js';
 

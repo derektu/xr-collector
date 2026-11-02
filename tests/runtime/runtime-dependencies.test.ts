@@ -1,3 +1,6 @@
+// The yt-dlp and Deno an installer ships: full SHA-256 pins, a verified archive cache outside the
+// checkout that repairs a changed runtime file and serves cache-only installs, and a failed
+// checksum that keeps the installed runtimes. `npm run prepare:runtime` fills the cache for both.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

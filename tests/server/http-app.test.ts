@@ -1,3 +1,7 @@
+// The core routes the UI and authorized Agents share: the schedule switch, subscription preview,
+// add, pause, check and removal, search filters and page bounds, and pasted addresses becoming
+// video or channel jobs, with malformed requests refused by stable error codes before any job
+// starts. The server answers only requests addressed to its own loopback name and port.
 import { describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';

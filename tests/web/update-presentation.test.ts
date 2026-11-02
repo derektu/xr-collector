@@ -1,3 +1,6 @@
+// The update label in the sidebar: quiet while idle, checking, up to date or failed, a new version
+// announced only with a discovered offer, the current step from downloading through installing,
+// and nothing when this environment cannot install.
 import { describe, expect, it } from 'vitest';
 import type { DeviceUpdateStatus, UpdateOffer, UpdatePhase } from '../../src/core/types.js';
 import { sidebarUpdateLabel } from '../../src/web/update-presentation.js';

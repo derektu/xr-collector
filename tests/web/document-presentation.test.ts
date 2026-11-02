@@ -1,3 +1,7 @@
+// What the Documents page shows: the list's query, source and page kept in the URL, the typed
+// query keeping a trailing space, the source menu with removed subscriptions marked, date and
+// source tags, highlighted snippets, page numbers, Reader paths, and the page the list lands on
+// after a deletion.
 import { describe, expect, it } from 'vitest';
 import type { DocumentMetadata } from '../../src/core/types.js';
 import {

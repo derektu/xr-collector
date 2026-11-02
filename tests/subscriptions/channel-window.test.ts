@@ -1,3 +1,6 @@
+// Every check collects only the newest videos in the subscription's range: deleted videos are not
+// collected again and their places are not filled by older ones, a burst of new videos yields only
+// the newest limit, and a resume months later reaches back from the resume (R-01–R-04).
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

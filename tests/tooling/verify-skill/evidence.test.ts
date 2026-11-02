@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // Where a verify run keeps its evidence and scratch state: claimEvidence never reuses a labelled
 // folder, labels are single folder names, and the locations follow the worktree the command runs in.
 import { execFile } from 'node:child_process';
@@ -57,7 +58,7 @@ describe('claimEvidence', () => {
 
     expect(new Set(labels).size).toBe(6);
     expect(labels.sort()).toEqual(['parallel', 'parallel-2', 'parallel-3', 'parallel-4', 'parallel-5', 'parallel-6']);
-  }, 20_000);
+  });
 
   it('shares the issue folder between runs without a label', () => {
     const { issue } = inWorktree();
@@ -95,7 +96,7 @@ describe('claimEvidence', () => {
     const outcomes = (await Promise.all(launches)).map((result) => result.stdout.trim()).sort();
 
     expect(outcomes).toEqual(['claimed', 'refused', 'refused', 'refused', 'refused', 'refused']);
-  }, 20_000);
+  });
 
   it('drops an explicit folder a failed launch made, and keeps one it was given', () => {
     inWorktree();

@@ -60,26 +60,15 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-item-url').click();
     await submit(url);
   };
-  const displayedVaultCountsWithin = async (expected, timeout = 6000) => {
-    const deadline = Date.now() + timeout;
-    let actual = '';
-    do {
-      actual = (await by('vault-counts').innerText()).trim();
-      if (actual === expected) return actual;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    } while (Date.now() < deadline);
-    return actual;
+  // The counts on screen once they match, or what they show when the wait gives up.
+  const displayedVaultCountsWithin = async (expected) => {
+    const shown = async () => (await by('vault-counts').innerText()).trim();
+    return waitFor(async () => (await shown()) === expected && expected, `vault counts ${expected}`).catch(shown);
   };
-  const displayedSearchCountsWithin = async (expected, timeout = 6000) => {
+  const displayedSearchCountsWithin = async (expected) => {
     const totals = by('settings-search-index').locator('p').filter({ hasText: '已索引' });
-    const deadline = Date.now() + timeout;
-    let actual = '';
-    do {
-      actual = (await totals.innerText()).trim();
-      if (actual === expected) return actual;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    } while (Date.now() < deadline);
-    return actual;
+    const shown = async () => (await totals.innerText()).trim();
+    return waitFor(async () => (await shown()) === expected && expected, `search counts ${expected}`).catch(shown);
   };
   await instance.updateCatalog((c) => {
     c.feeds['/counts-three.xml'] = {

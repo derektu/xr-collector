@@ -1,3 +1,7 @@
+// The tray reads the App's state again when a change it shows arrives: changes that arrive
+// together cost one read no sooner than the read gap after the last, a change during a read gets
+// one more read, and a destroyed tray reads nothing. At midnight it redraws the next check time
+// without a read.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeBatch } from '../../src/core/changes.js';
 import type { TrayMenu } from '../../src/electron/tray-menu.js';

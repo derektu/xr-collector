@@ -1,3 +1,5 @@
+// What each row of the Jobs page shows: the title or the address while the title is unknown, the
+// source type's icon, the status of started work, when and why it retries, and why it failed.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JobOverviewEntry } from '../../src/core/types.js';
 import { jobEntryLabel } from '../../src/web/jobs-presentation.js';

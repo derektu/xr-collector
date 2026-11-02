@@ -1,3 +1,7 @@
+// Starting the search engine after a crash: an engine a killed app left on the same database is
+// stopped before a new one starts, and a process record that cannot be verified stops startup
+// without killing another process or clearing search data. The killed-app cases run the real
+// engine.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';

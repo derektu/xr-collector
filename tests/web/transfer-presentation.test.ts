@@ -1,3 +1,6 @@
+// How export and import read in the window: file sizes, progress while a transfer runs, what an
+// import adds, updates and removes, newer local changes, the export time, the platform's file
+// manager name, and which operations switch the Vault.
 import { describe, expect, it } from 'vitest';
 import {
   changeText, hasChanges, localNewerText, progressText, relocates, removalText, revealLabel, sizeLabel, sourceText,

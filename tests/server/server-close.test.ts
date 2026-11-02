@@ -1,9 +1,14 @@
+// Closing the HTTP server, as quit and restart do: it waits for a handler under way even after its
+// client left, delivers a keep-alive response in progress, and does not hang on idle connections,
+// open event streams or waiting change reads. A close that hangs leaves quit or restart stuck.
+import { once } from 'node:events';
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ChangeFeed } from '../../src/core/change-feed.js';
 import type { BuildInfo, TranscriptSearch } from '../../src/core/types.js';
 import { startServer, type RunningServer } from '../../src/server/start.js';
+import { eventually } from '../support/wait.js';
 
 const info: BuildInfo = {
   schemaVersion: 1, kind: 'packaged', version: '0.7.0', builtAt: '2026-10-25T09:00:00.000Z',
@@ -51,15 +56,26 @@ function rebuild(port: number, agent?: http.Agent): { request: http.ClientReques
   return { request, response };
 }
 
-async function openSocket(port: number, bytes?: string): Promise<net.Socket> {
-  const socket = net.connect(port, '127.0.0.1');
+const connections = (running: RunningServer) => new Promise<number>((resolve, reject) => {
+  running.app.server.getConnections((error, count) => error ? reject(error) : resolve(count));
+});
+
+/** Opens a connection and returns once the server holds it. */
+async function openSocket(running: RunningServer, bytes?: string): Promise<net.Socket> {
+  const before = await connections(running);
+  const socket = net.connect(running.port, '127.0.0.1');
   sockets.push(socket);
   socket.on('error', () => undefined);
   await new Promise<void>((resolve) => socket.on('connect', resolve));
   if (bytes) socket.write(bytes);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await eventually(async () => expect(await connections(running)).toBe(before + 1));
   return socket;
 }
+
+/** Resolves once the server receives a request for `path`. */
+const arrives = (running: RunningServer, path: string) => new Promise<void>((resolve) => {
+  running.app.server.on('request', (request: http.IncomingMessage) => { if (request.url?.startsWith(path)) resolve(); });
+});
 
 const settled = (promise: Promise<unknown>) => {
   let done = false;
@@ -75,15 +91,19 @@ describe('HTTP server close', () => {
     response.catch(() => undefined);
     await held.running;
     request.destroy();
+    const serverClosed = once(running.app.server, 'close');
     const closing = running.close();
     const closed = settled(closing);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Past the listener's close, a close that did not wait for the handler has only callbacks left.
+    await serverClosed;
+    await new Promise((resolve) => setImmediate(resolve));
     expect(closed()).toBe(false);
     held.release();
     await closing;
     expect(held.finished()).toBe(true);
   });
 
+  // Fastify keeps an idle connection for 72 seconds, past the test bound, so a close that waited for it fails.
   it('delivers the response of a keep-alive request under way and closes without waiting for its idle timeout', async () => {
     const held = heldSearch();
     const running = await server(held.search);
@@ -92,18 +112,18 @@ describe('HTTP server close', () => {
     const { response } = rebuild(running.port, agent);
     await held.running;
     const closing = running.close();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await eventually(() => expect(running.app.server.listening).toBe(false));
     held.release();
     expect(await response).toBe(200);
     await closing;
-  }, 3000);
+  });
 
   it('closes with connections that carry no request', async () => {
     const running = await server();
-    await openSocket(running.port);
-    await openSocket(running.port, 'GET /api/search/status HTTP/1.1\r\nHost: 127.0.0.1\r\n');
+    await openSocket(running);
+    await openSocket(running, 'GET /api/search/status HTTP/1.1\r\nHost: 127.0.0.1\r\n');
     await running.close();
-  }, 3000);
+  });
 
   it('closes while event streams and waiting change reads are open', async () => {
     const changes = new ChangeFeed();
@@ -111,10 +131,11 @@ describe('HTTP server close', () => {
     const stream = await fetch(`${running.url}/api/events`);
     expect(stream.status).toBe(200);
     const ended = stream.text();
+    const arrived = arrives(running, '/api/changes');
     const waiting = fetch(`${running.url}/api/changes?after=${changes.revision}&wait=30`).then((response) => response.json());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await arrived;
     await running.close();
     expect(await ended).toContain('event: hello');
     expect(await waiting).toMatchObject({ batches: [] });
-  }, 3000);
+  });
 });

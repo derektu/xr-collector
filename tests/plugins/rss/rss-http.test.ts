@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchText } from '../../../src/plugins/rss/http.js';
 import { rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
 import type { SourcePlugin } from '../../../src/plugins/types.js';
@@ -9,6 +9,7 @@ import { createHttpApp } from '../../../src/server/app.js';
 import { page, rss2, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';
 import { cleanUp, machine, open, seed, temp } from '../../vault/exchange-fixtures.js';
+import { eventually } from '../../support/wait.js';
 
 // RSS through the routes every source type shares (R11-T9): the UI and an Agent with a token reach
 // RSS subscriptions with the same requests and read the same answers, and the Skill's RSS examples
@@ -41,7 +42,7 @@ async function world() {
     return { status: response.statusCode, body: response.json() };
   };
   const settled = async (id: string) => {
-    await vi.waitFor(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u), { timeout: 10_000 });
+    await eventually(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u));
     return (await send('GET', `/api/jobs/${id}`)).body.job;
   };
   return { workspace, ui, agent, send, settled, close: async () => { await ui.close(); await agent.close(); } };
@@ -92,7 +93,7 @@ describe('RSS on the shared routes (R11-T9)', () => {
     expect((await w.send('GET', '/api/documents?sourceType=rss')).body.documents).toHaveLength(2);
 
     expect((await w.send('DELETE', `/api/subscriptions/rss/${id}?documents=delete`)).status).toBe(200);
-    await vi.waitFor(async () => expect((await w.send('GET', '/api/documents?sourceType=rss')).body.documents).toEqual([]));
+    await eventually(async () => expect((await w.send('GET', '/api/documents?sourceType=rss')).body.documents).toEqual([]));
     expect((await w.send('GET', `/api/subscriptions/rss/${id}`)).body.error.code).toBe('subscription_not_found');
     await w.close();
   });

@@ -1,3 +1,6 @@
+// The bundled Chinese word lexicon that splits search queries: it loads only when its manifest
+// matches, cuts text like the jieba-rs reference, and plans query groups for Chinese words and
+// Latin terms, so a query looks for the words a user typed.
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

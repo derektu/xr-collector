@@ -1,8 +1,12 @@
+// The change push the window and Agents follow instead of polling: /api/events publishes a scoped
+// change for each kind of data change under revisions that increase one by one, every response
+// names its XR-Revision, a reconnecting reader catches up or is reset, and /api/changes answers a
+// waiting read. A missed change leaves the window showing outdated jobs, documents or settings.
 import { request as httpRequest } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parseCursor, type Change, type ChangeBatch } from '../../src/core/change-feed.js';
 import type { SearchResponse, SearchStatus, TranscriptSearch } from '../../src/core/types.js';
 import type { Pacing, PacingEvent } from '../../src/pacing/pacing-gate.js';
@@ -10,6 +14,7 @@ import type { DiscoveredYouTubeVideo } from '../../src/plugins/youtube/adapter.j
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import type { DeviceUpdateStatus, UpdateAccess } from '../../src/updates/types.js';
 import { withYouTube } from '../support/youtube-sources.js';
+import { eventually } from '../support/wait.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -52,17 +57,17 @@ async function openEvents(base: string, headers: Record<string, string> = {}) {
     response, events, changes,
     batches: () => events.filter((event) => event.event === 'change').map((event) => event.data as ChangeBatch),
     /** Resolves with the first event that matches. */
-    next: (match: (event: StreamEvent) => boolean, label: string) => vi.waitFor(() => {
+    next: (match: (event: StreamEvent) => boolean, label: string) => eventually(() => {
       const found = events.find(match);
       if (!found) throw new Error(`no event: ${label}`);
       return found;
-    }, { timeout: 5_000 }),
+    }),
     /** Resolves once a published change matches. */
-    change: (match: (change: Change) => boolean, label: string) => vi.waitFor(() => {
+    change: (match: (change: Change) => boolean, label: string) => eventually(() => {
       const found = changes().find(match);
       if (!found) throw new Error(`no change: ${label}`);
       return found;
-    }, { timeout: 5_000 }),
+    }),
     close: () => controller.abort(),
   };
 }
@@ -140,7 +145,7 @@ describe('change events', () => {
     const another = async (action: () => unknown, match: (change: Change) => boolean, label: string) => {
       const before = events.changes().filter(match).length;
       await action();
-      await vi.waitFor(() => expect(events.changes().filter(match).length, label).toBeGreaterThan(before));
+      await eventually(() => expect(events.changes().filter(match).length, label).toBeGreaterThan(before));
     };
     expect(events.response.headers.get('content-type')).toContain('text/event-stream');
     const hello = await events.next((event) => event.event === 'hello', 'hello');
@@ -159,7 +164,7 @@ describe('change events', () => {
     const added = await send('POST', '/api/subscriptions', { url: CHANNEL.url });
     const addJob = (await added.json()).job.id as string;
     await events.change((change) => change.kind === 'subscription' && change.id === CHANNEL.id, 'subscription added');
-    const check = await vi.waitFor(async () => {
+    const check = await eventually(async () => {
       const job = (await (await fetch(`${ui}/api/jobs/${addJob}`)).json()).job;
       expect(job.result?.followUpJobId).toBeTruthy();
       return job.result.followUpJobId as string;
@@ -171,7 +176,7 @@ describe('change events', () => {
     await events.change((change) => change.kind === 'document' && change.id === 'youtube:chgvideo001', 'check collected its video');
 
     expect((await send('DELETE', '/api/documents/youtube:chgsingle01')).status).toBe(200);
-    await vi.waitFor(() => expect(events.changes().filter((change) => change.kind === 'document' && change.id === 'youtube:chgsingle01').length).toBeGreaterThan(0));
+    await eventually(() => expect(events.changes().filter((change) => change.kind === 'document' && change.id === 'youtube:chgsingle01').length).toBeGreaterThan(0));
     const deletedAt = events.batches().length;
 
     expect((await send('PUT', '/api/schedule', { enabled: false })).status).toBe(200);

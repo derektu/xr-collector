@@ -1,3 +1,5 @@
+// Saving a document: a document whose search-index update fails stays saved and readable, and an
+// existing document is found by its YouTube ID, so a video is not captured twice.
 import { describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type { DocumentMetadata, SavedDocument } from '../../src/core/types.js';

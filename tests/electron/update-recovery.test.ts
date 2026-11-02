@@ -1,3 +1,6 @@
+// At startup after a native update install, its result is saved before the install journal is
+// removed, so a failed save keeps the journal for the next start; only a finished result is cleaned
+// up, and a failing cleanup is reported without breaking startup.
 import { expect, it, vi } from 'vitest';
 import { recoverNativeInstallations } from '../../src/electron/update-recovery.js';
 import type { NativeInstallRecovery } from '../../src/updates/types.js';

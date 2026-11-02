@@ -1,3 +1,7 @@
+// What the Subscriptions pages show: times relative to today in the device time zone, type and name
+// filters and detail paths kept in the URL, active jobs counted once, collection record rows, the
+// last and next check, shortened names and addresses, and a URL recognition applied only to the
+// address it answered.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob, SubscriptionEntry, UrlRecognition } from '../../src/core/types.js';
 import {

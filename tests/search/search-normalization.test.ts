@@ -1,3 +1,6 @@
+// Normalizing text for search: full-width forms, case and Simplified characters fold to one form,
+// by phrase context and without Taiwan regional vocabulary, so a search finds a document by either
+// spelling, while snippets highlight the original characters.
 import { describe, expect, it } from 'vitest';
 import { originalSnippet } from '../../src/search/meilisearch-backend.js';
 import { normalizeSearchText, normalizeSearchTextWithMap } from '../../src/search/search-normalization.js';

@@ -1,3 +1,5 @@
+// Which addresses count as one YouTube video: watch, youtu.be, shorts and live links normalize to
+// one canonical watch URL, and other sites, channels and look-alike hosts are refused.
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../src/core/types.js';
 import { parseYouTubeVideoUrl } from '../../../src/plugins/youtube/url.js';

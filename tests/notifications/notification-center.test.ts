@@ -1,3 +1,6 @@
+// Desktop notifications for an auto-paused subscription: one per pause, none while notifications
+// are off and no backlog when they turn back on, secrets masked before anything is stored or shown,
+// failed deliveries recorded, and the active list and history scoped to the current Vault.
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

@@ -1,3 +1,7 @@
+// Search on the bundled Meilisearch engine (real-engine cases): the index survives restarts and
+// rebuilds when the Vault changed; paging, filters, Traditional/Simplified and full-width forms,
+// contiguous Chinese fragments and Latin typos match as a user expects; a deleted document leaves
+// results at once.
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +15,7 @@ import {
   startMeilisearchProcess,
   type RunningMeilisearch,
 } from '../../src/search/meilisearch-process.js';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();
@@ -94,7 +99,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
 
     await rm(databasePath, { recursive: true, force: true });
     await expect(withSearch(databasePath, () => [document], firstHit)).resolves.toBe(document.id);
-  }, 30_000);
+  });
 
   it('rebuilds at startup when the Vault has the same count but different content or identity', async () => {
     const databasePath = await tempDatabase();
@@ -114,21 +119,21 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
     await withSearch(databasePath, () => changed, async (_search, _engine, rebuilds) => {
       expect(rebuilds).toBe(0);
     });
-  }, 30_000);
+  });
 
   it('replaces an index written by the earlier schema with a fully rebuilt one', async () => {
     const databasePath = await tempDatabase();
     await withSearch(databasePath, () => [document], async (_search, engine) => {
       const created = await engineRequest(engine, '/indexes', { method: 'POST', body: JSON.stringify({ uid: 'transcripts', primaryKey: 'key' }) });
       expect(created.status).toBe(202);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await eventually(async () => expect((await engineRequest(engine, '/indexes/transcripts')).status).toBe(200));
     });
 
     await withSearch(databasePath, () => [document], async (search, engine) => {
       expect((await engineRequest(engine, '/indexes/transcripts')).status).toBe(404);
       expect((await search.search({ query: '森林觀測' })).hits[0]?.id).toBe(document.id);
     });
-  }, 30_000);
+  });
 
   it('pages hits with an exact total and filters documents without a publisher ID', async () => {
     const databasePath = await tempDatabase();
@@ -147,7 +152,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(legacy.total).toBe(3);
       expect(legacy.hits.every((hit) => hit.publisher.id === null)).toBe(true);
     });
-  }, 30_000);
+  });
 
   it('normalizes document and query text while returning raw metadata and snippets', async () => {
     const databasePath = await tempDatabase();
@@ -175,7 +180,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(rawSnippet).toContain('🙂 <script>raw</script>');
       expect((await search.search({ query: ' \n\t　' })).total).toBe(3);
     });
-  }, 30_000);
+  });
 
   it('applies the same projection independently to title, publisher and body', async () => {
     const databasePath = await tempDatabase();
@@ -196,7 +201,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(simplified.hits.find(({ id }) => id === inTitle.id)?.title).toBe('光刻机標題');
       expect(simplified.hits.find(({ id }) => id === inPublisher.id)?.publisher.name).toBe('光刻機發布者');
     });
-  }, 30_000);
+  });
 
   it('uses OpenCC phrase context without expanding regional vocabulary', async () => {
     const databasePath = await tempDatabase();
@@ -209,7 +214,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect((await search.search({ query: '軟件' })).hits.map(({ id }) => id)).toEqual([contextual.id]);
       expect((await search.search({ query: '軟體' })).hits.map(({ id }) => id)).toEqual([regional.id]);
     });
-  }, 30_000);
+  });
 
   it('keeps complete words first and recalls only contiguous Chinese fragments', async () => {
     const databasePath = await tempDatabase();
@@ -229,7 +234,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       const snippet = (await search.search({ query: '導體' })).hits[0]!.snippet;
       expect(snippet).toContain('半<mark>導體</mark>');
     });
-  }, 30_000);
+  });
 
   it('leaves pure Latin and mixed-query typo and prefix matching to Meilisearch', async () => {
     const databasePath = await tempDatabase();
@@ -244,7 +249,7 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(mixed.hits[0]!.snippet).toContain('<mark>半導</mark>');
       expect((await search.search({ query: 'semicon 半導' })).hits.map(({ id }) => id)).toEqual([target.id]);
     });
-  }, 30_000);
+  });
 
   it('stops returning a deleted document as soon as its removal is requested', async () => {
     const databasePath = await tempDatabase();
@@ -269,5 +274,5 @@ describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', (
       expect(rebuilds).toBe(0);
       expect((await search.search({ query: '峽谷' })).total).toBe(0);
     });
-  }, 30_000);
+  });
 });

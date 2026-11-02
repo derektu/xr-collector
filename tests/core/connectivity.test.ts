@@ -1,3 +1,7 @@
+// Collection pauses while the device is offline and resumes on the first successful probe. The App
+// counts as online without probing, rechecks an offline device every 30 seconds, probes nothing
+// while the system sleeps, and reads a captive portal's sign-in page as offline, so checks do not
+// fail one by one against a network that is not there.
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CollectionPause, type PauseChange } from '../../src/core/collection-pause.js';

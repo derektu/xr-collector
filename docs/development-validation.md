@@ -1,6 +1,6 @@
 # 開發驗證流程
 
-PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式同時三支執行所有已收錄的 Web 回歸流程（Desktop 與真實來源以外的全部層級），並保存每支流程的 `results.json`；push 到 main 的 tree 與 merge 的 PR 最後一個 commit 相同、且那個 commit 的 PR run 已通過 Web 回歸時，main 沿用該結果，不再執行，log 寫出沿用的 PR 與 run。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
+PR 的驗證平台由功能影響決定。開發者先用自己的開發機完成適用案例，需要另一個平台時，由另一台機器或另一位 agent 對相同 commit 補驗。GitHub Linux CI 執行 `npm ci` 與 `npm run verify`（只改 Markdown 的修改不執行，見 AGENTS.md）；Mac ARM64 CI 另以 verify skill 的 Web 模式同時三支執行所有已收錄的 Web 回歸流程（Desktop 與真實來源以外的全部層級），並保存每支流程的 `results.json`；push 到 main 的 tree 與 merge 的 PR 最後一個 commit 相同、且那個 commit 的 PR run 已通過 Web 回歸時，main 沿用該結果，不再執行，log 寫出沿用的 PR 與 run。改到伺服器端程式、真實引擎測試檔或 runtime 的 pin 時，Mac CI 另以真實 Meilisearch 執行 `npm run test:meilisearch:mac`。原生操作仍由 agent 實際驗收；GitHub 的 Mac ARM64／Windows x64 打包 smoke 是手動觸發的離線補充檢查，不是正式安裝包來源，也不取代作業系統畫面的驗收。
 
 ## 驗證層級
 
@@ -39,6 +39,14 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 畫面多、流程長的票，Web 畫面 scenario 寫成一支 Playwright 腳本，依計畫順序操作、斷言預期結果並自動截圖，修改後可整條重跑。啟動隔離的 instance、合成資料、等待與截圖由 verify skill 的 CLI 與函式庫提供；涵蓋功能地圖子功能、可重跑的流程收進 verify skill 的 `flows/`；只對本票有意義的腳本放在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。Playwright 是 devDependency，腳本不加入 `npm run verify`。原生下拉選單等瀏覽器自動化拍不到的狀態，另以手動截圖補足。
 
+### 自動測試的判準
+
+`npm run verify` 的每個測試檔，開頭寫出它防什麼：使用者面向的寫壞掉時使用者或 Agent 會看到什麼；建置與發布工具寫使用者收到的安裝包會錯在哪；開發工具與架構掃描寫開發者會遇到什麼，並標明「Guards the developer, not the user」。說不出防什麼的測試不留。新增或檢討測試時，每一項判定為保留、合併到另一個測試、降到更低的層或刪除、補上缺的其中一種。
+
+**等待**：測試等某個狀態出現，不等固定時間。產品或測試替身有 promise 時直接等它；其餘經 `tests/support/wait.ts` 的共用 helper 輪詢，上限統一為 10 秒。這個上限是「狀態一直沒出現時多久報錯」，不是預期耗時，不逐處調長；個別測試也不另給時間上限，Vitest 的 `testTimeout` 與 `hookTimeout` 統一為 30 秒。證明「某件事沒有發生」時不睡一段時間再斷言，而是等產品排在那件事之後的步驟。`tests/tooling/test-waits.test.ts` 擋下直接輪詢、睡眠與個別上限。
+
+**失敗**：自動測試沒有改程式卻失敗時，不以重跑抵銷，CI 歷史裡的單次失敗也算。每次失敗歸為產品 bug、測試假設或環境，查到根因；當下修不了的開 issue 追蹤並加入看板。環境造成的失敗寫明是哪個環境條件，例如 VM 過載或防毒掃描。
+
 ### 另一個平台的完整驗證
 
 CI 的 `npm run verify` 只在 Linux 執行，開發機只跑自己的平台；路徑、權限與換行這類差異，只有在另一個平台跑完整測試才會發現。所以開發者在另一個平台跑完整 `npm run verify`：Mac 開發者跑 Windows，Windows 開發者跑 Mac。這裡說的是自動檢查；另一個平台的原生 Desktop 驗收依 scenario 決定，見第 5 節。完整 `npm run verify` 有兩個時機：每個發布候選前跑一次；修改涉及以下平台差異時，交付前必跑：
@@ -50,6 +58,8 @@ CI 的 `npm run verify` 只在 Linux 執行，開發機只跑自己的平台；�
 - 換行：Windows 的 Git 以 `core.autocrlf` 把文字檔 checkout 成 CRLF
 
 另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替；`npm ci` 後執行 `npm run verify`。逾時與 teardown error 保留並診斷，不以重跑抵銷。只在一個平台成立的行為依 [測試說明的平台邊界](../tests/README.md#真實搜尋與平台邊界) 以平台條件 skip，不用 mock 冒充另一個平台通過。
+
+Windows 上完整測試的耗時主要受防毒即時掃描影響：測試在暫存目錄寫大量檔案並啟動複製出來的程式，每一個都會被掃描。checkout 與 `TEMP`／`TMP` 都放在防毒排除的目錄時，掃描不再拖慢測試；只排除 checkout 時耗時多出數倍，程序相關的案例可能 30 秒逾時。防毒由公司管理、不能排除時，這類逾時歸為環境，記錄下來，不以重跑抵銷。
 
 ### 已收錄流程的門檻與成本
 

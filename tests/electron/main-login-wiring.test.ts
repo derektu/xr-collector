@@ -1,5 +1,10 @@
+// How the Electron main process starts: a login launch reads its reason after ready, passes it with
+// the single-instance lock and stays in the tray; a process that loses the lock quits; later manual
+// launches show the one window; a validation package uses its own update repository and app id; a
+// notification clicked while the page loads opens its target once the page listens.
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eventually } from '../support/wait.js';
 
 const harness = vi.hoisted(() => ({
   appHandlers: new Map<string, ((...args: any[]) => void)[]>(),
@@ -156,7 +161,7 @@ async function loadMain(startedAtLogin: boolean) {
   harness.wasOpenedAtLogin = startedAtLogin;
   await import('../../src/electron/main.js');
   harness.readyResolve();
-  await vi.waitFor(() => expect(harness.windows).toHaveLength(1));
+  await eventually(() => expect(harness.windows).toHaveLength(1));
 }
 
 const originalArgv = [...process.argv];
@@ -207,7 +212,7 @@ describe('Electron main login-startup wiring', () => {
     expect(harness.loginReadsBeforeReady).toBe(0);
     expect(harness.lockData).toEqual({ xrCollectorStartedAtLogin: true });
     harness.loadResolve();
-    await vi.waitFor(() => expect(harness.trays).toBe(1));
+    await eventually(() => expect(harness.trays).toBe(1));
   });
 
   it('quits a process that loses the ready-time lock without starting a runtime or window', async () => {
@@ -216,7 +221,7 @@ describe('Electron main login-startup wiring', () => {
     await import('../../src/electron/main.js');
     expect(harness.loginReadsBeforeReady).toBe(0);
     harness.readyResolve();
-    await vi.waitFor(() => expect(harness.quits).toBe(1));
+    await eventually(() => expect(harness.quits).toBe(1));
     expect(harness.lockData).toEqual({ xrCollectorStartedAtLogin: true });
     expect(harness.runtimeStarts).toBe(0);
     expect(harness.windows).toHaveLength(0);
@@ -230,7 +235,7 @@ describe('Electron main login-startup wiring', () => {
     expect(harness.shows).toBe(0);
 
     harness.loadResolve();
-    await vi.waitFor(() => expect(harness.trays).toBe(1));
+    await eventually(() => expect(harness.trays).toBe(1));
     expect(harness.runtimeStarts).toBe(1);
     expect(harness.shows).toBe(0);
 
@@ -246,7 +251,7 @@ describe('Electron main login-startup wiring', () => {
     expect(harness.windows).toHaveLength(1);
 
     harness.loadResolve();
-    await vi.waitFor(() => expect(harness.shows).toBe(1));
+    await eventually(() => expect(harness.shows).toBe(1));
     expect(harness.windows).toHaveLength(1);
     expect(harness.runtimeStarts).toBe(1);
   });
@@ -259,7 +264,7 @@ describe('Electron main login-startup wiring', () => {
       xrCollectorAppId: 'com.xrcollector.verify.public' };
 
     await loadMain(false);
-    await vi.waitFor(() => expect(harness.updateRepositories).toEqual(['derektu/xr-collector-test']));
+    await eventually(() => expect(harness.updateRepositories).toEqual(['derektu/xr-collector-test']));
     expect(harness.appIds).toEqual(['com.xrcollector.verify.public']);
   });
 
@@ -273,7 +278,7 @@ describe('Electron main login-startup wiring', () => {
     await Promise.resolve();
     expect(harness.sent).toEqual([]);
     harness.loadResolve();
-    await vi.waitFor(() => expect(harness.trays).toBe(1));
+    await eventually(() => expect(harness.trays).toBe(1));
     const window = harness.windows[0];
     for (const listener of harness.ipcHandlers.get('xrCollector:renderer:ready') ?? []) listener({ sender: window.webContents });
     expect(harness.sent).toEqual([{ kind: 'source', type: 'youtube', id: 'a' }]);

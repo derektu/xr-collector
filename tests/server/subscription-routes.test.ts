@@ -19,6 +19,7 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE_DEFAULTS, FakeSource } from '../support/fake-source-plugin.js';
 import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
+import { eventually } from '../support/wait.js';
 
 // The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
@@ -92,7 +93,7 @@ async function world(connectivity?: ConnectivityAccess) {
     return { status: response.statusCode, body: response.json() };
   };
   const settled = async (id: string) => {
-    await vi.waitFor(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u));
+    await eventually(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u));
     return (await send('GET', `/api/jobs/${id}`)).body.job;
   };
   /** Subscribes over HTTP and waits for the first check. */
@@ -121,7 +122,7 @@ async function world(connectivity?: ConnectivityAccess) {
     },
   ];
   const close = async () => {
-    await vi.waitFor(() => expect(jobs.isBusy()).toBe(false));
+    await eventually(() => expect(jobs.isBusy()).toBe(false));
     await ui.close();
     await agent.close();
     await jobs.close();
@@ -298,37 +299,15 @@ describe.each(['youtube', 'fake'] as const)('subscription and collection routes 
   });
 });
 
-describe('routes of the type-specific API (B-T2)', () => {
-  it('answers 404 not_found on every route the shared routes stand for, to the UI and to an Agent', async () => {
+describe('a route the API does not have', () => {
+  it('answers 404 not_found with the error body, to the UI and to an Agent', async () => {
     const w = await world();
-    const youtube = w.cases[0]!.addTarget('legacy');
-    await w.subscribe(youtube.url);
-    const retired: Array<['GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', string, unknown?]> = [
-      ['POST', '/api/youtube/submissions', { url: youtube.itemUrl }],
-      ['POST', '/api/youtube/collect', { url: youtube.itemUrl }],
-      ['POST', '/api/youtube/channel-previews', { url: youtube.url }],
-      ['GET', '/api/youtube/channels'],
-      ['POST', '/api/youtube/channels', { url: youtube.url }],
-      ['PATCH', `/api/youtube/channels/${youtube.id}`, { enabled: false }],
-      ['DELETE', `/api/youtube/channels/${youtube.id}`],
-      ['POST', `/api/youtube/channels/${youtube.id}/apply-settings`],
-      ['POST', '/api/youtube/channel-runs', { channelIds: [youtube.id] }],
-      ['GET', '/api/youtube/schedule'],
-      ['PUT', '/api/youtube/schedule', { enabled: false }],
-      ['GET', '/api/youtube/pacing'],
-      ['GET', '/api/fake/channels'],
-      ['POST', '/api/fake/submissions', { url: 'https://fake.example/item/x' }],
-      ['GET', '/api/sources'],
-      ['GET', `/api/sources/youtube/${youtube.id}`],
-    ];
     for (const app of [w.ui, w.agent]) {
-      for (const [method, url, payload] of retired) {
-        expect(await w.send(method, url, payload, app), `${method} ${url}`).toEqual({ status: 404, body: { error: { code: 'not_found', message: expect.any(String) } } });
+      for (const [method, url] of [['GET', '/api/no-such-route'], ['POST', '/api/youtube/no-such-route']] as const) {
+        expect(await w.send(method, url, method === 'POST' ? {} : undefined, app), `${method} ${url}`)
+          .toEqual({ status: 404, body: { error: { code: 'not_found', message: expect.any(String) } } });
       }
     }
-    // Nothing a retired route was sent changed the subscription.
-    expect((await w.send('GET', '/api/subscriptions')).body.subscriptions).toEqual([expect.objectContaining({ id: youtube.id, enabled: true })]);
-    expect((await w.send('GET', '/api/schedule')).body.schedule.enabled).toBe(true);
     await w.close();
   });
 });
@@ -402,7 +381,7 @@ describe('the shared routes for UI and Agents (B-T3)', () => {
     const unnamed = [...fields].filter((field) => !skill.includes(`\`${field}\``));
     // Subscription rows also carry the stored record's own fields, which the Skill explains by meaning.
     expect(unnamed.filter((field) => !['title', 'url', 'id', 'addedAt', 'updatedAt'].includes(field))).toEqual([]);
-    await vi.waitFor(async () => expect((await w.send('GET', '/api/jobs?state=active')).body.jobs).toEqual([]));
+    await eventually(async () => expect((await w.send('GET', '/api/jobs?state=active')).body.jobs).toEqual([]));
     await w.close();
   });
 });

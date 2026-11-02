@@ -25,6 +25,7 @@ import type { CapturedDocument, SourcePlugin } from '../../src/plugins/types.js'
 import { createFakePlugin, FAKE, FAKE2, FAKE_DEFAULTS, FakeSource, type FakeSettings } from '../support/fake-source-plugin.js';
 import { youtubePlugins } from '../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../vault/exchange-fixtures.js';
+import { eventually } from '../support/wait.js';
 
 // The core collects, subscribes, paces, deletes and resumes for source types it never names: two
 // fake types in separate pacing groups run through the same job manager, subscription services,
@@ -132,7 +133,13 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     async checkStatus(type: 'fake' | 'fake2', id: string) {
       return (await current.services[type].listSubscriptions()).find((entry) => entry.id === id)?.checkStatus;
     },
-    async idle() { await vi.waitFor(() => expect(current.jobs.isBusy()).toBe(false)); },
+    async idle() {
+      // A dispatched check records the dispatch before it submits its jobs.
+      await current.scheduler.idle();
+      await eventually(() => expect(current.jobs.isBusy()).toBe(false));
+      // A check leaves the job list before it records its end in the subscription.
+      (await current.jobs.hold())();
+    },
     async restart() {
       await current.jobs.close();
       await current.store.flush();
@@ -248,7 +255,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const [key] = w.sources.fake.addFeed('flaky', w.clock.now, [1]);
     w.sources.fake.fail(key!, new CollectorError('network_error', '連線中斷。'));
     const request = await w.jobs.submitItem('fake', itemUrl('fake', key!));
-    await vi.waitFor(() => expect(w.jobs.get(request.job.id)).toMatchObject({ state: 'queued', retry: { attempts: 1, maxAttempts: 3 } }));
+    await eventually(() => expect(w.jobs.get(request.job.id)).toMatchObject({ state: 'queued', retry: { attempts: 1, maxAttempts: 3 } }));
     w.fire();
     expect(await w.jobs.whenSettled(request.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' }, retry: { attempts: 1 } });
     expect(w.sources.fake.captures).toEqual([key, key]);
@@ -268,7 +275,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     vi.spyOn(w.jobs, 'recordEvent').mockImplementation((entry) => { events.push(entry.eventType); record(entry); });
     w.sources.fake.fail('limited-1', new CollectorError('rate_limited', '來源暫時限制連線。'));
     const limited = await w.jobs.submitItem('fake', itemUrl('fake', 'limited-1'));
-    await vi.waitFor(() => expect(w.jobs.get(limited.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
+    await eventually(() => expect(w.jobs.get(limited.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
     expect(w.gates.fake.status()).toMatchObject({ state: 'cooldown' });
     expect(w.gates.fake2.status()).toMatchObject({ state: 'idle' });
 
@@ -311,10 +318,10 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     w.sources.fake.held.add('leaving-late');
     w.advance(MINUTE);
     const [check] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['leaving'] });
-    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['leaving-late']));
+    await w.sources.fake.holds.reach(['leaving-late']);
 
     const removal = w.service('fake').remove('leaving', { documents: 'delete' });
-    await vi.waitFor(async () => expect(await w.collector.isDeletedFor({ sourceType: 'fake', sourceId: 'leaving-late' }, { explicitAt: null })).toBe(true));
+    await eventually(async () => expect(await w.collector.isDeletedFor({ sourceType: 'fake', sourceId: 'leaving-late' }, { explicitAt: null })).toBe(true));
     w.sources.fake.release('leaving-late');
     expect(await removal).toEqual({ documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
     await w.jobs.whenSettled(check!.job.id);
@@ -346,7 +353,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const keys = w.sources.fake.addFeed('resume', w.clock.now, [1, 2]);
     w.sources.fake.held.add(keys[0]!);
     const added = await w.jobs.whenSettled((await w.service('fake').add(feedUrl('fake', 'resume'))).job.id);
-    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual([keys[0]]));
+    await w.sources.fake.holds.reach([keys[0]]);
 
     // The manager stops while the first capture runs: it finishes and saves, the second never starts.
     const restarting = w.restart();
@@ -364,7 +371,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     // A capture of another item holds the only capture slot, so the job is still queued when the manager stops.
     w.sources.fake2.held.add('busy-1');
     await w.jobs.submitItem('fake2', itemUrl('fake2', 'busy-1'));
-    await vi.waitFor(() => expect(w.sources.fake2.running()).toEqual(['busy-1']));
+    await w.sources.fake2.holds.reach(['busy-1']);
     const job = await w.jobs.submitItem('fake2', itemUrl('fake2', 'orphan-1'));
     const closing = w.close();
     w.sources.fake2.release('busy-1');
@@ -379,7 +386,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
       documents: new Collector(new MarkdownVault(w.root)),
     });
     await manager.resume();
-    await vi.waitFor(() => expect(manager.isBusy()).toBe(false));
+    await eventually(() => expect(manager.isBusy()).toBe(false));
     expect(manager.get(job.job.id)).toMatchObject({ kind: 'fake2.item', state: 'interrupted' });
     expect(remaining.captures).toEqual([]);
     expect(w.sources.fake2.captures).toEqual(['busy-1']);
@@ -397,6 +404,7 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
     await w.subscribe('fake', 'status');
     await w.subscribe('fake', 'other');
     await w.scheduler.start();
+    await w.scheduler.idle();
     expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'scheduled', nextCheckAt: (await w.subscription('fake', 'status'))!.nextCheckAt });
 
     // One check runs and holds its capture; the next one waits for its turn.
@@ -404,14 +412,14 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
     w.sources.fake.held.add('status-new');
     w.advance(MINUTE);
     await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['status'] });
-    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['status-new']));
+    await w.sources.fake.holds.reach(['status-new']);
     expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'downloading', done: 0, total: 1 });
     w.sources.fake.release('status-new');
     await w.idle();
 
     w.sources.fake.listFailures.push(new CollectorError('rate_limited', '來源暫時限制連線。'));
     const [limited] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['other'] });
-    await vi.waitFor(() => expect(w.jobs.get(limited!.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
+    await eventually(() => expect(w.jobs.get(limited!.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
     expect(await w.checkStatus('fake', 'other')).toEqual({ state: 'retrying', at: w.jobs.get(limited!.job.id).wait!.until, cause: { reason: 'rate_limited' } });
     w.advance(10 * MINUTE);
     w.fire();
@@ -605,7 +613,7 @@ describe('failed items of a type the core does not name (N69-T2–T7)', () => {
     w.sources.fake.fail(signIn!, failure('login_needed'));
     const added = await w.service('fake').add(feedUrl('fake', 'g'), { maxItems: 2 });
     const subscribed = await w.jobs.whenSettled(added.job.id);
-    await vi.waitFor(() => expect(w.gates.fake.status()).toMatchObject({ state: 'cooldown' }));
+    await eventually(() => expect(w.gates.fake.status()).toMatchObject({ state: 'cooldown' }));
     w.advance(10 * MINUTE);
     w.fire();
     const first = await w.jobs.whenSettled(subscribed.result!.followUpJobId!);
@@ -663,12 +671,12 @@ describe('failed items of a type the core does not name (N69-T2–T7)', () => {
     const w = await world({ capture: 1, retry: { maxAttempts: 3, delaysMs: [MINUTE] } });
     w.sources.fake2.fail('retry-1', failure('network_error'));
     const retrying = await w.jobs.submitItem('fake2', itemUrl('fake2', 'retry-1'));
-    await vi.waitFor(() => expect(w.jobs.get(retrying.job.id)).toMatchObject({ retry: { attempts: 1 } }));
+    await eventually(() => expect(w.jobs.get(retrying.job.id)).toMatchObject({ retry: { attempts: 1 } }));
     w.sources.fake.addFeed('busy', w.clock.now, [1, 2, 3]);
     w.sources.fake.held.add('busy-00');
     const subscribed = await w.service('fake').add(feedUrl('fake', 'busy'));
     const check = (await w.jobs.whenSettled(subscribed.job.id)).result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.sources.fake.running()).toEqual(['busy-00']));
+    await w.sources.fake.holds.reach(['busy-00']);
     const named = await w.jobs.submitItem('fake', itemUrl('fake', 'single-1'));
     w.sources.fake.fail('gone-1', failure('video_unavailable'));
     const failedOne = await w.jobs.submitItem('fake', itemUrl('fake', 'gone-1'));
@@ -688,7 +696,7 @@ describe('failed items of a type the core does not name (N69-T2–T7)', () => {
     expect(overview.failed).toEqual([]);
 
     w.sources.fake.release('busy-00');
-    await vi.waitFor(async () => expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).toEqual([failedOne.job.id]));
+    await eventually(async () => expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).toEqual([failedOne.job.id]));
     w.fire();
     await w.idle();
     overview = await w.jobs.overview();

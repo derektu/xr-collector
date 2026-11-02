@@ -1,3 +1,6 @@
+// Which update repository and app id a package carries: an ordinary package updates from the
+// production repository under the production app id, and a validation package uses only a strictly
+// validated repository and id baked into its metadata.
 import { describe, expect, it } from 'vitest';
 import { appIdFromPackageMetadata, PRODUCTION_APP_ID, PRODUCTION_UPDATE_REPOSITORY, updateRepositoryFromPackageMetadata } from '../../src/updates/config.js';
 

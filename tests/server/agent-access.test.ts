@@ -1,3 +1,7 @@
+// The Agent's authenticated listener: every route refuses a missing or wrong key, and with the key
+// an Agent pages, reads, searches and deletes documents with the same results the UI gets. It takes
+// the preferred port or the next free one, keeps its key across restarts and rotates it on reset; a
+// port it cannot bind or a key it cannot save leaves the UI API working.
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -218,7 +222,7 @@ describe('Agent authenticated HTTP access', () => {
     const nextConfig = restarted.connection();
     expect(nextConfig.token).toBe(config.token);
     expect((await fetch(`${nextConfig.url}/api/documents`, { headers: { Authorization: `Bearer ${config.token}` } })).status).toBe(200);
-  }, 30_000);
+  });
 
   it('listens on the preferred port, or the next free one when it is taken, and records the port it uses', async () => {
     const { root, collector } = await fixture();

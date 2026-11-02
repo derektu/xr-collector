@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // Whether an issue's evidence matches the code: each results.json is current while its checkout
 // has the recorded commit and sourceHash, and STALE with the difference otherwise. Evidence whose
 // checkout does not exist on this machine is compared with the checkout doctor runs in. doctor
@@ -96,5 +97,5 @@ describe('doctor --issue', () => {
     expect(withIssue.code).toBe(plain.code);
     expect(report.healthy).toBe(JSON.parse(plain.stdout).healthy);
     expect(report.evidence).toMatchObject({ issue: '118', root, stale: 1, folders: [{ status: 'STALE' }] });
-  }, 30_000);
+  });
 });

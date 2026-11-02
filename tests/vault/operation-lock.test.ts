@@ -1,6 +1,10 @@
+// The lock Vault operations and app updates take: collection pauses while one waits or runs, a wait
+// can be cancelled without running the operation, reads and writes are refused while unsafe, and
+// work resumes once the operation finishes, fails or is cancelled.
 import { describe, expect, it, vi } from 'vitest';
 import { CollectorError } from '../../src/core/types.js';
 import { VaultOperationLock } from '../../src/vault/operation-lock.js';
+import { eventually } from '../support/wait.js';
 
 const deferred = <T = void>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -100,7 +104,7 @@ describe('Vault operation lock', () => {
         return { value: undefined, message: 'new done' };
       },
     });
-    await vi.waitFor(() => expect(held.value.status()).toMatchObject({ state: 'exporting', message: 'new operation' }));
+    await eventually(() => expect(held.value.status()).toMatchObject({ state: 'exporting', message: 'new operation' }));
     secondBody.resolve();
     await second;
     expect(held.value.status()).toMatchObject({ state: 'completed', message: 'new done' });
@@ -157,7 +161,7 @@ describe('Vault operation lock', () => {
         return { value: undefined, message: 'done' };
       },
     });
-    await vi.waitFor(() => expect(() => held.value.enter('vault-read')).toThrowError(/稍後再讀取/u));
+    await eventually(() => expect(() => held.value.enter('vault-read')).toThrowError(/稍後再讀取/u));
     expect(() => held.value.enter('device-data')()).not.toThrow();
     gate.resolve();
     await running;

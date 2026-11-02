@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // instance.restart() keeps the run's slot lock held by a live process the whole time, so a sweep
 // from another session that lands between the old server's exit and the new server's start leaves
 // the lock and the run folder alone. The servers are stand-ins (fixtures/fake-server.mjs) behind a
@@ -7,7 +8,8 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { alive, cleanUp, isolateHome, LIB, repository, start, temp, until } from './support.js';
+import { alive, cleanUp, isolateHome, LIB, repository, start, temp } from './support.js';
+import { eventually } from '../../support/wait.js';
 
 const home = isolateHome();
 const { processStart, runMarker, runsRoot, SLOT_LOCKS } = await import('../../../.claude/skills/verify/scripts/lib/paths.mjs');
@@ -69,7 +71,7 @@ describe.skipIf(process.platform === 'win32')('restart', () => {
     writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ ...record, pid: first.pid }));
     holdSlot(0, runDir, first.pid);
     // SIGTERM before the server's handler is installed would end it without the sweep.
-    await until(() => existsSync(path.join(scratch, String(first.pid))));
+    await eventually(() => expect(existsSync(path.join(scratch, String(first.pid)))).toBe(true));
     expect(runProcesses({ runDir }).map((member: { pid: number }) => member.pid)).toEqual([first.pid]);
 
     const instance = attach(runDir);
@@ -90,7 +92,7 @@ describe.skipIf(process.platform === 'win32')('restart', () => {
     expect(instance.pid).not.toBe(first.pid);
     expect(readFileSync(path.join(runDir, 'server.log'), 'utf8')).toContain('--- verify restart (graceful)');
     expect(processStart(instance.pid)).toBeNull();
-  }, 20_000);
+  });
 
   it('refuses a slot whose lock names another run and leaves that lock alone', async () => {
     const { main } = repository();

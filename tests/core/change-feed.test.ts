@@ -1,3 +1,6 @@
+// The change feed publishes the changes of one turn under one revision and replays the batches
+// after a reader's revision, or tells it to reset once they are no longer kept, so an open window
+// catches up on what changed instead of showing stale lists.
 import { describe, expect, it } from 'vitest';
 import { ChangeFeed, parseCursor, type ChangeBatch } from '../../src/core/change-feed.js';
 

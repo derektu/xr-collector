@@ -1,3 +1,6 @@
+// GET/PUT /api/device/login-startup, the open-at-login setting: readable before a Vault is set up,
+// refused outside the packaged app, strict about the request body, and reporting a needed approval
+// or a failed read-back with stable error codes.
 import { describe, expect, it, vi } from 'vitest';
 import type { LoginStartupAccess } from '../../src/core/login-startup.js';
 import { CollectorError } from '../../src/core/types.js';

@@ -1,3 +1,7 @@
+// The activity summary folds a run of scheduled checks with the same result into one row per
+// subscription, so a quiet channel shows one row instead of a page of "no new videos". Manual
+// checks, new content and skipped items end a run; raw events stay complete, pages hold still while
+// events arrive, and groups survive a restart until retention expires them.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

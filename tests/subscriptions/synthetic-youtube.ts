@@ -16,6 +16,7 @@ import type {
   CapturedTranscript,
 } from '../../src/plugins/youtube/adapter.js';
 import { publishedSince } from '../../src/core/published.js';
+import { HeldCaptures } from '../support/held-captures.js';
 import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
@@ -54,7 +55,7 @@ export class SyntheticYouTube implements YouTubeSource {
   holdCaptures = false;
   holdDiscovery: Promise<void> | null = null;
   discoveryFailure: CollectorError | null = null;
-  private readonly waiting = new Map<string, () => void>();
+  readonly holds = new HeldCaptures();
 
   addChannel(name: string, title = `合成頻道 ${name}`): string {
     const id = syntheticChannelId(name);
@@ -106,7 +107,7 @@ export class SyntheticYouTube implements YouTubeSource {
     this.captures.push(video.videoId);
     const failure = this.failures.get(video.videoId);
     if (failure) throw failure;
-    if (this.holdCaptures) await new Promise<void>((resolve) => this.waiting.set(video.videoId, resolve));
+    if (this.holdCaptures) await this.holds.hold(video.videoId);
     return {
       videoId: video.videoId, sourceUrl: video.canonicalUrl, title: `合成影片 ${video.videoId}`,
       channelId: found.channelId, channelTitle: found.channel.title, publishedAt: found.candidate.publishedAt,
@@ -114,16 +115,10 @@ export class SyntheticYouTube implements YouTubeSource {
     };
   }
 
-  running(): string[] {
-    return [...this.waiting.keys()];
+  release(id: string): void {
+    this.holds.release(id);
   }
 
-  release(id: string): void {
-    const resolve = this.waiting.get(id);
-    if (!resolve) throw new Error(`capture ${id} is not waiting`);
-    this.waiting.delete(id);
-    resolve();
-  }
 }
 
 /** Documents kept in memory, newest collection first, stamped with a controllable clock. */

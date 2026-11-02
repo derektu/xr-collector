@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
@@ -30,7 +30,9 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
+import { HeldCaptures } from '../support/held-captures.js';
 import { transcriptOf } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 // Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
 // through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
@@ -72,19 +74,18 @@ class GatedSource implements YouTubeSource {
   readonly failures = new Map<string, CollectorError[]>();
   readonly channelVideos = new Map<string, DiscoveredYouTubeVideo[]>();
   holdNext = false;
-  private readonly held: Array<() => void> = [];
+  readonly holds = new HeldCaptures();
 
   constructor(private readonly gate: PacingGate) {}
 
-  releaseHeld(): void { for (const release of this.held.splice(0)) release(); }
-  get heldCount(): number { return this.held.length; }
+  releaseHeld(): void { for (const name of this.holds.running()) this.holds.release(name); }
 
   private request<T>(name: string, answer: () => T, options: RequestOptions = {}): Promise<T> {
     return this.gate.run(options.priority ?? 'background', async () => {
       this.requests.push(name);
       if (this.holdNext) {
         this.holdNext = false;
-        await new Promise<void>((resolve) => this.held.push(resolve));
+        await this.holds.hold(name);
       }
       const failure = this.failures.get(name)?.shift();
       if (failure) throw failure;
@@ -178,7 +179,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const first = await p.manager.submitItem('youtube', watchUrl('aaaaaaaaaaa'));
     await w.advance(0);
     const until = new Date(T0 + 5 * MINUTE).toISOString();
-    await vi.waitFor(() => expect(p.manager.get(first.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
+    await eventually(() => expect(p.manager.get(first.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
     expect(p.manager.get(first.job.id).retry).toBeUndefined();
     expect(p.gate.status()).toMatchObject({ state: 'cooldown', cooldownUntil: until, level: 1 });
 
@@ -216,7 +217,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const limitedJob = await p.manager.submitItem('youtube', watchUrl('jjjjjjjjjjj'));
     const queuedJob = await p.manager.submitItem('youtube', watchUrl('kkkkkkkkkkk'));
     const until = new Date(T0 + 5 * MINUTE).toISOString();
-    await vi.waitFor(() => expect(p.manager.get(limitedJob.job.id).wait).toBeDefined());
+    await eventually(() => expect(p.manager.get(limitedJob.job.id).wait).toBeDefined());
     // The job that was only waiting in line shows the same cooldown, so the UI and Agents see why.
     expect(p.manager.get(queuedJob.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } });
     const lateJob = await p.manager.submitItem('youtube', watchUrl('lllllllllll'));
@@ -233,7 +234,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     p.source.holdNext = true;
     const after = await p.manager.submitItem('youtube', watchUrl('mmmmmmmmmmm'));
     expect(p.manager.get(after.job.id).wait).toBeUndefined();
-    await vi.waitFor(() => expect(p.source.heldCount).toBe(1));
+    await p.source.holds.count(1);
     p.source.releaseHeld();
   });
 
@@ -248,7 +249,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const accepted = await p.manager.submitCheck('youtube', channel, 'manual');
     await w.advance(0);
     const until = new Date(T0 + 5 * MINUTE).toISOString();
-    await vi.waitFor(() => expect(p.manager.get(accepted.job.id).items![0]).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
+    await eventually(() => expect(p.manager.get(accepted.job.id).items![0]).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } }));
     await w.advance(5 * MINUTE);
     const done = await p.manager.whenSettled(accepted.job.id);
     expect(done).toMatchObject({ state: 'completed', progress: { created: 1 } });
@@ -267,7 +268,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     p.source.failures.set(`list:${channel.id}`, [limited()]);
     const check = await p.manager.submitCheck('youtube', channel, 'manual');
     await w.advance(0);
-    await vi.waitFor(() => expect(p.manager.get(check.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
+    await eventually(() => expect(p.manager.get(check.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited' } }));
     await w.advance(5 * MINUTE);
     expect(await p.manager.whenSettled(check.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
 
@@ -294,7 +295,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     p.source.failures.set('info:fffffffffff', [limited()]);
     const job = await p.manager.submitItem('youtube', watchUrl('fffffffffff'));
     await w.advance(0);
-    await vi.waitFor(() => expect(p.manager.get(job.job.id).wait).toBeDefined());
+    await eventually(() => expect(p.manager.get(job.job.id).wait).toBeDefined());
     const release = await p.manager.hold(1_000);
     release();
     await p.manager.close();
@@ -308,10 +309,10 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     p.source.holdNext = true;
     const first = await p.manager.submitItem('youtube', watchUrl('ggggggggggg'));
     await w.advance(0);
-    await vi.waitFor(() => expect(p.source.heldCount).toBe(1));
+    await p.source.holds.count(1);
     p.source.releaseHeld();
     await w.advance(0);
-    await vi.waitFor(() => expect(p.gate.status().state).toBe('waiting'));
+    await eventually(() => expect(p.gate.status().state).toBe('waiting'));
     // The info request ended; the subtitle request now waits 8 seconds for its turn.
     expect(p.source.requests).toEqual(['info:ggggggggggg']);
     const release = await p.manager.hold(1_000);
@@ -330,7 +331,7 @@ describe('cooldown across restarts (P-T6)', () => {
     first.source.failures.set('info:hhhhhhhhhhh', [limited()]);
     const job = await first.manager.submitItem('youtube', watchUrl('hhhhhhhhhhh'));
     await w.advance(0);
-    await vi.waitFor(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
+    await eventually(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();
     await first.manager.close();
     await first.store.close();
@@ -340,7 +341,7 @@ describe('cooldown across restarts (P-T6)', () => {
     expect(second.gate.status()).toMatchObject({ state: 'cooldown', level: 1 });
     await second.manager.resume();
     await w.advance(0);
-    await vi.waitFor(() => expect(second.manager.get(job.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until: new Date(T0 + 5 * MINUTE).toISOString() } }));
+    await eventually(() => expect(second.manager.get(job.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until: new Date(T0 + 5 * MINUTE).toISOString() } }));
     expect(second.source.requests).toEqual([]);
     await w.advance(3 * MINUTE);
     expect(await second.manager.whenSettled(job.job.id)).toMatchObject({ state: 'completed' });
@@ -354,7 +355,7 @@ describe('cooldown across restarts (P-T6)', () => {
     first.source.failures.set('info:iiiiiiiiiii', [limited()]);
     const job = await first.manager.submitItem('youtube', watchUrl('iiiiiiiiiii'));
     await w.advance(0);
-    await vi.waitFor(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
+    await eventually(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();
     await first.manager.close();
     await first.store.close();

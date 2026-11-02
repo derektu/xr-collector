@@ -1,3 +1,6 @@
+// Only the latest request answers a screen: an older response arriving after a newer request is
+// dropped and the older request aborted, errors of stale requests stay silent, and cancel drops
+// every pending response. Without it a slow earlier search can overwrite newer results.
 import { describe, expect, it } from 'vitest';
 import { createLatestRequest } from '../../src/web/latest-request.js';
 

@@ -1,3 +1,4 @@
+// Guards the developer, not the user.
 // Recorded regression flows: the status sequences they judge, the checks they write to
 // results.json, and the feature map naming, for each feature, the flows that cover it.
 import { spawnSync } from 'node:child_process';

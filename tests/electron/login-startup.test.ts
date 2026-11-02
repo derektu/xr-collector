@@ -1,3 +1,7 @@
+// The start-at-login setting reports only what the OS reads back. An unpackaged App cannot register,
+// macOS approval is surfaced, and on Windows only the App's own Run entry with its executable and
+// login switch counts, followed after the App moves, so the setting never shows on or off while the
+// OS does otherwise. A login launch is told apart from a manual one.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

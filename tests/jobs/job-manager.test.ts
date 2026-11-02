@@ -1,3 +1,7 @@
+// Collection jobs and their status: a video is accepted before its capture and captured once
+// however often it is submitted, captures rotate between jobs so one large channel does not hold up
+// the rest, the status reads queued, checking, downloading or retrying, and on a stop running work
+// finishes, unfinished work reads interrupted and an unreadable jobs file is set aside.
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -22,7 +26,9 @@ import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/typ
 import type { DocumentKey } from '../../src/vault/document-paths.js';
 import { RecentTargets } from '../../src/subscriptions/recent-targets.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
+import { HeldCaptures } from '../support/held-captures.js';
 import { transcriptOf } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 const VAULT = '/vaults/a';
 
@@ -62,7 +68,7 @@ class MemoryVault implements DocumentVault {
 /** A YouTube source whose captures wait until the test releases them. */
 class ControlledSource implements YouTubeSource {
   readonly captures: string[] = [];
-  readonly pending = new Map<string, () => void>();
+  readonly holds = new HeldCaptures();
   readonly failures = new Map<string, CollectorError>();
   readonly channelVideos = new Map<string, DiscoveredYouTubeVideo[]>();
   holdCaptures = true;
@@ -79,20 +85,15 @@ class ControlledSource implements YouTubeSource {
 
   async capture(video: YouTubeVideoRef): Promise<CapturedTranscript> {
     this.captures.push(video.videoId);
-    if (this.holdCaptures) await new Promise<void>((resolve) => this.pending.set(video.videoId, resolve));
+    if (this.holdCaptures) await this.holds.hold(video.videoId);
     const failure = this.failures.get(video.videoId);
     if (failure) throw failure;
     return captured(video.videoId);
   }
 
   release(id: string): void {
-    const resolve = this.pending.get(id);
-    if (!resolve) throw new Error(`capture ${id} is not waiting`);
-    this.pending.delete(id);
-    resolve();
+    this.holds.release(id);
   }
-
-  running(): string[] { return [...this.pending.keys()]; }
 }
 
 function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
@@ -139,8 +140,8 @@ describe('JobManager', () => {
     const submission = await manager.submitItem('youtube', `https://youtu.be/${id}?t=3`);
     expect(submission).toMatchObject({ deduplicated: false, job: { kind: 'youtube.video', state: 'queued', source: { id } } });
 
-    await vi.waitFor(() => expect(manager.get(submission.job.id)).toMatchObject({ state: 'running', phase: 'capture' }));
-    await vi.waitFor(() => expect(source.pending.has(id)).toBe(true));
+    await eventually(() => expect(manager.get(submission.job.id)).toMatchObject({ state: 'running', phase: 'capture' }));
+    await source.holds.started(id);
     source.release(id);
     const job = await manager.whenSettled(submission.job.id);
     expect(job).toMatchObject({
@@ -166,7 +167,7 @@ describe('JobManager', () => {
     const repeated = await manager.submit('youtube', `https://youtu.be/${id}`);
     expect(repeated).toMatchObject({ deduplicated: true, job: { id: first.job.id } });
 
-    await vi.waitFor(() => expect(source.running()).toEqual([id]));
+    await source.holds.reach([id]);
     source.release(id);
     await manager.whenSettled(first.job.id);
 
@@ -186,12 +187,12 @@ describe('JobManager', () => {
     expect(b.job.id).not.toBe(a.job.id);
     expect((await collect(channel('UC-A'))).job.id).toBe(a.job.id);
 
-    await vi.waitFor(() => expect(manager.get(b.job.id).items).toHaveLength(2));
+    await eventually(() => expect(manager.get(b.job.id).items).toHaveLength(2));
     const aItems = manager.get(a.job.id).items!;
     expect(aItems.find((item) => item.sourceId === videoId(1, 'a'))?.jobId).toBe(manual.job.id);
 
     source.holdCaptures = false;
-    for (const id of source.running()) source.release(id);
+    for (const id of source.holds.running()) source.release(id);
     const [doneA, doneB] = await Promise.all([manager.whenSettled(a.job.id), manager.whenSettled(b.job.id)]);
     expect(doneA).toMatchObject({ state: 'completed', progress: { total: 3, done: 3, created: 3 } });
     expect(doneB).toMatchObject({ state: 'completed', progress: { total: 2, done: 2, created: 2 } });
@@ -203,16 +204,16 @@ describe('JobManager', () => {
     source.channelVideos.set('UC-BIG', videos(20, 'g'));
     source.channelVideos.set('UC-OTHER', videos(2, 'o'));
     const big = await collect(channel('UC-BIG'));
-    await vi.waitFor(() => expect(source.running()).toHaveLength(2));
+    await source.holds.count(2);
     const manual = await manager.submitItem('youtube', watchUrl(videoId(1, 'm')));
     const other = await collect(channel('UC-OTHER'));
-    await vi.waitFor(() => expect(manager.get(other.job.id).items).toHaveLength(2));
+    await eventually(() => expect(manager.get(other.job.id).items).toHaveLength(2));
 
     const order: string[] = [];
     while (order.length < 6) {
-      await vi.waitFor(() => expect(source.running().length).toBeGreaterThan(0));
-      expect(source.running().length).toBeLessThanOrEqual(2);
-      const next = source.running()[0]!;
+      await source.holds.any();
+      expect(source.holds.running().length).toBeLessThanOrEqual(2);
+      const next = source.holds.running()[0]!;
       order.push(next);
       source.release(next);
     }
@@ -222,14 +223,14 @@ describe('JobManager', () => {
     expect(manager.get(big.job.id).state).toBe('running');
 
     source.holdCaptures = false;
-    for (const id of source.running()) source.release(id);
+    for (const id of source.holds.running()) source.release(id);
     await Promise.all([manager.whenSettled(big.job.id), manager.whenSettled(manual.job.id), manager.whenSettled(other.job.id)]);
   });
 
   it('refuses new jobs once the waiting queue is full', async () => {
     const { manager, source } = setup({ limits: { capture: 1, maxQueued: 2 } });
     await manager.submitItem('youtube', watchUrl(videoId(1)));
-    await vi.waitFor(() => expect(source.running()).toHaveLength(1));
+    await source.holds.count(1);
     await manager.submitItem('youtube', watchUrl(videoId(2)));
     await manager.submitItem('youtube', watchUrl(videoId(3)));
     await expect(manager.submitItem('youtube', watchUrl(videoId(4)))).rejects.toMatchObject({ code: 'queue_full' });
@@ -282,7 +283,7 @@ describe('JobManager', () => {
 
     // A request nobody previewed holds the single discovery slot, so the previewed one waits in the queue.
     const blocker = await manager.submit('youtube', '@blocker');
-    await vi.waitFor(() => expect(manager.get(blocker.job.id).phase).toBe('resolve'));
+    await eventually(() => expect(manager.get(blocker.job.id).phase).toBe('resolve'));
     const added = await manager.submit('youtube', '@previewed');
     expect(added.job).toMatchObject({ state: 'queued', source: { id: null, title: '預覽的頻道' } });
     expect(manager.subscriptionWork('youtube').adds).toEqual([
@@ -327,7 +328,7 @@ describe('JobManager', () => {
     const { manager, source } = setup({ limits: { capture: 1 } });
     const running = await manager.submitItem('youtube', watchUrl(videoId(1)));
     const queued = await manager.submitItem('youtube', watchUrl(videoId(2)));
-    await vi.waitFor(() => expect(source.running()).toEqual([videoId(1)]));
+    await source.holds.reach([videoId(1)]);
     expect(manager.isBusy()).toBe(true);
 
     const closing = manager.close();
@@ -353,7 +354,7 @@ describe('JobManager', () => {
       return { id: 'UC-LATE', title: '晚到的頻道', url: 'https://www.youtube.com/channel/UC-LATE/videos' };
     };
     const discovering = await collect(channel('UC-DISCOVER'));
-    await vi.waitFor(() => expect(manager.get(discovering.job.id).phase).toBe('discover'));
+    await eventually(() => expect(manager.get(discovering.job.id).phase).toBe('discover'));
 
     const closing = manager.close();
     releaseDiscovery();
@@ -364,7 +365,7 @@ describe('JobManager', () => {
     const second = setup({ limits: { discovery: 1 } });
     second.source.resolveChannel = source.resolveChannel;
     const adding = await second.manager.submit('youtube', '@late');
-    await vi.waitFor(() => expect(second.manager.get(adding.job.id).phase).toBe('resolve'));
+    await eventually(() => expect(second.manager.get(adding.job.id).phase).toBe('resolve'));
     const closingSecond = second.manager.close();
     releaseResolve();
     await closingSecond;
@@ -444,9 +445,9 @@ describe('JobStore', () => {
     const onDisk = JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8'));
     expect(onDisk.jobs.map((job: { id: string }) => job.id)).toContain(accepted.job.id);
 
-    await vi.waitFor(() => expect(source.running()).toEqual([videoId(0, 's')]));
+    await source.holds.reach([videoId(0, 's')]);
     source.release(videoId(0, 's'));
-    await vi.waitFor(() => expect(manager.get(accepted.job.id).progress?.done).toBe(1));
+    await eventually(() => expect(manager.get(accepted.job.id).progress?.done).toBe(1));
     await store.flush();
 
     // A process that stops without closing leaves running and queued jobs on disk.

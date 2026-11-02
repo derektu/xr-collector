@@ -1,3 +1,6 @@
+// The window's shell: the page each path opens (unknown paths open Subscriptions), the sidebar's
+// pages in order with the unfinished-work count on Jobs, the system, dark or light theme and its
+// browser storage, and arrow-key movement in radio groups.
 import { describe, expect, it } from 'vitest';
 import {
   createBrowserThemeStore,

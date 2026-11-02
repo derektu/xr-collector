@@ -1,3 +1,6 @@
+// The build identity an installer carries: a packaged build records the package version and the
+// clean Git commit of its own checkout, refuses a dirty or Git-less source and a runtime prepared
+// for another target, and gets an id of its own, so an installed App shows true version information.
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -1,3 +1,7 @@
+// Guards the developer, not the user: CI runs the Web flows on a Mac three at a time and skips a
+// main push only when the reuse check allows it, keeps packaged smoke manual for the two delivery
+// targets, runs the real-engine search tests when their files change, and keeps failure evidence
+// for seven days.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -48,6 +52,15 @@ describe('CI UI regression contract', () => {
     expect(validate.run).toContain('^[0-9a-f]{40}$');
     const run = workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name === 'Run every registered Web flow');
     expect(run.run.match(/rev-parse HEAD/gu)).toHaveLength(2);
+  });
+
+  it('runs the real-engine cases on a Mac whenever a file of test:meilisearch:mac changes', async () => {
+    const engine = parse(await readFile(path.resolve(import.meta.dirname, '../..', '.github/workflows/search-engine.yml'), 'utf8'));
+    expect(engine.jobs['real-engine']['runs-on']).toBe('macos-15');
+    expect(engine.jobs['real-engine'].steps.some((step: { run?: string }) => step.run === 'npm run test:meilisearch:mac')).toBe(true);
+    const packageJson = JSON.parse(await readFile(path.resolve(import.meta.dirname, '../..', 'package.json'), 'utf8'));
+    const files = (packageJson.scripts['test:meilisearch:mac'] as string).match(/tests\/\S+\.test\.ts/gu)!;
+    for (const trigger of [engine.on.pull_request.paths, engine.on.push.paths]) expect(trigger).toEqual(expect.arrayContaining(files));
   });
 
   it('uploads only bounded failure evidence for seven days', () => {

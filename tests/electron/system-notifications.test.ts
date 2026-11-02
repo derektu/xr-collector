@@ -1,3 +1,5 @@
+// A system notification is handed to the OS at once: collection never waits for the OS to report it
+// shown, and a later OS failure is reported as a readable failure message.
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { attemptDelivery } from '../../src/electron/system-notifications.js';

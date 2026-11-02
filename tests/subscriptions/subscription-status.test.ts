@@ -1,7 +1,10 @@
+// The check status a subscription shows (scheduled, paused, auto check off, queued, checking,
+// downloading with progress, retrying, failing, auto-paused or sign-in needed), computed from its
+// record and its running work, so the subscription list says what each subscription is doing now.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { PacingEvent, Pacing } from '../../src/pacing/pacing-gate.js';
 import { SubscriptionService, SubscriptionServices, checkStatus } from '../../src/subscriptions/subscription-service.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
@@ -12,6 +15,7 @@ import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { eventually } from '../support/wait.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -97,11 +101,11 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     const videos = w.source.publish(alpha, 'a', w.clock.now, [1, 2, 3]);
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
-    await vi.waitFor(() => expect(w.source.running()).toHaveLength(3));
+    await w.source.holds.count(3);
     expect(await w.status(alpha)).toEqual({ state: 'downloading', done: 0, total: 3 });
 
     w.source.release(videos[0]!);
-    await vi.waitFor(async () => expect(await w.status(alpha)).toEqual({ state: 'downloading', done: 1, total: 3 }));
+    await eventually(async () => expect(await w.status(alpha)).toEqual({ state: 'downloading', done: 1, total: 3 }));
     w.source.release(videos[1]!);
     w.source.release(videos[2]!);
     await w.jobs.whenSettled(added.result!.followUpJobId!);
@@ -117,7 +121,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     let release!: () => void;
     w.source.holdDiscovery = new Promise<void>((resolve) => { release = resolve; });
     const submissions = await w.channels.startRun({ trigger: 'manual' });
-    await vi.waitFor(() => expect(w.source.listingRequests.at(-1)?.channelId).toBe(alpha));
+    await eventually(() => expect(w.source.listingRequests.at(-1)?.channelId).toBe(alpha));
 
     expect(await w.status(alpha)).toEqual({ state: 'checking' });
     expect(await w.status(beta)).toEqual({ state: 'queued' });
@@ -143,8 +147,8 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     w.source.failures.set(failing!, new CollectorError('network_error', '無法連線到 YouTube。'));
     const added = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
     const check = added.result!.followUpJobId!;
-    await vi.waitFor(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === fine)?.state).toBe('completed'));
-    await vi.waitFor(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === failing)?.retry?.nextAttemptAt).toBeTruthy());
+    await eventually(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === fine)?.state).toBe('completed'));
+    await eventually(() => expect(w.jobs.get(check).items?.find((item) => item.sourceId === failing)?.retry?.nextAttemptAt).toBeTruthy());
 
     const retry = w.jobs.get(check).items!.find((item) => item.sourceId === failing)!.retry!;
     expect(await w.status(alpha)).toEqual({

@@ -1,3 +1,7 @@
+// The window's add menus and add dialogs: the items each menu lists, which say they are not
+// supported yet, arrow-key and Home/End movement, and the offer to switch between adding once and
+// subscribing when the address is of the other kind. An address no source type owns reads as
+// unsupported.
 import { describe, expect, it } from 'vitest';
 import type { UrlRecognition } from '../../src/core/types.js';
 import {
