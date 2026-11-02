@@ -117,14 +117,26 @@ it('lets one of two stale-owner reapers acquire and reports the other busy when 
   const first = contender('first', 'b2');
   const second = contender('second', 'c3');
   second.catch(() => {}).finally(secondReaped.open);
+  // Which contender wins depends on whether the file system reuses the freed inode number for a new
+  // directory; either way exactly one acquires and the other reports busy.
   const loser = await Promise.race([first.then(() => null, (error) => error), second.then(() => null, (error) => error)]);
   expect(String(loser)).toBe('Error: busy');
   workGate.open();
-  await expect(first).resolves.toBe('first');
-  await expect(second).rejects.toThrow(/^busy$/u);
-  expect(entered).toEqual(['first']);
+  const results = await Promise.allSettled([first, second]);
+  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+  expect(entered).toHaveLength(1);
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+/** A lock held by a live owner, pid 41, as `withOwnedDirectoryLock` leaves it while work runs. */
+async function heldLock(extraEntries: string[] = [], ownerContent = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'a1' })) {
+  const lock = await lockRoot();
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), ownerContent, { mode: 0o600 });
+  for (const entry of extraEntries) await writeFile(path.join(lock, entry), ownerContent, { mode: 0o600 });
+  return lock;
+}
+const holderAlive = async (pid: number) => (pid === 41 ? { pid, uid, startedAt: 'holder' } : liveOwner(pid));
 
 it('starts over when its new directory is removed before the owner nonce is written', async () => {
   const lock = await lockRoot();
@@ -141,19 +153,27 @@ it('starts over when its new directory is removed before the owner nonce is writ
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('reports busy and leaves a replacement directory created by a competitor before the owner nonce is written', async () => {
-  const lock = await lockRoot();
-  let replaced = false;
-  schedule.intercept = async ({ name, target }, run) => {
-    if (!replaced && name === 'writeFile' && target === path.join(lock, 'owner-b2.json')) {
-      replaced = true;
-      await rmdir(lock);
-      await mkdir(lock, { mode: 0o700 });
-    }
-    return run();
-  };
-  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', liveOwner))).rejects.toThrow(/^busy$/u);
-  expect(await readdir(lock)).toEqual([]);
+it('reports busy and leaves the competitor\'s nonce when a competitor takes over its new directory before the owner nonce is written', async () => {
+  const competitor = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'c3' });
+  for (const replace of [true, false]) {
+    const lock = await lockRoot();
+    let takenOver = false;
+    schedule.intercept = async ({ name, target }, run) => {
+      if (!takenOver && name === 'writeFile' && target === path.join(lock, 'owner-b2.json')) {
+        takenOver = true;
+        // A replacement directory can carry the inode number of the one it replaces, so the same
+        // directory with the competitor's nonce stands for that case too.
+        if (replace) {
+          await rmdir(lock);
+          await mkdir(lock, { mode: 0o700 });
+        }
+        await writeFile(path.join(lock, 'owner-c3.json'), competitor, { mode: 0o600 });
+      }
+      return run();
+    };
+    await expect(withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', holderAlive))).rejects.toThrow(/^busy$/u);
+    expect(await readdir(lock)).toEqual(['owner-c3.json']);
+  }
 });
 
 it('fails with the write error while its new directory is still in place', async () => {
@@ -170,16 +190,6 @@ it('fails with the write error while its new directory is still in place', async
   expect(writes).toBe(1);
   await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
 });
-
-/** A lock held by a live owner, pid 41, as `withOwnedDirectoryLock` leaves it while work runs. */
-async function heldLock(extraEntries: string[] = [], ownerContent = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'a1' })) {
-  const lock = await lockRoot();
-  await mkdir(lock, { mode: 0o700 });
-  await writeFile(path.join(lock, 'owner-a1.json'), ownerContent, { mode: 0o600 });
-  for (const entry of extraEntries) await writeFile(path.join(lock, entry), ownerContent, { mode: 0o600 });
-  return lock;
-}
-const holderAlive = async (pid: number) => (pid === 41 ? { pid, uid, startedAt: 'holder' } : liveOwner(pid));
 
 it('acquires when the holder releases between listing the lock and reading its owner file', async () => {
   const lock = await heldLock();

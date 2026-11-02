@@ -79,7 +79,8 @@ async function acquire(lockPath, owner, options) {
 // Until the owner nonce is written and confirmed, the directory this contender created is still exposed
 // to the others: a reaper finishing a stale owner can remove it by path, and another contender can then
 // create a replacement. Either way this attempt lost the race and returns null so acquisition starts
-// over. Failures while the directory first observed after creation is still in place propagate.
+// over. Failures while the directory first observed after creation is still in place, holding no other
+// contender's nonce, propagate.
 async function claimCreatedDirectory(lockPath, owner, options) {
   const ownerName = `owner-${owner.token}.json`;
   const ownerPath = path.join(lockPath, ownerName);
@@ -94,9 +95,15 @@ async function claimCreatedDirectory(lockPath, owner, options) {
     // A nonce written into a replacement directory belongs to no one, so it is removed either way.
     await removeOnlyMatchingOwner(ownerPath, owner, options).catch(() => {});
     let current;
-    try { current = await lstat(lockPath); }
-    catch (inspectError) { if (inspectError.code === 'ENOENT') return null; throw error; }
+    let entries;
+    try {
+      current = await lstat(lockPath);
+      entries = await readdir(lockPath);
+    } catch (inspectError) { if (inspectError.code === 'ENOENT') return null; throw error; }
     if (!sameDirectory(current, directoryIdentity)) return null;
+    // Another contender's nonce marks a replacement too, which identity alone misses on file systems
+    // that give a recreated directory the inode number just freed.
+    if (entries.some((entry) => OWNER_FILE.test(entry) && entry !== ownerName)) return null;
     await rmdir(lockPath).catch(() => {});
     throw error;
   }
