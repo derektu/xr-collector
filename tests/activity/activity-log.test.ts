@@ -9,8 +9,7 @@ import { localDayStart } from '../../src/web/activity-presentation.js';
 import { readEventFiles } from './event-files.js';
 import { eventually } from '../support/wait.js';
 
-// The device activity log: day files with a 30-day retention, the earlier single file read along,
-// newest-first cursor pages, filters, masking and write failures that are reported, not lost.
+// The device activity log: day files with a 30-day retention, newest-first cursor pages, filters, masking and write failures that are reported, not lost.
 
 const DAY = 86_400_000;
 const VAULT = '/vaults/a';
@@ -61,12 +60,13 @@ function event(timestamp: string, overrides: Partial<JobEvent> = {}): JobEvent {
 
 const lines = (events: JobEvent[]) => events.map((entry) => `${JSON.stringify(entry)}\n`).join('');
 
-describe('activity log files and compatibility (A-T1)', () => {
-  it('reads the earlier single file with the day files, skipping broken and half-written lines', async () => {
+describe('activity log files (A-T1)', () => {
+  it('reads every day file, skipping broken and half-written lines', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     const old = [event('2026-10-14T01:00:00.000Z', { jobId: 'job-video', eventType: 'job.accepted' }), event('2026-10-14T02:00:00.000Z')];
-    await writeFile(path.join(directory, 'events.jsonl'), `${lines(old)}not json\n{"eventId":"x"}\n{"eventId":"half","timest`);
+    await mkdir(path.join(directory, 'events'), { recursive: true });
+    await writeFile(path.join(directory, 'events', '2026-10-14.jsonl'), `${lines(old)}not json\n{"eventId":"x"}\n{"eventId":"half","timest`);
     const log = await ActivityLog.open(directory, {
       now: () => clock.now,
       lookupJob: (id): CollectionJob | undefined => (id === 'job-video'
@@ -82,7 +82,7 @@ describe('activity log files and compatibility (A-T1)', () => {
     expect(page.events.map((entry) => entry.eventType)).toEqual(['job.completed', 'job.started', 'job.accepted']);
     expect(page.events[2]).toMatchObject({ sourceTitle: '影片標題', parentJobId: 'job-channel', subscriptionId: 'UC1' });
     expect(page.log.skippedLines).toBe(2);
-    expect(await readdir(path.join(directory, 'events'))).toEqual(['2026-10-15.jsonl']);
+    expect((await readdir(path.join(directory, 'events'))).sort()).toEqual(['2026-10-14.jsonl', '2026-10-15.jsonl']);
     expect(page.retentionDays).toBe(RETENTION_DAYS);
     await log.close();
   });
@@ -114,7 +114,7 @@ describe('activity log files and compatibility (A-T1)', () => {
 });
 
 describe('retention (A-T2)', () => {
-  it('removes expired day files and expired lines of the earlier file, at start and every hour', async () => {
+  it('removes expired day files at start and every hour', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     const timers = new Timers();
@@ -125,13 +125,11 @@ describe('retention (A-T2)', () => {
     await writeFile(path.join(segments, `${daysAgo(31).slice(0, 10)}.jsonl`), lines([event(daysAgo(31))]));
     await writeFile(path.join(segments, `${daysAgo(30).slice(0, 10)}.jsonl`), lines([event(daysAgo(30, 5), { message: '邊界前' }), event(daysAgo(30, 7), { message: '邊界後' })]));
     await writeFile(path.join(segments, `${daysAgo(29).slice(0, 10)}.jsonl`), lines([event(daysAgo(29), { message: '29 天前' })]));
-    await writeFile(path.join(directory, 'events.jsonl'), lines([event(daysAgo(40), { message: '舊檔過期' }), event(daysAgo(2), { message: '舊檔保留' })]));
 
     const log = await ActivityLog.open(directory, { now: () => clock.now, setTimer: timers.set });
     expect((await readdir(segments)).sort()).toEqual([`${daysAgo(30).slice(0, 10)}.jsonl`, `${daysAgo(29).slice(0, 10)}.jsonl`]);
-    expect(await readFile(path.join(directory, 'events.jsonl'), 'utf8')).not.toContain('舊檔過期');
     let messages = (await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
-    expect(messages).toEqual(['舊檔保留', '29 天前', '邊界後']);
+    expect(messages).toEqual(['29 天前', '邊界後']);
 
     // A day later the boundary day has fully expired and the hourly purge removes its file.
     clock.advance(DAY);
@@ -140,12 +138,7 @@ describe('retention (A-T2)', () => {
     await eventually(() => expect(timers.waiting.some((entry) => entry.ms === 3_600_000)).toBe(true));
     expect(await readdir(segments)).toEqual([`${daysAgo(29).slice(0, 10)}.jsonl`]);
     messages = (await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
-    expect(messages).toEqual(['舊檔保留', '29 天前']);
-
-    // Once every line of the earlier file expired, the file goes.
-    clock.advance(30 * DAY);
-    await log.purge();
-    await expect(readFile(path.join(directory, 'events.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(messages).toEqual(['29 天前']);
     await log.close();
   });
 
@@ -259,25 +252,27 @@ describe('filters (A-T5)', () => {
 });
 
 describe('masking (A-T6)', () => {
-  it('masks credentials and shortens long text on disk and in answers, older entries included', async () => {
+  it('masks credentials and shortens long text on disk and in answers, stored entries included', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     const token = 'a'.repeat(64);
     const secretMessage = `請求失敗 Authorization: Bearer sk-live-123 Cookie: SID=abc; HSID=def https://x.test/v?id=1&token=t0p&sig=s1g agent ${token}`;
-    await writeFile(path.join(directory, 'events.jsonl'), lines([event('2026-10-15T01:00:00.000Z', { message: 'Bearer legacy-secret-value' })]));
+    // Stored before the token was protected, so only the masking on read hides it.
+    await mkdir(path.join(directory, 'events'), { recursive: true });
+    await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines([event('2026-10-15T01:00:00.000Z', { message: `stored agent ${token}` })]));
     const log = await ActivityLog.open(directory, { now: () => clock.now });
     log.protectSecret(token);
     log.record(event('2026-10-15T02:00:00.000Z', { severity: 'error', message: secretMessage, detail: `${'x'.repeat(10_000)}\nERROR: cookie=SECRET; Authorization: Basic Zm9vOmJhcg== ${token}` }));
     log.record(event('2026-10-15T03:00:00.000Z', { message: '長'.repeat(2000) }));
     await log.flush();
 
-    const disk = JSON.stringify(await readEventFiles(directory));
+    const disk = JSON.stringify((await readEventFiles(directory)).filter((entry) => !entry.message.startsWith('stored')));
     const answer = JSON.stringify((await log.query({}, { vaultPath: VAULT })).events);
     for (const text of [disk, answer]) {
       for (const secret of ['sk-live-123', 'SID=abc', 't0p', 's1g', token, 'SECRET', 'Zm9vOmJhcg==']) expect(text).not.toContain(secret);
       expect(text).toContain('[已遮蔽]');
     }
-    expect(answer).not.toContain('legacy-secret-value');
+    expect(answer).toContain('stored agent [已遮蔽]');
     const [long, masked] = (await log.query({}, { vaultPath: VAULT })).events;
     expect([...long!.message].length).toBe(500);
     expect([...masked!.detail!].length).toBe(2000);

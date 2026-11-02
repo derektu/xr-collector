@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { jobRole } from '../core/source-registry.js';
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   CollectorError,
@@ -33,8 +33,6 @@ const SNAPSHOT_TTL_MS = 30 * 60_000;
 const SNAPSHOT_LIMIT = 50;
 
 const SEGMENT_DIRECTORY = 'events';
-/** The single log file of earlier versions; read with the segments and pruned the same way. */
-const LEGACY_FILE = 'events.jsonl';
 const SEGMENT_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/u;
 
 export interface ActivityLogOptions {
@@ -411,7 +409,6 @@ export class ActivityLog {
       await rm(file, { force: true });
       this.cache.delete(file);
     }
-    await this.pruneLegacy(cutoff.toISOString());
   }
 
   async close(): Promise<void> {
@@ -481,7 +478,7 @@ export class ActivityLog {
   /** Every stored event plus the ones still waiting to be written, each once. */
   private async readAll(): Promise<JobEvent[]> {
     if (!this.directory) return [...this.memory];
-    const files = [path.join(this.directory, LEGACY_FILE)];
+    const files: string[] = [];
     try {
       const names = (await readdir(path.join(this.directory, SEGMENT_DIRECTORY))).filter((name) => SEGMENT_NAME.test(name)).sort();
       files.push(...names.map((name) => path.join(this.directory!, SEGMENT_DIRECTORY, name)));
@@ -537,38 +534,7 @@ export class ActivityLog {
     return cached.events;
   }
 
-  /** Keeps the lines of the earlier single log file that are still within the retention period. */
-  private async pruneLegacy(cutoff: string): Promise<void> {
-    const file = path.join(this.directory!, LEGACY_FILE);
-    let contents: string;
-    try {
-      contents = await readFile(file, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    const lines = contents.split('\n').filter((line) => line.trim() !== '');
-    // Unreadable lines stay, so the skipped count keeps reporting them until the file expires.
-    const kept = lines.filter((line) => {
-      const event = parseEvent(line);
-      return event === null || event.timestamp >= cutoff;
-    });
-    if (kept.length === lines.length) return;
-    this.cache.delete(file);
-    if (!kept.some((line) => parseEvent(line) !== null)) {
-      await rm(file, { force: true });
-      return;
-    }
-    const temporary = `${file}.${process.pid}.tmp`;
-    try {
-      await writeFile(temporary, `${kept.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, file);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-  }
-
-  /** Masks and shortens free text; events from older versions are masked again when read. */
+  /** Masks and shortens free text; stored events are masked again when read, so a secret protected after they were written stays hidden. */
   private sanitize(event: JobEvent): JobEvent {
     const result: JobEvent = { ...event, message: limitText(redact(event.message, this.secrets), MESSAGE_LIMIT, 'head') };
     if (event.detail !== undefined) result.detail = limitText(redact(event.detail, this.secrets), DETAIL_LIMIT, 'tail');
