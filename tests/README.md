@@ -8,7 +8,7 @@
 
 | 目錄 | 責任 |
 | --- | --- |
-| `core` | 文件保存與索引、刪除紀錄與重新收集的互斥及競態；連線偵測（`connectivity.test.ts`：確認失敗即離線、離線時每 30 秒確認、同時的確認共用一次、在線結果 30 秒內重用、睡眠時不確認，以及確認網址只接受已知回應，captive portal 算離線）；變動串流（`change-feed.test.ts`：同一輪的變動合成一個 revision 並依資源去重、斷線後從上次 revision 接續、另一個程序或已不保留的範圍回 reset） |
+| `core` | 狀態檔的取代寫入（`json-file.test.ts`：Windows 上目標檔被其他程序開著時重試到完成，一直開著時以錯誤結束）；文件保存與索引、刪除紀錄與重新收集的互斥及競態；連線偵測（`connectivity.test.ts`：確認失敗即離線、離線時每 30 秒確認、同時的確認共用一次、在線結果 30 秒內重用、睡眠時不確認，以及確認網址只接受已知回應，captive portal 算離線）；變動串流（`change-feed.test.ts`：同一輪的變動合成一個 revision 並依資源去重、斷線後從上次 revision 接續、另一個程序或已不保留的範圍回 reset） |
 | `plugins` | 核心與來源類型無關（`core-agnostic.test.ts`：以 `tests/support/fake-source-plugin.ts` 的兩個假來源類型 `fake`、`fake2` 走過單一項目、去重、訂閱預覽與檢查、範圍內最新 N 則、重試分類、各請求群組各自冷卻、暫停與移除、刪除後略過與明確重新收集、重啟接續、未登錄類型的工作保持中斷且不執行、訂閱狀態（含 workspace 由 plugin 的登入狀態判斷），以及與 YouTube 並存的匯出、合併與完全取代，以及檢查中失敗項目的次數、略過、重試與收集紀錄、工作頁的排隊順序與失敗區）；來源類型宣告的 Vault 與匯出檔格式版本（`format-versions.test.ts`） |
 | `plugins/youtube` | YouTube plugin：網址、語言、字幕整理、收集設定、yt-dlp 輸出解析、字幕軌道選擇、頻道列出，以及失敗原因的分類與用字（`failures.test.ts`） |
 | `plugins/rss` | RSS plugin：RSS 2.0／RDF／Atom 解析、文章識別與 key（`feed.test.ts`）、HTML 轉 Markdown（圖片、表格、相對連結、移除的元素，`html.test.ts`）、網址與頁面宣告的 feed、讀取失敗分類、快取與重啟（`source.test.ts`）、經工作與 Vault 的首次收集、範圍與數量、只有摘要（`rss-collection.test.ts`），以及 UI／Agent 共用路由與 Skill（`rss-http.test.ts`）；以 `synthetic-feeds.ts` 的本機 feed 伺服器驗證 |
@@ -41,7 +41,7 @@
 
 平台擴充時一起調整 binary 選擇與 skip 規則；先保留真實結果，不以 fixture 冒充另一平台通過。
 
-依賴 POSIX 行為的案例（檔案權限位元、`/bin/ps`、POSIX signal、以 shebang 啟動的程式）以 `it.skipIf(process.platform === 'win32')` 在 Windows 略過，在 Mac 與 Linux 照常執行；Windows 沒有這些行為，不以 mock 冒充通過。Windows 的一般帳號不能建 symlink，symlink 防護的案例在 Windows 改建 junction（lstat 也把它讀成 symlink），在 Mac 與 Linux 照常建 symlink。比對 Git 回報的路徑時，暫存目錄先經 `realpathSync.native`，展開 macOS 的 `/var` symlink 與 Windows 的 8.3 短檔名。verify skill 的工具測試有些案例只在特定平台執行：`verify-skill/doctor.test.ts` 的規則案例只在 Mac 與 Windows（fixture 依平台）、`processes.test.ts` 的真實程序案例分 Mac／Linux 與 Windows 兩組、`slots.test.ts` 的缺少 Meilisearch 案例只在 Mac、`state.test.ts` 的 Meilisearch key 案例只在 Mac 與 Linux、`restart.test.ts` 不在 Windows。Linux CI 跑不到的部分，由各平台的完整 verify 涵蓋。這些邊界要在另一個平台跑完整 `npm run verify` 才看得到，時機見 [開發驗證流程](../docs/development-validation.md#另一個平台的完整驗證)。
+依賴 POSIX 行為的案例（檔案權限位元、`/bin/ps`、POSIX signal、以 shebang 啟動的程式）以 `it.skipIf(process.platform === 'win32')` 在 Windows 略過，在 Mac 與 Linux 照常執行；Windows 沒有這些行為，不以 mock 冒充通過。反過來，`core/json-file.test.ts` 以 PowerShell 開著目標檔、不允許刪除，重現 Windows 拒絕取代的 rename，只在 Windows 執行。Windows 的一般帳號不能建 symlink，symlink 防護的案例在 Windows 改建 junction（lstat 也把它讀成 symlink），在 Mac 與 Linux 照常建 symlink。比對 Git 回報的路徑時，暫存目錄先經 `realpathSync.native`，展開 macOS 的 `/var` symlink 與 Windows 的 8.3 短檔名。verify skill 的工具測試有些案例只在特定平台執行：`verify-skill/doctor.test.ts` 的規則案例只在 Mac 與 Windows（fixture 依平台）、`processes.test.ts` 的真實程序案例分 Mac／Linux 與 Windows 兩組、`slots.test.ts` 的缺少 Meilisearch 案例只在 Mac、`state.test.ts` 的 Meilisearch key 案例只在 Mac 與 Linux、`restart.test.ts` 不在 Windows。Linux CI 跑不到的部分，由各平台的完整 verify 涵蓋。這些邊界要在另一個平台跑完整 `npm run verify` 才看得到，時機見 [開發驗證流程](../docs/development-validation.md#另一個平台的完整驗證)。
 
 verify skill 的整合 smoke（`npm run test:verify-skill:mac`）啟動真的 Web 模式 instance 與 headless Chromium，只在 Mac 本機執行，不在 `npm run verify` 與 CI 中；Desktop smoke（Mac 是 `npm run test:verify-skill:desktop:mac`，Windows 是 `npm run test:verify-skill:desktop:win`）啟動開發版 Electron 或 `--app` 指定的打包版，收集一支真實影片，在 Mac 或 Windows 本機執行。內容見 [verify skill](../.claude/skills/verify/SKILL.md#自我測試)。
 

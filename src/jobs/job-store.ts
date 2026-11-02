@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
+import { replaceFile } from '../core/json-file.js';
 import { jobRole } from '../core/source-registry.js';
 import type { NoteChange } from '../core/change-feed.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
@@ -217,7 +218,7 @@ export class JobStore {
     const file: JobsFile = { version: FILE_VERSION, jobs: [...this.jobs.values()] };
     try {
       await writeFile(temporary, `${JSON.stringify(file)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-      await rename(temporary, target);
+      await replaceFile(temporary, target);
     } finally {
       await rm(temporary, { force: true });
     }
