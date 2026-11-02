@@ -1,16 +1,19 @@
+// Guards the developer, not the user.
 // Which processes belong to a verify run. Only server.mts under node and an app's main executable
 // (development Electron or a packaged app) carrying the run marker, and Meilisearch with its data in
 // the run, count; stop and sweep end those and nothing else, even processes whose command line
 // mentions the marker or the run directory. On Windows the app is the executable run.json records as
 // the run's target, and stop ends each run process with the processes it started.
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { alive, cleanUp, deadPid, isolateHome, mentioning, repository, start, temp, until } from './support.js';
+import { alive, cleanUp, deadPid, isolateHome, mentioning, repository, start, temp } from './support.js';
+import { eventually } from '../../support/wait.js';
 
 const home = isolateHome();
 const { isRunProcess, isUnmarkedAppInstance, runMarker, runsRoot, SLOT_LOCKS, windowsArgs } = await import('../../../.claude/skills/verify/scripts/lib/paths.mjs');
 const { runProcesses, stopRun, sweepStale } = await import('../../../.claude/skills/verify/scripts/lib/instance.mjs');
+const { processTable } = await import('../../../.claude/skills/verify/scripts/lib/platform.mjs');
 
 beforeAll(() => expect(SLOT_LOCKS).toBe(path.join(home, '.xr-collector', 'verify-slots')));
 afterEach(cleanUp);
@@ -128,8 +131,6 @@ describe('isRunProcess on Windows', () => {
 describe.skipIf(process.platform === 'win32')('stop and sweep with real processes', () => {
   const IDLE = 'setInterval(() => {}, 1000)';
 
-  const SLOW = 20_000;
-
   /** A run folder under the main checkout's verify-runs, with run.json naming slot 0 and a PID that has exited. */
   async function makeRun(main: string, name: string, { record = true } = {}) {
     const runDir = path.join(runsRoot(main), name);
@@ -155,7 +156,7 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
       start(process.execPath, ['-e', IDLE, 'flow.mjs', runMarker(runDir)], { detached: true }),
       start('tail', ['-f', path.join(runDir, 'server.log')], { detached: true }),
     ];
-    await until(() => mentioning(runDir).length === before + started.length);
+    await eventually(() => expect(mentioning(runDir)).toHaveLength(before + started.length));
     return started;
   }
 
@@ -164,18 +165,18 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
     const { runDir } = await makeRun(main, '111-find');
     const server = fakeServer(runDir);
     const others = await decoys(runDir);
-    await until(() => runProcesses({ runDir }).length === 1);
+    await eventually(() => expect(runProcesses({ runDir })).toHaveLength(1));
 
     expect(runProcesses({ runDir }).map((member: { pid: number }) => member.pid)).toEqual([server.pid]);
     for (const decoy of others) expect(alive(decoy.pid!)).toBe(true);
-  }, SLOW);
+  });
 
   it('stop ends the run\'s server, keeps the other processes and the evidence', async () => {
     const { main } = repository();
     const { runDir, evidence } = await makeRun(main, '111-stop');
     const server = fakeServer(runDir);
     const others = await decoys(runDir);
-    await until(() => runProcesses({ runDir }).length === 1);
+    await eventually(() => expect(runProcesses({ runDir })).toHaveLength(1));
 
     const result = await stopRun(runDir);
 
@@ -183,7 +184,7 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
     expect(alive(server.pid!)).toBe(false);
     for (const decoy of others) expect(alive(decoy.pid!), decoy.spawnargs.join(' ')).toBe(true);
     expect(runProcesses({ runDir })).toEqual([]);
-  }, SLOW);
+  });
 
   it('stop signals only the run\'s process when it is not its group\'s leader', async () => {
     const { main } = repository();
@@ -191,7 +192,7 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
     // A shell leads the group and keeps running; the server is a member, as a Meilisearch whose
     // leader died is. Signalling the group would end the shell too.
     const leader = start('sh', ['-c', `"${process.execPath}" -e '${IDLE}' '${path.join(runDir, '..', 'server.mts')}' '${runMarker(runDir)}' & sleep 60`], { detached: true });
-    await until(() => runProcesses({ runDir }).length === 1);
+    await eventually(() => expect(runProcesses({ runDir })).toHaveLength(1));
     const [server] = runProcesses({ runDir });
     expect(server.pgid).toBe(leader.pid);
     expect(server.pid).not.toBe(leader.pid);
@@ -200,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
 
     expect(alive(server.pid)).toBe(false);
     expect(alive(leader.pid!)).toBe(true);
-  }, SLOW);
+  });
 
   it('sweep removes runs with no process of their own and keeps the rest', async () => {
     const { main } = repository();
@@ -211,7 +212,7 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
     writeFileSync(path.join(broken.runDir, 'run.json'), '{');
     const server = fakeServer(running.runDir);
     const others = await decoys(idle.runDir);
-    await until(() => runProcesses({ runDir: running.runDir }).length === 1);
+    await eventually(() => expect(runProcesses({ runDir: running.runDir })).toHaveLength(1));
 
     const result = sweepStale(main);
 
@@ -221,18 +222,21 @@ describe.skipIf(process.platform === 'win32')('stop and sweep with real processe
     expect(existsSync(building.runDir)).toBe(true);
     expect(existsSync(broken.runDir)).toBe(true);
     expect(existsSync(idle.runDir)).toBe(false);
-  }, SLOW);
+  });
 });
 
 describe.runIf(process.platform === 'win32')('stop and sweep with real Windows processes', () => {
   // Node reads options after `-e <script>` too; `--` passes the run marker on as an argument.
   const IDLE = 'setInterval(() => {}, 1000)';
-  const SLOW = 60_000;
 
-  /** A copy of this Node under another name, standing in for an app or Meilisearch. */
+  /**
+   * This Node under another name, standing in for an app or Meilisearch. A hard link, not a copy:
+   * Defender scans a new executable on its first start for over 3 seconds, and a link is the same
+   * file it has already scanned. A temporary folder on another volume than Node gets a copy.
+   */
   function program(name: string) {
     const file = path.join(temp('program'), name);
-    copyFileSync(process.execPath, file);
+    try { linkSync(process.execPath, file); } catch { copyFileSync(process.execPath, file); }
     return file;
   }
 
@@ -259,7 +263,6 @@ describe.runIf(process.platform === 'win32')('stop and sweep with real Windows p
     const { runDir, evidence } = await makeRun(main, '113-stop-electron', app);
     const appProcess = startApp(app, runDir);
     const search = start(meilisearch, ['-e', IDLE, '--', '--db-path', path.join(runDir, 'profile', 'search')]);
-    const before = mentioning(runDir).length;
     const decoys = [
       // Mentions the marker and server.mts, but is cmd.
       start('cmd.exe', ['/d', '/c', `ping -n 120 127.0.0.1 > nul & rem ${runMarker(runDir)} server.mts`]),
@@ -270,20 +273,24 @@ describe.runIf(process.platform === 'win32')('stop and sweep with real Windows p
       // The same program with the marker of another run.
       start(app, ['-e', IDLE, '--', runMarker(`${runDir}-2`)]),
     ];
-    await until(() => runProcesses({ runDir }).length === 2, 30_000);
-    await until(() => mentioning(runDir).length >= before + 2, 30_000);
-    const helper = () => mentioning(' helper').length;
-    await until(() => helper() === 1, 30_000);
+    // One process table per attempt: on Windows each read is a CIM query of seconds.
+    await eventually(() => {
+      const table = processTable();
+      expect(runProcesses({ runDir }, table)).toHaveLength(2);
+      expect(mentioning(' helper', table)).toHaveLength(1);
+      expect(table.map((entry) => entry.pid)).toEqual(expect.arrayContaining(decoys.map((decoy) => decoy.pid)));
+    });
 
     const result = await stopRun(runDir);
 
     expect(result).toEqual({ runDir, removed: true, evidence });
     expect(alive(appProcess.pid!)).toBe(false);
     expect(alive(search.pid!)).toBe(false);
-    expect(helper()).toBe(0);
     for (const decoy of decoys) expect(alive(decoy.pid!), decoy.spawnargs.join(' ')).toBe(true);
-    expect(runProcesses({ runDir })).toEqual([]);
-  }, SLOW);
+    const after = processTable();
+    expect(mentioning(' helper', after)).toEqual([]);
+    expect(runProcesses({ runDir }, after)).toEqual([]);
+  });
 
   it('sweep keeps a run whose app is alive and removes one with no process', async () => {
     const { main } = repository();
@@ -292,7 +299,7 @@ describe.runIf(process.platform === 'win32')('stop and sweep with real Windows p
     const idle = await makeRun(main, '113-idle', app);
     const appProcess = startApp(app, running.runDir);
     const decoy = start(process.execPath, ['-e', IDLE, '--', 'flow.mjs', runMarker(idle.runDir)]);
-    await until(() => runProcesses({ runDir: running.runDir }).length === 1, 30_000);
+    await eventually(() => expect(runProcesses({ runDir: running.runDir })).toHaveLength(1));
 
     const result = sweepStale(main);
 
@@ -300,5 +307,5 @@ describe.runIf(process.platform === 'win32')('stop and sweep with real Windows p
     expect(alive(appProcess.pid!)).toBe(true);
     expect(alive(decoy.pid!)).toBe(true);
     expect(existsSync(idle.runDir)).toBe(false);
-  }, SLOW);
+  });
 });

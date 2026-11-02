@@ -18,6 +18,7 @@ import type { VaultWorkspace } from '../../../src/vault/workspace.js';
 import { atom, page, rss2, type SyntheticArticle, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../vault/exchange-fixtures.js';
+import { eventually } from '../../support/wait.js';
 
 // RSS through the product's core: a workspace with the YouTube and RSS plugins over synthetic feeds
 // on a local server. Subscribing, checking, removing and exchanging use the same services the
@@ -120,7 +121,7 @@ describe('subscribing to a feed through the core (R11-T5)', () => {
       .toEqual(['【合成】全文文章', '【合成】只有摘要', '【合成】定時新文', '【合成】立即新文']);
 
     await service.remove(id, { documents: 'delete' });
-    await expect.poll(async () => (await workspace.collector.list()).filter((document) => document.sourceType === 'rss').length).toBe(0);
+    await eventually(async () => expect(await (await workspace.collector.list()).filter((document) => document.sourceType === 'rss').length).toBe(0));
     expect(await service.listSubscriptions()).toEqual([]);
     expect((await workspace.collector.list()).map((document) => document.id)).toEqual(['youtube:dQw4w9WgXcQ']);
   });

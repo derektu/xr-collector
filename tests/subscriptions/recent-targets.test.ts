@@ -1,3 +1,5 @@
+// A channel a preview resolved is remembered by source type and address until it expires, so adding
+// it right after the preview does not resolve it again.
 import { describe, expect, it } from 'vitest';
 import { RecentTargets } from '../../src/subscriptions/recent-targets.js';
 

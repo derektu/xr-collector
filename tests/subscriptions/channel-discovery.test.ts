@@ -1,3 +1,6 @@
+// Which videos a channel check picks: the newest within the time range and item limit, skipping
+// upcoming streams and never filling a known video's place with an older one, so a check never
+// collects videos older than the range the user set.
 import { describe, expect, it } from 'vitest';
 import type { SubscriptionRecord } from '../../src/core/types.js';
 import { SyntheticYouTube } from './synthetic-youtube.js';

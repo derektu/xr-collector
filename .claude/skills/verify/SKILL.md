@@ -26,7 +26,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 Web 模式只在 Mac 執行；Windows 用原生 Desktop（見「原生 Desktop」與「平台」）。
 
-前置（每個 checkout 一次，每個 worktree 都要各做一次，`node_modules` 與 `resources/bin` 不共用）：`npm ci`；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno；Windows 是 `npm run download:runtime:win`，安裝到 `resources/bin/win`；下載與建置結果放在機器共用的 runtime cache，第二個 worktree 只需從 cache 安裝）；`npx playwright install chromium`（Web 模式，只在 doctor 說缺少時）。
+前置（每個 checkout 一次，每個 worktree 都要各做一次，`node_modules` 與 `resources/bin` 不共用）：`npm ci`；`npm run download:runtime`（Meilisearch；真實資料與 Electron 另需 yt-dlp 資料夾版與 Deno；Windows 是 `npm run download:runtime:win`，安裝到 `resources/bin/win`；下載與建置結果放在機器共用的 runtime cache，第二個 worktree 只需從 cache 安裝）；`npx playwright install chromium`（Web 模式，只在 doctor 說缺少時）。缺少 Meilisearch 時，`launch` 與 `flows run` 在占用 slot、建立證據資料夾之前就失敗，並寫出 `npm run download:runtime` 的修復指令。
 
 ```sh
 node .claude/skills/verify/scripts/verify.mjs launch --issue 91
@@ -54,7 +54,7 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --evidence /tmp/
 - 頻道 A（`@verify-a`，5 支）、B（`@verify-b`，3 支）：訂閱用。
 - 頻道 D（`@verify-d`，3 支，影片 `vD000000001`…）：單支加入用。
 - feed：`<feedsOrigin>/feed.xml`（RSS 2.0，4 篇）、`/atom.xml`（Atom，3 篇）、`/blog`（以 `<link rel="alternate">` 宣告 `/feed.xml` 的網頁）。
-- 失敗注入：在流程中以 `instance.updateCatalog(c => { c.youtube.failVideo = '<id>'; })` 改 `catalog.json`，server 每次請求重讀。欄位：`youtube.failListing`（頻道 ID，列出影片失敗）、`youtube.failVideo`（影片 ID，收集失敗）、`youtube.rateLimitNext`（下一次收集回 `rate_limited`，YouTube 通道冷卻 30 秒）、`youtube.captureDelayMs`、`feeds["/path"].status`／`delayMs`。新增影片或文章同樣改 catalog。
+- 失敗注入：在流程中以 `instance.updateCatalog(c => { c.youtube.failVideo = '<id>'; })` 改 `catalog.json`，server 每次請求重讀。欄位：`youtube.failListing`（頻道 ID，列出影片失敗）、`youtube.failVideo`（影片 ID，收集失敗）、`youtube.rateLimitNext`（下一次收集回 `rate_limited`，YouTube 通道冷卻 30 秒）、`youtube.captureDelayMs`、`youtube.holdCaptures`（為 true 時收集停在進行中，改回 false 才完成）、`feeds["/path"].status`／`delayMs`。新增影片或文章同樣改 catalog。
 
 **真實資料 smoke**：`node .claude/skills/verify/examples/smoke-real.mjs [--issue smoke]` 收一支真實影片（`REAL.video`）並訂閱一個真實 feed（`REAL.feed`，GitHub Blog），經畫面操作。需要網路；YouTube 限流會顯示為失敗的工作。
 
@@ -179,7 +179,7 @@ node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動�
 - **耗時**：每支流程的 `results.json` 記 `timings`：`prepareMs`（建 Web build、啟動 server 到搜尋就緒，或啟動 Electron）、`runMs`（開頁、流程本身與寫結果）、`cleanupMs`（關頁、停 server 與釋放 slot）。結束時印出每支的耗時表與總時間，輸出的 JSON 另有 `wallMs` 與每支的 `timings`。
 - **核心旅程**：`core-journey` 一次走過訂閱、文件頁新增單支影片、來源篩選與搜尋、閱讀、列表暫停與恢復、閱讀頁刪除確認；`subscription-remove` 是移除訂閱保留文件的資料安全代表。兩者是 `core` 層，其他流程不重複斷言它們已斷言的操作。
 - **內容操作**：`workspace-content` 串接設定頁計數、訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、文件分頁／搜尋與 RSS 刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
-- **流程的形式**：export `name`、`title`、`tier`、`covers`（涵蓋的功能地圖子功能 ID）、需要時的 `overBudget`，與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
+- **流程的形式**：export `name`、`title`、`tier`、`covers`（涵蓋的功能地圖子功能 ID）、需要時的 `overBudget`，與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄，`revision.mjs` 的 `pageTurn(page)` 等頁面處理完呼叫前已到達的回應（證明晚到的回應沒有改變畫面時，之後再檢查）；`scripts/lib/drive.mjs` 的 `painted(page)` 等頁面套用目前的樣式、轉場結束後再截圖。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
 

@@ -1,3 +1,6 @@
+// The HTTP status each error code answers with, which the UI and Agents act on: the core's codes
+// come from the core, a source type's codes from the plugin that declares them, and an unknown
+// code is 500.
 import { describe, expect, it } from 'vitest';
 import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { errorStatus } from '../../src/server/app.js';

@@ -1,3 +1,6 @@
+// The version and build identity the App shows: an installed App accepts only a clean packaged
+// identity for its own platform and fails rather than guess from Git, and a development launch never
+// shows a packaged identity or claims a clean source.
 import * as fs from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBuildInfo, validateBuildInfo } from '../../src/runtime/build-info.js';

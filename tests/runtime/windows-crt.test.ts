@@ -1,3 +1,6 @@
+// The vcruntime140.dll the Windows installer ships: the repository copy matches its pin, and the
+// build installs it only when its SHA-256, file version and Microsoft signature all match, so the
+// installed App starts without a missing or substituted C runtime.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

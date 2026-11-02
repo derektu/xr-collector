@@ -1,3 +1,6 @@
+// Creating a new Vault from a location and a name: names macOS or Windows cannot use, and locations
+// that are missing, unwritable or already hold the name, are refused; an export file's date, counts
+// and folder name are read for creating a Vault from it.
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

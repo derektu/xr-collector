@@ -1,3 +1,6 @@
+// The Windows update installer: it accepts the verified downloaded bytes before handoff, is
+// unavailable off Windows or in an unpackaged App, and reports an installer error before handoff as
+// an update failure, while an error after the App has handed off does not crash it.
 import { expect, it, vi } from 'vitest';
 import type { UpdateOffer } from '../../src/core/types.js';
 import { PinnedNsisUpdater, WindowsNativeInstaller, type WindowsUpdaterAdapter } from '../../src/updates/windows-installer.js';
@@ -47,10 +50,8 @@ it('consumes a post-handoff NSIS error without claiming the old App can observe 
   const updater = new PinnedNsisUpdater({ version: '0.1.1', name: 'XR Collector', isPackaged: true,
     appUpdateConfigPath: '/tmp/app-update.yml', userDataPath: '/tmp', baseCachePath: '/tmp',
     whenReady: async () => undefined, relaunch: vi.fn(), quit: vi.fn(), onQuit: vi.fn() });
-  vi.spyOn(updater, 'install').mockImplementation(() => {
-    setTimeout(() => updater.emit('error', new Error('NSIS failed after parent exit')), 20); return true;
-  });
+  vi.spyOn(updater, 'install').mockImplementation(() => true);
   await expect(updater.installPinned()).resolves.toBeUndefined();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  expect(updater.listenerCount('error')).toBeGreaterThan(0);
+  // An emitter without an error listener throws the error.
+  expect(() => updater.emit('error', new Error('NSIS failed after parent exit'))).not.toThrow();
 });

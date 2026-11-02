@@ -1,3 +1,6 @@
+// Installing an App update hands off to the native installer only after the data service has closed.
+// A cancelled, failed or timed-out preparation leaves the App usable with a readable message, and a
+// close that fails or never settles reports the failure and never starts the installer.
 import { describe, expect, it, vi } from 'vitest';
 import { runUpdateCoordinator } from '../../src/electron/update-coordinator.js';
 import type { NativeInstaller, UpdateApplyRequest } from '../../src/updates/types.js';

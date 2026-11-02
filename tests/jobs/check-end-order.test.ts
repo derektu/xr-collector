@@ -1,3 +1,6 @@
+// A check reads as finished only after its subscription recorded the end, so a window that
+// refreshes on the finished job never shows the subscription's previous check. While the end is
+// written, a manual check joins the running one and a pause frees the source for a resume check.
 import { describe, expect, it } from 'vitest';
 import { ChangeFeed, type ChangeBatch } from '../../src/core/change-feed.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';

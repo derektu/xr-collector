@@ -1,3 +1,7 @@
+// Which routes a Vault operation such as an import blocks: each route declares its Vault access,
+// and the UI and an authorized Agent meet the same lock. During an import, documents, search and
+// rebuild answer 409 vault_busy while jobs, activity, Vault status and device settings stay
+// available.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../src/server/app.js';

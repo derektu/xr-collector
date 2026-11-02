@@ -56,18 +56,9 @@ export function start(command: string, args: string[], options: SpawnOptions = {
   return child;
 }
 
-/** Polls `check` every 20 ms until it holds; fails after `timeout` ms. */
-export async function until(check: () => boolean, timeout = 5_000) {
-  const deadline = Date.now() + timeout;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error('condition not reached');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
-/** Command lines of every process that mentions `text`, as the process table reports them. */
-export const mentioning = (text: string) => (processTable() as { command: string }[])
-  .map((entry) => entry.command).filter((command) => command.includes(text));
+/** Command lines of every process that mentions `text`, in `table` or as the process table reports them now. */
+export const mentioning = (text: string, table: { command: string }[] = processTable()) =>
+  table.map((entry) => entry.command).filter((command) => command.includes(text));
 
 /** The PID of a process that has already exited. */
 export async function deadPid() {

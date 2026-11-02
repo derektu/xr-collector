@@ -88,7 +88,7 @@ export async function run({ instance, record, waitFor, sleep }) {
   try {
     feed.add(3);
     await instance.api('/api/subscriptions', { method: 'POST', body: JSON.stringify({ url: feed.url }) });
-    await waitFor(async () => await idle() && await documentsTotal() === 3, 'subscribed feed collected', { timeout: 60_000 });
+    await waitFor(async () => await idle() && await documentsTotal() === 3, 'subscribed feed collected');
     const firstId = await instanceId();
 
     await scenario('TRAY-D1', '閒置時的選單', async ({ expect, note, shot }) => {
@@ -104,14 +104,14 @@ export async function run({ instance, record, waitFor, sleep }) {
       expect(labels.indexOf(`版本 ${version}`) === labels.indexOf('檢查 App 更新') - 1, '版本行緊接在「檢查 App 更新」上方', labels);
       expect(autoCheck(current) === true, '自動檢查已勾選', autoCheck(current));
       await waitFor(async () => /^下次 /u.test((await instance.window.getByTestId('subscription-status').first().innerText()).trim()),
-        'source row shows its scheduled state', { timeout: 10_000 });
+        'source row shows its scheduled state');
       await shot('window');
     });
 
     await scenario('TRAY-D2', '關閉視窗：隱藏、程序與 Agent API 照常', async ({ expect, note }) => {
       await instance.window.evaluate(() => { window.__trayFlowMarker = 'before-close'; });
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden', { timeout: 10_000 });
+      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
       const state = await windowState(instance.app);
       note('window', state);
       expect(state.exists && !state.visible, '視窗隱藏但沒有銷毀', state);
@@ -142,12 +142,12 @@ export async function run({ instance, record, waitFor, sleep }) {
 
     await scenario('TRAY-D4', '從選單關閉與開啟自動檢查', async ({ expect, note }) => {
       await clickTray(instance.app, 'toggle_auto_check');
-      await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === false, 'automatic checks off', { timeout: 10_000 });
+      await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === false, 'automatic checks off');
       const off = await menu();
       note('off', off);
       expect(off.icon === 'auto_check_off' && statusLines(off).includes('自動檢查已關閉') && autoCheck(off) === false, '關閉後圖示、第二行與勾選都反映自動檢查已關閉', off);
       await clickTray(instance.app, 'toggle_auto_check');
-      await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === true, 'automatic checks on', { timeout: 10_000 });
+      await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === true, 'automatic checks on');
       const on = await menu();
       expect(on.icon === 'idle' && autoCheck(on) === true && /^下次檢查/u.test(statusLines(on)[1] ?? ''), '再開啟後恢復閒置與下次檢查', on);
     });
@@ -161,10 +161,10 @@ export async function run({ instance, record, waitFor, sleep }) {
       note('idleReads', { before: before.reads, after: after.reads });
       expect(Number.isInteger(before.reads) && after.reads === before.reads, `閒置 ${IDLE_MS / 1000} 秒，選單沒有讀取狀態`, { before: before.reads, after: after.reads });
       await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: false }) });
-      await waitFor(async () => (await shown()).menu.icon === 'auto_check_off', 'the drawn menu shows automatic checks off', { timeout: 5000 });
+      await waitFor(async () => (await shown()).menu.icon === 'auto_check_off', 'the drawn menu shows automatic checks off');
       expect(autoCheck((await shown()).menu) === false, '經 API 關閉自動檢查後，畫出的選單自己更新', (await shown()).menu.icon);
       await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: true }) });
-      await waitFor(async () => (await shown()).menu.icon === 'idle', 'the drawn menu shows automatic checks on', { timeout: 5000 });
+      await waitFor(async () => (await shown()).menu.icon === 'idle', 'the drawn menu shows automatic checks on');
       const total = await documentsTotal();
       feed.add(1);
       feed.delay = 3000;
@@ -175,13 +175,13 @@ export async function run({ instance, record, waitFor, sleep }) {
           const icon = (await shown()).menu.icon;
           if (icons.at(-1) !== icon) icons.push(icon);
           return icons.includes('collecting') && icon === 'idle';
-        }, 'the drawn menu shows the check start and end', { timeout: 30_000, interval: 100 });
+        }, 'the drawn menu shows the check start and end', { interval: 100 });
       } finally {
         feed.delay = 0;
       }
       note('icons', icons);
       expect(icons.includes('collecting') && icons.at(-1) === 'idle', '經 API 開始的檢查，畫出的選單顯示收集中再回到閒置', icons);
-      await waitFor(async () => await documentsTotal() === total + 1 && await idle(), 'the check collected one document', { timeout: 30_000 });
+      await waitFor(async () => await documentsTotal() === total + 1 && await idle(), 'the check collected one document');
     });
 
     await scenario('TRAY-D5', '從選單開啟工作、記錄與主視窗', async ({ expect, note, shot }) => {
@@ -190,13 +190,13 @@ export async function run({ instance, record, waitFor, sleep }) {
         await waitFor(async () => {
           const state = await windowState(instance.app);
           return state.visible && new URL(state.url).pathname === pathname;
-        }, `${action} shows ${pathname}`, { timeout: 10_000 });
+        }, `${action} shows ${pathname}`);
         const state = await windowState(instance.app);
         note(action, state);
         return state;
       };
       const jobs = await opened('jobs', '/jobs');
-      await instance.window.getByTestId('page-jobs').waitFor({ timeout: 10_000 });
+      await instance.window.getByTestId('page-jobs').waitFor();
       expect(jobs.visible, '「工作」顯示視窗並在 /jobs', jobs);
       await shot('jobs');
       await closeWindow(instance.app);
@@ -204,9 +204,9 @@ export async function run({ instance, record, waitFor, sleep }) {
       expect(activity.visible, '「記錄」顯示視窗並在 /activity', activity);
       await shot('activity');
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden', { timeout: 10_000 });
+      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
       await clickTray(instance.app, 'open');
-      await waitFor(async () => (await windowState(instance.app)).visible, 'open shows the window', { timeout: 10_000 });
+      await waitFor(async () => (await windowState(instance.app)).visible, 'open shows the window');
       const marker = await instance.window.evaluate(() => window.__trayFlowMarker ?? null);
       expect(marker === 'before-close', '重新開啟沒有重新載入頁面', marker);
       expect(await instanceId() === firstId, '同一個 runtime（instanceId 不變）', await instanceId());
@@ -216,12 +216,12 @@ export async function run({ instance, record, waitFor, sleep }) {
 
     await scenario('TRAY-D6', '第一次關閉提示只出現一次', async ({ expect, note }) => {
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden', { timeout: 10_000 });
+      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
       const again = await notifications(instance.app);
       expect(again.length === (WINDOWS ? 1 : 0), '再關一次不再發通知', again);
       await instance.relaunch();
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden after relaunch', { timeout: 10_000 });
+      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden after relaunch');
       const afterRestart = await notifications(instance.app);
       note('afterRestart', afterRestart);
       expect(afterRestart.length === 0, '重新啟動後關閉也不發通知', afterRestart);
@@ -235,7 +235,7 @@ export async function run({ instance, record, waitFor, sleep }) {
       const code = await instance.launchAgain();
       note('secondExit', code);
       expect(code === 0, '第二次啟動交給執行中的 App 後結束', code);
-      await waitFor(async () => (await windowState(instance.app)).visible, 'the running window shows', { timeout: 10_000 });
+      await waitFor(async () => (await windowState(instance.app)).visible, 'the running window shows');
       expect((await windowState(instance.app)).visible, '原本的視窗顯示出來', await windowState(instance.app));
       expect(await instanceId() === beforeSecondLaunch, '手動第二次啟動不建立第二個 runtime', await instanceId());
     });
@@ -245,12 +245,14 @@ export async function run({ instance, record, waitFor, sleep }) {
       feed.add(2);
       feed.delay = 8000;
       await clickTray(instance.app, 'check_now');
-      await waitFor(async () => (await menu()).icon === 'collecting', 'a check runs', { timeout: 10_000 });
+      await waitFor(async () => (await menu()).icon === 'collecting', 'a check runs');
       note('beforeQuit', await menu());
       await clickTray(instance.app, 'quit');
       await instance.exited();
-      await sleep(1000);
-      const search = processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(instance.runDir));
+      const searchProcesses = () => processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(instance.runDir));
+      // The app stops Meilisearch before it exits; the bound only lets the process table catch up.
+      await waitFor(() => searchProcesses().length === 0, 'Meilisearch ends with the app', { timeout: 3_000 }).catch(() => undefined);
+      const search = searchProcesses();
       expect(search.length === 0, '程序結束，Meilisearch 也結束', search.map((entry) => entry.pid));
       feed.delay = 0;
       await instance.relaunch();

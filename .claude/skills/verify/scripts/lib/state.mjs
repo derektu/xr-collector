@@ -58,13 +58,15 @@ async function allDocuments(read) {
 /**
  * Reads the state of the run in `run` (its directory, or an instance): { runDir, takenAt, running,
  * api, vault, profile, index }. See the skill's "State" section for each source's shape.
+ * `processes` are the run's live processes when the caller already has them; otherwise they are
+ * read from the process table.
  */
-export async function readState(run) {
+export async function readState(run, { processes } = {}) {
   const runDir = path.resolve(typeof run === 'string' ? run : run.runDir);
   const record = readRecord(runDir);
   if (!record) throw new Error(`No run.json in ${runDir}`);
   if (record.unreadable) throw new Error(`${runDir}/run.json cannot be read`);
-  const processes = runProcesses(record);
+  processes ??= runProcesses(record);
   const profile = record.profile ?? path.join(runDir, 'profile');
   return {
     runDir, takenAt: new Date().toISOString(), running: processes.length > 0,

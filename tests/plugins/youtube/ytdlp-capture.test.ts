@@ -1,3 +1,7 @@
+// Capturing a video's subtitles through yt-dlp: reading json3 subtitles, choosing by the track
+// yt-dlp actually downloads so a translation is never saved as the spoken text, passing the request
+// gate, and reading yt-dlp errors as an unavailable video, a YouTube rate limit or a network
+// failure.
 import { readFile, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../src/core/types.js';

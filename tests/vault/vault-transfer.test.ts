@@ -1,3 +1,6 @@
+// Moving to another machine through an export file: the new Vault serves documents, schedule and
+// subscriptions after restart, invalid exports leave the Vault unchanged, an export waits for the
+// running step, and deletion records stay in force. One case runs the real search engine.
 import { existsSync } from 'node:fs';
 import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -16,6 +19,7 @@ import type { SavedDocument } from '../../src/core/types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from './exchange-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 afterEach(cleanUp);
 
@@ -84,12 +88,12 @@ describe('workspace transfer through HTTP', () => {
     } } });
     const first = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
     const second = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=abcdefghijk');
-    await expect.poll(() => started.length).toBe(1);
+    await eventually(() => expect(started.length).toBe(1));
     const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
     try {
       // The export takes the Vault at once and waits for the capture already running.
       const pending = workspace.exportTo();
-      await expect.poll(() => workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' });
+      await eventually(() => expect(workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' }));
       expect((await app.inject({ method: 'POST', url: '/api/items', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
       await expect(workspace.previewImport(await fileOf(b.root, 'empty.zip', await packageOf([])))).rejects.toMatchObject({ code: 'vault_busy' });
       release();
@@ -130,16 +134,16 @@ it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('builds re
   const real = { searchBinary: path.resolve('resources/bin/mac/meilisearch'), createSearch: undefined };
   const workspace = await open(b, real, false);
   try {
-    await expect.poll(() => workspace.search.status().state, { timeout: 10_000 }).toBe('ready');
-    await expect.poll(async () => (await workspace.search.search({ query: '森林觀測' })).hits[0]?.id, { timeout: 10_000 }).toBe(`youtube:${capture.videoId}`);
+    await eventually(() => expect(workspace.search.status().state).toBe('ready'));
+    await eventually(async () => expect(await (await workspace.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`));
     expect((await workspace.schedule.getSchedule()).enabled).toBe(true);
   } finally { await workspace.close(); }
   const restarted = await open(b, real, false);
   try {
-    await expect.poll(() => restarted.search.status().state, { timeout: 10_000 }).toBe('ready');
+    await eventually(() => expect(restarted.search.status().state).toBe('ready'));
     expect((await restarted.search.search({ query: '森林觀測' })).hits[0]?.id).toBe(`youtube:${capture.videoId}`);
   } finally { await restarted.close(); }
-}, 60_000);
+});
 
 it('waits for a running channel discovery before exporting', async () => {
   const b = await machine('B'); await seed(b.vault);
@@ -151,7 +155,7 @@ it('waits for a running channel discovery before exporting', async () => {
   } });
   await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual' });
   const exported = workspace.exportTo();
-  await expect.poll(() => workspace.status().state).toBe('waiting');
+  await eventually(() => expect(workspace.status().state).toBe('waiting'));
   release();
   await expect(exported).resolves.toMatchObject({ state: 'completed' });
 });
@@ -278,7 +282,7 @@ it('refuses a document deletion while an import holds the Vault (A7)', async () 
     const preview = await workspace.previewImport(await fileOf(a.exports, 'a.zip', await packageBytes(a.vault)));
     workspace.applyImport(preview.id, 'merge', {});
     const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
-    await expect.poll(async () => (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409);
+    await eventually(async () => expect(await (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409));
     release(); await workspace.operationFinished();
     expect(workspace.status().state).toBe('completed');
   } finally { await app.close(); }

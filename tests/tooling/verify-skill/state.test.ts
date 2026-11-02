@@ -1,20 +1,27 @@
+// Guards the developer, not the user.
 // What `state` reads from a run's folders: the Vault's documents with frontmatter and content hash,
 // its other files by format, the profile's records without Meilisearch's own files, and nothing
 // written while reading. A run with no server reports `api` and `index` as unavailable. The
 // Meilisearch master key is read from a real process's environment on macOS and Linux. The API of
 // a stopped run is never read, even when another server answers on its port; document pages stop
 // when nextOffset does not move forward; a folder that cannot be listed does not stop the reading.
+// Cases about the folders read a stopped run without asking the process table, which takes seconds
+// on Windows; the cases about a stopped run's API and index read the real process table.
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiState, masterKey, readState } from '../../../.claude/skills/verify/scripts/lib/state.mjs';
-import { cleanUp, start, temp, until } from './support.js';
+import { cleanUp, start, temp } from './support.js';
+import { eventually } from '../../support/wait.js';
 
 const VERIFY = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/verify.mjs');
 
 afterEach(cleanUp);
+
+/** The state of a run known to have no live process. */
+const stoppedState = (runDir: string) => readState(runDir, { processes: [] });
 
 const write = (file: string, text: string) => {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -55,7 +62,7 @@ describe('readState', () => {
   it('reads the Vault and the profile by file format', async () => {
     const { runDir, vault, profile } = stoppedRun();
 
-    const state = await readState(runDir);
+    const state = await stoppedState(runDir);
 
     expect(state.running).toBe(false);
     expect(state.vault.path).toBe(vault);
@@ -78,11 +85,11 @@ describe('readState', () => {
 
   it('hashes only the text after the frontmatter', async () => {
     const { runDir, vault } = stoppedRun();
-    const before = (await readState(runDir)).vault.documents[0].contentHash;
+    const before = (await stoppedState(runDir)).vault.documents[0].contentHash;
     write(path.join(vault, 'documents', 'kind', 'one.md'), '---\ntitle: 改過的標題\n---\n正文一\n');
-    const sameBody = (await readState(runDir)).vault.documents[0].contentHash;
+    const sameBody = (await stoppedState(runDir)).vault.documents[0].contentHash;
     write(path.join(vault, 'documents', 'kind', 'one.md'), '---\ntitle: 改過的標題\n---\n正文二\n');
-    const otherBody = (await readState(runDir)).vault.documents[0].contentHash;
+    const otherBody = (await stoppedState(runDir)).vault.documents[0].contentHash;
 
     expect(sameBody).toBe(before);
     expect(otherBody).not.toBe(before);
@@ -91,7 +98,7 @@ describe('readState', () => {
   it('writes nothing', async () => {
     const { runDir } = stoppedRun();
     const before = snapshot(runDir);
-    await readState(runDir);
+    await stoppedState(runDir);
     expect(snapshot(runDir)).toEqual(before);
   });
 
@@ -104,7 +111,7 @@ describe('readState', () => {
       port: { mode: 'fixed', port: 65431 },
     }));
 
-    const state = await readState(runDir);
+    const state = await stoppedState(runDir);
     expect(state.profile.files['agent-settings.json']).toEqual({
       schemaVersion: 1,
       token: { redacted: true, sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) },
@@ -148,7 +155,7 @@ describe('readState', () => {
     const locked = path.join(vault, 'documents', 'kind');
     chmodSync(locked, 0o000);
     try {
-      const state = await readState(runDir);
+      const state = await stoppedState(runDir);
       expect(state.vault.files['documents/kind/']).toEqual({ error: expect.stringContaining('EACCES') });
       expect(state.vault.documents).toEqual([]);
       expect(Object.keys(state.vault.files)).toContain('xr-collector-vault.json');
@@ -160,7 +167,7 @@ describe('readState', () => {
   it('reads the run folder Vault when the profile selects none', async () => {
     const { runDir, vault, profile } = stoppedRun();
     writeFileSync(path.join(profile, 'vault-selection.json'), '{}');
-    expect((await readState(runDir)).vault.path).toBe(vault);
+    expect((await stoppedState(runDir)).vault.path).toBe(vault);
   });
 });
 
@@ -195,7 +202,7 @@ describe('apiState documents', () => {
 describe.runIf(process.platform === 'darwin' || process.platform === 'linux')('masterKey', () => {
   it('reads MEILI_MASTER_KEY from a running process', async () => {
     const child = start(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { env: { ...process.env, MEILI_MASTER_KEY: 'k3y-from-environment' } });
-    await until(() => masterKey(child.pid!) !== null);
+    await eventually(() => expect(masterKey(child.pid!)).not.toBeNull());
     expect(masterKey(child.pid!)).toBe('k3y-from-environment');
   });
 

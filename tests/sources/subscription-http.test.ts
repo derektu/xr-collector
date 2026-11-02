@@ -1,3 +1,7 @@
+// Subscriptions over HTTP: a request shows in the list while its channel resolves, a removed
+// channel stays marked in the document filter, and removing a subscription with its documents
+// deletes them as a user deletion does, including a video still capturing, so they never come back.
+// The UI and Agent listeners answer the same fields.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +18,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -57,8 +62,8 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   };
   const events = async () => (await store.activity.query({ limit: 200 }, { vaultPath: root })).events;
   /** Resolves once a removal has written the deletion record of a video that is still capturing. */
-  const deletionRecorded = (videoId: string) => vi.waitFor(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
-  const close = async () => { await vi.waitFor(() => expect(jobs.isBusy()).toBe(false)); await ui.close(); await agent.close(); };
+  const deletionRecorded = (videoId: string) => eventually(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
+  const close = async () => { await eventually(() => expect(jobs.isBusy()).toBe(false)); await ui.close(); await agent.close(); };
   return { root, clock, source, collector, jobs, channels, ui, agent, send, subscribe, events, removedFromSearch, deletionRecorded, close };
 }
 
@@ -136,7 +141,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
     w.source.holdCaptures = true;
     const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await vi.waitFor(() => expect(w.source.running()).toEqual([late]));
+    await w.source.holds.reach([late]);
 
     let answered = false;
     const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`).finally(() => { answered = true; });
@@ -161,7 +166,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
 
     // Later checks leave the channel alone, and its deleted videos stay deleted.
     expect(await w.channels.startRun({ trigger: 'scheduled' })).toHaveLength(1);
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect((await w.collector.list()).every((document) => document.publisher.id === other)).toBe(true);
     await w.close();
   });
@@ -175,7 +180,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
     w.source.holdCaptures = true;
     await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] });
-    await vi.waitFor(() => expect(w.source.running()).toEqual([late]));
+    await w.source.holds.reach([late]);
     await w.channels.setEnabled(leaving, false);
     expect((await w.send('GET', '/api/subscriptions?type=youtube')).body.subscriptions[0]).toMatchObject({ capturing: true, checkStatus: { state: 'paused' } });
 
@@ -183,7 +188,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     await w.deletionRecorded(late!);
     w.source.release(late!);
     expect((await removal).body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
-    await vi.waitFor(() => expect(w.jobs.isBusy()).toBe(false));
+    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
     expect(await w.collector.list()).toEqual([]);
     const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceId: string }> };
     expect(ledger.deleted.map((record) => record.sourceId)).toContain(late);
@@ -198,7 +203,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [single] = w.source.publish(leaving, 's', w.clock.now, [0]);
     w.source.holdCaptures = true;
     const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await vi.waitFor(() => expect(w.source.running()).toEqual([single]));
+    await w.source.holds.reach([single]);
 
     // Whether the capture ends before or while the removal waits, its document is saved and then deleted.
     const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
@@ -218,9 +223,9 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late, single] = w.source.publish(leaving, 'n', w.clock.now, [0, 0]);
     w.source.holdCaptures = true;
     const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await vi.waitFor(() => expect(w.source.running()).toContain(late));
+    await w.source.holds.started(late);
     const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await vi.waitFor(() => expect(w.source.running()).toContain(single));
+    await w.source.holds.started(single);
 
     // The removal answers after its bounded wait while both captures still run.
     const removed = await w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
@@ -229,7 +234,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     w.source.release(single!);
     await w.jobs.whenSettled(check.job.id);
     await w.jobs.whenSettled(request.job.id);
-    await vi.waitFor(async () => expect(await w.collector.list()).toEqual([]));
+    await eventually(async () => expect(await w.collector.list()).toEqual([]));
     const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceId: string }> };
     expect(ledger.deleted.map((record) => record.sourceId)).toEqual(expect.arrayContaining([late, single]));
     await w.close();

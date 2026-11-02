@@ -1,3 +1,7 @@
+// The packaging scripts' directory lock: one run at a time owns a checkout or keychain, so two runs
+// never mix into one installer; a stale lock is reclaimed only once its owner and that owner's
+// child processes are gone, and an aborted run ends its whole process tree. POSIX-only cases skip
+// Windows.
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,6 +9,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { withOwnedDirectoryLock } from '../../scripts/owned-directory-lock.mjs';
 import { runOwnedProcess, terminateOwnedProcessTree, UnsafeProcessTreeError } from '../../scripts/owned-process.mjs';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -51,9 +56,7 @@ it('allows only one of two synchronized stale-owner reapers to acquire the repla
   ]);
   expect(loser).toBeInstanceOf(Error);
   expect(String(loser)).toMatch(/busy/u);
-  const enteredDeadline = Date.now() + 1_000;
-  while (entered.length === 0 && Date.now() < enteredDeadline) await new Promise((resolve) => setTimeout(resolve, 5));
-  expect(entered).toHaveLength(1);
+  await eventually(() => expect(entered).toHaveLength(1));
   releaseWork();
   const results = await Promise.allSettled([first, second]);
   expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
@@ -214,10 +217,7 @@ it.skipIf(process.platform === 'win32')('kills a detached POSIX child and its gr
       finished: async () => { tracking.push('finished'); },
     },
   });
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try { await stat(state); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
-  }
+  await eventually(() => stat(state));
   const pids = JSON.parse(await readFile(state, 'utf8')) as { parent: number; child: number };
   controller.abort(new Error('test abort'));
   await expect(running).rejects.toThrow(/test abort/u);

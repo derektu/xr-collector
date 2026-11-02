@@ -1,3 +1,6 @@
+// How subscriptions read in the window: the summary of what subscribing or resuming will collect,
+// the choices and result of removal with or without documents, and the text and color of every
+// subscription status.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Subscription } from '../../src/core/types.js';
 import { asksAboutDocuments, backfillPhrase, removeChoices, removedMessage, resumeSummary, subscribeSummary, subscriptionStatusText, subscriptionStatusTone } from '../../src/web/subscription-presentation.js';

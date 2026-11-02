@@ -1,3 +1,5 @@
+// A launch at login opens no window while a later Dock activation does, and a show request while the
+// first window is loading joins it instead of opening a second window.
 import { describe, expect, it, vi } from 'vitest';
 import { shouldShowForActivation } from '../../src/electron/login-startup.js';
 import { WindowCreationGate } from '../../src/electron/window-creation.js';

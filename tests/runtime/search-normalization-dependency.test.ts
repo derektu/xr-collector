@@ -1,3 +1,5 @@
+// The OpenCC conversion that search normalization uses ships in the installer: the pinned
+// pure-JavaScript opencc-js 1.4.2 is installed and production node_modules go into app.asar.
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';

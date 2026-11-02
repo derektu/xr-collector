@@ -1,3 +1,7 @@
+// The local runtime behind the UI and the Agent: Not Ready status without a Vault, one shared
+// workspace whose accepted work outlives a disconnected client, queued and interrupted work resumed
+// after a restart, the update exclusion, and Vault create, open, import and switch that keep
+// device-only settings out of the Vault and never adopt or leave behind a rejected folder.
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,6 +21,7 @@ import { readEventFiles } from '../activity/event-files.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { eventually } from '../support/wait.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -205,7 +210,7 @@ describe('CollectorRuntime', () => {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
     });
     expect(changed.status).toBe(200);
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const activity = await (await fetch(`${runtime.server.url}/api/activity?limit=20`)).json() as { events: Array<{ eventType: string; vaultPath: string | null; jobId: string | null }> };
       const deviceEvents = activity.events.filter((event) => event.eventType.startsWith('device.login_startup'));
       expect(deviceEvents.map((event) => event.eventType)).toEqual(expect.arrayContaining([
@@ -243,7 +248,7 @@ describe('CollectorRuntime', () => {
     };
     let jobId: string;
     try {
-      await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+      await eventually(() => expect(capture).toHaveBeenCalledOnce());
       await clientExited;
       // The UI submission of the same video joins the Agent's job instead of capturing again.
       const ui = await fetch(`${runtime.server.url}/api/items`, {
@@ -257,7 +262,7 @@ describe('CollectorRuntime', () => {
     } finally {
       release(captured);
     }
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const response = await fetch(`${connection.url}/api/jobs/${jobId}`, { headers: { authorization: `Bearer ${connection.token}` } });
       expect((await response.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'created', saved: true } });
     });
@@ -289,7 +294,7 @@ describe('CollectorRuntime', () => {
     })).json()).job.id as string;
     const ids = [await submit('restart0001'), await submit('restart0002'), await submit('restart0003')];
     // One capture runs at a time; the other two wait in the queue.
-    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(capture).toHaveBeenCalledTimes(1));
 
     const closing = first.close();
     for (const release of releases.splice(0)) release();
@@ -298,7 +303,7 @@ describe('CollectorRuntime', () => {
 
     const second = await CollectorRuntime.start(setup.value);
     cleanups.push(() => second.close());
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       for (const release of releases.splice(0)) release();
       expect(capture).toHaveBeenCalledTimes(3);
       const page = await (await fetch(`${second.server.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
@@ -310,7 +315,7 @@ describe('CollectorRuntime', () => {
     expect(resumed).toMatchObject({ result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
     expect(resumed).not.toHaveProperty('checkpoint');
     expect((await (await fetch(`${second.server.url}/api/documents`)).json()).documents).toHaveLength(3);
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const events = (await readEventFiles(path.join(setup.value.profilePath, 'jobs')))
         .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
       expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
@@ -346,7 +351,7 @@ describe('CollectorRuntime', () => {
     const setup = await options({ capture });
     const runtime = await CollectorRuntime.start({ ...setup.value, profilePath: profile, explicitVaultPath: vaultPath });
     cleanups.push(() => runtime.close());
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const job = (await (await fetch(`${runtime.server.url}/api/jobs/${heldJob}`)).json()).job;
       expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 1 } });
     });
@@ -392,7 +397,7 @@ describe('CollectorRuntime', () => {
     });
     const addAndWait = async (url: string) => {
       const job = (await (await post('/api/subscriptions', { url })).json()).job.id as string;
-      await vi.waitFor(async () => {
+      await eventually(async () => {
         expect((await (await fetch(`${runtime.server.url}/api/jobs/${job}`)).json()).job.state).toBe('completed');
       });
     };
@@ -425,7 +430,7 @@ describe('CollectorRuntime', () => {
     const preview = (await (await post('/api/subscription-previews', { url: '@runtime' })).json()).preview;
     // A request nobody previewed resolves in the single discovery slot, so the previewed one waits in the queue.
     const blocking = (await (await post('/api/subscriptions', { url: 'https://www.youtube.com/@other' })).json()).job.id as string;
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       expect((await (await fetch(`${runtime.server.url}/api/jobs/${blocking}`)).json()).job.state).toBe('running');
     });
     const accepted = await post('/api/subscriptions', { url: preview.target.url });
@@ -436,13 +441,13 @@ describe('CollectorRuntime', () => {
     expect(overview.running).toEqual([expect.objectContaining({ jobId: blocking, title: null })]);
     expect(overview.queued).toEqual([expect.objectContaining({ jobId: job.id, role: 'add', title: 'Runtime' })]);
     // The stored event names the channel itself, not only once the log reads it next to the job.
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const events = await readEventFiles(path.join(setup.value.profilePath, 'jobs'));
       expect(events.find((event) => event.jobId === job.id && event.eventType === 'job.accepted')).toMatchObject({ sourceTitle: 'Runtime' });
     });
 
     release();
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       expect((await (await fetch(`${runtime.server.url}/api/jobs/${job.id}`)).json()).job).toMatchObject({
         state: 'completed', result: { subscriptionId: 'UC-runtime' },
       });
@@ -468,12 +473,12 @@ describe('CollectorRuntime', () => {
     });
     expect(added.status).toBe(202);
     const addJob = (await added.json()).job.id as string;
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { subscriptionId: 'UC-runtime' } });
     });
     // Adding a channel starts its first collection job. Wait for that check to record its end and
     // leave the job board before comparing complete UI and Agent snapshots.
-    const uiChannels = await vi.waitFor(async () => {
+    const uiChannels = await eventually(async () => {
       const channels = (await (await fetch(`${runtime.server.url}/api/subscriptions?type=youtube`)).json()).subscriptions;
       expect(channels).toMatchObject([{
         id: 'UC-runtime', enabled: true, status: 'tracking', documentCount: 0, lastCheckedAt: expect.any(String),
@@ -513,7 +518,7 @@ describe('CollectorRuntime', () => {
     });
     expect(resumed.status).toBe(200);
     const runId = (await resumed.json()).submission.job.id as string;
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       const current = await agent(`/api/jobs/${encodeURIComponent(runId)}`);
       expect((await current.json()).job).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
     });
@@ -560,7 +565,7 @@ describe('CollectorRuntime', () => {
       client.once('error', reject);
     });
     try {
-      await vi.waitFor(() => expect(rebuild).toHaveBeenCalledOnce());
+      await eventually(() => expect(rebuild).toHaveBeenCalledOnce());
       await clientExited;
       const reset = await fetch(`${runtime.server.url}/api/device/agent/key/reset`, { method: 'POST' });
       expect(reset.status).toBe(200);
@@ -570,7 +575,10 @@ describe('CollectorRuntime', () => {
       expect((await fetch(`${next.url}/api/health`, { headers: { authorization: `Bearer ${next.token}` } })).status).toBe(200);
       let closed = false;
       const closing = runtime.close().then(() => { closed = true; });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // The Agent listener stops accepting at once and then waits for the accepted rebuild
+      // (tests/server/server-close.test.ts); the runtime stops only after its listeners.
+      await eventually(async () => { await expect(fetch(`${next.url}/api/health`)).rejects.toThrow(); });
+      await new Promise((resolve) => setImmediate(resolve));
       expect(closed).toBe(false);
       release();
       await closing;
@@ -662,7 +670,7 @@ describe('CollectorRuntime Vault setup', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: other }),
     });
     expect(opened.status).toBe(202);
-    await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
+    await eventually(async () => expect(await (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed'));
     expect(await loginStatus()).toMatchObject({ enabled: true });
     expect(await agentStatus()).toMatchObject({ configured: { mode: 'fixed', port: 65431 }, restartRequired: true });
     expect((await connectionOf(runtime)).token).toBe(originalAgent.token);
@@ -677,12 +685,12 @@ describe('CollectorRuntime Vault setup', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: comparison.id, mode: 'replace' }),
     });
     expect(applied.status).toBe(202);
-    await expect.poll(async () => (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed');
+    await eventually(async () => expect(await (await (await fetch(`${runtime.server.url}/api/vault/status`)).json()).state).toBe('completed'));
     expect(await loginStatus()).toMatchObject({ enabled: true });
     expect(await agentStatus()).toMatchObject({ configured: { mode: 'fixed', port: 65431 }, restartRequired: true });
     expect((await connectionOf(runtime)).token).toBe(originalAgent.token);
     expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
-  }, 20_000);
+  });
 
   it('lets an Agent create a Vault while Not Ready, serves the UI immediately and reopens it after restart', async () => {
     const setup = await selected();
@@ -721,7 +729,7 @@ describe('CollectorRuntime Vault setup', () => {
     });
     expect(added.status).toBe(202);
     const addJob = (await added.json()).job.id as string;
-    await vi.waitFor(async () => {
+    await eventually(async () => {
       expect((await (await fetch(`${runtime.server.url}/api/jobs/${addJob}`)).json()).job.state).toBe('completed');
     });
     await runtime.close();
@@ -960,9 +968,9 @@ describe('CollectorRuntime Vault setup', () => {
     first.changes.subscribe((batch) => changes.push(...batch.changes));
     const opened = await agent('/api/vault/open', { path: target });
     expect(opened.status).toBe(202);
-    await expect.poll(async () => (await (await agent('/api/vault/status')).json()).state, { timeout: 10_000 }).toBe('completed');
+    await eventually(async () => expect(await (await (await agent('/api/vault/status')).json()).state).toBe('completed'));
     // Readers follow the switch's progress, then read everything again from the other Vault.
-    await expect.poll(() => changes.filter((change) => change.kind === 'vault').map((change) => 'scope' in change && change.scope).at(-1)).toBe('contents');
+    await eventually(() => expect(changes.filter((change) => change.kind === 'vault').map((change) => 'scope' in change && change.scope).at(-1)).toBe('contents'));
     expect(changes).toContainEqual({ kind: 'vault', scope: 'transfer' });
     expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));
     expect((await connectionOf(first)).token).toBe(firstConnection.token);
@@ -978,7 +986,7 @@ describe('CollectorRuntime Vault setup', () => {
     expect(secondConnection).toEqual({ url: `http://127.0.0.1:${fixedPort}`, token: firstConnection.token });
     expect(await readFile(setup.value.agentSettingsFile, 'utf8')).toBe(savedAgentSettings);
     expect(await readdir(setup.vaultPath)).toContain('xr-collector-vault.json');
-  }, 20_000);
+  });
 
   it('refuses to open another Vault when the app was started with a fixed one (A-10)', async () => {
     const setup = await options({ capture: vi.fn() });

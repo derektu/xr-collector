@@ -2,6 +2,7 @@
 // UI and Agent listeners refuse mutation instead of silently registering a development executable.
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pageTurn } from './lib/revision.mjs';
 
 export const name = 'login-startup';
 export const title = '登入自啟在開發版不可設定';
@@ -30,7 +31,7 @@ export async function run({ instance, page, record, waitFor }) {
     const visual = await visualSwitch();
     const moved = visual.transform !== 'none' && !/matrix\(1, 0, 0, 1, 0, 0\)/u.test(visual.transform);
     return visual.checked === checked && moved === checked ? visual : null;
-  }, `toggle visually ${checked ? 'on' : 'off'}`, { timeout: 3_000 });
+  }, `toggle visually ${checked ? 'on' : 'off'}`);
   let offBackground = null;
 
   await record.scenario('W1', 'Web／開發版只說明，不允許註冊登入自啟', async ({ expect, note, shot }) => {
@@ -102,8 +103,8 @@ export async function run({ instance, page, record, waitFor }) {
     await waitFor(async () => {
       const activity = await instance.api('/api/activity?eventType=device.login_startup_failed&limit=10');
       return activity.events.some((event) => event.errorCode === 'login_startup_requires_approval');
-    }, 'approval refusal recorded', { timeout: 10_000 });
-    await waitFor(async () => (await statusText()).includes('允許 XR Collector'), 'approval message restored after request', { timeout: 10_000 });
+    }, 'approval refusal recorded');
+    await waitFor(async () => (await statusText()).includes('允許 XR Collector'), 'approval message restored after request');
     expect(!(await switchInput().isChecked()) && (await statusText()).includes('允許 XR Collector'), '實際點開仍待核准，不把開關顯示成成功',
       { id: 'w1.approval-click', expected: { checked: false, message: '允許 XR Collector' }, actual: { checked: await switchInput().isChecked(), message: await statusText() } });
 
@@ -162,7 +163,7 @@ export async function run({ instance, page, record, waitFor }) {
       await settledToggle(true);
       releaseSlow();
       await slowFinished;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await pageTurn(page);
       const actual = { checked: await switchInput().isChecked(), statusMessages: await page.getByTestId('login-startup-status').count() };
       expect(actual.checked && actual.statusMessages === 0, '較慢的舊 GET 回覆不會蓋掉較新的 PUT read-back', {
         id: 'w1.focus-update-race',

@@ -1,3 +1,7 @@
+// Opening or creating another Vault while one is active: jobs continue only in the Vault that
+// accepted them, never in a copy or an import of it, the previous Vault stays as it was, a failed
+// switch keeps it active, and the UI and an Agent get the same over HTTP, refused when the location
+// is fixed.
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,6 +19,7 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -130,7 +135,7 @@ describe('Vault identity (A-08)', () => {
     const a = await open(context, { jobStore, capture: gated.capture }, false);
     await a.jobs.submitItem('youtube', urlOf(IDS[0]!));
     const left = await a.jobs.submitItem('youtube', urlOf(IDS[1]!));
-    await expect.poll(() => gated.started.length).toBe(1);
+    await eventually(() => expect(gated.started.length).toBe(1));
     gated.open();
     await a.close();
     expect(jobStore.get(left.job.id)).toMatchObject({ state: 'interrupted', vaultId: await readVaultId(source) });
@@ -185,7 +190,7 @@ describe('opening another Vault (A-13)', () => {
     const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore, capture: bGate.capture }, false);
     await bFirst.jobs.submitItem('youtube', urlOf(IDS[2]!));
     const bLeft = await bFirst.jobs.submitItem('youtube', urlOf(IDS[3]!));
-    await expect.poll(() => bGate.started.length).toBe(1);
+    await eventually(() => expect(bGate.started.length).toBe(1));
     bGate.open();
     await bFirst.close();
     // A has a queued job when B is opened.
@@ -193,7 +198,7 @@ describe('opening another Vault (A-13)', () => {
     const workspace = await open(context, { jobStore, capture: aGate.capture });
     const aRunning = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     const aLeft = await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
-    await expect.poll(() => aGate.started.length).toBe(1);
+    await eventually(() => expect(aGate.started.length).toBe(1));
     for (const [value, code] of [[a, 'invalid_request'], [path.join(a, 'attachments'), 'invalid_request'], [path.join(root, 'Nothing'), 'vault_invalid'], [path.join(root, 'profile'), 'invalid_request']] as const) {
       await expect(workspace.openOther(value), value).rejects.toMatchObject({ code });
     }

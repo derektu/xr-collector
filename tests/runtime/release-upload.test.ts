@@ -1,3 +1,6 @@
+// What users download from a GitHub Release: each platform's files go into one draft for the tag
+// at the built commit, match the platform index and are downloaded back to compare, and the upload
+// stops before changing GitHub on a dirty checkout, a mismatched commit, tag or file, or no sign-in.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

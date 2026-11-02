@@ -5,10 +5,22 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { environment } from './platform.mjs';
-import { sleep } from './wait.mjs';
 
 /** What the UI shows once loaded: a page of the app, or Onboarding while no Vault is ready. */
 export const LOADED = '[data-testid^="page-"], .onboarding-screen';
+
+/**
+ * Resolves once the page has drawn its current styles: the next frame has applied them, and the
+ * transitions they started have ended.
+ */
+export async function painted(page) {
+  await page.evaluate(async () => {
+    const frame = () => new Promise((resolve) => { requestAnimationFrame(() => resolve()); });
+    await frame();
+    await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    await frame();
+  });
+}
 
 /** A headless page on the instance's UI, zh-TW, Taipei time, dark scheme by default. */
 export async function openPage(instance, { viewport = { width: 1280, height: 860 }, colorScheme = 'dark', route = '/' } = {}) {
@@ -75,7 +87,7 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
       const themed = async (name) => {
         for (const scheme of ['dark', 'light']) {
           await current().emulateMedia({ colorScheme: scheme });
-          await sleep(250);
+          await painted(current());
           await shot(`${name}-${scheme}`);
         }
         await current().emulateMedia({ colorScheme: 'dark' });

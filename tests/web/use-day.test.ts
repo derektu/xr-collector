@@ -1,3 +1,6 @@
+// The day screens use for "today" and "tomorrow": it changes at local midnight, tells each
+// following screen once a day, and is read again when a screen starts following after the timer
+// stopped.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { currentDay, watchDay } from '../../src/web/use-day.js';
 

@@ -1,3 +1,5 @@
+// Automatic App update checks: one 30 seconds after start and then every 24 hours, timed again
+// from a manual check, run on wake only when due, and kept going after a failed check.
 import { afterEach, expect, it, vi } from 'vitest';
 import { startUpdateCheckScheduler, updateCheckTiming } from '../../src/electron/update-check-scheduler.js';
 

@@ -3,6 +3,7 @@
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
+import { pageTurn } from './lib/revision.mjs';
 
 export const name = 'check-history-summary';
 export const title = '定時檢查摘要與完整細節';
@@ -164,8 +165,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await olderStarted;
     await groupLevel.selectOption('error');
     await waitFor(async () => await detail.getByTestId('activity-group-check').count() === 10, 'new level wins while older page is delayed');
+    const olderAnswered = detail.waitForResponse(/\/api\/activity\/groups\/.*cursor=/u);
     releaseOlder();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await (await olderAnswered).finished();
+    await pageTurn(detail);
     expect(await detail.getByTestId('activity-group-check').count() === 10, '舊等級的延遲分頁不會混入新等級');
     await groupLevel.selectOption('info');
     await waitFor(async () => await detail.getByTestId('activity-group-check').count() === 10, 'info detail reloaded');

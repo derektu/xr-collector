@@ -1,3 +1,6 @@
+// How a collection job reads in the window: what it saved and indexed, a channel's phase, progress
+// and skipped work, why a channel job ran, failures by their message, and whether it resumed after
+// a restart.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
 import {

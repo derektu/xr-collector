@@ -1,3 +1,7 @@
+// App update download and install state: a check pins an offer without downloading, only a fully
+// verified download becomes ready and an older ready one survives a later failure, install needs a
+// separate request, the cache keeps only the ready file, and native install results are recorded
+// against the build that is actually running.
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +10,7 @@ import { expect, it, vi } from 'vitest';
 import type { UpdateOffer } from '../../src/core/types.js';
 import { UpdateService } from '../../src/updates/update-service.js';
 import type { UpdateApplyRequest } from '../../src/updates/types.js';
+import { eventually } from '../support/wait.js';
 
 const payload = Buffer.from('real package bytes');
 const offer: UpdateOffer = {
@@ -107,7 +112,7 @@ it('cancels a partial download without losing its pinned offer', async () => {
     })) as typeof fetch });
   const selection = { version: offer.version, sha256: offer.payload.sha256 };
   await service.check(); const work = service.download(selection);
-  await vi.waitFor(() => expect(service.status().phase).toBe('downloading'));
+  await eventually(() => expect(service.status().phase).toBe('downloading'));
   expect((await service.cancel()).phase).toBe('available');
   await expect(work).resolves.toMatchObject({ phase: 'available', offer: { version: offer.version } });
 });
@@ -127,7 +132,7 @@ it('keeps the verified ready version pinned while a newly discovered version dow
   await service.check(); await service.download({ version: offer.version, sha256: offer.payload.sha256 });
   expect((await service.check())).toMatchObject({ phase: 'ready', ready: { version: '0.1.1' }, offer: { version: '0.1.2' } });
   const downloading = service.download({ version: newer.version, sha256: newer.payload.sha256 });
-  await vi.waitFor(() => expect(service.status()).toMatchObject({ phase: 'downloading', ready: { version: '0.1.1' }, offer: { version: '0.1.2' } }));
+  await eventually(() => expect(service.status()).toMatchObject({ phase: 'downloading', ready: { version: '0.1.1' }, offer: { version: '0.1.2' } }));
   await service.cancel(); await downloading;
   expect(service.status()).toMatchObject({ phase: 'ready', ready: { version: '0.1.1' }, offer: { version: '0.1.2' } });
 });
@@ -142,7 +147,7 @@ it('finishes an in-flight check before accepting a selection so stale UI cannot 
     installer: { available: true, validate: async () => undefined }, directory, request });
   await service.check(); const checking = service.check();
   const download = service.download({ version: offer.version, sha256: offer.payload.sha256 });
-  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  await eventually(() => expect(finish).toBeTypeOf('function'));
   finish(newer); await checking;
   await expect(download).rejects.toMatchObject({ code: 'update_offer_changed' });
   expect(request).not.toHaveBeenCalled();

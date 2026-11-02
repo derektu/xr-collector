@@ -38,7 +38,7 @@ export function defaultCatalog(now = Date.now()) {
   return {
     youtube: {
       channels: [channel('A', 5, '頻道 A', now), channel('B', 3, '頻道 B', now), channel('D', 3, '單支影片頻道 D', now)],
-      failListing: null, failVideo: null, rateLimitNext: false, captureDelayMs: 600,
+      failListing: null, failVideo: null, rateLimitNext: false, captureDelayMs: 600, holdCaptures: false,
     },
     feeds: {
       '/feed.xml': { kind: 'rss2', title: '【合成】RSS 部落格', articles: articles('RSS 部落格', 4, now) },

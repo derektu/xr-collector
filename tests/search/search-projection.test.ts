@@ -1,3 +1,6 @@
+// Keeping or clearing a Vault's search database at start: kept when the engine and lexicon profile
+// match, rebuilt when they changed or the marker is corrupt, clearing only that Vault's derived
+// files, never through a symlink and never past a process record that cannot be verified.
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

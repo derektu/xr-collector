@@ -1,3 +1,5 @@
+// Saving a transcript as a Markdown file in the Vault: portable frontmatter, a clean body, and no
+// second document or overwrite when the same video is saved again.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

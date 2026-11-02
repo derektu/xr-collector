@@ -1,3 +1,5 @@
+// What the window does when the desktop app asks it to open something, as a notification does: it
+// opens the named source, or shows the given message instead of navigating.
 import { describe, expect, it, vi } from 'vitest';
 import { handleDesktopNavigation } from '../../src/web/desktop-navigation.js';
 

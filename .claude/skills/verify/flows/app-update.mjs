@@ -50,7 +50,7 @@ export async function run({ instance, page, record, waitFor }) {
     expect(checked.status === 200 && checked.body.update.phase === 'available', '授權 Agent 經相同 API 找到 0.1.1', {
       id: 'u36.agent-check', actual: { status: checked.status, phase: checked.body?.update?.phase, version: checked.body?.update?.offer?.version },
     });
-    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'available update UI', { timeout: 8_000 });
+    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'available update UI');
     const status = await update();
     expect(status.offer?.version === '0.1.1' && status.offer.source.id === 'generic-index' && status.offer.source.indexUrl.endsWith('/updates/release-darwin-arm64.json'), 'GenericIndexSource 讀取本平台的 index', {
       id: 'u36.generic-source', actual: status.offer && { version: status.offer.version, source: status.offer.source },
@@ -69,7 +69,7 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('U36-W2', '下載中只顯示取消，忙碌拒絕套用，錯誤後可重試到 ready', async ({ expect, shot }) => {
     await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 10_000; value.updates.payloadMode = 'valid'; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => await page.getByTestId('update-cancel').isVisible(), 'downloading cancel UI', { timeout: 8_000 });
+    await waitFor(async () => await page.getByTestId('update-cancel').isVisible(), 'downloading cancel UI');
     expect(await page.getByTestId('update-download').count() === 0 && await page.getByTestId('update-cancel').innerText() === '取消下載',
       '下載中不再顯示重複下載，只能取消', { id: 'u36.downloading-actions' });
     const downloading = await update();
@@ -87,8 +87,8 @@ export async function run({ instance, page, record, waitFor }) {
 
     await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 0; value.updates.payloadMode = 'corrupt'; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => (await update()).phase === 'error', 'integrity error state', { timeout: 8_000 });
-    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action', { timeout: 8_000 });
+    await waitFor(async () => (await update()).phase === 'error', 'integrity error state');
+    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action');
     const failed = await update();
     expect(failed.phase === 'error' && failed.errorCode === 'update_integrity_failed' && failed.ready === null,
       '雜湊錯誤不發布 ready，但保留同一 offer 可直接重新下載', {
@@ -122,7 +122,7 @@ export async function run({ instance, page, record, waitFor }) {
     });
     await shot('ready-and-newer');
     await page.getByRole('button', { name: '下載 0.1.2' }).click();
-    await waitFor(async () => (await update()).progress?.percent === 62, 'newer download progress', { timeout: 8_000 });
+    await waitFor(async () => (await update()).progress?.percent === 62, 'newer download progress');
     const replacing = await update();
     expect(replacing.phase === 'downloading' && replacing.ready?.version === '0.1.1' && replacing.offer?.version === '0.1.2',
       '0.1.2 尚未驗證完成時 0.1.1 仍是唯一 ready', {

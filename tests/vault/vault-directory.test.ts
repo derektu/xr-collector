@@ -1,3 +1,6 @@
+// Recognizing what a chosen folder is (empty, a Vault with its document count, or invalid with the
+// reason) without changing it, and creating a Vault folder with its marker only where no Vault or
+// other content is.
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

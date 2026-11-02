@@ -1,3 +1,6 @@
+// The RSS source against a local feed server: finding the feed a page announces, refusing addresses
+// without one, decoding charsets, classifying failures for retries, and capturing an article from
+// the last read of its feed, so a subscribed site's articles land in the Vault with their body.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { findFeedLinks } from '../../../src/plugins/rss/discovery.js';
 import { decode, fetchText } from '../../../src/plugins/rss/http.js';

@@ -1,3 +1,6 @@
+// GET/PUT /api/device/notifications: the UI and an authorized Agent read and change the desktop
+// notification preference, which is device data and works with no Vault selected. A malformed
+// body is refused with 400.
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../src/server/app.js';
 import type { NotificationState } from '../../src/notifications/types.js';

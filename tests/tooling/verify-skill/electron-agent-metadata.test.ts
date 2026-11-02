@@ -1,3 +1,5 @@
+// Guards the developer, not the user: the verify skill's Electron run records only the current UI
+// origin in run.json across relaunches, readable only by its owner on POSIX.
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';

@@ -215,6 +215,9 @@ async function syntheticSources() {
           throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
         }
         await sleep(Number(current.youtube?.captureDelayMs ?? 600));
+        // A held capture stays under way until the flow releases it in the catalog. Like a running
+        // yt-dlp, it ignores the signal, which only takes back a request still waiting for its turn.
+        while (catalog().youtube?.holdCaptures) await sleep(50);
         // The network can drop while a capture is under way.
         cutOff();
         return {
