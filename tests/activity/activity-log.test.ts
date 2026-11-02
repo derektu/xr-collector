@@ -1,7 +1,7 @@
 import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLog, RETENTION_DAYS } from '../../src/activity/activity-log.js';
 import { limitText, redact } from '../../src/activity/redact.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
@@ -9,7 +9,8 @@ import { localDayStart } from '../../src/web/activity-presentation.js';
 import { readEventFiles } from './event-files.js';
 import { eventually } from '../support/wait.js';
 
-// The device activity log: day files with a 30-day retention, newest-first cursor pages, filters, masking and write failures that are reported, not lost.
+// The device activity log: day files written once a second with a 30-day retention, newest-first
+// cursor pages, filters, masking and write failures that are reported, not lost.
 
 const DAY = 86_400_000;
 const VAULT = '/vaults/a';
@@ -84,6 +85,26 @@ describe('activity log files (A-T1)', () => {
     expect(page.log.skippedLines).toBe(2);
     expect((await readdir(path.join(directory, 'events'))).sort()).toEqual(['2026-10-14.jsonl', '2026-10-15.jsonl']);
     expect(page.retentionDays).toBe(RETENTION_DAYS);
+    await log.close();
+  });
+
+  it('writes the events recorded within a second in one append, and answers with them before', async () => {
+    const directory = await tempDirectory();
+    const timers = new Timers();
+    let appends = 0;
+    const log = await ActivityLog.open(directory, {
+      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      append: async (file, data) => { appends += 1; await appendFile(file, data); },
+    });
+    for (let index = 0; index < 5; index += 1) log.record(event('2026-10-15T05:00:00.000Z', { message: `第 ${index} 筆` }));
+    expect(appends).toBe(0);
+    expect(timers.waiting.filter((entry) => entry.ms === 1_000)).toHaveLength(1);
+    expect((await log.query({}, { vaultPath: VAULT })).events).toHaveLength(5);
+
+    timers.fire(1_000);
+    await log.flush();
+    expect(appends).toBe(1);
+    expect(await readEventFiles(directory)).toHaveLength(5);
     await log.close();
   });
 
@@ -317,6 +338,44 @@ describe('write failures (A-T7)', () => {
     expect(log.health()).toMatchObject({ state: 'ok', pending: 0, dropped: 0 });
     expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第一筆', '第二筆']);
     await log.close();
+  });
+
+  it('tries no write and logs no error until the retry 30 seconds after a failure', async () => {
+    const directory = await tempDirectory();
+    const timers = new Timers();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let failing = true;
+    let appends = 0;
+    const log = await ActivityLog.open(directory, {
+      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      append: async (file, data) => {
+        appends += 1;
+        if (failing) throw new Error('ENOSPC: no space left on device');
+        await appendFile(file, data);
+      },
+    });
+    try {
+      log.record(event('2026-10-15T05:00:00.000Z'));
+      timers.fire(1_000);
+      await log.flush();
+      for (let index = 0; index < 20; index += 1) log.record(event('2026-10-15T05:00:01.000Z'));
+      await log.flush();
+      expect(timers.waiting.map((entry) => entry.ms)).not.toContain(1_000);
+      expect(appends).toBe(1);
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(log.health()).toMatchObject({ state: 'failing', pending: 21 });
+
+      failing = false;
+      timers.fire(30_000);
+      await log.flush();
+      expect(appends).toBe(2);
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(log.health()).toMatchObject({ state: 'ok', pending: 0 });
+      expect(await readEventFiles(directory)).toHaveLength(21);
+      await log.close();
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('keeps a half-written batch from joining the events written after it', async () => {

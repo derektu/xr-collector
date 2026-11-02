@@ -21,7 +21,9 @@ import { limitText, redact } from './redact.js';
 export const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 const PURGE_INTERVAL_MS = 3_600_000;
-/** A failed write is tried again after this wait, even when no new event arrives. */
+/** Recorded events wait this long in memory and are then written together. */
+const FLUSH_INTERVAL_MS = 1_000;
+/** A failed write is tried again after this wait; events recorded meanwhile only join the queue. */
 const RETRY_WRITE_MS = 30_000;
 /** Events kept in memory while the log cannot be written; older ones beyond this are dropped. */
 const PENDING_LIMIT = 1000;
@@ -37,7 +39,7 @@ const SEGMENT_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/u;
 
 export interface ActivityLogOptions {
   now?: () => Date;
-  /** Starts a timer and returns its cancel function; purges and write retries wait through it. */
+  /** Starts a timer and returns its cancel function; purges, writes and write retries wait through it. */
   setTimer?: (callback: () => void, ms: number) => () => void;
   /** Appends text to a file; replaced in tests to make writes fail. */
   append?: (file: string, data: string) => Promise<void>;
@@ -87,9 +89,10 @@ interface SummarySnapshot {
 
 /**
  * The device activity log: one JSONL file per UTC day under the profile, kept for 30 days. Events
- * are masked before they reach disk; events that cannot be written wait in memory, are retried,
- * and the log reports the failure instead of losing them silently. Unfinished job state lives in
- * the job store, so removing old activity never affects what a restart resumes.
+ * are masked before they reach disk and written once a second; events that cannot be written wait
+ * in memory, are retried, and the log reports the failure instead of losing them silently.
+ * Unfinished job state lives in the job store, so removing old activity never affects what a
+ * restart resumes.
  */
 export class ActivityLog {
   private readonly now: () => Date;
@@ -102,6 +105,7 @@ export class ActivityLog {
   private readonly cache = new Map<string, CachedFile>();
   private readonly snapshots = new Map<string, SummarySnapshot>();
   private cancelPurge: (() => void) | null = null;
+  private cancelFlush: (() => void) | null = null;
   private cancelRetry: (() => void) | null = null;
   private closed = false;
   private healthValue: Omit<ActivityLogHealth, 'pending' | 'skippedLines'> = {
@@ -148,11 +152,16 @@ export class ActivityLog {
       this.healthValue.dropped += 1;
       this.options.onDropped?.(dropped);
     }
-    this.kick();
+    if (this.closed) this.kick();
+    else this.scheduleFlush();
   }
 
-  /** Resolves once every recorded event was written or the latest attempt failed. */
+  /**
+   * Writes the waiting events now and resolves once they are written or the attempt failed. While a
+   * failed write waits for its retry, it resolves without trying again.
+   */
   async flush(): Promise<void> {
+    if (this.directory) this.kick();
     await this.writeTail;
   }
 
@@ -414,7 +423,10 @@ export class ActivityLog {
   async close(): Promise<void> {
     this.closed = true;
     this.cancelPurge?.();
+    this.cancelFlush?.();
+    this.cancelFlush = null;
     this.cancelRetry?.();
+    this.cancelRetry = null;
     await this.flush();
   }
 
@@ -430,12 +442,24 @@ export class ActivityLog {
     }, PURGE_INTERVAL_MS);
   }
 
+  private scheduleFlush(): void {
+    if (this.cancelFlush || this.cancelRetry) return;
+    this.cancelFlush = this.setTimer(() => {
+      this.cancelFlush = null;
+      this.kick();
+    }, FLUSH_INTERVAL_MS);
+  }
+
   private kick(): void {
     this.writeTail = this.writeTail.then(() => this.drain());
   }
 
-  /** Writes waiting events in order, one run of same-day events at a time, and stops at the first failure. */
+  /**
+   * Writes waiting events in order, one run of same-day events at a time, and stops at the first
+   * failure. Nothing is written while a failed write waits for its retry.
+   */
   private async drain(): Promise<void> {
+    if (this.cancelRetry) return;
     const directory = path.join(this.directory!, SEGMENT_DIRECTORY);
     while (this.pending.length > 0) {
       const day = this.pending[0]!.timestamp.slice(0, 10);
@@ -468,6 +492,8 @@ export class ActivityLog {
   }
 
   private scheduleRetry(): void {
+    this.cancelFlush?.();
+    this.cancelFlush = null;
     if (this.closed || this.cancelRetry) return;
     this.cancelRetry = this.setTimer(() => {
       this.cancelRetry = null;
