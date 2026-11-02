@@ -8,6 +8,7 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 // @ts-expect-error The build doctor is intentionally executable JavaScript.
 import { assertBuildEnvironment, checkBuildEnvironment, formatResults, hostBuildTarget } from '../../scripts/build-doctor.mjs';
+import { DEVELOPER_ID_INTERMEDIATE_FIX, selectDeveloperIdIdentity } from '../../scripts/mac-signing.mjs';
 
 type Responses = Record<string, string | Error>;
 
@@ -130,6 +131,25 @@ it('reports the runtime cache and Mac signing state without failing on either', 
   });
   expect(byLabel(ready, 'Runtime cache')).toMatchObject({ status: 'ok', detail: 'yt-dlp and Deno, Meilisearch prepared' });
   expect(byLabel(ready, 'Mac Developer ID')).toMatchObject({ status: 'missing', detail: 'Signing environment is missing APPLE_TEAM_ID.' });
+
+  const signing = (checkDeveloperIdIdentity: () => Promise<unknown>) => check('darwin-arm64', {
+    report: true,
+    overrides: {
+      prepareRuntimeDependencies: async () => undefined,
+      prepareMeilisearch: async () => undefined,
+      access: async () => undefined,
+      loadMacSigningConfiguration: async () => ({ teamId: 'ABCDE12345' }),
+      checkDeveloperIdIdentity,
+    },
+  }).then((results) => byLabel(results, 'Mac Developer ID'));
+  expect(await signing(async () => ({ sha1: 'A'.repeat(40), teamId: 'ABCDE12345' })))
+    .toMatchObject({ status: 'ok', detail: 'valid identity for team ABCDE12345' });
+  const untrusted = `  1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`;
+  expect(await signing(async () => selectDeveloperIdIdentity('', 'ABCDE12345', untrusted))).toMatchObject({
+    status: 'missing', detail: expect.stringContaining('lacks the Apple Developer ID G2 intermediate certificate'), fix: DEVELOPER_ID_INTERMEDIATE_FIX,
+  });
+  expect(await signing(async () => { throw new Error('security exited with status 51'); }))
+    .toMatchObject({ status: 'missing', detail: 'security exited with status 51', fix: expect.stringContaining('keys/mac') });
 
   const windows = await check('win32-x64', {
     report: true,

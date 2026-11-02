@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { loadMacSigningConfiguration } from './mac-signing.mjs';
+import { checkDeveloperIdIdentity, loadMacSigningConfiguration } from './mac-signing.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
 import { prepareMeilisearch } from './prepare-meilisearch.mjs';
 import { prepareRuntimeCommand } from './runtime-cache.mjs';
@@ -158,12 +158,20 @@ async function checkMacSigning({ root, dependencies }) {
   try { await (dependencies.access ?? access)(environmentFile); } catch {
     return note(label, 'keys/mac/.env is absent; package:mac builds ad-hoc signed packages');
   }
+  let configuration;
   try {
-    const configuration = await (dependencies.loadMacSigningConfiguration ?? loadMacSigningConfiguration)({ environmentFile, pathRoot: signingRoot });
-    return ok(label, `configured for team ${configuration.teamId}`);
+    configuration = await (dependencies.loadMacSigningConfiguration ?? loadMacSigningConfiguration)({ environmentFile, pathRoot: signingRoot });
   } catch (error) {
     return missing(label, error.message, 'Fix keys/mac/.env and its files (owner-only permissions), or remove keys/mac/.env to build ad-hoc packages only.');
   }
+  // The identity check imports the p12 into a temporary keychain outside the user search list, so
+  // it changes no keychain the user owns.
+  try {
+    await (dependencies.checkDeveloperIdIdentity ?? checkDeveloperIdIdentity)(configuration);
+  } catch (error) {
+    return missing(label, error.detail ?? error.message, error.fix ?? 'Fix the p12 in keys/mac, or remove keys/mac/.env to build ad-hoc packages only.');
+  }
+  return ok(label, `valid identity for team ${configuration.teamId}`);
 }
 
 async function quietly(work) {

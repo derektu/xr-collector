@@ -11,7 +11,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
-  RUNTIME_SIGNING_CONCURRENCY, describeArtifact, loadMacSigningConfiguration, mapConcurrent, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList,
+  DEVELOPER_ID_INTERMEDIATE_FIX, RUNTIME_SIGNING_CONCURRENCY, checkDeveloperIdIdentity, describeArtifact, loadMacSigningConfiguration, mapConcurrent, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList,
   selectDeveloperIdIdentity, signStagedMacRuntimes, signedBuilderEnvironment, validateNotarizedApplication,
   verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory, withTemporarySigningKeychain,
 } from '../../scripts/mac-signing.mjs';
@@ -80,6 +80,117 @@ it.skipIf(process.platform === 'win32')('appends its keychain without reordering
   expect(parseUserKeychainList(existingKeychains.map((entry) => `    ${JSON.stringify(entry)}`).join('\n'))).toEqual(existingKeychains);
   expect(calls.find((args) => args[0] === 'set-keychain-settings')).toContain('900');
   expect(calls.find((args) => args[0] === 'import')).not.toContain('/usr/bin/security');
+});
+
+const SHA_A = 'A'.repeat(40);
+const SHA_B = 'B'.repeat(40);
+const identityLine = (index: number, sha1: string, team: string, problem?: string) =>
+  `  ${index}) ${sha1} "Developer ID Application: Example (${team})"${problem ? ` (${problem})` : ''}`;
+// `find-identity` without -v lists every matching identity, then repeats the valid ones.
+const matchingListing = (matching: string[], valid: string[]) => [
+  'Policy: Code Signing', '  Matching identities', ...matching, `     ${matching.length} identities found`, '',
+  '  Valid identities only', ...valid, `     ${valid.length} valid identities found`, '',
+].join('\n');
+
+type Identities = { valid: string[]; matching?: string[]; importError?: string };
+
+function fakeSecurity(identities: Identities, keychains: string[]) {
+  const calls: string[][] = [];
+  const run = async (_command: string, args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains.splice(0, keychains.length, ...args.slice(4)); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => `    ${JSON.stringify(entry)}`).join('\n'), stderr: '' };
+    if (args[0] === 'delete-keychain') { keychains.splice(0, keychains.length, ...keychains.filter((entry) => entry !== args[1])); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'import' && identities.importError) throw new Error(`security exited with status 1: ${identities.importError}`);
+    if (args[0] === 'find-identity' && args[1] === '-v') {
+      return { stdout: `${identities.valid.join('\n')}\n     ${identities.valid.length} valid identities found\n`, stderr: '' };
+    }
+    if (args[0] === 'find-identity') return { stdout: matchingListing(identities.matching ?? identities.valid, identities.valid), stderr: '' };
+    return { stdout: '', stderr: '' };
+  };
+  return { run, calls };
+}
+
+async function identityCheck(identities: Identities) {
+  const tempRoot = await privateSigningRoot();
+  const userKeychains = [path.resolve('fixture/login.keychain-db')];
+  const keychains = [...userKeychains];
+  const { run, calls } = fakeSecurity(identities, keychains);
+  const result = await checkDeveloperIdIdentity(
+    { certificatePath: '/protected/certificate.p12', certificatePassword: 'p12-secret', teamId: 'ABCDE12345' },
+    { run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock') },
+  ).then((identity: any) => ({ identity }), (error: any) => ({ error }));
+  const created = calls.find((args) => args[0] === 'create-keychain')?.at(-1);
+  return {
+    ...result, calls, created,
+    userKeychains: keychains, expectedUserKeychains: userKeychains,
+    leftovers: (await readdir(tempRoot)).filter((entry) => entry.startsWith('xr-mac-signing-')),
+  };
+}
+
+it.skipIf(process.platform === 'win32')('checks the Developer ID identity in a temporary keychain outside the user search list', async () => {
+  const cases = [
+    { name: 'valid', identities: { valid: [identityLine(1, SHA_A, 'ABCDE12345')] } },
+    // macOS 26 lists an identity with a missing intermediate under Matching identities with no reason.
+    { name: 'untrusted', identities: { valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345')] },
+      detail: /is not trusted; this Mac lacks the Apple Developer ID G2 intermediate/u, fix: DEVELOPER_ID_INTERMEDIATE_FIX },
+    { name: 'untrusted with reason', identities: { valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345', 'CSSMERR_TP_NOT_TRUSTED')] },
+      detail: /not trusted \(CSSMERR_TP_NOT_TRUSTED\).*G2 intermediate/u, fix: DEVELOPER_ID_INTERMEDIATE_FIX },
+    { name: 'expired', identities: { valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345', 'CSSMERR_TP_CERT_EXPIRED')] },
+      detail: /invalid \(CSSMERR_TP_CERT_EXPIRED\)/u, fix: /current Developer ID Application certificate/u },
+    { name: 'none', identities: { valid: [] }, detail: /no Developer ID Application identity for Team ABCDE12345/u, fix: /Apple Development/u },
+    { name: 'several', identities: { valid: [identityLine(1, SHA_A, 'ABCDE12345'), identityLine(2, SHA_B, 'ABCDE12345')] },
+      detail: /holds 2 valid .*exactly one/u, fix: /only the one/u },
+    { name: 'other Team', identities: { valid: [identityLine(1, SHA_A, 'ZZZZZ99999')] }, detail: /Team ZZZZZ99999, but APPLE_TEAM_ID is ABCDE12345/u, fix: /APPLE_TEAM_ID/u },
+    { name: 'wrong password', identities: { valid: [], importError: 'security: SecKeychainItemImport: MAC verification failed during PKCS12 import (wrong password?)' },
+      detail: /CSC_KEY_PASSWORD does not open/u, fix: /CSC_KEY_PASSWORD/u },
+  ];
+  for (const { name, identities, detail, fix } of cases) {
+    const outcome = await identityCheck(identities);
+    if (detail) {
+      expect(outcome.error?.detail, name).toMatch(detail);
+      if (typeof fix === 'string') expect(outcome.error.fix, name).toBe(fix); else expect(outcome.error.fix, name).toMatch(fix!);
+      expect(outcome.error.message, name).not.toContain('p12-secret');
+      expect(outcome.error.message, name).not.toContain('temporary-password');
+    } else {
+      expect(outcome.identity, name).toMatchObject({ sha1: SHA_A, teamId: 'ABCDE12345' });
+    }
+    expect(outcome.calls.some((args) => args[0] === 'list-keychains' && args[3] === '-s'), name).toBe(false);
+    expect(outcome.userKeychains, name).toEqual(outcome.expectedUserKeychains);
+    expect(outcome.calls.filter((args) => args[0] === 'delete-keychain').map((args) => args[1]), name).toEqual([outcome.created]);
+    expect(outcome.leftovers, name).toEqual([]);
+  }
+});
+
+it.skipIf(process.platform === 'win32')('leaves a stale signing keychain and its search-list entry for the next signing run', async () => {
+  const tempRoot = await privateSigningRoot();
+  const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
+  await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'old' }));
+  await writeFile(path.join(stale, 'signing.keychain-db'), 'stale');
+  const userKeychains = [path.resolve('fixture/login.keychain-db'), path.join(stale, 'signing.keychain-db')];
+  const keychains = [...userKeychains];
+  const { run, calls } = fakeSecurity({ valid: [identityLine(1, SHA_A, 'ABCDE12345')] }, keychains);
+  await expect(checkDeveloperIdIdentity({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, {
+    run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock'),
+    processIdentity: async (pid: number) => pid === process.pid ? { pid, uid: process.getuid?.(), startedAt: 'current' } : null,
+  })).resolves.toMatchObject({ sha1: SHA_A });
+  expect(keychains).toEqual(userKeychains);
+  expect(calls.some((args) => args[0] === 'list-keychains' && args[3] === '-s')).toBe(false);
+  await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
+});
+
+it.skipIf(process.platform === 'win32')('names the missing intermediate certificate when packaging finds only an untrusted identity', async () => {
+  const tempRoot = await privateSigningRoot();
+  const keychains: string[] = [];
+  const { run } = fakeSecurity({ valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345')] }, keychains);
+  const work = vi.fn();
+  const failure = await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, work, {
+    run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock'),
+  }).catch((error: Error) => error);
+  expect(failure.message).toContain('Developer ID G2 intermediate certificate');
+  expect(failure.message).toContain(`Fix: ${DEVELOPER_ID_INTERMEDIATE_FIX}`);
+  expect(work).not.toHaveBeenCalled();
+  expect(keychains).toEqual([]);
 });
 
 it.skipIf(process.platform === 'win32')('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
@@ -627,7 +738,7 @@ it('bounds concurrent work, keeps results in item order and stops starting work 
 });
 
 it('requires the selected certificate and the stapled DMG to match the expected Team and a notarized Gatekeeper source', async () => {
-  expect(() => selectDeveloperIdIdentity(`  1) ${'A'.repeat(40)} "Developer ID Application: Other (ZZZZZ99999)"`, 'ABCDE12345')).toThrow(/found 0/u);
+  expect(() => selectDeveloperIdIdentity(`  1) ${'A'.repeat(40)} "Developer ID Application: Other (ZZZZZ99999)"`, 'ABCDE12345')).toThrow(/Team ZZZZZ99999, but APPLE_TEAM_ID is ABCDE12345/u);
   const dmgRun = (source: string) => vi.fn(async (command: string, args: string[]) => {
     if (args[0] === '-dv') return { stdout: '', stderr: 'Authority=Developer ID Application: Example (ABCDE12345)\nTeamIdentifier=ABCDE12345\nTimestamp=Oct 28, 2026\n' };
     if (path.basename(command) === 'spctl') return { stdout: '', stderr: `/candidate/XR.dmg: accepted\nsource=${source}\n` };

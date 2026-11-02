@@ -45,7 +45,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | npm 套件 | 已執行 `npm ci` | 同左 |
 | Xcode Command Line Tools | `swiftc` 可用 | 不適用 |
 | Runtime cache | 只報告狀態：未準備時列出 `prepare:runtime` 指令 | 同左 |
-| Developer ID 簽章 | 只報告狀態：有 `keys/mac/.env` 時檢查設定與檔案權限，沒有時只能建 ad-hoc 包 | 不適用 |
+| Developer ID 簽章 | 有 `keys/mac/.env` 時檢查設定與檔案權限，並把 p12 匯入用完即刪的暫時 keychain，確認該 Team 恰有一個有效的 Developer ID Application 身分；不改動使用者的 keychain 與搜尋清單。沒有 `.env` 時只能建 ad-hoc 包 | 不適用 |
 
 `prepare:runtime` 與 `package:*` 開工前執行同一套檢查（不含 runtime cache 與簽章狀態），缺少時立即停止並列出修正方式。
 
@@ -238,6 +238,12 @@ Mac 正式版以 Developer ID 簽章並送 Apple 公證，建置機需要這三�
 
 目錄結構、權限與各欄位的說明見 [簽署設定](../config/README.md)。
 
-交接給新的 Mac 建置者時，由持有 Apple Developer 帳號的人提供 p12 與其密碼、p8 與它的 Key ID 和 Issuer ID，以及 Team ID；這些檔案與密碼以不經過 Git、聊天紀錄的方式傳遞。放好後執行 `npm run doctor:build`，`Mac Developer ID signing` 一項為 `ok` 並顯示 Team 時即可建置。沒有這些檔案時，`package:mac` 只能產生 ad-hoc 簽章的包，適合開發與驗收，不適合發布。Windows 版不簽章，不需要憑證。
+建置機還要有 Apple 的 Developer ID G2 中繼憑證（Developer ID Certification Authority），p12 裡的憑證才接得上 Apple 根憑證。裝過 Xcode 的 Mac 通常已有；只裝 Command Line Tools 的新機器沒有，這時 p12 能匯入，但簽章身分被判為無效。下載並匯入 login keychain：
+
+```sh
+curl -fsSLo ~/Downloads/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer && security import ~/Downloads/DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db
+```
+
+交接給新的 Mac 建置者時，由持有 Apple Developer 帳號的人提供 p12 與其密碼、p8 與它的 Key ID 和 Issuer ID，以及 Team ID；這些檔案與密碼以不經過 Git、聊天紀錄的方式傳遞。放好後執行 `npm run doctor:build`，`Mac Developer ID signing` 一項為 `ok` 並顯示 Team 時即可建置；缺中繼憑證、密碼錯或 Team 不符時，這一項為 `missing` 並附修正指令。沒有這些檔案時，`package:mac` 只能產生 ad-hoc 簽章的包，適合開發與驗收，不適合發布。Windows 版不簽章，不需要憑證。
 
 完整的發布前檢查與出錯時的處理見 [Release 發布手冊](release-runbook.md)。
