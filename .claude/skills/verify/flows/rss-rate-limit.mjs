@@ -81,7 +81,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
     const documentsBefore = await documentsTotal();
     const completed = await checkFromRow(feeds.b);
-    expect(completed?.state === 'completed', 'Atom 的檢查在 30 秒內完成', { id: 'w2.b-completed', expected: 'completed', actual: completed?.state ?? 'not settled' });
+    expect(completed?.state === 'completed', 'Atom 的檢查完成', { id: 'w2.b-completed', expected: 'completed', actual: completed?.state ?? 'not settled' });
     const added = await waitFor(async () => (await documentsTotal()) > documentsBefore ? await documentsTotal() - documentsBefore : null,
       'Atom article saved', { timeout: 10_000 }).catch(async () => await documentsTotal() - documentsBefore);
     expect(added === 1, 'Atom 收進 1 篇新文章', { id: 'w2.b-documents', expected: 1, actual: added });
