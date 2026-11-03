@@ -211,7 +211,7 @@ describe('source detail (T-07, T-08)', () => {
 });
 
 describe('per-subscription settings over HTTP (A5)', () => {
-  it('subscribes with chosen settings, changes and applies them, and answers the same to UI and Agent', async () => {
+  it('subscribes with chosen settings, changes and applies them', async () => {
     const w = await world();
     const auth = { authorization: 'Bearer agent-token' };
     const send = async (method: 'POST' | 'PATCH', url: string, payload?: unknown) => {

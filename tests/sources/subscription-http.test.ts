@@ -1,7 +1,6 @@
 // Subscriptions over HTTP: a request shows in the list while its channel resolves, a removed
 // channel stays marked in the document filter, and removing a subscription with its documents
 // deletes them as a user deletion does, including a video still capturing, so they never come back.
-// The UI and Agent listeners answer the same fields.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -50,10 +49,9 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
     },
     recordDeletion: (entry) => collector.recordDeletion(entry), removalSettleMs: options.removalSettleMs ?? 5_000,
   });
-  const ui = await createHttpApp({ collector, jobs, subscriptions: [channels] });
   const agent = await createHttpApp({ collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
-  const send = async (method: 'GET' | 'DELETE', url: string, app = agent) => {
-    const response = await app.inject({ method, url, ...(app === agent ? { headers: { authorization: 'Bearer agent-token' } } : {}) });
+  const send = async (method: 'GET' | 'DELETE', url: string) => {
+    const response = await agent.inject({ method, url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };
   };
   const subscribe = async (name: string) => {
@@ -63,8 +61,8 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const events = async () => (await store.activity.query({ limit: 200 }, { vaultPath: root })).events;
   /** Resolves once a removal has written the deletion record of a video that is still capturing. */
   const deletionRecorded = (videoId: string) => eventually(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
-  const close = async () => { await eventually(() => expect(jobs.isBusy()).toBe(false)); await ui.close(); await agent.close(); };
-  return { root, clock, source, collector, jobs, channels, ui, agent, send, subscribe, events, removedFromSearch, deletionRecorded, close };
+  const close = async () => { await eventually(() => expect(jobs.isBusy()).toBe(false)); await agent.close(); };
+  return { root, clock, source, collector, jobs, channels, agent, send, subscribe, events, removedFromSearch, deletionRecorded, close };
 }
 
 describe('subscription requests in the list (N75-T6)', () => {
@@ -289,28 +287,6 @@ describe('subscription status and removal over HTTP (N75-T9, N75-T10)', () => {
     expect((await w.channels.list()).map((channel) => channel.id)).toEqual([alpha]);
     expect((await w.send('DELETE', `/api/subscriptions/youtube/${alpha}?documents=keep`)).body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 0, documentsFailed: 0 });
     expect((await w.send('DELETE', `/api/subscriptions/youtube/${alpha}?documents=delete`)).status).toBe(404);
-    await w.close();
-  });
-
-  it('answers the Agent with the same subscription fields the UI reads', async () => {
-    const w = await world();
-    const alpha = w.source.addChannel('alpha', '【合成】頻道 A');
-    const beta = w.source.addChannel('beta', '【合成】頻道 B');
-    w.source.publish(alpha, 'a', w.clock.now, [1]);
-    await w.subscribe('alpha');
-    await w.subscribe('beta');
-    await w.channels.setEnabled(beta, false);
-    await w.channels.remove(beta);
-    await w.subscribe('beta');
-
-    for (const route of ['/api/subscriptions', '/api/subscriptions?type=youtube', `/api/subscriptions/youtube/${alpha}`, '/api/documents/sources']) {
-      const [fromUi, fromAgent] = [await w.send('GET', route, w.ui), await w.send('GET', route)];
-      expect(fromAgent).toEqual(fromUi);
-      expect(fromAgent.status).toBe(200);
-    }
-    const listed = (await w.send('GET', '/api/subscriptions')).body;
-    expect(Object.keys(listed).sort()).toEqual(['pending', 'subscriptions', 'types', 'unsubscribed']);
-    expect(listed.subscriptions[0]).toHaveProperty('checkStatus');
     await w.close();
   });
 });

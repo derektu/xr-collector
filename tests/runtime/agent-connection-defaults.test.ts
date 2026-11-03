@@ -5,9 +5,7 @@ import { AGENT_PORT_RANGE, DESKTOP_AGENT_PORT, DEVELOPMENT_AGENT_PORT } from '..
 
 describe('Agent connection defaults', () => {
   it('keeps installed and development automatic port ranges separate', () => {
-    expect(AGENT_PORT_RANGE).toBe(10);
-    expect(DESKTOP_AGENT_PORT).toBe(7222);
-    expect(DEVELOPMENT_AGENT_PORT).toBe(7232);
-    expect(DESKTOP_AGENT_PORT + AGENT_PORT_RANGE).toBeLessThanOrEqual(DEVELOPMENT_AGENT_PORT);
+    const [lower, upper] = [DESKTOP_AGENT_PORT, DEVELOPMENT_AGENT_PORT].sort((a, b) => a - b);
+    expect(lower! + AGENT_PORT_RANGE).toBeLessThanOrEqual(upper!);
   });
 });

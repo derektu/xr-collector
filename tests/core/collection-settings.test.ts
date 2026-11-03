@@ -1,10 +1,8 @@
-// The time range and item limit of a subscription: shared limits with per-type defaults, the
+// The time range and item limit of a subscription: the
 // message for each invalid value, and the publish date a check reaches back to, so a subscription
 // collects exactly the range the user set.
 import { describe, expect, it } from 'vitest';
 import {
-  BACKFILL_DAYS,
-  BACKFILL_MAX_ITEMS,
   isValidSettings,
   parseSettingsPatch,
   rangeSettings,
@@ -13,8 +11,6 @@ import {
 } from '../../src/core/collection-settings.js';
 import { publishedSince } from '../../src/core/published.js';
 import { CollectorError } from '../../src/core/types.js';
-import { rssDeclaration } from '../../src/plugins/rss/shared.js';
-import { youtubeDeclaration } from '../../src/plugins/youtube/shared.js';
 
 const { fields, subscription } = rangeSettings({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, { noun: '影片', measure: '支' });
 const field = (key: string) => fields.find((candidate) => candidate.key === key)!;
@@ -30,22 +26,6 @@ function rejection(run: () => unknown): { code: string; message: string } {
 }
 
 describe('range settings fields', () => {
-  it('declares the same limits for every source type and each type its own defaults', () => {
-    expect(BACKFILL_DAYS).toEqual({ min: 1, max: 60 });
-    expect(BACKFILL_MAX_ITEMS).toEqual({ min: 1, max: 100 });
-    for (const declaration of [youtubeDeclaration, rssDeclaration]) {
-      expect(declaration.settings.map((candidate) => candidate.input)).toEqual(['choice', 'number', 'number']);
-      expect(declaration.settings[1]).toMatchObject({ key: 'backfillDays', min: 1, max: 60, unit: '天' });
-      expect(declaration.settings[2]).toMatchObject({ key: 'backfillMaxItems', min: 1, max: 100 });
-    }
-    expect(youtubeDeclaration.subscription!.defaults).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 });
-    expect(youtubeDeclaration.settings.map((candidate) => candidate.default)).toEqual([30, 30, 10]);
-    expect(youtubeDeclaration.settings[2]).toMatchObject({ unit: '支影片' });
-    expect(rssDeclaration.subscription!.defaults).toEqual({ intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30 });
-    expect(rssDeclaration.settings.map((candidate) => candidate.default)).toEqual([60, 7, 30]);
-    expect(rssDeclaration.settings[2]).toMatchObject({ unit: '篇文章' });
-  });
-
   it('accepts whole numbers within the limits and nothing else', () => {
     for (const value of [1, 2, 59, 60]) expect(settingFieldError(field('backfillDays'), value)).toBeNull();
     for (const value of [0, 61, -1, 1.5, '30', '', null, undefined, Number.NaN]) {

@@ -64,11 +64,10 @@ describe('source type declarations (T-01)', () => {
 });
 
 describe('URL recognition (T-02 to T-05)', () => {
+  // Which address forms name a video or a channel is the plugin's rule, tested in plugins/youtube;
+  // an address typed without its scheme is the shared recognition's.
   it.each([
-    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     'https://youtu.be/dQw4w9WgXcQ?t=12',
-    'https://m.youtube.com/shorts/dQw4w9WgXcQ',
-    'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc&index=3',
     'youtube.com/watch?v=dQw4w9WgXcQ',
     'youtu.be/dQw4w9WgXcQ',
   ])('recognizes %s as one video to collect without resolving anything', async (url) => {
@@ -92,9 +91,6 @@ describe('URL recognition (T-02 to T-05)', () => {
   it.each([
     ['@channel-one', 'https://www.youtube.com/@channel-one'],
     ['www.youtube.com/@channel-one', 'https://www.youtube.com/@channel-one'],
-    ['https://www.youtube.com/channel/UCabc/featured', 'https://www.youtube.com/channel/UCabc'],
-    ['https://www.youtube.com/c/legacy', 'https://www.youtube.com/c/legacy'],
-    ['https://www.youtube.com/user/older', 'https://www.youtube.com/user/older'],
   ])('offers to subscribe to an unsubscribed channel %s with the type defaults', async (input, resolved) => {
     const { channels, preview } = channelsWith({ [resolved]: null });
     const recognition = (await recognize(input, channels)).json().recognition;

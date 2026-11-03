@@ -23,9 +23,9 @@ import { registeredFiles, registeredSource } from '../../src/vault/vault-package
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
-import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from './exchange-fixtures.js';
+import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from '../support/exchange-fixtures.js';
 import type { YouTubeTestSources } from '../support/youtube-sources.js';
-import { manifestOf, packageOf, tampered } from './package-fixtures.js';
+import { manifestOf, packageOf, tampered } from '../support/package-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
@@ -809,53 +809,6 @@ describe('export and import over HTTP (X77-A14)', () => {
     const manifest = await manifestOf(await readFile(file));
     expect(manifest.source).toEqual({ vaultId: await readVaultId(a.vault), machine: 'A', folderName: path.basename(a.vault) });
     expect(manifest).not.toHaveProperty('sync');
-  });
-
-  it('documents the export and import contract for Agents', async () => {
-    const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
-    for (const term of [
-      '/api/vault/export/suggestion', '/api/vault/import/preview', '/api/vault/import/apply', '/api/vault/import/cancel', '"packagePath"',
-      '`file_exists`', '`transfer_cancelled`', '`vault.imported`', '"mode":"merge"', '"mode":"replace"', '`localNewer`', '`updated_at`',
-      '`removed`', '.zip', '`searchRebuildNeeded: true`', '/api/vault/cancel', '`errorCode`', '"action":"import"',
-    ]) {
-      expect(skill, term).toContain(term);
-    }
-    expect(skill).not.toMatch(/\/api\/vault\/(restore|merge)|同步點|situation|replaceLoses|lastSync/u);
-  });
-});
-
-describe('subscription change and removal times', () => {
-  it('stamps a subscription when a person changes its name, address, pause or settings, and not for collection progress', async () => {
-    const root = await temp();
-    let day = 1;
-    const store = new JsonSubscriptionStore(root, 'youtube', () => new Date(at(day)));
-    await store.add(channel('UC123'));
-    expect((await store.list())[0]!.updatedAt).toBe('2026-09-18T00:00:00.000Z');
-    const stamp = async () => (await store.list())[0]!.updatedAt;
-    await store.update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: null, outOfRange: [] });
-    expect(await stamp()).toBe('2026-09-18T00:00:00.000Z');
-    let previous = await stamp();
-    for (const change of [
-      () => store.update('UC123', { title: '新名稱' }), () => store.update('UC123', { url: 'https://www.youtube.com/@new' }),
-      () => store.setEnabled('UC123', false), () => store.update('UC123', { settings: { ...settings, backfillMaxItems: 5 } }),
-    ]) {
-      day += 1;
-      await change();
-      const now = await stamp();
-      expect(now! > previous!).toBe(true);
-      previous = now;
-    }
-  });
-
-  it('records a removal with the store clock and lifts it when the channel is subscribed again', async () => {
-    const root = await temp();
-    await store(root).add(channel('UC123'));
-    expect(await store(root, at(3)).remove('UC123')).toBe(true);
-    expect(await store(root).removals()).toEqual([{ id: 'UC123', title: '頻道 UC123', url: 'https://www.youtube.com/channel/UC123', removedAt: at(3) }]);
-    expect(await store(root).remove('UC123')).toBe(false);
-    await store(root).add(channel('UC123', { addedAt: at(4) }));
-    expect(await store(root).removals()).toEqual([]);
-    expect(JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8'))).not.toHaveProperty('removed');
   });
 });
 

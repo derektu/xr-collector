@@ -1,4 +1,4 @@
-// The local runtime behind the UI and the Agent: Not Ready status without a Vault, one shared
+// The local runtime behind the UI and the Agent: both listeners serve the same routes, Not Ready status without a Vault, one shared
 // workspace whose accepted work outlives a disconnected client, queued and interrupted work resumed
 // after a restart, the update exclusion, and Vault create, open, import and switch that keep
 // device-only settings out of the Vault and never adopt or leave behind a rejected folder.
@@ -15,7 +15,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
-import { manifestOf, packageBytes, zipEntries } from '../vault/package-fixtures.js';
+import { manifestOf, packageBytes, zipEntries } from '../support/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -34,6 +34,22 @@ async function connectionOf(runtime: CollectorRuntime): Promise<{ url: string; t
   const response = await fetch(`${runtime.server.url}/api/device/agent/connection`);
   expect(response.status).toBe(200);
   return ((await response.json()) as { connection: { url: string; token: string } }).connection;
+}
+
+/** Each `/api` route of a Fastify route tree, as its full path and methods, e.g. "/api/jobs/:id (GET, HEAD)". */
+function apiRoutes(tree: string): string[] {
+  const prefixes: string[] = [];
+  const routes: string[] = [];
+  for (const line of tree.split('\n')) {
+    const match = /^((?:[│ ] {3})*)[├└]── (\S+)(?: \(([^)]+)\))?$/u.exec(line);
+    if (!match) continue;
+    const depth = match[1]!.length / 4;
+    prefixes.length = depth;
+    const full = `${prefixes.join('')}${match[2]}`;
+    prefixes.push(match[2]!);
+    if (match[3] && full.startsWith('/api/')) routes.push(`${full} (${match[3]})`);
+  }
+  return routes.sort();
 }
 
 async function options(
@@ -218,6 +234,19 @@ describe('CollectorRuntime', () => {
       ]));
       expect(deviceEvents.every((event) => event.vaultPath === null && event.jobId === null)).toBe(true);
     });
+  });
+
+  it('serves the same routes on the UI and Agent listeners', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const runtime = await CollectorRuntime.start(setup.value);
+    cleanups.push(() => runtime.close());
+    expect(runtime.status()).toMatchObject({ state: 'ready' });
+    const ui = apiRoutes(runtime.server.app.printRoutes({ commonPrefix: false }));
+    const agent = apiRoutes(runtime.agentAccess.listener()!.app.printRoutes({ commonPrefix: false }));
+    // Both lists cover the business routes, not only the device routes served before a Vault is set.
+    expect(ui).toContain('/api/subscriptions/:type/:id (PATCH, DELETE, GET, HEAD)');
+    expect(ui).toContain('/api/jobs/:id/retry (POST)');
+    expect(agent).toEqual(ui);
   });
 
   it('shares one workspace with UI and Agent and keeps accepted collection alive after client disconnect', async () => {

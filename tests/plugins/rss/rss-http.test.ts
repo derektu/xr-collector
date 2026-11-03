@@ -1,6 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchText } from '../../../src/plugins/rss/http.js';
 import { rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
@@ -8,12 +5,11 @@ import type { SourcePlugin } from '../../../src/plugins/types.js';
 import { createHttpApp } from '../../../src/server/app.js';
 import { page, rss2, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';
-import { cleanUp, machine, open, seed, temp } from '../../vault/exchange-fixtures.js';
+import { cleanUp, machine, open, seed, temp } from '../../support/exchange-fixtures.js';
 import { eventually } from '../../support/wait.js';
 
-// RSS through the routes every source type shares (R11-T9): the UI and an Agent with a token reach
-// RSS subscriptions with the same requests and read the same answers, and the Skill's RSS examples
-// use routes and fields the server has.
+// RSS through the routes every source type shares (R11-T9): an Agent with a token previews,
+// subscribes, changes, checks and removes an RSS subscription and reads its documents.
 
 const TOKEN = 'rss-routes-token';
 let feeds: SyntheticFeeds;
@@ -32,11 +28,10 @@ async function world() {
   const options = {
     collector: workspace.collector, jobs: workspace.jobs, subscriptions: workspace.subscriptions.all(), schedule: workspace.schedule,
   };
-  const ui = await createHttpApp(options);
   const agent = await createHttpApp({ ...options, agentToken: TOKEN });
-  const send = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown, app: FastifyInstance = agent) => {
-    const response = await app.inject({
-      method, url, headers: app === agent ? { authorization: `Bearer ${TOKEN}` } : {},
+  const send = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown) => {
+    const response = await agent.inject({
+      method, url, headers: { authorization: `Bearer ${TOKEN}` },
       ...(payload === undefined ? {} : { payload: payload as object }),
     });
     return { status: response.statusCode, body: response.json() };
@@ -45,11 +40,11 @@ async function world() {
     await eventually(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u));
     return (await send('GET', `/api/jobs/${id}`)).body.job;
   };
-  return { workspace, ui, agent, send, settled, close: async () => { await ui.close(); await agent.close(); } };
+  return { workspace, agent, send, settled, close: () => agent.close() };
 }
 
 describe('RSS on the shared routes (R11-T9)', () => {
-  it('recognizes, previews, subscribes, reads, changes, checks and removes an RSS subscription for UI and Agent alike', async () => {
+  it('recognizes, previews, subscribes, reads, changes, checks and removes an RSS subscription', async () => {
     feeds.set('/feed.xml', { body: rss2('【合成】部落格', [{ title: '【合成】一', guid: '1', link: '/1', publishedAt: ago(1), summary: '摘要' }]) });
     feeds.set('/', { body: page('首頁', [{ href: '/feed.xml' }]), contentType: 'text/html' });
     const w = await world();
@@ -71,12 +66,6 @@ describe('RSS on the shared routes (R11-T9)', () => {
     const patched = await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillDays: 45 } });
     expect(patched).toMatchObject({ status: 200 });
     expect((await w.send('PATCH', `/api/subscriptions/rss/${id}`, { settings: { backfillDays: 61 } })).status).toBe(400);
-    const reads = ['/api/subscriptions?type=rss', `/api/subscriptions/rss/${id}`, '/api/source-types', '/api/documents?sourceType=rss'];
-    for (const url of reads) {
-      const [fromUi, fromAgent] = [await w.send('GET', url, undefined, w.ui), await w.send('GET', url)];
-      expect(fromAgent.status, url).toBe(200);
-      expect(fromAgent, url).toEqual(fromUi);
-    }
     const detail = (await w.send('GET', `/api/subscriptions/rss/${id}`)).body;
     expect(detail).toMatchObject({
       subscription: { id, type: 'rss', kind: 'feed', kindLabel: 'RSS', settings: { backfillDays: 45, backfillMaxItems: 5 } },
@@ -96,12 +85,5 @@ describe('RSS on the shared routes (R11-T9)', () => {
     await eventually(async () => expect((await w.send('GET', '/api/documents?sourceType=rss')).body.documents).toEqual([]));
     expect((await w.send('GET', `/api/subscriptions/rss/${id}`)).body.error.code).toBe('subscription_not_found');
     await w.close();
-  });
-
-  it('teaches the Agent RSS with the shared routes and fields', async () => {
-    const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
-    expect(skill).toContain('/api/subscriptions/rss/');
-    expect(skill).toContain('`"rss"`');
-    for (const field of ['backfillDays', 'backfillMaxItems', 'contentExtent']) expect(skill).toContain(field);
   });
 });

@@ -11,7 +11,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createVaultDirectory, inspectVaultDirectory, readVaultId, VAULT_MARKER } from '../../src/vault/vault-directory.js';
-import { packageBytes, packageFiles } from './package-fixtures.js';
+import { packageBytes, packageFiles } from '../support/package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
@@ -287,7 +287,7 @@ describe('creating a new Vault while one is active', () => {
 });
 
 describe('opening another Vault through HTTP (A-10)', () => {
-  it('serves the same results to the UI and an authenticated Agent, and has no move routes', async () => {
+  it('opens and creates a Vault for an authenticated Agent, and has no move routes', async () => {
     const context = await setup('A');
     const b = path.join(context.root, 'B');
     await seed(b);

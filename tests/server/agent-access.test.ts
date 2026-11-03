@@ -1,12 +1,14 @@
 // The Agent's authenticated listener: every route refuses a missing or wrong key, and with the key
-// an Agent pages, reads, searches and deletes documents with the same results the UI gets. It takes
+// an Agent pages, reads, searches and deletes documents. It takes
 // the preferred port or the next free one, keeps its key across restarts and rotates it on reset; a
 // port it cannot bind or a key it cannot save leaves the UI API working.
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
@@ -21,7 +23,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
-import { zipEntries } from '../vault/package-fixtures.js';
+import { zipEntries } from '../support/package-fixtures.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -96,11 +98,10 @@ describe('Agent authenticated HTTP access', () => {
     expect((await app.inject({ url: '/api/health', headers })).statusCode).toBe(200);
   });
 
-  it('paginates without omissions, validates bounds, and reads the same full document as UI', async () => {
+  it('paginates without omissions, validates bounds, and reads the full document', async () => {
     const { collector } = await fixture();
     const agent = await createHttpApp({ collector, agentToken: 'secret' });
-    const ui = await createHttpApp({ collector });
-    cleanup.push(() => agent.close(), () => ui.close());
+    cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const ids: string[] = [];
     for (let offset = 0; offset < 3; offset++) {
@@ -108,8 +109,7 @@ describe('Agent authenticated HTTP access', () => {
       expect(response.json()).toMatchObject({ total: 3, offset, limit: 1, nextOffset: offset < 2 ? offset + 1 : null });
       ids.push(response.json().documents[0].id);
     }
-    const uiList = (await ui.inject('/api/documents')).json().documents;
-    expect(new Set(ids)).toEqual(new Set(uiList.map((d: { id: string }) => d.id)));
+    expect(new Set(ids).size).toBe(3);
     expect((await agent.inject({ url: '/api/documents?offset=99', headers })).json().documents).toEqual([]);
     expect((await agent.inject({ url: '/api/documents', headers })).json()).toMatchObject({ total: 3, offset: 0, limit: 50 });
     for (const query of ['limit=0', 'limit=101', 'limit=1.5', 'offset=-1', 'offset=1000001', 'offset=NaN', 'limit=1&limit=2']) {
@@ -117,18 +117,16 @@ describe('Agent authenticated HTTP access', () => {
     }
     const url = `/api/documents/${encodeURIComponent(ids[0]!)}`;
     const read = await agent.inject({ url, headers });
-    expect(read.json()).toEqual((await ui.inject(url)).json());
     expect(read.json().document).toMatchObject({ sourceUrl: expect.stringContaining('youtube.com'), bodyMarkdown: expect.stringContaining('Preserve the complete source text.') });
     const missing = await agent.inject({ url: '/api/documents/youtube:zzzzzzzzzzz', headers });
     expect(missing.statusCode).toBe(404);
     expect(missing.json().error.code).toBe('document_not_found');
   });
 
-  it('deletes a document for an authorized Agent with the same results the UI sees (A7)', async () => {
+  it('deletes a document for an authorized Agent (A7)', async () => {
     const { collector } = await fixture();
     const agent = await createHttpApp({ collector, agentToken: 'secret' });
-    const ui = await createHttpApp({ collector });
-    cleanup.push(() => agent.close(), () => ui.close());
+    cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const url = `/api/documents/${encodeURIComponent('youtube:aaaaaaaaaaa')}`;
 
@@ -139,15 +137,12 @@ describe('Agent authenticated HTTP access', () => {
       deleted: { id: 'youtube:aaaaaaaaaaa', sourceType: 'youtube', sourceId: 'aaaaaaaaaaa', title: 'Agent fixture aaaaaaaaaaa', deletedAt: expect.any(String) },
       indexed: false,
     });
-    for (const app of [agent, ui]) {
-      const options = app === agent ? { headers } : {};
-      const read = await app.inject({ url, ...options });
-      expect([read.statusCode, read.json().error.code]).toEqual([404, 'document_deleted']);
-      const again = await app.inject({ method: 'DELETE', url, ...options });
-      expect([again.statusCode, again.json().error.code]).toEqual([404, 'document_deleted']);
-      expect((await app.inject({ url: '/api/documents', ...options })).json().total).toBe(2);
-    }
-    const missing = await ui.inject({ method: 'DELETE', url: '/api/documents/youtube:zzzzzzzzzzz' });
+    const read = await agent.inject({ url, headers });
+    expect([read.statusCode, read.json().error.code]).toEqual([404, 'document_deleted']);
+    const again = await agent.inject({ method: 'DELETE', url, headers });
+    expect([again.statusCode, again.json().error.code]).toEqual([404, 'document_deleted']);
+    expect((await agent.inject({ url: '/api/documents', headers })).json().total).toBe(2);
+    const missing = await agent.inject({ method: 'DELETE', url: '/api/documents/youtube:zzzzzzzzzzz', headers });
     expect([missing.statusCode, missing.json().error.code]).toEqual([404, 'document_not_found']);
   });
 
@@ -177,7 +172,7 @@ describe('Agent authenticated HTTP access', () => {
     await search.start();
     const settingsFile = path.join(root, 'agent-settings.json');
     const options = {
-      collector, search, settingsFile, preferredPort: 7232,
+      collector, search, settingsFile, preferredPort: await freePort(),
       skillPath: path.resolve('skills/xr-collector-agent'),
     };
     const access = await startAgentAccess(options);
@@ -210,12 +205,11 @@ describe('Agent authenticated HTTP access', () => {
     for (const query of ['limit=101', 'offset=-1', 'q=first&q=second', 'publishedFrom=2026-02-30']) {
       expect((await ui.inject(`/api/search?${query}`)).statusCode).toBe(400);
     }
-    expect(first.hits[0]).toEqual((await ui.inject('/api/search?q=orchard')).json().hits[0]);
     const read = await get(`/api/documents/${encodeURIComponent(first.hits[0].id)}`);
-    expect(read).toEqual((await ui.inject(`/api/documents/${encodeURIComponent(first.hits[0].id)}`)).json());
+    expect(read.document).toMatchObject({ id: first.hits[0].id, bodyMarkdown: expect.any(String) });
     expect((await get('/api/search?q=nonexistentkeyword')).hits).toEqual([]);
     expect((await get('/api/search/status')).status).toMatchObject({ state: 'ready', indexedDocuments: 3, vaultDocuments: 3 });
-    expect((await get('/api/documents/sources')).sources).toEqual((await ui.inject('/api/documents/sources')).json().sources);
+    expect((await get('/api/documents/sources')).sources).toMatchObject({ total: 3 });
     await access.close();
     await expect(get('/api/documents')).rejects.toThrow();
     const restarted = await startAgentAccess(options);
@@ -228,7 +222,7 @@ describe('Agent authenticated HTTP access', () => {
   it('listens on the preferred port, or the next free one when it is taken, and records the port it uses', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const options = { collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') };
+    const options = { collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
     const blocker = await listenOnFreePort();
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
     const taken = (blocker.address() as { port: number }).port;
@@ -281,10 +275,31 @@ describe('Agent authenticated HTTP access', () => {
     expect(skill).not.toContain('agent-connection.json');
   });
 
+  it('keeps the key file no more open than its owner needs, on creation, after a reset and on reopen', async () => {
+    const { root, collector } = await fixture();
+    const settingsFile = path.join(root, 'agent-settings.json');
+    // On Windows the profile folder's inherited access rules protect the key; an ordinary file in the
+    // same folder shows them, and the key file must not grant anyone more.
+    const ordinary = path.join(root, 'ordinary.txt');
+    await writeFile(ordinary, 'x');
+    const ownerOnly = process.platform === 'win32' ? await fileReaders(ordinary) : ['mode 600'];
+    const options = { collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
+    const first = await startAgentAccess(options);
+    expect(await fileReaders(settingsFile)).toEqual(ownerOnly);
+    await first.resetKey();
+    expect(await fileReaders(settingsFile)).toEqual(ownerOnly);
+    await first.close();
+    // A key file another program left readable is closed again when the app opens it.
+    if (process.platform !== 'win32') await chmod(settingsFile, 0o644);
+    const reopened = await startAgentAccess(options);
+    cleanup.push(() => reopened.close());
+    expect(await fileReaders(settingsFile)).toEqual(ownerOnly);
+  });
+
   it('serializes a port update and key reset without losing either saved field', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const before = access.connection();
 
@@ -306,7 +321,7 @@ describe('Agent authenticated HTTP access', () => {
     const fixed = (blocker.address() as { port: number }).port;
     const settingsFile = path.join(root, 'agent-settings.json');
     await writeFile(settingsFile, JSON.stringify({ schemaVersion: 1, token: 'persistent-test-key', port: { mode: 'fixed', port: fixed } }));
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     expect(access.status()).toMatchObject({ state: 'unavailable', activeUrl: null, configured: { mode: 'fixed', port: fixed } });
     expect(() => access.connection()).toThrow('無法使用');
@@ -320,7 +335,7 @@ describe('Agent authenticated HTTP access', () => {
   it('keeps the current key when saving a reset fails', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const current = access.connection();
     await rm(settingsFile);
@@ -336,7 +351,7 @@ describe('Agent authenticated HTTP access', () => {
     // write target a missing directory. This reaches the save failure rather than a read failure.
     const missingParent = path.join(root, 'missing-settings-parent');
     const settingsFile = `${missingParent}${path.sep}`;
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: 7232, skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const ui = await createHttpApp({ collector, agentConnection: access });
     cleanup.push(() => ui.close());
@@ -357,4 +372,29 @@ function listenOnFreePort(): Promise<Server> {
     server.once('error', reject);
     server.listen({ host: '127.0.0.1', port: 0 }, () => resolve(server));
   });
+}
+
+/** A port nothing listens on right now, so the Agent listener never competes with a running app. */
+async function freePort(): Promise<number> {
+  const server = await listenOnFreePort();
+  const { port } = server.address() as { port: number };
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+/**
+ * Who may open a file: its POSIX mode, or on Windows every identity the file's access rules allow,
+ * with the signed-in user, SYSTEM and Administrators named by role and anyone else by SID.
+ */
+async function fileReaders(file: string): Promise<string[]> {
+  if (process.platform !== 'win32') return [`mode ${((await stat(file)).mode & 0o777).toString(8)}`];
+  const script = [
+    '$owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value;',
+    '(Get-Acl -LiteralPath $env:XR_KEY_FILE).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])',
+    '| Where-Object { $_.AccessControlType -eq "Allow" }',
+    '| ForEach-Object { switch ($_.IdentityReference.Value) { $owner { "owner" } "S-1-5-18" { "system" } "S-1-5-32-544" { "administrators" } default { $_ } } }',
+  ].join(' ');
+  const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+    { env: { ...process.env, XR_KEY_FILE: file }, windowsHide: true });
+  return [...new Set(stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean))].sort();
 }

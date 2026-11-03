@@ -9,7 +9,7 @@ import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
 import { ensureMarker } from './package-fixtures.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
-import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
+import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 
 /** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */

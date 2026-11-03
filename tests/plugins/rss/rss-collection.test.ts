@@ -17,7 +17,7 @@ import { VaultSelection } from '../../../src/vault/vault-selection.js';
 import type { VaultWorkspace } from '../../../src/vault/workspace.js';
 import { atom, page, rss2, type SyntheticArticle, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';
-import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../vault/exchange-fixtures.js';
+import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../support/exchange-fixtures.js';
 import { eventually } from '../../support/wait.js';
 
 // RSS through the product's core: a workspace with the YouTube and RSS plugins over synthetic feeds

@@ -23,7 +23,7 @@ import { eventually } from '../support/wait.js';
 
 // The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
-// the UI listener and an Agent listener with a token.
+// an Agent listener with a token. Every field these routes return is named in the Agent Skill.
 
 registerSourceDefinitions([FAKE]);
 
@@ -313,13 +313,12 @@ describe('a route the API does not have', () => {
 });
 
 describe('the jobs page routes (N69-T9)', () => {
-  it('answers the overview and removes a failed item from it, the same for UI and Agents', async () => {
+  it('answers the overview and removes a failed item from it', async () => {
     const w = await world();
     w.fake.fail('broken-1', new CollectorError('video_unavailable', '文章不存在。'));
     const failed = await w.settled((await w.send('POST', '/api/items', { url: 'https://fake.example/item/broken-1' })).body.job.id);
     expect(failed).toMatchObject({ state: 'failed' });
-    const [fromUi, fromAgent] = [await w.send('GET', '/api/jobs/overview', undefined, w.ui), await w.send('GET', '/api/jobs/overview')];
-    expect(fromAgent).toEqual(fromUi);
+    const fromAgent = await w.send('GET', '/api/jobs/overview');
     expect(fromAgent).toMatchObject({ status: 200, body: { overview: { running: [], queued: [], failed: [{
       jobId: failed.id, type: 'fake', role: 'item', title: null, url: 'https://fake.example/item/broken-1', publisher: null, progress: null,
       status: null, error: { code: 'video_unavailable' }, failedAt: failed.finishedAt,
@@ -340,32 +339,19 @@ describe('the jobs page routes (N69-T9)', () => {
   });
 });
 
-describe('the shared routes for UI and Agents (B-T3)', () => {
-  it('answers the Agent token with what the UI reads, and the Skill names the fields the routes return', async () => {
+describe('the Skill and the subscription routes (B-T3)', () => {
+  it('names every field the routes return', async () => {
     const w = await world();
     const skill = await readFile(path.resolve('skills/xr-collector-agent/SKILL.md'), 'utf8');
-    const sharedIds = new Map<string, string>();
     for (const c of w.cases) {
       const target = c.addTarget('shared');
-      sharedIds.set(c.type, target.id);
-      // The Agent writes, the UI reads the result.
       await w.subscribe(target.url);
       expect((await w.send('PATCH', `/api/subscriptions/${c.type}/${encodeURIComponent(target.id)}`, { settings: c.patch })).status).toBe(200);
-    }
-    const reads = ['/api/subscriptions', '/api/subscriptions?type=fake', `/api/subscriptions/youtube/${encodeURIComponent(sharedIds.get('youtube')!)}`,
-      `/api/subscriptions/fake/${encodeURIComponent(sharedIds.get('fake')!)}`, '/api/schedule', '/api/pacing', '/api/jobs?state=all'];
-    for (const url of reads) {
-      const [fromUi, fromAgent] = [await w.send('GET', url, undefined, w.ui), await w.send('GET', url)];
-      expect(fromAgent.status, url).toBe(200);
-      expect(fromAgent, url).toEqual(fromUi);
     }
     expect((await w.send('GET', '/api/subscriptions')).body.subscriptions.map((entry: { type: string; settings: unknown }) => [entry.type, entry.settings])).toEqual([
       ['youtube', { ...w.cases[0]!.defaults, ...w.cases[0]!.patch }], ['fake', { ...w.cases[1]!.defaults, ...w.cases[1]!.patch }],
     ]);
-    expect((await w.send('GET', '/api/subscriptions', undefined, w.ui)).status).toBe(200);
-    expect((await w.agent.inject({ method: 'GET', url: '/api/subscriptions' })).statusCode).toBe(401);
 
-    // Every field the routes return is one the Skill names.
     const list = (await w.send('GET', '/api/subscriptions')).body;
     const detail = (await w.send('GET', '/api/subscriptions/fake/shared')).body;
     const preview = (await w.send('POST', '/api/subscription-previews', { url: 'https://fake.example/feed/shared' })).body.preview;

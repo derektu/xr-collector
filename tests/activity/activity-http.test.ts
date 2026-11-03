@@ -16,7 +16,7 @@ import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
 
 // The activity and job query routes: device data readable while an import holds the Vault and before
-// one is chosen, the same contract for the UI and Agents, and parameter validation.
+// one is chosen, the summary and retry contract, and parameter validation.
 
 const VAULT = '/vaults/http';
 const cleanups: Array<() => Promise<unknown>> = [];
@@ -76,7 +76,7 @@ async function settled(app: Awaited<ReturnType<typeof createHttpApp>>, id: strin
 }
 
 describe('activity and job routes (A-T8, A-T10)', () => {
-  it('serves the same summary and exact group detail to UI and authorized Agents (A4-A5)', async () => {
+  it('serves the summary and exact group detail (A4-A5)', async () => {
     const { collector, jobs, store, activity } = services();
     for (let index = 0; index < 2; index += 1) {
       store.event({
@@ -90,23 +90,17 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       });
     }
     const ui = await createHttpApp({ collector, jobs, activity });
-    const agent = await createHttpApp({ collector, jobs, activity, agentToken: 'summary-token' });
-    cleanups.push(() => ui.close(), () => agent.close());
-    const headers = { authorization: 'Bearer summary-token' };
+    cleanups.push(() => ui.close());
     const query = '/api/activity?view=summary&sourceType=youtube&subscriptionId=UC-summary&limit=1';
     const uiPage = (await ui.inject({ method: 'GET', url: query })).json();
-    const agentPage = (await agent.inject({ method: 'GET', url: query, headers })).json();
     expect(uiPage.entries[0]).toMatchObject({ kind: 'check', count: 2, existing: 5, result: 'empty' });
-    expect({ ...agentPage.entries[0], groupId: undefined }).toEqual({ ...uiPage.entries[0], groupId: undefined });
-    for (const [app, groupId, auth] of [[ui, uiPage.entries[0].groupId, {}], [agent, agentPage.entries[0].groupId, headers]] as const) {
-      const detail = await app.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1`, headers: auth });
-      expect(detail.statusCode).toBe(200);
-      expect(detail.json()).toMatchObject({ checks: [{ events: expect.any(Array) }], nextCursor: expect.any(String) });
-      expect(detail.json().checks[0].events.map((event: { eventType: string }) => event.eventType).sort()).toEqual(['job.completed', 'job.started']);
-      const next = await app.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1&cursor=${encodeURIComponent(detail.json().nextCursor)}`, headers: auth });
-      expect(next.json().checks).toHaveLength(1);
-    }
-    expect((await agent.inject({ method: 'GET', url: '/api/activity?view=summary', headers: {} })).statusCode).toBe(401);
+    const groupId = uiPage.entries[0].groupId;
+    const detail = await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ checks: [{ events: expect.any(Array) }], nextCursor: expect.any(String) });
+    expect(detail.json().checks[0].events.map((event: { eventType: string }) => event.eventType).sort()).toEqual(['job.completed', 'job.started']);
+    const next = await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1&cursor=${encodeURIComponent(detail.json().nextCursor)}` });
+    expect(next.json().checks).toHaveLength(1);
     expect((await ui.inject({ method: 'GET', url: '/api/activity?view=bogus' })).statusCode).toBe(400);
     expect((await ui.inject({ method: 'GET', url: '/api/activity?view=summary&cursor=bogus' })).statusCode).toBe(400);
     expect((await ui.inject({ method: 'GET', url: '/api/activity/groups/unknown' })).statusCode).toBe(410);
@@ -146,7 +140,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect(health.activityLog).toMatchObject({ state: 'ok', pending: 0, dropped: 0 });
   });
 
-  it('answers Agents with the same activity, summary and retry contract, and rejects malformed queries', async () => {
+  it('answers the activity, summary and retry contract, and rejects malformed queries', async () => {
     const { collector, jobs, activity } = services([new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。')]);
     const app = await createHttpApp({ collector, jobs, activity, agentToken: 'agent-token-for-tests' });
     cleanups.push(() => app.close());

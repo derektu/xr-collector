@@ -1,7 +1,7 @@
 // Collection jobs and their status: a video is accepted before its capture and captured once
 // however often it is submitted, captures rotate between jobs so one large channel does not hold up
-// the rest, the status reads queued, checking, downloading or retrying, and on a stop running work
-// finishes, unfinished work reads interrupted and an unreadable jobs file is set aside.
+// the rest, and on a stop running work finishes, unfinished work reads interrupted and an unreadable
+// jobs file is set aside.
 import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,8 +13,7 @@ import {
   type DocumentSummary,
   type SavedDocument,
 } from '../../src/core/types.js';
-import { workStatus } from '../../src/jobs/job-board.js';
-import { JobManager, checkActivity, type JobLimits } from '../../src/jobs/job-manager.js';
+import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
@@ -372,61 +371,6 @@ describe('JobManager', () => {
     expect(second.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', error: { code: 'interrupted' } });
     expect(second.subs.subscriptions.size).toBe(0);
     expect(second.subs.of('subscribed')).toEqual([]);
-  });
-});
-
-describe('workStatus', () => {
-  const now = '2026-10-15T04:00:00.000Z';
-  const later = '2026-10-15T05:00:00.000Z';
-  const soon = '2026-10-15T04:30:00.000Z';
-  const error = { code: 'network_error', message: '無法連線。' };
-  const retry = { attempts: 1, maxAttempts: 3, nextAttemptAt: later, lastError: error };
-  const check = (overrides: Partial<CollectionJob>): CollectionJob => ({
-    id: 'j', kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: VAULT, parentId: null,
-    source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
-    createdAt: now, startedAt: now, finishedAt: null, updatedAt: now,
-    progress: { total: 10, done: 3, created: 3, existing: 0, failed: 0 }, items: null, result: null, error: null, ...overrides,
-  });
-  const item = (state: 'queued' | 'running' | 'completed', extra = {}) => ({ sourceId: 'v', title: 'v', url: 'u', jobId: 'x', state, outcome: null, error: null, ...extra });
-  const cooldown = (until = later) => ({ wait: { reason: 'rate_limited' as const, until } });
-  const downloading = { state: 'downloading' };
-  const failedRetry = { state: 'retrying', at: later, cause: { reason: 'failed', error, attempt: 2, maxAttempts: 3 } };
-
-  it('is queued until the work starts, also while its source cools down', () => {
-    expect(workStatus(check({ state: 'queued', startedAt: null, progress: null }))).toEqual({ state: 'queued' });
-    expect(workStatus(check({ state: 'queued', startedAt: null, progress: null, ...cooldown() }))).toEqual({ state: 'queued' });
-    expect(workStatus(check({ kind: 'youtube.video', state: 'queued', startedAt: null, progress: null }))).toEqual({ state: 'queued' });
-  });
-
-  it('checks until the check knows items to collect, and downloads after, whoever holds the capture slot', () => {
-    expect(workStatus(check({ phase: 'discover', progress: null }))).toEqual({ state: 'checking' });
-    expect(workStatus(check({ progress: { total: 0, done: 0, created: 0, existing: 0, failed: 0 } }))).toEqual({ state: 'checking' });
-    // A started check waiting in line again, such as after a restart, does not go back to queued.
-    expect(workStatus(check({ state: 'queued', phase: 'discover', progress: null }))).toEqual({ state: 'checking' });
-    expect(workStatus(check({}))).toEqual(downloading);
-    expect(workStatus(check({ items: [item('completed'), item('queued')] }))).toEqual(downloading);
-    expect(workStatus(check({ items: [item('queued', cooldown()), item('running')] }))).toEqual(downloading);
-    expect(workStatus(check({ items: [item('queued', cooldown()), item('queued')] }))).toEqual(downloading);
-    expect(workStatus(check({ kind: 'youtube.video', progress: null }))).toEqual(downloading);
-    expect(workStatus(check({ kind: 'youtube.channel-add', phase: 'resolve', progress: null }))).toEqual({ state: 'checking' });
-  });
-
-  it('retries while its own step waits for a retry or a cooldown', () => {
-    expect(workStatus(check({ state: 'queued', retry }))).toEqual(failedRetry);
-    expect(workStatus(check({ state: 'queued', phase: 'discover', progress: null, ...cooldown() })))
-      .toEqual({ state: 'retrying', at: later, cause: { reason: 'rate_limited' } });
-    expect(workStatus(check({ kind: 'youtube.video', state: 'queued', progress: null, retry }))).toEqual(failedRetry);
-  });
-
-  it('retries while every item it still collects waits, until the first of them goes on', () => {
-    expect(workStatus(check({ items: [item('completed'), item('queued', { retry }), item('queued', cooldown(soon))] })))
-      .toEqual({ state: 'retrying', at: soon, cause: { reason: 'rate_limited' } });
-    expect(workStatus(check({ items: [item('queued', { retry })] }))).toEqual(failedRetry);
-  });
-
-  it('reports a check with its item progress', () => {
-    expect(checkActivity(check({}))).toEqual({ jobId: 'j', status: downloading, done: 3, total: 10 });
-    expect(checkActivity(check({ state: 'queued', startedAt: null, progress: null }))).toEqual({ jobId: 'j', status: { state: 'queued' }, done: 0, total: 0 });
   });
 });
 

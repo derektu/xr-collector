@@ -92,8 +92,8 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
       await current.stores[type].updateWith(() => new Map([[id, patch]]));
     },
     /** Subscribes through the service and returns the first check once it ends. */
-    async subscribe(type: FakeType, id: string): Promise<CollectionJob> {
-      const added = await current.jobs.whenSettled((await current.services.of(type)!.add(`https://${type}.example/feed/${id}`)).job.id);
+    async subscribe(type: FakeType, id: string, settings?: Record<string, number>): Promise<CollectionJob> {
+      const added = await current.jobs.whenSettled((await current.services.of(type)!.add(`https://${type}.example/feed/${id}`, settings)).job.id);
       expect(added.result).toMatchObject({ outcome: 'created' });
       return current.jobs.whenSettled(added.result!.followUpJobId!);
     },
@@ -107,6 +107,8 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
     },
   };
 }
+
+const itemsOf = (job: CollectionJob) => job.items!.map((item) => [item.sourceId, item.skipReason ?? item.outcome]);
 
 const dispatchTimes = (record: SubscriptionRecord) => ({
   lastDispatchedAt: record.lastDispatchedAt, nextCheckAt: record.nextCheckAt, lastCheckedAt: record.lastCheckedAt,
@@ -147,6 +149,46 @@ describe('failed items across checks', () => {
     feed.items.unshift(...[1, 2, 3, 4, 5].map((index) => ({ key: `new-${index}`, title: `新的 ${index}`, publishedAt: new Date(w.clock.now.getTime() - index * MINUTE).toISOString() })));
     await w.checkNow('fake', 'f');
     expect((await w.record('fake', 'f')).failures).toBeUndefined();
+  });
+  it('counts no attempt for an item whose source needs a new sign-in', async () => {
+    const w = await world();
+    const [signIn, ok] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
+    w.sources.fake.fail(signIn!, new CollectorError('login_needed', '需要重新登入。'));
+    const first = await w.subscribe('fake', 'f');
+    expect(itemsOf(first)).toEqual([[signIn, null], [ok, 'created']]);
+    expect((await w.record('fake', 'f')).failures).toBeUndefined();
+  });
+
+  it('keeps a skipped item in the newest N without taking an older one, and keeps the records of two types apart', async () => {
+    const w = await world();
+    const keys = w.sources.fake.addFeed('n', w.clock.now, [1, 2, 3]);
+    w.sources.fake2.addFeed('n', w.clock.now, [1, 2]);
+    w.sources.fake.fail(keys[0]!, new CollectorError('video_unavailable', '文章不存在。'));
+    const first = await w.subscribe('fake', 'n', { maxItems: 2 });
+    expect(itemsOf(first)).toEqual([[keys[0], null], [keys[1], 'created']]);
+    w.advance(MINUTE);
+    expect(itemsOf(await w.checkNow('fake', 'n'))).toEqual([]);
+    expect(w.sources.fake.captures).not.toContain(keys[2]);
+
+    const other = await w.subscribe('fake2', 'n', { maxItems: 2 });
+    expect(other.progress).toMatchObject({ created: 2, failed: 0 });
+    expect((await w.record('fake2', 'n')).failures).toBeUndefined();
+    expect((await w.record('fake', 'n')).failures?.map((entry) => entry.itemKey)).toEqual([keys[0]]);
+  });
+
+  it('completes a check whose items all fail without an error status, and still fails a check whose listing fails', async () => {
+    const w = await world();
+    const [only] = w.sources.fake.addFeed('a', w.clock.now, [1]);
+    w.sources.fake.fail(only!, new CollectorError('no_subtitles', '沒有內文。'));
+    const first = await w.subscribe('fake', 'a');
+    expect(first).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, error: null });
+    const listed = async () => (await w.services.of('fake')!.listSubscriptions()).find((entry) => entry.id === 'a')!;
+    expect(await listed()).toMatchObject({ status: 'tracking', lastError: null });
+
+    w.advance(MINUTE);
+    w.sources.fake.listFailures.push(new CollectorError('capture_failed', '收集失敗。'));
+    expect(await w.checkNow('fake', 'a')).toMatchObject({ state: 'failed', error: { code: 'capture_failed' } });
+    expect(await listed()).toMatchObject({ status: 'error', lastError: { code: 'capture_failed' } });
   });
 });
 
