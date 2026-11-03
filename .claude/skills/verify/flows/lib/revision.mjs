@@ -45,6 +45,27 @@ export async function pageTurn(page) {
 }
 
 /**
+ * Records the requests `page` sends with `method` to a path starting with `prefix`. `sent()` resolves,
+ * once the page handled everything that reached it before the call (see pageTurn), with the
+ * requests so far as `METHOD path`; a flow proving that an action sent nothing asserts it is empty.
+ */
+export function recordRequests(page, method, prefix) {
+  const requests = [];
+  const listen = (request) => {
+    const { pathname } = new URL(request.url());
+    if (request.method() === method && pathname.startsWith(prefix)) requests.push(`${method} ${pathname}`);
+  };
+  page.on('request', listen);
+  return {
+    async sent() {
+      await pageTurn(page);
+      return [...requests];
+    },
+    stop: () => page.off('request', listen),
+  };
+}
+
+/**
  * The Agent port, with the run's own token. Each call returns the JSON body and the revision its
  * response named; an error status throws with the body. The token never goes into evidence.
  */

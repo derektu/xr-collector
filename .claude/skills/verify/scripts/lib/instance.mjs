@@ -304,6 +304,10 @@ function instance(record) {
       const current = JSON.parse(await readFile(catalogFile, 'utf8'));
       writeJsonAtomic(catalogFile, edit(current) ?? current);
     },
+    /** What the synthetic server holds now, by key (see server.mts): for example { 'capture:<video ID>': 1 }. */
+    async held() {
+      return JSON.parse(await readFile(path.join(record.runDir, 'held.json'), 'utf8').catch(() => '{}'));
+    },
     /**
      * Stops the server and starts it again on the same run: same profile, Vault, catalog, ports and
      * slot. By default the runtime shuts down through SIGTERM, as a user quitting the app does;

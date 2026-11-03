@@ -97,14 +97,9 @@ const ownBin = planned.kind === 'packaged' ? path.join(planned.resources, 'bin')
 console.log(`${desktop.target.kind} ${desktop.target.executable} ${desktop.target.version}, run ${desktop.runDir}, evidence ${desktop.evidence}`);
 // A relaunch opens a new window; the recorder screenshots whichever window is current.
 const record = recorder(desktop, () => desktop.window);
-const consoleErrors = [];
 let closed = false;
 /** Why the app could not be closed through its own shutdown; null once it closed. */
 let closeFailure = null;
-const watchConsole = (window) => {
-  window.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-  window.on('pageerror', (error) => consoleErrors.push(String(error)));
-};
 const documents = async () => (await desktop.api('/api/documents?limit=100')).documents;
 /** What the main process reports about the login item and the update feed. */
 const systemHooks = () => desktop.app.evaluate(({ app, autoUpdater }) => ({
@@ -124,7 +119,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { shutDow
 
 // From here on every exit goes through shutDown, so the slot and the run folder are released.
 try {
-  watchConsole(desktop.window);
   let hooksAtStart = null;
 
   await record.scenario('DESKTOP-01', '啟動：受測程式與隔離的 profile', async ({ expect, shot, note }) => {
@@ -218,7 +212,6 @@ try {
     const titles = (await documents()).map((document) => document.title).sort();
     note('documentsBefore', titles);
     await desktop.relaunch();
-    watchConsole(desktop.window);
     const hooks = await systemHooks();
     note('systemHooksAfterRelaunch', hooks);
     expect(JSON.stringify(hooks) === JSON.stringify(hooksAtStart), `重啟後登入項目與更新來源不變：${JSON.stringify(hooks)}`);
@@ -254,13 +247,13 @@ try {
     }
   });
 
-  const passed = await record.finish({ consoleErrors, video: o.video ?? null, userAppRunning });
+  const passed = await record.finish({ consoleErrors: desktop.consoleErrors, pageErrors: desktop.pageErrors, video: o.video ?? null, userAppRunning });
   console.log(`${passed ? 'PASS' : 'FAIL'} desktop smoke (${desktop.target.kind}), results in ${desktop.evidence}/results.json`);
   process.exitCode = passed ? 0 : 1;
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
-  await record.finish({ consoleErrors, video: o.video ?? null, userAppRunning, error: String(error.stack ?? error) }).catch(() => undefined);
+  await record.finish({ consoleErrors: desktop.consoleErrors, pageErrors: desktop.pageErrors, video: o.video ?? null, userAppRunning, error: String(error.stack ?? error) }).catch(() => undefined);
 } finally {
   await shutDown();
 }

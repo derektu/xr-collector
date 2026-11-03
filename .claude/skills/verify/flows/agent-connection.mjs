@@ -1,6 +1,7 @@
 // Compact Agent setup, explicit connection export and restart-bound port configuration.
 import { readFile } from 'node:fs/promises';
 import yauzl from 'yauzl';
+import { recordRequests } from './lib/revision.mjs';
 
 export const name = 'agent-connection';
 export const title = 'AI 助理連線、Skill 與連線設定';
@@ -90,8 +91,14 @@ export async function run({ instance, page, record, waitFor }) {
     await dialog.getByRole('button', { name: '取消' }).click();
     await section.getByRole('button', { name: '連線設定…' }).click();
     expect(await dialog.locator('input[type=radio]').first().isChecked(), '取消後重開會還原已保存的自動模式', { id: 'a44.cancel-restores-draft' });
+    // The saved setting is the dialog's state when 保存 is pressed; the stored mode is read once the save answered.
+    const saving = page.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname === '/api/device/agent/port');
     await dialog.getByRole('button', { name: '保存設定' }).click();
-    expect((await instance.api('/api/device/agent')).agent.configured.mode === 'auto', '取消的 fixed 草稿不會被後續保存', { id: 'a44.cancel-not-saved' });
+    const save = await saving;
+    const sent = JSON.parse(save.request().postData() ?? 'null');
+    const stored = (await instance.api('/api/device/agent')).agent.configured.mode;
+    expect(save.ok() && sent?.mode === 'auto' && stored === 'auto', '取消的 fixed 草稿不會被後續保存',
+      { id: 'a44.cancel-not-saved', expected: { status: 200, sent: 'auto', stored: 'auto' }, actual: { status: save.status(), sent, stored } });
     await section.getByRole('button', { name: '連線設定…' }).click();
     await fixed.check();
     await dialog.locator('input[type=number]').fill(String(new URL(old.url).port));
@@ -102,9 +109,13 @@ export async function run({ instance, page, record, waitFor }) {
     await section.getByRole('button', { name: '連線設定…' }).click();
     await dialog.getByRole('button', { name: '重設連線金鑰' }).click();
     const confirmation = dialog.getByRole('alertdialog', { name: '確定要重設連線金鑰？' });
+    const resets = recordRequests(page, 'POST', '/api/device/agent/key/reset');
     await confirmation.getByRole('button', { name: '取消' }).click();
+    const resetRequests = await resets.sent();
+    resets.stop();
     const afterCancel = (await instance.api('/api/device/agent/connection')).connection;
-    expect(afterCancel.token === old.token, '取消確認不會更換金鑰', { id: 'a44.reset-cancel', actual: { unchanged: afterCancel.token === old.token } });
+    expect(resetRequests.length === 0 && afterCancel.token === old.token, '取消確認不送出重設，金鑰不變',
+      { id: 'a44.reset-cancel', expected: { sent: [], unchanged: true }, actual: { sent: resetRequests, unchanged: afterCancel.token === old.token } });
     const resetEndpoint = '**/api/device/agent/key/reset';
     const failReset = async (route) => route.fulfill({
       status: 500,

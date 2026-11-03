@@ -1,7 +1,9 @@
 // A feed whose site answers 429: its check fails at once and counts toward that subscription's
 // failures, the row shows the failure, and another feed checked right after completes, since RSS
-// has no shared cooldown. A feed whose site answers 503 keeps its check running while it waits to
-// retry. Pausing after repeated failures and resuming are in subscription-failures.
+// has no shared cooldown: a cooldown would record an rss.rate_limited event, and the activity log
+// keeps every one. A feed whose site answers 503 keeps its check running while it waits to retry;
+// the retry is held, so the wait lasts until the flow has looked. Pausing after repeated failures
+// and resuming are in subscription-failures.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
@@ -44,13 +46,6 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     }, `${feed.title} check settled`, { timeout: CHECK_TIMEOUT }).catch(() => null);
   };
 
-  // The RSS channel's state, sampled while the checks run.
-  const pacingStates = [];
-  const samplePacing = async () => {
-    const group = (await instance.api('/api/pacing')).groups.find((entry) => entry.group === 'rss');
-    pacingStates.push(group?.state ?? null);
-  };
-
   await record.scenario('RL-1', '準備：訂閱 RSS 與 Atom 兩個 feed', async ({ expect }) => {
     const before = await documentsTotal();
     await subscribe(instance, `${instance.feedsOrigin}/feed.xml`);
@@ -73,35 +68,28 @@ export async function run({ instance, page, openPage, record, waitFor }) {
         publishedAt: new Date(Date.now() - 60_000).toISOString(), content: '<p>【合成文章】Atom 新文章。</p>',
       });
     });
-    const sampler = setInterval(() => { void samplePacing().catch(() => undefined); }, 300);
-    try {
-      failed = await checkFromRow(feeds.a);
-      expect(failed?.state === 'failed' && failed.error?.code === 'rate_limited', 'RSS 的檢查立刻失敗，錯誤為 rate_limited',
-        { id: 'w2.a-failed', expected: { state: 'failed', code: 'rate_limited' }, actual: failed ? { state: failed.state, error: failed.error } : 'not settled' });
-      const shown = await rowShows(feeds.a, 'failing');
-      const retryAt = (await subscriptions()).find((entry) => entry.id === feeds.a.id)?.checkStatus.nextCheckAt ?? null;
-      expect(shown.phase === 'failing' && shown.failures === '1' && retryAt !== null, 'RSS 列顯示連續失敗 1 次，API 有重試時間',
-        { id: 'w2.a-row', expected: { phase: 'failing', failures: '1', retryAt: '時間' }, actual: { ...shown, retryAt } });
-      const stored = await storedFeed(feeds.a.id);
-      expect(stored.checkFailures?.count === 1 && stored.checkFailures.error?.code === 'rate_limited', 'Vault 檔中 RSS 的連續失敗為 1 次、rate_limited',
-        { id: 'w2.a-vault', expected: { count: 1, code: 'rate_limited' }, actual: stored.checkFailures ?? null });
+    failed = await checkFromRow(feeds.a);
+    expect(failed?.state === 'failed' && failed.error?.code === 'rate_limited', 'RSS 的檢查立刻失敗，錯誤為 rate_limited',
+      { id: 'w2.a-failed', expected: { state: 'failed', code: 'rate_limited' }, actual: failed ? { state: failed.state, error: failed.error } : 'not settled' });
+    const shown = await rowShows(feeds.a, 'failing');
+    const retryAt = (await subscriptions()).find((entry) => entry.id === feeds.a.id)?.checkStatus.nextCheckAt ?? null;
+    expect(shown.phase === 'failing' && shown.failures === '1' && retryAt !== null, 'RSS 列顯示連續失敗 1 次，API 有重試時間',
+      { id: 'w2.a-row', expected: { phase: 'failing', failures: '1', retryAt: '時間' }, actual: { ...shown, retryAt } });
+    const stored = await storedFeed(feeds.a.id);
+    expect(stored.checkFailures?.count === 1 && stored.checkFailures.error?.code === 'rate_limited', 'Vault 檔中 RSS 的連續失敗為 1 次、rate_limited',
+      { id: 'w2.a-vault', expected: { count: 1, code: 'rate_limited' }, actual: stored.checkFailures ?? null });
 
-      const documentsBefore = await documentsTotal();
-      const completed = await checkFromRow(feeds.b);
-      expect(completed?.state === 'completed', 'Atom 的檢查在 30 秒內完成', { id: 'w2.b-completed', expected: 'completed', actual: completed?.state ?? 'not settled' });
-      const added = await waitFor(async () => (await documentsTotal()) > documentsBefore ? await documentsTotal() - documentsBefore : null,
-        'Atom article saved', { timeout: 10_000 }).catch(async () => await documentsTotal() - documentsBefore);
-      expect(added === 1, 'Atom 收進 1 篇新文章', { id: 'w2.b-documents', expected: 1, actual: added });
-      const rowB = await rowShows(feeds.b, 'scheduled');
-      expect(rowB.phase === 'scheduled', 'Atom 列回到排定下次檢查', { id: 'w2.b-row', expected: 'scheduled', actual: rowB });
-    } finally {
-      clearInterval(sampler);
-    }
-    await samplePacing();
-    expect(pacingStates.length > 0 && !pacingStates.includes('cooldown'), 'RSS 請求通道從未進入冷卻',
-      { id: 'w2.no-cooldown', expected: '沒有 cooldown', actual: [...new Set(pacingStates)] });
+    const documentsBefore = await documentsTotal();
+    const completed = await checkFromRow(feeds.b);
+    expect(completed?.state === 'completed', 'Atom 的檢查在 30 秒內完成', { id: 'w2.b-completed', expected: 'completed', actual: completed?.state ?? 'not settled' });
+    const added = await waitFor(async () => (await documentsTotal()) > documentsBefore ? await documentsTotal() - documentsBefore : null,
+      'Atom article saved', { timeout: 10_000 }).catch(async () => await documentsTotal() - documentsBefore);
+    expect(added === 1, 'Atom 收進 1 篇新文章', { id: 'w2.b-documents', expected: 1, actual: added });
+    const rowB = await rowShows(feeds.b, 'scheduled');
+    expect(rowB.phase === 'scheduled', 'Atom 列回到排定下次檢查', { id: 'w2.b-row', expected: 'scheduled', actual: rowB });
+    // Both checks have ended, so a cooldown the 429 started would be in the activity log by now.
     const limitedEvents = (await instance.api('/api/activity?limit=20&eventType=rss.rate_limited')).events;
-    expect(limitedEvents.length === 0, '記錄沒有 rss.rate_limited', { id: 'w2.no-event', expected: 0, actual: limitedEvents.map((event) => event.message) });
+    expect(limitedEvents.length === 0, 'RSS 請求通道沒有進入冷卻：沒有 rss.rate_limited 紀錄', { id: 'w2.no-event', expected: 0, actual: limitedEvents.map((event) => event.message) });
     await shot('rows-limited');
   });
 
@@ -129,6 +117,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await instance.updateCatalog((catalog) => {
       delete catalog.feeds['/feed.xml'].status;
       catalog.feeds['/atom.xml'].status = 503;
+      catalog.holdRetries = true;
     });
     try {
       const since = new Date().toISOString();
@@ -152,7 +141,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
         { id: 'w503.running', expected: { running: 1, queued: 0 }, actual: placed });
       await shot('running-retry');
     } finally {
-      await instance.updateCatalog((catalog) => { delete catalog.feeds['/atom.xml'].status; });
+      await instance.updateCatalog((catalog) => { delete catalog.feeds['/atom.xml'].status; catalog.holdRetries = false; });
     }
   });
 }

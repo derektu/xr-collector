@@ -4,9 +4,10 @@
 // collection uses synthetic YouTube data; all transfers use the production HTTP handlers and real
 // files and search indexes. A fixed Vault location refusing other Vaults is in
 // tests/vault/vault-open.test.ts.
-import { cp, mkdir, readFile, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { collect, idle, launchWeb, subscribe } from '../scripts/lib/index.mjs';
+import { recordRequests } from './lib/revision.mjs';
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';
@@ -62,6 +63,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     // Stop before copying the Vault, so opening it cannot share a live writer.
     await donor.stop({ keep: true });
     await cp(path.join(donor.runDir, 'vault'), donorRoot, { recursive: true });
+    await rm(donor.runDir, { recursive: true, force: true });
+    donor = null;
     await settings();
 
     await record.scenario('R102-1', '資訊、匯出、同名檔保留與覆蓋', async ({ expect, shot, themed }) => {
@@ -88,13 +91,23 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await click('export-confirm');
       await visible('export-exists');
       await shot('export-exists');
+      const exports = recordRequests(page, 'POST', '/api/vault/export');
       await click('export-keep');
-      expect(original.equals(await readFile(exportPath)), '保留後 zip 位元不變');
+      const keepRequests = await exports.sent();
+      exports.stop();
+      const kept = { sent: keepRequests, unchanged: original.equals(await readFile(exportPath)) };
+      expect(kept.sent.length === 0 && kept.unchanged, '保留不送出匯出，zip 位元不變', { id: 'export.keep', expected: { sent: [], unchanged: true }, actual: kept });
       await click('export-confirm');
       await visible('export-exists');
+      const before = await stat(exportPath);
+      const replacing = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/vault/export');
       await click('export-replace');
-      await visible('export-result-path');
-      expect((await instance.api('/api/vault/status')).state === 'completed', '覆蓋完成');
+      const replaced = await replacing;
+      if (replaced.ok()) await visible('export-result-path');
+      const after = await stat(exportPath);
+      const overwrite = { status: replaced.status(), overwrite: JSON.parse(replaced.request().postData() ?? '{}').overwrite, rewritten: after.mtimeMs > before.mtimeMs };
+      expect(replaced.ok() && overwrite.overwrite === true && overwrite.rewritten, '覆蓋送出 overwrite 並重寫 zip',
+        { id: 'export.replace', expected: { status: 200, overwrite: true, rewritten: true }, actual: overwrite });
       await click('transfer-close');
     });
 
@@ -151,9 +164,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await subscribe(instance, 'https://www.youtube.com/@verify-a');
       await waitFor(async () => {
         const stored = JSON.parse(await readFile(path.join(instance.runDir, 'profile', 'jobs', 'jobs.json'), 'utf8'));
-        const pacing = await instance.api('/api/pacing');
-        return stored.jobs.some((job) => job.kind === 'youtube.video' && job.state === 'running' && job.phase === 'capture')
-          && pacing.groups.some((group) => group.group === 'youtube' && group.state === 'busy');
+        const held = Object.keys(await instance.held()).some((key) => key.startsWith('capture:'));
+        return held && stored.jobs.some((job) => job.kind === 'youtube.video' && job.state === 'running' && job.phase === 'capture');
       }, 'capture running');
       await click('vault-import');
       await button('import-path').fill(exportPath);

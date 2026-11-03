@@ -26,8 +26,8 @@ const fromIndexKey = (key) => Buffer.from(key, 'base64url').toString('utf8');
 const difference = (a, b) => [...a].filter((value) => !b.has(value)).sort();
 
 export async function run({ instance, page, openPage, record, waitFor }) {
-  // Slower capture keeps A downloading while B is subscribed, so 下載中 is always sampled.
-  await instance.updateCatalog((catalog) => { catalog.youtube.captureDelayMs = 1500; });
+  // Captures are held until SUBAB-3, so A is still downloading however long subscribing B takes.
+  await instance.updateCatalog((catalog) => { catalog.youtube.holdCaptures = true; });
   const catalog = await instance.catalog();
   const [a, b] = ['verify-a', 'verify-b'].map((handle) => catalog.youtube.channels.find((source) => source.handle === handle));
   const rowOf = (source) => `source-row-${source.id}`;
@@ -63,10 +63,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   });
 
   await record.scenario('SUBAB-2', 'A 下載中時經畫面訂閱頻道 B，工作頁的分區', async ({ expect, shot }) => {
-    await waitFor(async () => {
-      const status = await apiStatus(a);
-      return status?.state === 'downloading' && status.done >= 1;
-    }, 'A downloading', { timeout: 60_000 });
+    const held = async (source) => Object.keys(await instance.held()).some((key) => source.videos.some((video) => key === `capture:${video.id}`));
+    await waitFor(async () => (await apiStatus(a))?.state === 'downloading' && await held(a), 'A downloading with a capture held', { timeout: 60_000 });
     const downloading = await statusOf(a);
     await subscribeThroughDialog(b);
     await page.getByTestId(rowOf(b)).waitFor({ timeout: 15_000 });
@@ -90,6 +88,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   });
 
   await record.scenario('SUBAB-3', '兩者完成：狀態序列、文件數、工作頁與徽章', async ({ expect, shot, note }) => {
+    await instance.updateCatalog((current) => { current.youtube.holdCaptures = false; });
     await waitFor(async () => (await apiStatus(a))?.state === 'scheduled' && (await apiStatus(b))?.state === 'scheduled', 'A and B scheduled', { timeout: 120_000 });
     // An unchanged row can still be waiting for the next poll. Wait for the terminal render,
     // retaining the checks below on timeout so stale rows fail with their observed text.

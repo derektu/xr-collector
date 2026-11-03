@@ -88,6 +88,8 @@ export interface WorkspaceOptions {
   /** The device's network, confirmed by the jobs of every Vault this workspace opens after a request fails for lack of it. */
   connectivity?: Connectivity;
   jobRetry?: Partial<RetryPolicy>;
+  /** Starts a timer jobs wait on (a retry's next attempt, a cooldown's end) and returns its cancel function; `setTimeout` by default. */
+  jobTimer?: (callback: () => void, ms: number) => () => void;
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
    * that location again, so no other Vault is created or opened.
@@ -691,6 +693,7 @@ export class VaultWorkspace {
       subscriptions: forwardingPort(() => bundle.subscriptions),
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
+      ...(this.options.jobTimer ? { setTimer: this.options.jobTimer } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
       ...(this.options.pause ? { pause: this.options.pause } : {}),
       ...(this.options.connectivity ? { connectivity: this.options.connectivity } : {}),

@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import {
   activateNotification, clickTray, closeWindow, idle, notifications, shownIn, subscribe, trayMenu, windowState,
 } from '../scripts/lib/index.mjs';
+import { writeJson } from './lib/files.mjs';
 
 export const name = 'notification-clicks';
 export const title = '自動暫停通知的選單、圖示與導頁';
@@ -67,14 +68,14 @@ export async function run({ instance, record, waitFor, visible }) {
           error: { code: 'feed_not_found', message: '找不到 feed（合成通知驗收）' },
         };
       }
-      await writeFile(subscriptionsFile, `${JSON.stringify(stored, null, 2)}\n`);
+      await writeJson(subscriptionsFile, stored);
       originalVaultId = JSON.parse(await readFile(markerFile, 'utf8')).id;
       const first = stored.subscriptions.find((entry) => entry.id === ids[0]);
       const event = {
         id: eventId(originalVaultId, ids[0]), vaultId: originalVaultId, sourceType: 'rss', subscriptionId: ids[0], title: first.title,
         failureCount: 5, error: first.checkFailures.error, autoPausedAt: PAUSED_AT, delivery: 'attempted', deliveryMessage: null,
       };
-      await writeFile(path.join(instance.profile, 'notifications.json'), `${JSON.stringify({ version: 1, enabled: true, events: [event] }, null, 2)}\n`);
+      await writeJson(path.join(instance.profile, 'notifications.json'), { version: 1, enabled: true, events: [event] });
 
       const other = path.join(instance.runDir, 'other-vault');
       const { createVaultDirectory } = await import(pathToFileURL(path.join(instance.checkout, 'dist/node/vault/vault-directory.js')).href);
@@ -85,7 +86,8 @@ export async function run({ instance, record, waitFor, visible }) {
       await instance.relaunch();
     });
 
-    await record.scenario('NCLICK-D1', 'attention 圖示、兩筆選單與隱藏／最小化後通知導頁', async ({ expect, note, shot }) => {
+    const d1 = visible ? 'attention 圖示、兩筆選單與隱藏／最小化後通知導頁' : 'attention 圖示、兩筆選單與隱藏後通知導頁（最小化還原只在 --visible 執行）';
+    await record.scenario('NCLICK-D1', d1, async ({ expect, note, shot }) => {
       const menu = await trayMenu(instance.app);
       const submenu = menu.items.find((item) => item.kind === 'submenu');
       note('menu', menu);
@@ -133,12 +135,19 @@ export async function run({ instance, record, waitFor, visible }) {
         { id: 'restart.no-work', expected: { running: 0, queued: 0, documents: beforeDocuments }, actual: { running: jobs.running.length, queued: jobs.queued.length, documents: afterDocuments } });
     });
 
-    await record.scenario('NCLICK-D3', '目前詳情已被外部移除時，點舊通知重新載入不存在狀態', async ({ expect, shot }) => {
+    await record.scenario('NCLICK-D3', '訂閱已被外部移除時，點舊通知導到它的詳情並顯示不存在', async ({ expect, shot }) => {
+      // Away from its detail first: the removal alone makes an open detail show source-missing, so
+      // only the click can bring the window back to that route.
+      await page().getByTestId('nav-settings').click();
+      await page().getByTestId('page-settings').waitFor();
       await instance.api(`/api/subscriptions/rss/${encodeURIComponent(ids[0])}`, { method: 'DELETE', body: '{}' });
       await activateNotification(instance.app, eventId(originalVaultId, ids[0]));
-      await page().getByTestId('source-missing').waitFor();
+      const missing = await page().getByTestId('source-missing').waitFor().then(() => true, () => false);
+      const route = new URL(page().url()).pathname;
+      expect(missing && route === `/sources/rss/${encodeURIComponent(ids[0])}`, '點舊通知導到被移除訂閱的詳情並顯示不存在',
+        { id: 'removed.route', expected: { route: `/sources/rss/${encodeURIComponent(ids[0])}`, missing: true }, actual: { route, missing } });
       const one = await trayMenu(instance.app);
-      expect(one.items.find((item) => item.kind === 'submenu')?.items.length === 1, '同一路由重抓後顯示不存在，選單剩一筆',
+      expect(one.items.find((item) => item.kind === 'submenu')?.items.length === 1, '點通知後顯示不存在，選單剩一筆',
         { id: 'removed.same-detail', expected: 1, actual: one });
       await shot('removed-old-notification');
 

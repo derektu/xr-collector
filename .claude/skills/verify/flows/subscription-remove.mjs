@@ -7,7 +7,7 @@
 // covered by tests/sources/ and the HTTP tests.
 import { idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
-import { screenAt } from './lib/revision.mjs';
+import { recordRequests, screenAt } from './lib/revision.mjs';
 
 export const name = 'subscription-remove';
 export const title = '移除訂閱：取消、預設保留文件、確認後文件仍可閱讀';
@@ -51,12 +51,15 @@ export async function run({ instance, page, record, waitFor }) {
     const expected = { keep: true, delete: false, documents: ids.length };
     expect(JSON.stringify(choices) === JSON.stringify(expected), '確認框預設勾選保留文件，並寫出份數', { id: 'remove.default-keep', expected, actual: choices });
     await shot('confirm');
+    const removals = recordRequests(page, 'DELETE', '/api/subscriptions/');
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });
+    const sent = await removals.sent();
+    removals.stop();
     const state = await instance.state();
-    const after = { row: await row.count(), subscribed: await listed(), documents: sameIds(vaultIds(state), ids) && sameIds(apiIds(state), ids) && sameIds(indexIds(state), ids) };
-    expect(after.row === 1 && after.subscribed && after.documents, '取消後列還在、仍訂閱、文件不變', {
-      id: 'remove.cancel', expected: { row: 1, subscribed: true, documents: true }, actual: after,
+    const after = { sent, row: await row.count(), subscribed: await listed(), documents: sameIds(vaultIds(state), ids) && sameIds(apiIds(state), ids) && sameIds(indexIds(state), ids) };
+    expect(sent.length === 0 && after.row === 1 && after.subscribed && after.documents, '取消不送出移除，列還在、仍訂閱、文件不變', {
+      id: 'remove.cancel', expected: { sent: [], row: 1, subscribed: true, documents: true }, actual: after,
     });
   });
 

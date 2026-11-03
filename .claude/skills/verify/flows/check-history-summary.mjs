@@ -6,9 +6,9 @@
 // The grouping rules themselves are in tests/activity/activity-summary.test.ts and
 // tests/activity/activity-jobs.test.ts; the detail's paging order is in
 // tests/web/activity-group-pages.test.ts.
-import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
+import { editJson, writeText } from './lib/files.mjs';
 
 export const name = 'check-history-summary';
 export const title = '定時檢查摘要、完整細節與工作記錄';
@@ -29,16 +29,12 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   /** The `[data-result]` rows of `locator` as { result, count }. */
   const rowsOf = (locator) => locator.evaluateAll((rows) => rows.map((row) => ({ result: row.dataset.result, count: Number(row.dataset.count) })));
 
-  // The edit goes through a temporary file and a rename, as the App's own writes do, so the App never reads half a file.
   const scheduledCheck = async () => {
     const before = new Set((await jobs()).map((job) => job.id));
-    const file = JSON.parse(await readFile(subscriptionsFile, 'utf8'));
-    const row = file.channels.find((candidate) => candidate.id === source.id);
-    row.nextCheckAt = new Date(Date.now() - 1_000).toISOString();
-    const temporary = `${subscriptionsFile}.verify.tmp`;
-    await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`);
-    await rename(temporary, subscriptionsFile);
-    await writeFile(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
+    await editJson(subscriptionsFile, (file) => {
+      file.channels.find((candidate) => candidate.id === source.id).nextCheckAt = new Date(Date.now() - 1_000).toISOString();
+    });
+    await writeText(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
     return waitFor(async () => {
       // A check reads as finished only once the subscription file records its end, so the next edit cannot be overwritten.
       const job = (await jobs()).find((candidate) => !before.has(candidate.id) && candidate.scope?.trigger === 'scheduled');
