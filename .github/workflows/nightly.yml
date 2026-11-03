@@ -227,7 +227,9 @@ jobs:
   report:
     name: Report
     needs: [changes, verify, desktop, web, package]
-    if: always() && needs.changes.outputs.run == 'true' && (github.event_name == 'schedule' || inputs.report)
+    # A cancelled run says nothing about the product, so it opens no issue; nothing cancels a scheduled
+    # run (cancel-in-progress is false), so no nightly failure goes unreported.
+    if: ${{ !cancelled() && needs.changes.outputs.run == 'true' && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: macos-15
     permissions:
       actions: read
