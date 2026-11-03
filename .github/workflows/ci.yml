@@ -1,7 +1,8 @@
 name: CI
 
-# A change to Markdown alone does not run Verify. The Agent skill is Markdown that tests read, so it
-# runs Verify like code.
+# The pull request gate: unit and integration tests, including the real-engine cases, typecheck and
+# build on a Mac. Web E2E and packaged smoke run in e2e.yml. A change to Markdown alone does not run
+# the gate; the Agent skill is Markdown that tests read, so it runs the gate like code.
 on:
   push:
     branches: [main]
@@ -10,29 +11,19 @@ on:
     branches: [main]
     paths: ['**', '!**/*.md', 'skills/xr-collector-agent/SKILL.md']
   workflow_dispatch:
-    inputs:
-      tested_ref:
-        description: Optional full 40-character commit to test with this branch's Web regression harness
-        required: false
-        type: string
-      packaged_smoke:
-        description: Build and run the offline packaged-App smoke on Mac ARM64 and Windows x64
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    name: Verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    name: Verify (Mac)
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -41,175 +32,7 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Install pinned runtimes for the real-engine tests
+        run: npm run download:runtime
       - name: Test, typecheck, and build
         run: npm run verify
-      - name: Save test report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: test-report-${{ github.sha }}
-          path: .data/ci/junit.xml
-          include-hidden-files: true
-          retention-days: 7
-          if-no-files-found: warn
-      - name: Save build
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: build-${{ github.sha }}
-          path: dist/
-          retention-days: 7
-          if-no-files-found: error
-
-  # A push to main whose tree equals the merged pull request's last commit reuses that commit's
-  # passed Web regression instead of running it again; Verify always runs.
-  web-regression-reuse:
-    name: Web regression reuse
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    outputs:
-      reuse: ${{ steps.decide.outputs.reuse }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          sparse-checkout: .github/scripts
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .nvmrc
-      - name: Compare with the pull request's tested tree
-        id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/web-regression-reuse.mjs
-
-  web-regression:
-    name: Web regression
-    needs: web-regression-reuse
-    # Runs when the reuse check was skipped (pull requests, manual runs), failed, or found nothing to reuse.
-    if: ${{ !cancelled() && needs.web-regression-reuse.outputs.reuse != 'true' }}
-    runs-on: macos-15
-    timeout-minutes: 60
-    steps:
-      - name: Check out regression harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Install harness dependencies
-        run: npm ci
-      - name: Validate separately tested commit
-        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
-        shell: bash
-        env:
-          REQUESTED_REF: ${{ inputs.tested_ref }}
-        run: |
-          [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]] || { echo 'tested_ref must be a full lowercase commit SHA' >&2; exit 1; }
-      - name: Check out separately tested source
-        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.tested_ref }}
-          path: .data/ci/tested-source
-      - name: Select tested source
-        shell: bash
-        env:
-          REQUESTED_REF: ${{ inputs.tested_ref }}
-        run: |
-          if [[ -n "$REQUESTED_REF" ]]; then
-            echo "XR_TESTED_SOURCE=$GITHUB_WORKSPACE/.data/ci/tested-source" >> "$GITHUB_ENV"
-            echo "XR_EXPECTED_TESTED_SHA=$REQUESTED_REF" >> "$GITHUB_ENV"
-          else
-            echo "XR_TESTED_SOURCE=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
-            echo "XR_EXPECTED_TESTED_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
-          fi
-      - name: Install separately tested source dependencies
-        if: github.event_name == 'workflow_dispatch' && inputs.tested_ref != ''
-        working-directory: .data/ci/tested-source
-        run: npm ci
-      - name: Install Chromium
-        run: npx playwright install chromium
-      - name: Prepare pinned search engine for Web regression
-        working-directory: ${{ env.XR_TESTED_SOURCE }}
-        run: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
-      - name: Run every registered Web flow
-        run: |
-          [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
-          node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --jobs 3 --checkout "$XR_TESTED_SOURCE"
-          [[ "$(git -C "$XR_TESTED_SOURCE" rev-parse HEAD)" == "$XR_EXPECTED_TESTED_SHA" ]]
-      # Every run keeps each flow's results.json, passed or failed, so `flows history` can count
-      # each flow's failures, their causes and its timings across runs.
-      - name: Save Web flow results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: web-regression-results-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .local/ticket-artifacts/119/ci-web/**/results.json
-          include-hidden-files: true
-          retention-days: 90
-          if-no-files-found: ignore
-      - name: Save failed Web evidence
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: web-regression-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .local/ticket-artifacts/119/ci-web/**/results.json
-            .local/ticket-artifacts/119/ci-web/**/*.png
-            .local/ticket-artifacts/119/ci-web/**/*server.log
-          include-hidden-files: true
-          retention-days: 7
-          if-no-files-found: error
-
-  packaged-smoke:
-    name: Packaged smoke (${{ matrix.target }})
-    if: github.event_name == 'workflow_dispatch' && inputs.packaged_smoke
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: darwin-arm64
-            package_command: package:mac
-            runtime_platform: mac
-            app: release/mac-arm64/XR Collector.app
-          - runner: windows-2022
-            target: win32-x64
-            package_command: package:win
-            runtime_platform: win
-            app: release/win-unpacked/XR Collector.exe
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Prepare pinned runtimes in the runtime cache
-        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
-      - name: Build unsigned test package
-        run: npm run ${{ matrix.package_command }}
-      - name: Run offline packaged-App smoke
-        shell: bash
-        timeout-minutes: 12
-        run: node .claude/skills/verify/scripts/smoke-packaged-offline.mjs --app "${{ matrix.app }}" --evidence ".data/ci/package-smoke"
-      - name: Save failed packaged smoke evidence
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: packaged-smoke-failure-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .data/ci/package-smoke/results.json
-            .data/ci/package-smoke/*.png
-            .data/ci/package-smoke/server.log
-            .data/ci/package-smoke/*-server.log
-          include-hidden-files: true
-          retention-days: 7
-          if-no-files-found: error

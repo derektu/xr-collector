@@ -22,6 +22,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { zipEntries } from '../vault/package-fixtures.js';
+import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -166,10 +167,10 @@ describe('Agent authenticated HTTP access', () => {
     expect(backend.search).not.toHaveBeenCalled();
   });
 
-  it.skipIf(!existsSync('resources/bin/mac/meilisearch'))('serves the platform-neutral HTTP contract and keeps credentials across restart', async () => {
+  it('serves the platform-neutral HTTP contract and keeps credentials across restart', { tags: [REAL_ENGINE_TAG] }, async () => {
     const { root, vault, collector } = await fixture();
     const lexiconPath = path.resolve('resources/search/coct-main.txt');
-    const engine = await startMeilisearchProcess({ binaryPath: path.resolve('resources/bin/mac/meilisearch'), databasePath: path.join(root, 'search') });
+    const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: path.join(root, 'search') });
     cleanup.push(() => engine.close());
     const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));

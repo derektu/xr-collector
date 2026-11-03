@@ -19,6 +19,7 @@ import type { SavedDocument } from '../../src/core/types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from './exchange-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
+import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
 
 afterEach(cleanUp);
@@ -125,13 +126,13 @@ describe('workspace transfer through HTTP', () => {
   });
 });
 
-it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('builds real Meilisearch for a Vault imported from A that is gone, and searches again after restart', async () => {
+it('builds real Meilisearch for a Vault imported from A that is gone, and searches again after restart', { tags: [REAL_ENGINE_TAG] }, async () => {
   const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
   await seed(a.vault);
   const file = await fileOf(a.exports, 'a.zip', await packageBytes(a.vault));
   await rm(a.vault, { recursive: true });
   await importAsNew(b, file);
-  const real = { searchBinary: path.resolve('resources/bin/mac/meilisearch'), createSearch: undefined };
+  const real = { searchBinary: bundledMeilisearch, createSearch: undefined };
   const workspace = await open(b, real, false);
   try {
     await eventually(() => expect(workspace.search.status().state).toBe('ready'));

@@ -14,6 +14,7 @@ on:
       - .github/workflows/meilisearch-native.yml
       - package.json
   push:
+    branches: [main]
     paths:
       - scripts/prepare-meilisearch.mjs
       - src/search/meilisearch-runtime-pins.json

@@ -171,7 +171,7 @@ node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動�
 - **層級**：每支流程 export `tier`：`core`（常用路徑與資料安全）、`feature`（功能專項與邊界）、`platform`（Desktop 與打包；Desktop 流程一律是它）、`real`（真實來源，以 `--data real` 啟動）。缺少或不合法時 `flows list`／`flows run` 指名檔案失敗。何時跑哪一層見 [功能地圖](features/README.md#流程層級)。
 - **選取**：名稱、`--web`／`--desktop`、`--tier`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 CI 跑的集合：Desktop 與 `real` 以外的全部流程。
 - **預算**：單支流程在 CI 不超過 60 秒；需要更久的流程 export `overBudget` 寫明理由。耗時表的 `budget` 欄標出超過 60 秒的流程，以及其中沒寫理由的；總時間超過全部 Web 流程的 300 秒預算時，最後一行註明。門檻見 [開發驗證流程](../../../docs/development-validation.md#已收錄流程的門檻與成本)。
-- **歷史**：`flows history` 讀 `--from <資料夾>` 底下每個流程的 `results.json`，沒給時以 `gh` 下載最近 `--runs`（預設 30）次 CI 的 `web-regression-results-*` artifact，列出每支流程的執行次數、失敗次數與原因（流程的 error，或失敗的 `<scenario>: <check id>`）、耗時中位數與最大值，以及超過 60 秒的次數。
+- **歷史**：`flows history` 讀 `--from <資料夾>` 底下每個流程的 `results.json`，沒給時以 `gh` 下載最近 `--runs`（預設 30）次 E2E workflow（`e2e.yml`）的 `web-regression-results-*` artifact，列出每支流程的執行次數、失敗次數與原因（流程的 error，或失敗的 `<scenario>: <check id>`）、耗時中位數與最大值，以及超過 60 秒的次數。
 
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的產品 `src/` 與 Web UI；收錄流程同時使用流程來源 checkout 的合成 verification server，才能以候選 harness 重複測固定的乾淨 main。`results.json` 分別記受測 checkout 與 `flowSource`，不可把兩者當成同一版本。票自己的 `.local` 流程若直接呼叫 `launchWeb`，預設仍使用受測 checkout 的 server；需要拆開時明確傳 `server`（見 API 表）。
 - **證據**：`--label`（預設 `flows`）決定這次執行的資料夾，規則與 `launch` 相同：`<issue>/<label>/`，已存在時用 `<label>-2/`、`<label>-3/`……。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log。`results.json` 另記 `flow`，以及流程所在 checkout 的路徑、commit 與 sourceHash（`flowSource`）。任一支流程失敗時 exit code 為 1。
