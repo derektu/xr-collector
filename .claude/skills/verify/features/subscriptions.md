@@ -40,7 +40,7 @@ Preconditions:
 - **收集紀錄。** 詳情中的單次檢查是 `collection-check`；連續定時無新內容或網路錯誤達兩次時是 `collection-check-group`，顯示結果、次數與起訖。例如「完成檢查：沒有新影片・12 次」「發生錯誤：網路錯誤・2 次」。恢復後的一次檢查獨立列出，不加「1 次」。合併列「查看細節」進入 [記錄的群組細節](activity.md)，「返回」回到同一訂閱。現有的 `detail-status`／`detail-problem` 仍獨立反映目前狀態。
 - **檢查時間。** 訂閱清單頁尾 `check-times` 顯示上次與下次檢查及所屬訂閱；完成後比對上次檢查對應的訂閱名稱與 `lastCheckedAt`，不要把最靠近的文件新增時間當成檢查完成時間。
 - **斷網與恢復。** `updateCatalog(c => { c.network = 'offline'; })` 讓合成 YouTube、feed 與 runtime 的網路確認都連不上。下一個連網的收集請求失敗後，`offline-banner` 出現，`GET /api/health` 的 `connectivity.state` 為 `offline`；`add-subscription`、`add-document`、`job-retry` disabled，title 為「沒有網路時無法使用」，`check-all` 仍可按，按下後 `notice` 為「目前沒有網路，恢復後再試。」。改回 `c.network = 'online'` 後 2 秒內確認成功，訊息消失，記錄有一筆 `collection.resumed`（`pauseReason: offline`），到期的訂閱各檢查一次。
-- **列出失敗。** `updateCatalog(c => { c.youtube.failListing = '<channelId>'; })` 後從該列「更多動作」→「立即檢查」。列出以 `network_error` 失敗，檢查內重試 3 次（間隔 30 秒、2 分鐘），約 2.5 分鐘後檢查失敗：列為「錯誤（連續 1 次）・HH:MM 重試」，`GET /api/subscriptions` 該筆 `checkFailures.count` 為 1，`lastCheckedAt` 等於失敗工作的 `finishedAt`；工作頁失敗區沒有它。
+- **列出失敗。** `updateCatalog(c => { c.youtube.failListing = '<channelId>'; })` 後從該列「更多動作」→「立即檢查」。列出以 `network_error` 失敗，檢查內重試 3 次（合成 server 間隔 2 秒、3 秒，約 5 秒；正式版 30 秒、2 分鐘），之後檢查失敗：列為「錯誤（連續 1 次）・HH:MM 重試」，`GET /api/subscriptions` 該筆 `checkFailures.count` 為 1，`lastCheckedAt` 等於失敗工作的 `finishedAt`；工作頁失敗區沒有它。
 - **自動暫停。** 不必等 24 小時：改 Vault 的 `settings/youtube-channels.json` 中該頻道的 `checkFailures`（`count: 4`、`since` 為 25 小時前），再讓一次檢查失敗，列變為「已暫停・連續失敗 5 次」，記錄有 `subscription.auto_paused`。詳情頁 `detail-toggle`（恢復）清除 `checkFailures` 與 `autoPausedAt` 並立即檢查。
 
 ## Gotchas
