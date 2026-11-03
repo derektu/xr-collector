@@ -1,4 +1,4 @@
-// Channel A's listing failing check after check: the row stays red with the failures in a row, the
+// Channel A's listing failing check after check: the row shows the failures in a row, the
 // detail page's 上次檢查 matches the newest check in the collection record, a failed check stays
 // out of the Jobs page's failed section, the fifth failure a day after the first pauses A by itself,
 // and 恢復 clears the failures and checks at once. The flow writes the earlier failures into the
@@ -7,23 +7,15 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
+import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscription-failures';
 export const title = '訂閱連續失敗與自動暫停';
 export const covers = ['sub-status', 'sub-failure'];
 
-/** Every subscription row's status text and color, by row test ID; runs inside the page. */
-const subscriptionStatuses = () => Object.fromEntries([...document.querySelectorAll('[data-testid^="source-row-"]')]
-  .map((row) => {
-    const chip = row.querySelector('.status-chip');
-    return [row.dataset.testid, `${(chip?.textContent ?? '').trim()}|${chip?.className ?? ''}`];
-  }));
-
 const DAY = 24 * 60 * 60_000;
 const CHECK_TIMEOUT = 5 * 60_000;
-const NEXT_TIME = String.raw`(?:\d{2}:\d{2}|明天 \d{2}:\d{2}|\d{2}-\d{2} \d{2}:\d{2})`;
-const ONE_FAILURE = new RegExp(`^錯誤（連續 1 次）・${NEXT_TIME} 重試$`, 'u');
 
 export const checkRecordForJob = (collection, jobId) => collection.find((entry) => entry.kind === 'check' && entry.jobId === jobId);
 
@@ -35,10 +27,15 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   const subscription = async () => (await instance.api('/api/subscriptions')).subscriptions.find((entry) => entry.id === a.id);
   const detail = async () => instance.api(`/api/subscriptions/youtube/${encodeURIComponent(a.id)}`);
   const storedA = async () => JSON.parse(await readFile(channelsFile, 'utf8')).channels.find((entry) => entry.id === a.id);
+  /** A's status chip: its state and failure count. */
   const chip = async () => {
     const element = row.getByTestId('subscription-status');
-    return { text: (await element.innerText()).trim(), error: (await element.getAttribute('class')).split(' ').includes('error') };
+    return { phase: await element.getAttribute('data-phase'), failures: await element.getAttribute('data-failures') };
   };
+  const rowShows = (phase, label, timeout = 15_000) => waitFor(async () => {
+    const value = await chip();
+    return value.phase === phase ? value : null;
+  }, label, { timeout }).catch(chip);
   const checksSince = async (since) => (await instance.api('/api/jobs?state=all&limit=100')).jobs
     .filter((job) => job.kind === 'youtube.channel' && job.source.id === a.id && job.createdAt >= since);
 
@@ -59,13 +56,14 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const detailView = await openPage(`/sources/youtube/${encodeURIComponent(a.id)}`);
     await detailView.getByTestId('source-detail').waitFor();
     const problem = detailView.getByTestId('detail-problem');
-    const lastChecked = (await detailView.locator('.stats div', { hasText: '上次檢查' }).locator('dd').innerText()).trim();
     const newestCheck = detailView.getByTestId('collection-check').first();
-    const newestCheckAt = (await newestCheck.count()) ? (await newestCheck.locator('.collection-when').innerText()).trim() : null;
     return {
       view: detailView,
-      problem: (await problem.count()) ? (await problem.innerText()).trim() : null,
-      lastChecked, newestCheckAt,
+      problem: (await problem.count()) ? {
+        kind: await problem.getAttribute('data-kind'), failures: await problem.getAttribute('data-failures'), code: await problem.getAttribute('data-error-code'),
+      } : null,
+      lastChecked: await detailView.getByTestId('detail-last-checked').getAttribute('data-at'),
+      newestCheck: (await newestCheck.count()) ? { job: await newestCheck.getAttribute('data-job'), at: await newestCheck.getAttribute('data-at') } : null,
     };
   };
 
@@ -76,29 +74,24 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await page.getByTestId('page-sources').waitFor();
     await watch(page, 'status', subscriptionStatuses);
     // Jobs can read idle between the add job and the first check it starts; the row settles once that check ends.
-    const start = await waitFor(async () => {
-      const value = await chip();
-      return /^下次 /u.test(value.text) ? value : null;
-    }, 'A row scheduled', { timeout: 120_000 }).catch(chip);
-    expect(/^下次 /u.test(start.text), 'A 一開始為「下次 HH:MM」', { id: 'start.scheduled', expected: '下次 HH:MM', actual: start.text });
+    const start = await rowShows('scheduled', 'A row scheduled', 120_000);
+    expect(start.phase === 'scheduled', 'A 一開始排定下次檢查', { id: 'start.scheduled', expected: 'scheduled', actual: start });
     await instance.updateCatalog((current) => { current.youtube.failListing = a.id; });
   });
 
-  await record.scenario('FAIL-2', '列出失敗一次：列維持紅色並顯示連續次數，上次檢查與收集紀錄一致，工作頁失敗區沒有它', async ({ expect, shot, note }) => {
+  await record.scenario('FAIL-2', '列出失敗一次：列顯示連續次數，上次檢查與收集紀錄一致，工作頁失敗區沒有它', async ({ expect, shot, note }) => {
     const failed = await checkFromRow();
     expect(failed.state === 'failed', 'A 的檢查失敗', { id: 'w1.job-failed', expected: 'failed', actual: failed.state });
 
-    const shown = await waitFor(async () => {
-      const value = await chip();
-      return ONE_FAILURE.test(value.text) ? value : null;
-    }, 'A row failing', { timeout: 15_000 }).catch(chip);
-    expect(ONE_FAILURE.test(shown.text) && shown.error, '列為紅色「錯誤（連續 1 次）・<下次時間> 重試」',
-      { id: 'w1.row', expected: '錯誤（連續 1 次）・<HH:MM／明天 HH:MM／MM-DD HH:MM> 重試（紅色）', actual: shown });
-    const samples = ((await watched(page, 'status'))[`source-row-${a.id}`] ?? []).map((sample) => sample.value.split('|')[0]);
+    const shown = await rowShows('failing', 'A row failing');
+    const retryAt = (await subscription()).checkStatus?.nextCheckAt ?? null;
+    expect(shown.phase === 'failing' && shown.failures === '1' && retryAt !== null, '列顯示連續失敗 1 次，API 有下次重試時間',
+      { id: 'w1.row', expected: { phase: 'failing', failures: '1', retryAt: '時間' }, actual: { ...shown, retryAt } });
+    const samples = ((await watched(page, 'status'))[`source-row-${a.id}`] ?? []).map((sample) => sample.value);
     note('rowSequence', samples);
-    const afterRetrying = samples.slice(samples.findIndex((value) => value.startsWith('錯誤・')));
-    expect(samples.some((value) => /^錯誤・\d{2}:\d{2} 重試$/u.test(value)) && !afterRetrying.some((value) => value.startsWith('下次')),
-      '重試期間顯示「錯誤・HH:MM 重試」，之後沒有回到「下次」', { id: 'w1.row-sequence', expected: '錯誤・HH:MM 重試 → 錯誤（連續 1 次）', actual: samples });
+    const retrying = samples.indexOf('retrying');
+    expect(retrying >= 0 && !samples.slice(retrying).includes('scheduled'),
+      '重試期間顯示等待重試，之後沒有回到排定下次檢查', { id: 'w1.row-sequence', expected: 'retrying → failing 1', actual: samples });
 
     const api = await subscription();
     expect(api.checkFailures?.count === 1 && api.checkFailures.since === failed.finishedAt && api.status === 'error',
@@ -112,10 +105,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
           : null });
 
     const view = await detailPage();
-    expect(view.problem?.startsWith('最近一次檢查失敗（連續 1 次）：') ?? false, '詳情頁紅條顯示連續次數與原因',
-      { id: 'w1.detail-problem', expected: '最近一次檢查失敗（連續 1 次）：…', actual: view.problem });
-    expect(view.lastChecked === view.newestCheckAt, '詳情頁「上次檢查」與收集紀錄最新一筆檢查的時間相同',
-      { id: 'w1.detail-last-checked', expected: view.newestCheckAt, actual: view.lastChecked });
+    const wantedProblem = { kind: 'failing', failures: '1', code: api.checkFailures?.error.code ?? null };
+    expect(JSON.stringify(view.problem) === JSON.stringify(wantedProblem), '詳情頁紅條顯示連續次數與原因',
+      { id: 'w1.detail-problem', expected: wantedProblem, actual: view.problem });
+    expect(view.newestCheck?.job === failed.id && view.lastChecked === api.lastCheckedAt && view.newestCheck.at === failedRecord?.at,
+      '詳情頁「上次檢查」是 API 的上次檢查，收集紀錄最新一筆是這次失敗的檢查',
+      { id: 'w1.detail-last-checked', expected: { lastChecked: api.lastCheckedAt, newest: { job: failed.id, at: failedRecord?.at ?? null } },
+        actual: { lastChecked: view.lastChecked, newest: view.newestCheck } });
     await shot('detail-failing', view.view);
     await view.view.close();
 
@@ -137,12 +133,9 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
     const failed = await checkFromRow();
     expect(failed.state === 'failed', 'A 的檢查再次失敗', { id: 'w3.job-failed', expected: 'failed', actual: failed.state });
-    const shown = await waitFor(async () => {
-      const value = await chip();
-      return value.text === '已暫停・連續失敗 5 次' ? value : null;
-    }, 'A row auto paused', { timeout: 15_000 }).catch(chip);
-    expect(shown.text === '已暫停・連續失敗 5 次' && shown.error, '列為紅色「已暫停・連續失敗 5 次」',
-      { id: 'w3.row', expected: '已暫停・連續失敗 5 次（紅色）', actual: shown });
+    const shown = await rowShows('auto_paused', 'A row auto paused');
+    expect(shown.phase === 'auto_paused' && shown.failures === '5', '列顯示已自動暫停、連續失敗 5 次',
+      { id: 'w3.row', expected: { phase: 'auto_paused', failures: '5' }, actual: shown });
 
     const stored = await storedA();
     expect(stored.enabled === false && stored.autoPausedAt === failed.finishedAt && stored.checkFailures?.count === 5 && !stored.nextCheckAt,
@@ -156,14 +149,15 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       { id: 'w3.event', expected: 1, actual: events.map((event) => ({ subscriptionId: event.subscriptionId, severity: event.severity, message: event.message })) });
 
     const view = await detailPage();
-    expect(/^連續失敗 5 次，.+ 自動暫停：.+/u.test(view.problem ?? ''), '詳情頁紅條顯示自動暫停的時間與原因',
-      { id: 'w3.detail-problem', expected: '連續失敗 5 次，<時間> 自動暫停：<原因>', actual: view.problem });
+    const wantedProblem = { kind: 'auto_paused', failures: '5', code: api.checkFailures?.error.code ?? null };
+    expect(JSON.stringify(view.problem) === JSON.stringify(wantedProblem), '詳情頁紅條顯示自動暫停與原因',
+      { id: 'w3.detail-problem', expected: wantedProblem, actual: view.problem });
     await shot('detail-auto-paused', view.view);
     await view.view.close();
     await shot('row-auto-paused');
   });
 
-  await record.scenario('FAIL-4', '恢復：次數歸零並立即檢查，完成後回到「下次 HH:MM」', async ({ expect, shot }) => {
+  await record.scenario('FAIL-4', '恢復：次數歸零並立即檢查，完成後回到排定下次檢查', async ({ expect, shot }) => {
     await instance.updateCatalog((current) => { current.youtube.failListing = null; });
     const since = new Date().toISOString();
     const view = await openPage(`/sources/youtube/${encodeURIComponent(a.id)}`);
@@ -176,11 +170,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       { id: 'w4.resume-check', expected: { state: 'completed', trigger: 'resume' }, actual: { state: resumed.state, trigger: resumed.scope?.trigger } });
     await view.close();
 
-    const shown = await waitFor(async () => {
-      const value = await chip();
-      return /^下次 /u.test(value.text) ? value : null;
-    }, 'A row scheduled', { timeout: 15_000 }).catch(chip);
-    expect(/^下次 /u.test(shown.text) && !shown.error, '列回到「下次 HH:MM」', { id: 'w4.row', expected: '下次 HH:MM', actual: shown });
+    const shown = await rowShows('scheduled', 'A row scheduled');
+    expect(shown.phase === 'scheduled', '列回到排定下次檢查', { id: 'w4.row', expected: 'scheduled', actual: shown });
     const api = await subscription();
     expect(api.enabled && api.checkFailures === null && api.autoPausedAt === null && api.status === 'tracking', 'API 的連續失敗與自動暫停已清除',
       { id: 'w4.api', expected: { checkFailures: null, autoPausedAt: null }, actual: { enabled: api.enabled, checkFailures: api.checkFailures, autoPausedAt: api.autoPausedAt, status: api.status } });

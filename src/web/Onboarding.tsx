@@ -45,7 +45,7 @@ export function OnboardingHome({ originalFailure, busy, error, pathEntry, onCrea
     <p className="onboarding-intro">收集的文件存在知識庫資料夾中，方便你自行備份與管理。</p>
     {agentOpen ? <div id="onboarding-agent-panel" data-testid="onboarding-agent-panel"><AgentConnection /></div> : null}
 
-    {originalFailure ? <div className="vault-warning" role="alert" data-testid="onboarding-original-failure">
+    {originalFailure ? <div className="vault-warning" role="alert" data-testid="onboarding-original-failure" data-path={originalFailure.path}>
       <span className="vault-warning-icon" aria-hidden="true">!</span>
       <div><strong>原知識庫無法開啟</strong><p>{originalFailure.reason}</p><code>{originalFailure.path}</code></div>
     </div> : null}
@@ -110,7 +110,8 @@ export function PackageRow({ described, busy, pathEntry, onChoose, onSubmitPath 
   onSubmitPath: (path: string) => void;
 }) {
   const [typed, setTyped] = useState('');
-  const summary = described ? <span className="ob-file-summary" data-testid="onboarding-package-summary">{packageSummary(described)}</span> : null;
+  const summary = described ? <span className="ob-file-summary" data-testid="onboarding-package-summary"
+    data-documents={described.documents} data-subscriptions={described.subscriptions} data-exported-at={described.exportedAt ?? undefined}>{packageSummary(described)}</span> : null;
   return <ListRow title="匯出檔" field testId="onboarding-package">
     {pathEntry === 'manual' ? <form className="ob-control" onSubmit={(event: FormEvent) => {
       event.preventDefault();

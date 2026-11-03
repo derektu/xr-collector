@@ -39,11 +39,13 @@ Preconditions:
 
 ## Regression flows
 
-- `login-startup`：斷言 `login-startup-setting`、`login-startup-unavailable`、`login-startup-os-state`。先驗 Web 設定頁停用與兩個 listener 拒絕；再以清楚標示的 run-local 平台 fixture 實際點擊開啟、模擬寫入失敗後 read-back、需要核准、OS 外部停用後 focus 刷新，以及慢速舊 GET 不得蓋掉新 PUT 的競態。fixture 不代表真實 OS 已註冊。
+- `login-startup`：斷言 `login-startup-setting`、`login-startup-unavailable`。Web 設定頁讀到不支援、開關停用；再以清楚標示的 run-local 平台 fixture 實際點擊開啟，開關與平台 read-back 都是開啟。fixture 不代表真實 OS 已註冊。兩個 listener 拒絕開發版寫入在 tests/server/login-startup-http.test.ts。
 
 設定頁不常駐背景執行與打包限制的長說明。正常狀態由開關表達；錯誤、系統核准與 App 位置變更的操作指引仍顯示。
 
 ## Backlog
+
+- `login-startup-os-state`：沒有流程；寫入被拒後重讀、視窗回到前景時重讀但寫入途中不讀、慢的舊讀取不蓋掉新寫入在 `tests/web/login-startup-control.test.ts`，平台 adapter 的需要核准與 OS 外部停用在 `tests/electron/login-startup.test.ts`。真實 OS 的狀態需要打包安裝版。
 
 - `login-startup-background`：由登入項目啟動時 runtime、排程、系統匣與 Agent API 可用且主視窗不顯示；需要打包安裝版，真正登出／登入的生效屬明確略過的項目。
 - `login-startup-single-instance`：登入自啟形式的第二次啟動不顯示視窗；手動第二次啟動見 [tray.md](tray.md)。

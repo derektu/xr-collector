@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Change } from '../../src/core/changes.js';
-import type { TranscriptSearch } from '../../src/core/types.js';
+import { CollectorError, type TranscriptSearch } from '../../src/core/types.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
 import { writeVaultMarker } from '../../src/vault/vault-directory.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -233,6 +233,24 @@ describe('CollectorRuntime', () => {
         'device.login_startup_launched', 'device.login_startup_enabled',
       ]));
       expect(deviceEvents.every((event) => event.vaultPath === null && event.jobId === null)).toBe(true);
+    });
+  });
+
+  it('records a refused login startup change as a device-wide warning', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const loginStartup = {
+      status: async () => ({ supported: true, enabled: false, state: 'requires_approval' as const, message: 'test' }),
+      update: async () => { throw new CollectorError('login_startup_requires_approval', '需要在系統設定核准。'); },
+    };
+    const runtime = await CollectorRuntime.start({ ...setup.value, loginStartup });
+    cleanups.push(() => runtime.close());
+    const refused = await fetch(`${runtime.server.url}/api/device/login-startup`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(refused.ok).toBe(false);
+    await eventually(async () => {
+      const activity = await (await fetch(`${runtime.server.url}/api/activity?eventType=device.login_startup_failed`)).json() as { events: Array<{ severity: string; errorCode?: string; vaultPath: string | null }> };
+      expect(activity.events).toEqual([expect.objectContaining({ severity: 'warning', errorCode: 'login_startup_requires_approval', vaultPath: null })]);
     });
   });
 

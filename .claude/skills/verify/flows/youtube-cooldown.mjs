@@ -3,17 +3,12 @@
 // when collection goes on, a video submitted during the cooldown waits with it, and once the
 // cooldown ends everything finishes by itself. The synthetic YouTube cools down for 30 seconds.
 import { collect, idle, subscribe } from '../scripts/lib/index.mjs';
+import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'youtube-cooldown';
 export const title = 'YouTube 限制連線與冷卻';
 export const covers = ['sub-status', 'jobs-row-text'];
-
-/** Every subscription row's status text, by row test ID; runs inside the page. */
-const subscriptionStatuses = () => Object.fromEntries([...document.querySelectorAll('[data-testid^="source-row-"]')]
-  .map((row) => [row.dataset.testid, (row.querySelector('.status-chip')?.textContent ?? '').trim()]));
-
-const RETRYING = /^錯誤・\d{2}:\d{2} 重試$/u;
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   // Slower capture keeps A downloading when the limit comes.
@@ -61,10 +56,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       'A 的 API 狀態為等冷卻結束的 retrying', { id: 'w2.api-status', expected: { state: 'retrying', cause: 'rate_limited', at: cooldownUntil }, actual: status });
 
     const row = await waitFor(async () => {
-      const text = (await watched(page, 'status'))[rowOf(a)]?.at(-1)?.value ?? '';
-      return RETRYING.test(text) ? text : null;
+      const value = (await watched(page, 'status'))[rowOf(a)]?.at(-1)?.value ?? '';
+      return value === 'retrying' ? value : null;
     }, 'A row retrying', { timeout: 10_000 }).catch(async () => (await watched(page, 'status'))[rowOf(a)]?.at(-1)?.value ?? null);
-    expect(RETRYING.test(row ?? ''), 'A 的列為「錯誤・HH:MM 重試」', { id: 'w2.row', expected: '錯誤・HH:MM 重試', actual: row });
+    expect(row === 'retrying', 'A 的列顯示等待重試', { id: 'w2.row', expected: 'retrying', actual: row });
 
     const check = await checkOfA();
     const waiting = (check?.items ?? []).filter((item) => item.wait);
@@ -83,9 +78,9 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const runningRow = jobsPage.getByTestId(`job-${check?.id}`);
     await runningRow.waitFor({ timeout: 15_000 }).catch(() => undefined);
     const section = await runningRow.evaluate((element) => element.closest('section')?.dataset.testid ?? null).catch(() => null);
-    const reason = (await runningRow.getByTestId('job-retry-reason').innerText().catch(() => '')).trim();
-    expect(section === 'jobs-running' && reason === 'YouTube 限制連線', 'A 在工作頁進行中，原因為「YouTube 限制連線」',
-      { id: 'w2.jobs-row', expected: { section: 'jobs-running', reason: 'YouTube 限制連線' }, actual: { section, reason } });
+    const reason = await runningRow.getByTestId('job-retry-reason').getAttribute('data-cause', { timeout: 5_000 }).catch(() => null);
+    expect(section === 'jobs-running' && reason === 'rate_limited', 'A 在工作頁進行中，原因為 YouTube 限制連線',
+      { id: 'w2.jobs-row', expected: { section: 'jobs-running', reason: 'rate_limited' }, actual: { section, reason } });
     const singleSection = await jobsPage.getByTestId(`job-${single.job.id}`).evaluate((element) => element.closest('section')?.dataset.testid ?? null).catch(() => null);
     expect(singleSection === 'jobs-queued', '單支影片在工作頁排隊中', { id: 'w2.jobs-single', expected: 'jobs-queued', actual: singleSection });
     await shot('jobs-cooldown', jobsPage);
@@ -96,7 +91,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   await record.scenario('YC-3', '冷卻結束：自動繼續並完成，事件各一次', async ({ expect, shot }) => {
     await idle(instance, 120_000).catch(() => null);
     const status = await apiStatus();
-    expect(status?.state === 'scheduled', 'A 回到「下次 HH:MM」', { id: 'w3.scheduled', expected: 'scheduled', actual: status });
+    expect(status?.state === 'scheduled', 'A 回到排定下次檢查', { id: 'w3.scheduled', expected: 'scheduled', actual: status });
     const finishedCheck = await checkOfA();
     expect(finishedCheck?.state === 'completed' && finishedCheck.progress?.created === 5 && finishedCheck.progress.failed === 0,
       'A 的檢查完成，5 支都收進', { id: 'w3.check', expected: { state: 'completed', created: 5, failed: 0 }, actual: finishedCheck ? { state: finishedCheck.state, progress: finishedCheck.progress } : null });
@@ -111,8 +106,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(counts['job.retry_scheduled'] === 0 && counts['job.failed'] === 0, '沒有排定重試，也沒有失敗的工作',
       { id: 'w3.no-retry', expected: { 'job.retry_scheduled': 0, 'job.failed': 0 }, actual: counts });
     const sequence = ((await watched(page, 'status'))[rowOf(a)] ?? []).map((sample) => sample.value);
-    const started = sequence.findIndex((text) => text !== '排隊中');
-    expect(started >= 0 && !sequence.slice(started).includes('排隊中'), 'A 開始後的列不再出現「排隊中」',
+    const started = sequence.findIndex((value) => value !== 'queued');
+    expect(started >= 0 && !sequence.slice(started).includes('queued'), 'A 開始後的列不再出現排隊中',
       { id: 'w3.sequence', expected: '開始後沒有排隊中', actual: [...new Set(sequence)] });
     await shot('rows-done');
   });

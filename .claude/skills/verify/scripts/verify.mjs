@@ -29,9 +29,11 @@ const USAGE = `verify.mjs <command>
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
   flows list [--feature <file>]
            the recorded regression flows and the feature-map sub-features each covers
-  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--feature <file>] [--jobs <N>]
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--visible] [--feature <file>] [--jobs <N>]
            runs the named recorded flows (all without names), each on its own instance; --web is every
-           flow that is not Desktop (what the E2E workflow runs); --feature keeps the flows covering a
+           flow that is not Desktop (what the E2E workflow runs); Desktop flows keep their window hidden,
+           and --visible runs the Desktop flows whose visibleScenarios need a window on screen, with
+           the window shown, so those checks run too; --feature keeps the flows covering a
            sub-feature of that feature file (subscriptions or subscriptions.md); --jobs runs up to N at
            once (default 1, at most one per verify slot; a Desktop flow always runs alone); the flows and
            this library come from the checkout the command runs in, --checkout picks the checkout under
@@ -51,7 +53,7 @@ const { values: o, positionals } = parseArgs({ allowPositionals: true, options: 
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
   platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
-  web: { type: 'boolean' }, desktop: { type: 'boolean' }, jobs: { type: 'string', default: '1' }, feature: { type: 'string' },
+  web: { type: 'boolean' }, desktop: { type: 'boolean' }, visible: { type: 'boolean' }, jobs: { type: 'string', default: '1' }, feature: { type: 'string' },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
@@ -110,12 +112,14 @@ async function main() {
     const { listFlows, runFlows, selectFlows } = await import('./lib/flows.mjs');
     if (positionals[1] === 'list') {
       const listed = selectFlows(await listFlows(), { feature: o.feature === undefined ? undefined : findFeature(readFeatures(), o.feature) });
-      return print(listed.map(({ name, title, covers, desktop }) => ({ name, title, covers, ...(desktop ? { desktop } : {}) })));
+      return print(listed.map(({ name, title, covers, desktop, visibleScenarios }) => ({ name, title, covers,
+        ...(desktop ? { desktop } : {}), ...(visibleScenarios.length ? { visibleScenarios } : {}) })));
     }
     if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
     if (o.web && o.desktop) throw new Error('Choose only one of --web or --desktop');
     const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout,
-      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', feature: o.feature, jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
+      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', feature: o.feature, jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN,
+      visible: o.visible === true });
     print(outcome);
     if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
     return;

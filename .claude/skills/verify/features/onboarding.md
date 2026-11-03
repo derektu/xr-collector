@@ -35,7 +35,7 @@ Preconditions: `launchWeb({ vault: 'none' })`。新知識庫的預設位置是 r
 
 ## Regression flows
 
-- `onboarding`：斷言 `onboarding-home`、`onboarding-create`、`onboarding-open`、`onboarding-missing`、`onboarding-from-export`（另斷言 vault-transfer 的建立新的知識庫）；首頁三入口、首頁／建立／從匯出檔建立的深淺色背景延伸、三種不能建立的原因、用預設值建立的路徑與既有資料夾不變、改名後重開的提示、開啟一般資料夾的錯誤與開啟改名後的知識庫、從匯出檔建立的摘要、預設名稱、文件與訂閱數一致及搜尋。Web 模式，合成 YouTube；開啟既有以輸入路徑代替原生選擇器，取消選擇只在 Desktop 發生。
+- `onboarding`：斷言 `onboarding-home`、`onboarding-create`、`onboarding-open`、`onboarding-missing`、`onboarding-from-export`（另斷言 vault-transfer 的建立新的知識庫）；首頁三入口、三種不能建立的名稱、用預設值建立的路徑與既有資料夾不變、改名後重開的提示、開啟一般資料夾的錯誤與開啟改名後的知識庫、從匯出檔建立的摘要、預設名稱、文件與訂閱數一致及搜尋。Web 模式，合成 YouTube；開啟既有以輸入路徑代替原生選擇器，取消選擇只在 Desktop 發生。
 
 ## Backlog
 

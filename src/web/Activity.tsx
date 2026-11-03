@@ -21,6 +21,7 @@ import { api, ApiError } from './api-client.js';
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import { Icon } from './icons.js';
 import { useChanges } from './use-changes.js';
+import { ActivityGroupPages, type GroupPagesState } from './activity-group-pages.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
 import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
@@ -248,7 +249,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
         : (effectiveMode === 'summary' ? log.entries.length : log.events.length) === 0 ? <p className="job-empty activity-pad">這段期間沒有符合的記錄。</p>
           : effectiveMode === 'summary' ? <ol className="summary-rows">{log.entries.map((entry) => entry.kind === 'event'
             ? <SummaryEvent key={entry.event.eventId} event={entry.event} />
-            : <li key={entry.groupId} className={`summary-row level-${eventLevel(entry)}`} data-testid="summary-check">
+            : <li key={entry.groupId} className={`summary-row level-${eventLevel(entry)}`} data-testid="summary-check"
+              data-group={entry.groupId} data-result={entry.result} data-count={entry.count} data-severity={entry.severity}>
               <Icon name={entry.severity === 'error' ? 'error' : 'jobs'} size={16} />
               <span><strong>{summaryCheckTitle(entry)}</strong><small>{summaryRange(entry.firstFinishedAt, entry.lastFinishedAt)}{entry.sourceTitle ? ` · ${entry.sourceTitle}` : ''}</small></span>
               <button type="button" className="inline-link" onClick={() => change({ group: entry.groupId, returnTo: '/activity' })}>查看細節</button>
@@ -261,7 +263,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
             // An entry written before events named their source type belongs to the first type with subscriptions.
             const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id ?? '';
             const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
-            return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row">
+            return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
+              data-event-type={event.eventType} data-severity={event.severity}>
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span>
               <span className={type ? `log-type type-${type.icon}` : 'log-type'}>
@@ -283,7 +286,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
 
 function SummaryEvent({ event }: { event: JobEvent }) {
   const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id;
-  return <li className="summary-row" data-testid="summary-event"><Icon name="activity" size={16} />
+  return <li className="summary-row" data-testid="summary-event" data-event-type={event.eventType} data-severity={event.severity}><Icon name="activity" size={16} />
     <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(event)}</a>
       : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(event)}</a>
         : eventText(event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
@@ -305,53 +308,8 @@ function summaryCheckTitle(entry: Extract<ActivitySummaryEntry, { kind: 'check' 
 }
 
 function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string; returnTo: string | null; state: ActivityViewState; onState: (next: ActivityViewState) => void }) {
-  const [page, setPage] = useState<ActivityGroupPage | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const loadedCount = useRef(10);
-  const loadedGroup = useRef(groupId);
-  const requestGeneration = useRef(0);
   const severity = activityQuery(state, new Date()).severity;
-  const severityKey = severity?.join(',') ?? '';
-  async function filteredChecks(target: number): Promise<ActivityGroupPage> {
-    let answer = await api.activityGroup(groupId, { limit: Math.min(100, target), severity });
-    while (answer.checks.length < target && answer.nextCursor) {
-      const next = await api.activityGroup(groupId, {
-        limit: Math.min(100, target - answer.checks.length), cursor: answer.nextCursor, severity,
-      });
-      answer = { ...next, checks: [...answer.checks, ...next.checks] };
-    }
-    return answer;
-  }
-  useEffect(() => {
-    let alive = true;
-    const generation = ++requestGeneration.current;
-    if (loadedGroup.current !== groupId) { loadedGroup.current = groupId; loadedCount.current = 10; }
-    setPage(null); setError(null); setLoading(false);
-    filteredChecks(loadedCount.current).then((answer) => { if (alive && generation === requestGeneration.current) setPage(answer); })
-      .catch((reason: unknown) => { if (alive && generation === requestGeneration.current) setError(reason instanceof Error ? reason.message : '無法讀取檢查細節。'); });
-    return () => { alive = false; };
-  }, [groupId, severityKey]);
-  async function older() {
-    if (!page?.nextCursor) return;
-    const generation = requestGeneration.current;
-    const requestedSeverity = severityKey;
-    const requestedCursor = page.nextCursor;
-    setLoading(true);
-    try {
-      const next = await api.activityGroup(groupId, { limit: 10, cursor: requestedCursor, severity });
-      setPage((previous) => generation === requestGeneration.current && requestedSeverity === severityKey
-        && previous?.group.groupId === groupId && previous.nextCursor === requestedCursor
-        ? { ...next, checks: [...previous.checks, ...next.checks] } : previous);
-      if (generation === requestGeneration.current && requestedSeverity === severityKey) loadedCount.current += next.checks.length;
-    } catch (reason) {
-      if (generation === requestGeneration.current && requestedSeverity === severityKey) {
-        setError(reason instanceof Error ? reason.message : '無法讀取更早的檢查。');
-      }
-    } finally {
-      if (generation === requestGeneration.current && requestedSeverity === severityKey) setLoading(false);
-    }
-  }
+  const { page, error, loading, older } = useActivityGroupPages(groupId, severity);
   const back = () => {
     if (returnTo && sourceRouteForPath(returnTo)) { location.href = returnTo; return; }
     onState({ ...state, group: null, returnTo: null });
@@ -361,7 +319,8 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
     <div className="page-header"><h1 className="page-title">記錄</h1></div>
     {error ? <p className="load-error" role="alert">{error}</p> : null}
     {!page ? (error ? null : <p className="loading">正在讀取…</p>) : <>
-      <section className="activity-context" data-testid="activity-group-context"><strong>{summaryCheckTitle(page.group)}</strong>
+      <section className="activity-context" data-testid="activity-group-context"
+        data-group={page.group.groupId} data-count={page.group.count} data-loaded={page.checks.length}><strong>{summaryCheckTitle(page.group)}</strong>
         <span>{page.group.sourceTitle ? `${page.group.sourceTitle} · ` : ''}{summaryRange(page.group.firstFinishedAt, page.group.lastFinishedAt)} · 完整事件</span></section>
       <section className="activity-card"><div className="log-toolbar"><h2>每次收集</h2><span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">最低等級</span><select value={state.minLevel}
@@ -372,12 +331,14 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
           {MIN_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <span className="activity-group-count">{page.checks.length === page.group.count
           ? `共 ${page.group.count} 次收集` : `已顯示 ${page.checks.length} 次，共 ${page.group.count} 次收集`}</span></div>
-        {page.checks.map((check, index) => <details key={check.jobId} open={index === 0} className="check-detail" data-testid="activity-group-check">
+        {page.checks.map((check, index) => <details key={check.jobId} open={index === 0} className="check-detail" data-testid="activity-group-check"
+          data-job={check.jobId} data-result={check.result} data-events={check.events.length}>
           <summary>{logTime(check.finishedAt)}　{checkResultTitle(check, page.group.sourceType)}</summary>
           {check.events.length === 0 ? <p className="job-empty activity-detail-empty">這次收集沒有符合等級的事件。</p> : <ol className="log-rows">{[...check.events].reverse().map((event) => {
             const level = eventLevel(event);
             const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
-            return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"><time>{logTime(event.timestamp)}</time>
+            return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
+              data-event-type={event.eventType} data-severity={event.severity}><time>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span><span className={type ? `log-type type-${type.icon}` : 'log-type'}>
                 {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}</span><span>{eventText(event)}</span></li>;
           })}</ol>}
@@ -399,4 +360,18 @@ function checkResultTitle(check: ActivityGroupPage['checks'][number], sourceType
     ...(check.skipped ? [`略過 ${itemCount(sourceType, check.skipped)}`] : []),
   ];
   return parts.length ? `完成收集：${parts.join('・')}` : '完成收集';
+}
+
+/** A check group's detail pages for the screen, read again when the group or the levels change. */
+function useActivityGroupPages(groupId: string, severity: ActivityQuery['severity']): GroupPagesState & { older: () => Promise<void> } {
+  const [state, setState] = useState<GroupPagesState>({ page: null, error: null, loading: false });
+  const pages = useRef<ActivityGroupPages | null>(null);
+  pages.current ??= new ActivityGroupPages((id, query) => api.activityGroup(id, query), setState);
+  const severityKey = severity?.join(',') ?? '';
+  useEffect(() => {
+    void pages.current!.show(groupId, severity);
+    return () => pages.current!.close();
+    // The levels are compared by value; a new array of the same levels keeps the loaded checks.
+  }, [groupId, severityKey]);
+  return { ...state, older: () => pages.current!.older() };
 }

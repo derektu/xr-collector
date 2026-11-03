@@ -54,7 +54,7 @@ export function Jobs({ offline, onChanged }: {
         </span>
         {extra.failed && label.reason ? <span className="job-sub failed">{label.reason}</span>
           : label.subtitle ? <span className="job-sub">{label.subtitle}</span> : null}
-        {label.retryReason ? <span className="job-sub retrying" data-testid="job-retry-reason">{label.retryReason}</span> : null}
+        {label.retryReason ? <span className="job-sub retrying" data-testid="job-retry-reason" data-cause={entry.status?.state === 'retrying' ? entry.status.cause.reason : undefined}>{label.retryReason}</span> : null}
         {progress ? <progress value={progress.done} max={progress.total} aria-label={`${label.title}進度`} /> : null}
       </span>
       {label.status ? <span className={`status-chip ${label.status.tone}`} data-testid="job-status">{label.status.text}</span> : null}

@@ -31,8 +31,10 @@ Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none
 
 ## Regression flows
 
-- `build-info`：斷言 `build-info-settings`、`build-info-onboarding`、`build-info-api`；設定／重新整理、兩 listener、token、Not Ready Onboarding，以及 UI 讀取失敗後點重試恢復。503 是路由注入，不宣稱真實服務故障。
+- `build-info`：斷言 `build-info-settings`、`build-info-api`；裝置 API 回報受測 checkout 的版本與 commit，設定頁卡片的版本與種類與 API 相同，UI 讀取失敗後點重試恢復。503 是路由注入，不宣稱真實服務故障。兩個 listener 回同一份身分、token 與 Vault 未就緒時可讀在 tests/server/build-info-http.test.ts。
 
 ## Backlog
+
+- `build-info-onboarding`：開始使用畫面的卡片顯示；API 在 Vault 未就緒時可讀已有 `tests/server/build-info-http.test.ts`，卡片與設定頁共用同一個元件。
 
 - `build-info-api`：在已有的打包產物上，以共用入口核對 API／DOM 與 asar／artifact 身分；沒有相符產物時明確列為未驗，不以 Web 代替。

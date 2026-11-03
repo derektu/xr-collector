@@ -30,8 +30,8 @@ Preconditions:
 
 ## Regression flows
 
-- `notifications`：斷言 `notification-settings`、`notification-actionable` 的無通知區塊與無規格補充文字、預設值、UI／Agent 契約、內部參數持久、既有自動暫停 active 與不補發。
-- `notification-clicks`：斷言 `notification-events`、`notification-actionable`、`notification-click`。事件由流程直接寫進裝置的通知紀錄檔當前置，只斷言正常重啟不重送，不斷言 App 自己寫的欄位；attention 圖示與兩筆選單、隱藏／最小化視窗還原聚焦、無 ledger 列導頁、正常重啟去重且不啟動收集、同一詳情移除後重抓不存在、清空 attention，以及其他 Vault 同 ID 拒絕導頁與切換。Desktop 流程，視窗會顯示；activation 不等同 OS toast 實際顯示。
+- `login-startup`：斷言 `notification-settings` 的設定頁沒有通知區塊。預設值與 UI／授權 Agent 讀同一份狀態在 tests/server/notifications-http.test.ts，關閉後重開 profile 仍關閉、重新開啟不補發在 tests/notifications/notification-center.test.ts。
+- `notification-clicks`：斷言 `notification-events`、`notification-actionable`、`notification-click`。事件由流程直接寫進裝置的通知紀錄檔當前置，只斷言正常重啟不重送，不斷言 App 自己寫的欄位；attention 圖示與兩筆選單、點通知顯示隱藏的視窗並導到詳情、無 ledger 列導頁、正常重啟去重且不啟動收集、同一詳情移除後重抓不存在、清空 attention，以及其他 Vault 同 ID 拒絕導頁與切換。Desktop 流程，視窗隱藏時以 App 的顯示紀錄判斷；聚焦與最小化還原需要畫面上的視窗（NCLICK-D1，--visible）。activation 不等同 OS toast 實際顯示。
 
 ## Backlog
 

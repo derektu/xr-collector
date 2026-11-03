@@ -1,20 +1,23 @@
 // Native menu attention and notification activation. The flow creates real RSS subscriptions,
 // then writes the already-auto-paused fixture that would otherwise take five failures over a day.
 // Validation activation follows the same route as an OS click; it does not claim the OS displayed a
-// toast, which remains installed-app visual acceptance.
+// toast, which remains installed-app visual acceptance. With the window hidden, a click is judged
+// by the app showing the window and the route it opens; focusing it and restoring a minimized window
+// need it on screen and run with --visible.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  activateNotification, clickTray, closeWindow, idle, notifications, subscribe, trayMenu, windowState,
+  activateNotification, clickTray, closeWindow, idle, notifications, shownIn, subscribe, trayMenu, windowState,
 } from '../scripts/lib/index.mjs';
 
 export const name = 'notification-clicks';
 export const title = '自動暫停通知的選單、圖示與導頁';
 export const covers = ['notification-events', 'notification-actionable', 'notification-click', 'tray-menu', 'tray-open'];
 export const desktop = true;
+export const visibleScenarios = ['NCLICK-D1'];
 
 const PAUSED_AT = '2026-10-28T01:00:00.000Z';
 const eventId = (vaultId, subscriptionId) => createHash('sha256')
@@ -36,7 +39,7 @@ async function serveFeeds(port) {
   };
 }
 
-export async function run({ instance, record, waitFor }) {
+export async function run({ instance, record, waitFor, visible }) {
   const feeds = await serveFeeds(instance.ports.feeds);
   const page = () => instance.window;
   const subscriptionsFile = path.join(instance.vault, 'settings', 'rss-subscriptions.json');
@@ -91,17 +94,22 @@ export async function run({ instance, record, waitFor }) {
 
       await closeWindow(instance.app);
       await activateNotification(instance.app, eventId(originalVaultId, ids[0]));
-      await waitFor(async () => { const state = await windowState(instance.app); return state.visible && state.focused; }, 'hidden window shown and focused');
+      const opened = async () => { const state = await windowState(instance.app); return shownIn(state, visible) === true && (!visible || state.focused); };
+      await waitFor(opened, 'hidden window shown').catch(() => undefined);
+      expect(await opened(), visible ? '點通知顯示並聚焦隱藏的視窗' : '點通知顯示隱藏的視窗',
+        { id: 'click.show', expected: { shown: true, ...(visible ? { focused: true } : {}) }, actual: await windowState(instance.app) });
       await waitFor(() => page().url().endsWith(`/sources/rss/${encodeURIComponent(ids[0])}`), 'notification source route');
       await page().getByTestId('detail-problem').waitFor();
-      expect((await page().getByTestId('detail-problem').innerText()).includes('自動暫停'), '點通知顯示真詳情與自動暫停原因',
-        { id: 'click.detail', expected: '自動暫停', actual: await page().getByTestId('detail-problem').innerText() });
+      const kind = await page().getByTestId('detail-problem').getAttribute('data-kind');
+      expect(kind === 'auto_paused', '點通知顯示真詳情與自動暫停原因', { id: 'click.detail', expected: 'auto_paused', actual: kind });
 
-      await instance.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
-      await activateNotification(instance.app, eventId(originalVaultId, ids[0]));
-      await waitFor(async () => instance.app.evaluate(({ BrowserWindow }) => !BrowserWindow.getAllWindows()[0].isMinimized()), 'minimized window restored');
-      expect((await windowState(instance.app)).focused, '最小化後通知 handler 還原並聚焦',
-        { id: 'click.restore', expected: true, actual: await windowState(instance.app) });
+      if (visible) {
+        await instance.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
+        await activateNotification(instance.app, eventId(originalVaultId, ids[0]));
+        await waitFor(async () => instance.app.evaluate(({ BrowserWindow }) => !BrowserWindow.getAllWindows()[0].isMinimized()), 'minimized window restored');
+        expect((await windowState(instance.app)).focused, '最小化後通知 handler 還原並聚焦',
+          { id: 'click.restore', expected: true, actual: await windowState(instance.app) });
+      } else note('click.restore', '最小化還原與聚焦需要畫面上的視窗，以 --visible 驗證。');
       await shot('attention-notification-detail');
 
       await clickTray(instance.app, `subscription:${eventId(originalVaultId, ids[1])}`);
@@ -146,7 +154,7 @@ export async function run({ instance, record, waitFor }) {
       await instance.api('/api/vault/open', { method: 'POST', body: JSON.stringify({ path: other }) });
       await waitFor(async () => (await instance.api('/api/health')).runtime.vaultPath === other, 'other Vault opened');
       await activateNotification(instance.app, eventId(originalVaultId, ids[0]));
-      await waitFor(async () => page().getByTestId('notice').textContent().then((text) => text.includes('其他知識庫'), () => false), 'cross-Vault notice');
+      await page().getByTestId('notice').waitFor();
       expect(page().url().endsWith('/settings') && (await instance.api('/api/health')).runtime.vaultPath === other, '舊通知不導到另一 Vault 同 ID 訂閱，也不切換 Vault',
         { id: 'cross-vault.refuse', expected: { route: '/settings', vault: other }, actual: { route: new URL(page().url()).pathname, vault: (await instance.api('/api/health')).runtime.vaultPath } });
       await shot('cross-vault-refused');

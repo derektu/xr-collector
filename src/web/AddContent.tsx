@@ -130,7 +130,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
 
       <div className="dialog-actions">
         <button type="button" className="button" onClick={onClose}>取消</button>
-        <button type="submit" className="button primary" disabled={busy || !primary || invalidSettings} data-testid="add-confirm">{busy ? '處理中…' : primaryLabel}</button>
+        <button type="submit" className="button primary" disabled={busy || !primary || invalidSettings} data-testid="add-confirm" data-action={primary?.id ?? ''}>{busy ? '處理中…' : primaryLabel}</button>
       </div>
     </form>
   </dialog>;

@@ -337,9 +337,22 @@ export function clickTray(app, action) {
   return app.evaluate((_electron, name) => { void globalThis.__xrCollectorValidation.click(name); }, action);
 }
 
-/** The main window: { exists, visible, focused, url }. */
+/**
+ * The main window: { exists, shown, visible, focused, url }. `shown` is whether the app last showed
+ * or hid the window, which a hidden run reports too; `visible` and `focused` are the window on screen.
+ */
 export function windowState(app) {
   return app.evaluate(() => globalThis.__xrCollectorValidation.window());
+}
+
+/**
+ * Whether a window state reads as shown: true or false from the app's record, and with the window
+ * on screen (`visible`) only when the window itself agrees; null when they disagree, so a check
+ * for either answer fails.
+ */
+export function shownIn(state, visible) {
+  if (!visible) return state.shown;
+  return state.shown === state.visible ? state.shown : null;
 }
 
 /** Closes the main window as its close button does. */

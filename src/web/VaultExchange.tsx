@@ -301,7 +301,8 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     </div> : null}
     {phase === 'replace' && preview ? <div data-testid="import-replace-confirm">
       {header}
-      <p className="merge-counts" data-testid="import-replace-counts">{changeText(preview.replace)}</p>
+      <p className="merge-counts" data-testid="import-replace-counts"
+        data-documents-removed={preview.replace.documents.removed} data-subscriptions-removed={preview.replace.subscriptions.removed}>{changeText(preview.replace)}</p>
     </div> : null}
     {phase === 'applying' ? <Progress progress={progress} fallback="正在匯入…" /> : null}
     {phase === 'done' && result && done ? <div data-testid="import-done">

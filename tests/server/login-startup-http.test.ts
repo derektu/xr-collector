@@ -1,9 +1,14 @@
 // GET/PUT /api/device/login-startup, the open-at-login setting: readable before a Vault is set up,
-// refused outside the packaged app, strict about the request body, and reporting a needed approval
+// refused outside the packaged app on the UI and the Agent listener alike, strict about the request body, and reporting a needed approval
 // or a failed read-back with stable error codes.
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { LoginStartupAccess } from '../../src/core/login-startup.js';
 import { CollectorError } from '../../src/core/types.js';
+import { startAgentAccess } from '../../src/server/agent-access.js';
 import { createHttpApp } from '../../src/server/app.js';
 
 describe('login startup HTTP API', () => {
@@ -15,6 +20,25 @@ describe('login startup HTTP API', () => {
     expect(write.statusCode).toBe(409);
     expect(write.json()).toMatchObject({ error: { code: 'login_startup_unavailable' } });
     await app.close();
+  });
+
+  it('refuses changes from an authorized Agent in Web/development mode too', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-login-startup-agent-'));
+    const access = await startAgentAccess({
+      notReady: () => '尚未設定 Vault。', settingsFile: path.join(root, 'agent-settings.json'),
+      preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent'),
+    });
+    try {
+      const { url, token } = access.connection();
+      const response = await fetch(`${url}/api/device/login-startup`, {
+        method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: 'login_startup_unavailable' } });
+    } finally {
+      await access.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('uses the injected packaged service and validates the exact request shape', async () => {
@@ -49,3 +73,11 @@ describe('login startup HTTP API', () => {
     }
   });
 });
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}

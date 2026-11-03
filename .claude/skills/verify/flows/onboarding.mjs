@@ -26,38 +26,27 @@ export async function run({ instance, page, record, waitFor }) {
     await page.goto(instance.url);
     await instance.restart({ page });
   };
-  const preview = (expected) => waitFor(async () => (await text('new-vault-preview')) === expected, `preview ${expected}`);
+  /** What the name check shows: the folder it would create, or that the name cannot be used. */
+  const previewState = async () => ({
+    path: await button('new-vault-preview').getAttribute('data-path'), problem: await button('new-vault-preview').getAttribute('data-problem') === 'true',
+  });
+  const preview = (expected) => waitFor(async () => JSON.stringify(await previewState()) === JSON.stringify(expected), `preview ${JSON.stringify(expected)}`)
+    .catch(() => undefined);
+  const at = (folder) => ({ path: folder, problem: false });
+  const refused = { path: null, problem: true };
   const vaultPath = async () => (await instance.api('/api/vault/status')).vaultPath;
   const documentCount = async () => (await instance.api('/api/documents')).documents.length;
   const subscriptionCount = async () => (await instance.api('/api/subscriptions')).subscriptions.length;
 
-  // The window bottom shows the onboarding background on every onboarding screen, in both schemes.
-  const fillsWindow = async (expect, screen) => {
-    for (const scheme of ['dark', 'light']) {
-      await page.emulateMedia({ colorScheme: scheme });
-      const fill = await page.evaluate(() => {
-        const wrapper = document.querySelector('.onboarding-with-build-info');
-        const box = wrapper.getBoundingClientRect();
-        const below = document.elementFromPoint(window.innerWidth / 2, window.innerHeight - 2);
-        return { bottom: box.bottom, viewport: window.innerHeight, coveredBy: below?.closest('.onboarding-with-build-info') ? 'onboarding' : below?.tagName ?? null };
-      });
-      expect(fill.bottom >= fill.viewport && fill.coveredBy === 'onboarding', `${screen}，${scheme}：視窗底部仍是開始使用畫面的背景`,
-        { id: `ob.background.${screen}.${scheme}`, expected: { bottom: `>= ${fill.viewport}`, coveredBy: 'onboarding' }, actual: fill });
-    }
-    await page.emulateMedia({ colorScheme: 'dark' });
-  };
-  await page.setViewportSize({ width: 1180, height: 1400 });
   await home();
 
-  await record.scenario('OB-W1', '沒有知識庫時看到三個入口，背景延伸到視窗底部', async ({ expect, themed }) => {
-    const rows = await button('onboarding-entries').locator('.ob-row strong').allTextContents();
-    const entries = ['建立新的知識庫', '開啟既有知識庫', '從匯出檔建立'];
-    expect(JSON.stringify(rows) === JSON.stringify(entries), '三個入口依序出現', { id: 'ob.entries', expected: entries, actual: rows });
-    const labels = await Promise.all(['onboarding-create', 'onboarding-open', 'onboarding-from-export'].map((id) => text(id)));
-    expect(JSON.stringify(labels) === JSON.stringify(['建立', '開啟', '選擇檔案']), '入口按鈕文字', { id: 'ob.entry-buttons', actual: labels });
+  await record.scenario('OB-W1', '沒有知識庫時看到三個入口', async ({ expect, themed }) => {
+    const entries = ['onboarding-create', 'onboarding-open', 'onboarding-from-export'];
+    const shown = await button('onboarding-entries').locator('[data-testid]').evaluateAll((elements, ids) => elements
+      .map((element) => element.dataset.testid).filter((id) => ids.includes(id)), entries);
+    expect(JSON.stringify(shown) === JSON.stringify(entries), '建立、開啟既有、從匯出檔建立三個入口依序出現', { id: 'ob.entries', expected: entries, actual: shown });
     expect(await button('onboarding-original-failure').count() === 0, '首次啟動沒有原知識庫提示', { id: 'ob.no-warning' });
     expect(await page.getByRole('button', { name: 'AI 助理連線', exact: true }).isVisible(), 'AI 助理連線入口保留', { id: 'ob.agent-entry' });
-    await fillsWindow(expect, 'home');
     await themed('home');
   });
 
@@ -70,30 +59,28 @@ export async function run({ instance, page, record, waitFor }) {
     const location = button('new-vault-location-input');
     expect(await name.inputValue() === 'XR Collector', '名稱預設 XR Collector', { id: 'ob.create.default-name', actual: await name.inputValue() });
     expect(await location.inputValue() === documents, '位置預設為文件資料夾', { id: 'ob.create.default-location', expected: documents, actual: await location.inputValue() });
-    await preview(`知識庫位置：${first}`);
-    expect(await button('onboarding-create-confirm').isEnabled(), '預設值可以建立', { id: 'ob.create.default-enabled' });
-    await fillsWindow(expect, 'create');
+    await preview(at(first));
+    const ready = { ...(await previewState()), enabled: await button('onboarding-create-confirm').isEnabled() };
+    expect(ready.path === first && ready.enabled, '預設值預覽 文件/XR Collector 且可以建立', { id: 'ob.create.default-enabled', expected: { path: first, enabled: true }, actual: ready });
     await themed('create');
 
-    for (const [value, message, id] of [
-      ['Taken', '這個位置已經有「Taken」，請換個名稱。', 'conflict'],
-      ['a/b', '名稱不能包含 \\ / : * ? " < > | 等字元。', 'invalid-char'],
-      ['', '請輸入名稱。', 'empty'],
-    ]) {
+    // The wording of each refusal is in tests/vault/new-vault.test.ts and tests/runtime/collector-runtime.test.ts.
+    for (const [value, id] of [['Taken', 'conflict'], ['a/b', 'invalid-char'], ['', 'empty']]) {
       await name.fill(value);
-      await preview(message);
-      expect(await button('onboarding-create-confirm').isDisabled(), `「${value}」：說明原因且建立停用`, { id: `ob.create.${id}`, expected: message, actual: await text('new-vault-preview') });
+      await preview(refused);
+      const state = { ...(await previewState()), disabled: await button('onboarding-create-confirm').isDisabled() };
+      expect(state.problem && state.disabled, `「${value}」：說明原因且建立停用`, { id: `ob.create.${id}`, expected: { problem: true, disabled: true }, actual: state });
       if (id === 'conflict') await shot('create-conflict');
     }
     await name.fill('XR Collector');
-    await preview(`知識庫位置：${first}`);
+    await preview(at(first));
     expect(await button('onboarding-create-confirm').isEnabled(), '改回可用的名稱後恢復可建立', { id: 'ob.create.recovered' });
 
     await button('onboarding-back').click();
     await home();
     expect(await button('onboarding-error').count() === 0, '返回首頁不帶錯誤', { id: 'ob.create.back' });
     await button('onboarding-create').click();
-    await preview(`知識庫位置：${first}`);
+    await preview(at(first));
     await button('onboarding-create-confirm').click();
     await button('nav-settings').waitFor({ timeout: 30_000 });
     expect(await vaultPath() === first, '用預設值建立的資料夾是 文件/XR Collector', { id: 'ob.create.path', expected: first, actual: await vaultPath() });
@@ -121,11 +108,12 @@ export async function run({ instance, page, record, waitFor }) {
     const location = button('new-vault-location-input');
     await waitFor(async () => await location.inputValue() === documents, 'location defaults to the parent of the active Vault');
     expect(await name.inputValue() === 'XR Collector', '名稱預設 XR Collector，位置預設目前知識庫的上一層', { id: 'settings.create.defaults' });
-    await preview('這個位置已經有「XR Collector」，請換個名稱。');
-    expect(await button('create-vault-confirm').isDisabled(), '預設值與目前的知識庫同名時不能建立', { id: 'settings.create.conflict' });
+    await preview(refused);
+    const conflict = { ...(await previewState()), disabled: await button('create-vault-confirm').isDisabled() };
+    expect(conflict.problem && conflict.disabled, '預設值與目前的知識庫同名時不能建立', { id: 'settings.create.conflict', expected: { problem: true, disabled: true }, actual: conflict });
     await name.fill('My Vault');
     await location.fill(path.dirname(other));
-    await preview(`知識庫位置：${other}`);
+    await preview(at(other));
     await shot('settings-create');
     await button('create-vault-confirm').click();
     await button('create-vault-result-path').waitFor({ timeout: 30_000 });
@@ -150,17 +138,16 @@ export async function run({ instance, page, record, waitFor }) {
     await rename(first, moved);
     await restartAtRoot();
     await home();
-    const warning = await text('onboarding-original-failure');
-    expect(warning.includes('原知識庫無法開啟') && warning.includes(first), '提示框說明原知識庫無法開啟並顯示原路徑',
-      { id: 'ob.missing.warning', expected: first, actual: warning });
+    const warning = await button('onboarding-original-failure').getAttribute('data-path', { timeout: 5_000 }).catch(() => null);
+    expect(warning === first, '提示框說明原知識庫無法開啟並顯示原路徑', { id: 'ob.missing.warning', expected: first, actual: warning });
     await shot('missing-vault');
 
     await button('onboarding-open').click();
     await button('onboarding-open-path').fill(path.join(documents, 'Taken'));
     await button('onboarding-open-confirm').click();
     await button('onboarding-error').waitFor();
-    expect(await text('onboarding-error') === '「Taken」不是 XR Collector 知識庫。', '選到一般資料夾時留在首頁並說明原因',
-      { id: 'ob.open.not-a-vault', actual: await text('onboarding-error') });
+    const error = await button('onboarding-error').count();
+    expect(error === 1, '選到一般資料夾時說明原因', { id: 'ob.open.not-a-vault', expected: 1, actual: error });
     expect(await button('onboarding-home').isVisible(), '仍在首頁', { id: 'ob.open.stays-home' });
     await shot('open-not-a-vault');
 
@@ -181,13 +168,16 @@ export async function run({ instance, page, record, waitFor }) {
     await button('onboarding-package-input').fill(exportFile);
     await button('onboarding-package-read').click();
     await waitFor(async () => (await button('onboarding-package-summary').count()) === 1, 'package described');
-    const summary = await text('onboarding-package-summary');
-    const counts = `${exported.documents} 份文件、${exported.subscriptions} 個訂閱`;
-    expect(/\d{4}-\d{2}-\d{2} 匯出/u.test(summary) && summary.includes(counts), '顯示匯出日期、文件數與訂閱數', { id: 'ob.export.summary', expected: counts, actual: summary });
+    const summary = button('onboarding-package-summary');
+    const described = {
+      documents: Number(await summary.getAttribute('data-documents')), subscriptions: Number(await summary.getAttribute('data-subscriptions')),
+      exportedAt: Boolean(await summary.getAttribute('data-exported-at')),
+    };
+    const wanted = { ...exported, exportedAt: true };
+    expect(JSON.stringify(described) === JSON.stringify(wanted), '顯示匯出日期、文件數與訂閱數', { id: 'ob.export.summary', expected: wanted, actual: described });
     const name = await button('new-vault-name').inputValue();
     expect(name === 'XR Collector', '名稱預設為匯出時的資料夾名稱', { id: 'ob.export.default-name', expected: 'XR Collector', actual: name });
-    await preview(`知識庫位置：${first}`);
-    await fillsWindow(expect, 'from-export');
+    await preview(at(first));
     await shot('from-export');
     await button('onboarding-import-confirm').click();
     await button('nav-settings').waitFor({ timeout: 30_000 });

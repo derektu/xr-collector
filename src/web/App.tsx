@@ -293,17 +293,17 @@ export default function App() {
         {navigation.map(navItem)}
         <span className="nav-spacer" />
         {update ? <button type="button" className="sidebar-update" onClick={openUpdate}
-          data-testid="sidebar-update"><span className="nav-label">v{update.currentVersion}{updateLabel ? ` · ${updateLabel}` : ''}</span></button> : null}
+          data-testid="sidebar-update" data-phase={updateLabel ? update.phase : 'none'}><span className="nav-label">v{update.currentVersion}{updateLabel ? ` · ${updateLabel}` : ''}</span></button> : null}
         {navItem(settingsNavigation)}
       </nav>
     </aside>
     <main className="content" ref={content}>
-      {offline && !readerId ? <p className="offline-banner" role="status" data-testid="offline-banner">
+      {offline && !readerId ? <p className="offline-banner" role="status" data-testid="offline-banner" data-checked-at={connectivity.checkedAt ?? undefined}>
         <Icon name="offline" size={16} />
         <span><strong>目前沒有網路</strong>，恢復後自動檢查。{connectivity.checkedAt ? <span className="muted">（{offlineCheckedLabel(connectivity.checkedAt)} 確認）</span> : null}</span>
       </p> : null}
       <div className={readerId ? 'page reader-page' : 'page'} data-testid={`page-${readerId ? 'reader' : sourceRoute ? 'source-detail' : page}`}>{body}</div>
-      {notice ? <p key={notice.key} className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="notice">{notice.text}</p> : null}
+      {notice ? <p key={notice.key} className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="notice" data-tone={notice.tone}>{notice.text}</p> : null}
     </main>
     {adding ? <AddContent mode={adding} sourceTypes={sourceTypes} onClose={() => setAdding(null)} onDone={added}
       onOpenSource={(type, id) => { setAdding(null); openSource(type, id); }} /> : null}

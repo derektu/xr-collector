@@ -78,7 +78,8 @@ export function NewVaultFields({ name, location, check, checking, onName, onLoca
         </div>
       </ListRow>
     </div>
-    <p className={`ob-preview ${check?.problem ? 'error' : ''}`} aria-live="polite" data-testid="new-vault-preview">
+    <p className={`ob-preview ${check?.problem ? 'error' : ''}`} aria-live="polite" data-testid="new-vault-preview"
+      data-path={check && !check.problem ? check.path ?? undefined : undefined} data-problem={check?.problem ? 'true' : undefined}>
       {check?.problem ?? (check?.path ? <>知識庫位置：<code>{check.path}</code></> : checking ? '正在檢查…' : '')}
     </p>
   </>;

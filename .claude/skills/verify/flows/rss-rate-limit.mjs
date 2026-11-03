@@ -1,17 +1,15 @@
 // A feed whose site answers 429: its check fails at once and counts toward that subscription's
-// failures, the row turns red, and another feed checked right after completes, since RSS has no
-// shared cooldown. The fifth failure a day after the first pauses the feed by itself, and 恢復
-// clears the failures and checks at once. The flow writes the earlier failures into the Vault file
-// instead of failing four checks over a day.
-import { readFile, writeFile } from 'node:fs/promises';
+// failures, the row shows the failure, and another feed checked right after completes, since RSS
+// has no shared cooldown. A feed whose site answers 503 keeps its check running while it waits to
+// retry. Pausing after repeated failures and resuming are in subscription-failures.
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'rss-rate-limit';
-export const title = 'RSS 網站限制連線';
-export const covers = ['rss-atom', 'rss-check', 'rss-failure'];
+export const title = 'RSS 網站限制連線與暫時無法使用';
+export const covers = ['rss-atom', 'rss-check', 'rss-failure', 'jobs-sections'];
 
-const DAY = 24 * 60 * 60_000;
 // An RSS check takes a few seconds; one that waits for a cooldown takes minutes.
 const CHECK_TIMEOUT = 30_000;
 
@@ -21,15 +19,17 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   const storedFeed = async (id) => JSON.parse(await readFile(subscriptionsFile, 'utf8')).subscriptions.find((entry) => entry.id === id);
   const documentsTotal = async () => (await instance.api('/api/documents?limit=1')).total;
   const feeds = {};
+  let failed;
 
+  /** A feed row's status chip: its state and failure count. */
   const chip = async (feed) => {
     const element = page.getByTestId(`source-row-${feed.id}`).getByTestId('subscription-status');
-    return { text: (await element.innerText()).trim(), error: (await element.getAttribute('class')).split(' ').includes('error') };
+    return { phase: await element.getAttribute('data-phase'), failures: await element.getAttribute('data-failures') };
   };
-  const rowShows = (feed, pattern) => waitFor(async () => {
+  const rowShows = (feed, phase) => waitFor(async () => {
     const value = await chip(feed);
-    return pattern.test(value.text) ? value : null;
-  }, `${feed.title} row ${pattern}`, { timeout: 15_000 }).catch(() => chip(feed));
+    return value.phase === phase ? value : null;
+  }, `${feed.title} row ${phase}`, { timeout: 15_000 }).catch(() => chip(feed));
 
   /** 立即檢查 from a feed's row menu; resolves with the check job once it settled, or null when it does not within `CHECK_TIMEOUT`. */
   const checkFromRow = async (feed) => {
@@ -59,8 +59,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     for (const entry of await subscriptions()) feeds[entry.url.endsWith('/atom.xml') ? 'b' : 'a'] = entry;
     await page.getByTestId('nav-sources').click();
     await page.getByTestId('page-sources').waitFor();
-    const rows = [await rowShows(feeds.a, /^下次 /u), await rowShows(feeds.b, /^下次 /u)];
-    expect(rows.every((row) => /^下次 /u.test(row.text)), '兩列都是「下次 HH:MM」', { id: 'start.scheduled', expected: '下次 HH:MM', actual: rows });
+    const rows = [await rowShows(feeds.a, 'scheduled'), await rowShows(feeds.b, 'scheduled')];
+    expect(rows.every((row) => row.phase === 'scheduled'), '兩列都排定下次檢查', { id: 'start.scheduled', expected: 'scheduled', actual: rows });
     const collected = await documentsTotal() - before;
     expect(collected === 7, 'RSS 收進 4 篇、Atom 收進 3 篇', { id: 'start.documents', expected: 7, actual: collected });
   });
@@ -75,13 +75,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     });
     const sampler = setInterval(() => { void samplePacing().catch(() => undefined); }, 300);
     try {
-      const failed = await checkFromRow(feeds.a);
+      failed = await checkFromRow(feeds.a);
       expect(failed?.state === 'failed' && failed.error?.code === 'rate_limited', 'RSS 的檢查立刻失敗，錯誤為 rate_limited',
         { id: 'w2.a-failed', expected: { state: 'failed', code: 'rate_limited' }, actual: failed ? { state: failed.state, error: failed.error } : 'not settled' });
-      const retryLabel = /^錯誤（連續 1 次）・(?:明天 )?\d{2}:\d{2} 重試$/u;
-      const shown = await rowShows(feeds.a, retryLabel);
-      expect(retryLabel.test(shown.text) && shown.error, 'RSS 列為紅色並顯示重試時間',
-        { id: 'w2.a-row', expected: '錯誤（連續 1 次）・[明天 ]HH:MM 重試（紅色）', actual: shown });
+      const shown = await rowShows(feeds.a, 'failing');
+      const retryAt = (await subscriptions()).find((entry) => entry.id === feeds.a.id)?.checkStatus.nextCheckAt ?? null;
+      expect(shown.phase === 'failing' && shown.failures === '1' && retryAt !== null, 'RSS 列顯示連續失敗 1 次，API 有重試時間',
+        { id: 'w2.a-row', expected: { phase: 'failing', failures: '1', retryAt: '時間' }, actual: { ...shown, retryAt } });
       const stored = await storedFeed(feeds.a.id);
       expect(stored.checkFailures?.count === 1 && stored.checkFailures.error?.code === 'rate_limited', 'Vault 檔中 RSS 的連續失敗為 1 次、rate_limited',
         { id: 'w2.a-vault', expected: { count: 1, code: 'rate_limited' }, actual: stored.checkFailures ?? null });
@@ -92,8 +92,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       const added = await waitFor(async () => (await documentsTotal()) > documentsBefore ? await documentsTotal() - documentsBefore : null,
         'Atom article saved', { timeout: 10_000 }).catch(async () => await documentsTotal() - documentsBefore);
       expect(added === 1, 'Atom 收進 1 篇新文章', { id: 'w2.b-documents', expected: 1, actual: added });
-      const rowB = await rowShows(feeds.b, /^下次 /u);
-      expect(/^下次 /u.test(rowB.text) && !rowB.error, 'Atom 列回到「下次 HH:MM」', { id: 'w2.b-row', expected: '下次 HH:MM', actual: rowB });
+      const rowB = await rowShows(feeds.b, 'scheduled');
+      expect(rowB.phase === 'scheduled', 'Atom 列回到排定下次檢查', { id: 'w2.b-row', expected: 'scheduled', actual: rowB });
     } finally {
       clearInterval(sampler);
     }
@@ -109,56 +109,50 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const view = await openPage(`/sources/rss/${encodeURIComponent(feeds.a.id)}`);
     await view.getByTestId('source-detail').waitFor();
     const problem = view.getByTestId('detail-problem');
-    const problemText = (await problem.count()) ? (await problem.innerText()).trim() : null;
-    expect(problemText === '最近一次檢查失敗（連續 1 次）：這個網站暫時限制連線。', '紅條顯示連續次數與原因',
-      { id: 'w3.detail-problem', expected: '最近一次檢查失敗（連續 1 次）：這個網站暫時限制連線。', actual: problemText });
-    const newestCheck = view.getByTestId('collection-check').first();
-    const newestTitle = (await newestCheck.count()) ? (await newestCheck.locator('.collection-title').innerText()).trim() : null;
-    expect(newestTitle === '發生錯誤：網站限制連線', '收集紀錄最新一筆是這次失敗的檢查',
-      { id: 'w3.collection-check', expected: '發生錯誤：網站限制連線', actual: newestTitle });
+    await problem.waitFor({ timeout: 5_000 }).catch(() => undefined);
+    const shownProblem = (await problem.count()) ? {
+      kind: await problem.getAttribute('data-kind'), failures: await problem.getAttribute('data-failures'), code: await problem.getAttribute('data-error-code'),
+    } : null;
+    const wantedProblem = { kind: 'failing', failures: '1', code: 'rate_limited' };
+    expect(JSON.stringify(shownProblem) === JSON.stringify(wantedProblem), '紅條顯示連續 1 次失敗、原因是網站限制連線',
+      { id: 'w3.detail-problem', expected: wantedProblem, actual: shownProblem });
+    const newest = view.getByTestId('collection-check').first();
+    const shownCheck = (await newest.count()) ? { job: await newest.getAttribute('data-job'), code: await newest.getAttribute('data-error-code') } : null;
+    const wantedCheck = { job: failed?.id ?? null, code: 'rate_limited' };
+    expect(JSON.stringify(shownCheck) === JSON.stringify(wantedCheck), '收集紀錄最新一筆是這次失敗的檢查',
+      { id: 'w3.collection-check', expected: wantedCheck, actual: shownCheck });
     await shot('detail-limited', view);
     await view.close();
   });
 
-  await record.scenario('RL-4', '第 5 次失敗、距第一次失敗超過 24 小時：自動暫停', async ({ expect, shot }) => {
-    // Four failures in a row, the first of them 25 hours ago.
-    const file = JSON.parse(await readFile(subscriptionsFile, 'utf8'));
-    const entry = file.subscriptions.find((candidate) => candidate.id === feeds.a.id);
-    entry.checkFailures = {
-      count: 4, since: new Date(Date.now() - DAY - 60 * 60_000).toISOString(),
-      error: entry.checkFailures?.error ?? { code: 'rate_limited', message: '這個網站暫時限制連線。' },
-    };
-    await writeFile(subscriptionsFile, `${JSON.stringify(file, null, 2)}\n`);
-
-    const failed = await checkFromRow(feeds.a);
-    expect(failed?.state === 'failed', 'RSS 的檢查再次失敗', { id: 'w4.job-failed', expected: 'failed', actual: failed?.state ?? 'not settled' });
-    const shown = await rowShows(feeds.a, /^已暫停・連續失敗 5 次$/u);
-    expect(shown.text === '已暫停・連續失敗 5 次' && shown.error, 'RSS 列為紅色「已暫停・連續失敗 5 次」',
-      { id: 'w4.row', expected: '已暫停・連續失敗 5 次（紅色）', actual: shown });
-    const events = (await instance.api('/api/activity?limit=20&eventType=subscription.auto_paused')).events;
-    expect(events.length === 1 && events[0].subscriptionId === feeds.a.id, '記錄一筆 subscription.auto_paused',
-      { id: 'w4.event', expected: 1, actual: events.map((event) => ({ subscriptionId: event.subscriptionId, message: event.message })) });
-    await shot('row-auto-paused');
-  });
-
-  await record.scenario('RL-5', '網站恢復後按「恢復」：次數歸零並立即檢查', async ({ expect, shot }) => {
-    await instance.updateCatalog((catalog) => { delete catalog.feeds['/feed.xml'].status; });
-    const since = new Date().toISOString();
-    const view = await openPage(`/sources/rss/${encodeURIComponent(feeds.a.id)}`);
-    await view.getByTestId('detail-toggle').click();
-    const resumed = await waitFor(async () => {
-      const job = (await instance.api('/api/jobs?state=all&limit=100')).jobs
-        .find((candidate) => candidate.kind === 'rss.feed' && candidate.source.id === feeds.a.id && candidate.createdAt >= since);
-      return job && (job.state === 'completed' || job.state === 'failed') ? job : null;
-    }, 'RSS resume check settled', { timeout: CHECK_TIMEOUT }).catch(() => null);
-    expect(resumed?.state === 'completed' && resumed.scope?.trigger === 'resume', '恢復後立即檢查一次並完成',
-      { id: 'w5.resume-check', expected: { state: 'completed', trigger: 'resume' }, actual: resumed ? { state: resumed.state, trigger: resumed.scope?.trigger } : 'not settled' });
-    await view.close();
-    const shown = await rowShows(feeds.a, /^下次 /u);
-    expect(/^下次 /u.test(shown.text) && !shown.error, 'RSS 列回到「下次 HH:MM」', { id: 'w5.row', expected: '下次 HH:MM', actual: shown });
-    const api = (await subscriptions()).find((entry) => entry.id === feeds.a.id);
-    expect(api.enabled && api.checkFailures === null && api.autoPausedAt === null, 'API 的連續失敗與自動暫停已清除',
-      { id: 'w5.api', expected: { enabled: true, checkFailures: null, autoPausedAt: null }, actual: { enabled: api.enabled, checkFailures: api.checkFailures, autoPausedAt: api.autoPausedAt } });
-    await shot('row-resumed');
+  await record.scenario('RL-503', '網站暫時無法使用（503）：檢查留在進行中等待重試', async ({ expect, shot }) => {
+    await instance.updateCatalog((catalog) => {
+      delete catalog.feeds['/feed.xml'].status;
+      catalog.feeds['/atom.xml'].status = 503;
+    });
+    try {
+      const since = new Date().toISOString();
+      await waitFor(async () => (await page.getByTestId('notice').count()) === 0, 'no toast over the page', { timeout: 15_000 });
+      await page.getByRole('button', { name: `${feeds.b.title} 的更多動作` }).click();
+      await page.getByRole('menuitem', { name: '立即檢查', exact: true }).click();
+      const retrying = await waitFor(async () => {
+        const status = (await subscriptions()).find((entry) => entry.id === feeds.b.id)?.checkStatus;
+        if (status?.state !== 'retrying') return null;
+        const job = (await instance.api('/api/jobs?state=all&limit=100')).jobs
+          .find((candidate) => candidate.kind === 'rss.feed' && candidate.source.id === feeds.b.id && candidate.createdAt >= since);
+        return job ? { status, job } : null;
+      }, 'Atom check waits to retry', { timeout: CHECK_TIMEOUT });
+      await page.getByTestId('nav-jobs').click();
+      await page.getByTestId('jobs-running').waitFor();
+      const placed = {
+        running: await page.getByTestId('jobs-running').getByTestId(`job-${retrying.job.id}`).count(),
+        queued: await page.getByTestId('jobs-queued').count(),
+      };
+      expect(placed.running === 1 && placed.queued === 0, '等待重試的檢查列在進行中，不在排隊中',
+        { id: 'w503.running', expected: { running: 1, queued: 0 }, actual: placed });
+      await shot('running-retry');
+    } finally {
+      await instance.updateCatalog((catalog) => { delete catalog.feeds['/atom.xml'].status; });
+    }
   });
 }

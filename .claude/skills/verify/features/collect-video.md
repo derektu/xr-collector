@@ -40,7 +40,8 @@ Preconditions:
 ## Regression flows
 
 - `core-journey`：斷言 `collect-add`、`collect-done`、`collect-read`。文件頁「新增」→「網址」加入頻道 D 的一支影片，留在文件頁，API、Vault 與索引都有它，不建立訂閱，閱讀頁顯示字幕。
-- `workspace-content`：斷言 `collect-add`、`collect-mismatch`、`collect-done`、`collect-fail`。空知識庫的新增入口開啟同一對話框；訂閱對話框貼影片網址後改為加入一次、收進文件且不建立訂閱；收集失敗後的工作列。
+- `workspace-content`：斷言 `collect-add`、`collect-mismatch`、`collect-done`、`collect-fail`。訂閱對話框貼影片網址後改為加入一次、收進文件且不建立訂閱；收集失敗後的工作列。
+- `live-updates`：斷言 `collect-add`。空知識庫的文件頁新增入口開啟新增對話框。
 
 ## Backlog
 

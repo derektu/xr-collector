@@ -28,7 +28,7 @@ Preconditions:
 - 匯入合併需要另一個 Vault 的匯出檔：在同一流程再 `launchWeb({ issue })` 一個 instance（會拿另一個 slot），在那邊收不同的影片後匯出，把 zip 路徑交給第一個 instance。
 - 所有路徑都放在 run 目錄內，例如 `path.join(instance.runDir, 'exports', 'a.zip')`。
 
-- **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是目前選用的 Vault，初始為 run 目錄內的 `vault`；`vault-counts` 與文件數一致。保持設定頁開啟，再以背景收集增加文件，知識庫數量與搜尋卡應跟著更新，不必離開頁面；`workspace-content` 的 COUNTS-1／2 比對 0 → 3 → 5。
+- **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是目前選用的 Vault，初始為 run 目錄內的 `vault`；`vault-counts` 與文件數一致。保持設定頁開啟，再經 Agent 刪除文件，知識庫數量與搜尋卡應跟著更新，不必離開頁面；`live-updates` 的 LIVE-3 比對 API 與引擎實際索引。
 - **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector 匯出/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
 - **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-compare`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
 - **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
@@ -50,14 +50,15 @@ Preconditions:
 
 ## Regression flows
 
-- `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的單排及窄視窗幾何斷言、DOM 順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。
+- `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的操作順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫與起始位置。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。視窗隱藏即可執行。
 
-- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`、`vault-fixed`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀，以及固定位置限制。Web 模式，合成 YouTube；不涵蓋原生對話框。
+- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `onboarding`：斷言 `vault-create`；設定頁以改過的名稱與位置建立並切換，預設值與目前的知識庫同名時停用「建立」，原知識庫資料夾內容不變，再以開啟既有知識庫切回。Web 模式。
-- `workspace-content`：斷言 `vault-info`。COUNTS-1、COUNTS-2 留在設定頁進行兩次背景 RSS 收集，以文件 API、Vault 檔案、搜尋狀態 API 與實際索引獨立確認 0 → 3 → 5，並檢查知識庫及搜尋卡各自在對應 API 就緒後 6 秒內更新，離開再返回仍為 5。
-- `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，知識庫計數與 API 相同。
+- `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，不離開設定，知識庫的文件與訂閱數與 API 相同。
 
 ## Backlog
+
+- `vault-fixed`：沒有流程；固定位置時建立與開啟其他知識庫被拒在 `tests/vault/vault-open.test.ts` 與 `tests/runtime/collector-runtime.test.ts`，畫面只是把 API 的拒絕原因顯示出來。
 
 - `vault-import-merge`：預覽的筆數與同 ID 更新後的確切文件內容，不只比對筆數。
 - `vault-native-dialogs`：原生選檔／選資料夾的參數、取消沒有副作用與完成結果，以 Desktop 控制驗證；reveal 路徑與對話框種類已有斷言，不驗 Finder 與對話框外觀。

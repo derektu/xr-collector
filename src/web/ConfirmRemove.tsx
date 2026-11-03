@@ -31,7 +31,7 @@ export function ConfirmRemove({ source, onCancel, onRemoved }: {
     }
   }
 
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="confirm-remove-title" data-testid="confirm-remove"
+  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="confirm-remove-title" data-testid="confirm-remove" data-documents={source.documentCount}
     onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}>
     <h2 id="confirm-remove-title">移除「{source.title}」？</h2>
     {asksAboutDocuments(source) ? <fieldset className="choice-list" disabled={busy}>

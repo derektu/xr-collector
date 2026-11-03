@@ -16,7 +16,7 @@ import {
   retryCauseLabel,
   shortTimeLabel,
 } from './source-presentation.js';
-import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
+import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 import { useDay } from './use-day.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
@@ -170,7 +170,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       <div className="detail-heading">
         <div className="detail-title-line">
           <h1 className="page-title" tabIndex={-1} data-page-heading>{source.title}</h1>
-          <span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="detail-status">{subscriptionStatusText(source.checkStatus)}</span>
+          <span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="detail-status" {...subscriptionStatusData(source.checkStatus)}>{subscriptionStatusText(source.checkStatus)}</span>
         </div>
         <p className="detail-kind"><Icon name={typeInfo?.icon ?? 'file'} size={14} />{source.kindLabel} ·
           <a href={source.url} target="_blank" rel="noopener noreferrer">{displayUrl(source.url)}</a></p>
@@ -184,17 +184,18 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     </header>
 
     {source.checkFailures && (source.autoPausedAt || source.status === 'error')
-      ? <p className="detail-problem" role="alert" data-testid="detail-problem">{source.autoPausedAt
+      ? <p className="detail-problem" role="alert" data-testid="detail-problem"
+        data-kind={source.autoPausedAt ? 'auto_paused' : 'failing'} data-failures={source.checkFailures.count} data-error-code={source.checkFailures.error.code}>{source.autoPausedAt
         ? `連續失敗 ${source.checkFailures.count} 次，${shortTimeLabel(source.autoPausedAt)} 自動暫停：`
         : `最近一次檢查失敗（連續 ${source.checkFailures.count} 次）：`}{source.checkFailures.error.message}</p>
       : null}
     {source.checkStatus.state === 'retrying'
-      ? <p className="detail-retry" data-testid="detail-retry-reason">{retryCauseLabel(source.type, source.checkStatus.cause)}</p> : null}
+      ? <p className="detail-retry" data-testid="detail-retry-reason" data-cause={source.checkStatus.cause.reason}>{retryCauseLabel(source.type, source.checkStatus.cause)}</p> : null}
 
     <dl className="stats">
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
       <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</dd></div>
-      <div><dt>上次檢查</dt><dd>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
+      <div><dt>上次檢查</dt><dd data-testid="detail-last-checked" data-at={source.lastCheckedAt ?? undefined}>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
       <div><dt>新增時間</dt><dd>{shortTimeLabel(source.addedAt)}</dd></div>
     </dl>
 
@@ -230,7 +231,8 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
           }
           if (entry.kind === 'check-group') {
             const failed = entry.result === 'network_error';
-            return <li key={entry.groupId} className={`collection-row check${failed ? ' error' : ''}`} data-testid="collection-check-group">
+            return <li key={entry.groupId} className={`collection-row check${failed ? ' error' : ''}`} data-testid="collection-check-group"
+              data-group={entry.groupId} data-result={entry.result} data-count={entry.count}>
               <Icon name={failed ? 'error' : 'jobs'} size={16} />
               <span className="collection-title">{label.title}</span>
               <span className="collection-detail collection-when">{label.detail}</span>
@@ -238,7 +240,8 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
             </li>;
           }
           const key = entry.kind === 'check' ? `check:${entry.jobId}` : `${entry.kind}:${entry.key}`;
-          return <li key={key} className={`collection-row ${entry.kind}`} data-testid={`collection-${entry.kind}`}>
+          return <li key={key} className={`collection-row ${entry.kind}`} data-testid={`collection-${entry.kind}`}
+            {...(entry.kind === 'check' ? { 'data-job': entry.jobId, 'data-at': entry.at, 'data-created': entry.created, 'data-error-code': entry.error?.code } : {})}>
             <Icon name={entry.kind === 'check' ? 'jobs' : entry.kind} size={16} />
             <span className="collection-title">{label.title}</span>
             <span className="collection-detail">{label.detail}</span>

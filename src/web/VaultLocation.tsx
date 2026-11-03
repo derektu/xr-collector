@@ -71,7 +71,7 @@ export function VaultLocationSection({ vaultPath, counts, onChanged }: {
   return <section className="settings-section" data-testid="settings-vault">
     <h2>知識庫</h2>
     <code className="setting-path" data-testid="vault-path">{current}</code>
-    {counts ? <p className="hint" data-testid="vault-counts">{counts.documents} 份文件・{counts.sources} 個訂閱</p> : null}
+    {counts ? <p className="hint" data-testid="vault-counts" data-documents={counts.documents} data-sources={counts.sources}>{counts.documents} 份文件・{counts.sources} 個訂閱</p> : null}
     <div className="settings-line vault-actions" data-testid="vault-actions">
       <div className="vault-action-group">
         <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'create', resume: false })}

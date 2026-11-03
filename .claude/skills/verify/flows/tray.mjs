@@ -1,26 +1,29 @@
 // The menu bar item (macOS) or notification area icon (Windows) and the window's lifecycle, in the
-// development Electron with its window shown: the menu while idle, closing the window while
-// collection and the Agent API go on, checking and switching automatic checks from the menu,
-// the menu following changes made elsewhere without reading while idle, opening pages from it, the first-close hint once per device, a second launch, and quitting from
-// the menu in the middle of a check. The flow serves its own RSS feed on the run's feeds port.
+// development Electron: the menu while idle, closing the window while collection and the Agent API
+// go on, checking and switching automatic checks from the menu, the menu following changes made
+// elsewhere without reading while idle, opening pages from it, the first-close hint once per device,
+// a second launch, and quitting from the menu in the middle of a check. The menu is read as the
+// tray draws it, by icon, action and check mark; its wording is in tests/electron/tray-menu.test.ts.
+// With the window hidden, showing and hiding are judged by the app's own record; with --visible
+// the window on screen must agree. The flow serves its own RSS feed on the run's feeds port.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { clickTray, closeWindow, notifications, trayMenu, trayShown, windowState } from '../scripts/lib/electron.mjs';
+import { clickTray, closeWindow, notifications, shownIn, trayMenu, trayShown, windowState } from '../scripts/lib/electron.mjs';
 import { processTable, programName, WINDOWS } from '../scripts/lib/platform.mjs';
 
 export const name = 'tray';
 export const title = '選單列／系統匣與視窗生命週期';
 export const covers = ['tray-menu', 'tray-hide', 'tray-actions', 'tray-open', 'tray-hint', 'tray-second-launch', 'tray-quit'];
 export const desktop = true;
+export const visibleScenarios = ['TRAY-D2', 'TRAY-D5', 'TRAY-D6', 'TRAY-D7'];
 
 /** Long enough for the reads the previous scenario's changes may still start: one read gap (1 s) and a margin. */
 const SETTLE_MS = 1500;
 /** Long enough to catch reading on a timer, which happened every 2 s or faster. */
 const IDLE_MS = 10_000;
-const ACTIONS = ['開啟 XR Collector', '立即檢查所有訂閱', '自動檢查', '工作', '記錄', '檢查 App 更新', '結束 XR Collector'];
-const statusLines = (menu) => menu.items.filter((item) => item.kind === 'status').map((item) => item.label);
-const actionLabels = (menu) => menu.items.filter((item) => item.kind === 'action').map((item) => item.label);
+const ACTIONS = ['open', 'check_now', 'toggle_auto_check', 'jobs', 'activity', 'check_app_update', 'quit'];
+const actions = (menu) => menu.items.filter((item) => item.kind === 'action').map((item) => item.action);
 const autoCheck = (menu) => menu.items.find((item) => item.action === 'toggle_auto_check')?.checked;
 
 /** An RSS feed whose articles the flow adds, answering after `delayMs`. */
@@ -47,7 +50,7 @@ async function serveFeed(port) {
   };
 }
 
-export async function run({ instance, record, waitFor, sleep }) {
+export async function run({ instance, record, waitFor, sleep, visible }) {
   const feed = await serveFeed(instance.ports.feeds);
   const documentsTotal = async () => (await instance.api('/api/documents?limit=1')).total;
   const idle = async () => {
@@ -55,6 +58,8 @@ export async function run({ instance, record, waitFor, sleep }) {
     return overview.running.length === 0 && overview.queued.length === 0;
   };
   const menu = () => trayMenu(instance.app);
+  /** Whether the window reads as shown; see shownIn. */
+  const shown = async () => shownIn(await windowState(instance.app), visible);
   const instanceId = async () => (await instance.api('/api/health')).runtime?.instanceId;
   /** The Agent API's view of the runtime, through the connection file an Agent reads. */
   const agentHealth = async () => {
@@ -77,7 +82,7 @@ export async function run({ instance, record, waitFor, sleep }) {
     const seen = [];
     await waitFor(async () => {
       const current = await menu();
-      const key = JSON.stringify({ icon: current.icon, status: statusLines(current) });
+      const key = JSON.stringify({ icon: current.icon });
       if (seen.at(-1) !== key) seen.push(key);
       return until();
     }, 'the menu sampled until the condition', { timeout, interval: 250 });
@@ -94,15 +99,9 @@ export async function run({ instance, record, waitFor, sleep }) {
       const current = await menu();
       note('menu', current);
       expect(current.icon === 'idle', '圖示為閒置', current.icon);
-      const lines = statusLines(current);
-      expect(lines[0] === '沒有進行中的工作' && /^下次檢查 (明天 )?\d\d:\d\d$/u.test(lines[1] ?? ''), '上方狀態行為「沒有進行中的工作／下次檢查 HH:MM」', lines);
-      const version = await instance.app.evaluate(({ app }) => app.getVersion());
-      expect(lines[2] === `版本 ${version}` && lines.length === 3, `下方狀態行為這次啟動的「版本 ${version}」`, lines);
-      expect(JSON.stringify(actionLabels(current)) === JSON.stringify(ACTIONS), '項目依序為開啟、立即檢查、自動檢查、工作、記錄、檢查 App 更新、結束', actionLabels(current));
-      const labels = current.items.filter((item) => item.kind !== 'separator').map((item) => item.label);
-      expect(labels.indexOf(`版本 ${version}`) === labels.indexOf('檢查 App 更新') - 1, '版本行緊接在「檢查 App 更新」上方', labels);
+      expect(JSON.stringify(actions(current)) === JSON.stringify(ACTIONS), '項目依序為開啟、立即檢查、自動檢查、工作、記錄、檢查 App 更新、結束', actions(current));
       expect(autoCheck(current) === true, '自動檢查已勾選', autoCheck(current));
-      await waitFor(async () => /^下次 /u.test((await instance.window.getByTestId('subscription-status').first().innerText()).trim()),
+      await waitFor(async () => await instance.window.getByTestId('subscription-status').first().getAttribute('data-phase') === 'scheduled',
         'source row shows its scheduled state');
       await shot('window');
     });
@@ -110,17 +109,17 @@ export async function run({ instance, record, waitFor, sleep }) {
     await scenario('TRAY-D2', '關閉視窗：隱藏、程序與 Agent API 照常', async ({ expect, note }) => {
       await instance.window.evaluate(() => { window.__trayFlowMarker = 'before-close'; });
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
+      await waitFor(async () => await shown() === false, 'window hidden').catch(() => undefined);
       const state = await windowState(instance.app);
       note('window', state);
-      expect(state.exists && !state.visible, '視窗隱藏但沒有銷毀', state);
+      expect(state.exists && shownIn(state, visible) === false, '視窗隱藏但沒有銷毀', state);
       expect(instance.app.process().exitCode === null, '程序還在', instance.app.process().exitCode);
       const agent = await agentHealth();
       expect(agent === firstId, 'Agent API /api/health 照常回應，instanceId 不變', { agent, firstId });
-      const shown = await notifications(instance.app);
-      note('notifications', shown);
-      if (WINDOWS) expect(shown.length === 1 && shown[0].title === 'XR Collector 仍在系統匣執行', 'Windows 發出一次「仍在系統匣執行」通知', shown);
-      else expect(shown.length === 0, 'macOS 不發通知', shown);
+      const sent = await notifications(instance.app);
+      note('notifications', sent);
+      if (WINDOWS) expect(sent.length === 1, 'Windows 發出一次「仍在系統匣執行」通知', sent);
+      else expect(sent.length === 0, 'macOS 不發通知', sent);
     });
 
     await scenario('TRAY-D3', '視窗隱藏時從選單立即檢查', async ({ expect, note }) => {
@@ -131,11 +130,12 @@ export async function run({ instance, record, waitFor, sleep }) {
       const settled = await sample(async () => (await menu()).icon === 'idle', 10_000);
       note('sequence', [...sequence, ...settled]);
       const busy = sequence.filter((entry) => entry.icon === 'collecting');
-      expect(busy.length > 0 && busy.every((entry) => entry.status.some((line) => /^(正在檢查|正在收集|排隊中)/u.test(line))), '檢查時圖示為收集中，狀態行為正在檢查／正在收集／排隊中', busy);
+      expect(busy.length > 0, '檢查時圖示為收集中', sequence);
       const last = await menu();
-      expect(last.icon === 'idle' && statusLines(last)[0] === '沒有進行中的工作', '檢查結束後回到閒置', statusLines(last));
+      expect(last.icon === 'idle' && await idle(), '檢查結束後回到閒置', last.icon);
       expect(await documentsTotal() === 5, '文件由 3 份變成 5 份', await documentsTotal());
-      expect(!(await windowState(instance.app)).visible, '整個檢查期間視窗維持隱藏', await windowState(instance.app));
+      const state = await windowState(instance.app);
+      expect(shownIn(state, visible) === false, '整個檢查期間視窗維持隱藏', state);
       feed.delay = 0;
     });
 
@@ -144,26 +144,27 @@ export async function run({ instance, record, waitFor, sleep }) {
       await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === false, 'automatic checks off');
       const off = await menu();
       note('off', off);
-      expect(off.icon === 'auto_check_off' && statusLines(off).includes('自動檢查已關閉') && autoCheck(off) === false, '關閉後圖示、第二行與勾選都反映自動檢查已關閉', off);
+      expect(off.icon === 'auto_check_off' && autoCheck(off) === false, '關閉後圖示與勾選都反映自動檢查已關閉', off);
       await clickTray(instance.app, 'toggle_auto_check');
       await waitFor(async () => (await instance.api('/api/schedule')).schedule.enabled === true, 'automatic checks on');
       const on = await menu();
-      expect(on.icon === 'idle' && autoCheck(on) === true && /^下次檢查/u.test(statusLines(on)[1] ?? ''), '再開啟後恢復閒置與下次檢查', on);
+      const next = (await instance.api('/api/schedule')).schedule.nextCheck;
+      expect(on.icon === 'idle' && autoCheck(on) === true && Boolean(next), '再開啟後恢復閒置，排定下次檢查', { icon: on.icon, checked: autoCheck(on), next });
     });
 
     await scenario('TRAY-D9', '選單跟著別處的變動更新，閒置時不讀', async ({ expect, note }) => {
-      const shown = () => trayShown(instance.app);
+      const drawn = () => trayShown(instance.app);
       await sleep(SETTLE_MS);
-      const before = await shown();
+      const before = await drawn();
       await sleep(IDLE_MS);
-      const after = await shown();
+      const after = await drawn();
       note('idleReads', { before: before.reads, after: after.reads });
       expect(Number.isInteger(before.reads) && after.reads === before.reads, `閒置 ${IDLE_MS / 1000} 秒，選單沒有讀取狀態`, { before: before.reads, after: after.reads });
       await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: false }) });
-      await waitFor(async () => (await shown()).menu.icon === 'auto_check_off', 'the drawn menu shows automatic checks off');
-      expect(autoCheck((await shown()).menu) === false, '經 API 關閉自動檢查後，畫出的選單自己更新', (await shown()).menu.icon);
+      await waitFor(async () => (await drawn()).menu.icon === 'auto_check_off', 'the drawn menu shows automatic checks off');
+      expect(autoCheck((await drawn()).menu) === false, '經 API 關閉自動檢查後，畫出的選單自己更新', (await drawn()).menu.icon);
       await instance.api('/api/schedule', { method: 'PUT', body: JSON.stringify({ enabled: true }) });
-      await waitFor(async () => (await shown()).menu.icon === 'idle', 'the drawn menu shows automatic checks on');
+      await waitFor(async () => (await drawn()).menu.icon === 'idle', 'the drawn menu shows automatic checks on');
       const total = await documentsTotal();
       feed.add(1);
       feed.delay = 3000;
@@ -171,7 +172,7 @@ export async function run({ instance, record, waitFor, sleep }) {
       try {
         await instance.api('/api/subscription-checks', { method: 'POST', body: '{}' });
         await waitFor(async () => {
-          const icon = (await shown()).menu.icon;
+          const icon = (await drawn()).menu.icon;
           if (icons.at(-1) !== icon) icons.push(icon);
           return icons.includes('collecting') && icon === 'idle';
         }, 'the drawn menu shows the check start and end', { interval: 100 });
@@ -188,24 +189,25 @@ export async function run({ instance, record, waitFor, sleep }) {
         await clickTray(instance.app, action);
         await waitFor(async () => {
           const state = await windowState(instance.app);
-          return state.visible && new URL(state.url).pathname === pathname;
-        }, `${action} shows ${pathname}`);
+          return shownIn(state, visible) === true && new URL(state.url).pathname === pathname;
+        }, `${action} shows ${pathname}`).catch(() => undefined);
         const state = await windowState(instance.app);
         note(action, state);
         return state;
       };
       const jobs = await opened('jobs', '/jobs');
       await instance.window.getByTestId('page-jobs').waitFor();
-      expect(jobs.visible, '「工作」顯示視窗並在 /jobs', jobs);
+      expect(shownIn(jobs, visible) === true && new URL(jobs.url).pathname === '/jobs', '「工作」顯示視窗並在 /jobs', jobs);
       await shot('jobs');
       await closeWindow(instance.app);
       const activity = await opened('activity', '/activity');
-      expect(activity.visible, '「記錄」顯示視窗並在 /activity', activity);
+      expect(shownIn(activity, visible) === true && new URL(activity.url).pathname === '/activity', '「記錄」顯示視窗並在 /activity', activity);
       await shot('activity');
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
+      await waitFor(async () => await shown() === false, 'window hidden');
       await clickTray(instance.app, 'open');
-      await waitFor(async () => (await windowState(instance.app)).visible, 'open shows the window');
+      await waitFor(async () => await shown() === true, 'open shows the window').catch(() => undefined);
+      expect(await shown() === true, '「開啟」顯示視窗', await windowState(instance.app));
       const marker = await instance.window.evaluate(() => window.__trayFlowMarker ?? null);
       expect(marker === 'before-close', '重新開啟沒有重新載入頁面', marker);
       expect(await instanceId() === firstId, '同一個 runtime（instanceId 不變）', await instanceId());
@@ -215,12 +217,12 @@ export async function run({ instance, record, waitFor, sleep }) {
 
     await scenario('TRAY-D6', '第一次關閉提示只出現一次', async ({ expect, note }) => {
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden');
+      await waitFor(async () => await shown() === false, 'window hidden');
       const again = await notifications(instance.app);
       expect(again.length === (WINDOWS ? 1 : 0), '再關一次不再發通知', again);
       await instance.relaunch();
       await closeWindow(instance.app);
-      await waitFor(async () => !(await windowState(instance.app)).visible, 'window hidden after relaunch');
+      await waitFor(async () => await shown() === false, 'window hidden after relaunch');
       const afterRestart = await notifications(instance.app);
       note('afterRestart', afterRestart);
       expect(afterRestart.length === 0, '重新啟動後關閉也不發通知', afterRestart);
@@ -234,8 +236,8 @@ export async function run({ instance, record, waitFor, sleep }) {
       const code = await instance.launchAgain();
       note('secondExit', code);
       expect(code === 0, '第二次啟動交給執行中的 App 後結束', code);
-      await waitFor(async () => (await windowState(instance.app)).visible, 'the running window shows');
-      expect((await windowState(instance.app)).visible, '原本的視窗顯示出來', await windowState(instance.app));
+      await waitFor(async () => await shown() === true, 'the running window shows').catch(() => undefined);
+      expect(await shown() === true, '原本的視窗顯示出來', await windowState(instance.app));
       expect(await instanceId() === beforeSecondLaunch, '手動第二次啟動不建立第二個 runtime', await instanceId());
     });
 

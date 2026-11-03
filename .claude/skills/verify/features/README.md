@@ -4,18 +4,18 @@
 
 | 功能 | 檔案 | 主要層級 | 已收錄流程 |
 | --- | --- | --- | --- |
-| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `core-journey`、`workspace-content` |
-| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `core-journey`、`subscription-remove`、`subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`feature-navigation`、`workspace-content`、`live-updates` |
-| 記錄 | [activity.md](activity.md) | Web | `check-history-summary`、`feature-navigation` |
-| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`feature-navigation`、`live-updates` |
-| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`feature-navigation`、`search-normalization`、`live-updates` |
-| RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content`、`feature-navigation` |
+| 收集單支影片 | [collect-video.md](collect-video.md) | Web；開啟原始影片需 Electron | `core-journey`、`workspace-content`、`live-updates` |
+| 訂閱與檢查 | [subscriptions.md](subscriptions.md) | Web | `core-journey`、`subscription-remove`、`subscribe-a-b`、`offline-recover`、`subscription-failures`、`check-history-summary`、`youtube-cooldown`、`workspace-content`、`live-updates` |
+| 記錄 | [activity.md](activity.md) | Web | `check-history-summary` |
+| 工作頁 | [jobs.md](jobs.md) | Web | `subscribe-a-b`、`youtube-cooldown`、`workspace-content`、`rss-rate-limit`、`live-updates` |
+| 文件、閱讀與搜尋 | [documents-reader-search.md](documents-reader-search.md) | Web | `core-journey`、`subscription-remove`、`documents-reader-search`、`workspace-content`、`search-normalization`、`live-updates` |
+| RSS | [rss.md](rss.md) | Web | `rss-rate-limit`、`workspace-content` |
 | 開始使用 | [onboarding.md](onboarding.md) | Web；原生選擇器需 Electron | `onboarding` |
-| Vault 建立、開啟、匯出與匯入 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`onboarding`、`workspace-content`、`live-updates` |
-| 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗會顯示） | `tray`、`notification-clicks` |
-| 訂閱自動暫停通知 | [notifications.md](notifications.md) | Web＋原生 Desktop | `notifications`、`notification-clicks` |
+| Vault 建立、開啟、匯出與匯入 | [vault-transfer.md](vault-transfer.md) | Web；原生對話框需 Electron | `vault-transfer`、`vault-actions`、`onboarding`、`live-updates` |
+| 選單列／系統匣 | [tray.md](tray.md) | 原生 Desktop（視窗隱藏；部分 scenario 需顯示視窗） | `tray`、`notification-clicks` |
+| 訂閱自動暫停通知 | [notifications.md](notifications.md) | Web＋原生 Desktop | `login-startup`、`notification-clicks` |
 | 建置資訊 | [build-info.md](build-info.md) | Web；安裝身分需 packaged Desktop | `build-info` |
-| App 更新 | [app-update.md](app-update.md) | Web 共用狀態；原生 A→B 需兩平台 packaged Desktop | `app-update`、`app-update-navigation` |
+| App 更新 | [app-update.md](app-update.md) | Web 共用狀態；原生 A→B 需兩平台 packaged Desktop | `app-update` |
 | 登入電腦時自動啟動 | [login-startup.md](login-startup.md) | Web 負向；打包安裝版 VM | `login-startup` |
 | AI 助理連線 | [agent-connection.md](agent-connection.md) | Web；固定埠原生啟動另驗 | `agent-connection` |
 | 外觀主題 | [appearance.md](appearance.md) | Web；Desktop 偏好檔需 Electron | 沒有 |
@@ -24,7 +24,7 @@
 
 ## 選流程
 
-票改到哪個功能，就跑涵蓋該功能檔的流程：`flows list --feature <功能檔>` 列出它們，`flows run --feature <功能檔>` 執行。E2E workflow 跑全部 Web 流程（`--web`）；Desktop 流程（`--desktop`）會顯示視窗，在改到平台層與發版前跑。
+票改到哪個功能，就跑涵蓋該功能檔的流程：`flows list --feature <功能檔>` 列出它們，`flows run --feature <功能檔>` 執行。E2E workflow 跑全部 Web 流程（`--web`）；Desktop 流程（`--desktop`）以隱藏視窗執行，在改到平台層與發版前跑。Desktop 流程的 `visibleScenarios` 列出需要畫面上視窗的 scenario（聚焦、最小化還原、視窗實際顯示與隱藏），`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者並集中一次跑。
 
 ## Backlog
 
