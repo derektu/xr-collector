@@ -1,5 +1,5 @@
 // Guards the developer, not the user.
-// The judgments the recorded subscription flows make: the status texts a subscription shows, in the
+// The judgments the recorded subscription flows make: the statuses a subscription row shows, in the
 // order the status model allows, the Jobs page sections a job passes through, and which collection
 // check belongs to a failed job. A wrong judgment here passes or fails the flow for the wrong reason.
 import { describe, expect, it } from 'vitest';
@@ -22,36 +22,34 @@ describe('subscription status sequence', () => {
     expect(record?.at).not.toBe(jobFinishedAt);
   });
 
-  it('classifies the status texts of the status model', () => {
-    expect(subscriptionPhase('排隊中')).toEqual({ phase: 'queued' });
-    expect(subscriptionPhase('檢查中')).toEqual({ phase: 'checking' });
-    expect(subscriptionPhase('下載中 2/5')).toEqual({ phase: 'downloading', done: 2, total: 5 });
-    for (const next of ['下次 18:52', '下次 明天 08:00', '下次 10-24 08:00']) expect(subscriptionPhase(next)).toEqual({ phase: 'scheduled' });
-    for (const other of ['更新中 2/5', '執行中', '下載中', '下次']) expect(subscriptionPhase(other)).toEqual({ phase: 'unknown' });
+  it('reads the sampled statuses of the status chip', () => {
+    expect(subscriptionPhase('queued')).toEqual({ phase: 'queued' });
+    expect(subscriptionPhase('downloading 2/5')).toEqual({ phase: 'downloading', done: 2, total: 5 });
+    expect(subscriptionPhase('failing 3')).toEqual({ phase: 'failing', failures: 3 });
   });
 
-  it('passes the full sequence and one that skips 排隊中 and 檢查中', () => {
-    expect(failed(sequence('排隊中', '檢查中', '下載中 0/5', '下載中 1/5', '下載中 4/5', '下次 18:52'))).toEqual([]);
-    expect(failed(sequence('下載中 0/5', '下載中 3/5', '下次 18:52'))).toEqual([]);
+  it('passes the full sequence and one that skips queued and checking', () => {
+    expect(failed(sequence('queued', 'checking', 'downloading 0/5', 'downloading 1/5', 'downloading 4/5', 'scheduled'))).toEqual([]);
+    expect(failed(sequence('downloading 0/5', 'downloading 3/5', 'scheduled'))).toEqual([]);
   });
 
-  it('fails a return to 排隊中 after the check started and names the segment', () => {
-    const checks = sequence('排隊中', '下載中 1/5', '排隊中', '下載中 2/5', '下次 18:52');
+  it('fails a return to queued after the check started and names the segment', () => {
+    const checks = sequence('queued', 'downloading 1/5', 'queued', 'downloading 2/5', 'scheduled');
     expect(failed(checks)).toEqual(['A.status.no-requeue', 'A.status.forward']);
-    expect(checks.find((check) => check.id === 'A.status.no-requeue')?.actual).toEqual(['下載中 1/5 → 排隊中']);
+    expect(checks.find((check) => check.id === 'A.status.no-requeue')?.actual).toEqual(['downloading 1/5 → queued']);
   });
 
-  it('fails a text outside the status model and lists it', () => {
-    const checks = sequence('排隊中', '更新中 1/5', '下載中 2/5', '下次 18:52');
+  it('fails a phase outside a check and lists it', () => {
+    const checks = sequence('queued', 'retrying', 'downloading 2/5', 'scheduled');
     expect(failed(checks)).toEqual(['A.status.known']);
-    expect(checks[0].actual).toEqual(['更新中 1/5']);
+    expect(checks[0].actual).toEqual(['retrying']);
   });
 
-  it('fails progress that goes back, a wrong total, no 下載中 and an end other than 下次', () => {
-    expect(failed(sequence('下載中 3/5', '下載中 2/5', '下次 18:52'))).toEqual(['A.status.progress']);
-    expect(failed(sequence('下載中 1/4', '下次 18:52'))).toEqual(['A.status.progress']);
-    expect(failed(sequence('檢查中', '下次 18:52'))).toEqual(['A.status.downloading-seen']);
-    expect(failed(sequence('下載中 1/5', '下載中 4/5'))).toEqual(['A.status.final']);
+  it('fails progress that goes back, a wrong total, no downloading and an end other than scheduled', () => {
+    expect(failed(sequence('downloading 3/5', 'downloading 2/5', 'scheduled'))).toEqual(['A.status.progress']);
+    expect(failed(sequence('downloading 1/4', 'scheduled'))).toEqual(['A.status.progress']);
+    expect(failed(sequence('checking', 'scheduled'))).toEqual(['A.status.downloading-seen']);
+    expect(failed(sequence('downloading 1/5', 'downloading 4/5'))).toEqual(['A.status.final']);
   });
 
   it('gives every check a value, also when nothing was sampled', () => {

@@ -18,6 +18,12 @@ describe('recorded flows', () => {
     expect(() => selectFlows(flows, { names: ['missing'], layer: 'web' })).toThrow(/Unknown flow missing/u);
   });
 
+  it('runs with a window on screen only the Desktop flows that name scenarios needing it', () => {
+    expect(names(selectFlows(flows, { visible: true })).sort()).toEqual(['notification-clicks', 'tray']);
+    expect(() => selectFlows(flows, { layer: 'web', visible: true })).toThrow(/--visible runs Desktop flows/u);
+    for (const flow of flows) expect(flow.visibleScenarios.length === 0 || flow.desktop, flow.name).toBe(true);
+  });
+
   it('picks the flows covering a feature file, named with or without .md', () => {
     const subscriptions = findFeature(features, 'subscriptions.md');
     expect(names(selectFlows(flows, { feature: subscriptions }))).toEqual(Object.keys(subscriptions.listed).sort());

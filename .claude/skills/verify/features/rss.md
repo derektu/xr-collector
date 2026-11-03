@@ -45,8 +45,7 @@ Preconditions:
 
 ## Regression flows
 
-- `feature-navigation`：斷言 `rss-failure`。503 後已開始的檢查在工作頁「進行中」等待重試，不在排隊中；之後恢復 feed 只為清理，不斷言完成。
-- `rss-rate-limit`：斷言 `rss-atom`、`rss-check`、`rss-failure`；兩個 feed 經 API 訂閱。一個 feed 回 429：該列的連續失敗與紅色、檢查工作失敗、詳情頁紅條與收集紀錄、另一個 feed 的檢查照常完成並收進新文章、RSS 請求通道從未冷卻、記錄沒有 RSS 的限流事件；第 5 次失敗自動暫停；恢復後歸零並檢查一次。
+- `rss-rate-limit`：斷言 `rss-atom`、`rss-check`、`rss-failure`；兩個 feed 經 API 訂閱。一個 feed 回 429：該列的連續失敗次數、檢查工作失敗、詳情頁紅條與收集紀錄最新一筆都是這次限制連線、另一個 feed 的檢查照常完成並收進新文章、RSS 請求通道從未冷卻、記錄沒有 RSS 的限流事件；一個 feed 回 503：已開始的檢查在工作頁「進行中」等待重試，不在排隊中。自動暫停與恢復見 subscription-failures。
 - `workspace-content`：斷言 `rss-add-feed`、`rss-add-page`、`rss-articles`、`rss-settings`。從畫面辨識網頁宣告的 feed、訂閱與閱讀，修改收集設定後比對 API 與刷新後的欄位，並確認 Vault 的訂閱檔有這個訂閱。
 
 ## Backlog

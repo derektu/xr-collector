@@ -9,7 +9,7 @@ import { agentClient, apiRevision, screenAt } from './lib/revision.mjs';
 
 export const name = 'live-updates';
 export const title = 'Agent 的變動即時反映在開著的畫面，閒置不發請求，斷線與重啟後跟上';
-export const covers = ['sub-status', 'sub-pause', 'sub-detail', 'sub-remove', 'docs-list', 'reader-view', 'jobs-empty', 'vault-info'];
+export const covers = ['collect-add', 'sub-status', 'sub-pause', 'sub-detail', 'sub-remove', 'docs-list', 'reader-view', 'jobs-empty', 'vault-info', 'docs-search'];
 
 const IDLE_MS = 10_000;
 
@@ -22,12 +22,20 @@ export async function run({ instance, page, record, waitFor }) {
     return apiRevision(instance);
   };
   const documentsTotal = async () => (await agent('/api/documents?limit=1')).body.total;
-  const summaryTotal = async () => Number(/共 (\d+) 份文件/u.exec(await by('documents-summary').innerText())?.[1] ?? NaN);
+  const summaryTotal = async () => Number(await by('documents-summary').getAttribute('data-total') ?? NaN);
 
-  await by('nav-sources').click();
   let feed;
 
-  await record.scenario('LIVE-1', '訂閱頁開著，Agent 訂閱並收集：列與文件數與 API 相同', async ({ expect, shot }) => {
+  await record.scenario('LIVE-1', '空知識庫的文件頁有新增入口；訂閱頁開著，Agent 訂閱並收集：列與文件數與 API 相同', async ({ expect, shot }) => {
+    await by('nav-documents').click();
+    await by('documents-empty-vault').waitFor();
+    await by('add-document-empty').click();
+    await by('add-item-url').click();
+    const dialog = await by('add-dialog').count();
+    expect(dialog === 1, '空知識庫的新增入口開啟新增對話框', { id: 'live.empty-vault-add', expected: 1, actual: dialog });
+    await page.keyboard.press('Escape');
+    await by('add-dialog').waitFor({ state: 'detached' });
+    await by('nav-sources').click();
     await agent('/api/subscriptions', { method: 'POST', body: JSON.stringify({ url: feedUrl }) });
     await screenAt(page, instance, await settled());
     feed = (await agent('/api/subscriptions')).body.subscriptions.find((entry) => entry.type === 'rss');
@@ -49,21 +57,21 @@ export async function run({ instance, page, record, waitFor }) {
     await screenAt(page, instance);
     const paused = await agent(`/api/subscriptions/rss/${encodeURIComponent(feed.id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
     await screenAt(page, instance, paused.revision);
-    const pausedText = (await by('detail-status').innerText()).trim();
-    expect(pausedText === '已暫停', '暫停後詳情顯示已暫停', { id: 'live.paused', expected: '已暫停', actual: pausedText });
+    const pausedPhase = await by('detail-status').getAttribute('data-phase');
+    expect(pausedPhase === 'paused', '暫停後詳情顯示已暫停', { id: 'live.paused', expected: 'paused', actual: pausedPhase });
     await shot('paused');
     await agent(`/api/subscriptions/rss/${encodeURIComponent(feed.id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: true }) });
     await screenAt(page, instance, await settled());
-    const resumed = (await by('detail-status').innerText()).trim();
-    expect(resumed !== '已暫停', '恢復並檢查完後詳情不再顯示已暫停', { id: 'live.resumed', expected: '不是已暫停', actual: resumed });
+    const resumed = await by('detail-status').getAttribute('data-phase');
+    expect(resumed !== null && resumed !== 'paused', '恢復並檢查完後詳情不再顯示已暫停', { id: 'live.resumed', expected: '不是 paused', actual: resumed });
   });
 
-  await record.scenario('LIVE-3', '文件頁與閱讀頁開著，Agent 刪除文件：總數減少，閱讀頁顯示已刪除', async ({ expect, shot }) => {
+  await record.scenario('LIVE-3', '文件頁、閱讀頁與設定開著，Agent 刪除文件：總數、已刪除狀態、知識庫與搜尋計數都與 API 相同', async ({ expect, shot }) => {
     await by('nav-documents').click();
     await by('document-list').waitFor();
     await screenAt(page, instance);
     const before = await documentsTotal();
-    const [first, second] = (await agent('/api/documents?limit=2')).body.documents;
+    const [first, second, third] = (await agent('/api/documents?limit=3')).body.documents;
     const removed = await agent(`/api/documents/${encodeURIComponent(first.id)}`, { method: 'DELETE' });
     await screenAt(page, instance, removed.revision);
     const totals = { screen: await summaryTotal(), api: await documentsTotal() };
@@ -78,18 +86,33 @@ export async function run({ instance, page, record, waitFor }) {
     const deleted = await by('reader-deleted').count();
     expect(deleted === 1, '開著的閱讀頁顯示這份文件已刪除', { id: 'live.reader-deleted', expected: 1, actual: deleted });
     await shot('reader-deleted');
-  });
 
-  await record.scenario('LIVE-4', '設定頁開著，Agent 刪除文件：知識庫計數與 API 相同', async ({ expect }) => {
     await by('nav-settings').click();
     await by('vault-counts').waitFor();
     await screenAt(page, instance);
-    const [target] = (await agent('/api/documents?limit=1')).body.documents;
-    const removed = await agent(`/api/documents/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
-    await screenAt(page, instance, removed.revision);
-    const expected = `${await documentsTotal()} 份文件・1 個訂閱`;
-    const shown = (await by('vault-counts').innerText()).trim();
-    expect(shown === expected, '計數等於 API 的文件數與訂閱數', { id: 'live.vault-counts', expected, actual: shown });
+    const last = await agent(`/api/documents/${encodeURIComponent(third.id)}`, { method: 'DELETE' });
+    await screenAt(page, instance, last.revision);
+    const subscriptions = (await agent('/api/subscriptions')).body.subscriptions.length;
+    const vault = { documents: await documentsTotal(), sources: subscriptions };
+    const shownVault = { documents: Number(await by('vault-counts').getAttribute('data-documents')), sources: Number(await by('vault-counts').getAttribute('data-sources')) };
+    expect(JSON.stringify(shownVault) === JSON.stringify(vault), '不離開設定，知識庫計數等於 API 的文件數與訂閱數', {
+      id: 'live.vault-counts', expected: vault, actual: shownVault,
+    });
+    const search = await waitFor(async () => {
+      const status = (await instance.api('/api/search/status')).status;
+      return status.state === 'ready' && status.indexedDocuments === vault.documents ? status : null;
+    }, 'search index follows the deletions');
+    await screenAt(page, instance);
+    const counts = by('search-index-counts');
+    const shownSearch = { indexed: Number(await counts.getAttribute('data-indexed')), vault: Number(await counts.getAttribute('data-vault')) };
+    const index = (await instance.state()).index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
+    const expectedSearch = { indexed: vault.documents, vault: vault.documents, engine: vault.documents };
+    const actualSearch = { ...shownSearch, engine: index?.numberOfDocuments ?? null, api: { indexed: search.indexedDocuments, vault: search.vaultDocuments } };
+    expect(shownSearch.indexed === vault.documents && shownSearch.vault === vault.documents && search.vaultDocuments === vault.documents
+      && index?.numberOfDocuments === vault.documents, '不離開設定，搜尋卡、搜尋狀態 API 與引擎實際索引數都等於文件數', {
+      id: 'live.search-counts', expected: expectedSearch, actual: actualSearch,
+    });
+    await shot('settings-counts');
   });
 
   await record.scenario('LIVE-5', '畫面閒置時只留事件連線，不發其他請求', async ({ expect }) => {
@@ -117,17 +140,17 @@ export async function run({ instance, page, record, waitFor }) {
       paused = await agent(`/api/subscriptions/rss/${encodeURIComponent(feed.id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
       offline = {
         caughtUp: await screenAt(page, instance, paused.revision, { timeout: 2_000 }).then(() => true, () => false),
-        status: (await by(`source-row-${feed.id}`).getByTestId('subscription-status').innerText()).trim(),
+        phase: await by(`source-row-${feed.id}`).getByTestId('subscription-status').getAttribute('data-phase'),
       };
     } finally {
       await page.context().setOffline(false);
     }
     await screenAt(page, instance, paused.revision);
-    const status = (await by(`source-row-${feed.id}`).getByTestId('subscription-status').innerText()).trim();
-    expect(!offline.caughtUp && offline.status !== '已暫停', '離線期間讀不到新資料，畫面不算跟上', {
-      id: 'live.offline-behind', expected: { caughtUp: false, status: '不是已暫停' }, actual: offline,
+    const phase = await by(`source-row-${feed.id}`).getByTestId('subscription-status').getAttribute('data-phase');
+    expect(!offline.caughtUp && offline.phase !== null && offline.phase !== 'paused', '離線期間讀不到新資料，畫面不算跟上', {
+      id: 'live.offline-behind', expected: { caughtUp: false, phase: '不是 paused' }, actual: offline,
     });
-    expect(status === '已暫停', '恢復連線後補讀，列顯示已暫停', { id: 'live.online-again', expected: '已暫停', actual: status });
+    expect(phase === 'paused', '恢復連線後補讀，列顯示已暫停', { id: 'live.online-again', expected: 'paused', actual: phase });
   });
 
   await record.scenario('LIVE-7', '伺服器重啟後，未重新載入的畫面跟上新伺服器的變動', async ({ expect, shot }) => {

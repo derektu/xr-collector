@@ -44,8 +44,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私
 
 ## Regression flows
 
-- `app-update`：斷言 `update-discovery`、`update-download`、`update-apply-wait`、`update-agent`、`update-no-vault`；使用 no-Vault Web instance、真實 generic HTTP metadata／stream 與 real UpdateService，涵蓋 Agent 檢查、UI 進度／取消、busy、integrity error、ready、稍後及 waiting 取消。明確不宣稱 Web 已安裝原生更新。
-- `app-update-navigation`：斷言 `update-navigation`；使用 selected Vault，側欄各更新階段的文字，以及從非設定頁的側欄點擊與原生導覽訊號都在非同步 BuildInfo 掛載後定位到更新面板。
+- `app-update`：斷言 `update-discovery`、`update-download`、`update-apply-wait`、`update-agent`、`update-no-vault`、`update-navigation`；從 no-Vault Web instance 開始，使用真實 generic HTTP metadata／stream 與 real UpdateService，涵蓋 Agent 檢查、UI 進度／取消、busy、integrity error、ready、稍後及 waiting 取消；之後建立 Vault，側欄各更新階段的 data-phase 與更新 API 相同，從非設定頁的側欄點擊與原生導覽訊號都定位到更新面板。明確不宣稱 Web 已安裝原生更新。
 
 ## Backlog
 

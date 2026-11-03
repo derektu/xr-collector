@@ -250,6 +250,32 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
     });
   });
 
+  it('matches quoted phrases, numbers and CJK typos only as written, and marks only the raw text that matched', async () => {
+    const databasePath = await tempDatabase();
+    const wind = transcript('windpower00', '半導體、個股與現金流量；離岸設備帶動風電；台積電 0050');
+    const competitor = transcript('offshore000', '離岸設備');
+    const ligature = transcript('ligature000', '台积电的 ﬃ 與 CoWoS🙂');
+    const byPublisher = { ...transcript('publisher00', '正文沒有目標'), publisher: { id: 'rules', name: '片段規則 ＡＩ' } };
+    await withSearch(databasePath, () => [wind, competitor, ligature, byPublisher], async (search) => {
+      const ids = async (query: string) => (await search.search({ query })).hits.map(({ id }) => id).sort();
+      expect(await ids('離岸風電')).toEqual([wind.id]);
+      expect(await ids('離岸 風電')).toEqual([wind.id]);
+      expect(await ids('"離岸風電"')).toEqual([]);
+      expect(await ids('"半導體、個股"')).toEqual([wind.id]);
+      expect(await ids('"半導體 個股"')).toEqual([]);
+      expect(await ids('50')).toEqual([]);
+      expect(await ids('台績電')).toEqual([]);
+
+      const publisherHit = (await search.search({ query: '片段規則 ai' })).hits;
+      expect(publisherHit.map(({ id }) => id)).toEqual([byPublisher.id]);
+      expect(publisherHit[0]!.publisher.name).toBe('片段規則 ＡＩ');
+      expect(publisherHit[0]!.snippet).not.toContain('<mark>');
+
+      const raw = (await search.search({ query: 'ffi' })).hits.find(({ id }) => id === ligature.id);
+      expect(raw?.snippet).toContain('<mark>ﬃ</mark>');
+    });
+  });
+
   it('stops returning a deleted document as soon as its removal is requested', async () => {
     const databasePath = await tempDatabase();
     const kept = transcript('keep0000000', '共同的草原內容，保留下來。');

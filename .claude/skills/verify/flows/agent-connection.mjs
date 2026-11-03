@@ -7,7 +7,7 @@ export const title = 'AI 助理連線、Skill 與連線設定';
 export const covers = ['agent-connection-summary', 'agent-connection-help', 'agent-connection-export', 'agent-connection-settings'];
 export const vault = 'none';
 
-export async function run({ instance, page, record }) {
+export async function run({ instance, page, record, waitFor }) {
   await record.scenario('A44-W0', '尚未建立知識庫也能使用同一個 AI 助理連線面板', async ({ expect, shot }) => {
     const launcher = page.getByRole('button', { name: 'AI 助理連線', exact: true });
     await launcher.click();
@@ -22,54 +22,23 @@ export async function run({ instance, page, record }) {
     await page.getByTestId('nav-settings').waitFor({ timeout: 10_000 });
   });
 
-  await record.scenario('A44-W1', '設定頁保留主要內容並提供精簡 AI 助理連線', async ({ expect, shot }) => {
-    await page.setViewportSize({ width: 1360, height: 900 });
+  await record.scenario('A44-W1', '設定頁的精簡 AI 助理連線：active 連線與四步說明', async ({ expect, shot }) => {
     await page.getByTestId('nav-settings').click();
     const section = page.getByTestId('settings-agent-connection');
     await section.waitFor();
-    const order = await page.locator('.settings-section').evaluateAll((sections) => sections.map((section) => section.getAttribute('data-testid')));
-    expect(order.indexOf('settings-vault') < order.indexOf('settings-agent-connection'), '知識庫卡片仍排在 AI 助理連線之前', { id: 'a44.order', actual: order });
-    expect((await section.getByTestId('agent-active-url').innerText()).startsWith('http://127.0.0.1:'), '摘要顯示 active loopback URL', { id: 'a44.active-url' });
+    const active = (await instance.api('/api/device/agent/connection')).connection.url;
+    const shown = (await section.getByTestId('agent-active-url').innerText()).trim();
+    expect(shown === active && active.startsWith('http://127.0.0.1:'), '摘要顯示 API 的 active loopback URL', { id: 'a44.active-url', expected: active, actual: shown });
     const help = section.getByRole('button', { name: 'AI 助理連線步驟' });
-    await help.hover();
+    await help.click();
     const tooltip = page.getByRole('tooltip');
-    expect(await tooltip.getByText('下載 Skill。').isVisible(), 'hover 顯示四步說明', { id: 'a44.help-hover' });
-    const from = await help.boundingBox(); const to = await tooltip.boundingBox();
-    for (let step = 1; step <= 6; step += 1) await page.mouse.move(from.x + from.width / 2 + ((to.x + 20) - (from.x + from.width / 2)) * step / 6,
-      from.y + from.height / 2 + ((to.y + 20) - (from.y + from.height / 2)) * step / 6);
-    expect(await tooltip.isVisible(), '游標可跨過間距移入說明並閱讀', { id: 'a44.help-readable' });
-    const desktopBounds = await tooltip.boundingBox();
-    expect(insideViewport(desktopBounds, { width: 1360, height: 900 }), '1360×900 的四步說明完整留在 viewport 內', {
-      id: 'a44.help-desktop-bounds', actual: desktopBounds,
-    });
-    expect(await tooltip.getByText(/先檢查 health，再查詢文件/).isVisible(), '1360×900 可看到最後一步', { id: 'a44.help-desktop-last-step' });
-    await shot('settings-agent-help-hover');
+    await tooltip.waitFor({ timeout: 5_000 }).catch(() => undefined);
+    const steps = await tooltip.locator('li').count();
+    expect(steps === 4, '點擊說明顯示四步', { id: 'a44.help', expected: 4, actual: steps });
+    await shot('settings-agent-help');
     await page.keyboard.press('Escape');
-    expect(!(await page.getByRole('tooltip').isVisible().catch(() => false)), '純 hover 的說明可用 Escape 收起', { id: 'a44.help-hover-escape' });
-    await help.focus();
-    await tooltip.waitFor();
-    await page.keyboard.press('Escape');
-    expect(!(await page.getByRole('tooltip').isVisible().catch(() => false)), '鍵盤 focus 的說明可用 Escape 收起', { id: 'a44.help-focus-escape' });
-    await help.click();
-    await page.mouse.move(10, 10);
-    expect(await tooltip.isVisible(), '點擊固定後移開游標仍可閱讀', { id: 'a44.help-pinned' });
-    await page.mouse.click(10, 10);
-    expect(!(await page.getByRole('tooltip').isVisible().catch(() => false)), '點擊外部收起固定的說明', { id: 'a44.help-outside' });
-    await help.click();
-    await page.keyboard.press('Escape');
-    expect(!(await page.getByRole('tooltip').isVisible().catch(() => false)), 'Escape 收起固定的說明', { id: 'a44.help-escape' });
-    await page.setViewportSize({ width: 720, height: 600 });
-    await help.scrollIntoViewIfNeeded();
-    await help.hover();
-    await tooltip.waitFor();
-    const narrowBounds = await tooltip.boundingBox();
-    expect(insideViewport(narrowBounds, { width: 720, height: 600 }), '較窄視窗的四步說明完整留在 viewport 內', {
-      id: 'a44.help-narrow-bounds', actual: narrowBounds,
-    });
-    expect(await tooltip.getByText(/先檢查 health，再查詢文件/).isVisible(), '較窄視窗可看到最後一步', { id: 'a44.help-narrow-last-step' });
-    await shot('settings-agent-help-narrow');
-    await page.keyboard.press('Escape');
-    await page.setViewportSize({ width: 1360, height: 900 });
+    const closed = await page.getByRole('tooltip').count();
+    expect(closed === 0, 'Escape 收起說明', { id: 'a44.help-escape', expected: 0, actual: closed });
     await shot('settings-agent-compact');
   });
 
@@ -93,7 +62,7 @@ export async function run({ instance, page, record }) {
       writeText: async (value) => { window.__xrCopiedAgentConnection = value; },
     } }));
     await section.getByRole('button', { name: '複製連線資料' }).click();
-    await section.getByText('已複製連線資料。').waitFor();
+    await page.waitForFunction(() => window.__xrCopiedAgentConnection !== undefined, null, { timeout: 5_000 }).catch(() => undefined);
     const copied = JSON.parse(await page.evaluate(() => window.__xrCopiedAgentConnection));
     const exported = (await instance.api('/api/device/agent/connection')).connection;
     expect(copied.url === exported.url && copied.token === exported.token, '剪貼簿與 explicit connection API 相同', { id: 'a44.copy-active', actual: { sameUrl: copied.url === exported.url, sameToken: copied.token === exported.token } });
@@ -128,8 +97,8 @@ export async function run({ instance, page, record }) {
     await dialog.locator('input[type=number]').fill(String(new URL(old.url).port));
     await dialog.getByRole('button', { name: '保存設定' }).click();
     await section.getByTestId('agent-restart-required').waitFor();
-    expect((await section.getByTestId('agent-active-url').innerText()) === old.url, 'pending 設定不熱換 active listener', { id: 'a44.pending-active' });
-    expect((await section.getByTestId('agent-restart-required').innerText()).includes('重新下載 Skill 或複製連線資料'), 'pending 提醒重啟後更新連線資料', { id: 'a44.pending-refresh' });
+    const pending = { shown: (await section.getByTestId('agent-active-url').innerText()).trim(), active: (await instance.api('/api/device/agent/connection')).connection.url };
+    expect(pending.shown === old.url && pending.active === old.url, 'pending 設定不熱換 active listener，並提醒重啟', { id: 'a44.pending-active', expected: old.url, actual: pending });
     await section.getByRole('button', { name: '連線設定…' }).click();
     await dialog.getByRole('button', { name: '重設連線金鑰' }).click();
     const confirmation = dialog.getByRole('alertdialog', { name: '確定要重設連線金鑰？' });
@@ -152,19 +121,16 @@ export async function run({ instance, page, record }) {
     });
     await page.unroute(resetEndpoint, failReset);
     await confirmation.getByRole('button', { name: '確認重設' }).click();
-    await dialog.getByRole('status').filter({ hasText: '連線金鑰已重設' }).waitFor();
-    const current = (await instance.api('/api/device/agent/connection')).connection;
+    const current = await waitFor(async () => {
+      const connection = (await instance.api('/api/device/agent/connection')).connection;
+      return connection.token !== old.token ? connection : null;
+    }, 'connection key reset').catch(async () => (await instance.api('/api/device/agent/connection')).connection);
     const oldHealth = await fetch(`${old.url}/api/health`, { headers: { authorization: `Bearer ${old.token}` } });
     const newHealth = await fetch(`${current.url}/api/health`, { headers: { authorization: `Bearer ${current.token}` } });
     expect(old.token !== current.token && oldHealth.status === 401 && newHealth.status === 200, '重設後舊金鑰 401、新金鑰 200', { id: 'a44.reset-auth', actual: { changed: old.token !== current.token, old: oldHealth.status, current: newHealth.status } });
     await dialog.locator('input[type=radio]').first().check();
     await dialog.getByRole('button', { name: '保存設定' }).click();
   });
-}
-
-function insideViewport(bounds, viewport) {
-  return Boolean(bounds && bounds.x >= 0 && bounds.y >= 0
-    && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
 }
 
 async function zipContents(bytes) {

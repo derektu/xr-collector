@@ -66,6 +66,9 @@ if (validationHidden) app.dock?.hide();
 // and the window through globalThis.__xrCollectorValidation in this process.
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
 const validationNotifications: { id?: string; title: string; content: string }[] = [];
+// Whether the app last showed or hid its window, which a hidden validation run never does on
+// screen; the validation channel reports it so a hidden run still sees when the app shows it.
+let windowShown = false;
 
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
@@ -132,6 +135,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
   // The app has no menu commands of its own; macOS keeps the default menu for
   // standard Edit and Quit shortcuts.
   if (process.platform !== 'darwin') window.removeMenu();
+  windowShown = showInitially;
   if (!validationHidden && showInitially) window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url);
@@ -144,6 +148,7 @@ async function createWindowOnce(showInitially: boolean): Promise<void> {
   window.on('close', (event) => {
     if (isQuitting) return;
     event.preventDefault();
+    windowShown = false;
     window.hide();
     void hintStillRunning();
   });
@@ -183,6 +188,7 @@ function showWindow(page?: DesktopTarget | { notificationId: string }): void {
     return;
   }
   deliverPendingNavigation();
+  windowShown = true;
   if (validationHidden) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -569,6 +575,7 @@ function exposeValidationControl(appTray: AppTray): void {
     activateNotification: (id: string) => showWindow({ notificationId: id }),
     window: () => ({
       exists: Boolean(mainWindow),
+      shown: Boolean(mainWindow) && windowShown,
       visible: mainWindow?.isVisible() ?? false,
       focused: mainWindow?.isFocused() ?? false,
       url: mainWindow?.webContents.getURL() ?? null,

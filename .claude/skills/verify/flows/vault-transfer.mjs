@@ -1,12 +1,16 @@
-// Shared Web regression for the Vault operation lifecycle. External collection uses synthetic
-// YouTube data; all transfers use the production HTTP handlers and real files/search indexes.
+// The Vault operations through Settings: export with keep or overwrite of an existing file, merge,
+// replace and nothing-to-import, opening another Vault, and an import that waits for a running
+// collection and lets it resume. A broken path loses or overwrites a user's documents. External
+// collection uses synthetic YouTube data; all transfers use the production HTTP handlers and real
+// files and search indexes. A fixed Vault location refusing other Vaults is in
+// tests/vault/vault-open.test.ts.
 import { cp, mkdir, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '../scripts/lib/index.mjs';
+import { collect, idle, launchWeb, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';
-export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other', 'vault-fixed'];
+export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const button = (id) => page.getByTestId(id);
@@ -16,8 +20,6 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   const exportPath = path.join(instance.runDir, 'exports', 'local.zip');
   await mkdir(path.dirname(exportPath), { recursive: true });
   let donor;
-  let fixed;
-  let fixedView;
   const donorRoot = path.join(instance.runDir, 'other-vault');
   const backupNames = () => readdir(path.join(instance.runDir, 'documents', 'XR Collector 備份')).catch(() => []);
   const exportThroughUI = async (file) => {
@@ -38,7 +40,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(await page.locator('.document-row').count() === count, `文件頁顯示 ${count} 份文件`);
     await button('documents-search').fill(search);
     await waitFor(async () => await page.locator('.document-row').count() === count
-      && (await button('documents-summary').innerText()).includes('找到') && !(await button('search-unavailable').count()), 'search results');
+      && await button('documents-summary').getAttribute('data-mode') === 'search' && !(await button('search-unavailable').count()), 'search results');
     expect(await page.locator('.document-row').count() === count, '搜尋可找到所有文件');
     const state = await instance.state();
     expect(state.vault.documents?.length === count, `Vault 實際保存 ${count} 份文件`, { id: `vault.count.${count}`, expected: count, actual: state.vault.documents?.length });
@@ -64,16 +66,12 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
     await record.scenario('R102-1', '資訊、匯出、同名檔保留與覆蓋', async ({ expect, shot, themed }) => {
       expect((await button('vault-path').innerText()).trim() === path.join(instance.runDir, 'vault'), '設定顯示目前 Vault 路徑');
-      expect((await button('vault-counts').innerText()).includes('1'), '設定顯示一份文件');
-      const order = await button('settings-vault').locator('button').allTextContents();
-      const labels = ['建立新的知識庫…', '開啟既有知識庫…', '匯入…', '匯出…'];
-      expect(JSON.stringify(order) === JSON.stringify(labels), '知識庫操作順序：建立、開啟在左，匯入、匯出在右',
-        { id: 'vault.actions.order', expected: labels, actual: order });
-      const frames = await Promise.all(['vault-create', 'vault-open-other', 'vault-import', 'vault-export'].map((id) => button(id).boundingBox()));
-      expect(frames.every((frame) => frame && Math.abs(frame.y - frames[0].y) < 1), '一般寬度的知識庫操作按鈕同一排',
-        { id: 'vault.actions.row', expected: 'same y', actual: frames });
-      expect(frames[2].x > frames[1].x + frames[1].width + 32, '建立／開啟與資料操作群組分居左右',
-        { id: 'vault.actions.groups', expected: 'separated groups', actual: frames });
+      const counted = await button('vault-counts').getAttribute('data-documents');
+      expect(counted === '1', '設定顯示一份文件', { id: 'vault.counts', expected: '1', actual: counted });
+      const order = await button('settings-vault').locator('button').evaluateAll((buttons) => buttons.map((item) => item.dataset.testid));
+      const ids = ['vault-create', 'vault-open-other', 'vault-import', 'vault-export'];
+      expect(JSON.stringify(order) === JSON.stringify(ids), '知識庫操作依序為建立、開啟、匯入、匯出',
+        { id: 'vault.actions.order', expected: ids, actual: order });
       await themed('vault-actions');
       await click('vault-export');
       await button('export-path').fill(exportPath);
@@ -114,7 +112,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       if (await button('import-replace-instead').count()) await click('import-replace-instead');
       else { await click('import-mode-replace'); await click('import-next'); }
       await visible('import-replace-confirm');
-      expect((await button('import-replace-counts').innerText()).includes('1'), '完全取代確認列出移除數');
+      const removed = await button('import-replace-counts').getAttribute('data-documents-removed');
+      expect(removed === '1', '完全取代確認列出會移除的一份文件', { id: 'replace.removed', expected: '1', actual: removed });
       await shot('replace-confirm');
       await click('import-replace-confirm-button');
       await visible('import-done');
@@ -197,22 +196,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       expect(state.vault.documents?.length === 8, '收集恢復並保存五份 A、兩份 B 與匯入的 D');
       await click('nav-sources');
       await page.getByTestId('page-sources').waitFor();
-      await waitFor(async () => (await page.getByTestId('source-row-UCverifyAAAAAAAAAAAAAAAA').innerText()).includes('下次'), 'subscription scheduled on screen');
+      await waitFor(async () => await page.getByTestId('source-row-UCverifyAAAAAAAAAAAAAAAA').getByTestId('subscription-status').getAttribute('data-phase') === 'scheduled', 'subscription scheduled on screen');
       await shot('collection-resumed');
     });
-
-    await record.scenario('R102-5', '固定位置禁止建立或開啟其他知識庫', async ({ expect, shot }) => {
-      fixed = await launchWeb({ issue: instance.issue, checkout: instance.checkout, vault: 'fixed', label: `${instance.label ?? 'transfer'}-fixed` });
-      fixedView = await openWebPage(fixed, { route: '/settings' });
-      const fixedPage = fixedView.page;
-      await fixedPage.getByTestId('vault-relocation-unavailable').waitFor();
-      expect(await fixedPage.getByTestId('vault-open-other').isDisabled(), '固定位置的開啟其他停用');
-      expect(await fixedPage.getByTestId('vault-create').isDisabled(), '固定位置的建立新的知識庫停用');
-      await shot('fixed', fixedPage);
-    });
   } finally {
-    await fixedView?.close();
-    await fixed?.stop();
     await donor?.stop();
   }
 }

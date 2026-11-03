@@ -73,6 +73,21 @@ describe('auto-pause notification center (#136)', () => {
     expect(JSON.parse(await readFile(path.join(root, 'notifications.json'), 'utf8')).events).toHaveLength(3);
   });
 
+  it('keeps notifications off after the profile is opened again, and turning them on then sends no backlog', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-notifications-'));
+    const show = vi.fn(async () => undefined);
+    const adapter: SystemNotificationAdapter = { availability: () => ({ state: 'available', message: null }), show, restore: async () => undefined };
+    await (await NotificationCenter.open(root, adapter)).update(false);
+
+    const reopened = await NotificationCenter.open(root, adapter);
+    const paused = [{ vaultId: 'vault-a', sourceType: 'youtube', subscription: record() }];
+    expect(reopened.view(paused, 'vault-a')).toMatchObject({ enabled: false, active: [{ delivery: 'suppressed' }], events: [] });
+    await reopened.recordAutoPause('vault-a', 'youtube', record());
+    await reopened.update(true);
+    expect(show).not.toHaveBeenCalled();
+    expect(reopened.view(paused, 'vault-a')).toMatchObject({ enabled: true, events: [expect.objectContaining({ delivery: 'suppressed' })] });
+  });
+
   it('records adapter failures without treating attempted delivery as OS visibility', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-notifications-'));
     const adapter: SystemNotificationAdapter = {

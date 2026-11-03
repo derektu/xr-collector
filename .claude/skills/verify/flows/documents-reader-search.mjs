@@ -1,18 +1,26 @@
-// The edges of browsing and deleting synthetic documents at 22 documents: two pages, the source
-// filter, the Documents page a deletion returns to with its search kept, a deleted ID opened
-// directly, explicit recollection and search after a graceful restart, each checked in the Vault,
-// the API and the index. Searching, reading and the delete confirmation themselves are asserted by
-// core-journey. Collection only establishes the precondition; every behavior this flow proves is
-// driven through the Documents and Reader screens.
+// The edges of browsing and deleting synthetic documents at 22 documents: two pages, the page kept
+// in the URL across reading a document, a search starting from the first page and clearing it
+// returning to browsing, the Documents page a deletion returns to with its search kept, a deleted ID
+// opened directly, and recollecting it, checked in the Vault, the API and the index. Without it a
+// user loses their place after deleting, or a deleted document cannot be brought back. Filtering,
+// searching, reading and the delete confirmation with its data checks are asserted by core-journey;
+// search after a rebuild and a restart by search-normalization. Collection only establishes the
+// precondition; every behavior this flow proves is driven through the Documents and Reader screens.
 import { articles } from '../scripts/lib/synthetic.mjs';
 import { collect, idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds as listedIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
 
 export const name = 'documents-reader-search';
-export const title = '文件分頁、來源篩選、刪除後導向、已刪除狀態、重新收集與重啟後搜尋';
-export const covers = ['docs-list', 'docs-filter', 'docs-search', 'reader-delete', 'reader-recollect'];
+export const title = '文件分頁、刪除後導向、已刪除狀態與重新收集';
+export const covers = ['docs-list', 'docs-search', 'reader-delete', 'reader-recollect'];
 
 const rowHrefs = (page) => page.locator('.document-row').evaluateAll((rows) => rows.map((row) => row.getAttribute('href')));
+/** The Documents page summary once it shows `total` loaded results in `mode`. */
+const summaryShows = async (page, mode, total) => {
+  const element = page.getByTestId('documents-summary');
+  return await element.getAttribute('data-loading') === 'false' && await element.getAttribute('data-mode') === mode
+    && await element.getAttribute('data-total') === String(total);
+};
 
 export async function run({ instance, page, record, waitFor }) {
   // The product page size is 20. A (5) + RSS (16) + one D video gives 22 deterministic documents,
@@ -48,8 +56,8 @@ export async function run({ instance, page, record, waitFor }) {
   await page.getByTestId('nav-documents').click();
   await page.getByTestId('page-documents').waitFor();
 
-  await record.scenario('DOCS-1', '文件列表、分頁與來源篩選', async ({ expect, shot, note }) => {
-    await waitFor(async () => (await page.getByTestId('documents-summary').innerText()).trim() === '共 22 份文件', '22 documents listed');
+  await record.scenario('DOCS-1', '文件列表與分頁', async ({ expect, shot }) => {
+    await waitFor(() => summaryShows(page, 'browse', 22), '22 documents listed');
     const firstCount = await page.locator('.document-row').count();
     expect(firstCount === 20, '第一頁列出 20 份文件', { id: 'list.page1.count', expected: 20, actual: firstCount });
     const preconditionApi = listedIds(precondition);
@@ -68,24 +76,32 @@ export async function run({ instance, page, record, waitFor }) {
     expect(pageUnion.size === 22, '兩頁文件不重複且合計 22 份', { id: 'list.pages.complete', expected: 22, actual: pageUnion.size });
     await shot('page-2');
 
-    const source = `youtube:${channelA.id}`;
-    const options = await page.getByTestId('documents-source').locator('option').allInnerTexts();
-    note('sourceOptions', options);
-    await page.getByTestId('documents-source').selectOption(source);
-    await waitFor(async () => (await page.getByTestId('documents-summary').innerText()).trim() === '共 5 份文件', 'channel A filter has five documents');
-    const filteredTitles = await page.locator('.document-title').allInnerTexts();
-    expect(filteredTitles.length === 5, '頻道 A 篩選後列出 5 份文件', { id: 'filter.channel-a.count', expected: 5, actual: filteredTitles.length });
-    expect(filteredTitles.every((title) => title.includes('頻道 A')), '篩選結果全部來自頻道 A',
-      { id: 'filter.channel-a.only', expected: '每個標題包含「頻道 A」', actual: filteredTitles });
-    await shot('channel-a-filter');
-  });
-
-  await record.scenario('DOCS-3', '從搜尋結果刪除後導向、直接開啟已刪文件與資料面', async ({ expect, shot }) => {
-    // Searching and opening the result set up the deletion; core-journey asserts both.
-    await page.getByTestId('documents-source').selectOption('');
+    const pageParam = () => new URL(page.url()).searchParams.get('page');
+    const urlPage = pageParam();
+    await page.locator('.document-row').first().click();
+    await page.getByTestId('reader-body').waitFor();
+    await page.locator('.reader-bar').getByRole('button', { name: '文件', exact: true }).click();
+    await waitFor(async () => JSON.stringify(await rowHrefs(page)) === JSON.stringify(second), 'reader returns to the second page').catch(() => undefined);
+    const back = { page: pageParam(), rows: await rowHrefs(page) };
+    expect(urlPage === '2' && back.page === '2' && JSON.stringify(back.rows) === JSON.stringify(second), '頁碼記在網址，閱讀後返回同一頁',
+      { id: 'list.page2.return', expected: { url: '2', page: '2', rows: second }, actual: { url: urlPage, ...back } });
     await page.getByTestId('documents-search').fill(targetQuery);
     await page.getByTestId('documents-search').press('Enter');
-    await waitFor(async () => (await page.getByTestId('documents-summary').innerText()).trim() === '找到 1 份', 'target search has one result');
+    await waitFor(async () => await page.getByTestId('documents-summary').getAttribute('data-mode') === 'search'
+      && await page.getByTestId('documents-summary').getAttribute('data-loading') === 'false', 'search results');
+    const searched = pageParam();
+    expect(searched === null, '搜尋從第一頁開始', { id: 'list.search.first-page', expected: null, actual: searched });
+    await page.getByRole('button', { name: '清除搜尋', exact: true }).click();
+    await waitFor(() => summaryShows(page, 'browse', 22), 'browse restored').catch(() => undefined);
+    const cleared = { mode: await page.getByTestId('documents-summary').getAttribute('data-mode'), query: await page.getByTestId('documents-search').inputValue() };
+    expect(cleared.mode === 'browse' && cleared.query === '', '清除搜尋回到瀏覽', { id: 'list.search.clear', expected: { mode: 'browse', query: '' }, actual: cleared });
+  });
+
+  await record.scenario('DOCS-3', '從搜尋結果刪除後導向、直接開啟已刪文件', async ({ expect, shot }) => {
+    // Searching and opening the result set up the deletion; core-journey asserts both.
+    await page.getByTestId('documents-search').fill(targetQuery);
+    await page.getByTestId('documents-search').press('Enter');
+    await waitFor(() => summaryShows(page, 'search', 1), 'target search has one result');
     await page.locator('.document-row').click();
     await page.getByTestId('reader-body').waitFor();
     await page.getByTestId('reader-delete').click();
@@ -102,27 +118,12 @@ export async function run({ instance, page, record, waitFor }) {
     await shot('delete-returned-to-documents');
 
     await page.goto(`${instance.url}/documents/${encodeURIComponent(targetId)}`);
-    await page.getByTestId('reader-deleted').waitFor();
-    const deletedTitle = (await page.getByTestId('reader-deleted').locator('h1').innerText()).trim();
-    expect(deletedTitle === '這份文件已刪除', '直接開已刪文件顯示已刪除狀態',
-      { id: 'delete.direct-url.state', expected: '這份文件已刪除', actual: deletedTitle });
-
-    await waitFor(async () => (await instance.api(`/api/search?q=${encodeURIComponent(targetQuery)}`)).total === 0, 'deleted target leaves search');
-    // Search excludes pending removals immediately; the physical engine deletion is asynchronous.
+    await page.getByTestId('reader-deleted').waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const states = { deleted: await page.getByTestId('reader-deleted').count(), body: await page.getByTestId('reader-body').count() };
+    expect(states.deleted === 1 && states.body === 0, '直接開已刪文件顯示已刪除狀態',
+      { id: 'delete.direct-url.state', expected: { deleted: 1, body: 0 }, actual: states });
+    // Recollecting below starts from the deletion every data source already holds.
     await waitFor(async () => sameIds(indexIds(await instance.state()), expectedAfterDelete), 'physical index contains exactly the remaining IDs');
-    const state = await instance.state();
-    const api = listedIds(state);
-    const vault = vaultIds(state);
-    const index = indexIds(state);
-    const deleted = deletedIds(state);
-    expect(sameIds(api, expectedAfterDelete), 'API 列表只移除目標 ID',
-      { id: 'delete.api.removed', expected: expectedAfterDelete, actual: api });
-    expect(sameIds(vault, expectedAfterDelete), 'Vault 只移除目標 ID',
-      { id: 'delete.vault.removed', expected: expectedAfterDelete, actual: vault });
-    expect(sameIds(index, expectedAfterDelete), '索引只移除目標 ID',
-      { id: 'delete.index.removed', expected: expectedAfterDelete, actual: index ?? state.index });
-    expect(deleted?.includes(targetId) === true, 'deleted-documents.json 記錄目標文件',
-      { id: 'delete.ledger.recorded', expected: [targetId], actual: deleted });
     await shot('deleted-direct-url');
   });
 
@@ -144,28 +145,6 @@ export async function run({ instance, page, record, waitFor }) {
     expect(deleted !== null && !deleted.includes(targetId), '重新收集後刪除紀錄移除目標',
       { id: 'recollect.ledger.cleared', expected: { targetPresent: false }, actual: deleted === null ? deletionFileDescription(state) : { targetPresent: deleted.includes(targetId), ids: deleted } });
     await shot('recollected-reader');
-  });
-
-  await record.scenario('DOCS-5', '重啟後搜尋仍正確', async ({ expect, shot }) => {
-    await instance.restart({ page });
-    await page.getByTestId('nav-documents').click();
-    await page.getByTestId('documents-search').fill(targetQuery);
-    await page.getByTestId('documents-search').press('Enter');
-    await waitFor(async () => (await page.getByTestId('documents-summary').innerText()).trim() === '找到 1 份', 'restart search has target');
-    const search = await instance.api(`/api/search?q=${encodeURIComponent(targetQuery)}`);
-    const state = await instance.state();
-    const api = listedIds(state);
-    const vault = vaultIds(state);
-    const index = indexIds(state);
-    expect(search.total === 1 && search.hits[0]?.id === targetId, '重啟後搜尋仍回傳重新收集的目標',
-      { id: 'restart.search.target', expected: { total: 1, id: targetId }, actual: { total: search.total, id: search.hits[0]?.id ?? null } });
-    expect(sameIds(api, expectedIds), '重啟後 API 仍是完整前置 ID 集合',
-      { id: 'restart.api.complete', expected: expectedIds, actual: api });
-    expect(sameIds(vault, expectedIds), '重啟後 Vault 仍是完整前置 ID 集合',
-      { id: 'restart.vault.complete', expected: expectedIds, actual: vault });
-    expect(sameIds(index, expectedIds), '重啟後索引仍是完整前置 ID 集合',
-      { id: 'restart.index.complete', expected: expectedIds, actual: index ?? state.index });
-    await shot('restart-search');
   });
 }
 

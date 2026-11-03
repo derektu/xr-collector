@@ -43,9 +43,9 @@ Preconditions:
 ## Regression flows
 
 - `subscribe-a-b`：斷言 `jobs-sections`、`jobs-empty`、`jobs-badge`。A、B 開始後在進行中且不回到排隊中、沒有失敗區、結束後顯示空狀態，以及工作全部結束、畫面穩定後沒有徽章。
-- `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中並以「YouTube 限制連線」說明等待原因，冷卻期間送出的單支影片在排隊中。
+- `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中、等待原因為限制連線（data-cause），冷卻期間送出的單支影片在排隊中。說明文字在 tests/web/jobs-presentation.test.ts。
 - `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`、`jobs-badge`。只有失敗工作時不顯示徽章；單篇失敗後重新收集及從失敗區移除，以 API 與文件內容確認結果。
-- `feature-navigation`：斷言 `jobs-sections`。RSS 503 後已開始的重試檢查在「進行中」，沒有「排隊中」分區。
+- `rss-rate-limit`：斷言 `jobs-sections`。RSS 503 後已開始的重試檢查在「進行中」，沒有「排隊中」分區。
 - `live-updates`：斷言 `jobs-empty`。Agent 訂閱的收集結束後工作頁顯示沒有進行中的工作，閒置 10 秒沒有請求。
 
 ## Backlog

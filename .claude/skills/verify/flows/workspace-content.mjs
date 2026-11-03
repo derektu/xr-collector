@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { articles, channel, idle, subscribe } from '../scripts/lib/index.mjs';
+import { articles, channel, idle } from '../scripts/lib/index.mjs';
 
 export const name = 'workspace-content';
-export const title = '設定計數、單篇類型切換、工作操作、RSS 設定與文件分頁搜尋';
+export const title = '單篇類型切換、工作操作、RSS 設定、刪除後分頁與搜尋不可用';
 export const covers = [
   'collect-add',
   'collect-mismatch',
@@ -20,7 +20,6 @@ export const covers = [
   'reader-view',
   'reader-delete',
   'reader-recollect',
-  'vault-info',
   'rss-add-feed',
   'rss-add-page',
   'rss-articles',
@@ -59,121 +58,6 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-item-url').click();
     await submit(url);
   };
-  // The counts on screen once they match, or what they show when the wait gives up.
-  const displayedVaultCountsWithin = async (expected) => {
-    const shown = async () => (await by('vault-counts').innerText()).trim();
-    return waitFor(async () => (await shown()) === expected && expected, `vault counts ${expected}`).catch(shown);
-  };
-  const displayedSearchCountsWithin = async (expected) => {
-    const totals = by('settings-search-index').locator('p').filter({ hasText: '已索引' });
-    const shown = async () => (await totals.innerText()).trim();
-    return waitFor(async () => (await shown()) === expected && expected, `search counts ${expected}`).catch(shown);
-  };
-  await instance.updateCatalog((c) => {
-    c.feeds['/counts-three.xml'] = {
-      kind: 'rss2', title: '【合成】計數第一輪', articles: articles('計數第一輪', 3),
-    };
-    c.feeds['/counts-two.xml'] = {
-      kind: 'rss2', title: '【合成】計數第二輪', articles: articles('計數第二輪', 2),
-    };
-  });
-
-  await scenario('COUNTS-1', '留在設定時文件數從 0 更新為 3', async ({ expect, shot }) => {
-    await go('/documents');
-    await by('documents-empty-vault').waitFor();
-    expect((await by('documents-empty-vault').count()) === 1, '空 Vault 顯示新增入口', {
-      id: 'COUNTS-1.empty-vault', expected: 1, actual: await by('documents-empty-vault').count(),
-    });
-    await by('add-document-empty').click();
-    await by('add-item-url').click();
-    expect((await by('add-dialog').count()) === 1, '空 Vault 的新增入口開啟相同對話框', {
-      id: 'COUNTS-1.empty-add-entry', expected: 1, actual: await by('add-dialog').count(),
-    });
-    await page.keyboard.press('Escape');
-    await go('/settings');
-    await by('vault-counts').waitFor();
-    expect((await by('vault-counts').innerText()).trim() === '0 份文件・0 個訂閱', '初始畫面顯示 0 份文件', {
-      id: 'COUNTS-1.initial-dom', expected: '0 份文件・0 個訂閱', actual: (await by('vault-counts').innerText()).trim(),
-    });
-    await subscribe(instance, instance.feedsOrigin + '/counts-three.xml');
-    await idle(instance);
-    const state = await instance.state();
-    expect(state.api.documents.total === 3, '背景收集後 API 有 3 份文件', {
-      id: 'COUNTS-1.api', expected: 3, actual: state.api.documents.total,
-    });
-    expect(state.vault.documents.length === 3, '背景收集後 Vault 有 3 份文件', {
-      id: 'COUNTS-1.vault', expected: 3, actual: state.vault.documents.length,
-    });
-    const actual = await displayedVaultCountsWithin('3 份文件・1 個訂閱');
-    expect(actual === '3 份文件・1 個訂閱', '不離開設定，畫面在 6 秒內更新為 3 份文件', {
-      id: 'COUNTS-1.dom-within-6s', expected: '3 份文件・1 個訂閱', actual,
-    });
-    const search = await waitFor(async () => {
-      const next = (await instance.api('/api/search/status')).status;
-      return next.state === 'ready' && next.indexedDocuments === 3 && next.vaultDocuments === 3 ? next : null;
-    }, 'search has 3 documents');
-    expect(search.indexedDocuments === 3 && search.vaultDocuments === 3, '搜尋狀態 API 已索引與知識庫數都是 3', {
-      id: 'COUNTS-1.search-api', expected: { indexedDocuments: 3, vaultDocuments: 3 },
-      actual: { indexedDocuments: search.indexedDocuments, vaultDocuments: search.vaultDocuments },
-    });
-    const searchActual = await displayedSearchCountsWithin('已索引 3 份／知識庫 3 份');
-    expect(searchActual === '已索引 3 份／知識庫 3 份', '搜尋 API 就緒後 6 秒內，搜尋卡更新為 3／3', {
-      id: 'COUNTS-1.search-dom-within-6s', expected: '已索引 3 份／知識庫 3 份', actual: searchActual,
-    });
-    const settled = await instance.state();
-    const index = settled.index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
-    expect(index?.numberOfDocuments === 3, '搜尋引擎實際索引有 3 份文件', {
-      id: 'COUNTS-1.index', expected: 3, actual: index?.numberOfDocuments ?? null,
-    });
-    await shot('counts-3');
-  });
-
-  await scenario('COUNTS-2', '再次收集更新為 5，返回設定仍為 5', async ({ expect, shot }) => {
-    await subscribe(instance, instance.feedsOrigin + '/counts-two.xml');
-    await idle(instance);
-    const state = await instance.state();
-    expect(state.api.documents.total === 5, '第二次背景收集後 API 有 5 份文件', {
-      id: 'COUNTS-2.api', expected: 5, actual: state.api.documents.total,
-    });
-    expect(state.vault.documents.length === 5, '第二次背景收集後 Vault 有 5 份文件', {
-      id: 'COUNTS-2.vault', expected: 5, actual: state.vault.documents.length,
-    });
-    const actual = await displayedVaultCountsWithin('5 份文件・2 個訂閱');
-    expect(actual === '5 份文件・2 個訂閱', '不離開設定，畫面在 6 秒內更新為 5 份文件', {
-      id: 'COUNTS-2.dom-within-6s', expected: '5 份文件・2 個訂閱', actual,
-    });
-    const search = await waitFor(async () => {
-      const next = (await instance.api('/api/search/status')).status;
-      return next.state === 'ready' && next.indexedDocuments === 5 && next.vaultDocuments === 5 ? next : null;
-    }, 'search has 5 documents');
-    expect(search.indexedDocuments === 5 && search.vaultDocuments === 5, '搜尋狀態 API 已索引與知識庫數都是 5', {
-      id: 'COUNTS-2.search-api', expected: { indexedDocuments: 5, vaultDocuments: 5 },
-      actual: { indexedDocuments: search.indexedDocuments, vaultDocuments: search.vaultDocuments },
-    });
-    const searchActual = await displayedSearchCountsWithin('已索引 5 份／知識庫 5 份');
-    expect(searchActual === '已索引 5 份／知識庫 5 份', '搜尋 API 就緒後 6 秒內，搜尋卡更新為 5／5', {
-      id: 'COUNTS-2.search-dom-within-6s', expected: '已索引 5 份／知識庫 5 份', actual: searchActual,
-    });
-    const settled = await instance.state();
-    const index = settled.index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
-    expect(index?.numberOfDocuments === 5, '搜尋引擎實際索引有 5 份文件', {
-      id: 'COUNTS-2.index', expected: 5, actual: index?.numberOfDocuments ?? null,
-    });
-    await shot('counts-5');
-    await by('nav-documents').click();
-    await by('page-documents').waitFor();
-    await by('nav-settings').click();
-    await by('vault-counts').waitFor();
-    const returned = (await by('vault-counts').innerText()).trim();
-    expect(returned === '5 份文件・2 個訂閱', '離開再返回設定仍顯示 5 份文件', {
-      id: 'COUNTS-2.returned-dom', expected: '5 份文件・2 個訂閱', actual: returned,
-    });
-    const returnedSearch = (await by('settings-search-index').locator('p').filter({ hasText: '已索引' }).innerText()).trim();
-    expect(returnedSearch === '已索引 5 份／知識庫 5 份', '離開再返回設定，搜尋卡仍顯示 5／5', {
-      id: 'COUNTS-2.returned-search-dom', expected: '已索引 5 份／知識庫 5 份', actual: returnedSearch,
-    });
-  });
-
   const d = (await instance.catalog()).youtube.channels.find((x) => x.handle === 'verify-d');
   await instance.updateCatalog((c) => {
     c.youtube.channels.push(channel('E', 1, '工作失敗驗證'));
@@ -187,7 +71,6 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-mismatch').waitFor();
     await shot('mismatch');
     expect(await by('add-confirm').isDisabled(), '類型不符時不能直接訂閱');
-    expect((await by('add-switch').innerText()).trim() === '改為加入一次', '切換按鈕的完整文字');
     await by('add-switch').click();
     expect((await by('add-url').inputValue()).includes(d.videos[1].id), '切換保留網址');
     await waitFor(async () => await by('add-confirm').isEnabled(), 'switch ready');
@@ -264,7 +147,7 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-item-rss-feed').click();
     await by('add-url').fill(instance.feedsOrigin + '/workspace-blog');
     await waitFor(async () => await by('add-confirm').isEnabled(), 'announced feed found');
-    expect((await by('add-confirm').innerText()).trim() === '訂閱', '網頁辨識產生訂閱動作');
+    expect((await by('add-confirm').getAttribute('data-action')) === 'subscribe', '網頁辨識產生訂閱動作');
     await shot('feed-recognition');
     await by('add-confirm').click();
     await by('add-dialog').waitFor({ state: 'detached' });
@@ -292,46 +175,6 @@ export async function run({ instance, page, record, waitFor }) {
     await shot('rss-settings');
     const stored = await readFile(path.join(instance.runDir, 'vault/settings/rss-subscriptions.json'), 'utf8');
     expect(stored.includes(feed.id), 'RSS 訂閱確實寫入 Vault');
-  });
-
-  await scenario('CONTENT-4', '22 篇文件的分頁、來源與搜尋', async ({ expect, note, shot }) => {
-    await go('/documents');
-    await by('documents-source').selectOption('rss:' + feed.id);
-    await waitFor(async () => (await page.locator('.document-row').count()) === 20, 'first page 20');
-    note('source-options', await by('documents-source').locator('option').allInnerTexts());
-    await by('documents-pagination').getByRole('button', { name: '下一頁', exact: true }).click();
-    await waitFor(async () => (await page.locator('.document-row').count()) === 2, 'second page 2');
-    expect(new URL(page.url()).searchParams.get('page') === '2', '頁碼記在 URL');
-    await shot('page-two');
-    await page.locator('.document-row').first().click();
-    await by('reader-body').waitFor();
-    expect((await by('reader-body').innerText()).includes('【合成文章】'), 'RSS Markdown 文章可閱讀');
-    const publisherHref = `/sources/rss/${encodeURIComponent(feed.id)}`;
-    const shownPublisherHref = await waitFor(async () => {
-      const href = await by('reader-publisher').getAttribute('href');
-      return href === publisherHref ? href : null;
-    }, 'reader links the subscribed RSS publisher');
-    expect(shownPublisherHref === publisherHref, '仍訂閱的發布者可以開啟正確的訂閱詳情');
-    await page.locator('.reader-bar').getByRole('button', { name: '文件', exact: true }).click();
-    await waitFor(async () => (await page.locator('.document-row').count()) === 2, 'reader returns to second page');
-    expect(new URL(page.url()).searchParams.get('page') === '2', '返回保留分頁');
-    await by('documents-search').fill('NeedleWorkspaceThree');
-    await waitFor(
-      async () =>
-        (await page.locator('.document-row').count()) === 1 &&
-        (await by('documents-summary').innerText()).includes('找到 1'),
-      'search unique body'
-    );
-    expect(new URL(page.url()).searchParams.get('page') !== '2', '搜尋回第一頁');
-    await shot('search-match');
-    await by('documents-search').fill('NoWorkspaceDocumentExists');
-    await by('documents-no-results').waitFor();
-    expect((await by('documents-no-results').innerText()).includes('沒有符合'), '無結果顯示搜尋空狀態');
-    await page.getByRole('button', { name: '清除搜尋', exact: true }).click();
-    await waitFor(
-      async () => (await page.locator('.document-row').count()) === 20,
-      'clear search restores source list'
-    );
   });
 
   await scenario('CONTENT-5', '已刪除的 RSS 不提供重新收集，最後一頁刪除後回到前一頁', async ({ expect, shot }) => {

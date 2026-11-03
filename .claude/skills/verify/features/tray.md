@@ -36,7 +36,7 @@ Preconditions:
 
 ## Gotchas
 
-- 背景模式（`hidden: true`）下「顯示視窗」只切換頁面，不真的顯示，`windowState().visible` 一直是 false。驗證視窗顯示要用 `hidden: false`，會在桌面上跳出視窗；跑之前先提醒使用者，並集中一次跑。
+- 背景模式（`hidden: true`）下「顯示視窗」只切換頁面，不真的顯示，`windowState().visible` 一直是 false；App 有沒有顯示或隱藏視窗看 `windowState().shown`。驗證畫面上的視窗（聚焦、最小化還原、實際顯示）要用 `hidden: false`（`flows run --desktop --visible`），會在桌面上跳出視窗；跑之前先提醒使用者，並集中一次跑。
 - 選單本身是作業系統畫的，Playwright 截不到；選單內容以 `trayMenu` 斷言，圖示與選單外觀由實機目視確認。
 - Windows 的系統匣與提示需要登入的桌面；SSH 的 session 0 沒有系統匣。
 - `notifications(app)` 只證明 App 發出了 Windows 關窗提示，不證明畫面上出現。版本更新在所有平台都不送 OS notification。Windows 只為 App 身分與開始選單捷徑相符的程式顯示關窗提示，開發版的 electron.exe 沒有這個捷徑，所以提示是否出現只能用安裝版（`npm run package:win` 的安裝檔）實機目視。
@@ -44,8 +44,8 @@ Preconditions:
 
 ## Regression flows
 
-- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的狀態行、項目與順序（含這次啟動 App 的「版本 X」與「檢查 App 更新」）、關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的狀態序列與文件數、自動檢查的切換、經 API 關閉自動檢查與開始檢查時畫出的選單自己更新、閒置 10 秒不讀狀態、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。Desktop 流程，視窗會顯示。
-- `notification-clicks`：斷言 `tray-menu`、`tray-open` 的 attention 優先圖示、需處理子選單、從隱藏／最小化還原聚焦及訂閱入口；移除最後一筆後清除。Desktop 流程，視窗會顯示。
+- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的圖示、項目與順序、自動檢查勾選，關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的圖示序列與文件數、自動檢查的切換、經 API 關閉自動檢查與開始檢查時畫出的選單自己更新、閒置 10 秒不讀狀態、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。選單文字在 tests/electron/tray-menu.test.ts。Desktop 流程，視窗隱藏時以 App 的顯示紀錄判斷；TRAY-D2、TRAY-D5、TRAY-D6、TRAY-D7 以 --visible 再核對畫面上的視窗。
+- `notification-clicks`：斷言 `tray-menu`、`tray-open` 的 attention 優先圖示、需處理子選單、點通知顯示隱藏的視窗及訂閱入口；移除最後一筆後清除。Desktop 流程，聚焦與最小化還原以 --visible 驗證。
 
 更新提示以向上箭頭疊在原有閒置／收集中／自動檢查關閉圖示上，保留原狀態；Mac 使用單色 Template 與 2x 素材，Windows 使用有輪廓的箭頭與 2x 素材。開啟選單或設定不清除更新標記，執行新版後才消失。訂閱需要處理的 attention 圖示與離線圖示都優先於版本更新標記，版本選單仍保留完整狀態。離線圖示在 Mac 是 Template 加 × 角標，Windows 是灰底加 × 角標。
 

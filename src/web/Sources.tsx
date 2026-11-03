@@ -17,7 +17,7 @@ import {
   sourcePath,
   type SourceListState,
 } from './source-presentation.js';
-import { subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
+import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 import { useDay } from './use-day.js';
 
 export interface SourcesProps {
@@ -132,7 +132,7 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
             <span><span className="name">{entry.title ?? displayUrl(entry.url)}</span><span className="kind">{owner?.kindLabel}</span></span></span>
           <span role="cell" className="numeric">—</span>
           <span role="cell" className="muted">—</span>
-          <span role="cell"><span className={`status-chip ${subscriptionStatusTone(entry.checkStatus)}`}>{subscriptionStatusText(entry.checkStatus, now)}</span></span>
+          <span role="cell"><span className={`status-chip ${subscriptionStatusTone(entry.checkStatus)}`} {...subscriptionStatusData(entry.checkStatus)}>{subscriptionStatusText(entry.checkStatus, now)}</span></span>
           <span role="cell" />
         </div>; })}
         {visible.length === 0 && pending.length === 0 ? <p className="table-empty" data-testid="sources-no-match">沒有符合的訂閱。</p> : null}
@@ -199,7 +199,7 @@ function SourceRow({ source, icon, now, onOpen, onChanged }: { source: Subscript
     </span>
     <span role="cell" className="numeric">{source.documentCount}</span>
     <span role="cell" className="muted">{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</span>
-    <span role="cell"><span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="subscription-status">{subscriptionStatusText(source.checkStatus, now)}</span></span>
+    <span role="cell"><span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="subscription-status" {...subscriptionStatusData(source.checkStatus)}>{subscriptionStatusText(source.checkStatus, now)}</span></span>
     <span role="cell" className="row-actions">
       {paused
         ? <button type="button" className="button small" disabled={busy} onClick={toggle}>恢復</button>

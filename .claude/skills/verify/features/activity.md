@@ -36,8 +36,7 @@ Preconditions:
 
 ## Regression flows
 
-- `feature-navigation`：斷言 `activity-raw`、`activity-summary`。工作限定網址、清除篩選與複製診斷文字，再回摘要等事件載入；Web 攔截 clipboard payload，不驗真 OS 剪貼簿。
-- `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。建立無新內容、網路錯誤與恢復三段，檢查等級與類型篩選、空交集、模式與 URL 保留、DEBUG 原始事件、群組限定與載入數不變。
+- `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。五次定時檢查（無新內容兩次、網路錯誤兩次、恢復一次）後，摘要 API 的分組與訂閱詳情、記錄頁摘要以結果與次數比對；群組細節只列這組的檢查、返回保留等級、完整事件預設 INFO 以上與 DEBUG、重新整理保留全部篩選；以網址開啟一個工作的記錄、複製診斷資訊並清除工作篩選（Web 攔截 clipboard payload，不驗真 OS 剪貼簿）。分組規則在 tests/activity/activity-summary.test.ts 與 tests/activity/activity-jobs.test.ts，細節分頁的先後在 tests/web/activity-group-pages.test.ts。
 
 ## Backlog
 

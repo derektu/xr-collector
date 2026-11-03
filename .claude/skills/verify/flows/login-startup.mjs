@@ -1,177 +1,58 @@
-// Browser development mode must explain that login startup belongs to an installed App, and both
-// UI and Agent listeners refuse mutation instead of silently registering a development executable.
+// Login startup belongs to the installed App: in a development build the Settings switch is off
+// limits, and with a run-local platform fixture a click reaches the platform adapter and the switch
+// shows what the platform reads back. Without it a development executable could register itself
+// as a login item, or the switch could claim a state the OS never took. The ordering rules (a
+// refused write reads again, focus reads again, a stale read never wins) are in
+// tests/web/login-startup-control.test.ts; both listeners refusing a development write are in
+// tests/server/login-startup-http.test.ts. The Settings page it opens has no notifications section;
+// the notification preference is the device API's (tests/server/notifications-http.test.ts).
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pageTurn } from './lib/revision.mjs';
 
 export const name = 'login-startup';
-export const title = '登入自啟在開發版不可設定';
-export const covers = ['login-startup-setting', 'login-startup-unavailable', 'login-startup-os-state'];
+export const title = '登入自啟在開發版不可設定，fixture 切換採用 read-back';
+export const covers = ['login-startup-setting', 'login-startup-unavailable', 'notification-settings'];
 
 export async function run({ instance, page, record, waitFor }) {
   const fixturePath = path.join(instance.runDir, 'login-startup-fixture.json');
   const fixture = async (mode, enabled) => writeFile(fixturePath, JSON.stringify({ mode, enabled }, null, 2));
   const focus = () => page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const section = () => page.getByTestId('settings-login-startup');
   const switchInput = () => page.getByTestId('login-startup-switch').locator('input');
-  const statusText = async () => (await page.getByTestId('login-startup-status').innerText()).trim();
-  const settledToggle = (enabled) => waitFor(async () =>
-    !(await switchInput().isDisabled()) && (await switchInput().isChecked()) === enabled &&
-    await page.getByTestId('login-startup-status').count() === 0, `login startup ${enabled ? 'on' : 'off'}`);
-  const visualSwitch = () => page.getByTestId('login-startup-switch').evaluate((label) => {
-    const input = label.querySelector('input');
-    const track = label.querySelector('.switch');
-    return {
-      checked: input.checked,
-      background: getComputedStyle(track).backgroundColor,
-      transform: getComputedStyle(track, '::after').transform,
-    };
+  /** The switch as the page shows it: the section's state and the input. */
+  const shown = async () => ({
+    state: await section().getAttribute('data-state'),
+    supported: await section().getAttribute('data-supported'),
+    checked: await switchInput().isChecked(),
+    disabled: await switchInput().isDisabled(),
   });
-  const settledVisual = (checked) => waitFor(async () => {
-    const visual = await visualSwitch();
-    const moved = visual.transform !== 'none' && !/matrix\(1, 0, 0, 1, 0, 0\)/u.test(visual.transform);
-    return visual.checked === checked && moved === checked ? visual : null;
-  }, `toggle visually ${checked ? 'on' : 'off'}`);
-  let offBackground = null;
+  const settled = (state, label) => waitFor(async () => { const now = await shown(); return now.state === state && !now.disabled ? now : null; }, label)
+    .catch(() => shown());
 
-  await record.scenario('W1', 'Web／開發版只說明，不允許註冊登入自啟', async ({ expect, note, shot }) => {
+  await record.scenario('W1', 'Web／開發版的登入自啟開關停用', async ({ expect, shot }) => {
     await page.getByTestId('nav-settings').click();
-    await page.getByTestId('settings-login-startup').waitFor();
-    await page.getByTestId('login-startup-status').filter({ hasText: '僅限安裝版 App。' }).waitFor();
-    const toggle = switchInput();
-    const message = await statusText();
-    const disabled = await toggle.isDisabled();
-    expect(disabled, '開發版的登入自啟開關停用', { id: 'w1.ui-disabled', expected: true, actual: disabled });
-    expect(message.includes('僅限安裝版 App。'), '畫面說明只能在安裝版設定',
-      { id: 'w1.ui-message', expected: '僅限安裝版 App。', actual: message });
+    await section().waitFor();
+    await waitFor(async () => await section().getAttribute('data-state') === 'unavailable', 'unavailable state read').catch(() => undefined);
+    const actual = await shown();
+    expect(actual.state === 'unavailable' && actual.supported === 'false' && actual.disabled, '開發版讀到不支援，開關停用',
+      { id: 'w1.ui-disabled', expected: { state: 'unavailable', supported: 'false', disabled: true }, actual });
+    const notifications = await page.getByTestId('settings-notifications').count();
+    expect(notifications === 0, '設定頁沒有通知區塊', { id: 'w1.no-notifications', expected: 0, actual: notifications });
     await shot('settings-unavailable');
-
-    const uiResponse = await fetch(`${instance.url}/api/device/login-startup`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
-    });
-    const ui = { status: uiResponse.status, body: await uiResponse.json() };
-    expect(ui.status === 409 && ui.body?.error?.code === 'login_startup_unavailable', 'UI API 拒絕開發版註冊',
-      { id: 'w1.ui-api', expected: { status: 409, code: 'login_startup_unavailable' }, actual: ui });
-
-    const connection = (await instance.api('/api/device/agent/connection')).connection;
-    const response = await fetch(`${connection.url}/api/device/login-startup`, {
-      method: 'PUT', headers: { authorization: `Bearer ${connection.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
-    const body = await response.json();
-    note('agent-refusal', { status: response.status, body });
-    expect(response.status === 409 && body?.error?.code === 'login_startup_unavailable', 'Agent API 也拒絕開發版註冊',
-      { id: 'w1.agent-api', expected: { status: 409, code: 'login_startup_unavailable' }, actual: { status: response.status, body } });
   });
 
   await record.scenario('W1-F1', '受控平台 fixture：實際切換成功並採用 OS read-back', async ({ expect, note, shot }) => {
     await fixture('normal', false);
     await focus();
-    await settledToggle(false);
-    expect(!(await switchInput().isDisabled()) && !(await switchInput().isChecked()), 'fixture 可操作且 read-back 為關閉',
-      { id: 'w1.fixture-ready', expected: { disabled: false, checked: false }, actual: { disabled: await switchInput().isDisabled(), checked: await switchInput().isChecked() } });
-    offBackground = (await settledVisual(false)).background;
+    const ready = await settled('disabled', 'fixture read back off');
+    expect(ready.state === 'disabled' && !ready.checked && !ready.disabled, 'fixture 可操作且 read-back 為關閉',
+      { id: 'w1.fixture-ready', expected: { state: 'disabled', checked: false, disabled: false }, actual: ready });
     await page.getByTestId('login-startup-switch').click();
-    await settledToggle(true);
+    const on = await settled('enabled', 'switch on after read-back');
     const stored = JSON.parse(await readFile(fixturePath, 'utf8'));
-    const visual = await settledVisual(true);
-    expect(await switchInput().isChecked() && stored.enabled === true && visual.transform !== 'none' && visual.background !== offBackground, '點開後 DOM、可見開關與平台 read-back 都是開啟',
-      { id: 'w1.enable-success', expected: { checked: true, visual: 'right', enabled: true }, actual: { checked: await switchInput().isChecked(), visual, fixture: stored } });
+    expect(on.state === 'enabled' && on.checked && stored.enabled === true, '點開後開關與平台 read-back 都是開啟',
+      { id: 'w1.enable-success', expected: { state: 'enabled', checked: true, fixture: true }, actual: { ...on, fixture: stored.enabled } });
     note('fixture', '此段只驗 UI 與平台 adapter 的串接，不證明真實 OS 已註冊。');
     await shot('settings-enabled-fixture');
-  });
-
-  await record.scenario('W1-F2', '受控平台 fixture：寫入失敗後重讀，不樂觀改掉開關', async ({ expect, shot }) => {
-    await fixture('failure', true);
-    await focus();
-    await settledToggle(true);
-    await page.getByTestId('login-startup-switch').click();
-    await page.getByTestId('login-startup-status').filter({ hasText: '合成作業系統拒絕更新登入自啟' }).waitFor();
-    const visual = await settledVisual(true);
-    expect(await switchInput().isChecked(), '關閉寫入失敗後重新讀回，開關仍為 OS 的開啟狀態',
-      { id: 'w1.failure-readback', expected: { checked: true, visual: 'right' }, actual: { checked: await switchInput().isChecked(), visual } });
-    await shot('settings-failure-fixture');
-  });
-
-  await record.scenario('W1-F3', '受控平台 fixture：需要核准與外部停用在 focus 後刷新', async ({ expect, shot }) => {
-    await fixture('requires_approval', false);
-    await focus();
-    await page.getByTestId('login-startup-status').filter({ hasText: '系統設定' }).waitFor();
-    expect(!(await switchInput().isChecked()) && (await statusText()).includes('允許 XR Collector'), '需要核准時維持關閉並說明系統設定',
-      { id: 'w1.requires-approval', expected: { checked: false, message: '允許 XR Collector' }, actual: { checked: await switchInput().isChecked(), message: await statusText() } });
-    await page.getByTestId('login-startup-switch').click();
-    await waitFor(async () => {
-      const activity = await instance.api('/api/activity?eventType=device.login_startup_failed&limit=10');
-      return activity.events.some((event) => event.errorCode === 'login_startup_requires_approval');
-    }, 'approval refusal recorded');
-    await waitFor(async () => (await statusText()).includes('允許 XR Collector'), 'approval message restored after request');
-    expect(!(await switchInput().isChecked()) && (await statusText()).includes('允許 XR Collector'), '實際點開仍待核准，不把開關顯示成成功',
-      { id: 'w1.approval-click', expected: { checked: false, message: '允許 XR Collector' }, actual: { checked: await switchInput().isChecked(), message: await statusText() } });
-
-    await fixture('normal', true);
-    await focus();
-    await settledToggle(true);
-    const before = await switchInput().isChecked();
-    await fixture('normal', false);
-    await focus();
-    await settledToggle(false);
-    const after = await switchInput().isChecked();
-    const visual = await settledVisual(false);
-    expect(before && !after && visual.background === offBackground, 'OS 外部停用後，視窗 focus 會把開關與可見狀態刷新為關閉',
-      { id: 'w1.external-disable', expected: { checked: [true, false], visual: 'left' }, actual: { checked: [before, after], visual } });
-    await shot('settings-external-disable-fixture');
-  });
-
-  await record.scenario('W1-F4', '受控平台 fixture：較舊的 focus 讀取不得覆蓋較新的切換結果', async ({ expect }) => {
-    await fixture('normal', false);
-    await focus();
-    await settledToggle(false);
-    let startSlow;
-    const slowStarted = new Promise((resolve) => { startSlow = resolve; });
-    let releaseSlow;
-    const slowRelease = new Promise((resolve) => { releaseSlow = resolve; });
-    let finishSlow;
-    const slowFinished = new Promise((resolve) => { finishSlow = resolve; });
-    let interceptSlowGet = true;
-    const route = async (requestRoute) => {
-      const request = requestRoute.request();
-      if (interceptSlowGet && request.method() === 'GET') {
-        interceptSlowGet = false;
-        startSlow();
-        await slowRelease;
-        try {
-          await requestRoute.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-            loginStartup: { supported: true, enabled: false, state: 'disabled', message: '登入自啟已關閉。' },
-          }) });
-        } catch { /* the fixed UI aborts this stale request */ }
-        finishSlow();
-        return;
-      }
-      if (request.method() === 'PUT') {
-        await requestRoute.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-          loginStartup: { supported: true, enabled: true, state: 'enabled', message: '已在登入電腦時自動啟動。' },
-        }) });
-        return;
-      }
-      await requestRoute.continue();
-    };
-    await page.route('**/api/device/login-startup', route);
-    try {
-      await focus();
-      await slowStarted;
-      await page.getByTestId('login-startup-switch').click();
-      await settledToggle(true);
-      releaseSlow();
-      await slowFinished;
-      await pageTurn(page);
-      const actual = { checked: await switchInput().isChecked(), statusMessages: await page.getByTestId('login-startup-status').count() };
-      expect(actual.checked && actual.statusMessages === 0, '較慢的舊 GET 回覆不會蓋掉較新的 PUT read-back', {
-        id: 'w1.focus-update-race',
-        expected: { checked: true, statusMessages: 0 },
-        actual,
-      });
-    } finally {
-      releaseSlow();
-      await page.unroute('**/api/device/login-startup', route);
-    }
   });
 }

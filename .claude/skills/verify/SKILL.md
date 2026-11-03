@@ -140,18 +140,20 @@ node $V flows list                                                   # 每支流
 node $V flows run --feature subscriptions --web --issue 91 --label subscriptions --jobs 3 # 涵蓋訂閱功能檔子功能的 Web 流程
 node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
 node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
-node $V flows run feature-navigation build-info --issue 91 --label navigation # 入口、診斷、索引及建置資訊
-node $V flows run search-normalization --issue 91 --label search      # 文字等價、詞界／片段、原文、條件／分頁及 Agent 一致性
+node $V flows run search-normalization --issue 91 --label search      # 片段的條件／分頁、UI 與 Agent 一致、重建與重啟
 node $V flows run --web --issue 91 --label ci-web --jobs 3           # E2E workflow：動態跑全部 Web 流程（Desktop 以外），同時三支
+node $V flows run --desktop --issue 91 --label desktop               # Desktop 流程，視窗隱藏
+node $V flows run --desktop --visible --issue 91 --label visible     # 有 visibleScenarios 的 Desktop 流程，視窗會跳出來
 ```
 
-- **選取**：名稱、`--web`／`--desktop`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 E2E workflow 跑的集合：Desktop 以外的全部流程。
+- **選取**：名稱、`--web`／`--desktop`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 E2E workflow 跑的集合：Desktop 以外的全部流程。`--visible` 只選有 `visibleScenarios` 的 Desktop 流程，以顯示的視窗執行。
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的 checkout：它的 `src/`、Web UI 與合成 verification server。
 - **證據**：`--label`（預設 `flows`）決定這次執行的新資料夾，規則與 `launch` 相同：`<issue>/<label>-<本地時間>/`。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log；`results.json` 另記 `flow`。流程還沒建立 recorder 就失敗（啟動 server 或瀏覽器失敗）時，照樣寫出 `passed: false` 的 `results.json`，沒跑成的流程不會從結果中消失。任一支流程失敗時 exit code 為 1。
 - **同時執行**：`--jobs <N>`（預設 1，最多等於 slot 數 10）讓最多 N 支流程同時跑，每支仍是自己的 instance 與 slot，依列出順序開始；Desktop 流程獨自執行，前面的流程結束才開始，後面的等它結束。一支失敗或中途丟出例外不影響其他流程跑完。N 大於 1 時每行 log 以 `[<流程名>]` 開頭。slot 被其他 run 佔滿時，流程等 slot 空出來。結束時印出通過的支數與失敗的流程名。
 - **核心旅程**：`core-journey` 一次走過訂閱、文件頁新增單支影片、來源篩選與搜尋、閱讀、列表暫停與恢復、閱讀頁刪除確認；`subscription-remove` 是移除訂閱保留文件的資料安全代表。其他流程不重複斷言它們已斷言的操作。
-- **內容操作**：`workspace-content` 串接設定頁計數、訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、文件分頁／搜尋與 RSS 刪除；從空的合成 instance 執行，文件數足以驗到第二頁。
-- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID），與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron({ hidden: false })` 啟動受測 checkout 的開發版 Electron：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`；執行時視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄，`revision.mjs` 的 `pageTurn(page)` 等頁面處理完呼叫前已到達的回應（證明晚到的回應沒有改變畫面時，之後再檢查）；`scripts/lib/drive.mjs` 的 `painted(page)` 等頁面套用目前的樣式、轉場結束後再截圖。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
+- **內容操作**：`workspace-content` 串接訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、RSS 刪除與最後一頁刪除回退、搜尋不可用；從空的合成 instance 執行，文件數足以驗到第二頁。
+- **斷言讀什麼**：比對 API 的值與產品元素的 `data-*`（例如狀態的 `data-phase`、文件摘要的 `data-mode`／`data-total`、檢查紀錄的 `data-job`），不比對整句中文；文字與排版規則放在下層的單元測試。外觀（焦點框、置中、背景延伸、tooltip 位置、窄視窗換行）不在流程裡斷言。
+- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID），與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron` 啟動受測 checkout 的開發版 Electron，視窗隱藏：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`，`visible` 是視窗是否在畫面上。視窗隱藏時，`windowState()` 的 `shown` 記錄 App 最後一次顯示或隱藏視窗，`shownIn(state, visible)` 以它判斷；視窗在畫面上時，`visible` 也必須一致，否則兩種答案都不成立。需要畫面上視窗的檢查（聚焦、最小化還原）只在 `visible` 時執行，所在 scenario 列進流程的 `visibleScenarios`；`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄，`revision.mjs` 的 `pageTurn(page)` 等頁面處理完呼叫前已到達的回應（證明晚到的回應沒有改變畫面時，之後再檢查）；`scripts/lib/drive.mjs` 的 `painted(page)` 等頁面套用目前的樣式、轉場結束後再截圖。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
 
@@ -227,9 +229,9 @@ await desktop.close();
 
 `vault` 預設 `selected`：以 checkout 的 `dist/node` 建立 Vault 並寫進 profile，畫面直接進到 App。`vault: 'none'` 不建立 Vault，畫面從 Onboarding 開始，用 `stubDialogs` 回答選擇目錄的對話框，經畫面建立或開啟 Vault。
 
-Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序（`pid`）與 App（`appPid`）。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕。流程 crash 而 Electron 還活著時，`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。驗證視窗顯示、聚焦、Dock、Tray 本身時改用 `hidden: false`，並在 issue 註明會跳出視窗。
+Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序（`pid`）與 App（`appPid`）。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕。流程 crash 而 Electron 還活著時，`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。App 有沒有顯示或隱藏視窗，背景模式以 `windowState().shown` 判斷；聚焦、最小化還原、Dock、Tray 本身需要畫面上的視窗，改用 `hidden: false`（收錄流程是 `--visible`），並在 issue 註明會跳出視窗。
 
-`launchElectron` 開啟 App 的驗證通道（`XR_COLLECTOR_VALIDATION_CONTROL=1`）：主程序在 `globalThis.__xrCollectorValidation` 提供選單列／系統匣的選單、點選單項目、視窗狀態、關閉視窗與已發出的提示，函式庫的 `trayMenu`、`clickTray`、`windowState`、`closeWindow`、`notifications` 經 Playwright 在主程序呼叫它。正式使用時不設這個變數，通道不存在。
+`launchElectron` 開啟 App 的驗證通道（`XR_COLLECTOR_VALIDATION_CONTROL=1`）：主程序在 `globalThis.__xrCollectorValidation` 提供選單列／系統匣的選單、點選單項目、視窗狀態（含 App 最後一次顯示或隱藏視窗的 `shown`）、關閉視窗與已發出的提示，函式庫的 `trayMenu`、`clickTray`、`windowState`、`shownIn`、`closeWindow`、`notifications` 經 Playwright 在主程序呼叫它。正式使用時不設這個變數，通道不存在。
 
 ### 打包版
 

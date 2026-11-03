@@ -1,95 +1,59 @@
+// The build a user runs, as Settings shows it: the version and kind on the card are the ones the
+// device API reports, the API names the checkout under test, and a failed read can be retried from
+// the card. Without it a user or a bug report names the wrong build. The API serving one identity to the UI and an authorized Agent, before a
+// Vault is chosen too, is in tests/server/build-info-http.test.ts.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { launchWeb, openPage } from '../scripts/lib/index.mjs';
 
 export const name = 'build-info';
-export const title = '設定與 Onboarding 顯示版本，Agent API 保留完整建置資訊';
-export const covers = ['build-info-settings', 'build-info-onboarding', 'build-info-api'];
+export const title = '設定頁顯示裝置 API 的版本與種類，讀取失敗可重試';
+export const covers = ['build-info-settings', 'build-info-api'];
 
-async function readInfo(instance) {
-  const response = await fetch(`${instance.url}/api/device/build-info`);
-  return { status: response.status, body: await response.json() };
-}
-
-async function cardMatches(page, info, expect, prefix) {
+export async function run({ instance, page, record, waitFor }) {
   const card = page.getByTestId('build-info');
-  await card.getByTestId('build-info-version').waitFor();
-  const values = { version: info.version, kind: info.kind === 'packaged' ? '安裝版' : '開發版' };
-  for (const [field, expected] of Object.entries(values)) {
-    const actual = (await card.getByTestId(`build-info-${field}`).innerText()).trim();
-    expect(actual === expected, `畫面 ${field} 與裝置 API 相同`, { id: `${prefix}.${field}`, expected, actual });
-  }
-  const text = await card.innerText();
-  const debugValues = [info.builtAt, info.commit, info.buildId, info.target, '中文精簡', '官方完整版', '有未提交修改', '原始碼狀態未知'].filter(Boolean);
-  const exposed = debugValues.filter((value) => text.includes(value));
-  expect(exposed.length === 0, '畫面不顯示除錯用建置資訊',
-    { id: `${prefix}.debug-hidden`, expected: [], actual: exposed });
-}
+  /** The card's version and kind once it loaded, or what it shows when the wait gives up. */
+  const shownCard = async () => {
+    await waitFor(async () => await card.getByTestId('build-info-kind').count() === 1, 'build info card loaded').catch(() => undefined);
+    return {
+      version: (await card.getByTestId('build-info-version').innerText().catch(() => null))?.trim() ?? null,
+      kind: await card.getByTestId('build-info-kind').getAttribute('data-kind').catch(() => null),
+    };
+  };
 
-export async function run({ instance, page, record }) {
-  await record.scenario('BINFO-W1', '設定頁與授權 Agent 讀取同一個 build', async ({ expect, themed, shot }) => {
+  await record.scenario('BINFO-W1', '設定頁的版本與種類就是裝置 API 回報的受測 build', async ({ expect, themed }) => {
     await page.getByTestId('nav-settings').click();
-    const response = await readInfo(instance);
-    expect(response.status === 200, '裝置 build API 可讀', { id: 'settings.api', expected: 200, actual: response.status });
-    if (response.status !== 200) { await shot('missing-build-info'); return; }
-    const info = response.body.buildInfo;
+    const info = (await instance.api('/api/device/build-info')).buildInfo;
     const pkg = JSON.parse(await readFile(path.join(instance.checkout, 'package.json'), 'utf8'));
-    expect(info.version === pkg.version && info.commit === instance.commit && info.kind === 'development', '原始碼版本與受測 checkout 相同',
-      { id: 'settings.source-identity', expected: { version: pkg.version, commit: instance.commit, kind: 'development' },
-        actual: { version: info.version, commit: info.commit, kind: info.kind } });
-    await cardMatches(page, info, expect, 'settings');
-    const { connection } = await instance.api('/api/device/agent/connection');
-    const authorized = await fetch(`${connection.url}/api/device/build-info`, { headers: { authorization: `Bearer ${connection.token}` } });
-    const agent = await authorized.json();
-    expect(authorized.status === 200 && JSON.stringify(agent) === JSON.stringify(response.body), '授權 Agent 與 UI 是同一份身分',
-      { id: 'settings.agent', expected: response.body, actual: { status: authorized.status, ...agent } });
-    const unauthorized = await fetch(`${connection.url}/api/device/build-info`);
-    expect(unauthorized.status === 401, 'Agent API 保留 token 驗證',
-      { id: 'settings.auth', expected: 401, actual: unauthorized.status });
-    await page.getByTestId('build-info').scrollIntoViewIfNeeded();
+    const identity = { version: info.version, commit: info.commit, kind: info.kind };
+    const wanted = { version: pkg.version, commit: instance.commit, kind: 'development' };
+    expect(JSON.stringify(identity) === JSON.stringify(wanted), '裝置 API 回報受測 checkout 的版本與 commit',
+      { id: 'settings.source-identity', expected: wanted, actual: identity });
+    const shown = await shownCard();
+    expect(shown.version === info.version && shown.kind === info.kind, '設定頁卡片的版本與種類與裝置 API 相同',
+      { id: 'settings.card', expected: { version: info.version, kind: info.kind }, actual: shown });
+    await card.scrollIntoViewIfNeeded();
     await themed('settings');
-    await page.reload();
-    await cardMatches(page, info, expect, 'settings-reload');
   });
 
-  await record.scenario('BINFO-W2', '尚未選知識庫也能辨識 build', async ({ expect, shot, note }) => {
-    const startup = await launchWeb({ issue: instance.issue, checkout: instance.checkout, vault: 'none', evidence: path.join(instance.evidence, 'onboarding-run') });
-    const opened = await openPage(startup);
-    try {
-      const response = await readInfo(startup);
-      const vault = await startup.api('/api/vault/setup');
-      expect(response.status === 200 && vault.vault.state === 'not_ready', 'Vault 未就緒時 build API 可讀',
-        { id: 'onboarding.api', expected: { status: 200, vault: 'not_ready' }, actual: { status: response.status, vault: vault.vault.state } });
-      note('onboarding.source', { commit: startup.commit, dirty: startup.dirty, sourceHash: startup.sourceHash });
-      if (response.status !== 200) { await shot('missing-build-info', opened.page); return; }
-      await cardMatches(opened.page, response.body.buildInfo, expect, 'onboarding');
-      await opened.page.emulateMedia({ colorScheme: 'dark' });
-      await shot('onboarding-dark', opened.page);
-      await opened.page.emulateMedia({ colorScheme: 'light' });
-      await shot('onboarding-light', opened.page);
-      note('onboarding.consoleErrors', opened.consoleErrors);
-    } finally { await opened.close(); await startup.stop(); }
-  });
-
-  await record.scenario('BINFO-W3', '讀取失敗可從卡片重試', async ({ expect, shot }) => {
-    await page.getByTestId('nav-settings').click();
-    const info = (await readInfo(instance)).body.buildInfo;
+  await record.scenario('BINFO-W3', '讀取失敗時卡片提供重試，重試後顯示裝置 API 的版本與種類', async ({ expect, shot }) => {
+    const info = (await instance.api('/api/device/build-info')).buildInfo;
     const route = '**/api/device/build-info';
     await page.route(route, (request) => request.fulfill({ status: 503, contentType: 'application/json',
       body: JSON.stringify({ error: { code: 'unavailable', message: '驗收注入建置資訊讀取失敗' } }),
     }));
     try {
       await page.reload();
-      const card = page.getByTestId('build-info');
       const alert = card.getByRole('alert');
       await alert.waitFor();
-      await card.scrollIntoViewIfNeeded();
-      expect((await alert.innerText()).includes('無法讀取建置資訊'), '讀取失敗顯示重試入口', { id: 'retry.error', actual: await alert.innerText() });
+      const failed = { alert: await alert.count(), retry: await alert.getByRole('button', { name: '重試' }).count(), kind: await card.getByTestId('build-info-kind').count() };
+      expect(failed.alert === 1 && failed.retry === 1 && failed.kind === 0, '讀取失敗時卡片顯示錯誤與重試，不顯示版本',
+        { id: 'retry.error', expected: { alert: 1, retry: 1, kind: 0 }, actual: failed });
       await shot('read-error');
       await page.unroute(route);
       await alert.getByRole('button', { name: '重試' }).click();
-      await cardMatches(page, info, expect, 'retry-restored');
-      await card.scrollIntoViewIfNeeded();
+      const restored = await shownCard();
+      expect(restored.version === info.version && restored.kind === info.kind, '重試後卡片顯示裝置 API 的版本與種類',
+        { id: 'retry.restored', expected: { version: info.version, kind: info.kind }, actual: restored });
       await shot('retry-restored');
     } finally { await page.unroute(route); }
   });

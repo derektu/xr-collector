@@ -113,6 +113,19 @@ export function subscriptionStatusTone(status: SubscriptionCheckStatus): 'queued
   }
 }
 
+/**
+ * A status chip's state as data attributes, for readers that need the state rather than its words:
+ * `data-phase` is the status state, a download adds `data-done` and `data-total`, a failure count
+ * `data-failures`.
+ */
+export function subscriptionStatusData(status: SubscriptionCheckStatus): Record<string, string> {
+  return {
+    'data-phase': status.state,
+    ...(status.state === 'downloading' ? { 'data-done': String(status.done), 'data-total': String(status.total) } : {}),
+    ...('failures' in status ? { 'data-failures': String(status.failures) } : {}),
+  };
+}
+
 /** A coming time: "18:52" today, "明天 08:00", "10-24 08:00" on a later day. */
 function nextTimeLabel(value: string, now: Date): string {
   const date = new Date(value);

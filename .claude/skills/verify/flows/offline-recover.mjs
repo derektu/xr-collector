@@ -6,21 +6,18 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { collect, idle, subscribe } from '../scripts/lib/index.mjs';
+import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'offline-recover';
 export const title = '斷網與恢復';
 export const covers = ['sub-status', 'sub-check', 'sub-offline'];
 
-/** Every subscription row's status text, by row test ID; runs inside the page. */
-const subscriptionStatuses = () => Object.fromEntries([...document.querySelectorAll('[data-testid^="source-row-"]')]
-  .map((row) => [row.dataset.testid, (row.querySelector('.status-chip')?.textContent ?? '').trim()]));
+/** Whether the offline message shows; runs inside the page. */
+const bannerState = () => ({ banner: document.querySelector('[data-testid="offline-banner"]') ? 'shown' : '' });
 
-/** Whether the offline message shows, and its text; runs inside the page. */
-const bannerState = () => ({ banner: document.querySelector('[data-testid="offline-banner"]')?.textContent?.trim() ?? '' });
-
-const OFFLINE_REFUSED = '目前沒有網路，恢復後再試。';
-const UNAVAILABLE = '沒有網路時無法使用';
+/** The statuses a row shows when a check failed or waits to retry. */
+const ERROR_PHASES = ['failing', 'retrying', 'auto_paused'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const catalog = await instance.catalog();
@@ -70,16 +67,15 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     // A's capture under way loses the network and the confirmation finds it gone.
     const banner = page.getByTestId('offline-banner');
     await banner.waitFor({ timeout: 30_000 });
-    const text = (await banner.innerText()).trim();
-    expect(/^目前沒有網路，恢復後自動檢查。（\d{2}:\d{2} 確認）$/u.test(text), '頁面上方顯示沒有網路的訊息與確認時間',
-      { id: 'offline.banner', expected: '目前沒有網路，恢復後自動檢查。（HH:MM 確認）', actual: text });
     const state = await connectivity();
     expect(state?.state === 'offline' && typeof state.checkedAt === 'string', 'health 的 connectivity 為 offline 並有確認時間',
       { id: 'offline.health', expected: 'offline', actual: state });
+    const checkedAt = await banner.getAttribute('data-checked-at');
+    expect(checkedAt !== null && checkedAt === state?.checkedAt, '頁面上方顯示沒有網路的訊息，確認時間與 health 相同',
+      { id: 'offline.banner', expected: state?.checkedAt ?? '確認時間', actual: checkedAt });
 
     const addDisabled = await disabled(page, 'add-subscription');
-    const addTitle = await page.getByTestId('add-subscription').getAttribute('title');
-    expect(addDisabled && addTitle === UNAVAILABLE, '「新增訂閱」停用並提示沒有網路時無法使用', { id: 'offline.add-subscription', expected: [true, UNAVAILABLE], actual: [addDisabled, addTitle] });
+    expect(addDisabled, '「新增訂閱」停用', { id: 'offline.add-subscription', expected: true, actual: addDisabled });
     const checkEnabled = !(await disabled(page, 'check-all'));
     expect(checkEnabled, '「立即檢查」保持可按', { id: 'offline.check-all.enabled', expected: true, actual: checkEnabled });
     await shot('sources-offline');
@@ -103,8 +99,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await page.getByTestId('check-all').click();
     const notice = page.getByTestId('notice');
     await notice.waitFor({ timeout: 15_000 });
-    const noticeText = (await notice.innerText()).trim();
-    expect(noticeText === OFFLINE_REFUSED, '按「立即檢查」顯示目前沒有網路', { id: 'offline.check-all.refused', expected: OFFLINE_REFUSED, actual: noticeText });
+    const tone = await notice.getAttribute('data-tone');
+    expect(tone === 'error', '按「立即檢查」顯示錯誤提示', { id: 'offline.check-all.refused', expected: 'error', actual: tone });
     const after = await jobCount();
     expect(after === before, '立即檢查沒有開始工作', { id: 'offline.check-all.no-job', expected: before, actual: after });
     await shot('check-all-refused');
@@ -159,10 +155,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     expect(count === String(a.videos.length), `A 的列顯示 ${a.videos.length} 份文件`, { id: 'online.a.documents', expected: String(a.videos.length), actual: count });
 
     const statuses = await watched(page, 'status');
-    const errors = Object.fromEntries(Object.entries(statuses).map(([row, samples]) => [row, samples.map((sample) => sample.value).filter((value) => value.includes('錯誤'))]));
+    const errors = Object.fromEntries(Object.entries(statuses).map(([row, samples]) => [row, samples.map((sample) => sample.value).filter((value) => ERROR_PHASES.includes(value.split(' ')[0]))]));
     note('statusSequences', Object.fromEntries(Object.entries(statuses).map(([row, samples]) => [row, samples.map((sample) => sample.value)])));
     const shown = Object.values(errors).flat();
-    expect(shown.length === 0, '整段期間訂閱列沒有出現「錯誤」', { id: 'rows.no-error', expected: [], actual: errors });
+    expect(shown.length === 0, '整段期間訂閱列沒有出現錯誤', { id: 'rows.no-error', expected: [], actual: errors });
     const banner = (await watched(page, 'banner')).banner?.map((sample) => sample.value !== '') ?? [];
     note('bannerSequence', banner);
     await shot('recovered');

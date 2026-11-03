@@ -54,15 +54,14 @@ Preconditions:
 ## Regression flows
 
 - `core-journey`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-view`、`reader-delete`。6 份文件的列表、頻道 A 篩選、搜尋無結果與命中（畫面、API、標示），從結果閱讀（內文、發布者連結、原始來源），閱讀頁刪除先取消再確認，API、Vault、索引只少這一份且刪除紀錄有它。
-- `subscription-remove`：斷言 `docs-filter`、`reader-view`。移除訂閱並保留文件後，來源選單為「<標題>・已移除（n）」，篩選列出全部文件，閱讀頁可讀且發布者不再是連結。
-- `feature-navigation`：斷言 `docs-search` 的設定入口，從畫面重建索引後回到就緒，Vault 文件內容不變。
-- `documents-reader-search`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁、來源篩選；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集並在重啟後再次搜尋。
-- `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。22 篇來源跨頁、搜尋命中／清除／空結果、閱讀返回保留分頁、已刪除 RSS 不提供重新收集、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支；COUNTS-1、COUNTS-2 另比對搜尋狀態 API、實際索引與設定頁搜尋卡在背景收集後的 3／3、5／5。
-- `search-normalization`：斷言 `docs-search-normalization`、`docs-search-fragments`、`docs-list`、`docs-filter`、`docs-search`、`reader-view`。NORM-1～4 用五份 RSS 文件驗等價文字、純空白 browse、地區詞、原文摘要、片段與重啟；NORM-5～7 擴充至 34 份，驗散字／空白／標點／跨欄位負例、COCT 多詞 AND 與引號、Latin typo／prefix、固定完整詞優先案例、Reader 原文、來源／日期／20＋1 分頁、授權 Agent 完整回應，以及畫面重建與重啟後 Vault／結果不變。均為 Mac Web 合成資料；不代表兩平台封裝資源、換詞庫或壞資源啟動驗收。
-- `live-updates`：斷言 `docs-list`、`reader-view`。文件頁開著時 Agent 刪除文件，總數與 API 相同；閱讀頁開著時 Agent 刪除同一份，顯示已刪除。
+- `subscription-remove`：斷言 `docs-filter`、`reader-view`。移除訂閱並保留文件後，來源選單列出這個已移除的訂閱且 API 標示已移除與份數，篩選列出全部文件，閱讀頁可讀且發布者不再是連結。選項文字「<標題>・已移除（n）」在 tests/web/document-presentation.test.ts。
+- `documents-reader-search`：斷言 `docs-list`、`docs-search`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁，頁碼記在網址、閱讀後返回同一頁、搜尋從第一頁開始；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集。
+- `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。已刪除 RSS 不提供重新收集、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支。
+- `search-normalization`：斷言 `docs-search-fragments`、`docs-filter`、`docs-search`。片段查詢套用來源、日期與 20＋1 分頁，UI API、授權 Agent 與畫面第二頁相同；從設定頁重建索引與重啟後，片段結果、原文與 Vault 不變。文字規則（簡繁與異體、NFKC、地區詞、連續片段、詞界、引號、原文標示）在 tests/search/meilisearch-integration.test.ts 與旁邊的單元測試。均為 Mac Web 合成資料；不代表兩平台封裝資源、換詞庫或壞資源啟動驗收。
+- `live-updates`：斷言 `docs-list`、`docs-search`、`reader-view`。文件頁開著時 Agent 刪除文件，總數與 API 相同；閱讀頁開著時 Agent 刪除同一份，顯示已刪除；設定頁開著時 Agent 刪除文件，搜尋卡的已索引與知識庫數、搜尋狀態 API 與引擎實際索引數都等於文件數。
 
 ## Backlog
 
 - `reader-view`：從訂閱詳情與記錄進入閱讀頁的入口，以及發布者連結實際點回訂閱詳情。
 - `docs-search`：搜尋索引筆數與知識庫不一致（已索引 N 份／知識庫 M 份）時的提示。
-- `docs-search-normalization`：外置詞庫的載入、替換與壞資源，整理成使用資源副本的參數化 smoke；詞庫格式、hash 與正規化已有 `tests/search/`，不放進一般文件流程。
+- `docs-search-normalization`：沒有流程；正規化、地區詞與原文標示在 `tests/search/meilisearch-integration.test.ts` 與 `tests/search/` 的單元測試。外置詞庫的載入、替換與壞資源，整理成使用資源副本的參數化 smoke，不放進一般文件流程。

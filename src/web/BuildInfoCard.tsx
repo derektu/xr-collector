@@ -22,7 +22,7 @@ export function BuildInfoCard({ compact = false, update = null, onUpdate }: { co
     {failed ? <p role="alert">無法讀取建置資訊。<button type="button" className="link-button" onClick={() => setRevision((value) => value + 1)}>重試</button></p>
       : !info ? <p role="status">正在讀取建置資訊…</p>
         : <>
-          <p className="build-info-version"><span data-testid="build-info-version">{info.version}</span> · <span data-testid="build-info-kind">{info.kind === 'packaged' ? '安裝版' : '開發版'}</span>
+          <p className="build-info-version"><span data-testid="build-info-version">{info.version}</span> · <span data-testid="build-info-kind" data-kind={info.kind}>{info.kind === 'packaged' ? '安裝版' : '開發版'}</span>
           </p>
           {!compact && onUpdate ? <SoftwareUpdate status={update} onStatus={onUpdate} /> : null}
         </>}

@@ -396,6 +396,49 @@ describe('job summary and event fields', () => {
   });
 });
 
+describe('check summaries from real jobs (#96 A2, L6)', () => {
+  it('summarizes scheduled checks that cannot list the channel as one network error run between empty runs', async () => {
+    const { manager, source, subs, store, runNextTimers } = setup();
+    const channel = subscribe(subs, 'UC-runs');
+    const check = async (failing: boolean) => {
+      if (failing) source.discoverFailures.push(network(), network(), network());
+      const id = (await manager.submitCheck('youtube', channel, 'scheduled')).job.id;
+      // A check that cannot list the channel makes three attempts: the first and two automatic retries.
+      if (failing) for (let retry = 0; retry < 2; retry += 1) await runNextTimers();
+      return manager.whenSettled(id);
+    };
+    const states = [];
+    for (const failing of [false, false, true, true, false]) states.push((await check(failing)).state);
+    expect(states).toEqual(['completed', 'completed', 'failed', 'failed', 'completed']);
+
+    const summary = await store.activity.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-runs' }, { vaultPath: VAULT });
+    const runs = summary.entries.filter((entry) => entry.kind === 'check').map((entry) => [entry.result, entry.count]);
+    expect(runs).toEqual([['empty', 1], ['network_error', 2], ['empty', 2]]);
+  });
+
+  it('shows a first collection of three videos as one subscription, one start, three documents and one result, with queue events only at DEBUG', async () => {
+    const { manager, source, service, store } = await setupWithService();
+    const id = (await source.resolveChannel('https://www.youtube.com/@lifecycle')).id;
+    source.channelVideos.set(id, ['lllllllll01', 'lllllllll02', 'lllllllll03'].map((video) => ({
+      id: video, title: `影片 ${video}`, url: watchUrl(video), publishedAt: T0.toISOString(), upcoming: false,
+    })));
+    await manager.whenSettled((await service.add('https://www.youtube.com/@lifecycle')).job.id);
+    const scope = { vaultPath: VAULT };
+    await eventually(async () => expect((await store.activity.summary({ view: 'summary', subscriptionId: id }, scope)).entries
+      .some((entry) => entry.kind === 'check')).toBe(true));
+
+    const info: ['info', 'warning', 'error'] = ['info', 'warning', 'error'];
+    const summary = (await store.activity.summary({ view: 'summary', subscriptionId: id, severity: info }, scope)).entries;
+    const shown = summary.map((entry) => (entry.kind === 'check' ? `check:${entry.result}:${entry.created}` : entry.event.eventType)).sort();
+    expect(shown).toEqual(['check:other:3', 'document.saved', 'document.saved', 'document.saved', 'job.started', 'subscription.added']);
+    const raw = (await store.activity.query({ subscriptionId: id, severity: info }, scope)).events.map((event) => event.eventType);
+    expect(raw.filter((type) => type === 'document.saved')).toHaveLength(3);
+    expect(raw).not.toContain('job.accepted');
+    const debug = (await store.activity.query({ subscriptionId: id }, scope)).events.map((event) => event.eventType);
+    expect(debug).toContain('job.accepted');
+  });
+});
+
 describe('retention leaves job records alone (A-T3)', () => {
   it('keeps real check summaries and detail after their jobs are pruned and the store restarts (#96 A6)', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-summary-jobs-'));

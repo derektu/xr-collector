@@ -1,5 +1,5 @@
-// The everyday journey in one pass: subscribe to channel A and add one video through the screens,
-// filter and search the documents, read one, pause and resume A from the list, and delete the read
+// The everyday journey in one pass: subscribe to channel A from the empty list's entry and filter
+// the list, add one video through the screens, filter and search the documents, read one, pause and resume A from the list, and delete the read
 // document after first cancelling. Each step starts from the state the previous one left; data
 // writes are checked in the API, the Vault and the search index. Every wait is on a state.
 // Unit and HTTP tests hold each step's rule; only the screen shows the steps composing: a
@@ -24,7 +24,15 @@ export async function run({ instance, page, record, waitFor }) {
   const targetQuery = '頻道 A 第 3 集';
   const missingQuery = '核心旅程不存在的關鍵詞';
   const row = by(`source-row-${a.id}`);
-  const rowStatus = async () => (await row.getByTestId('subscription-status').innerText()).trim();
+  const rowPhase = async () => row.getByTestId('subscription-status').getAttribute('data-phase');
+  /** The Documents page summary once it shows loaded results: { mode, total }. */
+  const summary = async () => {
+    const element = by('documents-summary');
+    if (await element.getAttribute('data-loading') !== 'false') return null;
+    return { mode: await element.getAttribute('data-mode'), total: Number(await element.getAttribute('data-total')) };
+  };
+  const summaryIs = (mode, total, label) => waitFor(async () => { const now = await summary(); return now?.mode === mode && now.total === total; }, label, { timeout: 15_000 })
+    .catch(() => undefined).then(summary);
   const subscription = async () => (await instance.api('/api/subscriptions')).subscriptions.find((entry) => entry.id === a.id);
   const noToast = () => waitFor(async () => (await by('notice').count()) === 0, 'no toast over the page', { timeout: 15_000 });
   /** The state once API, Vault and index hold exactly `ids`. */
@@ -34,26 +42,36 @@ export async function run({ instance, page, record, waitFor }) {
   }, label);
   let allIds;
 
-  await record.scenario('CORE-1', '經畫面訂閱頻道 A，收完後列顯示下次檢查與 5 份文件', async ({ expect, shot }) => {
+  await record.scenario('CORE-1', '從空清單的入口訂閱頻道 A，收完後列顯示下次檢查與 5 份文件，名稱與類型篩選', async ({ expect, shot }) => {
     await by('nav-sources').click();
     await by('page-sources').waitFor();
-    await by('add-subscription').click();
+    await by('add-subscription-empty').click();
     await by('add-item-youtube-channel').click();
     await by('add-url').fill(`https://www.youtube.com/@${a.handle}`);
     const confirm = by('add-confirm');
-    await waitFor(async () => (await confirm.innerText()).trim() === '訂閱' && await confirm.isEnabled(), 'subscribe enabled', { timeout: 15_000 });
+    await waitFor(async () => await confirm.getAttribute('data-action') === 'subscribe' && await confirm.isEnabled(), 'subscribe enabled', { timeout: 15_000 });
     await confirm.click();
     await by('add-dialog').waitFor({ state: 'detached', timeout: 10_000 });
     const onSources = await by('page-sources').count();
     expect(onSources === 1, '對話框關閉後留在訂閱頁', { id: 'subscribe.stays', expected: 1, actual: onSources });
     await row.waitFor({ timeout: 15_000 });
     await waitFor(async () => (await subscription())?.checkStatus?.state === 'scheduled', 'A scheduled', { timeout: 60_000 });
-    const status = await waitFor(async () => { const text = await rowStatus(); return /^下次 /u.test(text) ? text : null; }, 'row shows the next check', { timeout: 15_000 })
-      .catch(async () => rowStatus());
-    expect(/^下次 /u.test(status), '收完後列的狀態是「下次 HH:MM」', { id: 'subscribe.status', expected: '下次 HH:MM', actual: status });
+    await waitFor(async () => await rowPhase() === 'scheduled', 'row shows the next check', { timeout: 15_000 }).catch(() => undefined);
+    const status = await rowPhase();
+    expect(status === 'scheduled', '收完後列的狀態是排定下次檢查', { id: 'subscribe.status', expected: 'scheduled', actual: status });
     const count = (await row.locator('[role="cell"].numeric').innerText()).trim();
     expect(count === String(a.videos.length), `列的文件數是 ${a.videos.length}`, { id: 'subscribe.documents', expected: String(a.videos.length), actual: count });
     await shot('subscribed');
+    await by('sources-filter').fill('核心旅程不存在的訂閱');
+    await by('sources-no-match').waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const filtered = { rows: await row.count(), empty: await by('sources-no-match').count() };
+    expect(filtered.rows === 0 && filtered.empty === 1, '名稱篩選沒有符合時列消失、顯示沒有符合', { id: 'subscribe.filter-name', expected: { rows: 0, empty: 1 }, actual: filtered });
+    await by('sources-filter').fill('');
+    await page.getByRole('group', { name: '類型' }).getByRole('button', { name: /YouTube/u }).click();
+    await row.waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const typed = await page.locator('[data-testid^="source-row-"]').count();
+    expect(typed === 1 && await row.count() === 1, '類型篩選 YouTube 列出頻道 A', { id: 'subscribe.filter-type', expected: 1, actual: typed });
+    await page.getByRole('group', { name: '類型' }).getByRole('button', { name: /全部/u }).click();
   });
 
   await record.scenario('CORE-2', '文件頁新增單支影片：收進文件、可閱讀、不建立訂閱', async ({ expect, shot }) => {
@@ -64,7 +82,7 @@ export async function run({ instance, page, record, waitFor }) {
     await by('add-item-url').click();
     await by('add-url').fill(`https://www.youtube.com/watch?v=${single.id}`);
     const confirm = by('add-confirm');
-    await waitFor(async () => (await confirm.innerText()).trim() === '加入' && await confirm.isEnabled(), 'add enabled', { timeout: 15_000 });
+    await waitFor(async () => await confirm.getAttribute('data-action') === 'collect' && await confirm.isEnabled(), 'add enabled', { timeout: 15_000 });
     await confirm.click();
     await by('add-dialog').waitFor({ state: 'detached', timeout: 10_000 });
     const onDocuments = await by('page-documents').count();
@@ -75,9 +93,9 @@ export async function run({ instance, page, record, waitFor }) {
       'API、Vault 與索引都是 A 的 5 份加上單支影片', { id: 'collect.data', expected: allIds, actual: { api: apiIds(state), vault: vaultIds(state), index: indexIds(state) } });
     const subscriptions = (await instance.api('/api/subscriptions')).subscriptions.map((entry) => entry.id);
     expect(!subscriptions.includes(d.id), '單支影片不建立頻道 D 的訂閱', { id: 'collect.no-subscription', expected: `不含 ${d.id}`, actual: subscriptions });
-    await waitFor(async () => (await by('documents-summary').innerText()).trim() === `共 ${allIds.length} 份文件`, 'list shows every document', { timeout: 15_000 }).catch(() => undefined);
-    const summary = (await by('documents-summary').innerText()).trim();
-    expect(summary === `共 ${allIds.length} 份文件`, '文件頁列出全部文件', { id: 'collect.list', expected: `共 ${allIds.length} 份文件`, actual: summary });
+    const listed = await summaryIs('browse', allIds.length, 'list shows every document');
+    const rows = await page.locator('.document-row').count();
+    expect(listed?.total === allIds.length && rows === allIds.length, '文件頁列出全部文件', { id: 'collect.list', expected: { total: allIds.length, rows: allIds.length }, actual: { ...listed, rows } });
     await page.goto(`${instance.url}/documents/${encodeURIComponent(singleId)}`);
     await by('reader-body').waitFor();
     const body = await by('reader-body').innerText();
@@ -89,7 +107,7 @@ export async function run({ instance, page, record, waitFor }) {
     await page.locator('.reader-bar').getByRole('button', { name: '文件', exact: true }).click();
     await by('page-documents').waitFor();
     await by('documents-source').selectOption(`youtube:${a.id}`);
-    await waitFor(async () => (await by('documents-summary').innerText()).trim() === `共 ${a.videos.length} 份文件`, 'channel A filter', { timeout: 15_000 }).catch(() => undefined);
+    await summaryIs('browse', a.videos.length, 'channel A filter');
     const titles = await page.locator('.document-title').allInnerTexts();
     expect(titles.length === a.videos.length && titles.every((text) => text.includes('頻道 A')), '篩選頻道 A 只列出它的 5 份文件',
       { id: 'filter.channel-a', expected: `${a.videos.length} 份，標題都含「頻道 A」`, actual: titles });
@@ -97,11 +115,12 @@ export async function run({ instance, page, record, waitFor }) {
     await by('documents-search').fill(missingQuery);
     await by('documents-search').press('Enter');
     await by('documents-no-results').waitFor();
-    const none = (await by('documents-summary').innerText()).trim();
-    expect(none === '找到 0 份', '不存在的詞顯示 0 份', { id: 'search.none', expected: '找到 0 份', actual: none });
+    const none = { ...(await summaryIs('search', 0, 'no results')), empty: await by('documents-no-results').count(), api: (await instance.api(`/api/search?q=${encodeURIComponent(missingQuery)}`)).total };
+    expect(none.mode === 'search' && none.total === 0 && none.empty === 1 && none.api === 0, '不存在的詞沒有結果，搜尋 API 也是 0 份',
+      { id: 'search.none', expected: { mode: 'search', total: 0, empty: 1, api: 0 }, actual: none });
     await by('documents-search').fill(targetQuery);
     await by('documents-search').press('Enter');
-    await waitFor(async () => (await by('documents-summary').innerText()).trim() === '找到 1 份', 'target found', { timeout: 15_000 }).catch(() => undefined);
+    await summaryIs('search', 1, 'target found');
     const hrefs = await page.locator('.document-row').evaluateAll((rows) => rows.map((element) => element.getAttribute('href')));
     const api = await instance.api(`/api/search?q=${encodeURIComponent(targetQuery)}`);
     expect(hrefs.length === 1 && decodeURIComponent(hrefs[0] ?? '').endsWith(targetId), '搜尋只列出目標文件',
@@ -135,16 +154,16 @@ export async function run({ instance, page, record, waitFor }) {
     await noToast();
     await page.getByRole('button', { name: `暫停 ${a.title}`, exact: true }).click();
     await waitFor(async () => (await subscription())?.status === 'paused', 'API paused', { timeout: 15_000 }).catch(() => undefined);
-    await waitFor(async () => (await rowStatus()) === '已暫停', 'row paused', { timeout: 15_000 }).catch(() => undefined);
-    const paused = { api: (await subscription())?.status, row: await rowStatus() };
-    expect(paused.api === 'paused' && paused.row === '已暫停', '暫停後 API 與列都是已暫停', { id: 'pause.paused', expected: { api: 'paused', row: '已暫停' }, actual: paused });
+    await waitFor(async () => (await rowPhase()) === 'paused', 'row paused', { timeout: 15_000 }).catch(() => undefined);
+    const paused = { api: (await subscription())?.status, row: await rowPhase() };
+    expect(paused.api === 'paused' && paused.row === 'paused', '暫停後 API 與列都是已暫停', { id: 'pause.paused', expected: { api: 'paused', row: 'paused' }, actual: paused });
     await shot('paused');
     await noToast();
     await row.getByRole('button', { name: '恢復', exact: true }).click();
     await waitFor(async () => (await subscription())?.checkStatus?.state === 'scheduled' && (await subscription())?.status !== 'paused', 'A resumed and checked', { timeout: 60_000 }).catch(() => undefined);
-    await waitFor(async () => /^下次 /u.test(await rowStatus()), 'row scheduled', { timeout: 15_000 }).catch(() => undefined);
-    const resumed = { api: (await subscription())?.status, row: await rowStatus() };
-    expect(resumed.api !== 'paused' && /^下次 /u.test(resumed.row), '恢復後檢查完成，列回到「下次 HH:MM」', { id: 'pause.resumed', expected: { api: '不是 paused', row: '下次 HH:MM' }, actual: resumed });
+    await waitFor(async () => await rowPhase() === 'scheduled', 'row scheduled', { timeout: 15_000 }).catch(() => undefined);
+    const resumed = { api: (await subscription())?.status, row: await rowPhase() };
+    expect(resumed.api !== 'paused' && resumed.row === 'scheduled', '恢復後檢查完成，列回到排定下次檢查', { id: 'pause.resumed', expected: { api: '不是 paused', row: 'scheduled' }, actual: resumed });
     const pauseButton = await page.getByRole('button', { name: `暫停 ${a.title}`, exact: true }).count();
     expect(pauseButton === 1, '列上回到暫停按鈕', { id: 'pause.button-back', expected: 1, actual: pauseButton });
   });

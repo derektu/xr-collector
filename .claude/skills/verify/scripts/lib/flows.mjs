@@ -16,7 +16,11 @@ import { sleep, waitFor } from './wait.mjs';
 
 export const FLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'flows');
 
-/** Every recorded flow: { name, title, covers, desktop, catalog, vault, run, file }, by name. */
+/**
+ * Every recorded flow: { name, title, covers, desktop, visibleScenarios, catalog, vault, run, file },
+ * by name. `visibleScenarios` names the scenarios of a Desktop flow with checks that need its window
+ * on screen; the rest of the flow runs with the window hidden.
+ */
 export async function listFlows(dir = FLOWS_DIR) {
   const files = readdirSync(dir).filter((file) => file.endsWith('.mjs')).sort();
   return Promise.all(files.map(async (file) => {
@@ -24,7 +28,8 @@ export async function listFlows(dir = FLOWS_DIR) {
     if (!flow.name || !flow.title || !Array.isArray(flow.covers) || typeof flow.run !== 'function') {
       throw new Error(`${file} must export name, title, covers and run`);
     }
-    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true, catalog: flow.catalog,
+    return { name: flow.name, title: flow.title, covers: flow.covers, desktop: flow.desktop === true,
+      visibleScenarios: Array.isArray(flow.visibleScenarios) ? flow.visibleScenarios : [], catalog: flow.catalog,
       vault: flow.vault === 'none' ? 'none' : 'selected', run: flow.run, file: path.join(dir, file) };
   }));
 }
@@ -32,15 +37,18 @@ export async function listFlows(dir = FLOWS_DIR) {
 /**
  * The flows to run, in their listed order. `names` picks flows by name (strict); `layer` is `web`
  * (every flow that is not Desktop: the set the E2E workflow runs), `desktop` or `all`; `feature` (a
- * parsed feature file) keeps the flows covering any of its sub-features.
+ * parsed feature file) keeps the flows covering any of its sub-features; `visible` keeps the Desktop
+ * flows with scenarios that need a window on screen.
  */
-export function selectFlows(flows, { names = [], layer = 'all', feature } = {}) {
+export function selectFlows(flows, { names = [], layer = 'all', feature, visible = false } = {}) {
   if (!['all', 'web', 'desktop'].includes(layer)) throw new Error(`Unknown flow layer ${layer}`);
+  if (visible && layer === 'web') throw new Error('--visible runs Desktop flows; it cannot be combined with --web');
   const unknown = names.filter((name) => !flows.some((flow) => flow.name === name));
   if (unknown.length) throw new Error(`Unknown flow ${unknown.join(', ')}; known: ${flows.map((flow) => flow.name).join(', ')}`);
   const inLayer = (flow) => layer === 'all' || (layer === 'desktop') === flow.desktop;
   return flows.filter((flow) => (names.length === 0 || names.includes(flow.name))
     && inLayer(flow)
+    && (!visible || (flow.desktop && flow.visibleScenarios.length > 0))
     && (feature === undefined || flow.covers.some((id) => feature.subFeatures.includes(id))));
 }
 
@@ -96,16 +104,18 @@ const currentFlow = new AsyncLocalStorage();
 
 /**
  * Runs the flows `selectFlows` picks (all when nothing narrows them; `feature` names a feature file
- * of the map) against `checkout`, up to `jobs` at once, each on its own instance and slot. The label
+ * of the map) against `checkout`, up to `jobs` at once, each on its own instance and slot. Desktop
+ * flows run with their window hidden; `visible` runs the Desktop flows that have scenarios needing
+ * a window on screen, with the window shown, so those checks run too. The label
  * (default `flows`) names one new evidence folder for this whole invocation, as launch does; each flow
  * writes into `<that folder>/<flow>/`. With more than one job, each log line starts with `[<flow>]`.
  * Returns { evidence, label, jobs, flows: [{ name, passed, evidence, error? }] }.
  */
-export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', feature, jobs = 1 } = {}) {
+export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', feature, jobs = 1, visible = false } = {}) {
   if (!issue) throw new Error('flows run needs --issue for the evidence folder');
   if (!Number.isInteger(jobs) || jobs < 1 || jobs > SLOTS.length) throw new Error(`--jobs is a whole number from 1 to ${SLOTS.length}, one verify slot per flow`);
   const all = await listFlows();
-  const selected = selectFlows(all, { names, layer, feature: feature === undefined ? undefined : findFeature(readFeatures(), feature) });
+  const selected = selectFlows(all, { names, layer, visible, feature: feature === undefined ? undefined : findFeature(readFeatures(), feature) });
   if (!selected.length) throw new Error(`No flows selected (layer ${layer}${feature ? `, feature ${feature}` : ''})`);
   const claimed = claimEvidence(issue, label);
   const log = console.log;
@@ -114,7 +124,7 @@ export async function runFlows({ names = [], issue, label = 'flows', checkout = 
   try {
     outcomes = await runPool(selected, jobs, (flow) => currentFlow.run(flow.name, () => {
       console.log(`flow ${flow.name}: ${flow.title}`);
-      return runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout });
+      return runOne(flow, { issue, label: claimed.label, evidence: path.join(claimed.evidence, flow.name), checkout, visible });
     }));
   } finally {
     console.log = log;
@@ -178,16 +188,17 @@ async function runOne(flow, options) {
 }
 
 /**
- * A Desktop flow (`export const desktop = true`) drives the development Electron of `checkout` with
- * its window shown, because it tests the window and the tray themselves. It gets the app handle as
- * `instance`, whose `api()` reaches the app's own API, and the window as `page`.
+ * A Desktop flow (`export const desktop = true`) drives the development Electron of `checkout`,
+ * because it tests the window and the tray themselves. It gets the app handle as `instance`, whose
+ * `api()` reaches the app's own API, the window as `page`, and `visible`: false while the window
+ * stays hidden, when the flow skips the checks of its `visibleScenarios` that need it on screen.
  */
-async function runDesktop(flow, { issue, label, evidence, checkout }) {
-  const instance = await launchElectron({ issue, label, evidence, checkout, hidden: false });
+async function runDesktop(flow, { issue, label, evidence, checkout, visible = false }) {
+  const instance = await launchElectron({ issue, label, evidence, checkout, hidden: !visible });
   const record = recorder(instance, () => instance.window);
   let error;
   try {
-    await flow.run({ instance, page: instance.window, record, waitFor, sleep });
+    await flow.run({ instance, page: instance.window, record, waitFor, sleep, visible });
   } catch (caught) {
     error = caught;
     console.log(`  flow ${flow.name} stopped: ${caught.message}`);

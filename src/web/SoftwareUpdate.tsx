@@ -24,8 +24,8 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
     || phase === 'error' && (!ready || newerOffer)));
   const canApply = Boolean(ready && status?.installerAvailable && (phase === 'ready' || phase === 'error'));
   const attemptProblem = status?.lastAttempt && ['failed', 'unknown'].includes(status.lastAttempt.outcome) ? status.lastAttempt : null;
-  const cancel = (label: string) => <button type="button" className="button" data-testid="update-cancel"
-    onClick={() => void action(() => api.cancelUpdate())}>{label}</button>;
+  const cancel = (label: string, cancels: 'download' | 'wait') => <button type="button" className="button" data-testid="update-cancel"
+    data-cancels={cancels} onClick={() => void action(() => api.cancelUpdate())}>{label}</button>;
   return <div className="software-update" id="software-update" data-testid="software-update">
     <div className="software-update-line">
       <span className={status?.phase === 'available' || ready ? 'update-state available' : 'update-state'}>{status?.message ?? '正在讀取更新狀態…'}</span>
@@ -34,14 +34,14 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
         {canDownload && download ? <button type="button" className="button primary" data-testid="update-download"
           disabled={busy} onClick={() => void action(() => api.downloadUpdate(download.version, download.payload.sha256))}>
           {newerOffer ? `下載 ${newerOffer.version}` : '下載更新'}</button> : null}
-        {phase === 'downloading' || (phase === 'verifying' && Boolean(status?.progress)) ? cancel('取消下載') : null}
+        {phase === 'downloading' || (phase === 'verifying' && Boolean(status?.progress)) ? cancel('取消下載', 'download') : null}
         {canApply && ready ? <>
           <button type="button" className="button primary" data-testid="update-apply" disabled={busy}
             onClick={() => void action(() => api.applyUpdate(ready.version, ready.payload.sha256))}>重新啟動以安裝</button>
           <button type="button" className="button" data-testid="update-later" onClick={() => setDeferredVersion(ready.version)}>稍後</button>
         </> : null}
-        {phase === 'waiting' || (phase === 'verifying' && Boolean(ready) && !status?.progress) ? cancel('取消等待') : null}
-        {phase === 'ready' && ready && deferredVersion === ready.version ? <span className="update-deferred">已保留，可隨時安裝</span> : null}
+        {phase === 'waiting' || (phase === 'verifying' && Boolean(ready) && !status?.progress) ? cancel('取消等待', 'wait') : null}
+        {phase === 'ready' && ready && deferredVersion === ready.version ? <span className="update-deferred" data-testid="update-deferred">已保留，可隨時安裝</span> : null}
         {status && ['idle', 'up_to_date', 'error', 'ready'].includes(status.phase) ? <button type="button" className="button" data-testid="update-check"
           disabled={busy} onClick={() => void action(() => api.checkForUpdate())}>{status.phase === 'error' ? '重新檢查' : '檢查更新'}</button> : null}
       </div>

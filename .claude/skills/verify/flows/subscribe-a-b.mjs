@@ -2,17 +2,13 @@
 // screen while A downloads. The Subscriptions page's status sequences, the Jobs page's sections,
 // the document counts once both finish, and the documents in the Vault and the search index.
 import { subscribe } from '../scripts/lib/seed.mjs';
-import { distinct, jobSectionChecks, subscriptionSequenceChecks } from './lib/status-sequence.mjs';
+import { distinct, jobSectionChecks, subscriptionSequenceChecks, subscriptionStatuses } from './lib/status-sequence.mjs';
 import { screenAt } from './lib/revision.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscribe-a-b';
 export const title = '兩個頻道同時收集：狀態序列、工作頁分區與資料面';
 export const covers = ['sub-add', 'sub-status', 'jobs-sections', 'jobs-empty', 'jobs-badge'];
-
-/** Every subscription row's status text, by row test ID; runs inside the page. */
-const subscriptionStatuses = () => Object.fromEntries([...document.querySelectorAll('[data-testid^="source-row-"], [data-testid^="pending-row-"]')]
-  .map((row) => [row.dataset.testid, (row.querySelector('.status-chip')?.textContent ?? '').trim()]));
 
 /** Every Jobs page row's section and title, by job ID; runs inside the page. */
 const jobSections = () => Object.fromEntries([...document.querySelectorAll('section[data-testid^="jobs-"] li[data-testid^="job-"]')]
@@ -48,7 +44,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await page.getByTestId('add-dialog').waitFor();
     await page.getByTestId('add-url').fill(`https://www.youtube.com/@${source.handle}`);
     const confirm = page.getByTestId('add-confirm');
-    await waitFor(async () => (await confirm.innerText()).trim() === '訂閱' && await confirm.isEnabled(), 'subscribe enabled', { timeout: 15_000 });
+    await waitFor(async () => await confirm.getAttribute('data-action') === 'subscribe' && await confirm.isEnabled(), 'subscribe enabled', { timeout: 15_000 });
     await confirm.click();
     await page.getByTestId('add-dialog').waitFor({ state: 'detached', timeout: 10_000 });
   };
@@ -97,7 +93,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await waitFor(async () => (await apiStatus(a))?.state === 'scheduled' && (await apiStatus(b))?.state === 'scheduled', 'A and B scheduled', { timeout: 120_000 });
     // An unchanged row can still be waiting for the next poll. Wait for the terminal render,
     // retaining the checks below on timeout so stale rows fail with their observed text.
-    await waitFor(async () => [await statusOf(a), await statusOf(b)].every((text) => /^下次 /u.test(text ?? '')),
+    await waitFor(async () => [await statusOf(a), await statusOf(b)].every((value) => value === 'scheduled'),
       'rows show the completed checks', { timeout: 30_000 }).catch(() => undefined);
     const statuses = await watched(page, 'status');
     for (const [source, label] of [[a, 'A'], [b, 'B']]) {
@@ -115,8 +111,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await shot('done');
 
     await jobsPage.getByTestId('jobs-empty').waitFor({ timeout: 30_000 });
-    const empty = (await jobsPage.getByTestId('jobs-empty').innerText()).trim();
-    expect(empty === '沒有進行中的工作', '工作頁顯示「沒有進行中的工作」', { id: 'jobs.empty', expected: '沒有進行中的工作', actual: empty });
+    const empty = await jobsPage.getByTestId('jobs-empty').count();
+    expect(empty === 1, '工作頁顯示沒有進行中的工作', { id: 'jobs.empty', expected: 1, actual: empty });
     const jobs = await watched(jobsPage, 'jobs');
     const sections = Object.fromEntries(Object.entries(jobs).map(([jobId, samples]) => {
       const rows = samples.map((sample) => JSON.parse(sample.value));

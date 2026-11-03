@@ -35,8 +35,8 @@ export function SearchIndexCard() {
     <h2>搜尋</h2>
     {loadError ? <p className="documents-error">{loadError}</p> : null}
     {status && state ? <>
-      <p className="index-state" data-testid="search-index-state"><span className={`status-light ${state}`} aria-hidden="true" />{STATE_LABELS[state]}</p>
-      <p>已索引 {status.indexedDocuments} 份／知識庫 {status.vaultDocuments} 份</p>
+      <p className="index-state" data-testid="search-index-state" data-state={state}><span className={`status-light ${state}`} aria-hidden="true" />{STATE_LABELS[state]}</p>
+      <p data-testid="search-index-counts" data-indexed={status.indexedDocuments} data-vault={status.vaultDocuments}>已索引 {status.indexedDocuments} 份／知識庫 {status.vaultDocuments} 份</p>
       <p>上次重建：{status.lastRebuiltAt ? dateTimeLabel(status.lastRebuiltAt) : '尚未重建'}</p>
       {status.state === 'error' && status.message ? <p className="index-problem">原因：{status.message}</p> : null}
       {mismatch ? <p className="index-problem">索引篇數與知識庫不同，可以重建索引。</p> : null}

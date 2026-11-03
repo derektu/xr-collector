@@ -208,7 +208,8 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       <button type="button" onClick={() => onNavigate('settings')}>前往設定</button>
     </div> : null}
 
-    <div className="documents-summary" aria-live="polite" data-testid="documents-summary">
+    <div className="documents-summary" aria-live="polite" data-testid="documents-summary"
+      data-mode={results?.mode} data-total={results?.total} data-loading={loading || !results ? 'true' : 'false'}>
       {loadError ? <span className="documents-error">{loadError}</span>
         : results ? results.mode === 'search' ? `找到 ${results.total} 份` : `共 ${results.total} 份文件`
           : '正在載入…'}
