@@ -6,7 +6,6 @@ import { collect, idle, launchWeb, openPage as openWebPage, subscribe } from '..
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';
-export const tier = 'feature';
 export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other', 'vault-fixed'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {

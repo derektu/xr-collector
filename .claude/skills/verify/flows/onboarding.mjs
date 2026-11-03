@@ -9,7 +9,6 @@ import { collect, idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'onboarding';
 export const title = '開始使用：建立、開啟既有與從匯出檔建立知識庫；設定頁建立新的知識庫';
-export const tier = 'feature';
 export const vault = 'none';
 export const covers = ['onboarding-home', 'onboarding-create', 'onboarding-open', 'onboarding-missing', 'onboarding-from-export', 'vault-create'];
 

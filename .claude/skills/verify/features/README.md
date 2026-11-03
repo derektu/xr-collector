@@ -22,57 +22,18 @@
 
 已收錄流程在 [`../flows/`](../flows/)，以 `verify.mjs flows run` 執行，見 [SKILL.md](../SKILL.md#已收錄流程)。
 
-## 流程層級
+## 選流程
 
-每支流程在自己的檔案以 `export const tier` 標記層級，地圖不另列：`flows list` 印出每支流程的層級，`flows list --feature <功能檔>` 只列涵蓋該功能的流程。層級決定做票時哪些流程值得在本機跑。PR 的 CI 不執行流程；全部 Web 流程在手動觸發的 E2E workflow、nightly 與發布前執行，見 [開發驗證流程](../../../../docs/development-validation.md#做票驗收pr-門檻與-nightly)。
-
-| 層級 | 內容 | 什麼時候跑 |
-| --- | --- | --- |
-| `core` | 常用路徑與資料安全：`core-journey`（訂閱、新增、查詢、閱讀、暫停恢復、刪除確認）、`subscription-remove`、`live-updates`（Agent 的變動即時反映在開著的畫面，閒置不發請求） | 本機快速回饋：`flows run --tier core`，runtime 已備妥時 3 分鐘內完成 |
-| `feature` | 一個功能的專項與邊界 | 票改到該功能時：`flows run --feature <功能檔>` |
-| `platform` | Desktop 與打包，視窗會顯示 | 改到平台層、發版前 |
-| `real` | 真實來源，需要網路 | 改到收集、選軌、辨識或 feed 讀取的票交付前；`--web` 不含它 |
+票改到哪個功能，就跑涵蓋該功能檔的流程：`flows list --feature <功能檔>` 列出它們，`flows run --feature <功能檔>` 執行。E2E workflow 跑全部 Web 流程（`--web`）；Desktop 流程（`--desktop`）會顯示視窗，在改到平台層與發版前跑。
 
 ## Backlog
 
 每個功能檔最後的 `Backlog` 列出已清點、尚未有流程斷言的項目，以子功能 ID 開頭，寫明待補的行為，以及下層測試已保護的部分。項目沒有實作前不寫進 `Regression flows`，也不寫成已覆蓋。某張票碰到該功能時，先判斷下層測試能否保護，必須經畫面才補進流程，補上後從 Backlog 移到 `Regression flows`。來源是 [#168 的盤點](https://github.com/derektu/xr-collector/issues/168#issuecomment-6470881479)。
 
-## 定期檢討
-
-檢討已收錄流程時，依 [開發驗證流程的自動測試判準](../../../../docs/development-validation.md#自動測試的判準) 決定每支流程保留、合併、下移或刪除，結果記在這裡，最新一次放最上面。每次記日期、依據的執行紀錄，以及有決定的流程。
-
-### 2026-11-02（#215）
-
-依據是 `flows history` 讀出的 CI Web regression 紀錄（runs 40789486459、40832223955、41133118152 與 vault-transfer 的 17 次 CI 執行）及本機單支量測；沒有重跑全部 Web 流程，總時間沿用 #168 的數字。
-
-| 流程 | 決定 | 依據 |
-| --- | --- | --- |
-| `vault-transfer` | 保留，不再標 `overBudget`；R102-4 的收集中匯入以 `youtube.holdCaptures` 停住的收集製造，匯入一定遇上執行中的收集 | CI 17 次都超過 60 秒，因為 5 支各 6 秒的慢收集；本機同負載 71.5 → 46.8 秒 |
-| `tray` | 保留 `SETTLE_MS`，等 #223 讓系統匣回報讀取中或已排定後改為等狀態；拿掉個別等待上限 | Mac 開發版 Electron 9／9 scenario 通過 |
-| 其他用 `captureDelayMs` 製造進行中的流程 | 保留，改用停住的收集見 #224 | 機器忙時收集可能先結束 |
-
-每支流程的清理約 5.5 秒，其中 5 秒是 server 停止 Meilisearch 後還留著的計時器（#219）。
-
-### 2026-10-29（#168）
-
-CI 尚未累積 `results.json`，依據是本機 `--jobs 3` 的兩次完整執行（Mac arm64）與 PR #177 的 CI 耗時表。全部 Web 流程：17 支 191.7 秒 → 19 支 196.2 秒（本機）；CI 上同一批 17 支是 231.1 秒。
-
-| 流程 | 決定 | 依據 |
-| --- | --- | --- |
-| `core-journey`、`subscription-remove` | 新增，`core` | 本機 25.1 秒、10.5 秒 |
-| `offline-recover` | 保留，固定 32 秒等待改為等排程輪詢完成 | 65.8 → 34.1 秒 |
-| `workspace-content` | 保留，單篇新增與閱讀、YouTube 刪除與重新收集交給 `core-journey` 與 `documents-reader-search` | 34.3 → 31.9 秒 |
-| `documents-reader-search` | 保留，搜尋與閱讀的斷言交給 `core-journey` | 26.7 → 26.3 秒 |
-| `subscribe-a-b` | 保留，A 改由 API 訂閱，經畫面訂閱的代表是 `core-journey` | 28.6 → 28.3 秒 |
-| `vault-transfer`、`search-normalization` | 保留，以 `overBudget` 寫明超過 60 秒的理由 | CI 90.4、69.7 秒 |
-| 其他流程 | 保留 | 都在 60 秒內；沒有失敗紀錄可評估不穩定 |
-
-清理階段每支約 5.5 秒（server 正常結束），佔全部流程時間約兩成，是下一次檢討可以看的共同成本。
-
 ## 基準前置狀態
 
 - 以 `verify.mjs launch --issue <N>` 啟動新的 instance：合成資料、`selected` Vault、空的 profile。
-- `doctor --run <runDir>` 回報 `healthy: true`，Vault 路徑在 run 目錄內。
+- `launch` 回傳時 health 成功、搜尋為 `ready`；`state --run <runDir>` 的 `vault.path` 在 run 目錄內。
 - 合成資料：頻道 A（5 支）、B（3 支）、D（3 支，單支加入用）；feed `/feed.xml`、`/atom.xml`、`/blog`。網址見 `launch` 輸出的 `synthetic`。
 - 不操作不是本次啟動的 instance。
 

@@ -121,7 +121,7 @@
 - 工作排序、進度文字、Activity grouping／snapshot／retention：沿用相關核心／HTTP／呈現測試；畫面僅驗代表串接。
 - 搜尋詞庫格式／hash／正規化與 runtime identity：沿用 `tests/search/`；實際換資源生命週期屬資源 smoke。
 - Agent 固定 port／避讓／bind 失敗、Vault 交換不攜帶裝置設定：沿用 `tests/server/agent-access.test.ts` 與 `tests/runtime/collector-runtime.test.ts`。
-- Tray 選單模型、主題 preference、建置資訊錯誤格式與產物身分：沿用 `tests/electron/`、`tests/web/` 與 `tests/runtime/` 的相應案例。
+- Tray 選單模型、主題 preference、建置資訊錯誤格式與產物身分：沿用 `tests/electron/`、`tests/web/` 與 `tests/packaging/` 的相應案例。
 
 ## 明確略過的項目
 
@@ -214,7 +214,7 @@ Desktop bridge 與詞庫資源 smoke 使用獨立資料／資源副本，不修�
 ## 程式核對入口
 
 - [收錄流程](../.claude/skills/verify/flows/)與[選取／執行器](../.claude/skills/verify/scripts/lib/flows.mjs)。
-- [地圖與流程一致性測試](../tests/tooling/verify-skill/flows.test.ts)：已有名稱一致性檢查，沒有完整覆蓋的自動證明。
+- [地圖與流程一致性測試](../tests/tooling/verify-flows.test.ts)：已有名稱一致性檢查，沒有完整覆蓋的自動證明。
 - [單元與整合測試分類](../tests/README.md)：確認已有下層保障，避免建立重複 E2E。
-- [真實來源 smoke](../.claude/skills/verify/examples/smoke-real.mjs)、[Desktop smoke](../.claude/skills/verify/scripts/smoke-desktop.mjs)、[打包離線 smoke](../.claude/skills/verify/scripts/smoke-packaged-offline.mjs)：已有可執行程式，無須以新增相同 smoke 作為覆蓋成果。
+- [真實來源 smoke](../.claude/skills/verify/examples/smoke-real.mjs)、[Desktop smoke](../.claude/skills/verify/scripts/smoke-desktop.mjs)（開發版與打包版共用）：已有可執行程式，無須以新增相同 smoke 作為覆蓋成果。
 - [外觀控制](../src/web/Settings.tsx)、[主題狀態與持久性](../src/web/App.tsx)、[主題邏輯測試](../tests/web/app-shell.test.ts)、[Desktop preference 測試](../tests/electron/theme-preference.test.ts)。

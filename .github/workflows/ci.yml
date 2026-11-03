@@ -1,7 +1,8 @@
 name: CI
 
 # The pull request gate: unit and integration tests, including the real-engine cases, typecheck and
-# build on a Mac. Web E2E and packaged smoke run in e2e.yml. A change to Markdown alone does not run
+# build on a Mac, plus the verify skill's own tests when the change touches its scripts. Web E2E and
+# packaged smoke run in e2e.yml. A change to Markdown alone does not run
 # the gate; the Agent skill is Markdown that tests read, so it runs the gate like code.
 on:
   push:
@@ -26,6 +27,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The parent commit: the base branch of a pull request's merge commit, or main's previous commit.
+          fetch-depth: 2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -36,3 +40,10 @@ jobs:
         run: npm run download:runtime
       - name: Test, typecheck, and build
         run: npm run verify
+      - name: Test the verify skill when its scripts or tests changed
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- .claude/skills/verify/scripts .claude/skills/verify/tests; then
+            echo "The verify skill's scripts and tests are unchanged."
+          else
+            npm run test:verify-skill
+          fi

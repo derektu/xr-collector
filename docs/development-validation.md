@@ -8,7 +8,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 | 層級 | 時機 | 內容 |
 | --- | --- | --- |
-| 自動檢查 | 每次修改 | `npm run verify`：單元、HTTP 與檔案系統整合測試、typecheck、build |
+| 自動檢查 | 每次修改 | `npm run verify`：單元、HTTP 與檔案系統整合測試、typecheck、build；改到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill` |
 | Web 畫面 | 有畫面或 API 行為變更時，以及改到畫面依賴的狀態或資料流時 | verify skill 的 Web 模式：隔離的 instance 與 headless Playwright，依 scenario 操作、斷言並截圖 |
 | 原生 Desktop | 票的結尾，只針對依賴 Electron 或平台能力的 scenario | verify skill 的 Electron 背景模式，Mac 與 Windows 用同一支流程腳本；Windows 見第 5 節 |
 
@@ -28,7 +28,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **做票驗收**：在本機進行，嚴格並涵蓋邊界情況，只在那張票做一次。用功能地圖決定要跑哪些流程。邊界情況的測試留在所屬功能的測試目錄。
 
-**PR 門檻**：一個 Mac job：`npm ci`、安裝釘住版本的 runtime、`npm run verify`（單元與整合測試，含真實 Meilisearch 的案例，以及 typecheck 與 build）。門檻要快、結果穩定，不設時間上限。Web E2E 不在 PR 執行，而在 nightly、發布前與手動觸發的 E2E workflow 執行。只改 Markdown 的修改不執行門檻，見 AGENTS.md。
+**PR 門檻**：一個 Mac job：`npm ci`、安裝釘住版本的 runtime、`npm run verify`（單元與整合測試，含真實 Meilisearch 的案例，以及 typecheck 與 build），改動碰到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。門檻要快、結果穩定，不設時間上限。Web E2E 不在 PR 執行，而在 nightly、發布前與手動觸發的 E2E workflow 執行。只改 Markdown 的修改不執行門檻，見 AGENTS.md。
 
 **nightly 與發布前**：Mac 與 Windows 都跑完整測試、全部 E2E（Web 流程在 Mac，Desktop 流程在兩平台）、App 啟動檢查與打包。失敗自動開 issue，修正優先於新功能。
 
@@ -103,7 +103,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 開 PR 前，開 PR 的人逐條對照 `results.json` 與回報：每個 scenario 的 checks、observations 與記錄的狀態序列，以及功能檔不符的項目。結果檔裡有、回報卻沒提的不一致，先依第 2 節判斷，再補進 PR 的待決定問題。這一步不依賴實作 session 的自我檢查，因為它看漏的通常就是它沒意識到的地方。
 
-證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。同一個 label 重跑時，verify skill 改用下一個編號的子目錄，先前的證據保留；回報引用證據時寫實際的子目錄名。PR 描述的驗證段落列出：
+證據放在票的 worktree 的 `.local/ticket-artifacts/<issue>/`（gitignored），不提交到 repo，也不上傳 PR；基準與本票版本各放一個子目錄。verify skill 每次 run 建立新的子目錄 `<label>-<本地時間>/`，先前的證據保留；回報引用證據時寫實際的子目錄名。PR 描述的驗證段落列出：
 
 - 需求平台與實際驗證的平台、OS 與架構
 - 改動平台相依時，在另一個平台跑的完整 `npm run verify`：OS、host 與 Node 的架構（ARM64 上模擬的 x64 Node 照實標示）、通過／失敗／略過數與耗時
@@ -137,25 +137,24 @@ Windows 上的完整測試正常需要 80～110 秒，Mac 約 15 秒。原因包
 
 Windows 驗收用 verify skill 的原生 Desktop 模式，與 Mac 用同一支流程腳本與同一套證據格式。受測程式是開發版 Electron，或 `npm run package:win` 打包時留在 `release/win-unpacked/` 的 `XR Collector.exe`（`launchElectron({ app })`、`--app`）。Web 模式只在 Mac 執行；共用 UI 的 Web 畫面驗證在 Mac 完成。
 
-在 Windows 上受測的 checkout 先執行 `npm ci`、`npm run download:runtime:win` 與 `npm run build`，打包版另執行 `npm run package:win`，再以 doctor 確認前置條件。doctor 的 `missing` 列出缺少的項目與修正方式，例如 `resources/bin/win`、Electron 執行檔、受測的 `.exe`：
+在 Windows 上受測的 checkout 先執行 `npm ci`、`npm run download:runtime:win` 與 `npm run build`，打包版另執行 `npm run package:win`。缺少的前置條件（例如 `resources/bin/win`、Electron 執行檔、受測的 `.exe`）由啟動錯誤列出，各附修正方式，啟動失敗也寫出失敗的 `results.json`：
 
 ```powershell
-node .claude\skills\verify\scripts\verify.mjs doctor --app "release\win-unpacked\XR Collector.exe"
 node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <證據目錄>
 node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <證據目錄>
 ```
 
-票的流程腳本與 smoke 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。兩個平台的結果以 summary 彙整：
+票的流程腳本與 smoke 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。兩個平台的結果以 `check` 確認完整且對應受驗的程式：
 
 ```sh
-node .claude/skills/verify/scripts/verify.mjs summary --commit <完整 SHA> --platform darwin --platform win32 <mac>/results.json <windows>/results.json
+node .claude/skills/verify/scripts/verify.mjs check --platform darwin --platform win32 <mac 證據目錄> <windows 證據目錄>
 ```
 
-summary 只計入該 commit 的結果；checkout 有未提交修改的 run 是 provisional，不計入。每個 scenario 在每個需要的平台都有 pass、同一平台沒有 fail、計入的 run 本身沒有失敗（`results.json` 沒有 `error`），才算完整；`--scenario` 列出的 scenario 沒有結果時標為 pending，缺少的平台也標為 pending。不完整時 exit code 為 2。
+本機的結果只計入執行 `check` 的 checkout 自己的 run，而且它的 commit 與未提交內容都沒變；另一台機器的結果只在它測的是這個 checkout 的 commit、而且兩邊都沒有未提交修改時計入。每個 scenario 在每個需要的平台都有 pass、同一平台沒有 fail、計入的 run 本身沒有失敗（`results.json` 沒有 `error`），才算完整；`--scenario` 列出的 scenario 沒有結果時標為 pending，缺少的平台也標為 pending。不完整時 exit code 為 2。
 
 從沒有桌面的入口執行也能完成開發版與打包版的驗證，例如 SSH 登入的 Windows session 0：背景模式不顯示視窗，Playwright 照常操作頁面與截圖；螢幕大小依該入口而定（Windows session 0 是 1024x768），截圖的視窗大小可能與開發機不同。需要使用者桌面的能力，例如視窗聚焦、系統匣、通知、原生對話框本身、整個螢幕的截圖，在這種入口無法驗證；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
 
-Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，doctor 的 `platform` 與 `results.json` 的 `environment`（`emulated`、`hostArch`）如實標示 ARM64 host 與 x64 process，不把結果描述成 Intel／AMD host 原生執行。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
+Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，`results.json` 的 `environment`（`emulated`、`hostArch`）如實標示 ARM64 host 與 x64 process，不把結果描述成 Intel／AMD host 原生執行。機器停止、桌面鎖定或無法連線時，該平台標為 blocked，恢復後再驗證。
 
 ## 6. 平台打包
 

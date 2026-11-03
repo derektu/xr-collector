@@ -45,15 +45,8 @@ const { createVaultDirectory } = await load('src/vault/vault-directory.ts');
 const { VaultSelection } = await load('src/vault/vault-selection.ts');
 const { exportFolder, backupFolder } = await load('src/vault/transfer-files.ts');
 const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
-// A reverse-baseline run uses an older checkout that has no updater modules. Keep its server
-// runnable without copying new product source into it: the flow then fails meaningfully on the
-// absent device update API instead of failing verification-server provisioning.
-const updateModulesAvailable = existsSync(path.join(checkout, 'src/updates/update-service.ts'))
-  && existsSync(path.join(checkout, 'src/updates/sources.ts'));
-const updateServiceModule = updateModulesAvailable ? await load('src/updates/update-service.ts') : null;
-const updateSourcesModule = updateModulesAvailable ? await load('src/updates/sources.ts') : null;
-const UpdateService = updateServiceModule?.UpdateService;
-const GenericIndexSource = updateSourcesModule?.GenericIndexSource;
+const { UpdateService } = await load('src/updates/update-service.ts');
+const { GenericIndexSource } = await load('src/updates/sources.ts');
 
 const profilePath = path.join(run, 'profile');
 const vaultPath = path.join(run, 'vault');
@@ -71,7 +64,7 @@ const program = (name: string, environmentName: string) => process.env[environme
 // Opt-in fixture for the recorded update flow. It serves the real generic-index protocol and runs
 // the real UpdateService, but validates a semantic test file instead of pretending Web mode can
 // install a native app. Other verification runs do not receive an update source or fake installer.
-const updateEnabled = () => updateModulesAvailable && data === 'synthetic' && catalog().updates?.enabled === true;
+const updateEnabled = () => data === 'synthetic' && catalog().updates?.enabled === true;
 const sha256 = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', version: '0.1.0', builtAt: '2026-10-27T00:00:00.000Z',
   commit: '1'.repeat(40), buildId: 'verify-update-0.1.0', target: 'darwin-arm64', sourceDirty: false });

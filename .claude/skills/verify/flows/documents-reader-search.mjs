@@ -10,7 +10,6 @@ import { apiIds as listedIds, deletedIds, indexIds, sameIds, vaultIds } from './
 
 export const name = 'documents-reader-search';
 export const title = '文件分頁、來源篩選、刪除後導向、已刪除狀態、重新收集與重啟後搜尋';
-export const tier = 'feature';
 export const covers = ['docs-list', 'docs-filter', 'docs-search', 'reader-delete', 'reader-recollect'];
 
 const rowHrefs = (page) => page.locator('.document-row').evaluateAll((rows) => rows.map((row) => row.getAttribute('href')));

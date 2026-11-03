@@ -80,20 +80,12 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 
 **Vitest 測試**在 `tests/`，依功能分目錄：`core`、`plugins`、`sources`、`jobs`、`activity`、`subscriptions`、`vault`、`search`、`server`、`runtime`、`electron`、`updates`、`web`、`tooling` 等。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 
-**E2E 流程**由 verify skill（`.claude/skills/verify/`）執行：它在隔離的 profile、Vault 與 port 啟動 App，以 Playwright 依使用者的方式操作並留下截圖與 `results.json`。已收錄的回歸流程放在 `.claude/skills/verify/flows/`，每支標記一個層級：
-
-| 層級 | 內容 | 什麼時候跑 |
-| --- | --- | --- |
-| `core` | 常用路徑與資料安全 | 本機快速回饋，幾分鐘內完成 |
-| `feature` | 一個功能的專項與邊界 | 改到該功能時 |
-| `platform` | Electron 桌面與打包版，視窗會顯示 | 改到平台層、發版前 |
-| `real` | 真實 YouTube 與 feed，需要網路 | 改到收集、選軌、辨識或 feed 讀取時 |
+**E2E 流程**由 verify skill（`.claude/skills/verify/`）執行：它在隔離的 profile、Vault 與 port 啟動 App，以 Playwright 依使用者的方式操作並留下截圖與 `results.json`。已收錄的回歸流程放在 `.claude/skills/verify/flows/`。
 
 ```sh
 npx playwright install chromium
-node .claude/skills/verify/scripts/verify.mjs doctor
 node .claude/skills/verify/scripts/verify.mjs flows list
-node .claude/skills/verify/scripts/verify.mjs flows run --tier core --issue 123
+node .claude/skills/verify/scripts/verify.mjs flows run --web --jobs 3 --issue 123
 node .claude/skills/verify/scripts/verify.mjs flows run --feature subscriptions --web --issue 123
 ```
 

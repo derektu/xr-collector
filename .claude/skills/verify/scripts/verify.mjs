@@ -1,112 +1,60 @@
 #!/usr/bin/env node
-// Command line around the verify library: start, check, seed, capture and stop one Web-mode instance.
-// Ticket flows import lib/index.mjs for everything else. Run from the checkout under test:
+// Command line around the verify library: start, seed, capture, read and stop one Web-mode instance,
+// run the recorded flows, and check evidence against the code. Ticket flows import lib/index.mjs for
+// everything else. Run from the checkout under test:
 //   node .claude/skills/verify/scripts/verify.mjs <command> [options]
-import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { doctorReport } from './lib/doctor.mjs';
-import { attach, launchWeb, stopRun, sweepStale } from './lib/instance.mjs';
-import { checkoutRoot, mainCheckout } from './lib/paths.mjs';
+import { checkEvidence, resultFiles } from './lib/check.mjs';
+import { attach, launchWeb, stopRun } from './lib/instance.mjs';
+import { checkoutRoot, evidenceDir } from './lib/paths.mjs';
 import { waitFor } from './lib/wait.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { findFeature, readFeatures } from './lib/features.mjs';
 import { apiState, readState } from './lib/state.mjs';
-import { readResults, summarize } from './lib/summary.mjs';
 import { REAL } from './lib/synthetic.mjs';
-// Playwright takes about a second of CPU to load, so only the commands that use it load it: snapshot,
-// flows, and doctor for where Chromium is kept.
+// Playwright takes about a second of CPU to load, so only the commands that use it load it: snapshot
+// and flows.
 
 const USAGE = `verify.mjs <command>
-  doctor   [--run <dir>] [--app <path>] [--electron] [--issue <N>]
-           environment, slots, (with --run) one instance and (with --app) a packaged app (a .app on macOS, the .exe
-           on Windows); --electron requires the development Electron; with --app or --electron the run is a Desktop
-           one and Chromium (Web mode) is not required; read-only; "missing" lists what is not ready, each with its
-           fix; exit code 2 when not healthy; --issue lists each results.json of that issue's evidence as current
-           or STALE against its checkout, which leaves the exit code alone
-  launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>] [--no-build]
-           evidence goes to .local/ticket-artifacts/<N>[/<label>]/ of the worktree the command runs in;
-           a label already used gets the next free <label>-2, <label>-3…; the output's evidence and label name it;
-           --evidence <dir> writes it there instead (a missing or empty folder);
-           --checkout picks the version under test; --no-build serves the checkout's existing dist/web
+  launch   --issue <N> [--label <name>] [--evidence <dir>] [--data synthetic|real] [--vault selected|fixed|none] [--checkout <dir>]
+           builds the checkout's Web UI into a new run and starts it; evidence goes to a new folder
+           .local/ticket-artifacts/<N>/[<label>-]<local time>/ of the worktree the command runs in, which the
+           output's evidence names; --evidence <dir> writes it there instead (a missing or empty folder);
+           --checkout picks the version under test
   state    --run <dir>                         the run's data: api, vault, profile and index side by side; read-only
   seed     --run <dir> [--collect <url>]... [--subscribe <url>]... [--wait]
   snapshot --run <dir> --name <name> [--route /documents] [--theme dark|light]
   stop     --run <dir> [--keep]                stop one instance; --keep leaves profile and Vault for inspection
-  sweep                                        remove stale slot locks and scratch folders of runs with no live process
-  flows list [--tier <tier>] [--feature <file>]
-           the recorded regression flows: tier, the feature-map sub-features each covers, overBudget
-  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--tier <tier>] [--feature <file>] [--jobs <N>]
-           runs the named recorded flows (all without names), each on its own instance; --web is every flow
-           neither Desktop nor real-source (what CI runs); --tier keeps core, feature, platform or real;
-           --feature keeps the flows covering a sub-feature of that feature file (subscriptions or
-           subscriptions.md); --jobs runs up to N at once (default 1, at most one per verify slot; a Desktop
-           flow always runs alone); the flows and this library come from the checkout the command runs in,
-           --checkout picks only the src/ under test; evidence goes to
-           .local/ticket-artifacts/<N>/<label>[-N]/<flow>/ (label defaults to flows); each results.json records
-           timings (prepareMs, runMs, cleanupMs) and the run ends with a table of them, marking flows over the
-           one-flow budget; exit code 1 when any flow fails
-  flows history [--from <dir>] [--runs <N>]
-           each flow's runs, failures with their causes, median and longest total, and runs over the one-flow
-           budget, from every results.json under --from, or else from the Web regression results of the last
-           N (default 30) E2E runs (e2e.yml), downloaded with gh
-  summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
-           whether every scenario passed on every given platform (any one platform without --platform), counting
-           only results of that commit from a clean checkout; --scenario names a scenario the flow must record;
-           exit code 2 when not complete`;
+  flows list [--feature <file>]
+           the recorded regression flows and the feature-map sub-features each covers
+  flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--feature <file>] [--jobs <N>]
+           runs the named recorded flows (all without names), each on its own instance; --web is every
+           flow that is not Desktop (what the E2E workflow runs); --feature keeps the flows covering a
+           sub-feature of that feature file (subscriptions or subscriptions.md); --jobs runs up to N at
+           once (default 1, at most one per verify slot; a Desktop flow always runs alone); the flows and
+           this library come from the checkout the command runs in, --checkout picks the checkout under
+           test; evidence goes to a new folder .local/ticket-artifacts/<N>/<label>-<local time>/<flow>/
+           (label defaults to flows); exit code 1 when any flow fails
+  check    [--issue <N>] [--platform darwin|win32]... [--scenario <ID>]... [<results.json or folder>...]
+           whether the evidence proves the code as it is now: results.json files (those of issue N's
+           evidence, and of the folders given) count while their checkout still has the recorded commit
+           and uncommitted changes, or, from another machine, when they tested this commit from a clean
+           checkout; complete when every scenario passed on every given platform (any one platform
+           without --platform); --scenario names a scenario the flow must record; exit code 2 when not
+           complete`;
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
-  issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, app: { type: 'string' }, electron: { type: 'boolean' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
-  checkout: { type: 'string' }, 'no-build': { type: 'boolean' }, run: { type: 'string' }, keep: { type: 'boolean' },
+  issue: { type: 'string' }, label: { type: 'string' }, evidence: { type: 'string' }, data: { type: 'string', default: 'synthetic' }, vault: { type: 'string', default: 'selected' },
+  checkout: { type: 'string' }, run: { type: 'string' }, keep: { type: 'boolean' },
   collect: { type: 'string', multiple: true }, subscribe: { type: 'string', multiple: true }, wait: { type: 'boolean' },
   name: { type: 'string' }, route: { type: 'string', default: '/' }, theme: { type: 'string', default: 'dark' }, help: { type: 'boolean' },
-  commit: { type: 'string' }, platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
-  web: { type: 'boolean' }, desktop: { type: 'boolean' }, jobs: { type: 'string', default: '1' },
-  tier: { type: 'string' }, feature: { type: 'string' }, from: { type: 'string' }, runs: { type: 'string', default: '30' },
+  platform: { type: 'string', multiple: true }, scenario: { type: 'string', multiple: true },
+  web: { type: 'boolean' }, desktop: { type: 'boolean' }, jobs: { type: 'string', default: '1' }, feature: { type: 'string' },
 } });
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
-
-/**
- * `flows history`: reads every results.json under --from, or downloads the `web-regression-results-*`
- * artifacts of the last --runs E2E runs with gh (runs without one are skipped), and prints each
- * flow's record as JSON and as a table.
- */
-async function history() {
-  if (!/^\d+$/u.test(o.runs) || Number(o.runs) < 1) throw new Error(`--runs is a whole number of CI runs\n${USAGE}`);
-  let from = o.from && path.resolve(o.from);
-  let scratch;
-  try {
-    if (!from) {
-      scratch = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-history-'));
-      from = scratch;
-      const runs = JSON.parse(execFileSync('gh', ['run', 'list', '--workflow', 'e2e.yml', '--limit', o.runs, '--json', 'databaseId'], { encoding: 'utf8' }));
-      for (const { databaseId } of runs) {
-        try {
-          execFileSync('gh', ['run', 'download', String(databaseId), '--pattern', 'web-regression-results-*', '--dir', path.join(scratch, String(databaseId))], { stdio: 'ignore' });
-        } catch {
-          // The run kept no Web regression results.
-        }
-      }
-    }
-    const { flowHistory, historyTable, readFlowResults } = await import('./lib/history.mjs');
-    const records = flowHistory(readFlowResults(from));
-    print(records);
-    console.log(historyTable(records));
-  } finally {
-    if (scratch) await rm(scratch, { recursive: true, force: true });
-  }
-}
-
-async function doctor() {
-  const { chromium } = await import('playwright');
-  const report = await doctorReport({ checkout: path.resolve(o.checkout ?? checkoutRoot()), app: o.app, electron: Boolean(o.electron),
-    run: o.run, issue: o.issue, chromiumPath: chromium.executablePath() });
-  print(report);
-  if (!report.healthy) process.exitCode = 2;
-}
 
 async function snapshot() {
   const { openPage, painted } = await import('./lib/drive.mjs');
@@ -126,13 +74,22 @@ async function snapshot() {
   print({ screenshot: png, state });
 }
 
+function check() {
+  const platforms = o.platform ?? [];
+  if (platforms.some((platform) => !['darwin', 'win32'].includes(platform))) throw new Error(`--platform is darwin or win32\n${USAGE}`);
+  const paths = [...(o.issue ? [evidenceDir(o.issue)] : []), ...positionals.slice(1)];
+  if (!paths.length) throw new Error(`check needs --issue or results.json files\n${USAGE}`);
+  const report = checkEvidence(resultFiles(paths), { checkout: checkoutRoot(), platforms, scenarios: o.scenario ?? [] });
+  print(report);
+  if (!report.complete) process.exitCode = 2;
+}
+
 async function main() {
   const command = positionals[0];
   if (o.help || !command) { console.log(USAGE); return; }
-  if (command === 'doctor') return doctor();
   if (command === 'launch') {
     if (!['synthetic', 'real'].includes(o.data) || !['selected', 'fixed', 'none'].includes(o.vault)) throw new Error(USAGE);
-    const instance = await launchWeb({ issue: need('issue'), label: o.label, evidence: o.evidence, checkout: o.checkout, data: o.data, vault: o.vault, build: !o['no-build'] });
+    const instance = await launchWeb({ issue: need('issue'), label: o.label, evidence: o.evidence, checkout: o.checkout, data: o.data, vault: o.vault });
     const { api, catalog, updateCatalog, restart, state, stop, ...record } = instance;
     if (o.data === 'real') record.real = REAL;
     return print(record);
@@ -148,30 +105,19 @@ async function main() {
   }
   if (command === 'snapshot') return snapshot();
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
-  if (command === 'sweep') return print(sweepStale(mainCheckout()));
+  if (command === 'check') return check();
   if (command === 'flows') {
     const { listFlows, runFlows, selectFlows } = await import('./lib/flows.mjs');
     if (positionals[1] === 'list') {
-      const listed = selectFlows(await listFlows(), { tier: o.tier, feature: o.feature === undefined ? undefined : findFeature(readFeatures(), o.feature) });
-      return print(listed.map(({ name, title, tier, covers, desktop, overBudget }) => ({ name, title, tier, covers,
-        ...(desktop ? { desktop } : {}), ...(overBudget ? { overBudget } : {}) })));
+      const listed = selectFlows(await listFlows(), { feature: o.feature === undefined ? undefined : findFeature(readFeatures(), o.feature) });
+      return print(listed.map(({ name, title, covers, desktop }) => ({ name, title, covers, ...(desktop ? { desktop } : {}) })));
     }
-    if (positionals[1] === 'history') return history();
-    if (positionals[1] !== 'run') throw new Error(`flows needs list, run or history\n${USAGE}`);
+    if (positionals[1] !== 'run') throw new Error(`flows needs list or run\n${USAGE}`);
     if (o.web && o.desktop) throw new Error('Choose only one of --web or --desktop');
     const outcome = await runFlows({ names: positionals.slice(2), issue: need('issue'), label: o.label, checkout: o.checkout,
-      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', tier: o.tier, feature: o.feature, jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
+      layer: o.web ? 'web' : o.desktop ? 'desktop' : 'all', feature: o.feature, jobs: /^\d+$/u.test(o.jobs) ? Number(o.jobs) : Number.NaN });
     print(outcome);
     if (!outcome.flows.every((flow) => flow.passed)) process.exitCode = 1;
-    return;
-  }
-  if (command === 'summary') {
-    const platforms = o.platform ?? [];
-    if (platforms.some((platform) => !['darwin', 'win32'].includes(platform))) throw new Error(`--platform is darwin or win32\n${USAGE}`);
-    if (positionals.length < 2) throw new Error(`summary needs results.json files\n${USAGE}`);
-    const summary = summarize(readResults(positionals.slice(1)), { commit: need('commit'), platforms, scenarios: o.scenario ?? [] });
-    print(summary);
-    if (!summary.complete) process.exitCode = 2;
     return;
   }
   throw new Error(`Unknown command ${command}\n${USAGE}`);

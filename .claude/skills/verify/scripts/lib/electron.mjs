@@ -31,10 +31,10 @@ import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { checkoutRoot, claimEvidence, cleanEnv, commitOf, processStart, runMarker } from './paths.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, commitOf, runMarker } from './paths.mjs';
 import { LOADED } from './drive.mjs';
 import { writeFailureResult } from './failure.mjs';
-import { createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
+import { abandonRun, createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 import { endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
 import { sleep } from './wait.mjs';
@@ -99,9 +99,9 @@ async function quit({ app, child, debuggerWait }, runDir) {
 /** How a Desktop run's page and main process are reached; recorded in results.json as target.connection. */
 const CONNECTION = 'playwright-electron';
 
-/** Records only the current UI origin; credentials are exported from that UI when they are needed. */
-export function recordElectronUiOrigin(record, window) {
-  record.uiUrl = new URL(window.url()).origin;
+/** Records the PID of the app now running, which stop ends when a crashed flow leaves the app behind. */
+function recordApp(record, current) {
+  record.appPid = current.app.process().pid;
   writeJsonAtomic(path.join(record.runDir, 'run.json'), record);
 }
 
@@ -122,7 +122,6 @@ export async function launchElectron({
   if (!issue) throw new Error('launchElectron needs an issue (number or label) for the evidence folder');
   if (!['selected', 'none'].includes(vault)) throw new Error(`vault must be selected or none, not ${vault}`);
   checkout = path.resolve(checkout);
-  // A label already used gets the next free <label>-N folder; the record carries the one used.
   const claimed = claimEvidence(issue, label, { evidence: explicitEvidence });
   const evidence = claimed.evidence;
   label = claimed.label ?? undefined;
@@ -144,7 +143,7 @@ export async function launchElectron({
   }
   let run;
   try {
-    run = await createRun(issue, checkout, { label, suffix: '-electron' });
+    run = await createRun(issue, { label, suffix: '-electron' });
   } catch (error) {
     await startupFailure(error, { kind: target.kind, app: target.app, executable: target.executable });
     throw error;
@@ -168,12 +167,12 @@ export async function launchElectron({
     XR_COLLECTOR_VALIDATION_CONTROL: '1',
     ...(hidden ? { XR_COLLECTOR_VALIDATION_HIDDEN: '1' } : {}),
   };
-  // run.json names this flow process as the holder, so sweep and stop leave a live run alone. The
-  // run marker on the app's command line lets them find an app the flow left behind.
+  // run.json names this flow process as the holder, so stop leaves a live run alone, and the app's
+  // PID, whose command line carries the run marker, so stop can end an app a crashed flow left behind.
   const record = {
     kind: 'electron', issue: String(issue), ...(label ? { label: String(label) } : {}), runDir, evidence, checkout, ...commitOf(checkout),
     profile, vault: vault === 'selected' ? vaultPath : null, documents, ports,
-    pid: process.pid, start: processStart(process.pid), data: prepareVault ? 'fixture' : 'real', layer: '原生 Desktop（Playwright _electron）',
+    pid: process.pid, appPid: null, data: prepareVault ? 'fixture' : 'real', layer: '原生 Desktop（Playwright _electron）',
     target: { kind: target.kind, app: target.app, executable: target.executable, version: null, platform: process.platform, arch: null, connection: CONNECTION },
     startedAt: new Date().toISOString(),
   };
@@ -215,14 +214,12 @@ export async function launchElectron({
     current = await start();
     // The program reports its own version and architecture, the same way for both kinds of target.
     Object.assign(record.target, await current.app.evaluate(({ app }) => ({ version: app.getVersion(), arch: process.arch })));
-    // The UI origin identifies this isolated profile without persisting an Agent key. Doctor asks
-    // that UI for a fresh active connection, so a key reset or port change cannot leave a snapshot.
-    recordElectronUiOrigin(record, current.window);
+    recordApp(record, current);
   } catch (error) {
     try { if (current) await quit(current, runDir); } catch { /* already closed */ }
-    await terminateRun(runDir);
-    if (existsSync(log)) await copyFile(log, path.join(evidence, 'server.log')).catch(() => undefined);
-    releaseSlot(ports.slot, runDir);
+    if (current) record.appPid = current.child.pid;
+    await terminateRun(record).catch(() => undefined);
+    abandonRun({ runDir, ports, evidence });
     await writeFailureResult({ evidence, record, error, phase: 'startup' });
     throw error;
   }
@@ -273,8 +270,8 @@ export async function launchElectron({
     },
     /** Quits through the app's own shutdown path and starts again with the same profile. */
     async relaunch() {
-      await quit(current, runDir); await terminateRun(runDir); current = await start();
-      recordElectronUiOrigin(record, current.window);
+      await quit(current, runDir); await terminateRun(record); current = await start();
+      recordApp(record, current);
       return current;
     },
     /**
@@ -285,7 +282,7 @@ export async function launchElectron({
     async close({ keep = false } = {}) {
       let failure = null;
       try { await quit(current, runDir); } catch (error) { if (error.quitFailure) failure = error; }
-      await terminateRun(runDir);
+      await terminateRun(record);
       if (existsSync(log)) await copyFile(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
       releaseSlot(ports.slot, runDir);
       if (!keep) await rm(runDir, { recursive: true, force: true });

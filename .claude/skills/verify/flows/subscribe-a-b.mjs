@@ -8,7 +8,6 @@ import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscribe-a-b';
 export const title = '兩個頻道同時收集：狀態序列、工作頁分區與資料面';
-export const tier = 'feature';
 export const covers = ['sub-add', 'sub-status', 'jobs-sections', 'jobs-empty', 'jobs-badge'];
 
 /** Every subscription row's status text, by row test ID; runs inside the page. */

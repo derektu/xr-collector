@@ -1,10 +1,9 @@
 // Where a verification run keeps things. The checkout under test is the Git worktree the command
-// runs in (or --checkout). Evidence belongs to the worktree the command runs in, next to the ticket's
-// flow scripts, whichever checkout is under test. Scratch state of runs lives in the main checkout's
-// .local/, so sweep sees the runs of every worktree.
+// runs in (or --checkout). Evidence and the runs' scratch folders belong to the worktree the command
+// runs in, next to the ticket's flow scripts, whichever checkout is under test.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -17,79 +16,50 @@ export function checkoutRoot(from = process.cwd()) {
   return git(from, ['rev-parse', '--show-toplevel']);
 }
 
-/** The main checkout that every worktree of this repository shares. */
-export function mainCheckout(from = process.cwd()) {
-  return path.dirname(path.resolve(from, git(from, ['rev-parse', '--git-common-dir'])));
-}
-
 /**
  * Evidence of one issue in the worktree the command runs in: screenshots, results.json, server logs.
- * A label (baseline, ticket, …) keeps the runs of one issue in their own subfolders. Never removed by
- * cleanup.
+ * Never removed by cleanup.
  */
-export function evidenceDir(issue, label) {
-  checkLabel(label);
-  return path.join(checkoutRoot(), '.local', 'ticket-artifacts', String(issue), ...(label ? [String(label)] : []));
+export function evidenceDir(issue) {
+  return path.join(checkoutRoot(), '.local', 'ticket-artifacts', String(issue));
 }
 
-/** The file that marks an explicit evidence folder as taken by one run. */
-const CLAIM_FILE = '.claimed';
-
 /**
- * Claims the evidence folder of one run and returns { evidence, label, created }. An explicit
- * `evidence` folder (a path from the command line, for a run whose evidence is collected from
- * another machine) is used as given; it must be missing or empty, so a run never mixes with an
- * earlier one, and the run marks it with a `.claimed` file, so two runs given the same folder at
- * once never share it. Otherwise the first run of a label gets `<label>/`; when that folder exists, the next
- * free `<label>-2/`, `<label>-3/`… is created, so an earlier run's results.json and screenshots are
- * never overwritten. `label` is the folder name actually used, or the label as given with an explicit
- * folder. Without either, the evidence is the issue folder itself, shared by every unlabelled run of
- * the issue. `created` tells whether this call made the folder.
+ * Creates the evidence folder of one run and returns { evidence, label }. Each run gets a new folder,
+ * `<issue>/<label>-<local time>/` (`<issue>/<local time>/` without a label), so an earlier run's
+ * results.json and screenshots never mix with this one; a second run in the same second gets `-2`.
+ * An explicit `evidence` folder (for a run whose evidence is collected from another machine) is used
+ * as given and must be missing or empty.
  */
 export function claimEvidence(issue, label, { evidence: explicit } = {}) {
   checkLabel(label);
+  const named = label === undefined ? null : String(label);
   if (explicit) {
     const evidence = path.resolve(explicit);
     if (existsSync(evidence) && readdirSync(evidence).length) throw new Error(`Evidence folder ${evidence} is not empty; give a new or empty folder`);
-    const created = !existsSync(evidence);
     mkdirSync(evidence, { recursive: true });
-    try {
-      closeSync(openSync(path.join(evidence, CLAIM_FILE), 'wx'));
-    } catch (error) {
-      if (error.code === 'EEXIST') throw new Error(`Evidence folder ${evidence} is not empty; give a new or empty folder`);
-      throw error;
-    }
-    return { evidence, label: label === undefined ? null : String(label), created };
+    return { evidence, label: named };
   }
-  if (!label) {
-    const evidence = evidenceDir(issue);
-    mkdirSync(evidence, { recursive: true });
-    return { evidence, label: null, created: false };
-  }
-  mkdirSync(evidenceDir(issue), { recursive: true });
+  const base = path.join(evidenceDir(issue), named ? `${named}-${stamp()}` : stamp());
+  mkdirSync(path.dirname(base), { recursive: true });
   for (let number = 1; ; number += 1) {
-    const candidate = number === 1 ? String(label) : `${label}-${number}`;
-    const evidence = evidenceDir(issue, candidate);
+    const evidence = number === 1 ? base : `${base}-${number}`;
     try {
-      // Without `recursive`, mkdir fails on an existing folder, which also keeps two launches of one
-      // label from sharing a folder.
+      // Without `recursive`, mkdir fails on an existing folder, so two runs never share one.
       mkdirSync(evidence);
-      return { evidence, label: candidate, created: true };
+      return { evidence, label: named };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }
   }
 }
 
-/** Removes an evidence folder a failed launch made and never wrote to; its claim file does not count. */
-export function dropUnusedEvidence({ evidence, created }) {
-  if (!created) return;
-  try {
-    if (readdirSync(evidence).every((file) => file === CLAIM_FILE)) rmSync(evidence, { recursive: true });
-  } catch { /* already gone */ }
+/** Removes an evidence folder a failed launch left empty. */
+export function dropUnusedEvidence({ evidence }) {
+  try { rmdirSync(evidence); } catch { /* has files, or already gone */ }
 }
 
-/** A label becomes one folder name: letters, digits, dot, dash and underscore, other than `.` and `..`. */
+/** A label becomes part of one folder name: letters, digits, dot, dash and underscore, other than `.` and `..`. */
 export function checkLabel(label) {
   if (label === undefined) return;
   const name = String(label);
@@ -98,7 +68,7 @@ export function checkLabel(label) {
 
 /** Scratch folders of runs: profile, Vault, the run's Web build, run.json. Removed by stop. */
 export function runsRoot(from = process.cwd()) {
-  return path.join(mainCheckout(from), '.local', 'verify-runs');
+  return path.join(checkoutRoot(from), '.local', 'verify-runs');
 }
 
 /** Slot locks are per machine, so worktrees and main checkout never hand out the same ports. */
@@ -134,106 +104,16 @@ export function stamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
 }
 
-export { processStart } from './platform.mjs';
-
 /**
  * The argument that marks a process the run started (its Web server or Electron). The trailing slash
- * ends the path, so a run directory never matches the start of another one, spaces included.
+ * ends the path, so a run directory never matches the start of another one, spaces included. stop
+ * signals a recorded PID only while its command line carries the marker.
  */
 export const runMarker = (runDir) => `--xr-verify-run=${runDir}/`;
 
-/** The main executable of a macOS app bundle: development Electron or a packaged app. */
-const isAppExecutable = (executable) => /\.app\/Contents\/MacOS\/[^/]+$/u.test(executable);
-
-/**
- * The arguments of a Windows command line, split the way CommandLineToArgvW splits them: whitespace
- * outside double quotes separates arguments, quotes group, and backslashes escape only a quote.
- */
-export function windowsArgs(command) {
-  const args = [];
-  let current = '';
-  let quoted = false;
-  let started = false;
-  for (let at = 0; at < command.length; at += 1) {
-    const char = command[at];
-    if (char === '\\') {
-      let count = 0;
-      while (command[at] === '\\') { count += 1; at += 1; }
-      if (command[at] === '"') {
-        current += '\\'.repeat(Math.floor(count / 2));
-        if (count % 2) current += '"'; else quoted = !quoted;
-      } else {
-        current += '\\'.repeat(count);
-        at -= 1;
-      }
-      started = true;
-    } else if (char === '"') {
-      quoted = !quoted;
-      started = true;
-    } else if (!quoted && /\s/u.test(char)) {
-      if (started) args.push(current);
-      current = '';
-      started = false;
-    } else {
-      current += char;
-      started = true;
-    }
-  }
-  if (started) args.push(current);
-  return args;
-}
-
-/**
- * Whether a process is one of the run's own programs, by its executable and command line: node
- * running server.mts or the run's app (development Electron or the packaged app), carrying the run
- * marker, or meilisearch with its data in the run's profile. Any other program that mentions the
- * marker or the directory (a `pgrep -f` with the whole server command line as its pattern, a `tail`
- * of the log, `verify.mjs stop --run`) does not count.
- *
- * On macOS an app is any app bundle's main executable. A Windows executable says nothing about
- * being an app, so there the app is the executable the run recorded as its target (`apps`), compared
- * case-insensitively, and the command line is read as Windows arguments, quotes included.
- */
-export function isRunProcess(command, runDir, executable, { platform = process.platform, apps = [] } = {}) {
-  if (platform === 'win32') return isWindowsRunProcess(command, runDir, executable, apps);
-  const program = path.basename(executable ?? '');
-  const padded = ` ${command} `;
-  if (padded.includes(` ${runMarker(runDir)} `)) {
-    return (program === 'node' && padded.includes('server.mts ')) || isAppExecutable(executable ?? '');
-  }
-  return program === 'meilisearch' && padded.includes(` --db-path ${runDir}/profile/`);
-}
-
-function isWindowsRunProcess(command, runDir, executable, apps) {
-  if (!executable) return false;
-  const fold = (value) => path.win32.resolve(value).toLowerCase();
-  const program = path.win32.basename(executable).toLowerCase();
-  const args = windowsArgs(command ?? '');
-  // Windows paths ignore case, so the marker naming the run folder does too.
-  const marker = runMarker(runDir).toLowerCase();
-  if (args.some((arg) => arg.toLowerCase() === marker)) {
-    return (program === 'node.exe' && args.some((arg) => arg.toLowerCase().endsWith('server.mts')))
-      || apps.some((app) => fold(app) === fold(executable));
-  }
-  if (program !== 'meilisearch.exe') return false;
-  const database = args[args.indexOf('--db-path') + 1];
-  return args.includes('--db-path') && Boolean(database) && database.toLowerCase().startsWith(`${path.win32.join(runDir, 'profile').toLowerCase()}\\`);
-}
-
-/**
- * Whether a process is an instance of the app whose main executable is named `name` that verify did
- * not start (no run marker): the user's installed App, or any other copy of the same program. On
- * Windows `name` includes `.exe`, and Chromium's helper processes run the same executable with
- * `--type=…`, so those are left out.
- */
-export function isUnmarkedAppInstance(command, executable, name, { platform = process.platform } = {}) {
-  if (platform === 'win32') {
-    const args = windowsArgs(command ?? '');
-    return path.win32.basename(executable ?? '').toLowerCase() === name.toLowerCase()
-      && !args.some((arg) => arg.startsWith('--type=') || arg.startsWith('--xr-verify-run='));
-  }
-  return (executable ?? '').endsWith(`.app/Contents/MacOS/${name}`) && !` ${command} `.includes(' --xr-verify-run=');
-}
+/** Whether a command line carries the run's marker; Windows paths, and so the marker, ignore case. */
+export const hasMarker = (command, runDir) => (process.platform === 'win32'
+  ? command.toLowerCase().includes(runMarker(runDir).toLowerCase()) : command.includes(runMarker(runDir)));
 
 /** The copy of the environment a run's processes start with: the shell's XR_COLLECTOR_* settings removed. */
 export function cleanEnv() {

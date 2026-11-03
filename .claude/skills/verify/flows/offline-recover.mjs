@@ -10,7 +10,6 @@ import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'offline-recover';
 export const title = '斷網與恢復';
-export const tier = 'feature';
 export const covers = ['sub-status', 'sub-check', 'sub-offline'];
 
 /** Every subscription row's status text, by row test ID; runs inside the page. */

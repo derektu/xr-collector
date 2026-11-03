@@ -7,7 +7,6 @@ import { pageTurn } from './lib/revision.mjs';
 
 export const name = 'check-history-summary';
 export const title = '定時檢查摘要與完整細節';
-export const tier = 'feature';
 export const covers = ['sub-detail', 'sub-failure', 'activity-summary', 'activity-detail', 'activity-raw'];
 
 const CHECK_TIMEOUT = 30_000;

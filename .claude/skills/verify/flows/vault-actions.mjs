@@ -3,7 +3,6 @@ import { stubDialogs } from '../scripts/lib/index.mjs';
 
 export const name = 'vault-actions';
 export const title = '知識庫操作列與桌面入口';
-export const tier = 'platform';
 export const covers = ['vault-actions', 'vault-native-dialogs'];
 export const desktop = true;
 

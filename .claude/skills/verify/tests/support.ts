@@ -1,12 +1,9 @@
 // Fixtures for the verify skill's own tests: throwaway Git checkouts, a throwaway HOME for the slot
 // locks, and real processes that are always ended when a test finishes.
 import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { processTable } from '../../../.claude/skills/verify/scripts/lib/platform.mjs';
-
-export const LIB = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/lib');
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -21,19 +18,18 @@ export function temp(prefix: string) {
   return dir;
 }
 
-const git = (cwd: string, ...args: string[]) =>
+export const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=verify-test', '-c', 'user.email=verify-test@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 
-/** A main checkout with one commit and a linked worktree of it: { main, worktree }. */
+/** A checkout with one commit of a tracked source file, and .local/ ignored as in the repository. */
 export function repository() {
-  const root = temp('repo');
-  const main = path.join(root, 'main');
-  mkdirSync(main);
-  git(main, 'init', '-q');
-  git(main, 'commit', '-q', '--allow-empty', '-m', 'start');
-  const worktree = path.join(root, 'worktree');
-  git(main, 'worktree', 'add', '-q', worktree);
-  return { main, worktree };
+  const checkout = temp('repo');
+  git(checkout, 'init', '-q');
+  writeFileSync(path.join(checkout, '.gitignore'), '.local/\n');
+  writeFileSync(path.join(checkout, 'source.ts'), 'export const value = 1;\n');
+  git(checkout, 'add', '.');
+  git(checkout, 'commit', '-q', '-m', 'start');
+  return checkout;
 }
 
 /**
@@ -55,10 +51,6 @@ export function start(command: string, args: string[], options: SpawnOptions = {
   children.push(child);
   return child;
 }
-
-/** Command lines of every process that mentions `text`, in `table` or as the process table reports them now. */
-export const mentioning = (text: string, table: { command: string }[] = processTable()) =>
-  table.map((entry) => entry.command).filter((command) => command.includes(text));
 
 /** The PID of a process that has already exited. */
 export async function deadPid() {
