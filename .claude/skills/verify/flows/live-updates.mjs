@@ -5,7 +5,7 @@
 // shows that the screens read again from it, stay quiet while nothing changes, and follow a
 // reconnected or restarted server.
 import { idle } from '../scripts/lib/seed.mjs';
-import { agentClient, apiRevision, screenAt } from './lib/revision.mjs';
+import { agentClient, apiRevision, caughtUp, screenAt } from './lib/revision.mjs';
 
 export const name = 'live-updates';
 export const title = 'Agent 的變動即時反映在開著的畫面，閒置不發請求，斷線與重啟後跟上';
@@ -116,6 +116,7 @@ export async function run({ instance, page, record, waitFor }) {
   });
 
   await record.scenario('LIVE-5', '畫面閒置時只留事件連線，不發其他請求', async ({ expect }) => {
+    // A named observation period: no request in it shows the screen does not read on a timer.
     for (const [nav, shown] of [['nav-sources', `source-row-${feed.id}`], ['nav-jobs', 'jobs-empty']]) {
       await by(nav).click();
       await by(shown).waitFor({ timeout: 5_000 });
@@ -133,22 +134,35 @@ export async function run({ instance, page, record, waitFor }) {
   await record.scenario('LIVE-6', '網路中斷時重讀失敗的畫面維持落後，恢復後補讀', async ({ expect }) => {
     await by('nav-sources').click();
     await screenAt(page, instance);
+    // The page's reads that failed, with when; the screen is judged once one failed after the change.
+    // The event stream's own reconnects are not reads.
+    const failures = [];
+    const failed = (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.startsWith('/api/') && pathname !== '/api/events') failures.push({ at: Date.now(), path: pathname });
+    };
+    page.on('requestfailed', failed);
     await page.context().setOffline(true);
     let paused;
     let offline;
     try {
       paused = await agent(`/api/subscriptions/rss/${encodeURIComponent(feed.id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
+      const changedAt = Date.now();
+      const attempt = await waitFor(() => failures.find((failure) => failure.at >= changedAt), 'the page tried to read after the change').catch(() => null);
       offline = {
-        caughtUp: await screenAt(page, instance, paused.revision, { timeout: 2_000 }).then(() => true, () => false),
+        attempt,
+        shown: await page.evaluate(() => document.documentElement.dataset.revision ?? null),
         phase: await by(`source-row-${feed.id}`).getByTestId('subscription-status').getAttribute('data-phase'),
       };
+      offline.caughtUp = caughtUp(offline.shown, paused.revision);
     } finally {
+      page.off('requestfailed', failed);
       await page.context().setOffline(false);
     }
     await screenAt(page, instance, paused.revision);
     const phase = await by(`source-row-${feed.id}`).getByTestId('subscription-status').getAttribute('data-phase');
-    expect(!offline.caughtUp && offline.phase !== null && offline.phase !== 'paused', '離線期間讀不到新資料，畫面不算跟上', {
-      id: 'live.offline-behind', expected: { caughtUp: false, phase: '不是 paused' }, actual: offline,
+    expect(offline.attempt !== null && !offline.caughtUp && offline.phase !== null && offline.phase !== 'paused', '離線期間重讀失敗，畫面不算跟上', {
+      id: 'live.offline-behind', expected: { attempt: '變動後有一次失敗的讀取', caughtUp: false, phase: '不是 paused' }, actual: offline,
     });
     expect(phase === 'paused', '恢復連線後補讀，列顯示已暫停', { id: 'live.online-again', expected: 'paused', actual: phase });
   });

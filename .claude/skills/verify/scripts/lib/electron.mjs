@@ -32,12 +32,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { checkoutRoot, claimEvidence, cleanEnv, commitOf, runMarker } from './paths.mjs';
-import { LOADED } from './drive.mjs';
+import { LOADED, watchErrors } from './drive.mjs';
 import { writeFailureResult } from './failure.mjs';
 import { abandonRun, createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
 import { endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
-import { sleep } from './wait.mjs';
+import { raceWithTimeout, waitFor } from './wait.mjs';
 
 /** Node's output once the app has quit and only an attached inspector keeps the process alive. */
 const DEBUGGER_WAIT = /Debugger ending on|Waiting for the debugger to disconnect/u;
@@ -69,30 +69,38 @@ async function captureThroughElectron(app, window) {
   };
 }
 
+/** The run's Meilisearch processes still running. */
+const runSearch = (runDir) => processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(runDir));
+
 /**
  * Quits the app through Playwright's close(), which runs the app's own shutdown with its window
  * still open. On Windows, once the app reports that only the inspector keeps it alive, its process
- * tree is ended (see the top of this file). An app that neither quits nor reaches that point
- * within QUIT_TIMEOUT, or reaches it with the run's Meilisearch still running, is an error marked
- * `quitFailure`.
+ * tree is ended (see the top of this file). The app must stop the run's Meilisearch itself: an app
+ * that neither quits nor reaches that point within QUIT_TIMEOUT, or quits with the run's Meilisearch
+ * still running, is an error marked `quitFailure`.
  */
 async function quit({ app, child, debuggerWait }, runDir) {
   // An app that already quit on its own (the tray menu's 結束) has nothing left to close; Playwright
   // has released its handle by then, so the process is the one kept from the launch.
   if (child.exitCode !== null || child.signalCode !== null) return;
-  if (!WINDOWS) return app.close();
   const closing = app.close();
-  const outcome = await Promise.race([
-    closing.then(() => 'closed'), debuggerWait.then(() => 'debugger'), sleep(QUIT_TIMEOUT).then(() => 'timeout'),
-  ]);
+  const outcome = await raceWithTimeout([
+    closing.then(() => 'closed'), ...(WINDOWS ? [debuggerWait.then(() => 'debugger')] : []),
+  ], QUIT_TIMEOUT, 'timeout');
   if (outcome === 'timeout') throw Object.assign(new Error(`The app did not quit within ${QUIT_TIMEOUT / 1000} seconds`), { quitFailure: true });
+  let search;
   if (outcome === 'debugger') {
-    const search = processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(runDir));
+    // Ending the tree ends Meilisearch too, so what the app left running is read first.
+    search = runSearch(runDir);
     endWindowsTree(app.process().pid);
     await closing.catch(() => undefined);
-    if (search.length) {
-      throw Object.assign(new Error(`The app exited with Meilisearch still running (PID ${search.map((entry) => entry.pid).join(', ')})`), { quitFailure: true });
-    }
+  } else {
+    // The app waits for Meilisearch to exit; the bound covers only the process table catching up.
+    search = await waitFor(() => { const left = runSearch(runDir); return left.length ? null : left; }, 'Meilisearch ended with the app', { timeout: 10_000 })
+      .catch(() => runSearch(runDir));
+  }
+  if (search.length) {
+    throw Object.assign(new Error(`The app exited with Meilisearch still running (PID ${search.map((entry) => entry.pid).join(', ')})`), { quitFailure: true });
   }
 }
 
@@ -178,6 +186,8 @@ export async function launchElectron({
   };
   writeJsonAtomic(path.join(runDir, 'run.json'), record);
   const log = path.join(runDir, 'server.log');
+  // Every window the run opens, across relaunches; an uncaught exception in one fails the run.
+  const errors = { consoleErrors: [], pageErrors: [] };
 
   const start = async () => {
     const app = await electron.launch({
@@ -197,6 +207,7 @@ export async function launchElectron({
       app.process().stderr?.on('data', watch);
     });
     const window = await app.firstWindow({ timeout: 90_000 });
+    watchErrors(window, errors);
     if (WINDOWS) await captureThroughElectron(app, window);
     await window.locator(LOADED).first().waitFor({ timeout: 90_000 });
     return { app, child: app.process(), window, debuggerWait };
@@ -225,6 +236,7 @@ export async function launchElectron({
   }
   const handle = {
     ...record,
+    ...errors,
     get app() { return current.app; },
     get window() { return current.window; },
     /** The app's own UI origin, which serves the same API the page uses. */
@@ -259,9 +271,7 @@ export async function launchElectron({
       const { child, debuggerWait } = current;
       if (child.exitCode !== null || child.signalCode !== null) return;
       const exit = new Promise((resolve) => child.once('exit', resolve));
-      const outcome = await Promise.race([
-        exit.then(() => 'exited'), debuggerWait.then(() => 'debugger'), sleep(timeout).then(() => 'timeout'),
-      ]);
+      const outcome = await raceWithTimeout([exit.then(() => 'exited'), debuggerWait.then(() => 'debugger')], timeout, 'timeout');
       if (outcome === 'timeout') throw new Error(`The app did not exit within ${timeout / 1000} seconds`);
       if (outcome === 'debugger') {
         if (WINDOWS) endWindowsTree(child.pid);

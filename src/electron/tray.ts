@@ -33,7 +33,7 @@ export class AppTray {
   private menu: TrayMenu = trayMenu(null);
   private state: TrayState | null = null;
   private drawn = '';
-  private reading: Promise<void> | null = null;
+  private pending: Promise<void> | null = null;
   private again = false;
   private lastRead = 0;
   private stopped = false;
@@ -55,14 +55,17 @@ export class AppTray {
   /** The menu as last drawn. */
   current(): TrayMenu { return this.menu; }
 
+  /** Whether a state read is running or waiting for its turn; validation waits for it to end before it watches an idle period. */
+  get reading(): boolean { return this.pending !== null; }
+
   /**
    * Reads the state and redraws. One read runs at a time, starting at least `READ_GAP_MS` after the
    * previous one; a call during a read reads once more after it, and resolves once the menu shows a
    * state read after the call.
    */
   refresh(): Promise<void> {
-    if (this.reading) { this.again = true; return this.reading; }
-    this.reading = (async () => {
+    if (this.pending) { this.again = true; return this.pending; }
+    this.pending = (async () => {
       try {
         do {
           const wait = this.lastRead + READ_GAP_MS - Date.now();
@@ -79,10 +82,10 @@ export class AppTray {
         } while (this.again);
       } finally {
         // Cleared in the same step as the last check of `again`, so a later call starts a new read.
-        this.reading = null;
+        this.pending = null;
       }
     })();
-    return this.reading;
+    return this.pending;
   }
 
   async run(action: TrayAction): Promise<void> {

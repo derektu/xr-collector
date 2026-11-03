@@ -10,18 +10,32 @@
 //   youtube.channels[]   { id, handle, title, videos: [{ id, title, publishedAt }] }, videos newest first
 //   youtube.failListing  channel ID whose listing fails with network_error
 //   youtube.failVideo    video ID whose capture fails with video_unavailable
-//   youtube.rateLimitNext  true makes the next capture fail with rate_limited, then clears itself
-//   feeds["/path"]       { kind: 'rss2' | 'atom' | 'page', title, articles?, feeds?, status?, delayMs? }
+//   youtube.rateLimitNext  true makes the next capture fail with rate_limited, then clears itself; the
+//                        YouTube request channel then cools down until youtube.endCooldown
+//   youtube.captureDelayMs  how long each capture takes (600 ms by default)
+//   feeds["/path"]       { kind: 'rss2' | 'atom' | 'page', title, articles?, feeds?, status? }
 //                        or { status, body, contentType } for a literal answer
 //   network              'offline' cuts the device off: synthetic YouTube requests fail with network_error,
 //                        and the feeds port, which also answers the runtime's network probe at /connectivity,
 //                        drops every connection. 'online' or absent restores it.
+//
+// Holds stop a request part way until the flow clears the flag again, so a flow makes "in progress"
+// and "cooling down" last as long as its steps need:
+//   youtube.holdCaptures   a capture waits before its request reaches YouTube (key capture:<videoId>);
+//                          the request channel stays free meanwhile, as between two requests
+//   youtube.endCooldown    false keeps a cooldown in force (key cooldown); true ends it, and while it
+//                          stays true a cooldown ends at once
+//   updates.holdPayload    the update payload stops after 62 % of its bytes (key payload)
+//   feeds["/path"].hold    the feed answers once the hold is cleared (key feed:/path)
+//   holdRetries            a job's retry that comes due waits (key retry)
+// <run>/held.json counts what waits now under each key, so a flow waits for a request to be held
+// instead of for a time.
 // Synthetic titles carry 【合成】 so a screenshot never passes for a real source.
 //
 // Environment: XR_VERIFY_CHECKOUT, XR_VERIFY_RUN, XR_VERIFY_DATA, XR_VERIFY_VAULT_MODE (selected | fixed | none),
 // XR_VERIFY_UI_PORT, XR_VERIFY_SEARCH_PORT, XR_VERIFY_AGENT_PORT, XR_VERIFY_FEEDS_PORT.
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -53,10 +67,42 @@ const vaultPath = path.join(run, 'vault');
 const catalogPath = path.join(run, 'catalog.json');
 const loginStartupFixturePath = path.join(run, 'login-startup-fixture.json');
 const scheduleTriggerPath = path.join(run, 'schedule-trigger');
+const heldPath = path.join(run, 'held.json');
 const catalog = () => JSON.parse(readFileSync(catalogPath, 'utf8'));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Writes through a temporary file and a rename, so a flow reading the file never sees part of it. */
+const writeAtomic = (file: string, value: unknown) => {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify(value, null, 2));
+  renameSync(temporary, file);
+};
+
+// What waits on a hold now, by key (see the top of this file).
+const held = new Map<string, number>();
+const countHeld = (key: string, change: number) => {
+  const count = (held.get(key) ?? 0) + change;
+  if (count > 0) held.set(key, count); else held.delete(key);
+  writeAtomic(heldPath, Object.fromEntries(held));
+};
+writeAtomic(heldPath, {});
+/**
+ * Resolves once `holding()` turns false, or at once when it already is; `gone()` ends the wait for a
+ * request whose connection closed meanwhile. The polling timer does not keep the process alive, so
+ * a held request never delays the server's shutdown.
+ */
+async function hold(key: string, holding: () => boolean, gone: () => boolean = () => false): Promise<void> {
+  if (!holding()) return;
+  countHeld(key, 1);
+  try {
+    while (holding() && !gone()) await new Promise((resolve) => { setTimeout(resolve, 50).unref(); });
+  } finally {
+    countHeld(key, -1);
+  }
+}
 const offline = () => catalog().network === 'offline';
 const cutOff = () => { if (offline()) throw new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。（合成斷網）'); };
+/** Longer than any flow runs; the flow ends the cooldown. */
+const HELD_COOLDOWN_MS = 60 * 60_000;
 const createdBy = `XR Collector (verify skill, ${data} data)`;
 const program = (name: string, environmentName: string) => process.env[environmentName]
   ?? path.join(checkout, 'resources', 'bin', 'mac', name);
@@ -110,7 +156,7 @@ const loginStartup = {
     if (fixture.mode === 'unavailable') throw new CollectorError('login_startup_unavailable', loginStartupStatus().message);
     if (fixture.mode === 'requires_approval') throw new CollectorError('login_startup_requires_approval', loginStartupStatus().message);
     if (fixture.mode === 'failure') throw new CollectorError('login_startup_failed', '合成作業系統拒絕更新登入自啟。');
-    writeFileSync(loginStartupFixturePath, JSON.stringify({ mode: 'normal', enabled }, null, 2));
+    writeAtomic(loginStartupFixturePath, { mode: 'normal', enabled });
     return loginStartupStatus();
   },
 };
@@ -134,15 +180,16 @@ function syntheticFeedServer() {
       const body = settings.payloadMode === 'corrupt' ? Buffer.from(fixture.payload) : fixture.payload;
       if (settings.payloadMode === 'corrupt') body[body.length - 1] ^= 0xff;
       response.writeHead(200, { 'content-type': 'application/zip', 'content-length': body.byteLength });
-      const delay = Number(settings.payloadDelayMs ?? 0);
-      if (!delay) { response.end(body); return; }
+      const holding = () => catalog().updates?.holdPayload === true;
+      if (!holding()) { response.end(body); return; }
       const first = Math.floor(body.byteLength * 0.62);
       response.write(body.subarray(0, first));
-      setTimeout(() => { if (!response.destroyed) response.end(body.subarray(first)); }, delay);
+      void hold('payload', holding, () => response.destroyed).then(() => { if (!response.destroyed) response.end(body.subarray(first)); });
       return;
     }
-    const route = catalog().feeds?.[pathname];
     const answer = () => {
+      // The route is read when the feed answers, so what a flow sets during a hold is what the held request gets.
+      const route = catalog().feeds?.[pathname];
       if (!route) { response.writeHead(404).end('not found'); return; }
       const body = route.kind === 'rss2' ? rss2(route.title, revive(route.articles))
         : route.kind === 'atom' ? atom(route.title, revive(route.articles), route.base)
@@ -151,8 +198,8 @@ function syntheticFeedServer() {
       const type = route.contentType ?? (route.kind === 'page' ? 'text/html; charset=utf-8' : 'application/rss+xml; charset=utf-8');
       response.writeHead(route.status ?? 200, { 'content-type': type }).end(body);
     };
-    if (route?.delayMs) setTimeout(answer, route.delayMs);
-    else answer();
+    void hold(`feed:${pathname}`, () => catalog().feeds?.[pathname]?.hold === true, () => response.destroyed)
+      .then(() => { if (!response.destroyed) answer(); });
   });
   // Feed builders take Date values; the catalog stores ISO strings.
   const revive = (articles: Array<Record<string, unknown>> = []) => articles.map((article) => ({
@@ -163,7 +210,22 @@ function syntheticFeedServer() {
 
 async function syntheticSources() {
   const fast = { statePath: null, waitRangeMs: { min: 100, max: 250 } };
-  const youtubeGate = await PacingGate.open(YOUTUBE_PACING, { ...fast, cooldown: { initialMs: 30_000, maxMs: 30_000 } });
+  // A YouTube cooldown lasts until the flow ends it (youtube.endCooldown). Its timer is the gate's
+  // only one longer than a minute; the gap between two requests stays a plain timer.
+  const youtubeGate = await PacingGate.open(YOUTUBE_PACING, {
+    ...fast,
+    cooldown: { initialMs: HELD_COOLDOWN_MS, maxMs: HELD_COOLDOWN_MS },
+    setTimer: (callback: () => void, ms: number) => {
+      if (ms <= 60_000) {
+        const timer = setTimeout(callback, ms);
+        timer.unref();
+        return () => clearTimeout(timer);
+      }
+      let cancelled = false;
+      void hold('cooldown', () => !cancelled && catalog().youtube?.endCooldown !== true).then(() => { if (!cancelled) callback(); });
+      return () => { cancelled = true; };
+    },
+  });
   const rssGate = await PacingGate.open(rssDefinition.pacing, fast);
   const gates = new Map([[youtubeGate.group, youtubeGate], [rssGate.group, rssGate]]);
   const youtube = () => catalog().youtube ?? { channels: [] };
@@ -193,12 +255,15 @@ async function syntheticSources() {
       }, options.signal),
   };
   const capture = {
-    capture: (video: { videoId: string; canonicalUrl: string }, options: { publishedNotBefore?: string; signal?: AbortSignal } = {}) =>
-      youtubeGate.run('background', async () => {
+    capture: async (video: { videoId: string; canonicalUrl: string }, options: { publishedNotBefore?: string; signal?: AbortSignal } = {}) => {
+      // Like a running yt-dlp, a held capture ignores the signal, which only takes back a request
+      // still waiting for its turn in the gate.
+      await hold(`capture:${video.videoId}`, () => catalog().youtube?.holdCaptures === true);
+      return youtubeGate.run('background', async () => {
         cutOff();
         const current = catalog();
         if (current.youtube?.rateLimitNext) {
-          writeFileSync(catalogPath, JSON.stringify({ ...current, youtube: { ...current.youtube, rateLimitNext: false } }, null, 2));
+          writeAtomic(catalogPath, { ...current, youtube: { ...current.youtube, rateLimitNext: false } });
           throw new CollectorError('rate_limited', 'YouTube 暫時限制連線。（合成冷卻）');
         }
         const owner = youtube().channels.find((channel: { videos: Array<{ id: string }> }) => channel.videos.some((candidate) => candidate.id === video.videoId));
@@ -208,9 +273,6 @@ async function syntheticSources() {
           throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
         }
         await sleep(Number(current.youtube?.captureDelayMs ?? 600));
-        // A held capture stays under way until the flow releases it in the catalog. Like a running
-        // yt-dlp, it ignores the signal, which only takes back a request still waiting for its turn.
-        while (catalog().youtube?.holdCaptures) await sleep(50);
         // The network can drop while a capture is under way.
         cutOff();
         return {
@@ -218,7 +280,8 @@ async function syntheticSources() {
           publishedAt: found.publishedAt, languageCode: 'zh-Hant', languageName: '中文（合成）', subtitleKind: 'manual',
           bodyMarkdown: found.body ?? `【合成字幕】${found.title}。這是驗證用的合成內容，不是真實影片。\n\n## 第二段\n\n合成段落，用來檢查閱讀頁排版。`,
         };
-      }, options.signal),
+      }, options.signal);
+    },
   };
   registerSources();
   const rss = createRssPlugin({
@@ -282,8 +345,18 @@ const runtime = await CollectorRuntime.start({
     exportFolder: exportFolder(path.join(run, 'documents')),
     backupFolder: backupFolder(path.join(run, 'documents')),
     // Keep retry state transitions but make synthetic failures settle promptly. Production uses the
-    // normal 30 s / 120 s delays; this option already exists for controlled runtimes and tests.
-    ...(data === 'synthetic' ? { jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] } } : {}),
+    // normal 30 s / 120 s delays; this option already exists for controlled runtimes and tests. A
+    // retry that comes due waits while the catalog's holdRetries is true.
+    ...(data === 'synthetic' ? {
+      jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] },
+      jobTimer: (callback: () => void, ms: number) => {
+        let cancelled = false;
+        const timer = setTimeout(() => {
+          void hold('retry', () => !cancelled && catalog().holdRetries === true).then(() => { if (!cancelled) callback(); });
+        }, ms);
+        return () => { cancelled = true; clearTimeout(timer); };
+      },
+    } : {}),
   },
   ...(vaultMode === 'fixed' ? { explicitVaultPath: vaultPath } : {}),
   // A new Vault goes in the run's Documents folder unless another place is picked, so accepting the default stays isolated.

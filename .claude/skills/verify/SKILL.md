@@ -53,7 +53,8 @@ node .claude/skills/verify/scripts/verify.mjs launch --issue 91 --evidence /tmp/
 - 頻道 A（`@verify-a`，5 支）、B（`@verify-b`，3 支）：訂閱用。
 - 頻道 D（`@verify-d`，3 支，影片 `vD000000001`…）：單支加入用。
 - feed：`<feedsOrigin>/feed.xml`（RSS 2.0，4 篇）、`/atom.xml`（Atom，3 篇）、`/blog`（以 `<link rel="alternate">` 宣告 `/feed.xml` 的網頁）。
-- 失敗注入：在流程中以 `instance.updateCatalog(c => { c.youtube.failVideo = '<id>'; })` 改 `catalog.json`，server 每次請求重讀。欄位：`youtube.failListing`（頻道 ID，列出影片失敗）、`youtube.failVideo`（影片 ID，收集失敗）、`youtube.rateLimitNext`（下一次收集回 `rate_limited`，YouTube 通道冷卻 30 秒）、`youtube.captureDelayMs`、`youtube.holdCaptures`（為 true 時收集停在進行中，改回 false 才完成）、`feeds["/path"].status`／`delayMs`。新增影片或文章同樣改 catalog。
+- 失敗注入：在流程中以 `instance.updateCatalog(c => { c.youtube.failVideo = '<id>'; })` 改 `catalog.json`，server 每次請求重讀。欄位：`youtube.failListing`（頻道 ID，列出影片失敗）、`youtube.failVideo`（影片 ID，收集失敗）、`youtube.rateLimitNext`（下一次收集回 `rate_limited`，YouTube 通道開始冷卻）、`youtube.captureDelayMs`（每支收集的時間，預設 600 ms）、`feeds["/path"].status`。新增影片或文章同樣改 catalog。
+- 停住與放行：「進行中」「冷卻中」要持續多久由流程決定，不靠調慢或固定秒數。設下列旗標停住，改回來放行：`youtube.holdCaptures`（收集停在送出前，YouTube 請求通道保持空閒，key `capture:<影片 ID>`）、`youtube.endCooldown`（冷卻持續到它為 true，key `cooldown`）、`updates.holdPayload`（更新檔傳到 62 % 停住，key `payload`）、`feeds["/path"].hold`（feed 等放行才回應，回應內容在放行時讀，key `feed:/path`）、`holdRetries`（到期的工作重試等放行，key `retry`）。`instance.held()` 讀 run 目錄的 `held.json`，回傳目前停住的請求數 `{ <key>: 數量 }`，流程等請求真的停住再操作。
 
 **真實資料 smoke**：`node .claude/skills/verify/examples/smoke-real.mjs [--issue smoke]` 收一支真實影片（`REAL.video`）並訂閱一個真實 feed（`REAL.feed`，GitHub Blog），經畫面操作。需要網路；YouTube 限流會顯示為失敗的工作。
 
@@ -153,7 +154,7 @@ node $V flows run --desktop --visible --issue 91 --label visible     # 有 visib
 - **核心旅程**：`core-journey` 一次走過訂閱、文件頁新增單支影片、來源篩選與搜尋、閱讀、列表暫停與恢復、閱讀頁刪除確認；`subscription-remove` 是移除訂閱保留文件的資料安全代表。其他流程不重複斷言它們已斷言的操作。
 - **內容操作**：`workspace-content` 串接訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、RSS 刪除與最後一頁刪除回退、搜尋不可用；從空的合成 instance 執行，文件數足以驗到第二頁。
 - **斷言讀什麼**：比對 API 的值與產品元素的 `data-*`（例如狀態的 `data-phase`、文件摘要的 `data-mode`／`data-total`、檢查紀錄的 `data-job`），不比對整句中文；文字與排版規則放在下層的單元測試。外觀（焦點框、置中、背景延伸、tooltip 位置、窄視窗換行）不在流程裡斷言。
-- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID），與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron` 啟動受測 checkout 的開發版 Electron，視窗隱藏：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`，`visible` 是視窗是否在畫面上。視窗隱藏時，`windowState()` 的 `shown` 記錄 App 最後一次顯示或隱藏視窗，`shownIn(state, visible)` 以它判斷；視窗在畫面上時，`visible` 也必須一致，否則兩種答案都不成立。需要畫面上視窗的檢查（聚焦、最小化還原）只在 `visible` 時執行，所在 scenario 列進流程的 `visibleScenarios`；`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。共用的輔助在 `flows/lib/`：`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄，`revision.mjs` 的 `pageTurn(page)` 等頁面處理完呼叫前已到達的回應（證明晚到的回應沒有改變畫面時，之後再檢查）；`scripts/lib/drive.mjs` 的 `painted(page)` 等頁面套用目前的樣式、轉場結束後再截圖。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
+- **流程的形式**：export `name`、`title`、`covers`（涵蓋的功能地圖子功能 ID），與 `run({ instance, page, openPage, record, waitFor, sleep })`。每支流程各自 launch 一個合成資料的 instance，跑完就 stop。export `desktop = true` 的流程改以 `launchElectron` 啟動受測 checkout 的開發版 Electron，視窗隱藏：`instance` 是 Electron 的 handle（`api()` 經 App 自己的 API），`page` 是主視窗，沒有 `openPage`，`visible` 是視窗是否在畫面上。視窗隱藏時，`windowState()` 的 `shown` 記錄 App 最後一次顯示或隱藏視窗，`shownIn(state, visible)` 以它判斷；視窗在畫面上時，`visible` 也必須一致，否則兩種答案都不成立。需要畫面上視窗的檢查（聚焦、最小化還原）只在 `visible` 時執行，所在 scenario 列進流程的 `visibleScenarios`；`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者，並和其他會跳視窗的驗證集中一次跑。`openPage(route)` 另開分頁，console error 一併收集。頁面未捕捉的例外（`pageerror`）讓流程失敗；console error 只記錄。`results.json` 在 server 停止或 App 結束之後才寫，收尾失敗時記為 `cleanupError`，流程不通過。共用的輔助在 `flows/lib/`：`files.mjs` 改 App 擁有的檔案時寫暫存檔再 rename，App 不會讀到寫了一半的檔；`watch.mjs` 在頁內以 MutationObserver 記錄畫面每一次變化，`status-sequence.mjs` 判斷訂閱狀態序列與工作頁分區，`document-ids.mjs` 從 `instance.state()` 分別讀出 API、Vault、索引的文件 ID 與刪除紀錄，`revision.mjs` 的 `pageTurn(page)` 等頁面處理完呼叫前已到達的回應（證明晚到的回應沒有改變畫面時，之後再檢查），`recordRequests(page, method, prefix)` 記錄頁面送出的請求，證明取消之類的操作什麼都沒送；`scripts/lib/drive.mjs` 的 `painted(page)` 等頁面套用目前的樣式、轉場結束後再截圖。合成資料的 run 裡，寫入 run 目錄的 `schedule-trigger` 會立刻觸發一次排程輪詢，輪詢結束後 server 把同一個值寫進 `schedule-trigger.done`，流程等這個值，不用固定時間等輪詢。
 - **斷言**：畫面上的狀態讀 DOM 的文字與屬性，資料面讀 `instance.state()` 的 `vault`、`profile`、`index`；截圖只負責版面與視覺。每項斷言寫成 `expect(ok, text, { id, expected, actual })`：`id` 固定，兩次執行以 `id` 集合比對斷言清單；`actual` 寫出實際觀察；失敗時印出 `id`、預期與實際。
 - **功能地圖**：每個功能檔的 `Regression flows` 列出涵蓋它的流程與流程斷言的子功能，必須與流程的 `covers` 一致，單元測試會檢查。從票改到的功能查這一節，就知道要跑哪幾支。
 
@@ -183,10 +184,10 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `launchWeb({ issue, label, evidence, checkout, data, vault, catalog })` | 同 CLI `launch`，回傳 instance |
 | `attach(runDir)` | 接手已啟動的 instance |
 | `instance.api(path, init)` | 呼叫 UI 用的同一組 HTTP API，錯誤狀態會 throw；只有帶 `body` 的請求才送 `content-type: application/json` |
-| `instance.catalog()`／`instance.updateCatalog(fn)` | 讀／改合成資料 |
+| `instance.catalog()`／`instance.updateCatalog(fn)`／`instance.held()` | 讀／改合成資料；目前停住的請求（見「停住與放行」） |
 | `instance.restart({ crash, page })` | 在同一個 run 上重啟 server（見「重啟」） |
 | `instance.stop({ keep })` | 同 CLI `stop` |
-| `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error |
+| `openPage(instance, { route, colorScheme, viewport })` | headless Chromium，zh-TW、Asia/Taipei，收集 console error 與未捕捉的例外 |
 | `recorder(instance, page)` | `scenario(id, title, body)`、`shot(name)`、`finish(extra)`；寫 `results.json`。scenario 內的 `expect(ok, text, { id, expected, actual })` 第三個參數可省略，`shot(name, page)` 可截另一個分頁。`page` 可以是回傳目前頁面的函式（Electron `relaunch()` 後換了視窗） |
 | `apiState(instance)` | Vault、訂閱、工作、文件（所有分頁）、搜尋的 API 快照 |
 | `instance.state()`、`readState(runDir)` | `api`、`vault`、`profile`、`index` 的資料狀態（見「State」） |
@@ -194,7 +195,7 @@ const { jobs } = await instance.api('/api/jobs?state=all&limit=100');   // 例�
 | `waitFor(check, label, { timeout })`、`sleep(ms)` | 輪詢等待 |
 | `channel()`、`articles()`、`defaultCatalog()`、`REAL` | 合成資料與真實 smoke 來源 |
 | `launchElectron({ issue, label, evidence, app, vault, hidden })`、`stubDialogs(app, { open, save })`、`recordOpenExternal(app)` | 原生 Desktop（見下節） |
-| `trayMenu(app)`、`trayShown(app)`、`clickTray(app, action)`、`windowState(app)`、`closeWindow(app)`、`notifications(app)`；handle 的 `api()`、`launchAgain()`、`exited()` | 選單列／系統匣與視窗（驗證通道，見 [features/tray.md](features/tray.md)） |
+| `trayMenu(app)`、`trayShown(app)`（`{ menu, reads, reading }`）、`clickTray(app, action)`、`windowState(app)`、`closeWindow(app)`、`notifications(app)`；handle 的 `api()`、`launchAgain()`、`exited()` | 選單列／系統匣與視窗（驗證通道，見 [features/tray.md](features/tray.md)） |
 
 ### CLI 單步操作
 
@@ -229,7 +230,7 @@ await desktop.close();
 
 `vault` 預設 `selected`：以 checkout 的 `dist/node` 建立 Vault 並寫進 profile，畫面直接進到 App。`vault: 'none'` 不建立 Vault，畫面從 Onboarding 開始，用 `stubDialogs` 回答選擇目錄的對話框，經畫面建立或開啟 Vault。
 
-Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序（`pid`）與 App（`appPid`）。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕。流程 crash 而 Electron 還活著時，`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。App 有沒有顯示或隱藏視窗，背景模式以 `windowState().shown` 判斷；聚焦、最小化還原、Dock、Tray 本身需要畫面上的視窗，改用 `hidden: false`（收錄流程是 `--visible`），並在 issue 註明會跳出視窗。
+Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 YouTube 只在 Web 模式，需要合成 YouTube 的 scenario 改用 Web 模式，或在 Desktop 用真實資料。profile、Vault、Agent port、匯出與備份目錄都隔離在 `.local/verify-runs/<issue>-<本地時間>-<PID>-electron/`，`run.json` 記錄持有它的流程程序（`pid`）與 App（`appPid`）。Electron 只活在啟動它的流程程序裡，CLI 沒有 Electron 的 `launch`；流程還在跑時 `stop` 會拒絕。流程 crash 而 Electron 還活著時，`stop --run <run 目錄>` 會以 SIGTERM 關閉這個遺留的 Electron 與它的 Meilisearch，再清掉 run 目錄。Electron 自己 crash 而流程還在時，`close()`／`relaunch()` 會先收掉留下的 Meilisearch。`close()`／`relaunch()` 在兩個平台都經 App 自己的結束流程關閉 App，並在收掉任何程序之前確認 run 的 Meilisearch 已由 App 停止；60 秒內沒結束或 Meilisearch 還在，都算失敗。主程序的輸出寫進 run 的 `server.log`，`close()` 時複製到證據目錄。App 有沒有顯示或隱藏視窗，背景模式以 `windowState().shown` 判斷；聚焦、最小化還原、Dock、Tray 本身需要畫面上的視窗，改用 `hidden: false`（收錄流程是 `--visible`），並在 issue 註明會跳出視窗。
 
 `launchElectron` 開啟 App 的驗證通道（`XR_COLLECTOR_VALIDATION_CONTROL=1`）：主程序在 `globalThis.__xrCollectorValidation` 提供選單列／系統匣的選單、點選單項目、視窗狀態（含 App 最後一次顯示或隱藏視窗的 `shown`）、關閉視窗與已發出的提示，函式庫的 `trayMenu`、`clickTray`、`windowState`、`shownIn`、`closeWindow`、`notifications` 經 Playwright 在主程序呼叫它。正式使用時不設這個變數，通道不存在。
 
@@ -306,7 +307,7 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
 
 本 skill 的機制只留防止「說通過，其實沒驗」的部分，自測也只測這些：
 
-- **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
+- **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯或頁面有未捕捉例外的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
 - **`tests/tooling/verify-flows.test.ts`**（在 `npm test` 裡）：動態找出每一支流程、功能地圖每個功能檔列出的流程與流程的 `covers` 一致。改流程或功能地圖都會影響 E2E 會跑哪些流程，所以每個 PR 都跑。流程判斷訂閱狀態序列與工作頁分區的邏輯在 `tests/subscriptions/status-sequence.test.ts`。
 - **Desktop smoke**（`scripts/smoke-desktop.mjs`，見「打包版」）：改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或 `stop` 時，兩個平台的開發版與打包版各跑一次。
 

@@ -569,7 +569,7 @@ app.on('before-quit', (event) => {
 function exposeValidationControl(appTray: AppTray): void {
   (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
     tray: async () => { await appTray.refresh(); return appTray.current(); },
-    trayShown: () => ({ menu: appTray.current(), reads: appTray.reads }),
+    trayShown: () => ({ menu: appTray.current(), reads: appTray.reads, reading: appTray.reading }),
     click: (action: TrayAction) => appTray.run(action),
     notifications: () => [...validationNotifications],
     activateNotification: (id: string) => showWindow({ notificationId: id }),

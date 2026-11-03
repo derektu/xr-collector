@@ -6,6 +6,7 @@
 // subscription made in the dialog filling the list, the Documents page and the Reader, and pausing
 // and deleting from the screen reaching the data.
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
+import { recordRequests } from './lib/revision.mjs';
 
 export const name = 'core-journey';
 export const title = '核心旅程：訂閱、新增、查詢、閱讀、暫停恢復與刪除確認';
@@ -159,11 +160,19 @@ export async function run({ instance, page, record, waitFor }) {
     expect(paused.api === 'paused' && paused.row === 'paused', '暫停後 API 與列都是已暫停', { id: 'pause.paused', expected: { api: 'paused', row: 'paused' }, actual: paused });
     await shot('paused');
     await noToast();
+    const since = new Date().toISOString();
     await row.getByRole('button', { name: '恢復', exact: true }).click();
-    await waitFor(async () => (await subscription())?.checkStatus?.state === 'scheduled' && (await subscription())?.status !== 'paused', 'A resumed and checked', { timeout: 60_000 }).catch(() => undefined);
+    // Resuming starts a check of its own; the row is judged once that check has ended.
+    const resumeCheck = async () => (await instance.api('/api/jobs?state=all&limit=100')).jobs
+      .find((job) => job.kind === 'youtube.channel' && job.source.id === a.id && job.scope?.trigger === 'resume' && job.createdAt >= since);
+    const check = await waitFor(async () => {
+      const job = await resumeCheck();
+      return job && ['completed', 'failed'].includes(job.state) ? job : null;
+    }, 'the resume check ended', { timeout: 60_000 }).catch(resumeCheck);
+    expect(check?.state === 'completed', '恢復後立即檢查一次並完成', { id: 'pause.resume-check', expected: { trigger: 'resume', state: 'completed' }, actual: check ? { trigger: check.scope?.trigger, state: check.state } : null });
     await waitFor(async () => await rowPhase() === 'scheduled', 'row scheduled', { timeout: 15_000 }).catch(() => undefined);
     const resumed = { api: (await subscription())?.status, row: await rowPhase() };
-    expect(resumed.api !== 'paused' && resumed.row === 'scheduled', '恢復後檢查完成，列回到排定下次檢查', { id: 'pause.resumed', expected: { api: '不是 paused', row: 'scheduled' }, actual: resumed });
+    expect(resumed.api !== 'paused' && resumed.row === 'scheduled', '恢復後列回到排定下次檢查', { id: 'pause.resumed', expected: { api: '不是 paused', row: 'scheduled' }, actual: resumed });
     const pauseButton = await page.getByRole('button', { name: `暫停 ${a.title}`, exact: true }).count();
     expect(pauseButton === 1, '列上回到暫停按鈕', { id: 'pause.button-back', expected: 1, actual: pauseButton });
   });
@@ -174,10 +183,13 @@ export async function run({ instance, page, record, waitFor }) {
     const dialog = by('confirm-delete-document');
     await by('reader-delete').click();
     await dialog.waitFor();
+    const deletes = recordRequests(page, 'DELETE', '/api/documents/');
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });
-    const kept = { reader: await by('reader-body').count(), api: apiIds(await instance.state()).includes(targetId) };
-    expect(kept.reader === 1 && kept.api, '取消後仍在閱讀頁，文件還在', { id: 'delete.cancel', expected: { reader: 1, api: true }, actual: kept });
+    const sent = await deletes.sent();
+    deletes.stop();
+    const kept = { sent, reader: await by('reader-body').count(), api: apiIds(await instance.state()).includes(targetId) };
+    expect(sent.length === 0 && kept.reader === 1 && kept.api, '取消不送出刪除，仍在閱讀頁，文件還在', { id: 'delete.cancel', expected: { sent: [], reader: 1, api: true }, actual: kept });
     await by('reader-delete').click();
     await dialog.waitFor();
     await shot('delete-confirm');

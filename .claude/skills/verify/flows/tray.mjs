@@ -5,7 +5,8 @@
 // a second launch, and quitting from the menu in the middle of a check. The menu is read as the
 // tray draws it, by icon, action and check mark; its wording is in tests/electron/tray-menu.test.ts.
 // With the window hidden, showing and hiding are judged by the app's own record; with --visible
-// the window on screen must agree. The flow serves its own RSS feed on the run's feeds port.
+// the window on screen must agree. The flow serves its own RSS feed on the run's feeds port and
+// holds its answer to keep a check running for as long as a scenario needs.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -18,23 +19,30 @@ export const covers = ['tray-menu', 'tray-hide', 'tray-actions', 'tray-open', 't
 export const desktop = true;
 export const visibleScenarios = ['TRAY-D2', 'TRAY-D5', 'TRAY-D6', 'TRAY-D7'];
 
-/** Long enough for the reads the previous scenario's changes may still start: one read gap (1 s) and a margin. */
-const SETTLE_MS = 1500;
-/** Long enough to catch reading on a timer, which happened every 2 s or faster. */
+/** The idle period watched for reads: long enough to catch reading on a timer, which happened every 2 s or faster. */
 const IDLE_MS = 10_000;
 const ACTIONS = ['open', 'check_now', 'toggle_auto_check', 'jobs', 'activity', 'check_app_update', 'quit'];
 const actions = (menu) => menu.items.filter((item) => item.kind === 'action').map((item) => item.action);
 const autoCheck = (menu) => menu.items.find((item) => item.action === 'toggle_auto_check')?.checked;
 
-/** An RSS feed whose articles the flow adds, answering after `delayMs`. */
+/**
+ * An RSS feed whose articles the flow adds. `hold()` keeps every request waiting until `release()`;
+ * `waiting` counts the requests held now.
+ */
 async function serveFeed(port) {
-  const feed = { articles: [], delayMs: 0 };
+  const feed = { articles: [] };
+  let gate = null;
+  let waiting = 0;
   const xml = () => `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>【合成】選單列測試</title><link>http://127.0.0.1:${port}/</link>${
     feed.articles.map((article) => `<item><title>${article.title}</title><link>http://127.0.0.1:${port}/a/${article.id}</link><guid>tray-${article.id}</guid><pubDate>${article.published.toUTCString()}</pubDate><description>${article.title} 的內容。</description></item>`).join('')
   }</channel></rss>`;
-  const server = createServer((request, response) => {
-    const answer = () => response.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' }).end(xml());
-    if (feed.delayMs) setTimeout(answer, feed.delayMs); else answer();
+  const server = createServer(async (request, response) => {
+    if (gate) {
+      waiting += 1;
+      await gate.promise;
+      waiting -= 1;
+    }
+    if (!response.destroyed) response.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' }).end(xml());
   });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   return {
@@ -45,8 +53,10 @@ async function serveFeed(port) {
         feed.articles.push({ id, title: `【合成】選單列文章 ${id}`, published: new Date(Date.now() - 60_000) });
       }
     },
-    set delay(ms) { feed.delayMs = ms; },
-    close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }),
+    hold() { if (!gate) { let open; gate = { promise: new Promise((resolve) => { open = resolve; }) }; gate.open = open; } },
+    release() { gate?.open(); gate = null; },
+    get waiting() { return waiting; },
+    close: () => new Promise((resolve) => { gate?.open(); server.closeAllConnections(); server.close(resolve); }),
   };
 }
 
@@ -124,19 +134,20 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
 
     await scenario('TRAY-D3', '視窗隱藏時從選單立即檢查', async ({ expect, note }) => {
       feed.add(2);
-      feed.delay = 4000;
+      feed.hold();
       await clickTray(instance.app, 'check_now');
+      // The check stays on the held feed until the menu has been read.
+      const running = await sample(async () => feed.waiting > 0 && (await menu()).icon === 'collecting', 60_000).catch(() => null);
+      expect(running !== null, '檢查時圖示為收集中', running ?? await menu());
+      feed.release();
       const sequence = await sample(async () => await documentsTotal() === 5 && await idle(), 60_000);
       const settled = await sample(async () => (await menu()).icon === 'idle', 10_000);
-      note('sequence', [...sequence, ...settled]);
-      const busy = sequence.filter((entry) => entry.icon === 'collecting');
-      expect(busy.length > 0, '檢查時圖示為收集中', sequence);
+      note('sequence', [...(running ?? []), ...sequence, ...settled]);
       const last = await menu();
       expect(last.icon === 'idle' && await idle(), '檢查結束後回到閒置', last.icon);
       expect(await documentsTotal() === 5, '文件由 3 份變成 5 份', await documentsTotal());
       const state = await windowState(instance.app);
       expect(shownIn(state, visible) === false, '整個檢查期間視窗維持隱藏', state);
-      feed.delay = 0;
     });
 
     await scenario('TRAY-D4', '從選單關閉與開啟自動檢查', async ({ expect, note }) => {
@@ -154,8 +165,8 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
 
     await scenario('TRAY-D9', '選單跟著別處的變動更新，閒置時不讀', async ({ expect, note }) => {
       const drawn = () => trayShown(instance.app);
-      await sleep(SETTLE_MS);
-      const before = await drawn();
+      // The reads the previous scenario's changes started end first; the idle period starts after them.
+      const before = await waitFor(async () => { const shown = await drawn(); return shown.reading ? null : shown; }, 'the tray finished reading');
       await sleep(IDLE_MS);
       const after = await drawn();
       note('idleReads', { before: before.reads, after: after.reads });
@@ -167,18 +178,21 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
       await waitFor(async () => (await drawn()).menu.icon === 'idle', 'the drawn menu shows automatic checks on');
       const total = await documentsTotal();
       feed.add(1);
-      feed.delay = 3000;
+      feed.hold();
       const icons = [];
+      const follow = async (until) => {
+        const icon = (await drawn()).menu.icon;
+        if (icons.at(-1) !== icon) icons.push(icon);
+        return until(icon);
+      };
       try {
         await instance.api('/api/subscription-checks', { method: 'POST', body: '{}' });
-        await waitFor(async () => {
-          const icon = (await drawn()).menu.icon;
-          if (icons.at(-1) !== icon) icons.push(icon);
-          return icons.includes('collecting') && icon === 'idle';
-        }, 'the drawn menu shows the check start and end', { interval: 100 });
+        // The check waits on the held feed until the drawn menu shows it collecting.
+        await waitFor(() => follow((icon) => feed.waiting > 0 && icon === 'collecting'), 'the drawn menu shows the check start', { interval: 100 }).catch(() => undefined);
       } finally {
-        feed.delay = 0;
+        feed.release();
       }
+      await waitFor(() => follow((icon) => icons.includes('collecting') && icon === 'idle'), 'the drawn menu shows the check end', { interval: 100 }).catch(() => undefined);
       note('icons', icons);
       expect(icons.includes('collecting') && icons.at(-1) === 'idle', '經 API 開始的檢查，畫出的選單顯示收集中再回到閒置', icons);
       await waitFor(async () => await documentsTotal() === total + 1 && await idle(), 'the check collected one document');
@@ -244,10 +258,13 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
     await scenario('TRAY-D8', '檢查中從選單結束，再啟動接續', async ({ expect, note }) => {
       const total = await documentsTotal();
       feed.add(2);
-      feed.delay = 8000;
+      feed.hold();
       await clickTray(instance.app, 'check_now');
-      await waitFor(async () => (await menu()).icon === 'collecting', 'a check runs');
-      note('beforeQuit', await menu());
+      await waitFor(async () => feed.waiting > 0 && (await menu()).icon === 'collecting', 'a check runs on the held feed');
+      // The check is held at the feed, so quitting interrupts it before it saves anything.
+      const beforeQuit = { icon: (await menu()).icon, documents: await documentsTotal(), waiting: feed.waiting };
+      note('beforeQuit', beforeQuit);
+      expect(beforeQuit.documents === total && beforeQuit.waiting > 0, '結束時檢查還在進行，文件還沒增加', beforeQuit);
       await clickTray(instance.app, 'quit');
       await instance.exited();
       const searchProcesses = () => processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(instance.runDir));
@@ -255,7 +272,7 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
       await waitFor(() => searchProcesses().length === 0, 'Meilisearch ends with the app', { timeout: 3_000 }).catch(() => undefined);
       const search = searchProcesses();
       expect(search.length === 0, '程序結束，Meilisearch 也結束', search.map((entry) => entry.pid));
-      feed.delay = 0;
+      feed.release();
       await instance.relaunch();
       await waitFor(async () => await documentsTotal() === total + 2 && await idle(), 'the interrupted check finishes after relaunch', { timeout: 90_000 });
       expect(await documentsTotal() === total + 2, `重啟後接續的檢查完成，文件由 ${total} 份變成 ${total + 2} 份`, await documentsTotal());

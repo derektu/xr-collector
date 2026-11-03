@@ -172,19 +172,25 @@ async function runOne(flow, options) {
     error = caught;
     console.log(`  flow ${flow.name} stopped: ${caught.message}`);
   }
+  // results.json is written once the server has stopped, so a failed cleanup fails the run on disk too.
+  const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
+  for (const opened of pages) await opened.close().catch(() => undefined);
+  const cleanupError = await instance.stop().then(() => null, (caught) => caught);
+  const consoleErrors = pages.flatMap((opened) => opened.consoleErrors);
+  const pageErrors = pages.flatMap((opened) => opened.pageErrors);
+  const outcome = { flow: flow.name, consoleErrors, pageErrors, state, ...(error ? { error: error.message } : {}),
+    ...(cleanupError ? { cleanupError: cleanupError.message } : {}) };
   let passed = false;
-  try {
-    const consoleErrors = pages.flatMap((opened) => opened.consoleErrors);
-    const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
-    if (record) passed = await record.finish({ flow: flow.name, consoleErrors, state, ...(error ? { error: error.message } : {}) });
-    else if (error) await writeProvisioningFailure({ issue, label, evidence, checkout, flow: flow.name, error, phase: 'browser' });
-    for (const opened of pages) await opened.close().catch(() => undefined);
-  } finally {
-    // The server and its slot lock never outlive the flow, even when writing results.json fails.
-    await instance.stop();
-  }
-  console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
-  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+  if (record) passed = await record.finish(outcome);
+  else await writeProvisioningFailure({ issue, label, evidence, checkout, flow: flow.name, error: error ?? cleanupError, phase: 'browser' });
+  return reported(flow, evidence, passed, outcome);
+}
+
+/** Logs a flow's outcome and returns it for runFlows: passed only when the recorder judged the run passed. */
+function reported(flow, evidence, passed, { error, cleanupError, pageErrors }) {
+  const reason = error ?? cleanupError ?? (pageErrors.length ? `uncaught page error: ${pageErrors[0].split('\n')[0]}` : undefined);
+  console.log(`${passed ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}${!passed && reason ? ` (${reason})` : ''}`);
+  return { name: flow.name, passed, evidence, ...(passed || !reason ? {} : { error: reason }) };
 }
 
 /**
@@ -203,13 +209,11 @@ async function runDesktop(flow, { issue, label, evidence, checkout, visible = fa
     error = caught;
     console.log(`  flow ${flow.name} stopped: ${caught.message}`);
   }
-  let passed = false;
-  try {
-    const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
-    passed = await record.finish({ flow: flow.name, state, ...(error ? { error: error.message } : {}) });
-  } finally {
-    await instance.close({ keep: false }).catch((caught) => { error ??= caught; });
-  }
-  console.log(`${passed && !error ? 'PASSED' : 'FAILED'} ${flow.name}; evidence in ${evidence}`);
-  return { name: flow.name, passed: passed && !error, evidence, ...(error ? { error: error.message } : {}) };
+  // results.json is written once the app has quit, so an app that fails to quit fails the run on disk too.
+  const state = await apiState(instance).catch((caught) => ({ unavailable: caught.message }));
+  const cleanupError = await instance.close({ keep: false }).then(() => null, (caught) => caught);
+  const outcome = { flow: flow.name, consoleErrors: instance.consoleErrors, pageErrors: instance.pageErrors, state,
+    ...(error ? { error: error.message } : {}), ...(cleanupError ? { cleanupError: cleanupError.message } : {}) };
+  const passed = await record.finish(outcome);
+  return reported(flow, evidence, passed, outcome);
 }

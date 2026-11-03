@@ -1,6 +1,6 @@
 // Guards the developer, not the user.
 // What makes a recorded flow pass: the recorder passes a scenario only with at least one check, all
-// of them ok, and a run only when no driver or cleanup error was reported; a flow that cannot start
+// of them ok, and a run only when no driver or cleanup error and no uncaught page exception was reported; a flow that cannot start
 // still writes a failed results.json. Flows run side by side up to the job limit, a Desktop flow
 // alone, and one failing flow never stops the others.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -31,6 +31,16 @@ describe('recorder', () => {
     expect(await record.finish({ error: 'app did not exit' })).toBe(false);
     expect(await results()).toMatchObject({ passed: false, error: 'app did not exit',
       results: [{ id: 'CLEANUP-1', pass: true, checks: [{ id: 'x.y', ok: true, text: 'scenario passed', expected: true, actual: true }] }] });
+  });
+
+  it('fails a run whose cleanup failed or whose page threw, though every scenario passed', async () => {
+    evidence = await mkdtemp(path.join(os.tmpdir(), 'xr-recorder-after-'));
+    for (const extra of [{ cleanupError: 'The app exited with Meilisearch still running' }, { pageErrors: ['TypeError: x is undefined'] }]) {
+      const record = recorder({ issue: '235', evidence, checkout: '/test', data: 'synthetic' }, {});
+      await record.scenario('AFTER-1', 'scenario passed', async ({ expect: check }) => check(true, 'scenario passed', { id: 'x.y', expected: true, actual: true }));
+      expect(await record.finish(extra)).toBe(false);
+      expect(await results()).toMatchObject({ passed: false, ...extra, results: [{ id: 'AFTER-1', pass: true }] });
+    }
   });
 
   it('keeps a failed result when provisioning stops before the recorder exists', async () => {

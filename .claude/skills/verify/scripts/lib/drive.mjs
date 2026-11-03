@@ -22,18 +22,26 @@ export async function painted(page) {
   });
 }
 
+/**
+ * Collects a page's console errors and its uncaught exceptions. An uncaught exception fails the run
+ * (see recorder's finish); console errors are kept as evidence.
+ */
+export function watchErrors(page, into = { consoleErrors: [], pageErrors: [] }) {
+  page.on('console', (message) => { if (message.type() === 'error') into.consoleErrors.push(message.text()); });
+  page.on('pageerror', (error) => into.pageErrors.push(String(error.stack ?? error)));
+  return into;
+}
+
 /** A headless page on the instance's UI, zh-TW, Taipei time, dark scheme by default. */
 export async function openPage(instance, { viewport = { width: 1280, height: 860 }, colorScheme = 'dark', route = '/' } = {}) {
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({ viewport, locale: 'zh-TW', timezoneId: 'Asia/Taipei', colorScheme });
     const page = await context.newPage();
-    const consoleErrors = [];
-    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-    page.on('pageerror', (error) => consoleErrors.push(String(error)));
+    const { consoleErrors, pageErrors } = watchErrors(page);
     await page.goto(`${instance.url}${route}`);
     await page.locator(LOADED).first().waitFor({ timeout: 30_000 });
-    return { browser, context, page, consoleErrors, close: () => browser.close() };
+    return { browser, context, page, consoleErrors, pageErrors, close: () => browser.close() };
   } catch (error) {
     await browser.close();
     throw error;
@@ -61,7 +69,10 @@ export function failureHint(text, detail) {
  * `expect(ok, text, detail?)` records a check (see checkEntry), `shot(name, page?)` saves `<id>-<name>.png` (of another
  * page when given), `themed(name)` saves
  * dark and light variants, `note(key, value)` keeps an observation. A throw fails the scenario and
- * saves `<id>-error.png`. `finish(extra)` writes results.json and returns whether every scenario passed.
+ * saves `<id>-error.png`. `finish(extra)` writes results.json and returns whether the run passed:
+ * every scenario passed, and `extra` names no `error` (the flow stopped), no `cleanupError` (stopping
+ * the app or server failed) and no `pageErrors` (an uncaught exception in a page). A flow calls it
+ * once the run's cleanup is done, so results.json never says passed for a run that failed after it.
  * `page` may be a function returning the page, for a flow whose page changes (a relaunched Electron).
  */
 export function recorder(instance, page, { file = 'results.json' } = {}) {
@@ -105,7 +116,8 @@ export function recorder(instance, page, { file = 'results.json' } = {}) {
     },
     async finish(extra = {}) {
       // A driver/cleanup error is part of the run result, not only its process exit status.
-      const passed = !extra.error && results.length > 0 && results.every((result) => result.pass);
+      const passed = !extra.error && !extra.cleanupError && !extra.pageErrors?.length
+        && results.length > 0 && results.every((result) => result.pass);
       await writeFile(path.join(instance.evidence, file), JSON.stringify({
         issue: instance.issue, label: instance.label ?? null, checkout: instance.checkout,
         commit: instance.commit, dirty: instance.dirty, sourceHash: instance.sourceHash, data: instance.data,

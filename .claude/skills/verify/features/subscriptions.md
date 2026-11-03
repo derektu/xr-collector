@@ -31,7 +31,7 @@ Preconditions:
 - **空清單與篩選。** 空清單的 `add-subscription-empty` 開啟同一新增選單。完成訂閱後，`sources-filter` 填名稱，並在 `getByRole('group', { name: '類型' })` 選「全部」「YouTube」或「RSS」；結果不符時顯示 `sources-no-match`，清空名稱及類型恢復清單。
 - **狀態變化。** 記錄 `source-row-<channelId>` 內 `subscription-status` 每個不同的值（頁內 MutationObserver，見 `flows/lib/watch.mjs`）。預期依序為「排隊中 → 檢查中 → 下載中 0/5 … 4/5 → 下次 HH:MM」，可省略排隊中與檢查中（檢查中只持續約 200 ms，取樣不一定拍到）；開始後不再回到排隊中，k 只增不減。完成後列的文件欄為 5。
 - **兩個訂閱同時收集。** A 下載中時訂閱 B：B 開始前顯示「排隊中」，開始後為「檢查中」「下載中 k/3」，兩者輪流擷取時都維持下載中，不回到排隊中。
-- **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；下載中的訂閱轉為「錯誤・HH:MM 重試」（時間是冷卻結束），還沒開始的檢查維持「排隊中」；冷卻 30 秒後自動繼續並完成。
+- **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；下載中的訂閱轉為「錯誤・HH:MM 重試」（時間是冷卻結束），還沒開始的檢查維持「排隊中」；合成的冷卻持續到流程設 `c.youtube.endCooldown = true`，之後自動繼續並完成。
 - **暫停。** `getByRole('button', { name: '暫停 <頻道標題>' })`，狀態變「已暫停」。
 - **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停的列顯示「自動檢查已關閉」，已暫停的維持「已暫停」。再點一次恢復「下次 HH:MM」。
 - **移除並保留。** `getByRole('button', { name: '<頻道標題> 的更多動作' })` → `getByRole('menuitem', { name: '移除' })`。`confirm-remove` 中 `remove-keep` 預設勾選；點 `confirm-remove-button`。列消失，`GET /api/documents` 仍有該頻道的文件；文件頁 `documents-source` 選項顯示「<標題>・已移除（n）」。
@@ -46,7 +46,7 @@ Preconditions:
 ## Gotchas
 
 - 剛送出的訂閱先以 `pending-row-<jobId>` 出現，解析完頻道才變成 `source-row-<channelId>`；選取時兩者都要涵蓋。
-- 合成頻道每次列出等 200 ms、每支影片收集等 `captureDelayMs`（預設 600 ms），想拍到「下載中」就調大 `captureDelayMs`（`subscribe-a-b` 用 1500 ms）。
+- 合成頻道每次列出等 200 ms、每支影片收集等 `captureDelayMs`（預設 600 ms）。要讓「下載中」持續到拍完，設 `c.youtube.holdCaptures = true` 停住收集，等 `instance.held()` 出現 `capture:<影片 ID>`，拍完改回 `false`。
 - 冷卻期間互動式請求（訂閱預覽）立即失敗，新增訂閱的對話框會顯示錯誤；這是產品行為。
 - `auto-collection-switch` 是視覺上覆蓋的 checkbox，點擊要 `force: true`。
 - 新增 toast（`notice`）會擋住下一個動作，等 `notice` 數量為 0 再繼續。

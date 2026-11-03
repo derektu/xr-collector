@@ -1,7 +1,8 @@
 // YouTube limiting requests while channel A downloads: the YouTube request channel cools down,
 // the video that met the limit waits without spending an attempt, A's row and the Jobs page say
 // when collection goes on, a video submitted during the cooldown waits with it, and once the
-// cooldown ends everything finishes by itself. The synthetic YouTube cools down for 30 seconds.
+// cooldown ends everything finishes by itself. A's first capture is held until the limit is set,
+// so that capture meets it; the synthetic cooldown lasts until the flow ends it.
 import { collect, idle, subscribe } from '../scripts/lib/index.mjs';
 import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
@@ -11,8 +12,7 @@ export const title = 'YouTube 限制連線與冷卻';
 export const covers = ['sub-status', 'jobs-row-text'];
 
 export async function run({ instance, page, openPage, record, waitFor }) {
-  // Slower capture keeps A downloading when the limit comes.
-  await instance.updateCatalog((catalog) => { catalog.youtube.captureDelayMs = 1500; });
+  await instance.updateCatalog((catalog) => { catalog.youtube.holdCaptures = true; });
   const catalog = await instance.catalog();
   const [a, d] = ['verify-a', 'verify-d'].map((handle) => catalog.youtube.channels.find((source) => source.handle === handle));
   const rowOf = (source) => `source-row-${source.id}`;
@@ -31,15 +31,17 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
   await record.scenario('YC-1', '準備：訂閱頻道 A，A 下載中', async ({ expect }) => {
     await subscribe(instance, `https://www.youtube.com/@${a.handle}`);
+    const held = async () => Object.keys(await instance.held()).some((key) => a.videos.some((video) => key === `capture:${video.id}`));
     const downloading = await waitFor(async () => {
       const status = await apiStatus();
-      return status?.state === 'downloading' && status.done >= 1 ? status : null;
-    }, 'A downloaded one video', { timeout: 30_000 }).catch(() => null);
-    expect(downloading !== null, 'A 下載中且已收進至少 1 支', { id: 'start.downloading', expected: 'downloading, done ≥ 1', actual: downloading ?? await apiStatus() });
+      return status?.state === 'downloading' && await held() ? status : null;
+    }, 'A downloading with a capture held', { timeout: 30_000 }).catch(() => null);
+    expect(downloading !== null, 'A 下載中，一支影片的收集停在送出前', { id: 'start.downloading', expected: 'downloading, capture held', actual: downloading ?? await apiStatus() });
   });
 
   await record.scenario('YC-2', 'YouTube 限流：通道冷卻，A 的列與工作頁顯示重試時間，嘗試次數不變', async ({ expect, shot }) => {
-    await instance.updateCatalog((current) => { current.youtube.rateLimitNext = true; });
+    // One write: the released capture is the one that meets the limit.
+    await instance.updateCatalog((current) => { current.youtube.rateLimitNext = true; current.youtube.holdCaptures = false; });
     const channel = await waitFor(async () => {
       const group = await youtubeChannel();
       return group?.state === 'cooldown' ? group : null;
@@ -89,7 +91,8 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   });
 
   await record.scenario('YC-3', '冷卻結束：自動繼續並完成，事件各一次', async ({ expect, shot }) => {
-    await idle(instance, 120_000).catch(() => null);
+    await instance.updateCatalog((current) => { current.youtube.endCooldown = true; });
+    await idle(instance).catch(() => null);
     const status = await apiStatus();
     expect(status?.state === 'scheduled', 'A 回到排定下次檢查', { id: 'w3.scheduled', expected: 'scheduled', actual: status });
     const finishedCheck = await checkOfA();

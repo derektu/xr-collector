@@ -4,9 +4,10 @@
 // and 恢復 clears the failures and checks at once. The flow writes the earlier failures into the
 // Vault file instead of failing four checks over a day; each failing check still takes its three
 // attempts, which the verify server spaces 2 and 3 seconds apart with synthetic data.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
+import { editJson } from './lib/files.mjs';
 import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
@@ -123,13 +124,13 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
   await record.scenario('FAIL-3', '第 5 次失敗、距第一次失敗超過 24 小時：自動暫停', async ({ expect, shot }) => {
     // Four failures in a row, the first of them 25 hours ago.
-    const file = JSON.parse(await readFile(channelsFile, 'utf8'));
-    const entry = file.channels.find((candidate) => candidate.id === a.id);
-    entry.checkFailures = {
-      count: 4, since: new Date(Date.now() - DAY - 60 * 60_000).toISOString(),
-      error: entry.checkFailures?.error ?? { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。（合成錯誤）' },
-    };
-    await writeFile(channelsFile, `${JSON.stringify(file, null, 2)}\n`);
+    await editJson(channelsFile, (file) => {
+      const entry = file.channels.find((candidate) => candidate.id === a.id);
+      entry.checkFailures = {
+        count: 4, since: new Date(Date.now() - DAY - 60 * 60_000).toISOString(),
+        error: entry.checkFailures?.error ?? { code: 'network_error', message: '無法連線到 YouTube，請稍後再試。（合成錯誤）' },
+      };
+    });
 
     const failed = await checkFromRow();
     expect(failed.state === 'failed', 'A 的檢查再次失敗', { id: 'w3.job-failed', expected: 'failed', actual: failed.state });

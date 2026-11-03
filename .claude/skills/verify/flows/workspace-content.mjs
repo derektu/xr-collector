@@ -118,11 +118,12 @@ export async function run({ instance, page, record, waitFor }) {
     await by('job-' + failed.jobId)
       .getByTestId('job-dismiss')
       .click();
-    await waitFor(
-      async () => !(await instance.api('/api/jobs/overview')).overview.failed.some((x) => x.jobId === failed.jobId),
-      'dismiss persisted'
-    );
-    expect(true, '移除後 API 不再包含失敗列');
+    const listed = async () => (await instance.api('/api/jobs/overview')).overview.failed.some((x) => x.jobId === failed.jobId);
+    await waitFor(async () => !(await listed()), 'dismiss persisted').catch(() => undefined);
+    await by('job-' + failed.jobId).waitFor({ state: 'detached', timeout: 15_000 }).catch(() => undefined);
+    const dismissed = { api: await listed(), row: await by('job-' + failed.jobId).count() };
+    expect(!dismissed.api && dismissed.row === 0, '移除後 API 與工作頁都不再有這個失敗列',
+      { id: 'jobs.dismiss', expected: { api: false, row: 0 }, actual: dismissed });
     await instance.updateCatalog((c) => {
       c.youtube.failVideo = null;
     });
@@ -212,6 +213,17 @@ export async function run({ instance, page, record, waitFor }) {
   });
 
   await scenario('CONTENT-6', '搜尋不可用時保留條件並退回 Vault 瀏覽', async ({ expect, note, shot }) => {
+    // The feed filter from CONTENT-5 lists fewer documents than the whole Vault, so the fallback's
+    // total tells a kept filter from a dropped one.
+    const source = 'rss:' + feed.id;
+    const summary = async () => ({
+      source: await by('documents-source').inputValue(),
+      mode: await by('documents-summary').getAttribute('data-mode'),
+      total: Number(await by('documents-summary').getAttribute('data-total')),
+    });
+    const filtered = await summary();
+    const vaultTotal = (await instance.api('/api/documents?limit=1')).total;
+    note('before', { ...filtered, vaultTotal });
     const pattern = '**/api/search?*';
     await page.route(pattern, (r) =>
       r.fulfill({
@@ -223,7 +235,11 @@ export async function run({ instance, page, record, waitFor }) {
     try {
       await by('documents-search').fill('NeedleWorkspaceThree');
       await by('search-unavailable').waitFor();
-      expect((await page.locator('.document-row').count()) === 20, '搜尋不可用仍瀏覽相同來源');
+      await waitFor(async () => (await by('documents-summary').getAttribute('data-loading')) === 'false', 'fallback listed').catch(() => undefined);
+      const fallback = await summary();
+      const expected = { source, mode: 'browse', total: filtered.total };
+      expect(filtered.source === source && filtered.total < vaultTotal && JSON.stringify(fallback) === JSON.stringify(expected),
+        '搜尋不可用時保留來源篩選，瀏覽同一來源的文件', { id: 'search.fallback-keeps-filter', expected, actual: { fallback, filtered, vaultTotal } });
       expect((await by('documents-search').inputValue()) === 'NeedleWorkspaceThree', '保留搜尋字串');
       note('scope', '路由 stub 只證明 UI 的 fallback 分支，不宣稱實際引擎故障。');
       await shot('search-fallback');

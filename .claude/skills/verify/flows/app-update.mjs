@@ -10,7 +10,7 @@ export const name = 'app-update';
 export const title = 'App 更新的查詢、下載驗證、取消、安全等待與更新入口';
 export const covers = ['update-discovery', 'update-download', 'update-apply-wait', 'update-agent', 'update-no-vault', 'update-navigation'];
 export const vault = 'none';
-export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', payloadMode: 'valid', payloadDelayMs: 0 } });
+export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', payloadMode: 'valid' } });
 
 export async function run({ instance, page, record, waitFor }) {
   const connection = (await instance.api('/api/device/agent/connection')).connection;
@@ -58,13 +58,17 @@ export async function run({ instance, page, record, waitFor }) {
   if (!updateApiAvailable) return;
 
   await record.scenario('U36-W2', '下載中只顯示取消，忙碌拒絕套用，錯誤後可重試到 ready', async ({ expect, shot }) => {
-    await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 10_000; value.updates.payloadMode = 'valid'; });
+    // The payload stops after 62 % of its bytes until the flow releases it, so the download stays under way.
+    await instance.updateCatalog((value) => { value.updates.holdPayload = true; value.updates.payloadMode = 'valid'; });
     await page.getByTestId('update-download').click();
     await waitFor(async () => await cancels() === 'download', 'downloading cancel UI');
     const actions = { download: await page.getByTestId('update-download').count(), cancels: await cancels() };
     expect(actions.download === 0 && actions.cancels === 'download', '下載中不再顯示重複下載，只能取消下載',
       { id: 'u36.downloading-actions', expected: { download: 0, cancels: 'download' }, actual: actions });
-    const downloading = await update();
+    const downloading = await waitFor(async () => {
+      const value = await update();
+      return value.progress?.percent === 62 && (await instance.held()).payload ? value : null;
+    }, 'download held at 62 %').catch(update);
     expect(downloading.phase === 'downloading' && downloading.progress?.percent === 62, '串流下載回報 62% 進度', {
       id: 'u36.progress', actual: { phase: downloading.phase, progress: downloading.progress },
     });
@@ -77,7 +81,7 @@ export async function run({ instance, page, record, waitFor }) {
     await page.getByTestId('update-download').waitFor();
     expect((await update()).phase === 'available', '取消後回到同一固定 offer，沒有 ready', { id: 'u36.download-cancel' });
 
-    await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 0; value.updates.payloadMode = 'corrupt'; });
+    await instance.updateCatalog((value) => { value.updates.holdPayload = false; value.updates.payloadMode = 'corrupt'; });
     await page.getByTestId('update-download').click();
     await waitFor(async () => (await update()).phase === 'error', 'integrity error state');
     await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action');
@@ -104,7 +108,7 @@ export async function run({ instance, page, record, waitFor }) {
     expect(deferred.phase === 'ready' && deferred.apply, '稍後保留 verified ready，同一頁仍可重新啟動以安裝',
       { id: 'u36.defer-ready', expected: { phase: 'ready', apply: true }, actual: deferred });
 
-    await instance.updateCatalog((value) => { value.updates.version = '0.1.2'; value.updates.payloadDelayMs = 10_000; });
+    await instance.updateCatalog((value) => { value.updates.version = '0.1.2'; value.updates.holdPayload = true; });
     await page.getByTestId('update-check').click();
     await waitFor(async () => (await update()).offer?.version === '0.1.2', 'newer offer found');
     await page.getByTestId('update-download').waitFor();
@@ -195,14 +199,14 @@ export async function run({ instance, page, record, waitFor }) {
     expect(await sidebarShows(start.phase, 'sidebar follows the update phase') === start.phase, '側欄顯示目前的更新階段',
       { id: 'u36.sidebar-current', expected: start.phase, actual: await sidebarPhase() });
 
-    await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 10_000; });
+    await instance.updateCatalog((value) => { value.updates.holdPayload = true; });
     await page.getByTestId('update-download').click();
     expect(await sidebarShows('downloading', 'sidebar downloading') === 'downloading', '下載時側欄顯示下載中',
       { id: 'u36.sidebar-downloading', expected: 'downloading', actual: await sidebarPhase() });
     await page.getByTestId('update-cancel').click();
     await page.getByTestId('update-download').waitFor();
 
-    await instance.updateCatalog((value) => { value.updates.payloadDelayMs = 0; });
+    await instance.updateCatalog((value) => { value.updates.holdPayload = false; });
     await page.getByTestId('update-download').click();
     await waitFor(async () => (await update()).ready?.version === '0.1.2', '0.1.2 verified');
     expect(await sidebarShows('ready', 'sidebar ready') === 'ready', '驗證完成後側欄顯示可安裝',

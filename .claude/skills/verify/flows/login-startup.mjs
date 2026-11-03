@@ -6,8 +6,9 @@
 // tests/web/login-startup-control.test.ts; both listeners refusing a development write are in
 // tests/server/login-startup-http.test.ts. The Settings page it opens has no notifications section;
 // the notification preference is the device API's (tests/server/notifications-http.test.ts).
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { writeJson } from './lib/files.mjs';
 
 export const name = 'login-startup';
 export const title = '登入自啟在開發版不可設定，fixture 切換採用 read-back';
@@ -15,7 +16,7 @@ export const covers = ['login-startup-setting', 'login-startup-unavailable', 'no
 
 export async function run({ instance, page, record, waitFor }) {
   const fixturePath = path.join(instance.runDir, 'login-startup-fixture.json');
-  const fixture = async (mode, enabled) => writeFile(fixturePath, JSON.stringify({ mode, enabled }, null, 2));
+  const fixture = async (mode, enabled) => writeJson(fixturePath, { mode, enabled });
   const focus = () => page.evaluate(() => window.dispatchEvent(new Event('focus')));
   const section = () => page.getByTestId('settings-login-startup');
   const switchInput = () => page.getByTestId('login-startup-switch').locator('input');

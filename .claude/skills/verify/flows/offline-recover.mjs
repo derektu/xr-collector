@@ -2,10 +2,12 @@
 // back: the offline message and the controls it disables, 立即檢查 refused, subscription rows that
 // never show an error, nothing dispatched or failed while offline, and after recovery one check of
 // B and A finishing. The catalog's `network: 'offline'` cuts the synthetic sources and the
-// runtime's network probe off together.
-import { readFile, writeFile } from 'node:fs/promises';
+// runtime's network probe off together; A's capture is held until the network is gone, so it
+// always meets the lost network part way.
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { collect, idle, subscribe } from '../scripts/lib/index.mjs';
+import { editJson, writeText } from './lib/files.mjs';
 import { subscriptionStatuses } from './lib/status-sequence.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
@@ -40,12 +42,10 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     await collect(instance, `https://www.youtube.com/watch?v=${failing}`);
     await subscribe(instance, `https://www.youtube.com/@${b.handle}`);
     await idle(instance);
-    await instance.updateCatalog((current) => { current.youtube.captureDelayMs = 2500; });
+    await instance.updateCatalog((current) => { current.youtube.holdCaptures = true; });
     await subscribe(instance, `https://www.youtube.com/@${a.handle}`);
-    await waitFor(async () => {
-      const status = await apiStatus(a);
-      return status?.state === 'downloading' && status.done >= 1;
-    }, 'A downloading', { timeout: 60_000 });
+    await waitFor(async () => (await apiStatus(a))?.state === 'downloading'
+      && Object.keys(await instance.held()).some((key) => key.startsWith('capture:')), 'A downloading with a capture held', { timeout: 60_000 });
     await page.getByTestId('nav-sources').click();
     await page.getByTestId('page-sources').waitFor();
     await watch(page, 'status', subscriptionStatuses);
@@ -56,17 +56,16 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
   await record.scenario('OFF-2', '斷網：全域訊息、停用的按鈕、立即檢查被拒絕、不派工也不失敗', async ({ expect, shot, note }) => {
     offlineAt = new Date().toISOString();
-    await instance.updateCatalog((current) => { current.network = 'offline'; });
-    // B comes due while the device is offline.
-    const channels = JSON.parse(await readFile(channelsFile, 'utf8'));
-    const entry = (channels.channels ?? channels.subscriptions ?? []).find((candidate) => candidate.id === b.id);
-    if (!entry) throw new Error(`B is not in ${channelsFile}`);
-    entry.nextCheckAt = new Date(Date.now() - 60_000).toISOString();
-    await writeFile(channelsFile, `${JSON.stringify(channels, null, 2)}\n`);
-
     // A's capture under way loses the network and the confirmation finds it gone.
+    await instance.updateCatalog((current) => { current.network = 'offline'; current.youtube.holdCaptures = false; });
     const banner = page.getByTestId('offline-banner');
     await banner.waitFor({ timeout: 30_000 });
+    // B comes due once the device is confirmed offline, so no scheduler poll can dispatch it before.
+    await editJson(channelsFile, (channels) => {
+      const entry = (channels.channels ?? channels.subscriptions ?? []).find((candidate) => candidate.id === b.id);
+      if (!entry) throw new Error(`B is not in ${channelsFile}`);
+      entry.nextCheckAt = new Date(Date.now() - 60_000).toISOString();
+    });
     const state = await connectivity();
     expect(state?.state === 'offline' && typeof state.checkedAt === 'string', 'health 的 connectivity 為 offline 並有確認時間',
       { id: 'offline.health', expected: 'offline', actual: state });
@@ -110,7 +109,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const trigger = path.join(instance.runDir, 'schedule-trigger');
     for (let poll = 0; poll < 2; poll += 1) {
       const value = `${Date.now()}-${poll}-${Math.random()}\n`;
-      await writeFile(trigger, value);
+      await writeText(trigger, value);
       await waitFor(async () => (await readFile(`${trigger}.done`, 'utf8').catch(() => '')) === value, `scheduler poll ${poll + 1} finished`, { timeout: 15_000 });
     }
     const during = (await events(offlineAt)).map((event) => ({ eventType: event.eventType, pauseReason: event.pauseReason }));

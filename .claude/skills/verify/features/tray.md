@@ -26,7 +26,7 @@ Preconditions:
 - 需要工作時，用本機的 RSS feed：Electron 用真的 plugin，可以讀任何本機 HTTP 伺服器的 feed（`flows/tray.mjs` 自己在 run 的 feeds port 提供）。
 
 - **讀選單。** `trayMenu(app)` 回傳 `{ icon, updateBadge?, tooltip, items }`；`items` 包含狀態、動作、分隔線，以及 `{ kind: 'submenu', label, items: [{ action, label }] }`。它先重新讀一次 API 再回傳。
-- **讀畫出的選單。** `trayShown(app)` 不重讀，回傳 `{ menu, reads }`：`menu` 是目前畫出的選單，`reads` 是選單建立以來讀狀態的次數。
+- **讀畫出的選單。** `trayShown(app)` 不重讀，回傳 `{ menu, reads, reading }`：`menu` 是目前畫出的選單，`reads` 是選單建立以來讀狀態的次數，`reading` 是有沒有讀取正在進行或等著開始。觀察閒置前先等 `reading` 為 false。
 - **點選單。** `clickTray(app, action)` 支援既有 action、版本更新動作，以及需處理列的 `subscription:<notification-id>`。
 - **視窗。** `closeWindow(app)` 等於按關閉鈕；`windowState(app)` 回傳 `{ exists, visible, focused, url }`。
 - **提示。** `notifications(app)` 回傳這次啟動發出的提示 `[{ id?, title, content }]`；`activateNotification(app, id)` 走與 OS 點擊相同的導頁。版本更新不發送 OS notification。
