@@ -24,7 +24,7 @@
 
 ## 流程層級
 
-每支流程在自己的檔案以 `export const tier` 標記層級，地圖不另列：`flows list` 印出每支流程的層級，`flows list --feature <功能檔>` 只列涵蓋該功能的流程。層級決定流程什麼時候值得花時間跑；PR 的 CI 照樣執行全部 Web 流程，層級不縮減 PR 的驗證。
+每支流程在自己的檔案以 `export const tier` 標記層級，地圖不另列：`flows list` 印出每支流程的層級，`flows list --feature <功能檔>` 只列涵蓋該功能的流程。層級決定做票時哪些流程值得在本機跑。PR 的 CI 不執行流程；全部 Web 流程在手動觸發的 E2E workflow、nightly 與發布前執行，見 [開發驗證流程](../../../../docs/development-validation.md#做票驗收pr-門檻與-nightly)。
 
 | 層級 | 內容 | 什麼時候跑 |
 | --- | --- | --- |
@@ -39,7 +39,7 @@
 
 ## 定期檢討
 
-大約每 10 張票 merge 後，以 `flows history --runs <N>` 讀出 CI 的紀錄，依 [開發驗證流程](../../../../docs/development-validation.md#已收錄流程的門檻與成本) 決定每支流程保留、合併或降級，最新一次放最上面。每次記日期、讀了哪些 run、全部 Web 流程的總時間，以及有決定的流程。
+檢討已收錄流程時，依 [開發驗證流程的自動測試判準](../../../../docs/development-validation.md#自動測試的判準) 決定每支流程保留、合併、下移或刪除，結果記在這裡，最新一次放最上面。每次記日期、依據的執行紀錄，以及有決定的流程。
 
 ### 2026-11-02（#215）
 

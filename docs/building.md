@@ -76,7 +76,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | `npm test` | 全部 Vitest 測試 |
 | `npm run test:watch` | Vitest watch 模式 |
 | `npm run typecheck` | 產品程式 typecheck |
-| `npm run verify` | Vitest（含 JUnit 報告）、typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
+| `npm run verify` | Vitest、typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
 
 **Vitest 測試**在 `tests/`，依功能分目錄：`core`、`plugins`、`sources`、`jobs`、`activity`、`subscriptions`、`vault`、`search`、`server`、`runtime`、`electron`、`updates`、`web`、`tooling` 等。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 
@@ -101,17 +101,15 @@ Web 模式的流程在 Mac 執行，Windows 執行 Electron 桌面流程。證�
 
 ### CI
 
-GitHub Actions（`.github/workflows/`）在 pull request 與 main push 時執行：
+GitHub Actions（`.github/workflows/`）的工作：
 
-| 工作 | 環境 | 內容 |
-| --- | --- | --- |
-| Verify | Ubuntu 24.04 | `npm ci` 與 `npm run verify`，保存 JUnit 報告與 build |
-| Web regression | macOS 15 | 執行全部已收錄的 Web 流程，保存每支流程的 `results.json` |
-| Meilisearch native runtimes | Mac arm64、Windows x64 | 改到 Meilisearch 準備或 pin 時，下載釘住的 release 並跑 API smoke |
-| Search with the real engine | macOS 15 | 改到 `src/` 中視窗與 Electron 以外的程式、`test:meilisearch:mac` 的測試檔或 runtime 的 pin 時，以真實 Meilisearch 跑 `npm run test:meilisearch:mac` |
-| Packaged smoke | Mac、Windows | 手動觸發時建置未簽章的測試包並檢查打包 App |
+| 工作 | 觸發 | 環境 | 內容 |
+| --- | --- | --- | --- |
+| Verify (Mac) | pull request 與 main push；只改 Markdown 時不執行 | macOS 15 | `npm ci`、安裝釘住版本的 runtime、`npm run verify`（含真實 Meilisearch 的案例） |
+| E2E | 手動觸發 | macOS 15；打包 smoke 在 macOS 15 與 Windows Server 2022 | 全部已收錄的 Web 流程，保存每支流程的 `results.json`；可選擇建置未簽章的測試包並檢查打包 App |
+| Meilisearch native runtimes | 改到 Meilisearch 準備或 pin 的 pull request 與 main push | Mac arm64、Windows x64 | 下載釘住的 release 並跑 API smoke |
 
-CI 不建置正式安裝包，也不跑 Electron 桌面流程。
+CI 不建置正式安裝包。各層驗證在哪裡執行見 [開發驗證流程](development-validation.md#做票驗收pr-門檻與-nightly)。
 
 ## 建置安裝包
 
@@ -122,7 +120,7 @@ CI 不建置正式安裝包，也不跑 Electron 桌面流程。
 | `npm run package:mac` | DMG 與 ZIP，在 `release/` |
 | `npm run package:win` | NSIS 安裝檔，在 `release/` |
 
-打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256。每次建置另在 `release/` 寫出兩份檔案：
+打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），執行期間持有整個 checkout 的獨占鎖，所有入口都使用 `--publish never`。完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256，任一不一致都不交付。每次建置另在 `release/` 寫出兩份檔案：
 
 - 該平台的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，記錄版本、完整 commit、BuildInfo，以及安裝檔與更新檔的檔名、大小與 SHA-256。它和安裝檔一起上傳，App 靠它找到自己平台的更新檔。
 - artifact manifest：`XR-Collector-<版本>-<target>-artifacts.json`，記錄這次建置的所有產物、runtime、簽章、工具版本與建置機架構，留在建置機，不上傳。
@@ -131,11 +129,35 @@ Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dl
 
 ### 簽章
 
-- **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任。從瀏覽器下載的 ad-hoc 包帶有隔離屬性，macOS 會拒絕開啟；測試時以 `xattr -dr com.apple.quarantine "/Applications/<App 名稱>.app"` 移除，或在「系統設定 → 隱私權與安全性」選「強制打開」。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key（檔案與設定方式見 [簽署設定](../config/README.md)），以 `--mac-signing-mode developer-id-notarized` 啟用，每次送 Apple 公證兩次（App 與 DMG）。
+- **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任；打包的檢查以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources。從瀏覽器下載的 ad-hoc 包帶有隔離屬性，macOS 會拒絕開啟；測試時以 `xattr -dr com.apple.quarantine "/Applications/<App 名稱>.app"` 移除，或在「系統設定 → 隱私權與安全性」選「強制打開」。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key（檔案與設定方式見 [簽署設定](../config/README.md)），步驟見下一節。
 - **Windows**：未簽章。預期的簽署設定格式見 [簽署設定](../config/README.md#windows)。
 
-開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選。使用時機與 Developer ID 的建置步驟見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
+開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選，使用時機見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
 
+### Mac 的 Developer ID 建置
+
+以 `--mac-signing-mode developer-id-notarized --mac-signing-env <absolute-env> --mac-signing-root <absolute-root>` 明確啟用 Developer ID 模式：
+
+```bash
+npm run package:mac -- --mac-signing-mode developer-id-notarized --mac-signing-env /absolute/signing/root/.env --mac-signing-root /absolute/signing/root
+```
+
+env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；兩個檔案路徑都相對 signing root，env、p12、p8 必須只允許 owner 讀取。流程以專用 temporary keychain 找到該 p12 唯一且 Team 相符的 identity。因 macOS `codesign --keychain` 仍要求 identity 所在 keychain 可被搜尋，流程在保留既有順序下把自己建立的 keychain 暫時 append 到目前 user search list；正常清理由 `delete-keychain` 移除自己的 keychain，若該命令失敗，fallback 只從當下清單刪除自己的 entry，保留其他 session 同時加入的項目，並讓整次建置以包含主錯與清理錯的診斷失敗，不用舊 snapshot 覆蓋新變更。builder child 不取得 App Store Connect key。Mac Developer ID 產物依下列順序建置與檢查，每份產物只做一次完整檢查：
+
+1. electron-builder `--dir` 產 App；afterPack 簽署 staged runtime，再以 Developer ID 簽署 App。
+2. 公證前對 App 跑完整 Developer ID gate：Team、hardened runtime、entitlements、sealed resources 與 signed runtime inventory。
+3. App 只送公證一次：以 `ditto` 壓成上傳用 ZIP，`notarytool submit` 後立即用 upload SHA、Team 與用途保存 submission ID，再等待結果並取回 log；中斷後只續查同一 submission，不能盲目重送。`Accepted`、零 issues 才 `stapler staple` 並 `stapler validate` App。
+4. 對已 staple 的 App 跑完整 Developer ID gate、`syspolicy_check distribution` 與 `spctl --assess --type execute`；這份 App 的 identity 記為 App 收據的 `stapled`。
+5. electron-builder 以 `--prepackaged` 由已 staple 的 App 一次產出 DMG 與 ZIP。
+6. DMG 只送公證一次：直接上傳 DMG 本身，與 App 共用同一套 submission 保存、續查與收據規則；`Accepted`、零 issues 才 `stapler staple` 並 `stapler validate` DMG。DMG 收據的 `stapled` 是最終 DMG 的 bytes。
+7. DMG gate：`codesign --verify --strict` 與 Team，並以 `spctl --assess --type open --context context:primary-signature -vv` 評估；該命令 exit code 非零，或 `source=` 不是 `Notarized Developer ID`，即失敗。`source=` 行印在 log。
+8. 唯讀掛載 DMG，其中唯一的 App bytes 必須等於 `stapled`，並對它跑 `stapler validate`、`syspolicy_check distribution` 與 `spctl --assess --type execute` 各一次。
+9. 以 `ditto` 解開 ZIP，其中唯一的 App 做與第 8 步相同的比對與檢查。
+10. 讀回 `release/mac-arm64` 的 App：bytes 必須等於 `stapled`，再核對 BuildInfo、runtime 與 resources；步驟 2、4 已驗過相同 bytes，不重跑 Developer ID gate。
+
+這些自動 gate 不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。
+
+Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。
 
 ## 發布
 

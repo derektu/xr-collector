@@ -170,7 +170,7 @@ node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動�
 
 - **層級**：每支流程 export `tier`：`core`（常用路徑與資料安全）、`feature`（功能專項與邊界）、`platform`（Desktop 與打包；Desktop 流程一律是它）、`real`（真實來源，以 `--data real` 啟動）。缺少或不合法時 `flows list`／`flows run` 指名檔案失敗。何時跑哪一層見 [功能地圖](features/README.md#流程層級)。
 - **選取**：名稱、`--web`／`--desktop`、`--tier`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 CI 跑的集合：Desktop 與 `real` 以外的全部流程。
-- **預算**：單支流程在 CI 不超過 60 秒；需要更久的流程 export `overBudget` 寫明理由。耗時表的 `budget` 欄標出超過 60 秒的流程，以及其中沒寫理由的；總時間超過全部 Web 流程的 300 秒預算時，最後一行註明。門檻見 [開發驗證流程](../../../docs/development-validation.md#已收錄流程的門檻與成本)。
+- **預算**：單支流程在 CI 不超過 60 秒；需要更久的流程 export `overBudget` 寫明理由。耗時表的 `budget` 欄標出超過 60 秒的流程，以及其中沒寫理由的；總時間超過全部 Web 流程的 300 秒預算時，最後一行註明。
 - **歷史**：`flows history` 讀 `--from <資料夾>` 底下每個流程的 `results.json`，沒給時以 `gh` 下載最近 `--runs`（預設 30）次 E2E workflow（`e2e.yml`）的 `web-regression-results-*` artifact，列出每支流程的執行次數、失敗次數與原因（流程的 error，或失敗的 `<scenario>: <check id>`）、耗時中位數與最大值，以及超過 60 秒的次數。
 
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的產品 `src/` 與 Web UI；收錄流程同時使用流程來源 checkout 的合成 verification server，才能以候選 harness 重複測固定的乾淨 main。`results.json` 分別記受測 checkout 與 `flowSource`，不可把兩者當成同一版本。票自己的 `.local` 流程若直接呼叫 `launchWeb`，預設仍使用受測 checkout 的 server；需要拆開時明確傳 `server`（見 API 表）。
@@ -185,7 +185,7 @@ node $V flows run --web --issue 91 --label ci-web --jobs 3           # CI：動�
 
 **收錄規則**：
 
-1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑，且符合 [新增流程的門檻](../../../docs/development-validation.md#已收錄流程的門檻與成本) 時，同一張票把它收進 `flows/`，隨 PR 一起 commit：標記層級，斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能，從 `Backlog` 移除已補上的項目。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
+1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑，且符合 [自動測試的判準](../../../docs/development-validation.md#自動測試的判準) 時，同一張票把它收進 `flows/`，隨 PR 一起 commit：標記層級，斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能，從 `Backlog` 移除已補上的項目。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
 2. 只對本票有意義的步驟，例如重現特定 bug 的資料、一次性的資料檢查，留在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
 3. 票改變了已收錄流程所檢查的行為時，同一張票更新該流程與功能地圖；改過的斷言在基準上失敗、在本票版本通過。
 4. 已收錄流程涵蓋的功能，票不另寫重複的 `.local` 流程；需要多檢查的項目加進已收錄流程。
