@@ -38,7 +38,7 @@ Preconditions:
 - 合成收集很快，不調慢 `captureDelayMs` 很難拍到進行中。
 - 沒有未結束的工作時每 2 秒更新，有工作時每 1.5 秒更新。等待畫面符合預期，不以 API 剛完成就假定畫面已刷新。
 - 重試前沒把注入的失敗拿掉，重試會再次失敗；這是驗證步驟的錯誤，不是產品問題。
-- 失敗原因的用字由 plugin 分類決定（`tests/plugins/youtube/failures.test.ts`），截圖只核對畫面呈現。
+- 失敗原因的用字由 plugin 宣告決定（`src/plugins/youtube/shared.ts` 的 `failureLabels`），截圖只核對畫面呈現。
 
 ## Regression flows
 

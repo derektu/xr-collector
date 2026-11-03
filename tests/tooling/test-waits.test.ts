@@ -49,7 +49,7 @@ describe('waits in tests', () => {
 
   it('sleeps only to stand for the work a test double does', () => {
     expect(using(/setTimeout\(resolve/u)).toEqual([
-      'tests/runtime/mac-signing.test.ts', // signing work that overlaps, for the concurrency bound
+      'tests/packaging/mac-signing.test.ts', // signing work that overlaps, for the concurrency bound
       'tests/tooling/verify-skill/flows.test.ts', // flow runs that overlap, for the job limit
     ]);
   });

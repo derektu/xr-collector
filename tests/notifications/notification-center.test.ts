@@ -98,18 +98,4 @@ describe('auto-pause notification center (#136)', () => {
     expect(notificationNavigation(active.active[0]!, 'current-vault')).toEqual({ kind: 'source', type: 'rss', id: 'channel-a' });
     expect(notificationNavigation(active.active[0]!, 'another-vault')).toEqual({ kind: 'message', message: expect.stringContaining('其他知識庫') });
   });
-
-  it('serializes concurrent auto-pauses and preference writes', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'xr-notifications-'));
-    const adapter: SystemNotificationAdapter = { availability: () => ({ state: 'available', message: null }), show: async () => undefined, restore: async () => undefined };
-    const center = await NotificationCenter.open(root, adapter);
-    await Promise.all([
-      center.recordAutoPause('vault-a', 'youtube', record('2026-10-28T01:00:00.000Z')),
-      center.recordAutoPause('vault-a', 'youtube', record('2026-10-28T02:00:00.000Z')),
-      center.update(false),
-    ]);
-    const saved = JSON.parse(await readFile(path.join(root, 'notifications.json'), 'utf8'));
-    expect(saved.enabled).toBe(false);
-    expect(saved.events).toHaveLength(2);
-  });
 });

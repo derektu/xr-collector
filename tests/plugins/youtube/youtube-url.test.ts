@@ -20,6 +20,7 @@ describe('classifyYouTubeInput', () => {
     [' https://www.youtube.com/@3blue1brown/videos ', 'https://www.youtube.com/@3blue1brown'],
     ['https://youtube.com/channel/UCYO_jab_esuFRV4b17AJtAw/featured', 'https://www.youtube.com/channel/UCYO_jab_esuFRV4b17AJtAw'],
     ['http://www.youtube.com/c/sample', 'https://www.youtube.com/c/sample'],
+    ['https://www.youtube.com/user/older', 'https://www.youtube.com/user/older'],
   ])('treats %s as a channel', (input, url) => {
     expect(classifyYouTubeInput(input)).toEqual({ kind: 'channel', url });
   });

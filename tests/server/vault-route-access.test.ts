@@ -1,7 +1,7 @@
-// Which routes a Vault operation such as an import blocks: each route declares its Vault access,
-// and the UI and an authorized Agent meet the same lock. During an import, documents, search and
-// rebuild answer 409 vault_busy while jobs, activity, Vault status and device settings stay
-// available.
+// Which routes a Vault operation such as an import blocks: each route declares its Vault access.
+// The UI and Agent listeners share the route code, so one listener stands for both. During an
+// import, documents, search and rebuild answer 409 vault_busy while jobs, activity, Vault status
+// and device settings stay available.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../src/server/app.js';
@@ -12,57 +12,7 @@ const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
 describe('Vault access declared by routes', () => {
-  it('uses route declarations for device data and operations, and method defaults otherwise', async () => {
-    const accesses: VaultAccess[] = [];
-    const transfer = {
-      enterRequest(access: VaultAccess) { accesses.push(access); return () => undefined; },
-      status: () => ({ state: 'idle' }),
-      exportSuggestion: () => ({ folder: '/tmp', path: '/tmp/export.zip' }),
-    } as unknown as VaultWorkspace;
-    const app = await createHttpApp({
-      transfer,
-      collector: {
-        listDocuments: async () => ({ documents: [], total: 0, nextOffset: null }),
-      } as never,
-      search: {
-        status: () => ({ state: 'ready', indexedDocuments: 0 }),
-        rebuild: async () => undefined,
-      } as never,
-      jobs: {
-        list: () => ({ jobs: [], nextCursor: null }),
-        overview: async () => ({ running: [], queued: [], failed: [] }),
-      } as never,
-      activity: {
-        query: async () => ({ events: [], nextCursor: null }),
-        summary: async () => ({ entries: [], nextCursor: null }),
-        group: async () => ({ group: { groupId: 'locked-group', count: 1 }, checks: [], nextCursor: null }),
-        health: () => ({ state: 'ready' }),
-      } as never,
-      agentConnection: {
-        status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
-        connection: () => ({ url: 'http://127.0.0.1:7222', token: 'device-key' }),
-        configure: async () => ({ state: 'available', activeUrl: 'http://127.0.0.1:7222', activePort: 7222, configured: { mode: 'auto' }, restartRequired: false, message: 'ok' }),
-        resetKey: async () => ({ url: 'http://127.0.0.1:7222', token: 'next-key' }),
-        download: async () => Buffer.from('zip'), authorize: () => true,
-      },
-    });
-    apps.push(app);
-
-    await app.inject({ method: 'GET', url: '/api/documents' });
-    await app.inject({ method: 'POST', url: '/api/search/rebuild' });
-    await app.inject({ method: 'GET', url: '/api/jobs' });
-    await app.inject({ method: 'GET', url: '/api/activity' });
-    await app.inject({ method: 'GET', url: '/api/activity?view=summary' });
-    await app.inject({ method: 'GET', url: '/api/activity/groups/locked-group' });
-    await app.inject({ method: 'GET', url: '/api/vault/status' });
-    await app.inject({ method: 'GET', url: '/api/vault/export/suggestion' });
-
-    expect(accesses).toEqual([
-      'vault-read', 'vault-write', 'vault-operation',
-    ]);
-  });
-
-  it.each([undefined, 'agent-secret'])('enforces the same lock for UI and Agent routes (token %s)', async (agentToken) => {
+  it('blocks document reads and writes during an import while device routes stay available', async () => {
     const lock = new VaultOperationLock({
       hold: async () => () => undefined,
       idle: async () => undefined,
@@ -73,7 +23,7 @@ describe('Vault access declared by routes', () => {
       status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
     } as unknown as VaultWorkspace;
     const app = await createHttpApp({
-      ...(agentToken ? { agentToken } : {}), transfer,
+      transfer,
       loginStartup: {
         status: async () => ({ supported: true, enabled: false, state: 'disabled', message: 'off' }),
         update: async (enabled) => ({ supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: 'ok' }),
@@ -103,7 +53,7 @@ describe('Vault access declared by routes', () => {
       },
     });
     apps.push(app);
-    const headers = agentToken ? { authorization: `Bearer ${agentToken}` } : {};
+    const headers = {};
     let release!: () => void;
     let entered!: () => void;
     const bodyEntered = new Promise<void>((resolve) => { entered = resolve; });

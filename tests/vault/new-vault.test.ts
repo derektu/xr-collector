@@ -7,7 +7,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkNewVault, createNewVault, describePackage, nameProblem } from '../../src/vault/new-vault.js';
 import { inspectVaultDirectory, VAULT_MARKER } from '../../src/vault/vault-directory.js';
-import { packageOf } from './package-fixtures.js';
+import { packageOf } from '../support/package-fixtures.js';
 
 const roots: string[] = [];
 afterEach(async () => {

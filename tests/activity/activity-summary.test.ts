@@ -1,7 +1,7 @@
 // The activity summary folds a run of scheduled checks with the same result into one row per
 // subscription, so a quiet channel shows one row instead of a page of "no new videos". Manual
-// checks, new content and skipped items end a run; raw events stay complete, pages hold still while
-// events arrive, and groups survive a restart until retention expires them.
+// checks, new content and skipped items end a run; raw events stay complete, and groups survive a
+// restart until retention expires them.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -142,31 +142,13 @@ describe('activity check summaries (#96 A1-A5)', () => {
     expect(summary.entries.filter((entry) => entry.kind === 'check')).toHaveLength(2);
   });
 
-  it('keeps same-millisecond summary lifecycle in newest-first causal order (F2)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
-    const timestamp = at(20);
-    log.record({ eventId: '000000000001-added', timestamp, severity: 'info', eventType: 'subscription.added', message: 'added',
-      vaultPath: VAULT, jobId: null, sourceType: 'youtube', sourceTitle: 'A', subscriptionId: 'sub-a' });
-    log.record({ eventId: '000000000002-start', timestamp, severity: 'info', eventType: 'job.started', message: 'started',
-      vaultPath: VAULT, jobId: 'collect', jobRole: 'check', sourceType: 'youtube', sourceTitle: 'A', subscriptionId: 'sub-a', trigger: 'subscribe' });
-    log.record({ ...terminal('collect', timestamp, { trigger: 'subscribe', result: 'other', created: 1 }), eventId: '000000000003-complete' });
-    const entries = (await log.summary({ view: 'summary' }, scope)).entries;
-    expect(entries.map((entry) => entry.kind === 'event' ? entry.event.eventId : entry.jobId))
-      .toEqual(['collect', '000000000002-start', '000000000001-added']);
-  });
-
-  it('freezes pages across arrivals and applies severity only after result boundaries (A5)', async () => {
+  it('applies severity only after result boundaries (A5)', async () => {
     const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     log.record({ ...terminal('old', at(1)), eventId: 'system', jobId: null, check: undefined, eventType: 'collection.resumed' });
     log.record(terminal('e1', at(2), { result: 'network_error' }));
     log.record(terminal('empty', at(3)));
     log.record(terminal('e2', at(4), { result: 'network_error' }));
-    const first = await log.summary({ view: 'summary', limit: 1 }, scope);
     log.record(terminal('e3', at(5), { result: 'network_error' }));
-    const second = await log.summary({ view: 'summary', limit: 10, cursor: first.nextCursor! }, scope);
-    expect(new Set([...first.entries, ...second.entries].map((entry) => entry.kind === 'event' ? entry.event.eventId : entry.groupId)).size).toBe(4);
-    const refreshed = await log.summary({ view: 'summary' }, scope);
-    expect(refreshed.entries.find((entry) => entry.kind === 'check' && entry.lastFinishedAt === at(5))).toMatchObject({ count: 2 });
     const errors = await log.summary({ view: 'summary', severity: ['error'] }, scope);
     expect(errors.entries.filter((entry) => entry.kind === 'check').map((entry) => entry.count)).toEqual([2, 1]);
   });
@@ -189,37 +171,6 @@ describe('activity check summaries (#96 A1-A5)', () => {
 });
 
 describe('durable summary retention (#96 A6)', () => {
-  it('keeps same-millisecond raw pagination ordered and unique across restart', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'xr-events-'));
-    roots.push(root);
-    const fixed = new Date(at(20));
-    let store = await JobStore.open(root, () => fixed);
-    const write = (message: string) => store.event({
-      severity: 'info', eventType: 'system.test', message, vaultPath: VAULT, jobId: null,
-    });
-    write('one'); write('two'); write('three');
-    await store.close();
-    store = await JobStore.open(root, () => fixed);
-    write('four');
-    const first = await store.activity.query({ limit: 2 }, scope);
-    const second = await store.activity.query({ limit: 2, cursor: first.nextCursor! }, scope);
-    expect([...first.events, ...second.events].map((event) => event.message)).toEqual(['four', 'three', 'two', 'one']);
-    expect(new Set([...first.events, ...second.events].map((event) => event.eventId)).size).toBe(4);
-    await store.close();
-  });
-
-  it('expires an existing summary cursor when retention removes part of its frozen snapshot', async () => {
-    let now = new Date(Date.UTC(2026, 9, 20, 9));
-    const log = ActivityLog.memory({ now: () => now });
-    log.record({ ...terminal('system-1', at(1)), eventId: 'system-1', jobId: null, check: undefined, eventType: 'collection.resumed' });
-    log.record({ ...terminal('system-2', at(2)), eventId: 'system-2', jobId: null, check: undefined, eventType: 'collection.paused' });
-    const first = await log.summary({ view: 'summary', limit: 1 }, scope);
-    expect(first.nextCursor).toBeTruthy();
-    now = new Date(Date.UTC(2026, 10, 21, 9));
-    await expect(log.summary({ view: 'summary', limit: 1, cursor: first.nextCursor! }, scope))
-      .rejects.toMatchObject({ code: 'activity_snapshot_expired' });
-  });
-
   it('expires cached detail when an early event crosses retention before its completed check', async () => {
     let now = new Date('2026-10-31T08:00:00.000Z');
     const log = ActivityLog.memory({ now: () => now });

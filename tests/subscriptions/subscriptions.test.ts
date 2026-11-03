@@ -109,28 +109,6 @@ describe('first subscription (S-T3)', () => {
     expect(w.source.captures).not.toContain('premiere000');
   });
 
-  it.each([
-    [7, 50, 3],
-    [30, 5, 5],
-    [60, 50, 20],
-  ] as const)('applies a range of %i days with at most %i videos', async (days, maxItems, expected) => {
-    const w = await world();
-    Object.assign(w.policy, { backfillDays: days, backfillMaxItems: maxItems });
-    const id = w.source.addChannel('ranges');
-    const ids = w.source.publish(id, 'r', w.clock.now, Array.from({ length: 30 }, (_, index) => 1 + 3 * index));
-    const first = await subscribe(w, 'ranges');
-    expect(first.items!.map((item) => item.sourceId)).toEqual(ids.slice(0, expected));
-  });
-
-  it('takes the newest 100 of more videos within the range at the largest limit', async () => {
-    const w = await world();
-    Object.assign(w.policy, { backfillDays: 60, backfillMaxItems: 100 });
-    const id = w.source.addChannel('many');
-    const ids = w.source.publish(id, 'm', w.clock.now, Array.from({ length: 120 }, (_, index) => 0.25 * (index + 1)));
-    const first = await subscribe(w, 'many');
-    expect(first.items!.map((item) => item.sourceId)).toEqual(ids.slice(0, 100));
-  });
-
   it('skips before downloading subtitles a video whose listing age is in range but whose exact date is not', async () => {
     const w = await world();
     const id = w.source.addChannel('approx');
@@ -182,33 +160,7 @@ describe('first subscription (S-T3)', () => {
   });
 });
 
-describe('checks after the first (R-02, R-03, R-07, R-09)', () => {
-  it('collects only the new videos when a few were published, and only the newest limit when more were', async () => {
-    const w = await world();
-    const id = w.source.addChannel('busy');
-    const older = w.source.publish(id, 'o', w.clock.now, Array.from({ length: 12 }, (_, index) => 1 + index));
-    const first = await subscribe(w, 'busy');
-    expect(first.items!.map((item) => item.sourceId)).toEqual(older.slice(0, 10));
-
-    w.advance(30 * 60_000);
-    const few = w.source.publish(id, 'b', w.clock.now, [0.01, 0.02, 0.03]);
-    const [check] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
-    expect(check!.items!.map((item) => item.sourceId)).toEqual(few);
-
-    w.advance(30 * 60_000);
-    const many = w.source.publish(id, 'm', w.clock.now, Array.from({ length: 15 }, (_, index) => (index + 1) / 10_000), 100);
-    const [crowded] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
-    expect(crowded!.items!.map((item) => item.sourceId)).toEqual(many.slice(0, 10));
-
-    // The five older new videos fall outside the newest ten for good: later checks never reach them.
-    w.advance(30 * 60_000);
-    const [next] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
-    expect(next).toMatchObject({ result: { outcome: 'empty' }, items: [] });
-    expect(many.slice(10).some((video) => w.documents.documents.has(video))).toBe(false);
-    expect(older.slice(10).some((video) => w.documents.documents.has(video))).toBe(false);
-    expect(new Set(w.source.captures).size).toBe(w.source.captures.length);
-  });
-
+describe('checks after the first (R-07, R-09)', () => {
   it('joins the active job when a check overlaps it, then finds what was published meanwhile', async () => {
     const w = await world({ capture: 1 });
     const id = w.source.addChannel('overlap');

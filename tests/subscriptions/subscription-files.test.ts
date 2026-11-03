@@ -1,13 +1,15 @@
 // The subscription and schedule files in a Vault: a file of another version or with invalid values
 // is refused and left untouched rather than guessed at or converted, saves keep the fields they do
 // not manage, and subscriptions, failed items and the automatic collection switch survive a
-// restart.
+// restart. A subscription's change time moves only for a person's changes, which a Vault merge
+// compares, and a removal is recorded until the channel is subscribed again.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import { channel, settings } from '../support/exchange-fixtures.js';
 
 const roots: string[] = [];
 
@@ -132,5 +134,43 @@ describe('JsonSubscriptionStore', () => {
     await store.save({ enabled: false });
     expect(await new JsonScheduleStore(root).load()).toEqual({ enabled: false });
     expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: false });
+  });
+});
+
+const at = (n: number) => `2030-01-${String(n).padStart(2, '0')}T00:00:00.000Z`;
+const store = (root: string, when?: string) => new JsonSubscriptionStore(root, 'youtube', when ? () => new Date(when) : undefined);
+
+describe('subscription change and removal times', () => {
+  it('stamps a subscription when a person changes its name, address, pause or settings, and not for collection progress', async () => {
+    const root = await vault({});
+    let day = 1;
+    const store = new JsonSubscriptionStore(root, 'youtube', () => new Date(at(day)));
+    await store.add(channel('UC123'));
+    expect((await store.list())[0]!.updatedAt).toBe('2026-09-18T00:00:00.000Z');
+    const stamp = async () => (await store.list())[0]!.updatedAt;
+    await store.update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: null, outOfRange: [] });
+    expect(await stamp()).toBe('2026-09-18T00:00:00.000Z');
+    let previous = await stamp();
+    for (const change of [
+      () => store.update('UC123', { title: '新名稱' }), () => store.update('UC123', { url: 'https://www.youtube.com/@new' }),
+      () => store.setEnabled('UC123', false), () => store.update('UC123', { settings: { ...settings, backfillMaxItems: 5 } }),
+    ]) {
+      day += 1;
+      await change();
+      const now = await stamp();
+      expect(now! > previous!).toBe(true);
+      previous = now;
+    }
+  });
+
+  it('records a removal with the store clock and lifts it when the channel is subscribed again', async () => {
+    const root = await vault({});
+    await store(root).add(channel('UC123'));
+    expect(await store(root, at(3)).remove('UC123')).toBe(true);
+    expect(await store(root).removals()).toEqual([{ id: 'UC123', title: '頻道 UC123', url: 'https://www.youtube.com/channel/UC123', removedAt: at(3) }]);
+    expect(await store(root).remove('UC123')).toBe(false);
+    await store(root).add(channel('UC123', { addedAt: at(4) }));
+    expect(await store(root).removals()).toEqual([]);
+    expect(JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8'))).not.toHaveProperty('removed');
   });
 });

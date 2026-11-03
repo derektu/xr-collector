@@ -1,6 +1,7 @@
 // The check status a subscription shows (scheduled, paused, auto check off, queued, checking,
 // downloading with progress, retrying, failing, auto-paused or sign-in needed), computed from its
-// record and its running work, so the subscription list says what each subscription is doing now.
+// record and its running work, so the subscription list says what each subscription is doing now. A
+// started check never reads as queued again while its videos wait for another subscription's capture slot.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type PacingStatus } from '../../src/core/types.js';
+import { workStatus } from '../../src/jobs/job-board.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
@@ -183,6 +185,50 @@ describe('subscription check status computed by the service (N75-T5)', () => {
 
     w.advance(31 * MINUTE);
     expect(await w.status(alpha)).toEqual({ state: 'queued' });
+  });
+
+  it('never shows queued again for a started check while its videos wait for the capture slot another subscription holds (#108)', async () => {
+    const w = await world({ capture: 1 });
+    const alpha = w.source.addChannel('alpha');
+    const beta = w.source.addChannel('beta');
+    const alphaVideos = w.source.publish(alpha, 'a', w.clock.now, [1, 2]);
+    const betaVideos = w.source.publish(beta, 'b', w.clock.now, [1]);
+    w.source.holdCaptures = true;
+    const first = await w.jobs.whenSettled((await w.channels.add('@alpha')).job.id);
+    const second = await w.jobs.whenSettled((await w.channels.add('@beta')).job.id);
+    const betaCheck = second.result!.followUpJobId!;
+    await eventually(() => expect(w.jobs.get(betaCheck).items).toHaveLength(1));
+    expect(w.source.holds.running()).toEqual([alphaVideos[0]]);
+
+    expect((await w.status(beta)).state).not.toBe('queued');
+    const overview = await w.jobs.overview();
+    expect(overview.running.map((entry) => entry.jobId)).toContain(betaCheck);
+    expect(overview.queued.map((entry) => entry.jobId)).not.toContain(betaCheck);
+
+    w.source.release(alphaVideos[0]!);
+    await w.source.holds.reach([alphaVideos[1]]);
+    expect((await w.status(beta)).state).not.toBe('queued');
+    w.source.release(alphaVideos[1]!);
+    await w.source.holds.reach([betaVideos[0]]);
+    w.source.release(betaVideos[0]!);
+    await w.jobs.whenSettled(first.result!.followUpJobId!);
+    await w.jobs.whenSettled(betaCheck);
+  });
+
+  it('keeps a started job that waits in line again, such as after a restart, out of queued, and reads its own wait as retrying', () => {
+    const at = '2026-10-15T04:00:00.000Z';
+    const requeued: CollectionJob = {
+      id: 'j', kind: 'youtube.channel', state: 'queued', phase: 'discover', vaultPath: '/vault', parentId: null,
+      source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
+      createdAt: at, startedAt: at, finishedAt: null, updatedAt: at, progress: null, items: null, result: null, error: null,
+    };
+    expect(workStatus(requeued)).toEqual({ state: 'checking' });
+    expect(workStatus({ ...requeued, startedAt: null })).toEqual({ state: 'queued' });
+    // Its own cooldown or next attempt reads as retrying, and adding a channel reads as checking.
+    const later = '2026-10-15T05:00:00.000Z';
+    expect(workStatus({ ...requeued, wait: { reason: 'rate_limited', until: later } }))
+      .toEqual({ state: 'retrying', at: later, cause: { reason: 'rate_limited' } });
+    expect(workStatus({ ...requeued, state: 'running', kind: 'youtube.channel-add', phase: 'resolve' })).toEqual({ state: 'checking' });
   });
 
   it('orders paused, sign-in, active work, the auto check switch and the schedule', () => {

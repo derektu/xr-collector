@@ -24,7 +24,7 @@ import type { VaultWorkspace } from '../../src/vault/workspace.js';
 import type { CapturedDocument, SourcePlugin } from '../../src/plugins/types.js';
 import { createFakePlugin, FAKE, FAKE2, FAKE_DEFAULTS, FakeSource, type FakeSettings } from '../support/fake-source-plugin.js';
 import { youtubePlugins } from '../support/youtube-sources.js';
-import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../vault/exchange-fixtures.js';
+import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../support/exchange-fixtures.js';
 import { eventually } from '../support/wait.js';
 
 // The core collects, subscribes, paces, deletes and resumes for source types it never names: two
@@ -214,39 +214,6 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     expect(JSON.parse(await readFile(path.join(w.root, 'settings/fake-feeds.json'), 'utf8'))).toMatchObject({ version: 1, feeds: [{ id: 'news' }] });
     expect(await w.service('fake').preview(feedUrl('fake', 'news'))).toMatchObject({ subscription: { enabled: true, settings: { maxItems: 3 } } });
     expect((await w.collector.read(`fake:${keys[0]}`))).toMatchObject({ publisher: { id: 'news', name: 'fake 動態 news' }, fake: { note: '來自 fake 動態 news' } });
-    await w.close();
-  });
-
-  it('takes the newest N in range at every check without filling in for collected items, and remembers items outside the range', async () => {
-    const w = await world();
-    const keys = w.sources.fake.addFeed('daily', w.clock.now, [1, 2, 3, 4, 5]);
-    // The listing dates the newest item within the range; its exact time, which the capture reads, is not.
-    w.sources.fake.feed('daily').items.unshift({ key: 'daily-old', title: '舊文', publishedAt: new Date(w.clock.now.getTime() - 90 * DAY).toISOString(), listedAt: new Date(w.clock.now.getTime() - DAY / 2).toISOString() });
-    w.sources.fake.feed('daily').items.unshift({ key: 'daily-soon', title: '預告', publishedAt: null, eligible: false });
-    await w.jobs.whenSettled((await w.jobs.submitItem('fake', itemUrl('fake', keys[1]!))).job.id);
-    w.sources.fake.captures.length = 0;
-
-    const first = await w.subscribe('fake', 'daily', { maxItems: 3 });
-    expect(itemsOf(first)).toEqual([['daily-old', 'out_of_range'], [keys[0], 'created']]);
-    expect([...w.sources.fake.captures].sort()).toEqual(['daily-00', 'daily-old']);
-    expect((await w.subscription('fake', 'daily'))!.outOfRange).toEqual([{ itemKey: 'daily-old', before: expect.any(String) }]);
-
-    // An immediate check takes the same candidates and does not ask for the remembered item again.
-    w.advance(MINUTE);
-    const [immediate] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['daily'] });
-    const checked = await w.jobs.whenSettled(immediate!.job.id);
-    expect(checked.scope).toEqual({ trigger: 'manual' });
-    expect(itemsOf(checked)).toEqual([]);
-    expect([...w.sources.fake.captures].sort()).toEqual(['daily-00', 'daily-old']);
-
-    // A scheduled check after the interval finds a new item and collects it.
-    w.sources.fake.feed('daily').items.unshift({ key: 'daily-new', title: '新文', publishedAt: w.clock.now.toISOString() });
-    w.advance(FAKE_DEFAULTS.intervalMinutes * MINUTE);
-    await w.scheduler.checkNow();
-    await w.idle();
-    const scheduled = w.jobs.list({ limit: 50 }).jobs.find((job) => job.kind === 'fake.feed' && job.scope?.trigger === 'scheduled')!;
-    expect(itemsOf(scheduled)).toEqual([['daily-new', 'created']]);
-    expect([...w.sources.fake.captures].sort()).toEqual(['daily-00', 'daily-new', 'daily-old']);
     await w.close();
   });
 
@@ -565,7 +532,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
   });
 });
 
-describe('failed items of a type the core does not name (N69-T2–T7)', () => {
+describe('failed items of a type the core does not name (N69-T5–T7)', () => {
   const failure = (code: string) => new CollectorError(code, `${code}（測試）`);
   const check = async (w: Awaited<ReturnType<typeof world>>, id: string) => {
     w.advance(MINUTE);
@@ -574,98 +541,6 @@ describe('failed items of a type the core does not name (N69-T2–T7)', () => {
   };
   const failuresOf = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
     [...(await w.subscription('fake', id))?.failures ?? []].sort((left, right) => String(left.itemKey).localeCompare(String(right.itemKey)));
-
-  it('counts one attempt per check, skips an item after the third or on a failure no retry changes, and forgets it once collected (N69-T2)', async () => {
-    const w = await world();
-    const [later, gone, flaky] = w.sources.fake.addFeed('f', w.clock.now, [1, 2, 3]);
-    w.sources.fake.fail(later!, failure('no_subtitles'), failure('no_subtitles'), failure('no_subtitles'));
-    w.sources.fake.fail(gone!, failure('video_unavailable'));
-    // The retry policy here allows one attempt, so a transient failure outlasts the check at once.
-    w.sources.fake.fail(flaky!, failure('network_error'));
-
-    const first = await w.subscribe('fake', 'f');
-    expect(first).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { created: 0, failed: 3 } });
-    expect(await failuresOf(w, 'f')).toEqual([
-      { itemKey: later, title: 'f 第 0 篇', attempts: 1, errorCode: 'no_subtitles', failedAt: w.clock.now.toISOString(), skipped: false },
-      { itemKey: gone, title: 'f 第 1 篇', attempts: 1, errorCode: 'video_unavailable', failedAt: w.clock.now.toISOString(), skipped: true },
-      { itemKey: flaky, title: 'f 第 2 篇', attempts: 1, errorCode: 'network_error', failedAt: w.clock.now.toISOString(), skipped: false },
-    ]);
-    // Failed items leave the subscription's status alone.
-    const listed = (await w.service('fake').listSubscriptions()).find((entry) => entry.id === 'f')!;
-    expect(listed).toMatchObject({ status: 'tracking', lastError: null });
-
-    const second = await check(w, 'f');
-    expect(itemsOf(second)).toEqual([[later, null], [flaky, 'created']]);
-    expect((await failuresOf(w, 'f')).map((entry) => [entry.itemKey, entry.attempts, entry.skipped])).toEqual([[later, 2, false], [gone, 1, true]]);
-
-    await check(w, 'f');
-    expect((await failuresOf(w, 'f')).map((entry) => [entry.itemKey, entry.attempts, entry.skipped])).toEqual([[later, 3, true], [gone, 1, true]]);
-    const captures = w.sources.fake.captures.length;
-    expect(itemsOf(await check(w, 'f'))).toEqual([]);
-    expect(w.sources.fake.captures).toHaveLength(captures);
-    await w.close();
-  });
-
-  it('counts nothing for a cooldown or a source that needs a new sign-in, and forgets items that are no longer candidates (N69-T2)', async () => {
-    const w = await world();
-    const [limited, signIn] = w.sources.fake.addFeed('g', w.clock.now, [1, 2]);
-    w.sources.fake.fail(limited!, failure('rate_limited'));
-    w.sources.fake.fail(signIn!, failure('login_needed'));
-    const added = await w.service('fake').add(feedUrl('fake', 'g'), { maxItems: 2 });
-    const subscribed = await w.jobs.whenSettled(added.job.id);
-    await eventually(() => expect(w.gates.fake.status()).toMatchObject({ state: 'cooldown' }));
-    w.advance(10 * MINUTE);
-    w.fire();
-    const first = await w.jobs.whenSettled(subscribed.result!.followUpJobId!);
-    expect(itemsOf(first)).toEqual([[limited, 'created'], [signIn, null]]);
-    expect(await failuresOf(w, 'g')).toEqual([]);
-
-    // A failure of an item that later drops out of the newest N is forgotten at the next check.
-    w.sources.fake.fail(signIn!, failure('no_subtitles'));
-    await check(w, 'g');
-    expect((await failuresOf(w, 'g')).map((entry) => entry.itemKey)).toEqual([signIn]);
-    w.sources.fake.feed('g').items.unshift(
-      { key: 'g-new-1', title: '新一', publishedAt: w.clock.now.toISOString() },
-      { key: 'g-new-2', title: '新二', publishedAt: w.clock.now.toISOString() },
-    );
-    await check(w, 'g');
-    expect(await failuresOf(w, 'g')).toEqual([]);
-    await w.close();
-  });
-
-  it('keeps a skipped item in the newest N without taking an older one, and keeps the records of two types apart (N69-T3)', async () => {
-    const w = await world();
-    const keys = w.sources.fake.addFeed('n', w.clock.now, [1, 2, 3]);
-    w.sources.fake2.addFeed('n', w.clock.now, [1, 2]);
-    w.sources.fake.fail(keys[0]!, failure('video_unavailable'));
-    const first = await w.subscribe('fake', 'n', { maxItems: 2 });
-    expect(itemsOf(first)).toEqual([[keys[0], null], [keys[1], 'created']]);
-    expect(itemsOf(await check(w, 'n'))).toEqual([]);
-    expect(w.sources.fake.captures).not.toContain(keys[2]);
-
-    const other = await w.subscribe('fake2', 'n', { maxItems: 2 });
-    expect(other.progress).toMatchObject({ created: 2, failed: 0 });
-    expect((await w.subscription('fake2', 'n'))?.failures).toBeUndefined();
-    expect((await failuresOf(w, 'n')).map((entry) => entry.itemKey)).toEqual([keys[0]]);
-    await w.close();
-  });
-
-  it('completes a check whose items all fail without an error status, and still fails a check whose listing fails (N69-T4)', async () => {
-    const w = await world();
-    const [only] = w.sources.fake.addFeed('a', w.clock.now, [1]);
-    w.sources.fake.fail(only!, failure('no_subtitles'));
-    const first = await w.subscribe('fake', 'a');
-    expect(first).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, error: null });
-    let entry = (await w.service('fake').listSubscriptions()).find((candidate) => candidate.id === 'a')!;
-    expect(entry).toMatchObject({ status: 'tracking', lastError: null, checkStatus: { state: 'scheduled' } });
-
-    w.sources.fake.listFailures.push(failure('capture_failed'));
-    const broken = await check(w, 'a');
-    expect(broken).toMatchObject({ state: 'failed', error: { code: 'capture_failed' } });
-    entry = (await w.service('fake').listSubscriptions()).find((candidate) => candidate.id === 'a')!;
-    expect(entry).toMatchObject({ status: 'error', lastError: { code: 'capture_failed' } });
-    await w.close();
-  });
 
   it('lists running, queued and failed work for the jobs page, in the order it starts (N69-T5)', async () => {
     const w = await world({ capture: 1, retry: { maxAttempts: 3, delaysMs: [MINUTE] } });

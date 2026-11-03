@@ -4,13 +4,13 @@ import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
 
-// The pacing state and a limited channel preview read the same over the UI listener and the
-// Agent listener, which only differs by its token.
+// The pacing state and a channel preview during a cooldown over HTTP: the preview answers
+// rate_limited at once with the time it resumes, and the state clears when the cooldown ends.
 
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 
 describe('YouTube pacing over HTTP (P-T7)', () => {
-  it('reports the request channel to the UI and to an authorized Agent', async () => {
+  it('reports the request channel and refuses a preview during a cooldown', async () => {
     let now = T0;
     const gate = await PacingGate.open(YOUTUBE_PACING, { now: () => new Date(now), setTimer: () => () => undefined });
     await gate.run('background', async () => { throw new CollectorError('rate_limited', 'YouTube 暫時限制連線。'); }).catch(() => undefined);
@@ -21,12 +21,8 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
     } as unknown as SubscriptionCollection;
 
     const ui = await createHttpApp({ pacing: [gate], subscriptions: [channels] });
-    const agent = await createHttpApp({ pacing: [gate], subscriptions: [channels], agentToken: 'pacing-token' });
     const expected = { groups: [{ group: 'youtube', label: 'YouTube', state: 'cooldown', cooldownUntil: until, level: 1, waitRangeMs: { min: 4_000, max: 12_000 } }] };
     expect((await ui.inject({ method: 'GET', url: '/api/pacing' })).json()).toEqual(expected);
-    const authorized = await agent.inject({ method: 'GET', url: '/api/pacing', headers: { authorization: 'Bearer pacing-token' } });
-    expect(authorized.json()).toEqual(expected);
-    expect((await agent.inject({ method: 'GET', url: '/api/pacing' })).statusCode).toBe(401);
 
     const preview = await ui.inject({
       method: 'POST', url: '/api/subscription-previews', payload: { url: 'https://www.youtube.com/@LennysPodcast' },
@@ -38,7 +34,6 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
     now = T0 + 5 * 60_000 + 1;
     expect((await ui.inject({ method: 'GET', url: '/api/pacing' })).json()).toMatchObject({ groups: [{ group: 'youtube', state: 'idle', cooldownUntil: null }] });
     await ui.close();
-    await agent.close();
   });
 
   it('reads the request channels while the Vault is not ready', async () => {

@@ -70,6 +70,8 @@ class AgentConnectionService implements AgentConnectionAccess {
     }
   }
 
+  /** The running Agent listener, or null when it could not start. */
+  listener(): RunningServer | null { return this.server; }
   status(): AgentConnectionStatus { return {
     state: this.server ? 'available' : 'unavailable', activeUrl: this.server?.url ?? null, activePort: this.server?.port ?? null,
     configured: clonePort(this.configured), restartRequired: !samePort(this.configured, this.activeConfigured),

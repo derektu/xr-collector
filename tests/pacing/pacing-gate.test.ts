@@ -12,6 +12,8 @@ import {
 } from '../../src/pacing/pacing-gate.js';
 import { rssDefinition } from '../../src/plugins/rss/server.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
+import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
+import type { SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 
 // The request channel runs with a manual clock and timers, so every wait is checked exactly.
 
@@ -160,6 +162,33 @@ describe('YouTube request channel (P-T3)', () => {
     running.finish('done');
     expect(await first).toBe('done');
     await expect(gate.run('background', async () => 'x', abort.signal)).rejects.toBe(reason);
+  });
+
+  it('drops a channel preview that times out while it waits for its turn, so it is never sent', async () => {
+    const gate = await PacingGate.open(YOUTUBE_PACING, { waitRangeMs: { min: 0, max: 0 } });
+    let finishRunning!: () => void;
+    const running = gate.run('background', () => new Promise<void>((resolve) => { finishRunning = resolve; }));
+    let previewRequests = 0;
+    const store = { list: async () => [] } as unknown as SubscriptionStore;
+    const subscriptions = new SubscriptionService('youtube', store, {} as never, {
+      autoCollection: async () => true,
+      documents: async () => [],
+      previewTimeoutMs: 50,
+      resolveTarget: (url, signal) => gate.run('interactive', async () => {
+        previewRequests += 1;
+        return { id: 'UCabcdefghijklmnopqrstuv', title: '頻道', url };
+      }, signal),
+    });
+
+    await expect(subscriptions.preview('https://www.youtube.com/@example')).rejects.toMatchObject({ code: 'network_error' });
+    expect(gate.status().state).toBe('busy');
+    finishRunning();
+    await running;
+    // Requests run one at a time in queue order and an interactive one goes first, so a preview still
+    // queued would run before this one.
+    await gate.run('background', async () => undefined);
+    expect(previewRequests).toBe(0);
+    expect(gate.status().state).toBe('idle');
   });
 });
 

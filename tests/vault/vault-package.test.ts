@@ -24,7 +24,7 @@ import { importNewVault } from '../../src/vault/vault-import.js';
 import { VaultWorkspace } from '../../src/vault/workspace.js';
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
-} from './package-fixtures.js';
+} from '../support/package-fixtures.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';

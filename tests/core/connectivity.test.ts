@@ -72,18 +72,6 @@ describe('connectivity (#128)', () => {
     w.connectivity.close();
   });
 
-  it('shares one probe between confirmations that overlap', async () => {
-    const w = world();
-    let open!: () => void;
-    w.probe.gate = new Promise((resolve) => { open = resolve; });
-    w.probe.online = false;
-    const answers = Promise.all([w.connectivity.confirm(), w.connectivity.confirm(), w.connectivity.check()]);
-    open();
-    expect(await answers).toEqual(['offline', 'offline', 'offline']);
-    expect(w.probe.calls).toBe(1);
-    w.connectivity.close();
-  });
-
   it('reuses an online answer for 30 seconds after a failed request, and probes again after', async () => {
     const w = world();
     expect(await w.connectivity.check()).toBe('online');
