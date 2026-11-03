@@ -9,7 +9,6 @@ import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-
 
 export const name = 'core-journey';
 export const title = '核心旅程：訂閱、新增、查詢、閱讀、暫停恢復與刪除確認';
-export const tier = 'core';
 export const covers = ['sub-add', 'sub-status', 'sub-pause', 'collect-add', 'collect-done', 'collect-read',
   'docs-list', 'docs-filter', 'docs-search', 'reader-view', 'reader-delete'];
 

@@ -11,7 +11,6 @@ import { screenAt } from './lib/revision.mjs';
 
 export const name = 'subscription-remove';
 export const title = '移除訂閱：取消、預設保留文件、確認後文件仍可閱讀';
-export const tier = 'core';
 export const covers = ['sub-remove', 'docs-filter', 'reader-view'];
 
 export async function run({ instance, page, record, waitFor }) {

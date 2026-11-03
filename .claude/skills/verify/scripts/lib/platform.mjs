@@ -1,8 +1,8 @@
-// What the verify skill asks the operating system: the process table, when a process started, who
+// What the verify skill asks the operating system: the process table, a process's command line, who
 // listens on a port, how to end a process tree, and the machine's own architecture. macOS answers
 // through ps, lsof and sysctl; Windows has none of them, so it answers through PowerShell (CIM and
 // Get-NetTCPConnection), taskkill and the registry. Callers see the same shapes on both.
-import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -31,7 +31,7 @@ function powershell(script) {
     { encoding: 'utf8', maxBuffer: BUFFER, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
-// One CIM query lists every process with its parent, executable, command line and start time.
+// One CIM query lists every process with its parent, executable and command line.
 const WINDOWS_PROCESSES = "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; executable = $_.ExecutablePath; command = $_.CommandLine } } | ConvertTo-Json -Compress";
 
 const windowsRows = (stdout) => {
@@ -57,20 +57,6 @@ export function processTable() {
   }));
 }
 
-/** processTable without blocking: { pid, ppid, executable } only, for sampling while a flow runs. */
-export function processTableAsync() {
-  return new Promise((resolve, reject) => {
-    const done = (parse) => (error, stdout) => (error ? reject(error) : resolve(parse(stdout)));
-    if (WINDOWS) {
-      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${WINDOWS_PROCESSES}`],
-        { encoding: 'utf8', maxBuffer: BUFFER, windowsHide: true }, done(windowsRows));
-      return;
-    }
-    execFile('ps', ['-A', '-o', 'pid=,ppid=,pgid=,comm='], { encoding: 'utf8', maxBuffer: BUFFER },
-      done((stdout) => psRows(stdout).map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), executable: match[4] }))));
-  });
-}
-
 /** The command line of one process; empty when it is not running. */
 export function commandOf(pid) {
   try {
@@ -79,44 +65,6 @@ export function commandOf(pid) {
   } catch {
     return '';
   }
-}
-
-/**
- * When a process started; null when it is not running. A PID plus its start time names one process
- * even after the PID is reused.
- */
-export function processStart(pid) {
-  return processStarts([pid]).get(Number(pid)) ?? null;
-}
-
-/**
- * When each of `pids` started, by PID, in the form `processStart` gives; a PID that is not running
- * is left out. One process query answers all of them, which matters on Windows, where each
- * PowerShell start costs a second or more.
- */
-export function processStarts(pids) {
-  const wanted = [...new Set(pids.map(Number).filter((pid) => Number.isInteger(pid) && pid > 0))];
-  const starts = new Map();
-  if (wanted.length === 0) return starts;
-  let stdout = '';
-  try {
-    // A PID that is not running is left out of both answers. macOS ps prints nothing at all when one
-    // PID is beyond the largest it allows, so then each PID is asked on its own.
-    if (WINDOWS) {
-      stdout = powershell(`Get-Process -Id ${wanted.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) $($_.StartTime.ToUniversalTime().ToString('o'))" }; exit 0`);
-    } else {
-      const ps = (list) => spawnSync('ps', ['-p', list.join(','), '-o', 'pid=,lstart='], { encoding: 'utf8' });
-      const all = ps(wanted);
-      stdout = all.stdout || all.status === 0 || wanted.length === 1 ? all.stdout ?? '' : wanted.map((pid) => ps([pid]).stdout ?? '').join('\n');
-    }
-  } catch {
-    return starts;
-  }
-  for (const line of stdout.split(/\r?\n/u)) {
-    const match = /^\s*(\d+)\s+(\S.*?)\s*$/u.exec(line);
-    if (match) starts.set(Number(match[1]), match[2]);
-  }
-  return starts;
 }
 
 /** PIDs listening on a TCP port, sorted; empty when nothing listens. */
@@ -136,55 +84,6 @@ export function listeners(port) {
  * signal a console or windowless process could handle as a request to shut down, so this is the
  * only way to end one from outside.
  */
-/**
- * Windows: reports each process that starts from now on as { pid, ppid, executable }, through a
- * WMI creation event that PowerShell polls every 0.2 s. A short-lived program such as yt-dlp is seen
- * even though one listing of the whole process table takes seconds. Returns { ready, stop() }; ready
- * resolves once the subscription is in place. stop() ends the watcher once, and only while it is
- * still running: after it exits, its PID may belong to another program, whose tree taskkill would
- * end. `start` and `endTree` replace spawning PowerShell and taskkill in tests.
- */
-export function watchWindowsStarts(onStart, { start = startWatcher, endTree = endWindowsTree } = {}) {
-  const script = [
-    "$query = \"SELECT * FROM __InstanceCreationEvent WITHIN 0.2 WHERE TargetInstance ISA 'Win32_Process'\"",
-    'Register-CimIndicationEvent -Query $query -SourceIdentifier xrVerifyStarts | Out-Null',
-    "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush()",
-    'while ($true) {',
-    '  $arrival = Wait-Event -SourceIdentifier xrVerifyStarts',
-    '  $started = $arrival.SourceEventArgs.NewEvent.TargetInstance',
-    "  [Console]::Out.WriteLine(\"$($started.ProcessId)|$($started.ParentProcessId)|$($started.ExecutablePath)\"); [Console]::Out.Flush()",
-    '  Remove-Event -EventIdentifier $arrival.EventIdentifier',
-    '}',
-  ].join('\n');
-  const child = start(script);
-  let resolveReady;
-  const ready = new Promise((resolve) => { resolveReady = resolve; });
-  let buffer = '';
-  child.stdout.setEncoding('utf8').on('data', (chunk) => {
-    buffer += chunk;
-    const lines = buffer.split(/\r?\n/u);
-    buffer = lines.pop();
-    for (const line of lines) {
-      if (line === 'ready') { resolveReady(); continue; }
-      const [pid, ppid, executable] = line.split('|');
-      if (pid) onStart({ pid: Number(pid), ppid: Number(ppid), executable: executable || null });
-    }
-  });
-  child.once('exit', () => resolveReady());
-  let stopped = false;
-  return {
-    ready,
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      if (child.exitCode === null && child.signalCode === null) endTree(child.pid);
-    },
-  };
-}
-
-/** Runs a PowerShell script in the background with its standard output piped. */
-const startWatcher = (script) => spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-
 export function endWindowsTree(pid) {
   try {
     execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -221,7 +120,7 @@ function readHostArch() {
 }
 
 /**
- * The machine a run executes on, as results.json and doctor record it: platform, OS release and
+ * The machine a run executes on, as results.json records it: platform, OS release and
  * version, Node's architecture, the machine's own architecture, and whether Node is emulated.
  */
 export function environment() {

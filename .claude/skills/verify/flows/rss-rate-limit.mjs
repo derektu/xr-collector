@@ -9,7 +9,6 @@ import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'rss-rate-limit';
 export const title = 'RSS 網站限制連線';
-export const tier = 'feature';
 export const covers = ['rss-atom', 'rss-check', 'rss-failure'];
 
 const DAY = 24 * 60 * 60_000;

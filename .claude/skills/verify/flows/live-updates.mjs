@@ -9,7 +9,6 @@ import { agentClient, apiRevision, screenAt } from './lib/revision.mjs';
 
 export const name = 'live-updates';
 export const title = 'Agent 的變動即時反映在開著的畫面，閒置不發請求，斷線與重啟後跟上';
-export const tier = 'core';
 export const covers = ['sub-status', 'sub-pause', 'sub-detail', 'sub-remove', 'docs-list', 'reader-view', 'jobs-empty', 'vault-info'];
 
 const IDLE_MS = 10_000;

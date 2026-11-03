@@ -4,7 +4,6 @@ import { articles, channel, idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'workspace-content';
 export const title = '設定計數、單篇類型切換、工作操作、RSS 設定與文件分頁搜尋';
-export const tier = 'feature';
 export const covers = [
   'collect-add',
   'collect-mismatch',

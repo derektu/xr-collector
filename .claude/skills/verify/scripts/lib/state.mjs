@@ -11,7 +11,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { readRecord, runProcesses } from './instance.mjs';
-import { programName } from './platform.mjs';
 
 /** Operating-system files that say nothing about the app's data. */
 const IGNORED = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
@@ -58,8 +57,7 @@ async function allDocuments(read) {
 /**
  * Reads the state of the run in `run` (its directory, or an instance): { runDir, takenAt, running,
  * api, vault, profile, index }. See the skill's "State" section for each source's shape.
- * `processes` are the run's live processes when the caller already has them; otherwise they are
- * read from the process table.
+ * `processes` are the run's live processes (runProcesses) when the caller already has them.
  */
 export async function readState(run, { processes } = {}) {
   const runDir = path.resolve(typeof run === 'string' ? run : run.runDir);
@@ -83,8 +81,7 @@ export async function readState(run, { processes } = {}) {
  */
 async function readApi(record, processes) {
   if (!record.url) return { unavailable: 'this run has no HTTP API address (an Electron run is checked through its window)' };
-  const server = processes.some((member) => !member.holder && programName(member.executable ?? member.command.split(' ')[0]) !== 'meilisearch');
-  if (!server) return { unavailable: 'the run is not running: no server process of this run' };
+  if (!processes.some((member) => member.role === 'server')) return { unavailable: 'the run is not running: no server process of this run' };
   const healthy = await fetch(`${record.url}/api/health`).then((response) => response.ok, () => false);
   if (!healthy) return { unavailable: `${record.url} does not answer; the server is not running` };
   return apiState({
@@ -197,11 +194,11 @@ function listFiles(root, skip, errors) {
 /**
  * The run's Meilisearch: { url, indexes: [{ uid, primaryKey, numberOfDocuments, isIndexing, keys }],
  * tasks: { enqueued, processing, failed } }. The runtime starts it with a random master key that
- * lives only in its environment, which macOS (`ps -E`) and Linux (`/proc/<pid>/environ`) show to the
- * same user; Windows does not, so the index is unavailable there.
+ * lives only in its environment, which macOS (`ps -E`) shows to the same user; Windows does not, so
+ * the index is unavailable there.
  */
 async function readIndex(processes) {
-  const search = processes.find((member) => programName(member.executable ?? member.command.split(' ')[0]) === 'meilisearch');
+  const search = processes.find((member) => member.role === 'search');
   if (!search) return { unavailable: 'the run has no Meilisearch process; the run is stopped or search did not start' };
   const address = /--http-addr\s+(\S+)/u.exec(search.command)?.[1];
   const key = masterKey(search.pid);
@@ -240,12 +237,9 @@ async function indexKeys(get, uid, primaryKey) {
 }
 
 /** MEILI_MASTER_KEY from a process's environment; null where the platform does not show it. */
-export function masterKey(pid, { platform = process.platform } = {}) {
+export function masterKey(pid) {
   try {
-    if (platform === 'linux') {
-      return readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((entry) => entry.startsWith('MEILI_MASTER_KEY='))?.slice('MEILI_MASTER_KEY='.length) ?? null;
-    }
-    if (platform === 'darwin') {
+    if (process.platform === 'darwin') {
       return /(?:^|\s)MEILI_MASTER_KEY=(\S+)/u.exec(execFileSync('ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }))?.[1] ?? null;
     }
   } catch { /* the process ended */ }

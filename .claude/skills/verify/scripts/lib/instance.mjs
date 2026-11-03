@@ -1,49 +1,35 @@
 // Launching, attaching to and stopping one verification instance (Web mode): server.mts on a slot
 // of reserved ports, with its own profile, Vault and Web build under .local/verify-runs/<issue>-<time>-<pid>/.
-// A run's processes are found by their command line (the run marker, or Meilisearch's data path in the
-// run), not by a recorded PID. stop signals a whole process group only when its leader is one of
-// them, so the user's own App, terminals and other agents' runs are never touched. Web mode runs on
-// macOS; the process handling (stop, sweep, slot locks) also serves Desktop runs on Windows.
+// stop ends the PID run.json records, and only while its command line carries the run marker, so the
+// user's own App, terminals and other agents' runs are never touched. Web mode runs on macOS; slots
+// and stop also serve Desktop runs on Windows.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFileSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, isRunProcess, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
-import { commandOf, endWindowsTree, processStart, processStarts, processTable, WINDOWS } from './platform.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, hasMarker, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
+import { commandOf, endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { readState } from './state.mjs';
 import { runtimeBin } from './target.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
-const OWN_SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mts');
+/** Whether a process runs; EPERM is a process of another user. */
+export const alive = (pid) => {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+};
 
-export const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-export { processTable };
-
-/**
- * Whether any process of the group remains, asked of the kernel with signal 0; EPERM is a member
- * owned by another user. Polling it costs a system call, where a process table costs two ps runs.
- */
+/** Whether any process of the group remains; EPERM is a member owned by another user. */
 const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
-
-/**
- * Processes the run started: its Web server or Electron (run marker) and Meilisearch. On Windows the
- * app counts by the executable run.json records as the run's target.
- */
-function runMembers(runDir, table = processTable()) {
-  const record = readRecord(runDir);
-  const apps = record?.target?.executable ? [record.target.executable] : [];
-  return table.filter((entry) => entry.pid !== process.pid && isRunProcess(entry.command, runDir, entry.executable, { apps }));
-}
 
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
 export function writeJsonAtomic(file, value) {
   const temporary = `${file}.${randomUUID()}.tmp`;
-  // Run metadata can contain profile-local credentials. The renamed destination keeps this mode
-  // on POSIX; Windows continues to rely on the containing user's ACL.
+  // Run metadata can contain profile-local paths. The renamed destination keeps this mode on POSIX;
+  // Windows continues to rely on the containing user's ACL.
   writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600, flag: 'wx' });
   renameSync(temporary, file);
 }
@@ -68,91 +54,89 @@ export function portFree(port) {
 }
 
 // ---- slot locks --------------------------------------------------------------------------------
-// A lock names its holder by PID and start time, so a reused PID never keeps a slot. Claiming runs
-// under a directory mutex; lock contents are written to a temporary file and renamed into place, so
-// readers never see a partial lock.
+// A slot's lock file names the PID that keeps the slot (the run's server, or the flow process that
+// drives an Electron run) and the run folder. It is created whole and exclusively by a hard link, so
+// two launches never both take it; a lock whose PID no longer runs is stale and taken over.
+
+/** How long a launch waits for a slot while all of them are busy, such as with flows of other worktrees. */
+const SLOT_WAIT_MS = 10 * 60_000;
 
 const lockPath = (slot) => path.join(SLOT_LOCKS, `${slot}.json`);
 
-function readLock(slot) {
-  const file = lockPath(slot);
-  if (!existsSync(file)) return null;
+/** The lock in `file`; null when there is none, {} when it cannot be read. */
+function readLock(file) {
   try {
     return JSON.parse(readFileSync(file, 'utf8'));
-  } catch {
-    return { slot, unreadable: true, runDir: null, writtenAt: statSync(file).mtimeMs };
+  } catch (error) {
+    return error.code === 'ENOENT' ? null : {};
   }
 }
 
-/**
- * Whether the lock's holder is the process that wrote it, by the start time `startOf` reads for its
- * PID. An unreadable lock counts as held for a minute.
- */
-export const lockLive = (lock, startOf = processStart) => Boolean(lock) && (lock.unreadable
-  ? Date.now() - lock.writtenAt < 60_000
-  : Boolean(lock.start) && startOf(lock.pid) === lock.start);
-
-/** The slot locks with whether each is live, with one process query for all their holders. */
-function readLocks() {
-  const locks = SLOTS.map((ports) => readLock(ports.slot));
-  const starts = processStarts(locks.filter((lock) => lock && !lock.unreadable).map((lock) => lock.pid));
-  const startOf = (pid) => starts.get(Number(pid)) ?? null;
-  return locks.map((lock) => lock && { ...lock, live: lockLive(lock, startOf) });
+/** Takes the slot's lock for `runDir` unless a running process holds it. */
+export function tryLock(slot, runDir) {
+  const temporary = `${lockPath(slot)}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ pid: process.pid, runDir }));
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        linkSync(temporary, lockPath(slot));
+        return true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const holder = readLock(lockPath(slot));
+        if (holder && alive(holder.pid)) return false;
+        // The dead holder's lock moves aside before the slot is taken. When another launch took the
+        // slot between the read and the move, the moved lock is that launch's and goes back.
+        const aside = `${lockPath(slot)}.${randomUUID()}.stale`;
+        try {
+          renameSync(lockPath(slot), aside);
+        } catch (moveError) {
+          if (moveError.code === 'ENOENT') continue;
+          throw moveError;
+        }
+        const moved = readLock(aside);
+        if (moved?.pid !== holder?.pid || moved?.runDir !== holder?.runDir) {
+          try { linkSync(aside, lockPath(slot)); } catch { /* a third launch holds the slot now */ }
+          rmSync(aside, { force: true });
+          return false;
+        }
+        rmSync(aside, { force: true });
+      }
+    }
+    return false;
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
-
-const writeLock = (slot, content) => writeJsonAtomic(lockPath(slot), content);
 
 /** Records `pid` as the holder of the slot the run holds. */
 export function holdSlot(slot, runDir, pid) {
-  writeLock(slot, { slot, runDir, pid, start: processStart(pid) });
+  writeJsonAtomic(lockPath(slot), { pid, runDir });
 }
 
-async function withClaimMutex(body) {
-  const mutex = path.join(SLOT_LOCKS, 'claim.lock');
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    try {
-      mkdirSync(mutex);
-      break;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      // A claim takes well under a second; an older mutex was left by a crashed claim. The holder
-      // may release it between mkdir and stat, which just means trying again.
-      let heldSince = null;
-      try { heldSince = statSync(mutex).mtimeMs; } catch { /* released meanwhile */ }
-      if (heldSince !== null && Date.now() - heldSince > 15_000) rmSync(mutex, { recursive: true, force: true });
-      if (Date.now() > deadline) throw new Error(`Slot claim mutex ${mutex} is held; remove it if no launch is running`);
-      await sleep(100);
-    }
-  }
-  try { return await body(); } finally { rmSync(mutex, { recursive: true, force: true }); }
-}
-
-/** The state of each slot lock: { slot, runDir, pid, live }. */
-export function slotHolders() {
-  return readLocks().filter(Boolean);
-}
-
-/** Takes the first slot with no live lock and all four ports free, held by this process for `runDir`. */
+/**
+ * Takes the first slot whose lock is free and whose four ports are free, held by this process for
+ * `runDir`. While every slot is busy it waits for one, up to SLOT_WAIT_MS.
+ */
 export async function claimSlot(runDir) {
-  await mkdir(SLOT_LOCKS, { recursive: true });
-  return withClaimMutex(async () => {
-    const locks = readLocks();
-    for (const [index, ports] of SLOTS.entries()) {
-      if (locks[index]?.live) continue;
-      const free = await Promise.all([ports.ui, ports.search, ports.agent, ports.feeds].map(portFree));
-      if (!free.every(Boolean)) continue;
-      holdSlot(ports.slot, runDir, process.pid);
-      return ports;
+  mkdirSync(SLOT_LOCKS, { recursive: true });
+  const deadline = Date.now() + SLOT_WAIT_MS;
+  for (;;) {
+    for (const ports of SLOTS) {
+      if (!tryLock(ports.slot, runDir)) continue;
+      if ((await Promise.all([ports.ui, ports.search, ports.agent, ports.feeds].map(portFree))).every(Boolean)) return ports;
+      releaseSlot(ports.slot, runDir);
     }
-    throw new Error(`All ${SLOTS.length} verify slots are busy; run "verify.mjs doctor" to see who holds them`);
-  });
+    if (Date.now() > deadline) {
+      throw new Error(`All ${SLOTS.length} verify slots stayed busy for ${SLOT_WAIT_MS / 60_000} minutes. Each lock in ${SLOT_LOCKS} names its PID and run folder; end a leftover run with verify.mjs stop --run <runDir>`);
+    }
+    await sleep(1_000);
+  }
 }
 
-/** Releases the slot if its lock names `runDir`; an unreadable lock is released too. */
+/** Releases the slot if its lock names `runDir`. */
 export function releaseSlot(slot, runDir) {
-  const lock = readLock(slot);
-  if (lock?.runDir === runDir || lock?.unreadable) rmSync(lockPath(slot), { force: true });
+  if (readLock(lockPath(slot))?.runDir === runDir) rmSync(lockPath(slot), { force: true });
 }
 
 // ---- runs --------------------------------------------------------------------------------------
@@ -162,8 +146,8 @@ export function releaseSlot(slot, runDir) {
  * different processes apart, and a counter (`-2`, `-3`…) the launches one process makes in the same
  * second, such as flows run side by side. When no slot is free the directory is removed again.
  */
-export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
-  const root = runsRoot(checkout);
+export async function createRun(issue, { label, suffix = '' } = {}) {
+  const root = runsRoot();
   await mkdir(root, { recursive: true });
   const base = path.join(root, `${issue}${label ? `-${label}` : ''}-${stamp()}-${process.pid}`);
   let runDir;
@@ -185,16 +169,28 @@ export async function createRun(issue, checkout, { label, suffix = '' } = {}) {
 }
 
 /**
- * Starts a Web instance and waits until the UI answers and search is ready. Options: issue
- * (required), label (evidence subfolder, such as baseline; a label already used gets the next
- * free `<label>-N`, see claimEvidence), evidence (an explicit evidence folder, missing or empty),
- * checkout, data ('synthetic' | 'real'), vault ('selected' | 'fixed' | 'none'), catalog (synthetic
- * catalog; defaultCatalog() otherwise), build (false copies the checkout's existing dist/web instead
- * of building), server (verification server script; the checkout's own server.mts by default).
- * The returned instance carries the evidence folder and label actually used.
+ * Ends a launch that failed: the run's log goes to the evidence folder for diagnosis, the slot is
+ * released and the scratch folder removed; an evidence folder left empty is removed too.
  */
-export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog, build = true,
-  server: serverScript } = {}) {
+export function abandonRun({ runDir, ports, evidence }) {
+  const log = path.join(runDir, 'server.log');
+  if (existsSync(log)) {
+    mkdirSync(evidence, { recursive: true });
+    copyFileSync(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
+  }
+  releaseSlot(ports.slot, runDir);
+  rmSync(runDir, { recursive: true, force: true });
+  dropUnusedEvidence({ evidence });
+}
+
+/**
+ * Starts a Web instance and waits until the UI answers and search is ready. Options: issue
+ * (required), label (names the run's new evidence folder, see claimEvidence), evidence (an explicit
+ * evidence folder, missing or empty), checkout, data ('synthetic' | 'real'), vault ('selected' |
+ * 'fixed' | 'none'), catalog (synthetic catalog; defaultCatalog() otherwise). The Web UI is built
+ * from the checkout into the run every time, and the checkout's own server.mts serves it.
+ */
+export async function launchWeb({ issue, label, evidence, checkout = checkoutRoot(), data = 'synthetic', vault = 'selected', catalog } = {}) {
   if (!issue) throw new Error('launchWeb needs an issue (number or label) for the evidence folder');
   if (process.platform !== 'darwin') throw new Error(`Web mode runs on macOS; on ${process.platform} use the Desktop runs (launchElectron)`);
   checkout = path.resolve(checkout);
@@ -205,7 +201,7 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
   const claimed = claimEvidence(issue, label, { evidence });
   let run;
   try {
-    run = await createRun(issue, checkout, { label: claimed.label ?? undefined });
+    run = await createRun(issue, { label: claimed.label ?? undefined });
   } catch (error) {
     dropUnusedEvidence(claimed);
     throw error;
@@ -216,21 +212,13 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
   try {
     const initial = data === 'synthetic' ? (catalog ?? defaultCatalog()) : { youtube: { channels: [] }, feeds: {} };
     await writeFile(path.join(runDir, 'catalog.json'), JSON.stringify(initial, null, 2));
-    const web = path.join(runDir, 'web');
-    if (build) {
-      execFileSync(path.join(checkout, 'node_modules', '.bin', 'vite'), ['build', '--outDir', web, '--emptyOutDir', '--logLevel', 'warn'],
-        { cwd: checkout, stdio: ['ignore', 'inherit', 'inherit'] });
-    } else {
-      const built = path.join(checkout, 'dist', 'web');
-      if (!existsSync(path.join(built, 'index.html'))) throw new Error(`--no-build needs ${built}; run npm run build:web first`);
-      await cp(built, web, { recursive: true });
-    }
-    const script = serverScript ? path.resolve(serverScript) : existsSync(path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts'))
-      ? path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts') : OWN_SERVER;
+    execFileSync(path.join(checkout, 'node_modules', '.bin', 'vite'), ['build', '--outDir', path.join(runDir, 'web'), '--emptyOutDir', '--logLevel', 'warn'],
+      { cwd: checkout, stdio: ['ignore', 'inherit', 'inherit'] });
     const record = {
       kind: 'web', issue: String(issue), ...(claimed.label ? { label: claimed.label } : {}), runDir, evidence: claimed.evidence,
       checkout, ...commitOf(checkout), data, vault, ports, pid: null, url: `http://127.0.0.1:${ports.ui}`,
-      feedsOrigin: `http://127.0.0.1:${ports.feeds}`, server: script, startedAt: new Date().toISOString(),
+      feedsOrigin: `http://127.0.0.1:${ports.feeds}`, server: path.join(checkout, '.claude', 'skills', 'verify', 'scripts', 'server.mts'),
+      startedAt: new Date().toISOString(),
     };
     if (data === 'synthetic') record.synthetic = syntheticAddresses(initial, record.feedsOrigin);
     pid = spawnServer(record);
@@ -239,25 +227,23 @@ export async function launchWeb({ issue, label, evidence, checkout = checkoutRoo
     await serverReady(record);
     return instance(record);
   } catch (error) {
-    // The run directory is this launch's own, so its server is the one to stop. The folder stays
-    // for diagnosis until sweep.
+    // The server is this launch's own: it leads its own process group, Meilisearch included.
     if (pid) {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
     }
-    releaseSlot(ports.slot, runDir);
-    dropUnusedEvidence(claimed);
+    abandonRun({ runDir, ports, evidence: claimed.evidence });
     throw error;
   }
 }
 
 /**
- * Starts the run's server.mts detached, its output appended to the run's server.log, and records the
- * new PID in the slot lock. Returns the PID.
+ * Starts the run's server.mts detached (leading its own process group), its output appended to the
+ * run's server.log, and records the new PID in the slot lock. Returns the PID.
  */
 function spawnServer(record) {
   const { checkout, runDir, ports } = record;
   const log = openSync(path.join(runDir, 'server.log'), 'a');
-  // server.mts does not read the marker; it is how stop and sweep find the run's processes.
+  // server.mts does not read the marker; stop checks it before signalling the recorded PID.
   const server = spawn(path.join(checkout, 'node_modules', '.bin', 'tsx'), [record.server, runMarker(runDir)], {
     cwd: checkout, detached: true, stdio: ['ignore', log, log],
     env: {
@@ -328,16 +314,16 @@ function instance(record) {
      * lock names another run (taken after this run's server died) is refused.
      */
     async restart({ crash = false, page } = {}) {
-      const lock = readLock(record.ports.slot);
-      if (lock && !lock.unreadable && lock.runDir !== record.runDir) {
-        throw new Error(`Slot ${record.ports.slot} is held by another run (${lock.runDir}); launch a new run instead of restarting ${record.runDir}`);
+      const lock = readLock(lockPath(record.ports.slot));
+      if (lock?.runDir !== record.runDir) {
+        throw new Error(`Slot ${record.ports.slot} is no longer held by ${record.runDir}; launch a new run instead of restarting it`);
       }
       const route = page ? new URL(page.url()).pathname : null;
       if (page) await page.goto('about:blank');
-      // Between the old server's exit and the new server's start, the lock names this flow, so a
-      // sweep from another session sees a live holder and leaves the slot and the run folder alone.
+      // Between the old server's exit and the new server's start the lock names this flow, so the
+      // slot never looks stale to another launch.
       holdSlot(record.ports.slot, record.runDir, process.pid);
-      await terminateRun(record.runDir, { kill: crash });
+      await terminateRun(record, { kill: crash });
       appendFileSync(path.join(record.runDir, 'server.log'), `\n--- verify restart (${crash ? 'crash' : 'graceful'}) ${new Date().toISOString()} ---\n`);
       record.pid = spawnServer(record);
       self.pid = record.pid;
@@ -352,56 +338,60 @@ function instance(record) {
   return self;
 }
 
-/** Whether the flow process that launched an Electron run is still running. */
-const holderLive = (record) => record.kind === 'electron' && Boolean(record.start) && processStart(record.pid) === record.start;
+/** The process that runs the program under test: the Web server, or the app of an Electron run. */
+const programPid = (record) => (record.kind === 'electron' ? record.appPid : record.pid);
 
 /**
- * The live processes of a run, found by their command line: the Web server or Electron with the run
- * marker, and Meilisearch with its data in the run. An Electron run also counts its flow process
- * while that flow is running. `table` is a process table the caller already read (processTable).
+ * The live processes of a run: its program (the Web server or the app, while its command line
+ * carries the run marker) with role 'server', and on macOS its Meilisearch (data in the run's
+ * profile) with role 'search'. Windows does not show Meilisearch's key, so its index is never read
+ * and its process is not looked up.
  */
-export function runProcesses(record, table) {
-  const members = runMembers(record.runDir, table);
-  if (holderLive(record)) members.push({ pid: record.pid, pgid: null, command: commandOf(record.pid), holder: true });
-  return members;
+export function runProcesses(record) {
+  const found = [];
+  const pid = programPid(record);
+  if (alive(pid) && hasMarker(commandOf(pid), record.runDir)) found.push({ pid, role: 'server' });
+  if (!WINDOWS) {
+    const database = ` --db-path ${record.profile ?? path.join(record.runDir, 'profile')}/`;
+    for (const entry of processTable()) {
+      if (programName(entry.executable) === 'meilisearch' && ` ${entry.command} `.includes(database)) found.push({ ...entry, role: 'search' });
+    }
+  }
+  return found;
 }
 
 /**
- * Ends the run's processes through their own SIGTERM shutdown, with SIGKILL after 30 seconds;
- * `kill: true` sends SIGKILL at once, an unclean stop that skips the runtime's shutdown. A
- * process group is signalled as a whole only when its leader is one of the run's processes (the
- * detached Web server or Electron), which takes helpers such as esbuild and Electron's helpers
- * along; any other run process, such as a Meilisearch whose leader died, is signalled on its own.
+ * Ends the run's program through its own SIGTERM shutdown, with SIGKILL after 30 seconds; `kill:
+ * true` sends SIGKILL at once, an unclean stop that skips the runtime's shutdown. The detached
+ * server and Playwright's Electron each lead their own process group, which holds Meilisearch and
+ * the helpers, so the group is signalled. A group outlives its leader while any member runs, and its
+ * ID is not handed to a new process meanwhile, so a group whose leader died still belongs to the run;
+ * a live leader is signalled only while its command line carries the run marker.
  *
- * Windows has neither process groups nor a shutdown signal, so there each run process is ended with
- * the processes it started (taskkill /T /F) at once. A Desktop flow quits the app through Electron
- * before this, so only what a crashed app or flow left behind is ended this way.
+ * Windows has neither process groups nor a shutdown signal, so there the recorded program is ended
+ * with the processes it started (taskkill /T /F) at once. A Desktop flow quits the app through
+ * Electron before this, so only what a crashed app or flow left behind is ended this way.
  */
-export async function terminateRun(runDir, { kill = false } = {}) {
-  const members = runMembers(runDir);
-  if (!members.length) return;
+export async function terminateRun(record, { kill = false } = {}) {
+  const pid = programPid(record);
+  if (!pid) return;
+  if (alive(pid) && !hasMarker(commandOf(pid), record.runDir)) {
+    throw new Error(`PID ${pid} in ${record.runDir}/run.json is no longer this run's program; end the run's processes by hand`);
+  }
   if (WINDOWS) {
-    // Each process-table read is a CIM query of a second or more, so the wait watches the known
-    // PIDs and reads the table again only once they have exited, for a process started meanwhile.
-    for (let left = members; left.length; left = runMembers(runDir)) {
-      for (const member of left) endWindowsTree(member.pid);
-      await waitFor(() => left.every((member) => !alive(member.pid)), 'run kill', { timeout: 10_000 });
-    }
+    if (!alive(pid)) return;
+    endWindowsTree(pid);
+    await waitFor(() => !alive(pid), 'run kill', { timeout: 10_000 });
     return;
   }
-  const groups = new Set(members.filter((member) => member.pid === member.pgid).map((member) => member.pgid));
-  const loose = members.filter((member) => !groups.has(member.pgid)).map((member) => member.pid);
-  const signal = (name) => {
-    for (const pgid of groups) { try { process.kill(-pgid, name); } catch { /* group gone */ } }
-    for (const pid of loose) { try { process.kill(pid, name); } catch { /* gone */ } }
-  };
-  const gone = () => [...groups].every((pgid) => !groupAlive(pgid)) && loose.every((pid) => !alive(pid));
+  if (!groupAlive(pid)) return;
+  const signal = (name) => { try { process.kill(-pid, name); } catch { /* group gone */ } };
   if (!kill) {
     signal('SIGTERM');
-    if (await waitFor(gone, 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
+    if (await waitFor(() => !groupAlive(pid), 'run exit', { timeout: 30_000 }).then(() => true, () => false)) return;
   }
   signal('SIGKILL');
-  await waitFor(gone, 'run kill', { timeout: 10_000 });
+  await waitFor(() => !groupAlive(pid), 'run kill', { timeout: 10_000 });
 }
 
 /**
@@ -415,8 +405,10 @@ export async function stopRun(runDir, { keep = false } = {}) {
   const record = readRecord(runDir);
   if (!record) throw new Error(`No run.json in ${runDir}`);
   if (record.unreadable) throw new Error(`${runDir}/run.json cannot be read; inspect the folder and its processes by hand`);
-  if (holderLive(record)) throw new Error(`Electron run ${runDir} is held by flow PID ${record.pid}; close it from that flow`);
-  await terminateRun(runDir);
+  if (record.kind === 'electron' && record.pid !== process.pid && alive(record.pid)) {
+    throw new Error(`Electron run ${runDir} is held by flow PID ${record.pid}; close it from that flow`);
+  }
+  await terminateRun(record);
   await mkdir(record.evidence, { recursive: true });
   if (existsSync(path.join(runDir, 'server.log'))) {
     await copyFile(path.join(runDir, 'server.log'), path.join(record.evidence, `${path.basename(runDir)}-server.log`));
@@ -424,35 +416,4 @@ export async function stopRun(runDir, { keep = false } = {}) {
   releaseSlot(record.ports.slot, runDir);
   if (!keep) await rm(runDir, { recursive: true, force: true });
   return { runDir, removed: !keep, evidence: record.evidence };
-}
-
-/**
- * Removes slot locks whose holder is gone, and scratch folders of runs that have no live process:
- * crashed flows, failed launches, runs stopped with --keep. Left alone: a folder a live slot lock
- * names, one with live processes (an Electron a crashed flow left behind counts), one without
- * run.json younger than ten minutes (a launch still building), and one whose run.json cannot be
- * read, which is reported in `unreadable`.
- */
-export function sweepStale(from) {
-  const holders = slotHolders();
-  for (const lock of holders) if (!lock.live) rmSync(lockPath(lock.slot), { force: true });
-  const root = runsRoot(from);
-  const result = { removed: [], live: [], unreadable: [] };
-  if (!existsSync(root)) return result;
-  const held = new Set(holders.filter((lock) => lock.live).map((lock) => lock.runDir));
-  // One process table for every run folder: on Windows each read is a CIM query of seconds.
-  let table;
-  const processes = () => { table ??= processTable(); return table; };
-  for (const name of readdirSync(root)) {
-    const runDir = path.join(root, name);
-    if (held.has(runDir)) continue;
-    const record = readRecord(runDir);
-    if (record?.unreadable) { result.unreadable.push(name); continue; }
-    if (record && runProcesses(record, processes()).length) { result.live.push(name); continue; }
-    if (!record && runMembers(runDir, processes()).length) { result.live.push(name); continue; }
-    if (!record && Date.now() - statSync(runDir).mtimeMs < 10 * 60_000) continue;
-    rmSync(runDir, { recursive: true, force: true });
-    result.removed.push(name);
-  }
-  return result;
 }

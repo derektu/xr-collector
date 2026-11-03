@@ -4,7 +4,7 @@
 // writes it to release/win-unpacked/ before wrapping it in the installer). Both kinds report the
 // same fields on both platforms, so results compare one to one.
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { exe } from './platform.mjs';
 
@@ -48,7 +48,7 @@ function executableArchs(executable) {
       const arch = PE_MACHINE[header.readUInt16LE(4)];
       return arch ? [arch] : [];
     }
-    return execFileSync('lipo', ['-archs', executable], { encoding: 'utf8' }).trim().split(/\s+/u).map((arch) => LIPO_ARCH[arch] ?? arch);
+    return execFileSync('lipo', ['-archs', executable], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split(/\s+/u).map((arch) => LIPO_ARCH[arch] ?? arch);
   } catch {
     return [];
   }
@@ -64,28 +64,18 @@ function bundleExecutable(app) {
   }
 }
 
-// Electron fuses are a wire of bytes after this sentinel in the binary that holds Electron itself
-// (the Electron Framework on macOS, the app's .exe on Windows): a version byte, a length byte, then
-// one byte per fuse ('1' enabled, '0' disabled, 'r' removed).
-const FUSE_SENTINEL = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX');
-// Playwright's _electron.launch drives the app through --inspect, which this fuse allows.
-const NODE_CLI_INSPECT_FUSE = 3;
-
-/** The binary that carries a packaged app's fuse wire. */
-const fuseBinary = (app) => (process.platform === 'win32' ? app
-  : path.join(app, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'));
-
-/** The fuse wire of a packaged Electron app, such as '101100011'; null when it cannot be read. */
-export function fuseWire(app) {
-  try {
-    const binary = readFileSync(fuseBinary(app));
-    const at = binary.indexOf(FUSE_SENTINEL);
-    if (at < 0) return null;
-    const start = at + FUSE_SENTINEL.length + 2;
-    return binary.subarray(start, start + binary[start - 1]).toString('latin1');
-  } catch {
-    return null;
-  }
+/**
+ * Whether `output` was written after every file under `sources` changed (files under `skip` aside):
+ * development Electron runs the checkout's build, so a build older than the sources is older code.
+ */
+function builtAfter(output, sources, skip = null) {
+  if (!existsSync(output)) return false;
+  const newest = readdirSync(sources, { recursive: true }).map((file) => path.join(sources, String(file)))
+    .filter((file) => !skip || !file.startsWith(skip + path.sep))
+    .map((file) => statSync(file))
+    .filter((stat) => stat.isFile())
+    .reduce((latest, stat) => Math.max(latest, stat.mtimeMs), 0);
+  return statSync(output).mtimeMs >= newest;
 }
 
 /** What each platform calls its Desktop pieces: the runtime download, the package and its layout. */
@@ -113,7 +103,7 @@ const PLATFORM = {
  * the checkout's development Electron loading the checkout's build; with `app` it is that packaged
  * app: a `.app` bundle on macOS, the app's `.exe` on Windows. `resources` is the packaged app's
  * resources folder (null for development). `requires` lists each prerequisite as
- * { check, ok, path, fix }, which doctor reports and launchElectron enforces.
+ * { check, ok, path, fix }, which launchElectron enforces.
  */
 export function desktopTarget({ checkout, app }) {
   const platform = PLATFORM[process.platform];
@@ -122,12 +112,17 @@ export function desktopTarget({ checkout, app }) {
   const need = (check, file, fix) => ({ check, ok: Boolean(file) && existsSync(file), path: file, fix });
   if (!app) {
     const executable = path.join(checkout, 'node_modules', 'electron', 'dist', ...platform.electron);
+    const src = path.join(checkout, 'src');
+    const main = path.join(checkout, 'dist', 'node', 'electron', 'main.js');
+    const web = path.join(checkout, 'dist', 'web', 'index.html');
     return {
       kind: 'development', app: null, executable, args: ['.'], cwd: checkout, resources: null,
       requires: [
         // npm may skip Electron's install script, which downloads the executable.
         need('electron', executable, 'node node_modules/electron/install.js'),
-        need('electronBuild', path.join(checkout, 'dist', 'node', 'electron', 'main.js'), 'npm run build'),
+        need('electronBuild', main, 'npm run build'),
+        { check: 'electronBuildCurrent', ok: builtAfter(main, src, path.join(src, 'web')), path: main, fix: 'npm run build; the build is older than src/' },
+        { check: 'electronWebCurrent', ok: builtAfter(web, path.join(src, 'web')), path: web, fix: 'npm run build; the Web build is older than src/web, so Electron would show an older UI' },
         need('meilisearch', bin.meilisearch, platform.download),
         need('ytdlp', bin.ytdlp, platform.download),
         need('deno', bin.deno, platform.download),
@@ -156,20 +151,10 @@ export function desktopTarget({ checkout, app }) {
       need('appMeilisearch', programs.meilisearch, `${platform.download} before ${fix}`),
       need('appYtdlp', programs.ytdlp, `${platform.download} before ${fix}`),
       need('appDeno', programs.deno, `${platform.download} before ${fix}`),
-      fusesCheck(app),
       // An app of another architecture runs under emulation, if at all; it is not the build under test.
       { check: 'appArch', ok: archs.includes(process.arch), path: executable, value: archs.join(' ') || null,
         fix: `the app is built for ${archs.join(' ') || 'an unknown architecture'} and Node is ${process.arch}; package the app for ${process.arch}` },
     ],
-  };
-}
-
-/** Whether the app's fuses still allow Playwright's connection. */
-function fusesCheck(app) {
-  const wire = fuseWire(app);
-  return {
-    check: 'appFuses', ok: wire?.[NODE_CLI_INSPECT_FUSE] === '1', path: app, value: wire,
-    fix: wire === null ? 'the Electron fuse wire cannot be read from the app' : 'the app disables the EnableNodeCliInspectArguments fuse, which Playwright needs to drive it; verify cannot drive this build',
   };
 }
 

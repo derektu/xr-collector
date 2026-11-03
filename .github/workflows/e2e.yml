@@ -1,12 +1,12 @@
 name: E2E
 
-# Every registered Web flow on a Mac, and optionally the offline packaged-App smoke on both delivery
-# targets. Runs only when dispatched.
+# Every registered Web flow on a Mac, and optionally the packaged-App smoke on both delivery targets.
+# Runs only when dispatched.
 on:
   workflow_dispatch:
     inputs:
       packaged_smoke:
-        description: Build and run the offline packaged-App smoke on Mac ARM64 and Windows x64
+        description: Build and run the packaged-App smoke on Mac ARM64 and Windows x64
         required: false
         default: false
         type: boolean
@@ -33,26 +33,15 @@ jobs:
         run: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
       - name: Run every registered Web flow
         run: node .claude/skills/verify/scripts/verify.mjs flows run --web --issue 119 --label ci-web --jobs 3
-      # Every run keeps each flow's results.json, passed or failed, so `flows history` can count
-      # each flow's failures, their causes and its timings across runs.
-      - name: Save Web flow results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: web-regression-results-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .local/ticket-artifacts/119/ci-web/**/results.json
-          include-hidden-files: true
-          retention-days: 90
-          if-no-files-found: ignore
       - name: Save failed Web evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: web-regression-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .local/ticket-artifacts/119/ci-web/**/results.json
-            .local/ticket-artifacts/119/ci-web/**/*.png
-            .local/ticket-artifacts/119/ci-web/**/*server.log
+            .local/ticket-artifacts/119/ci-web-*/**/results.json
+            .local/ticket-artifacts/119/ci-web-*/**/*.png
+            .local/ticket-artifacts/119/ci-web-*/**/*server.log
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: error
@@ -88,10 +77,10 @@ jobs:
         run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
       - name: Build unsigned test package
         run: npm run ${{ matrix.package_command }}
-      - name: Run offline packaged-App smoke
+      - name: Run packaged-App smoke
         shell: bash
         timeout-minutes: 12
-        run: node .claude/skills/verify/scripts/smoke-packaged-offline.mjs --app "${{ matrix.app }}" --evidence ".data/ci/package-smoke"
+        run: node .claude/skills/verify/scripts/smoke-desktop.mjs --app "${{ matrix.app }}" --evidence ".data/ci/package-smoke"
       - name: Save failed packaged smoke evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

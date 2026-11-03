@@ -1,6 +1,6 @@
 // Driving an instance with headless Chromium and recording evidence. A flow opens a page, runs
 // scenarios through a recorder, and finishes it; the recorder writes the screenshots and
-// results.json into the instance's evidence folder (.local/ticket-artifacts/<issue>[/<label>]/).
+// results.json into the instance's evidence folder (.local/ticket-artifacts/<issue>/[<label>-]<local time>/).
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';

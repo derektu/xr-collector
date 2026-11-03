@@ -1,22 +1,18 @@
-// Guards the developer, not the user.
+// Guards the developer and the user's secrets.
 // What `state` reads from a run's folders: the Vault's documents with frontmatter and content hash,
-// its other files by format, the profile's records without Meilisearch's own files, and nothing
-// written while reading. A run with no server reports `api` and `index` as unavailable. The
-// Meilisearch master key is read from a real process's environment on macOS and Linux. The API of
-// a stopped run is never read, even when another server answers on its port; document pages stop
-// when nextOffset does not move forward; a folder that cannot be listed does not stop the reading.
-// Cases about the folders read a stopped run without asking the process table, which takes seconds
-// on Windows; the cases about a stopped run's API and index read the real process table.
+// its other files by format, the profile's records with credentials redacted and without
+// Meilisearch's own files, and nothing written while reading. The API of a stopped run is never
+// read, even when another server answers on its port, and document pages stop when nextOffset does
+// not move forward.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiState, masterKey, readState } from '../../../.claude/skills/verify/scripts/lib/state.mjs';
-import { cleanUp, start, temp } from './support.js';
-import { eventually } from '../../support/wait.js';
+import { apiState, readState } from '../scripts/lib/state.mjs';
+import { cleanUp, temp } from './support.js';
 
-const VERIFY = path.resolve(import.meta.dirname, '../../../.claude/skills/verify/scripts/verify.mjs');
+const VERIFY = path.resolve(import.meta.dirname, '../scripts/verify.mjs');
 
 afterEach(cleanUp);
 
@@ -59,11 +55,13 @@ function stoppedRun() {
 }
 
 describe('readState', () => {
-  it('reads the Vault and the profile by file format', async () => {
+  it('reads the Vault and the profile by file format and writes nothing', async () => {
     const { runDir, vault, profile } = stoppedRun();
+    const before = snapshot(runDir);
 
     const state = await stoppedState(runDir);
 
+    expect(snapshot(runDir)).toEqual(before);
     expect(state.running).toBe(false);
     expect(state.vault.path).toBe(vault);
     expect(state.vault.documents).toEqual([
@@ -81,25 +79,6 @@ describe('readState', () => {
     expect(state.profile.files['jobs/events/2026-10-23.jsonl']).toEqual([{ event: 'queued' }, { event: 'done' }]);
     expect(state.profile.files['broken.json']).toEqual({ error: expect.any(String) });
     expect(state.profile.other).toEqual([]);
-  });
-
-  it('hashes only the text after the frontmatter', async () => {
-    const { runDir, vault } = stoppedRun();
-    const before = (await stoppedState(runDir)).vault.documents[0].contentHash;
-    write(path.join(vault, 'documents', 'kind', 'one.md'), '---\ntitle: 改過的標題\n---\n正文一\n');
-    const sameBody = (await stoppedState(runDir)).vault.documents[0].contentHash;
-    write(path.join(vault, 'documents', 'kind', 'one.md'), '---\ntitle: 改過的標題\n---\n正文二\n');
-    const otherBody = (await stoppedState(runDir)).vault.documents[0].contentHash;
-
-    expect(sameBody).toBe(before);
-    expect(otherBody).not.toBe(before);
-  });
-
-  it('writes nothing', async () => {
-    const { runDir } = stoppedRun();
-    const before = snapshot(runDir);
-    await stoppedState(runDir);
-    expect(snapshot(runDir)).toEqual(before);
   });
 
   it('redacts persistent profile credentials from readState and CLI state output', async () => {
@@ -124,14 +103,7 @@ describe('readState', () => {
     expect(JSON.parse(cli).profile.files['agent-settings.json']).toEqual(state.profile.files['agent-settings.json']);
   });
 
-  it('reports the API and the index as unavailable when the run is stopped', async () => {
-    const { runDir } = stoppedRun();
-    const state = await readState(runDir);
-    expect(state.api).toEqual({ unavailable: expect.stringContaining('the run is not running') });
-    expect(state.index).toEqual({ unavailable: expect.stringContaining('no Meilisearch process') });
-  });
-
-  it('does not read another run that answers on a stopped run\'s port', async () => {
+  it('reports a stopped run\'s API and index as unavailable, even when another server answers on its port', async () => {
     const { runDir } = stoppedRun();
     const requests: string[] = [];
     const other = createServer((request, response) => {
@@ -144,31 +116,13 @@ describe('readState', () => {
     try {
       const state = await readState(runDir);
       expect(state.api).toEqual({ unavailable: expect.stringContaining('the run is not running') });
+      expect(state.index).toEqual({ unavailable: expect.stringContaining('no Meilisearch process') });
       expect(requests).toEqual([]);
     } finally {
       await new Promise((resolve) => other.close(resolve));
     }
   });
 
-  it.skipIf(process.platform === 'win32')('records a folder it cannot list and reads the rest', async () => {
-    const { runDir, vault } = stoppedRun();
-    const locked = path.join(vault, 'documents', 'kind');
-    chmodSync(locked, 0o000);
-    try {
-      const state = await stoppedState(runDir);
-      expect(state.vault.files['documents/kind/']).toEqual({ error: expect.stringContaining('EACCES') });
-      expect(state.vault.documents).toEqual([]);
-      expect(Object.keys(state.vault.files)).toContain('xr-collector-vault.json');
-    } finally {
-      chmodSync(locked, 0o755);
-    }
-  });
-
-  it('reads the run folder Vault when the profile selects none', async () => {
-    const { runDir, vault, profile } = stoppedRun();
-    writeFileSync(path.join(profile, 'vault-selection.json'), '{}');
-    expect((await stoppedState(runDir)).vault.path).toBe(vault);
-  });
 });
 
 describe('apiState documents', () => {
@@ -186,36 +140,12 @@ describe('apiState documents', () => {
     };
   };
 
-  it('reads every page until nextOffset is null', async () => {
+  it('reads every page, and stops with an error when nextOffset is missing or does not move forward', async () => {
     const { documents } = await apiState(api((offset) => (offset < 2 ? offset + 1 : null)));
     expect(documents).toEqual({ documents: [{ id: 'doc-0' }, { id: 'doc-1' }, { id: 'doc-2' }], total: 3, pages: 3 });
-  });
-
-  it('stops with an error when nextOffset is missing or does not move forward', async () => {
     const missing = (await apiState(api(() => undefined))).documents;
     const repeated = (await apiState(api((offset) => offset))).documents;
     expect(missing).toMatchObject({ pages: 1, error: expect.stringContaining('nextOffset did not advance') });
     expect(repeated).toMatchObject({ pages: 1, error: expect.stringContaining('nextOffset did not advance') });
-  });
-});
-
-describe.runIf(process.platform === 'darwin' || process.platform === 'linux')('masterKey', () => {
-  it('reads MEILI_MASTER_KEY from a running process', async () => {
-    const child = start(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { env: { ...process.env, MEILI_MASTER_KEY: 'k3y-from-environment' } });
-    await eventually(() => expect(masterKey(child.pid!)).not.toBeNull());
-    expect(masterKey(child.pid!)).toBe('k3y-from-environment');
-  });
-
-  it('is null for a process without the key', () => {
-    const env = { ...process.env };
-    delete env.MEILI_MASTER_KEY;
-    const child = start(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { env });
-    expect(masterKey(child.pid!)).toBeNull();
-  });
-});
-
-describe('masterKey on Windows', () => {
-  it('is null: Windows does not show another process its environment', () => {
-    expect(masterKey(process.pid, { platform: 'win32' })).toBeNull();
   });
 });

@@ -26,9 +26,7 @@
     "download:runtime:win": "node scripts/prepare-runtime.mjs win",
     "package:win": "node scripts/package-app.mjs --target win32-x64",
     "release:upload": "node scripts/release-upload.mjs",
-    "test:verify-skill:mac": "npm run download:runtime && node .claude/skills/verify/scripts/smoke.mjs",
-    "test:verify-skill:desktop:mac": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
-    "test:verify-skill:desktop:win": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
+    "test:verify-skill": "vitest run --config .claude/skills/verify/tests/vitest.config.ts",
     "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts --tags-filter=real-engine"
   },
   "dependencies": {

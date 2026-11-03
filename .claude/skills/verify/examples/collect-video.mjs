@@ -1,7 +1,7 @@
 // Example ticket flow: collect one synthetic video through the Documents page and read it.
 // A ticket copies this file to .local/ticket-artifacts/<issue>/scripts/flow.mjs in its own worktree,
 // keeps the launch/record/stop frame and replaces the scenarios with its own. Run from the ticket's
-// worktree; evidence goes to its .local/ticket-artifacts/<issue>[/<label>]/:
+// worktree; evidence goes to a new folder .local/ticket-artifacts/<issue>/[<label>-]<local time>/:
 //   node .claude/skills/verify/examples/collect-video.mjs [--issue <N>] [--label <name>] [--keep]
 //   node .claude/skills/verify/examples/collect-video.mjs --checkout <main checkout> --label baseline
 //   node .claude/skills/verify/examples/collect-video.mjs --run <runDir>
