@@ -142,12 +142,12 @@ node $V flows run --feature subscriptions --web --issue 91 --label subscriptions
 node $V flows run subscribe-a-b --issue 91 --checkout /Users/derektu/projects/km/xr-collector --label baseline
 node $V flows run --issue 91 --label ticket                          # 不給名稱就跑全部
 node $V flows run search-normalization --issue 91 --label search      # 片段的條件／分頁、UI 與 Agent 一致、重建與重啟
-node $V flows run --web --issue 91 --label ci-web --jobs 3           # E2E workflow：動態跑全部 Web 流程（Desktop 以外），同時三支
+node $V flows run --web --issue 91 --label web --jobs 3              # nightly：動態跑全部 Web 流程（Desktop 以外），同時三支
 node $V flows run --desktop --issue 91 --label desktop               # Desktop 流程，視窗隱藏
 node $V flows run --desktop --visible --issue 91 --label visible     # 有 visibleScenarios 的 Desktop 流程，視窗會跳出來
 ```
 
-- **選取**：名稱、`--web`／`--desktop`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 E2E workflow 跑的集合：Desktop 以外的全部流程。`--visible` 只選有 `visibleScenarios` 的 Desktop 流程，以顯示的視窗執行。
+- **選取**：名稱、`--web`／`--desktop`、`--feature <功能檔>`（`subscriptions` 或 `subscriptions.md`，選 `covers` 含該檔任一子功能的流程）可以合併使用，結果依流程名排序。`--web` 是 nightly 在 Mac 跑的集合：Desktop 以外的全部流程；nightly 也在兩個平台以 `--desktop` 跑全部 Desktop 流程（視窗隱藏）。`--visible` 只選有 `visibleScenarios` 的 Desktop 流程，以顯示的視窗執行。
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的 checkout：它的 `src/`、Web UI 與合成 verification server。
 - **證據**：`--label`（預設 `flows`）決定這次執行的新資料夾，規則與 `launch` 相同：`<issue>/<label>-<本地時間>/`。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log；`results.json` 另記 `flow`。流程還沒建立 recorder 就失敗（啟動 server 或瀏覽器失敗）時，照樣寫出 `passed: false` 的 `results.json`，沒跑成的流程不會從結果中消失。任一支流程失敗時 exit code 為 1。
 - **同時執行**：`--jobs <N>`（預設 1，最多等於 slot 數 10）讓最多 N 支流程同時跑，每支仍是自己的 instance 與 slot，依列出順序開始；Desktop 流程獨自執行，前面的流程結束才開始，後面的等它結束。一支失敗或中途丟出例外不影響其他流程跑完。N 大於 1 時每行 log 以 `[<流程名>]` 開頭。slot 被其他 run 佔滿時，流程等 slot 空出來。結束時印出通過的支數與失敗的流程名。
@@ -243,7 +243,7 @@ Electron 用產品自己的 plugin，所以 YouTube 是真的 yt-dlp；合成 Yo
 - Mac 的 ad-hoc 簽署後的啟動；
 - `electron-builder.yml` 的打包設定，例如帶進 `.app` 的檔案與 `extraResources`。
 
-共用畫面、API 與資料流平常用 Web 模式或開發版驗證；打包版另驗上列項目、發版前 smoke 與安裝包相關的票。[登入自啟](features/login-startup.md) 是明確的平台差異：Web／開發版拒絕設定，打包版可操作真實 OS 登入項目，正向驗收使用 VM 的安裝版。
+共用畫面、API 與資料流平常用 Web 模式或開發版驗證；打包版另驗上列項目、發版前的 startup 與安裝包相關的票。[登入自啟](features/login-startup.md) 是明確的平台差異：Web／開發版拒絕設定，打包版可操作真實 OS 登入項目，正向驗收使用 VM 的安裝版。
 
 打包版不需要 checkout 的 build：用 `vault: 'none'` 經 Onboarding 建立 Vault，就只需要 `.app` 與這個 skill 的 `node_modules`（Playwright）。`vault: 'selected'` 仍需要 checkout 的 `dist/node`。
 
@@ -251,25 +251,37 @@ Playwright 以 `_electron.launch` 啟動打包版，靠 Electron fuses 的 `Enab
 
 Windows 的 NSIS 安裝程式本身（安裝、捷徑、解除安裝）不經過 verify；verify 啟動的是安裝程式包進去的同一個 `win-unpacked` 內容。
 
-打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。profile、Vault、匯出與備份可導進 run 目錄，但 OS 登入項目不受這些路徑隔離。主機打包 smoke 使用全新隔離 profile、不切換登入自啟；Windows 沿用登入設定的 profile 手動啟動還可能修復搬移後的 OS 註冊，這類案例也在 VM 執行。登入項目的真實註冊、外部停用與登入行為依 [login-startup.md](features/login-startup.md) 的 VM 前置條件與時段執行。
+打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。profile、Vault、匯出與備份可導進 run 目錄，但 OS 登入項目不受這些路徑隔離。startup 的打包版使用全新隔離 profile、不切換登入自啟；Windows 沿用登入設定的 profile 手動啟動還可能修復搬移後的 OS 註冊，這類案例也在 VM 執行。登入項目的真實註冊、外部停用與登入行為依 [login-startup.md](features/login-startup.md) 的 VM 前置條件與時段執行。
 
-**Desktop smoke**：一個指令跑完，不需要互動、不需要網路，全部通過 exit code 為 0，任一項失敗不為 0。打包版與開發版 Electron 同一支，Mac 與 Windows 同一支；E2E workflow 的打包 smoke 也是它：
+**startup**：App 能正確啟動的檢查，開發版 Electron 與打包版、Mac 與 Windows 同一支，視窗隱藏、不需要互動與網路，不訂閱、不收集。全部通過 exit code 為 0，任一項失敗不為 0。nightly 在兩個平台各跑開發版與打包版：
 
 ```sh
+npm run build
+node .claude/skills/verify/scripts/startup.mjs [--evidence <dir>] [--issue <N>] [--label <name>]   # 開發版 Electron
 npm run package:mac
-node .claude/skills/verify/scripts/smoke-desktop.mjs --app "release/mac-arm64/XR Collector.app" [--evidence <dir>] [--issue <N>] [--label <name>] [--video <url>]
-node .claude/skills/verify/scripts/smoke-desktop.mjs            # 開發版 Electron（先 npm run build）
+node .claude/skills/verify/scripts/startup.mjs --app "release/mac-arm64/XR Collector.app"
 ```
 
 ```powershell
+node .claude\skills\verify\scripts\startup.mjs --evidence <dir>
 npm run package:win
-node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <dir>
-node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <dir>
+node .claude\skills\verify\scripts\startup.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <dir>
 ```
 
-流程：Vault 在啟動前放進兩份 fixture 文件 → 啟動（確認 `isPackaged`、從 `app.asar` 載入、resources 在受測的 App 內、profile 在 run 目錄、BuildInfo 的 commit 與種類對應受測 checkout、沒有設定自動更新來源）→ 受測程式自己 bin 底下的 yt-dlp 與 Deno 可執行、Meilisearch 從同一個 bin 啟動，經 API 與畫面搜尋到 fixture（打包版的 bin 是 `.app/Contents/Resources/bin` 或 `.exe` 旁的 `resources\bin`，開發版是 checkout 的 `resources/bin/<平台>`）→ 加 `--video <網址>`（例如 `REAL.video`）時再經畫面收集這支真實影片，斷言閱讀頁有字幕、知識庫有對應的 Markdown 檔，這一步需要網路 → 重啟後文件清單、知識庫與登入項目、更新來源都相同 → 結束，斷言 App 經自己的結束流程關閉、沒有命令列含有 run 目錄的程序、slot 的 lock 不再指向這個 run、7222／7175 的 listener 前後相同，以及 Electron 未指定 profile 時的預設資料夾（Mac 的 `~/Library/Application Support/`、Windows 的 `%APPDATA%` 下的 `XR Collector` 與 `xr-collector`）前後相同。使用者的 App 在執行中（7222 有 listener）時它自己會寫入這些資料夾，因此不比對，`results.json` 的 `userAppRunning` 為 true。證據預設在新的 `.local/ticket-artifacts/<issue>/<packaged|development>-<本地時間>/`（issue 預設為 `verify-smoke`），`--evidence` 指定時只寫該目錄。
+啟動前在隔離的 Vault 預放一份合成文件，之後依序檢查：
 
-Desktop smoke 的登入項目比較只涵蓋第一次啟動後與重啟後取樣的 `openAtLogin`；不證明首次啟動沒有異動註冊、註冊路徑／參數／核准狀態未變，或真實登入成功。這些行為依 [登入自啟](features/login-startup.md) 的原生安裝版案例驗證。
+| Scenario | 檢查 | 產品壞掉時 |
+| --- | --- | --- |
+| `STARTUP-01` | 跑的是受測程式（`isPackaged` 與種類相符；打包版從受測 App 的 `app.asar` 載入、resources 在 App 內）、profile 在 run 目錄、架構與 Node 相同，受測程式自己 bin 底下的 yt-dlp 與 Deno 可執行（打包版是 `.app/Contents/Resources/bin` 或 `.exe` 旁的 `resources\bin`，開發版是 checkout 的 `resources/bin/<平台>`） | 打包漏掉 runtime 或載入別的程式 |
+| `STARTUP-02` | 主視窗讀到 server 並列出預放的文件，沒有 console error 與未捕捉的例外 | 畫面啟動時丟錯 |
+| `STARTUP-03` | `/api/health` 回 200，搜尋狀態為 `ready`，Meilisearch 從受測程式自己的 bin 啟動 | 搜尋引擎起不來或用錯 binary |
+| `STARTUP-04` | Agent API 帶金鑰回 200、不帶回 401；經 Agent 讀的 build 資訊的種類與 commit 等於受測 checkout，打包版沒有未提交內容，開發版的 `sourceDirty` 與 checkout 相同 | Agent 不驗金鑰；跑到舊的 build |
+| `STARTUP-05` | 搜尋 API 找到預放的文件 | 索引沒有建立 |
+| `STARTUP-06` | App 經自己的結束流程關閉，run 的 Meilisearch 已停止（`close()` 的判定），App 結束後沒有命令列含有 run 目錄的程序（`close()` 在收掉任何程序之前讀取） | 關閉時留下 Meilisearch 或其他程序 |
+
+開發版的 build 資訊記錄 `npm run build` 當時的 commit，build 之後才 commit 時 `STARTUP-04` 失敗，重新 build 再跑。證據預設在新的 `.local/ticket-artifacts/<issue>/<label>-<本地時間>/`（issue 預設為 `startup`，label 預設為 `development` 或 `packaged`），`--evidence` 指定時只寫該目錄。
+
+登入項目與真實收集不在 startup 的範圍，見 [登入自啟](features/login-startup.md) 與「真實資料 smoke」。
 
 **受測程式的紀錄**：Desktop run 的 `results.json` 以 `target` 記錄受測的程式，開發版與打包版、Mac 與 Windows 的欄位都相同：`kind`（`packaged`／`development`）、`app`（打包版的 `.app` 或 `.exe` 路徑，開發版為 null）、`executable`、`version` 與 `arch`（程式自己回報的 `app.getVersion()` 與 `process.arch`）、`platform`、`connection`。`commit`、`sourceHash` 記錄的是執行 skill 的 checkout，打包版的版本以 `target` 為準。每個 `results.json` 另以 `environment` 記錄執行的機器：`platform`、`osRelease`、`osVersion`、`node`、`nodeArch`、`hostArch`、`emulated`。
 
@@ -309,7 +321,7 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
 
 - **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯或頁面有未捕捉例外的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
 - **`tests/tooling/verify-flows.test.ts`**（在 `npm test` 裡）：動態找出每一支流程、功能地圖每個功能檔列出的流程與流程的 `covers` 一致。改流程或功能地圖都會影響 E2E 會跑哪些流程，所以每個 PR 都跑。流程判斷訂閱狀態序列與工作頁分區的邏輯在 `tests/subscriptions/status-sequence.test.ts`。
-- **Desktop smoke**（`scripts/smoke-desktop.mjs`，見「打包版」）：改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或 `stop` 時，兩個平台的開發版與打包版各跑一次。
+- **startup**（`scripts/startup.mjs`，見「打包版」）：改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或 `stop` 時，兩個平台的開發版與打包版各跑一次；nightly 每天在兩個平台跑。
 
 ## 平台
 
@@ -320,5 +332,5 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
     - 從未顯示的視窗，Playwright 的頁面截圖每隔一次逾時，所以 Windows 的 `window.screenshot()` 由 Electron 的 `webContents.capturePage()` 產生，只寫 `path`、回傳 PNG，`clip`、`fullPage` 不適用。從未顯示的視窗不會畫新的畫面，capturePage 會拿到它上一次畫的內容，所以 verify 訂閱視窗的畫面（`beginFrameSubscription`）讓它持續繪製，每次截圖前再等兩個 animation frame。
     - 螢幕是 1024x768，視窗被限制在螢幕內（內容約 1008x717），截圖比 Mac 的 1280x900 小，窄寬度的版面因此出現在 Windows 的截圖中。
     - log 會出現 GPU process 的錯誤（`GPU process exited unexpectedly`），不影響操作與截圖。
-    - Windows 的 `close()`／`relaunch()` 在視窗開著時經 Playwright 結束 App，走 App 自己的結束流程（與系統匣的「結束」相同）。App 結束後 Node 因 Playwright 連著 inspector 印出 `Debugger ending on …` 而不退出，verify 看到這一行才以 `taskkill /T` 結束程序樹。這時 run 的 Meilisearch 必須已經停止，證明是 App 自己停止了它；Meilisearch 還在，或 60 秒內沒有走到這一步，`close()`／`relaunch()` 都算失敗，smoke 的 DESKTOP-05（或重啟的 DESKTOP-04）因此不通過。需要使用者桌面的能力在 session 0 無法驗證：視窗顯示與聚焦（`hidden: false`）、系統匣、通知、原生對話框本身、整個螢幕的截圖；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
+    - Windows 的 `close()`／`relaunch()` 在視窗開著時經 Playwright 結束 App，走 App 自己的結束流程（與系統匣的「結束」相同）。App 結束後 Node 因 Playwright 連著 inspector 印出 `Debugger ending on …` 而不退出，verify 看到這一行才以 `taskkill /T` 結束程序樹。這時 run 的 Meilisearch 必須已經停止。Windows 上 App 的結束流程即使沒有停止 Meilisearch，它在這時也已經結束，所以 Windows 的結果證明沒有留下引擎，App 自己停止引擎由 Mac 的結果證明；Meilisearch 還在，或 60 秒內沒有走到這一步，`close()`／`relaunch()` 都算失敗，startup 的 `STARTUP-06` 因此不通過。需要使用者桌面的能力在 session 0 無法驗證：視窗顯示與聚焦（`hidden: false`）、系統匣、通知、原生對話框本身、整個螢幕的截圖；這類 scenario 在驗收計畫標為實機目視，在登入的桌面上執行。
   - `stop` 以 `taskkill /T /F` 結束 run 的程序，沒有給 runtime 正常關閉的機會（見「Cleanup」）。

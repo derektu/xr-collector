@@ -23,8 +23,9 @@
 // - When the app quits, Node keeps the process alive while the inspector Playwright attached is
 //   still connected and prints "Debugger ending on …"; on Windows Playwright's close() never
 //   disconnects it, so the app has finished its own shutdown but the process stays. That line is
-//   the signal to end the process tree. Meilisearch of the run must be gone by then, which shows
-//   that the app stopped it itself.
+//   the signal to end the process tree. Meilisearch of the run must be gone by then. On Windows it
+//   is gone at that point even when the app's shutdown skips stopping it, so there this shows that
+//   no engine is left behind; that the app stops the engine itself shows on macOS.
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -71,6 +72,16 @@ async function captureThroughElectron(app, window) {
 
 /** The run's Meilisearch processes still running. */
 const runSearch = (runDir) => processTable().filter((entry) => programName(entry.executable ?? '') === 'meilisearch' && entry.command.includes(runDir));
+
+/**
+ * The processes whose command line mentions the run folder once the app has quit, before the run
+ * ends anything itself: what the app left behind. Electron's helper processes take a moment to exit
+ * after the app, so the list is read again until it is empty or the bound passes.
+ */
+async function leftBehind(runDir) {
+  const mentioning = () => processTable().filter((entry) => entry.command.includes(runDir)).map((entry) => `${entry.pid} ${entry.command}`);
+  return waitFor(() => (mentioning().length ? null : []), 'the app\'s processes ended', { timeout: 10_000 }).catch(() => mentioning());
+}
 
 /**
  * Quits the app through Playwright's close(), which runs the app's own shutdown with its window
@@ -287,16 +298,23 @@ export async function launchElectron({
     /**
      * Quits, ends whatever the app left running (a Meilisearch after an Electron crash), copies the
      * app's output into the evidence folder, releases the slot. An app that did not quit in time is
-     * ended all the same, and close then throws, so the flow reports it.
+     * ended all the same, and close then throws, so the flow reports it. Resolves with `leftovers`:
+     * the processes mentioning the run that were still running after the app quit, before the run
+     * ended them.
      */
     async close({ keep = false } = {}) {
       let failure = null;
-      try { await quit(current, runDir); } catch (error) { if (error.quitFailure) failure = error; }
+      let leftovers = [];
+      try {
+        await quit(current, runDir);
+        leftovers = await leftBehind(runDir);
+      } catch (error) { if (error.quitFailure) failure = error; }
       await terminateRun(record);
       if (existsSync(log)) await copyFile(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
       releaseSlot(ports.slot, runDir);
       if (!keep) await rm(runDir, { recursive: true, force: true });
       if (failure) throw failure;
+      return { leftovers };
     },
   };
   return handle;

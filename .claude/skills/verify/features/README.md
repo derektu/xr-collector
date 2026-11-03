@@ -24,7 +24,7 @@
 
 ## 選流程
 
-票改到哪個功能，就跑涵蓋該功能檔的流程：`flows list --feature <功能檔>` 列出它們，`flows run --feature <功能檔>` 執行。E2E workflow 跑全部 Web 流程（`--web`）；Desktop 流程（`--desktop`）以隱藏視窗執行，在改到平台層與發版前跑。Desktop 流程的 `visibleScenarios` 列出需要畫面上視窗的 scenario（聚焦、最小化還原、視窗實際顯示與隱藏），`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者並集中一次跑。
+票改到哪個功能，就跑涵蓋該功能檔的流程：`flows list --feature <功能檔>` 列出它們，`flows run --feature <功能檔>` 執行。nightly 在 Mac 跑全部 Web 流程（`--web`），在 Mac 與 Windows 以隱藏視窗跑全部 Desktop 流程（`--desktop`）；改到平台層的票在本機也跑 Desktop 流程。Desktop 流程的 `visibleScenarios` 列出需要畫面上視窗的 scenario（聚焦、最小化還原、視窗實際顯示與隱藏），`flows run --desktop --visible` 以顯示的視窗跑這些流程，視窗會跳出來，先提醒使用者並集中一次跑。
 
 ## Backlog
 

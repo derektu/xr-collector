@@ -1,6 +1,6 @@
 # 開發驗證流程
 
-驗證分三處：做票驗收在本機，嚴格並涵蓋邊界，證明本票的新行為正確；PR 門檻在 Mac CI，確認改動沒弄壞程式；nightly 與發布前在 Mac 與 Windows 跑完整的測試、E2E 與打包。原生操作由 agent 實際驗收，不以 build 成功或 CI 通過代替。
+驗證分三處：做票驗收在本機，嚴格並涵蓋邊界，證明本票的新行為正確；PR 門檻在 Mac CI，確認改動沒弄壞程式；nightly 與發布前在 Mac 與 Windows 跑完整的測試、E2E、App 啟動檢查與打包。原生操作由 agent 實際驗收，不以 build 成功或 CI 通過代替。
 
 ## 驗證層級
 
@@ -28,15 +28,36 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 **做票驗收**：在本機進行，嚴格並涵蓋邊界情況，只在那張票做一次。用功能地圖決定要跑哪些流程。邊界情況的測試留在所屬功能的測試目錄。
 
-**PR 門檻**：一個 Mac job：`npm ci`、安裝釘住版本的 runtime、`npm run verify`（單元與整合測試，含真實 Meilisearch 的案例，以及 typecheck 與 build），改動碰到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。門檻要快、結果穩定，不設時間上限。Web E2E 不在 PR 執行，而在 nightly、發布前與手動觸發的 E2E workflow 執行。只改 Markdown 的修改不執行門檻，見 AGENTS.md。
+**PR 門檻**：一個 Mac job：`npm ci`、安裝釘住版本的 runtime、`npm run verify`（單元與整合測試，含真實 Meilisearch 的案例，以及 typecheck 與 build），改動碰到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。門檻要快、結果穩定，不設時間上限。Web E2E、Windows 與打包不在 PR 執行，而在 nightly 執行。只改 Markdown 的修改不執行門檻，見 AGENTS.md。
 
-**nightly 與發布前**：Mac 與 Windows 都跑完整測試、全部 E2E（Web 流程在 Mac，Desktop 流程在兩平台）、App 啟動檢查與打包。失敗自動開 issue，修正優先於新功能。
+**nightly 與發布前**：Mac 與 Windows 都跑完整測試、全部 E2E（Web 流程在 Mac，Desktop 流程在兩平台）、App 啟動檢查與打包。失敗自動開 issue，修正優先於新功能。做法見下節；發布前在發布候選的 commit 手動觸發同一個 workflow。
 
 **改 A 壞 B**：模組切分清楚時，改一個功能不會弄壞另一個功能。發現改 A 壞 B 時當設計問題處理：修模組邊界；修不了的牽連記在對應的功能檔。
 
 **平台**：要不要在某個平台跑，只看改動的平台相依程度。路徑、檔案權限與 rename、程序與 lock、隨附 runtime、Electron 與打包屬於平台相依，Mac 與 Windows 都驗；平台無關的在 Mac 驗。某個平台跑得慢不是不跑的理由，要查出慢的原因。
 
 **畫面**：畫面的回歸檢查讀程式狀態，例如 verify 的 state、App API 與結構化的 DOM 屬性，不比對整句文案。畫面長相（焦點框、置中、換行、tooltip）只在牽涉畫面的那張票驗收。打包相關的檢查只在改到打包時跑。
+
+### nightly
+
+`.github/workflows/nightly.yml` 每天台北時間 02:00 在 main 執行，main 前 26 小時沒有新 commit 時跳過（排程開跑的延遲每次不同，多留兩小時才不會漏掉 commit）；也可以在任何分支手動觸發，勾選 `report` 時才把結果寫進 issue。除了 Web 流程只在 Mac，每個 job 都在 Mac arm64（`macos-15`）與 Windows x64（`windows-2022`）各跑一次：
+
+| Job | 內容 |
+| --- | --- |
+| Verify | `npm run verify`（真實引擎的案例用各平台釘住的 Meilisearch）與 `npm run test:verify-skill` |
+| Startup and Desktop flows | 開發版的 [startup](../.claude/skills/verify/SKILL.md#打包版) 檢查，以及 `flows run --desktop`：視窗隱藏能跑的全部 Desktop 流程 |
+| Web flows | Mac：`flows run --web --jobs 3`，全部 Web 流程 |
+| Package and startup | `npm run package:mac`／`package:win` 的未簽章測試包，再以 `startup --app` 檢查打包版 |
+
+Windows runner 用完即丟，job 開始時把 workspace 與 TEMP 加進 Defender 排除；開發者與公司的機器不改 Defender。startup 與每支流程的 `results.json`、截圖與 server log 上傳成該次 run 的 artifact，保存 14 天，不含 Vault、profile 與安裝包。
+
+失敗時，report job 在帶 `nightly` label 的 open issue 留言；沒有 open 的就開一張新 issue，並依 AGENTS.md 加入看板、Status 設為 Todo。內容是失敗的 job、失敗的流程與 check，以及 run 連結。寫看板用 repo secret `NIGHTLY_PROJECT_TOKEN`（只有 `project` 權限的 classic PAT；workflow 的 `GITHUB_TOKEN` 不能寫使用者層級的 Project），沒設或寫入失敗時 issue 上會有「issue 已建立，看板設定尚未完成」與原因。之後的 nightly 通過時，在 open 的 nightly issue 留言。
+
+**nightly 失敗的處理順序**：
+
+1. nightly issue 排在所有新功能之前：放到看板 Todo 的最前面，下一張開工的就是它。
+2. 依下面「失敗」的規則把失敗歸為產品 bug、測試假設或環境並查到根因，不以重跑讓它消失。
+3. 修正照一般的票與 PR 交付，PR 寫 `Closes #<nightly issue>`；merge 後在 main 手動觸發 nightly 並勾選 `report`，確認通過。
 
 ### 自動測試的判準
 
@@ -129,7 +150,7 @@ PR merge 後，先把票的 worktree 的 `.local/ticket-artifacts/<issue>/` 複�
 - 隨附 runtime、Electron、簽署、打包與更新
 - 換行：Windows 的 Git 以 `core.autocrlf` 把文字檔 checkout 成 CRLF
 
-另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替，也不放未提交修改；`npm ci` 後執行 `npm run verify`。只在一個平台成立的行為依 [測試說明的平台邊界](../tests/README.md#真實搜尋與平台邊界) 以平台條件 skip，不用 mock 冒充另一個平台通過。
+另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替，也不放未提交修改；`npm ci`、安裝該平台釘住的 runtime（Mac 是 `npm run download:runtime`；Windows 是 `npm run download:runtime:win`，機器沒有安裝 Visual C++ runtime 時再執行 `node scripts/prepare-windows-crt.mjs`）後執行 `npm run verify`，真實引擎的案例在兩個平台都執行。只在一個平台成立的行為依 [測試說明的平台邊界](../tests/README.md#真實搜尋與平台邊界) 以平台條件 skip，不用 mock 冒充另一個平台通過。
 
 Windows 上的完整測試正常需要 80～110 秒，Mac 約 15 秒。原因包括 worker 數少、每個測試檔的固定啟動成本，以及防毒即時掃描測試寫出的檔案與啟動的程式。checkout 已排除時，再把 `TEMP` 放進 Defender 排除只快約 15～20%，所以驗證流程不假設有排除；公司管理的機器不能改 Defender。VM 剛開機或病毒碼更新後約半小時內會慢 2～4 倍，量測耗時要等 Defender 閒下來。逾時與 teardown error 照失敗處理：查出原因，不以重跑抵銷。
 
@@ -140,11 +161,11 @@ Windows 驗收用 verify skill 的原生 Desktop 模式，與 Mac 用同一支�
 在 Windows 上受測的 checkout 先執行 `npm ci`、`npm run download:runtime:win` 與 `npm run build`，打包版另執行 `npm run package:win`。缺少的前置條件（例如 `resources/bin/win`、Electron 執行檔、受測的 `.exe`）由啟動錯誤列出，各附修正方式，啟動失敗也寫出失敗的 `results.json`：
 
 ```powershell
-node .claude\skills\verify\scripts\smoke-desktop.mjs --evidence <證據目錄>
-node .claude\skills\verify\scripts\smoke-desktop.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <證據目錄>
+node .claude\skills\verify\scripts\startup.mjs --evidence <證據目錄>
+node .claude\skills\verify\scripts\startup.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <證據目錄>
 ```
 
-票的流程腳本與 smoke 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。兩個平台的結果以 `check` 確認完整且對應受驗的程式：
+票的流程腳本與 startup 都是一個指令跑完、不需要互動，結果以 exit code 表示。`--evidence` 指定的目錄收下 `results.json`、截圖與 log，跑完整批取回開發機上票的 worktree 的 `.local/ticket-artifacts/<issue>/`。`results.json` 記錄受測的 commit、未提交內容的雜湊，以及執行的平台、OS 版本、Node 與機器的架構（`environment`）。兩個平台的結果以 `check` 確認完整且對應受驗的程式：
 
 ```sh
 node .claude/skills/verify/scripts/verify.mjs check --platform darwin --platform win32 <mac 證據目錄> <windows 證據目錄>
@@ -167,4 +188,4 @@ Windows ARM VM 以 x64 Node 模擬執行開發版與打包版時，`results.json
 - 發布候選建置後需要修改程式時，修正先以 ad-hoc／未簽署包驗收，確認後再重建正式候選。
 - 例外：修改簽章、公證或打包流程本身的票，以一次 Developer ID 實跑驗證該流程。
 
-打包的自動檢查不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。E2E workflow 手動觸發時可選擇建置 Mac 與 Windows 的未簽章測試包，以隔離的離線文件檢查打包 App、隨附 Meilisearch 與 yt-dlp／Deno；這些包不是安裝包來源。發布步驟見 [建置、測試與發布](building.md#發布) 與 [Release 發布手冊](release-runbook.md)。
+打包的自動檢查不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。nightly 每天建置 Mac 與 Windows 的未簽章測試包，以 startup 檢查打包 App、隨附的 Meilisearch 與 yt-dlp／Deno；這些包不是安裝包來源。發布步驟見 [建置、測試與發布](building.md#發布) 與 [Release 發布手冊](release-runbook.md)。

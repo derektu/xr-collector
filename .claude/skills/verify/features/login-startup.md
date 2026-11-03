@@ -22,7 +22,7 @@ Preconditions:
 
 - 開發版負向案例用 Web 合成資料或 macOS／Windows 原生開發 Electron，驗證設定頁與 Agent 都拒絕註冊，不修改作業系統登入項目。
 - 真實 OS 註冊、外部停用及登入案例必須在兩台 VM 使用相同受測 commit 的安裝版；受控啟動辨識只能補驗分支，不能取代真實登入。
-- 程式以 `app.isPackaged` 判定是否能操作 OS；未安裝的 `.app` 與 `win-unpacked` 也具備此能力。隔離 profile 不會隔離作業系統登入項目，本機打包 smoke 不點這個開關；正向案例仍使用 VM 的安裝版。
+- 程式以 `app.isPackaged` 判定是否能操作 OS；未安裝的 `.app` 與 `win-unpacked` 也具備此能力。隔離 profile 不會隔離作業系統登入項目，startup 檢查不點這個開關；正向案例仍使用 VM 的安裝版。
 - 真登入案例沿用上述 VM 安裝版，會真的登出再登入，只在使用者確認時段後執行。
 
 - **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 內的 `input` 必須 disabled，`login-startup-status` 簡短顯示「僅限安裝版 App。」。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。

@@ -110,7 +110,7 @@
 | 知識庫 | 匯出、merge／replace／nothing、切庫、fixed、等待取消及背景計數有 UI＋檔案／索引斷言 | 保留資料交換專項；補 preview 數與同 ID 更新後的精確文件內容，避免只看筆數。 | 原生選檔／選目錄的參數、取消無副作用、完成結果、reveal IPC 用 Desktop 控制驗證；不驗 Finder／對話框外觀。 |
 | Agent 連線 | Settings ZIP／複製 payload／設定／重設已有 Web；port bind、重啟生效與 profile 隔離有真 TCP／runtime 測試 | 核心保留一個基本下載／可達性代表；修正未證明的標記。 | Onboarding 三按鈕實際操作、unavailable 顯示／停用、卡片順序、重設 identity 屬 Agent 專項；不重造 port／移轉矩陣。 |
 | Tray | D1～D8 已有 Desktop：隱藏、Agent 同 instance、背景收集、開關、頁面不 reload、提示、第二啟動、退出與接續 | 保留 Desktop 專項，不建立另一套相同流程。 | 若聚焦列為必要結果，將現有 note 補為斷言；offline／retry／queue 等純選單狀態留在模型單元測試。 |
-| 建置資訊 | Web 設定／Onboarding、UI／Agent 身分及 503 重試已有；打包 smoke 讀取實際產物 API | 保留廉價身分檢查，沿用已有 smoke。 | 在已有打包產物補 API／DOM與 asar／artifact identity 的共用核對入口；缺匹配產物明確列未驗，不用 Web 代替。 |
+| 建置資訊 | Web 設定／Onboarding、UI／Agent 身分及 503 重試已有；打包版 startup 讀取實際產物 API | 保留廉價身分檢查，沿用 startup。 | 在已有打包產物補 API／DOM與 asar／artifact identity 的共用核對入口；缺匹配產物明確列未驗，不用 Web 代替。 |
 | 登入自啟 | Web 拒絕、fixture 成功／失敗／approval／外部停用／GET-PUT 競態已有 | 保留 Web 負向與已有 fixture。 | 真 OS 註冊、外部設定及登入後生效略過；普通手動第二實例仍由 Tray 驗證。 |
 | 外觀主題 | `Settings.tsx` 有深／淺／系統與鍵盤操作；`app-shell`、`theme-preference` 有規則與儲存單元測試，尚無獨立功能檔／操作流程 | 地圖納入外觀；以一個簡短 Web 操作驗深／淺切換與刷新保留。 | 跟隨系統用瀏覽器可控外觀、鍵盤操作、Desktop 持久性歸外觀／平台專項；不新增低風險寫檔失敗的產品 UI。 |
 
@@ -216,5 +216,5 @@ Desktop bridge 與詞庫資源 smoke 使用獨立資料／資源副本，不修�
 - [收錄流程](../.claude/skills/verify/flows/)與[選取／執行器](../.claude/skills/verify/scripts/lib/flows.mjs)。
 - [地圖與流程一致性測試](../tests/tooling/verify-flows.test.ts)：已有名稱一致性檢查，沒有完整覆蓋的自動證明。
 - [單元與整合測試分類](../tests/README.md)：確認已有下層保障，避免建立重複 E2E。
-- [真實來源 smoke](../.claude/skills/verify/examples/smoke-real.mjs)、[Desktop smoke](../.claude/skills/verify/scripts/smoke-desktop.mjs)（開發版與打包版共用）：已有可執行程式，無須以新增相同 smoke 作為覆蓋成果。
+- [真實來源 smoke](../.claude/skills/verify/examples/smoke-real.mjs)、[startup](../.claude/skills/verify/scripts/startup.mjs)（開發版與打包版共用）：已有可執行程式，無須以新增相同 smoke 作為覆蓋成果。
 - [外觀控制](../src/web/Settings.tsx)、[主題狀態與持久性](../src/web/App.tsx)、[主題邏輯測試](../tests/web/app-shell.test.ts)、[Desktop preference 測試](../tests/electron/theme-preference.test.ts)。

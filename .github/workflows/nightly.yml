@@ -1,0 +1,253 @@
+name: Nightly
+
+# Everything the pull request gate leaves out, on both delivery targets: the full tests with the
+# real engine, the startup check of the development and the packaged app, every Web flow (Mac) and
+# every Desktop flow that runs with its window hidden. Scheduled on main, skipped when main has no
+# commit in the last 26 hours; a dispatch runs on any branch. A failure opens the nightly issue (or
+# comments on the open one) and puts a new issue on the project board; each passing run comments on
+# the open nightly issue. Dispatched runs report only when asked to.
+on:
+  schedule:
+    # 02:00 in Taipei.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      report:
+        description: Open or update the nightly issue with this run's result
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: New commits
+    runs-on: macos-15
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # A scheduled run starts late by a varying amount, so a one-day window can miss a commit that
+      # lands between two runs; 26 hours covers that, at the cost of an occasional extra run.
+      - name: Run when dispatched or when main changed in the last 26 hours
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          committed=$(git log -1 --format=%ct HEAD)
+          if [ "$EVENT" != schedule ] || [ "$committed" -gt $(( $(date +%s) - 26 * 3600 )) ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No commit on main since $(date -r "$committed")."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify:
+    name: Verify (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            runtime_platform: mac
+          - runner: windows-2022
+            target: win32-x64
+            runtime_platform: win
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Exclude the workspace and TEMP from Defender on this one-off runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:TEMP, $env:RUNNER_TEMP
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install pinned runtimes for the real-engine tests
+        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+      - name: Place the pinned Visual C++ runtime beside Meilisearch
+        if: runner.os == 'Windows'
+        run: node scripts/prepare-windows-crt.mjs
+      - name: Test, typecheck, and build
+        run: npm run verify
+      - name: Test the verify skill
+        run: npm run test:verify-skill
+
+  desktop:
+    name: Startup and Desktop flows (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            runtime_platform: mac
+          - runner: windows-2022
+            target: win32-x64
+            runtime_platform: win
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Exclude the workspace and TEMP from Defender on this one-off runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:TEMP, $env:RUNNER_TEMP
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install pinned runtimes
+        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+      - name: Place the pinned Visual C++ runtime beside Meilisearch
+        if: runner.os == 'Windows'
+        run: node scripts/prepare-windows-crt.mjs
+      - name: Install the Electron binary
+        run: node node_modules/electron/install.js
+      - name: Build
+        run: npm run build
+      - name: Startup check of the development app
+        shell: bash
+        run: node .claude/skills/verify/scripts/startup.mjs --issue nightly --label startup-development
+      - name: Desktop flows with the window hidden
+        if: success() || failure()
+        shell: bash
+        run: node .claude/skills/verify/scripts/verify.mjs flows run --desktop --issue nightly --label desktop
+      - name: Save results and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-desktop-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ticket-artifacts/nightly/**/results.json
+            .local/ticket-artifacts/nightly/**/*.png
+            .local/ticket-artifacts/nightly/**/*server.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  web:
+    name: Web flows (darwin-arm64)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install chromium
+      - name: Prepare pinned search engine
+        run: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
+      - name: Run every Web flow
+        run: node .claude/skills/verify/scripts/verify.mjs flows run --web --issue nightly --label web --jobs 3
+      - name: Save results and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-web-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ticket-artifacts/nightly/**/results.json
+            .local/ticket-artifacts/nightly/**/*.png
+            .local/ticket-artifacts/nightly/**/*server.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  package:
+    name: Package and startup (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            package_command: package:mac
+            runtime_platform: mac
+            app: release/mac-arm64/XR Collector.app
+          - runner: windows-2022
+            target: win32-x64
+            package_command: package:win
+            runtime_platform: win
+            app: release/win-unpacked/XR Collector.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Exclude the workspace and TEMP from Defender on this one-off runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:TEMP, $env:RUNNER_TEMP
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Prepare pinned runtimes in the runtime cache
+        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+      - name: Build unsigned test package
+        run: npm run ${{ matrix.package_command }}
+      - name: Startup check of the packaged app
+        shell: bash
+        run: node .claude/skills/verify/scripts/startup.mjs --app "${{ matrix.app }}" --issue nightly --label startup-packaged
+      - name: Save results and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-package-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ticket-artifacts/nightly/**/results.json
+            .local/ticket-artifacts/nightly/**/*.png
+            .local/ticket-artifacts/nightly/**/*server.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  report:
+    name: Report
+    needs: [changes, verify, desktop, web, package]
+    if: always() && needs.changes.outputs.run == 'true' && (github.event_name == 'schedule' || inputs.report)
+    runs-on: macos-15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: nightly-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .data/nightly-results
+      - name: Open, update or close out the nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT_TOKEN: ${{ secrets.NIGHTLY_PROJECT_TOKEN }}
+          PROJECT_OWNER: derektu
+          PROJECT_NUMBER: '3'
+          RESULTS_DIR: .data/nightly-results
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: node scripts/nightly-report.mjs

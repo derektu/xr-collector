@@ -1,9 +1,9 @@
 name: CI
 
 # The pull request gate: unit and integration tests, including the real-engine cases, typecheck and
-# build on a Mac, plus the verify skill's own tests when the change touches its scripts. Web E2E and
-# packaged smoke run in e2e.yml. A change to Markdown alone does not run
-# the gate; the Agent skill is Markdown that tests read, so it runs the gate like code.
+# build on a Mac, plus the verify skill's own tests when the change touches its scripts. Windows,
+# the E2E flows, the startup check and packaging run in nightly.yml. A change to Markdown alone does
+# not run the gate; the Agent skill is Markdown that tests read, so it runs the gate like code.
 on:
   push:
     branches: [main]
