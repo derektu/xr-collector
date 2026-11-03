@@ -15,8 +15,8 @@ import {
   stopLeftoverMeilisearchProcess,
   type RunningMeilisearch,
 } from '../../src/search/meilisearch-process.js';
+import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 
-const bundledBinary = path.resolve('resources/bin/mac/meilisearch');
 const cleanups: Array<() => Promise<unknown>> = [];
 
 afterEach(async () => {
@@ -49,7 +49,7 @@ async function exitedProcessId(): Promise<number> {
 }
 
 /** Runs the fixture that starts an engine, kills the fixture with SIGKILL, and returns the engine it left behind. */
-async function leaveEngineBehind(databasePath: string, binaryPath = bundledBinary): Promise<number> {
+async function leaveEngineBehind(databasePath: string, binaryPath = bundledMeilisearch): Promise<number> {
   const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('tests/search/fixtures/killed-engine.ts'), binaryPath, databasePath], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
@@ -120,13 +120,13 @@ describe('persisted Meilisearch process record', () => {
   });
 });
 
-describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app', () => {
+describe('engine left behind by a killed app', { tags: [REAL_ENGINE_TAG] }, () => {
   it('stops the engine a killed run left on the same database before starting a new one', async () => {
     const databasePath = await tempDatabase();
     const leftover = await leaveEngineBehind(databasePath);
     expect(alive(leftover)).toBe(true);
 
-    const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
+    const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath });
     cleanups.push(() => engine.close());
     expect(alive(leftover)).toBe(false);
     expect(await healthy(engine)).toBe(true);
@@ -143,11 +143,11 @@ describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app'
     cleanups.push(async () => { other.kill('SIGKILL'); });
     await writeFile(pidFilePath(databasePath), JSON.stringify({
       pid: other.pid,
-      binaryPath: bundledBinary,
+      binaryPath: bundledMeilisearch,
       databasePath,
     }));
 
-    await expect(startMeilisearchProcess({ binaryPath: bundledBinary, databasePath })).rejects.toThrow(/Cannot prove process/u);
+    await expect(startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath })).rejects.toThrow(/Cannot prove process/u);
     expect(alive(other.pid!)).toBe(true);
     expect(existsSync(pidFilePath(databasePath))).toBe(true);
   });
@@ -157,19 +157,19 @@ describe.skipIf(!existsSync(bundledBinary))('engine left behind by a killed app'
     // A symlink gives the leftover its own command-line path. A copy is a new executable that macOS
     // scans on its first launch for about two seconds; the symlink launches the already-scanned binary.
     const previousBinary = path.join(path.dirname(databasePath), 'previous-meilisearch');
-    await symlink(bundledBinary, previousBinary);
+    await symlink(bundledMeilisearch, previousBinary);
     const leftover = await leaveEngineBehind(databasePath, previousBinary);
 
-    const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
+    const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath });
     cleanups.push(() => engine.close());
     expect(alive(leftover)).toBe(false);
     expect(await healthy(engine)).toBe(true);
   });
 });
 
-describe.skipIf(!existsSync(bundledBinary))('stopping the engine', () => {
+describe('stopping the engine', { tags: [REAL_ENGINE_TAG] }, () => {
   it('leaves no timer behind once the engine has exited, so the app can quit at once', async () => {
-    const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath: await tempDatabase() });
+    const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: await tempDatabase() });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       await engine.close();

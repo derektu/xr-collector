@@ -22,6 +22,7 @@ import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
+import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from './exchange-fixtures.js';
 import type { YouTubeTestSources } from '../support/youtube-sources.js';
 import { manifestOf, packageOf, tampered } from './package-fixtures.js';
@@ -897,12 +898,12 @@ it('refuses an export file the manifest of which does not match its content, wit
   expect(await items(a.vault)).toEqual(before);
 });
 
-it.skipIf(!existsSync(path.resolve('resources/bin/mac/meilisearch')))('updates real Meilisearch with what an import wrote and removed, and keeps it after restart', async () => {
+it('updates real Meilisearch with what an import wrote and removed, and keeps it after restart', { tags: [REAL_ENGINE_TAG] }, async () => {
   const { a, b } = await pair();
   await changeB(b);
   await modify(b.vault, D3, '匯入後的珊瑚觀察', at(2));
   const file = await exportFrom(b, 'b-1');
-  const real = { searchBinary: path.resolve('resources/bin/mac/meilisearch'), createSearch: undefined };
+  const real = { searchBinary: bundledMeilisearch, createSearch: undefined };
   const ids = async (workspace: VaultWorkspace, query: string) => (await workspace.search.search({ query })).hits.map((hit) => hit.id);
   await using(a, async (workspace) => {
     await eventually(() => expect(workspace.search.status().state).toBe('ready'));

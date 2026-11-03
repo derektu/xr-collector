@@ -51,7 +51,7 @@ const USAGE = `verify.mjs <command>
   flows history [--from <dir>] [--runs <N>]
            each flow's runs, failures with their causes, median and longest total, and runs over the one-flow
            budget, from every results.json under --from, or else from the Web regression results of the last
-           N (default 30) CI runs, downloaded with gh
+           N (default 30) E2E runs (e2e.yml), downloaded with gh
   summary  --commit <SHA> [--platform darwin|win32]... [--scenario <ID>]... <results.json>...
            whether every scenario passed on every given platform (any one platform without --platform), counting
            only results of that commit from a clean checkout; --scenario names a scenario the flow must record;
@@ -71,8 +71,8 @@ const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USA
 
 /**
  * `flows history`: reads every results.json under --from, or downloads the `web-regression-results-*`
- * artifacts of the last --runs CI runs with gh (runs without one, such as Markdown-only changes or
- * reused main pushes, are skipped), and prints each flow's record as JSON and as a table.
+ * artifacts of the last --runs E2E runs with gh (runs without one are skipped), and prints each
+ * flow's record as JSON and as a table.
  */
 async function history() {
   if (!/^\d+$/u.test(o.runs) || Number(o.runs) < 1) throw new Error(`--runs is a whole number of CI runs\n${USAGE}`);
@@ -82,7 +82,7 @@ async function history() {
     if (!from) {
       scratch = await mkdtemp(path.join(os.tmpdir(), 'xr-flow-history-'));
       from = scratch;
-      const runs = JSON.parse(execFileSync('gh', ['run', 'list', '--workflow', 'ci.yml', '--limit', o.runs, '--json', 'databaseId'], { encoding: 'utf8' }));
+      const runs = JSON.parse(execFileSync('gh', ['run', 'list', '--workflow', 'e2e.yml', '--limit', o.runs, '--json', 'databaseId'], { encoding: 'utf8' }));
       for (const { databaseId } of runs) {
         try {
           execFileSync('gh', ['run', 'download', String(databaseId), '--pattern', 'web-regression-results-*', '--dir', path.join(scratch, String(databaseId))], { stdio: 'ignore' });

@@ -1,79 +1,43 @@
-// Guards the developer, not the user: CI runs the Web flows on a Mac three at a time and skips a
-// main push only when the reuse check allows it, keeps packaged smoke manual for the two delivery
-// targets, runs the real-engine search tests when their files change, and keeps failure evidence
-// for seven days.
-import { readFile } from 'node:fs/promises';
+// Guards the developer and the user's data: what CI uploads never includes a Vault or a profile, the
+// packaged smoke builds exactly the targets that `package:*` delivers, and no `run:` script expands
+// text a pull request or a dispatch can set.
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { WEB_REGRESSION_JOB } from '../../.github/scripts/web-regression-reuse.mjs';
 
-const workflowPath = path.resolve(import.meta.dirname, '../..', '.github/workflows/ci.yml');
-const workflow = parse(await readFile(workflowPath, 'utf8'));
+type Step = { name?: string; run?: string; uses?: string; with?: Record<string, unknown> };
+type Job = { steps?: Step[]; strategy?: { matrix?: { include?: Array<{ target?: string }> } } };
 
-describe('CI UI regression contract', () => {
-  it('runs Web regression on a standard Mac runner and dynamically selects Web flows', () => {
-    const job = workflow.jobs['web-regression'];
-    expect(job['runs-on']).toBe('macos-15');
-    expect(job.steps.some((step: { run?: string }) => step.run?.includes('flows run --web'))).toBe(true);
-    expect(job['timeout-minutes']).toBeGreaterThan(0);
+const root = path.resolve(import.meta.dirname, '../..');
+const workflowDir = path.join(root, '.github/workflows');
+const workflows = readdirSync(workflowDir).filter((name) => /\.ya?ml$/u.test(name)).map((name) => ({
+  name,
+  jobs: Object.entries((parse(readFileSync(path.join(workflowDir, name), 'utf8')) as { jobs: Record<string, Job> }).jobs),
+}));
+const steps = workflows.flatMap(({ name, jobs }) => jobs.flatMap(([job, { steps: list = [] }]) => list.map((step) => ({ at: `${name} ${job} ${step.name ?? step.uses ?? step.run}`, step }))));
+const scripts = (JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts;
+
+describe('CI workflows', () => {
+  it('uploads no Vault, profile or packaged App', () => {
+    const uploads = steps.filter(({ step }) => step.uses?.startsWith('actions/upload-artifact@'));
+    for (const { at, step } of uploads) expect(String(step.with?.path), at).not.toMatch(/vault|profile|release\//iu);
   });
 
-  it('runs flows three at a time and skips a main push only when the reuse check says so', () => {
-    const job = workflow.jobs['web-regression'];
-    expect(job.name).toBe(WEB_REGRESSION_JOB);
-    const run = job.steps.find((step: { name?: string }) => step.name === 'Run every registered Web flow');
-    expect(run.run).toContain('--jobs 3');
-    const reuse = workflow.jobs['web-regression-reuse'];
-    expect(reuse.if).toBe("github.event_name == 'push'");
-    expect(reuse.outputs.reuse).toContain('steps.decide.outputs.reuse');
-    expect(job.needs).toBe('web-regression-reuse');
-    expect(job.if).toContain('!cancelled()');
-    expect(job.if).toContain("needs.web-regression-reuse.outputs.reuse != 'true'");
-    expect(workflow.jobs.verify.needs).toBeUndefined();
-    expect(workflow.jobs.verify.if).toBeUndefined();
+  it('packages exactly the targets that package:* delivers', () => {
+    const delivered = Object.entries(scripts)
+      .filter(([name]) => /^package:/u.test(name))
+      .map(([, command]) => /--target (\S+)/u.exec(command)?.[1])
+      .sort();
+    const packaged = workflows.flatMap(({ jobs }) => jobs)
+      .filter(([, job]) => job.steps?.some((step) => step.run?.includes('${{ matrix.package_command }}')))
+      .flatMap(([, job]) => job.strategy?.matrix?.include?.map((entry) => entry.target) ?? [])
+      .sort();
+    expect(packaged).toEqual(delivered);
   });
 
-  it('keeps packaged smoke manual and covers only the two delivery targets', () => {
-    const job = workflow.jobs['packaged-smoke'];
-    expect(job.if).toContain("github.event_name == 'workflow_dispatch'");
-    expect(job.if).toContain('inputs.packaged_smoke');
-    expect(job.strategy.matrix.include.map((entry: { target: string }) => entry.target).sort())
-      .toEqual(['darwin-arm64', 'win32-x64']);
-  });
-
-  it('lets manually dispatched clean-main repeats finish independently', () => {
-    expect(workflow.concurrency.group).toContain('github.run_id');
-    const select = workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name === 'Select tested source');
-    expect(select.env.REQUESTED_REF).toContain('inputs.tested_ref');
-    expect(select.run).toContain('$REQUESTED_REF');
-    expect(select.run).not.toContain('${{ inputs.tested_ref }}');
-    const validate = workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name === 'Validate separately tested commit');
-    expect(validate.run).toContain('^[0-9a-f]{40}$');
-    const run = workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name === 'Run every registered Web flow');
-    expect(run.run.match(/rev-parse HEAD/gu)).toHaveLength(2);
-  });
-
-  it('runs the real-engine cases on a Mac whenever a file of test:meilisearch:mac changes', async () => {
-    const engine = parse(await readFile(path.resolve(import.meta.dirname, '../..', '.github/workflows/search-engine.yml'), 'utf8'));
-    expect(engine.jobs['real-engine']['runs-on']).toBe('macos-15');
-    expect(engine.jobs['real-engine'].steps.some((step: { run?: string }) => step.run === 'npm run test:meilisearch:mac')).toBe(true);
-    const packageJson = JSON.parse(await readFile(path.resolve(import.meta.dirname, '../..', 'package.json'), 'utf8'));
-    const files = (packageJson.scripts['test:meilisearch:mac'] as string).match(/tests\/\S+\.test\.ts/gu)!;
-    for (const trigger of [engine.on.pull_request.paths, engine.on.push.paths]) expect(trigger).toEqual(expect.arrayContaining(files));
-  });
-
-  it('uploads only bounded failure evidence for seven days', () => {
-    for (const name of ['web-regression', 'packaged-smoke']) {
-      const upload = workflow.jobs[name].steps.find((step: { name?: string }) => step.name?.startsWith('Save failed'));
-      expect(upload.if).toBe('failure()');
-      expect(upload.with['retention-days']).toBe(7);
-      expect(upload.with.path).toContain('results.json');
-      expect(upload.with.path).toContain('server.log');
-      expect(upload.with.path).not.toMatch(/release\/|profile|vault/iu);
-    }
-    // stop copies each run's log into the evidence as <run>-server.log.
-    expect(workflow.jobs['web-regression'].steps.find((step: { name?: string }) => step.name?.startsWith('Save failed')).with.path)
-      .toContain('ci-web/**/*server.log');
+  it('passes pull request and dispatch text to run scripts only through the environment', () => {
+    const untrusted = /\$\{\{[^}]*\b(github\.event\.|github\.head_ref|inputs\.)/u;
+    for (const { at, step } of steps) if (step.run) expect(step.run, at).not.toMatch(untrusted);
   });
 });

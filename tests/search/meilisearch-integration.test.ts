@@ -2,7 +2,6 @@
 // rebuilds when the Vault changed; paging, filters, Traditional/Simplified and full-width forms,
 // contiguous Chinese fragments and Latin typos match as a user expects; a deleted document leaves
 // results at once.
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,11 +14,11 @@ import {
   startMeilisearchProcess,
   type RunningMeilisearch,
 } from '../../src/search/meilisearch-process.js';
+import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
 
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();
-const bundledBinary = path.resolve('resources/bin/mac/meilisearch');
 const bundledLexicon = path.resolve('resources/search/coct-main.txt');
 const lexiconPromise = loadSearchLexicon(bundledLexicon);
 
@@ -60,7 +59,7 @@ async function withSearch<T>(
   use: (search: ManagedTranscriptSearch, engine: RunningMeilisearch, rebuilds: number) => Promise<T>,
 ): Promise<T> {
   const lexicon = await lexiconPromise;
-  const engine = await startMeilisearchProcess({ binaryPath: bundledBinary, databasePath });
+  const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath });
   running.add(engine);
   try {
     let rebuilds = 0;
@@ -84,7 +83,7 @@ async function engineRequest(engine: RunningMeilisearch, pathName: string, init?
   });
 }
 
-describe.skipIf(!existsSync(bundledBinary))('bundled Meilisearch integration', () => {
+describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
   it('searches after restart and rebuilds after the local index is removed', async () => {
     const databasePath = await tempDatabase();
     const firstHit = (search: ManagedTranscriptSearch) => search.search({

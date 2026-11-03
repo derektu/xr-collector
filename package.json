@@ -22,15 +22,14 @@
     "package:mac": "node scripts/package-app.mjs --target darwin-arm64",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:ci": "vitest run --config vitest.config.ts --reporter=default --reporter=junit --outputFile.junit=.data/ci/junit.xml",
-    "verify": "npm run test:ci && npm run build",
+    "verify": "npm test && npm run build",
     "download:runtime:win": "node scripts/prepare-runtime.mjs win",
     "package:win": "node scripts/package-app.mjs --target win32-x64",
     "release:upload": "node scripts/release-upload.mjs",
     "test:verify-skill:mac": "npm run download:runtime && node .claude/skills/verify/scripts/smoke.mjs",
     "test:verify-skill:desktop:mac": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
     "test:verify-skill:desktop:win": "node .claude/skills/verify/scripts/smoke-desktop.mjs",
-    "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts tests/search/meilisearch-integration.test.ts tests/search/meilisearch-leftover.test.ts tests/server/agent-access.test.ts tests/vault/vault-transfer.test.ts tests/vault/vault-exchange.test.ts"
+    "test:meilisearch:mac": "npm run download:runtime && vitest run --config vitest.config.ts --tags-filter=real-engine"
   },
   "dependencies": {
     "@fastify/static": "10.1.8",
