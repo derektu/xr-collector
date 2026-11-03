@@ -16,4 +16,11 @@ App 尚未 release，本機存的資料（例如 `jobs.json`、設定）不保�
 
 自動檢查使用 `npm run verify`。只改 Markdown 的修改不跑 `npm run verify`，CI 也不執行，改為確認連結有效與 Markdown 呈現正確；`skills/xr-collector-agent/SKILL.md` 例外，測試會讀它，改它時照常跑。同一次修改含有任何其他檔案時，照常跑完整的 `npm run verify`。測試按功能分目錄，分類、真實引擎測試與平台 skip 邊界見 [測試說明](tests/README.md)。
 
+程式碼審查：開 PR 前，由沒有參與實作的 reviewer 審查本票相對 main 的全部改動，包含未提交的修改。reviewer 只拿到 diff、issue 與 repo，不拿實作 session 的結論。審查分兩個面向，分開回報：
+
+- 正確性與風險：從每個改動追到受影響的 module，檢查是否弄壞既有功能、有無安全問題、是否改變開發者建置或執行的方式、只該在特定條件開啟的功能是否外漏。在本 repo，後者指驗證專用的控制通道不能在一般執行時開啟，新增的 API 要套用正確的 Agent 授權。
+- 需求與規範：對照 issue 原文，以及本檔與 [開發驗證流程](docs/development-validation.md)。
+
+只回報追到底、確定成立的問題；不修的問題與理由列進 PR 的待決定問題。
+
 PR merge 後，若該 PR 改變使用者看得到的畫面或操作流程，提醒使用者維護 verify skill 的功能地圖：列出 `.claude/skills/verify/` 最後一次 commit 之後 merge 的這類 PR，並建議執行 `/pstack:maintain-verification-skill`。是否執行由使用者決定，agent 不自行啟動。repo 沒有 `.claude/skills/verify/` 時略過這項提醒。
