@@ -120,8 +120,11 @@ describe('persisted Meilisearch process record', () => {
   });
 });
 
+// On Windows, libuv places every child it spawns without `detached` in a job object that closes,
+// ending the child, when the parent dies; a killed app takes its engine with it, so no leftover exists
+// to stop there.
 describe('engine left behind by a killed app', { tags: [REAL_ENGINE_TAG] }, () => {
-  it('stops the engine a killed run left on the same database before starting a new one', async () => {
+  it.skipIf(process.platform === 'win32')('stops the engine a killed run left on the same database before starting a new one', async () => {
     const databasePath = await tempDatabase();
     const leftover = await leaveEngineBehind(databasePath);
     expect(alive(leftover)).toBe(true);
@@ -152,7 +155,7 @@ describe('engine left behind by a killed app', { tags: [REAL_ENGINE_TAG] }, () =
     expect(existsSync(pidFilePath(databasePath))).toBe(true);
   });
 
-  it('stops a proven leftover even when the installed binary path changed', async () => {
+  it.skipIf(process.platform === 'win32')('stops a proven leftover even when the installed binary path changed', async () => {
     const databasePath = await tempDatabase();
     // A symlink gives the leftover its own command-line path. A copy is a new executable that macOS
     // scans on its first launch for about two seconds; the symlink launches the already-scanned binary.

@@ -394,7 +394,11 @@ async function fileReaders(file: string): Promise<string[]> {
     '| Where-Object { $_.AccessControlType -eq "Allow" }',
     '| ForEach-Object { switch ($_.IdentityReference.Value) { $owner { "owner" } "S-1-5-18" { "system" } "S-1-5-32-544" { "administrators" } default { $_ } } }',
   ].join(' ');
+  // A PSModulePath inherited from PowerShell 7 points Windows PowerShell at modules it cannot load,
+  // so Get-Acl goes missing; without it Windows PowerShell uses its own defaults.
+  const env: NodeJS.ProcessEnv = { ...process.env, XR_KEY_FILE: file };
+  for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
   const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
-    { env: { ...process.env, XR_KEY_FILE: file }, windowsHide: true });
+    { env, windowsHide: true });
   return [...new Set(stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean))].sort();
 }

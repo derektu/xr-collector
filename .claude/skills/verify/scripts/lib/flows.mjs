@@ -36,7 +36,7 @@ export async function listFlows(dir = FLOWS_DIR) {
 
 /**
  * The flows to run, in their listed order. `names` picks flows by name (strict); `layer` is `web`
- * (every flow that is not Desktop: the set the E2E workflow runs), `desktop` or `all`; `feature` (a
+ * (every flow that is not Desktop: the set the nightly runs on a Mac), `desktop` or `all`; `feature` (a
  * parsed feature file) keeps the flows covering any of its sub-features; `visible` keeps the Desktop
  * flows with scenarios that need a window on screen.
  */

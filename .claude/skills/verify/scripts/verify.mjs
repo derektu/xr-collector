@@ -31,7 +31,7 @@ const USAGE = `verify.mjs <command>
            the recorded regression flows and the feature-map sub-features each covers
   flows run [<flow>...] --issue <N> [--label <name>] [--checkout <dir>] [--web|--desktop] [--visible] [--feature <file>] [--jobs <N>]
            runs the named recorded flows (all without names), each on its own instance; --web is every
-           flow that is not Desktop (what the E2E workflow runs); Desktop flows keep their window hidden,
+           flow that is not Desktop (what the nightly runs on a Mac); Desktop flows keep their window hidden,
            and --visible runs the Desktop flows whose visibleScenarios need a window on screen, with
            the window shown, so those checks run too; --feature keeps the flows covering a
            sub-feature of that feature file (subscriptions or subscriptions.md); --jobs runs up to N at

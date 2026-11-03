@@ -1,5 +1,5 @@
 // Guards the developer and the user's data: what CI uploads never includes a Vault or a profile, the
-// packaged smoke builds exactly the targets that `package:*` delivers, and no `run:` script expands
+// nightly packaging builds exactly the targets that `package:*` delivers, and no `run:` script expands
 // text a pull request or a dispatch can set.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';

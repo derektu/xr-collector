@@ -7,7 +7,7 @@ export default defineConfig({
     setupFiles: ['tests/support/register-sources.ts', 'tests/support/require-real-engine.ts'],
     tags: [{
       name: REAL_ENGINE_TAG,
-      description: 'Runs the bundled Meilisearch; skipped on platforms other than Mac arm64',
+      description: 'Runs the bundled Meilisearch; skipped on platforms other than Mac arm64 and Windows x64',
       skip: !realEngineSupported,
     }],
     // A test fails on a missing state through its own wait (tests/support/wait.ts) before this bound.

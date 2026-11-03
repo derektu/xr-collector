@@ -98,7 +98,7 @@ GitHub Actions（`.github/workflows/`）的工作：
 | 工作 | 觸發 | 環境 | 內容 |
 | --- | --- | --- | --- |
 | Verify (Mac) | pull request 與 main push；只改 Markdown 時不執行 | macOS 15 | `npm ci`、安裝釘住版本的 runtime、`npm run verify`（含真實 Meilisearch 的案例） |
-| E2E | 手動觸發 | macOS 15；打包 smoke 在 macOS 15 與 Windows Server 2022 | 全部已收錄的 Web 流程，保存每支流程的 `results.json`；可選擇建置未簽章的測試包並檢查打包 App |
+| Nightly | 每天 02:00（台北）在 main，前 26 小時沒有新 commit 時跳過；也可在任何分支手動觸發 | macOS 15 與 Windows Server 2022 | 兩平台的 `npm run verify`（含真實 Meilisearch）與 verify skill 自測、開發版 startup 與 Desktop 流程、未簽章測試包與打包版 startup；Mac 的全部 Web 流程；保存每支流程的 `results.json` 與失敗證據；失敗時開 nightly issue 並加入看板 |
 | Meilisearch native runtimes | 改到 Meilisearch 準備或 pin 的 pull request 與 main push | Mac arm64、Windows x64 | 下載釘住的 release 並跑 API smoke |
 
 CI 不建置正式安裝包。各層驗證在哪裡執行見 [開發驗證流程](development-validation.md#做票驗收pr-門檻與-nightly)。
