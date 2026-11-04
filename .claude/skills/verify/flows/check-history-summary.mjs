@@ -31,8 +31,9 @@ export async function run({ instance, page, openPage, record, waitFor }) {
 
   const scheduledCheck = async () => {
     const before = new Set((await jobs()).map((job) => job.id));
+    // Due now, not earlier: the check before this one listed moments ago and would serve an earlier due time.
     await editJson(subscriptionsFile, (file) => {
-      file.channels.find((candidate) => candidate.id === source.id).nextCheckAt = new Date(Date.now() - 1_000).toISOString();
+      file.channels.find((candidate) => candidate.id === source.id).nextCheckAt = new Date().toISOString();
     });
     await writeText(path.join(instance.runDir, 'schedule-trigger'), `${Date.now()}-${Math.random()}\n`);
     return waitFor(async () => {
