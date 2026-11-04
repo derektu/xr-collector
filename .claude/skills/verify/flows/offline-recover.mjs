@@ -61,10 +61,11 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     const banner = page.getByTestId('offline-banner');
     await banner.waitFor({ timeout: 30_000 });
     // B comes due once the device is confirmed offline, so no scheduler poll can dispatch it before.
+    // Due now, not earlier: a check that listed B after an earlier due time already serves it.
     await editJson(channelsFile, (channels) => {
       const entry = (channels.channels ?? channels.subscriptions ?? []).find((candidate) => candidate.id === b.id);
       if (!entry) throw new Error(`B is not in ${channelsFile}`);
-      entry.nextCheckAt = new Date(Date.now() - 60_000).toISOString();
+      entry.nextCheckAt = new Date().toISOString();
     });
     const state = await connectivity();
     expect(state?.state === 'offline' && typeof state.checkedAt === 'string', 'health 的 connectivity 為 offline 並有確認時間',

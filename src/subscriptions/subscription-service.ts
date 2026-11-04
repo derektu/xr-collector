@@ -387,9 +387,11 @@ export class SubscriptionService {
 
   /**
    * Dispatches one check per subscription: the listed ones, or every enabled one. A subscription
-   * whose job is still queued or running returns that job, so the check joins it. Each checked
-   * subscription's next automatic check moves on, also when it joined an active job: a scheduled
-   * check keeps its rhythm from the time that came due, any other dispatch counts an interval from now.
+   * whose job is still queued or running returns that job, so the check joins it. A scheduled check
+   * also joins the subscription's newest check when that one began listing after the subscription
+   * came due. Each checked subscription's next automatic check moves on, also when it joined: a
+   * scheduled check keeps its rhythm from the time that came due, any other dispatch counts an
+   * interval from now.
    */
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
     let selected: SubscriptionRecord[];
@@ -413,7 +415,10 @@ export class SubscriptionService {
   private async dispatch(selected: readonly SubscriptionRecord[], trigger: StartRunRequest['trigger']): Promise<JobSubmission[]> {
     const now = this.now();
     const submissions: JobSubmission[] = [];
-    for (const record of selected) submissions.push(await this.jobs.submitCheck(this.type, record, trigger));
+    for (const record of selected) {
+      const dueAt = trigger === 'scheduled' ? record.nextCheckAt ?? undefined : undefined;
+      submissions.push(await this.jobs.submitCheck(this.type, record, trigger, dueAt));
+    }
     const ids = new Set(selected.map((record) => record.id));
     // Computed from the current rows, so a settings change made meanwhile keeps its interval and
     // a subscription paused meanwhile gets no next check.

@@ -52,7 +52,7 @@ Preconditions:
 - 新增 toast（`notice`）會擋住下一個動作，等 `notice` 數量為 0 再繼續。
 - 移除時只有已有文件或仍有收集中的訂閱才顯示保留／刪除文件選項；空訂閱的確認框直接提供取消與移除，不應等待不存在的 `remove-keep`。
 - 斷網只在收集請求連不上時才被發現：沒有工作在跑時設 `network: 'offline'` 不會出現訊息，要有工作連網（或按「立即檢查」）才會確認。合成模式離線時每 2 秒確認一次，正式版是 30 秒。
-- 讓訂閱在流程中到期：改 Vault 的 `settings/youtube-channels.json` 中該頻道的 `nextCheckAt`，服務每次讀檔，不必重啟。
+- 讓訂閱在流程中到期：改 Vault 的 `settings/youtube-channels.json` 中該頻道的 `nextCheckAt`，服務每次讀檔，不必重啟。時間寫「現在」，不要寫成「現在減幾秒」：到期時間早於該訂閱上一次開始列出來源的時間時，排程會併入那次檢查（即使已經結束），不會派出新的檢查。
 
 ## Regression flows
 

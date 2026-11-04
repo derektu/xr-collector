@@ -182,6 +182,8 @@ export class JobManager {
   private readonly jobs = new Map<string, CollectionJob>();
   private readonly keys = new Map<string, string>();
   private readonly activeByKey = new Map<string, string>();
+  /** The newest check of each subscription that listed its source, and when its listing began, by dedupe key. */
+  private readonly listings = new Map<string, { jobId: string; at: number }>();
   private readonly discoveryQueue: string[] = [];
   private readonly captureLanes = new Map<string, string[]>();
   /** When each job last joined its queue; a job put back at the head gets a number before all others. */
@@ -401,10 +403,12 @@ export class JobManager {
 
   /**
    * Starts one check of a subscription; an active job of the same subscription is returned
-   * instead, so the check joins it. Only the subscriptions dispatch checks.
+   * instead, so the check joins it. A check for the time the subscription came due (`dueAt`) is
+   * also served by the subscription's newest check when that one began listing no earlier, however
+   * long it waited before it listed. Only the subscriptions dispatch checks.
    */
-  async submitCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): Promise<JobSubmission> {
-    const submission = this.enqueueCheck(type, subscription, trigger);
+  async submitCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger, dueAt?: string): Promise<JobSubmission> {
+    const submission = this.enqueueCheck(type, subscription, trigger, dueAt);
     await this.options.store.flush();
     this.pump();
     return submission;
@@ -962,10 +966,15 @@ export class JobManager {
     }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
   }
 
-  private enqueueCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): JobSubmission {
+  private enqueueCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger, dueAt?: string): JobSubmission {
     const kind = jobKind(type, 'check');
     if (!kind) throw new Error(`Source type ${type} has no check jobs`);
-    return this.enqueue(kind, type, `${type}:check:${subscription.id}`, {
+    const key = `${type}:check:${subscription.id}`;
+    const listing = dueAt && !this.activeByKey.has(key) ? this.listings.get(key) : undefined;
+    if (listing && listing.at >= new Date(dueAt!).getTime() && this.options.store.get(listing.jobId)) {
+      return { job: this.get(listing.jobId), deduplicated: true };
+    }
+    return this.enqueue(kind, type, key, {
       id: subscription.id, url: subscription.url, title: subscription.title,
     }, null, { scope: { trigger } });
   }
@@ -1373,11 +1382,14 @@ export class JobManager {
     const id = job.source.id!;
     const plugin = this.requirePlugin(type);
     const retryItems = job.checkpoint?.retryItems;
-    const plan = await this.subscriptions.planCheck(type, id, this.now());
+    const at = this.now();
+    const plan = await this.subscriptions.planCheck(type, id, at);
     if ('stopped' in plan) {
       this.finish(job, 'completed', { outcome: 'skipped', skipReason: plan.stopped }, null);
       return;
     }
+    // Collecting failed items again lists nothing.
+    if (!retryItems) this.listings.set(jobKey(job), { jobId: job.id, at: at.getTime() });
     const target = { ...plan.target, title: job.source.title ?? plan.target.title, url: job.source.url };
     const discovery = retryItems
       ? {

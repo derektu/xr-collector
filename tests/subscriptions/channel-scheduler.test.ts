@@ -1,7 +1,8 @@
 // The scheduler checks each subscription on its own interval and rhythm, never a paused one and
 // nothing while automatic collection is off. While the system sleeps or the network is gone it
-// dispatches nothing, then checks each due subscription once. A settings change moves the next
-// check by the newest interval, and concurrent changes all persist.
+// dispatches nothing, then checks each due subscription once; a check that began listing after its
+// subscription came due serves that due time, also when it finishes before the poll submits. A
+// settings change moves the next check by the newest interval, and concurrent changes all persist.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +15,7 @@ import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { CollectionPause } from '../../src/core/collection-pause.js';
 import { Connectivity } from '../../src/core/connectivity.js';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError, type JobSubmission } from '../../src/core/types.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
@@ -151,6 +152,26 @@ describe('per-subscription scheduling (A2)', () => {
     w.source.holdCaptures = false;
     w.source.release(video!);
     await w.idle();
+    await w.scheduler.close();
+  });
+
+  it('starts a new check when the one before it started listing before the subscription came due', async () => {
+    const w = await world();
+    const id = await w.subscribe('long', { intervalMinutes: 15 });
+    await w.start();
+    w.source.holdCaptures = true;
+    const [video] = w.source.publish(id, 'l', w.clock.now, [0.001], 5);
+    w.advance(15 * MINUTE);
+    await w.scheduler.checkNow();
+    await w.source.holds.reach([video]);
+    // The check listed at 04:15 and finishes after 04:30 came due, before the next poll.
+    w.advance(15 * MINUTE);
+    w.source.holdCaptures = false;
+    w.source.release(video!);
+    await w.idle();
+    await poll(w);
+    expect(w.scheduledChecks(id)).toBe(2);
+    expect(await w.channel(id)).toMatchObject({ nextCheckAt: '2026-10-15T04:45:00.000Z' });
     await w.scheduler.close();
   });
 
@@ -342,7 +363,11 @@ describe('system sleep (#97)', () => {
 });
 
 describe('lost network (#128)', () => {
-  it('pauses on a check that finds no network, dispatches nothing while offline, then checks each due subscription once', async () => {
+  /**
+   * Two subscriptions, 15 and 60 minutes; the network drops, the 15-minute subscription's scheduled
+   * check finds no network and waits in the queue, and four more periods pass offline.
+   */
+  async function offlineWithStalledCheck() {
     const pause = new CollectionPause();
     const network = { online: true };
     const connectivity = new Connectivity({ pause, probe: async () => network.online });
@@ -353,7 +378,6 @@ describe('lost network (#128)', () => {
     w.runs.mockClear();
     w.events.splice(0);
 
-    // The network drops; the next scheduled check fails to list and finds no network.
     network.online = false;
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。');
     w.advance(15 * MINUTE);
@@ -364,26 +388,55 @@ describe('lost network (#128)', () => {
     expect(w.jobs.get(stalled!.id)).not.toHaveProperty('retry');
     expect(w.runs).toHaveBeenCalledTimes(1);
 
-    // Four more periods pass offline; the poll dispatches nothing and nothing fails.
     w.runs.mockClear();
     for (let step = 0; step < 4; step += 1) {
       w.advance(15 * MINUTE);
       await w.scheduler.checkNow();
     }
     expect(w.runs).not.toHaveBeenCalled();
+    /** The network comes back; the scheduler's poll and the stalled check both go on. */
+    const reconnect = async () => {
+      network.online = true;
+      w.source.discoveryFailure = null;
+      expect(await connectivity.check()).toBe('online');
+    };
+    return { w, connectivity, quarter, hourly, stalled: stalled!.id, reconnect };
+  }
+
+  it('pauses on a check that finds no network, dispatches nothing while offline, then checks each due subscription once', async () => {
+    const { w, connectivity, quarter, hourly, stalled, reconnect } = await offlineWithStalledCheck();
+
+    // Four periods passed offline; the poll dispatched nothing and nothing failed.
     expect(w.events).toEqual(['schedule.dispatched', 'collection.paused']);
     expect(w.jobEvents()).not.toContain('job.failed');
     expect(w.jobEvents()).not.toContain('job.retry_scheduled');
 
-    network.online = true;
-    w.source.discoveryFailure = null;
-    expect(await connectivity.check()).toBe('online');
+    await reconnect();
     await eventually(() => expect(w.events).toEqual(['schedule.dispatched', 'collection.paused', 'collection.resumed', 'schedule.dispatched']));
     await w.idle();
     expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
     // The stalled check finishes and takes the due check of its subscription; each subscription has one scheduled check.
-    expect(w.jobs.get(stalled!.id)).toMatchObject({ state: 'completed' });
+    expect(w.jobs.get(stalled)).toMatchObject({ state: 'completed' });
     expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
+    connectivity.close();
+    await w.scheduler.close();
+  });
+
+  it('takes the due check from a stalled check that finishes before the poll submits it (#229)', async () => {
+    const { w, connectivity, quarter, hourly, stalled, reconnect } = await offlineWithStalledCheck();
+    // The poll has read the due subscriptions; it submits them only once the stalled check has finished.
+    w.runs.mockImplementationOnce(async (request) => {
+      await w.jobs.whenSettled(stalled);
+      return SubscriptionService.prototype.startRun.call(w.channels, request);
+    });
+    await reconnect();
+    await eventually(() => expect(w.runs).toHaveBeenCalledTimes(1));
+    const submissions = await w.runs.mock.results[0]!.value as JobSubmission[];
+    await w.idle();
+    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
+    expect(submissions[0]).toMatchObject({ job: { id: stalled }, deduplicated: true });
+    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
+    expect(await w.channel(quarter)).toMatchObject({ nextCheckAt: '2026-10-15T05:30:00.000Z' });
     connectivity.close();
     await w.scheduler.close();
   });
