@@ -35,14 +35,16 @@ export interface CheckReport {
 }
 
 /**
- * How a check ended: with its items (`error` null), or failing. `counted` says whether the end
- * tells how the subscription's own listing went, so a success clears its failures in a row and a
- * failure adds one. It does not for a check a pause or removal stopped while its items finished, a
- * check the service gave up after repeated interruptions, or a source that needs a new sign-in.
+ * How a check ended: with its items (`error` null), or failing. `counted` is false when the job's
+ * own work says nothing about the subscription's listing: a check a pause or removal stopped while
+ * its items finished, or a check the service gave up after repeated interruptions. Whether a
+ * counted end changes the subscription's failures in a row is the subscriptions' rule.
  */
 export interface CheckEnd {
   at: string;
   error: JobError | null;
+  /** How the source type treats `error`; null for a check that ended with its items. */
+  failureClass: FailureClass | null;
   counted: boolean;
 }
 
@@ -73,8 +75,8 @@ export interface SubscriptionPort {
   /** A check's item was collected. */
   itemCollected(type: string, id: string, key: string): Promise<void>;
   /**
-   * A check's item failed for good within its job. Returns the item's failure record after this
-   * failure, or null when nothing was counted.
+   * A check's item failed for good within its job, with how its source type treats the failure.
+   * Returns the item's failure record after this failure, or null when nothing was counted.
    */
   itemFailed(type: string, id: string, item: { key: string; title: string | null; url: string }, error: JobError, failureClass: FailureClass): Promise<ItemFailureEntry | null>;
   /** A check's item was published before the range start `before`. */

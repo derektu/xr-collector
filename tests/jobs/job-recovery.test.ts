@@ -465,7 +465,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     const keys = listed(6, 'c').map((video) => video.id);
     expect(w.subs.of('checked')).toEqual([{ kind: 'checked', type: 'youtube', id: subscribed.id, candidates: keys, collecting: keys }]);
     expect(w.subs.of('ended')).toEqual([
-      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, counted: true },
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, failureClass: null, counted: true },
     ]);
   });
 
@@ -486,7 +486,7 @@ describe('channel jobs across restarts (R-T4)', () => {
     expect(done).toMatchObject({ state: 'completed', progress: { total: 2, created: 2 } });
     expect(w.script.discoveries).toBe(1);
     expect(w.subs.of('ended')).toEqual([
-      { kind: 'ended', type: 'youtube', id: subscribed.id, at: '2026-10-15T07:00:00.000Z', errorCode: null, counted: true },
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: '2026-10-15T07:00:00.000Z', errorCode: null, failureClass: null, counted: true },
     ]);
   });
 
@@ -694,7 +694,7 @@ describe('lost network (#128)', () => {
     const done = await g.manager.whenSettled(accepted.job.id);
     expect(done).toMatchObject({ state: 'completed', result: { outcome: 'empty' } });
     expect(w.subs.of('ended')).toEqual([
-      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, counted: true },
+      { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, failureClass: null, counted: true },
     ]);
     net.connectivity.close();
   });

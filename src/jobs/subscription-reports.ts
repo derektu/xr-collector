@@ -31,8 +31,9 @@ export interface ReportHost {
 /**
  * Turns what happens to check jobs and their items into reports to the subscriptions: an item
  * collected, failed for good or out of range, and how a check ended. An item submitted on its own
- * reports nothing. Whether an end or a failure tells about the subscription's own listing is
- * decided here, from the job; how the subscription records it is the subscriptions' rule.
+ * reports nothing. What only the job knows is decided here: how the source type treats a failure,
+ * and whether a pause, a removal or repeated interruptions stopped a check. Whether a failure counts
+ * against the subscription, and how the subscription records it, is the subscriptions' rule.
  */
 export class SubscriptionReports {
   constructor(private readonly host: ReportHost) {}
@@ -60,11 +61,10 @@ export class SubscriptionReports {
 
   /**
    * Reports a check item that failed for good within this job, with its source's failure class, and
-   * records the failure count the subscription keeps across checks. A limit or a source that needs a
-   * new sign-in is no failure of the item.
+   * records an event of the failure count the subscription keeps across checks. A failure the
+   * subscription does not count records no event.
    */
   async failed(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
-    if (failureClass === 'login_required' || failureClass === 'rate_limited') return;
     const target = this.checkItemOf(item);
     if (!target) return;
     let entry: ItemFailureEntry | null = null;
@@ -99,10 +99,9 @@ export class SubscriptionReports {
     if (job.state !== 'completed' && job.state !== 'failed') return null;
     if (job.result?.skipReason && STOP_REASONS.has(job.result.skipReason)) return null;
     const error = job.state === 'failed' ? job.error ?? null : null;
-    const counted = !this.host.stoppedCheck(job.id)
-      && (job.state === 'completed'
-        || (error !== null && error.code !== INTERRUPTED_REPEATEDLY && this.host.classify(job, error) !== 'login_required'));
-    return { at: job.finishedAt, error, counted };
+    const failureClass = error ? this.host.classify(job, error) : null;
+    const counted = !this.host.stoppedCheck(job.id) && (job.state === 'completed' || (error !== null && error.code !== INTERRUPTED_REPEATEDLY));
+    return { at: job.finishedAt, error, failureClass, counted };
   }
 
   /** The check job's subscription an item job collects for, with the item's key; null for any other job. */

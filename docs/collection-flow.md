@@ -12,7 +12,7 @@
 | 等待條件與其計時器 | `src/jobs/job-waits.ts` |
 | 請求通道與冷卻 | `src/pacing/pacing-gate.ts` |
 | 斷網與睡眠 | `src/core/connectivity.ts`、`src/core/collection-pause.ts` |
-| 檢查結束、連續失敗 | `src/subscriptions/subscription-service.ts` |
+| 檢查結束、項目失敗與連續失敗的計入 | `src/subscriptions/subscription-service.ts` |
 | 狀態 | `src/jobs/job-board.ts`（`workStatus`）、`subscription-service.ts`（`checkStatus`） |
 
 ## 工作
@@ -89,7 +89,7 @@ RSS 的每個 feed 是不同的網站，一個 feed 限流不代表其他 feed �
 
 ## 檢查結束
 
-檢查在所有項目結束後才結束；項目失敗不會讓檢查失敗。
+檢查在所有項目結束後才結束；項目失敗不會讓檢查失敗。工作照實回報項目的失敗與檢查的結束，附上來源類型對錯誤的分類，以及只有工作知道的事：檢查是否被暫停、移除，或因多次中斷而停止接續。哪些失敗計入、計入後如何記錄，由訂閱決定。
 
 **項目的失敗**記在訂閱上，跨檢查累計：`skip` 或累計到 `MAX_CHECK_ATTEMPTS` 時標為略過，之後的檢查不再嘗試；收集成功或離開收集範圍時清除。等冷卻的限流（`rate_limited` 分類）與需要重新登入不算項目的失敗；RSS 的限流分類為 `retry_next_check`，照常計入。
 
