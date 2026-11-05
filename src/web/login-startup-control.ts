@@ -1,4 +1,4 @@
-import type { LoginStartupStatus } from '../core/types.js';
+import type { LoginStartupStatus } from '../core/device-types.js';
 import { createLatestRequest } from './latest-request.js';
 
 export interface LoginStartupState {

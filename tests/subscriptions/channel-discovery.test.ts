@@ -2,7 +2,7 @@
 // upcoming streams and never filling a known video's place with an older one, so a check never
 // collects videos older than the range the user set.
 import { describe, expect, it } from 'vitest';
-import type { SubscriptionRecord } from '../../src/core/types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { SyntheticYouTube } from './synthetic-youtube.js';
 import { discoverChannelVideos, type DiscoveryRange } from '../support/youtube-discovery.js';
 

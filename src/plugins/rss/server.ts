@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 import type {
   FailureClass,
   ListedItem,

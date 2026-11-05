@@ -10,7 +10,7 @@ export interface YouTubeDocumentMetadata {
   subtitleKind: SubtitleKind;
 }
 
-declare module '../../core/types.js' {
+declare module '../../core/document-types.js' {
   interface DocumentDetails {
     /** Subtitle details of a YouTube transcript. */
     youtube?: YouTubeDocumentMetadata;

@@ -10,7 +10,9 @@ import { ActivityLog } from '../../src/activity/activity-log.js';
 import { ActivityViews } from '../../src/activity/activity-views.js';
 import { openJobRecords } from '../../src/runtime/job-records.js';
 import { collectionRecord } from '../../src/sources/source-catalog.js';
-import type { ActivityCheckSummary, CollectionJob, JobEvent, Subscription } from '../../src/core/types.js';
+import type { ActivityCheckSummary, JobEvent } from '../../src/core/activity-types.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
+import type { Subscription } from '../../src/core/subscription-types.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const VAULT = '/vault/activity-summary';

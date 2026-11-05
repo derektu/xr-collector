@@ -1,6 +1,7 @@
 import type { SourceRegistry } from '../../src/core/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
-import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../../src/core/types.js';
+import type { ItemFailureEntry, SubscriptionSettings } from '../../src/core/subscription-types.js';
+import type { JobError, JobSubmission, SkipReason } from '../../src/core/job-types.js';
 import type { JobManager } from '../../src/jobs/job-manager.js';
 import { checkPlan } from '../../src/subscriptions/candidates.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';

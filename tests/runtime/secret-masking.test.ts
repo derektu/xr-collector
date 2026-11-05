@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
 import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { withYouTube } from '../support/youtube-sources.js';

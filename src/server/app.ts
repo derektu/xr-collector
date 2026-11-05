@@ -22,45 +22,44 @@ import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../core/source-contract.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
 import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
-import {
-  CollectorError,
-  type AgentPortSetting,
-  type UpdateSelection,
-  type CollectorRuntimeStatus,
-  type NotificationState,
-  type CoreErrorCode,
-  type BuildInfo,
-  type ActivityLogHealth,
-  type ActivityPage,
-  type ActivitySummaryPage,
-  type ActivityGroupPage,
-  type ActivityCheckSummary,
-  type ActivityQuery,
-  type EventSeverity,
-  type JobSummary,
-  type JobOverview,
-  type JobPage,
-  type JobSubmission,
-  type JobView,
-  type CollectionSchedule,
-  type CollectionScheduleView,
-  type ConnectivityState,
-  type ConnectivityStatus,
-  type DocumentFilter,
-  type SearchStatusReport,
-  type TranscriptSearch,
-  type VaultInspection,
-  type NewVaultCheck,
-  type PackageDescription,
-  type VaultSetupRequest,
-  type VaultSetupResult,
-  type VaultSetupStatus,
-  type PendingSubscription,
-  type Subscription,
-  type SubscriptionPreview,
-  type SubscriptionRecord,
-  type SubscriptionSettings,
-} from '../core/types.js';
+import { CollectorError, type CoreErrorCode } from '../core/collector-error.js';
+import type {
+  AgentPortSetting,
+  CollectorRuntimeStatus,
+  NotificationState,
+  ConnectivityState,
+  ConnectivityStatus,
+} from '../core/device-types.js';
+import type { UpdateSelection, BuildInfo } from '../core/update-types.js';
+import type {
+  ActivityLogHealth,
+  ActivityPage,
+  ActivitySummaryPage,
+  ActivityGroupPage,
+  ActivityCheckSummary,
+  ActivityQuery,
+  EventSeverity,
+} from '../core/activity-types.js';
+import type { JobSummary, JobOverview, JobPage, JobSubmission, JobView } from '../core/job-types.js';
+import type {
+  CollectionSchedule,
+  CollectionScheduleView,
+  PendingSubscription,
+  Subscription,
+  SubscriptionPreview,
+  SubscriptionRecord,
+  SubscriptionSettings,
+} from '../core/subscription-types.js';
+import type { DocumentFilter } from '../core/document-types.js';
+import type { SearchStatusReport, TranscriptSearch } from '../core/search-types.js';
+import type {
+  VaultInspection,
+  NewVaultCheck,
+  PackageDescription,
+  VaultSetupRequest,
+  VaultSetupResult,
+  VaultSetupStatus,
+} from '../core/vault-types.js';
 
 /** The subscriptions of one source type, as the HTTP API manages them. */
 export interface SubscriptionCollection {
@@ -487,7 +486,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   }
 
   {
-    const unavailableUpdate = (): import('../core/types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
+    const unavailableUpdate = (): import('../core/update-types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
       target: buildInfo.target, installerAvailable: false, offer: null, ready: null, progress: null,
       lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null });
     const updates: UpdateAccess = options.updates ?? {

@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DocumentVault } from '../core/collector.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { SavedDocument, TranscriptSearch } from '../core/types.js';
+import type { SavedDocument } from '../core/document-types.js';
+import type { TranscriptSearch } from '../core/search-types.js';
 import {
   ManagedTranscriptSearch,
   UnavailableTranscriptSearch,

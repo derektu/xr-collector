@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
-import { CollectorError, type ContentExtent } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
+import type { ContentExtent } from '../../core/document-types.js';
 import { htmlToText } from './html.js';
 
 /** One article of a feed, as the feed describes it. */

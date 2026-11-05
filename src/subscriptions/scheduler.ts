@@ -1,13 +1,9 @@
 import type { StartRunRequest } from './subscription-service.js';
-import type { NewJobEvent } from '../core/types.js';
+import type { NewJobEvent } from '../core/activity-types.js';
 import { PAUSE_MESSAGES, type CollectionPause } from '../core/collection-pause.js';
-import {
-  CollectorError,
-  type CollectionSchedule,
-  type JobSubmission,
-  type ScheduledCheck,
-  type SubscriptionRecord,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { CollectionSchedule, ScheduledCheck, SubscriptionRecord } from '../core/subscription-types.js';
+import type { JobSubmission } from '../core/job-types.js';
 
 /** What the Vault keeps for automatic collection; check times live with each subscription. */
 export interface StoredSchedule {

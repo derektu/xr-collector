@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { eventSpec } from '../core/event-catalog.js';
-import type { ActivityLogHealth, EventRecorder, JobEvent, NewJobEvent } from '../core/types.js';
+import type { ActivityLogHealth, EventRecorder, JobEvent, NewJobEvent } from '../core/activity-types.js';
 import { limitText, redact } from '../core/redact.js';
 
 /** Activity is kept this many days and then removed. */

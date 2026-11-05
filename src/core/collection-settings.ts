@@ -1,6 +1,8 @@
 import type { SubscriptionDeclaration } from './source-contract.js';
 import { intervalLabel } from './check-interval.js';
-import { CollectorError, type SourceSettingField, type SubscriptionSettings } from './types.js';
+import { CollectorError } from './collector-error.js';
+import type { SourceSettingField } from './source-info-types.js';
+import type { SubscriptionSettings } from './subscription-types.js';
 
 /** Check intervals a subscription may use, in minutes. */
 export const INTERVAL_OPTIONS = [15, 30, 60, 180, 360, 720, 1440] as const;

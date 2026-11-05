@@ -1,7 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CollectorError, type LoginStartupStatus } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { LoginStartupStatus } from '../core/device-types.js';
 import { loginStartupStatus, type LoginStartupAccess } from '../core/login-startup.js';
 import { replaceFile } from '../core/json-file.js';
 

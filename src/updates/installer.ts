@@ -1,4 +1,4 @@
-import { CollectorError } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
 import type { NativeInstaller } from './types.js';
 
 export class UnavailableInstaller implements NativeInstaller {

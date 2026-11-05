@@ -5,7 +5,7 @@ import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../core/collection-pause.js';
 import { internetProbe } from '../core/connectivity.js';
-import type { BuildInfo } from '../core/types.js';
+import type { BuildInfo } from '../core/update-types.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';

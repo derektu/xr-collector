@@ -5,7 +5,8 @@ import { replaceFile } from '../core/json-file.js';
 import { inOwnStep, jobEventSubject } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { NoteChange } from '../core/change-feed.js';
-import type { CollectionJob, EventRecorder, JobStopKind, NewJobEvent } from '../core/types.js';
+import type { CollectionJob, JobStopKind } from '../core/job-types.js';
+import type { EventRecorder, NewJobEvent } from '../core/activity-types.js';
 
 const JOBS_FILE = 'jobs.json';
 const FILE_VERSION = 1;

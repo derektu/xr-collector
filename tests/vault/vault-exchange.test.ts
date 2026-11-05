@@ -11,7 +11,7 @@ import { parse, stringify } from 'yaml';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
-import type { SavedDocument } from '../../src/core/types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';

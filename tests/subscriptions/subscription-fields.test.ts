@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SubscriptionRecord } from '../../src/core/types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { importedSubscription, subscriptionContent, SUBSCRIPTION_FIELDS } from '../../src/subscriptions/subscription-fields.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';

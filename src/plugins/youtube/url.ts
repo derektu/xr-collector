@@ -1,4 +1,4 @@
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 
 /** One YouTube video: its 11-character ID and its canonical watch address. */
 export interface YouTubeVideoRef {

@@ -1,10 +1,7 @@
-import type {
-  ContentExtent,
-  DocumentMetadata,
-  JobPhase,
-  SourceTypeInfo,
-  SubscriptionSettings,
-} from './types.js';
+import type { ContentExtent, DocumentMetadata } from './document-types.js';
+import type { JobPhase } from './job-types.js';
+import type { SourceTypeInfo } from './source-info-types.js';
+import type { SubscriptionSettings } from './subscription-types.js';
 
 /**
  * The contract between the type-agnostic core and one source type. A source plugin owns everything

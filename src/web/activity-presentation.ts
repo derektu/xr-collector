@@ -1,6 +1,7 @@
 import type { EventType } from '../core/event-catalog.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { ActivityLogHealth, ActivityQuery, JobError, JobPhase, JobState, JobView, JobEvent } from '../core/types.js';
+import type { ActivityLogHealth, ActivityQuery, JobEvent } from '../core/activity-types.js';
+import type { JobError, JobPhase, JobState, JobView } from '../core/job-types.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 

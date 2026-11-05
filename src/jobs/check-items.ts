@@ -1,4 +1,4 @@
-import type { CollectionJob, JobItem, JobProgress, JobState } from '../core/types.js';
+import type { CollectionJob, JobItem, JobProgress, JobState } from '../core/job-types.js';
 
 /** States of a job that is not finished. */
 export const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);

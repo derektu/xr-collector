@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import type { JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { JobOverview, JobOverviewEntry } from '../core/job-types.js';
 import { api } from './api-client.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { Icon, SourceTypeBadge } from './icons.js';

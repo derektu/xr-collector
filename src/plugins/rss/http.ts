@@ -1,4 +1,4 @@
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 
 /** A fetched document: the address it came from after redirects, and its text. */
 export interface FetchedText {

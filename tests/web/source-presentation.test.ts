@@ -3,7 +3,9 @@
 // work waits for a retry, the last and next check, shortened names and addresses, and a URL
 // recognition applied only to the address it answered.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionJob, SubscriptionEntry, UrlRecognition } from '../../src/core/types.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
+import type { SubscriptionEntry } from '../../src/core/subscription-types.js';
+import type { UrlRecognition } from '../../src/core/source-info-types.js';
 import { rssDeclaration } from '../../src/plugins/rss/shared.js';
 import { youtubeDeclaration } from '../../src/plugins/youtube/shared.js';
 import {

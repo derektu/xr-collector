@@ -1,4 +1,4 @@
-import type { DeviceUpdateStatus } from '../core/types.js';
+import type { DeviceUpdateStatus } from '../core/update-types.js';
 
 /** The update step the sidebar names beside the version. */
 export type SidebarUpdate = 'available' | 'downloading' | 'verifying' | 'ready' | 'waiting' | 'installing';

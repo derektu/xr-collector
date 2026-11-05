@@ -1,4 +1,13 @@
-import type { CollectionSchedule, JobError, JobView, PendingSubscription, RecognitionAction, RetryCause, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
+import type {
+  CollectionSchedule,
+  PendingSubscription,
+  RetryCause,
+  SubscriptionEntry,
+  SubscriptionCollectionEntry,
+  Subscription,
+} from '../core/subscription-types.js';
+import type { JobError, JobView } from '../core/job-types.js';
+import type { RecognitionAction, UrlRecognition } from '../core/source-info-types.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';

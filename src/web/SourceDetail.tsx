@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { settingsErrors } from '../core/collection-settings.js';
-import type { CollectionSchedule, SubscriptionDetail as Detail, SourceTypeInfo, SubscriptionSettings } from '../core/types.js';
+import type {
+  CollectionSchedule,
+  SubscriptionDetail as Detail,
+  SubscriptionSettings,
+} from '../core/subscription-types.js';
+import type { SourceTypeInfo } from '../core/source-info-types.js';
 import { ApiError, api } from './api-client.js';
 import { useLiveRead } from './use-changes.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';

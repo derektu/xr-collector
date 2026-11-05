@@ -5,11 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import {
-  CollectorError,
-  type DocumentSummary,
-  type SavedDocument,
-} from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { DocumentSummary, SavedDocument } from '../../src/core/document-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import type { JobStore } from '../../src/jobs/job-store.js';
 import { openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
@@ -29,7 +26,7 @@ import type {
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../src/core/source-contract.js';
-import type { DocumentKey } from '../../src/vault/document-paths.js';
+import type { DocumentKey } from '../../src/core/document-types.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { transcriptOf } from '../support/youtube-documents.js';

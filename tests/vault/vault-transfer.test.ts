@@ -15,7 +15,7 @@ import { createHttpApp } from '../../src/server/app.js';
 import { Collector } from '../../src/core/collector.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
-import type { SavedDocument } from '../../src/core/types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from '../support/exchange-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';

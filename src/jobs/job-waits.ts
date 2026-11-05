@@ -1,4 +1,4 @@
-import type { CollectionJob } from '../core/types.js';
+import type { CollectionJob } from '../core/job-types.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 
 /**

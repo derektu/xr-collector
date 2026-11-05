@@ -11,7 +11,8 @@ import { SubscriptionService, SubscriptionServices, checkStatus } from '../../sr
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
-import { CollectorError, type CollectionJob, type PacingStatus } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { CollectionJob, PacingStatus } from '../../src/core/job-types.js';
 import { workStatus } from '../../src/jobs/job-board.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';

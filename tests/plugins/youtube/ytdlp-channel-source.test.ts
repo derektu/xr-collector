@@ -2,7 +2,7 @@
 // channel address form, dated pages of videos including upcoming premieres, refusing video
 // addresses and channels without a videos tab, and passing previews through the request gate.
 import { describe, expect, it } from 'vitest';
-import { CollectorError } from '../../../src/core/types.js';
+import { CollectorError } from '../../../src/core/collector-error.js';
 import { YtDlpChannelSource } from '../../../src/plugins/youtube/ytdlp-channel-source.js';
 
 describe('YtDlpChannelSource', () => {

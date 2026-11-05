@@ -3,7 +3,8 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SourceRegistry } from '../core/source-registry.js';
-import { CollectorError, type VaultInspection } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { VaultInspection } from '../core/vault-types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 import { replaceFile } from '../core/json-file.js';
 

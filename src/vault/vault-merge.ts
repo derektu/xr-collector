@@ -3,8 +3,10 @@ import { parse } from 'yaml';
 import { canonicalJson } from '../core/canonical-json.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import type { ExchangedSubscriptions, SubscriptionFileExchange } from '../core/subscription-exchange.js';
-import { CollectorError, type ChangeCounts, type ImportMode } from '../core/types.js';
-import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { ChangeCounts, ImportMode } from '../core/vault-types.js';
+import type { DeletionRecord } from '../core/document-types.js';
+import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentIdFromPath, documentPathFromId } from './document-paths.js';
 
 /**

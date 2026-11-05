@@ -1,4 +1,4 @@
-import type { AutoPauseNotification } from '../core/types.js';
+import type { AutoPauseNotification } from '../core/device-types.js';
 
 export type NotificationNavigation = { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
 

@@ -5,26 +5,20 @@ import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
 import type { SourceDeclarations, SourceRegistry } from '../core/source-registry.js';
 import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../core/source-contract.js';
-import {
-  AUTO_PAUSE_AFTER_MS,
-  AUTO_PAUSE_FAILURES,
-  CollectorError,
-  type ChannelJobTrigger,
-  type JobView,
-  type DocumentMetadata,
-  type ItemFailureEntry,
-  type JobError,
-  type JobSubmission,
-  MAX_CHECK_ATTEMPTS,
-  type OutOfRangeEntry,
-  type PendingSubscription,
-  type Subscription,
-  type SubscriptionCheckStatus,
-  type SubscriptionPreview,
-  type SubscriptionRecord,
-  type SkipReason,
-  type SubscriptionSettings,
-} from '../core/types.js';
+import { AUTO_PAUSE_AFTER_MS, AUTO_PAUSE_FAILURES, MAX_CHECK_ATTEMPTS } from '../core/subscription-limits.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { ChannelJobTrigger, JobView, JobError, JobSubmission, SkipReason } from '../core/job-types.js';
+import type { DocumentMetadata } from '../core/document-types.js';
+import type {
+  ItemFailureEntry,
+  OutOfRangeEntry,
+  PendingSubscription,
+  Subscription,
+  SubscriptionCheckStatus,
+  SubscriptionPreview,
+  SubscriptionRecord,
+  SubscriptionSettings,
+} from '../core/subscription-types.js';
 
 /** A preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;

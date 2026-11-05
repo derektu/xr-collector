@@ -1,9 +1,11 @@
 import path from 'node:path';
+import type { DeletionRecords } from '../core/collector.js';
 import { readJsonFile } from '../core/json-file.js';
-import type { DocumentSourceType } from '../core/types.js';
+import { documentId } from '../core/document-id.js';
+import type { DeletionRecord } from '../core/document-types.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { VaultFiles } from '../core/vault-files.js';
-import { documentId, isSourceId, isSourceType } from './document-paths.js';
+import { isSourceId, isSourceType } from './document-paths.js';
 
 /**
  * Vault file of deleted documents, relative to the Vault root. Each record keeps a source item from
@@ -17,17 +19,6 @@ import { documentId, isSourceId, isSourceType } from './document-paths.js';
 export const DELETIONS_FILE = 'settings/deleted-documents.json';
 const DELETIONS_VERSION = 1;
 
-export interface DeletionRecord {
-  sourceType: DocumentSourceType;
-  sourceId: string;
-  sourceUrl: string;
-  title: string;
-  publisherId: string | null;
-  publisherName: string;
-  /** When the deletion intent was recorded, from the same clock that stamps `collected_at`. */
-  deletedAt: string;
-}
-
 export interface DeletionsFile {
   version: typeof DELETIONS_VERSION;
   deleted: DeletionRecord[];
@@ -38,21 +29,6 @@ export class InvalidDeletionsFile extends Error {}
 /** The document ID a record stands for. */
 export function deletionId(record: Pick<DeletionRecord, 'sourceType' | 'sourceId'>): string {
   return documentId(record);
-}
-
-/**
- * Whether a document collected at `collectedAt` belongs to the deletion made at `deletedAt`. Equal
- * times count as before the deletion, so a deletion always wins a tie; an explicit re-collection
- * stamps its document after the deletion time. A missing or unreadable `collected_at` cannot prove
- * the document newer, so the deletion wins as well.
- */
-export function collectedBeforeDeletion(collectedAt: string | undefined, deletedAt: string): boolean {
-  return !collectedAtReadable(collectedAt) || Date.parse(collectedAt) <= Date.parse(deletedAt);
-}
-
-/** Whether a document's `collected_at` is a time the deletion rule can compare. */
-export function collectedAtReadable(collectedAt: unknown): collectedAt is string {
-  return typeof collectedAt === 'string' && !Number.isNaN(Date.parse(collectedAt));
 }
 
 /**
@@ -83,7 +59,7 @@ export function deletionsToJson(records: DeletionRecord[]): DeletionsFile {
  * The deletions file of one Vault. Reads go to the file every time, so records written by an
  * import are seen at once; writes from this process run one after another.
  */
-export class DeletionLedger {
+export class DeletionLedger implements DeletionRecords {
   private readonly filePath: string;
   private writeTail: Promise<void> = Promise.resolve();
 

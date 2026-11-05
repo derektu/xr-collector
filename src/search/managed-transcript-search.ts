@@ -1,12 +1,6 @@
-import type {
-  SavedDocument,
-  SearchQuery,
-  SearchResponse,
-  SearchState,
-  SearchStatus,
-  TranscriptSearch,
-} from '../core/types.js';
-import { CollectorError } from '../core/types.js';
+import type { SavedDocument } from '../core/document-types.js';
+import type { SearchQuery, SearchResponse, SearchState, SearchStatus, TranscriptSearch } from '../core/search-types.js';
+import { CollectorError } from '../core/collector-error.js';
 
 export interface SearchBackend {
   initialize(): Promise<void>;

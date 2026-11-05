@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SavedDocument } from '../core/types.js';
+import type { SavedDocument } from '../core/document-types.js';
 import { ApiError, api } from './api-client.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } from './document-presentation.js';

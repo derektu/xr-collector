@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Change } from '../../src/core/changes.js';
-import type { CollectionJob } from '../../src/core/types.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
 import { memoryJobRecords, openJobRecords } from '../../src/runtime/job-records.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 

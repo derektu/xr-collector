@@ -7,12 +7,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import {
-  CollectorError,
-  type CollectionJob,
-  type DocumentSummary,
-  type SavedDocument,
-} from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
+import type { DocumentSummary, SavedDocument } from '../../src/core/document-types.js';
 import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords, openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -22,7 +19,7 @@ import type {
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../src/core/source-contract.js';
-import type { DocumentKey } from '../../src/vault/document-paths.js';
+import type { DocumentKey } from '../../src/core/document-types.js';
 import { RecentTargets } from '../../src/subscriptions/recent-targets.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { HeldCaptures } from '../support/held-captures.js';

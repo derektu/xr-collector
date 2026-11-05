@@ -1,4 +1,4 @@
-import type { EventSeverity } from './types.js';
+import type { EventSeverity } from './activity-types.js';
 
 /**
  * What the activity log knows about one kind of event.

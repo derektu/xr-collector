@@ -2,7 +2,7 @@
 // appear together inside one field, so searching 半導 skips documents where the characters are
 // scattered, and updates and deletions leave no stale matches.
 import { describe, expect, it } from 'vitest';
-import type { SavedDocument } from '../../src/core/types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { ContiguousFragmentIndex } from '../../src/search/contiguous-fragment-index.js';
 
 function document(id: string, title: string, publisher: string, body: string): SavedDocument {

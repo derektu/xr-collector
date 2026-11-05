@@ -3,7 +3,8 @@ import { spawn, execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CollectorError, type BuildInfo, type UpdateOffer } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { BuildInfo, UpdateOffer } from '../core/update-types.js';
 import type { NativeInstaller, NativeInstallRecovery, NativeRecoveryResult, PreparedInstall } from './types.js';
 import yauzl from 'yauzl';
 

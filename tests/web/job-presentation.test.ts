@@ -2,7 +2,7 @@
 // and skipped work, why a channel job ran, failures with their error, and whether it resumed after
 // a restart.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionJob } from '../../src/core/types.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
 import { jobKind, jobProgress, jobResult, jobStep, recovery } from '../../src/web/job-presentation.js';
 import { PRODUCT_DECLARATIONS } from '../support/product-sources.js';
 

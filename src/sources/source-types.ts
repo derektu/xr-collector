@@ -1,11 +1,8 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
 import { API_ROUTES, routePath } from '../core/api-routes.js';
-import {
-  CollectorError,
-  type SourceTypeInfo,
-  type SubscriptionPreview,
-  type UrlRecognition,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { SourceTypeInfo, UrlRecognition } from '../core/source-info-types.js';
+import type { SubscriptionPreview } from '../core/subscription-types.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 
 /** Services a source type may call while recognizing an address. */

@@ -1,4 +1,5 @@
-import type { ChannelJobTrigger, Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/types.js';
+import type { ChannelJobTrigger } from '../core/job-types.js';
+import type { Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/subscription-types.js';
 import { intervalLabel } from '../core/check-interval.js';
 import { upcomingTime, upcomingTimeText, type UpcomingTime } from '../core/upcoming-time.js';
 import type { SourceDeclarations } from '../core/source-registry.js';

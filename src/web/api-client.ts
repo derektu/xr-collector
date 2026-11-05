@@ -1,31 +1,15 @@
+import type { BuildInfo, DeviceUpdateStatus } from '../core/update-types.js';
+import type { ActivityPage, ActivitySummaryPage, ActivityGroupPage, ActivityQuery } from '../core/activity-types.js';
+import type { JobOverview, JobSummary, JobPage, JobSubmission, JobView } from '../core/job-types.js';
 import type {
-  BuildInfo,
-  ActivityPage,
-  ActivitySummaryPage,
-  ActivityGroupPage,
-  ActivityQuery,
-  JobOverview,
-  JobSummary,
   DocumentFilter,
   DocumentDeletion,
   DocumentPage,
   DocumentSources,
-  JobPage,
-  JobSubmission,
-  JobView,
-  TransferStatus,
   SavedDocument,
-  SearchQuery,
-  SearchResponse,
-  SearchStatusReport,
-  CollectionScheduleView,
-  SubscriptionRecord,
-  SubscriptionSettings,
-  RecognitionAction,
-  SubscriptionDetail,
-  SubscriptionList,
-  SourceTypeInfo,
-  UrlRecognition,
+} from '../core/document-types.js';
+import type {
+  TransferStatus,
   VaultInspection,
   NewVaultCheck,
   PackageDescription,
@@ -35,12 +19,22 @@ import type {
   ImportPreview,
   VaultSetupResult,
   VaultSetupStatus,
+} from '../core/vault-types.js';
+import type { SearchQuery, SearchResponse, SearchStatusReport } from '../core/search-types.js';
+import type {
+  CollectionScheduleView,
+  SubscriptionRecord,
+  SubscriptionSettings,
+  SubscriptionDetail,
+  SubscriptionList,
+} from '../core/subscription-types.js';
+import type { RecognitionAction, SourceTypeInfo, UrlRecognition } from '../core/source-info-types.js';
+import type {
   LoginStartupStatus,
-  DeviceUpdateStatus,
   AgentConnection,
   AgentConnectionStatus,
   AgentPortSetting,
-} from '../core/types.js';
+} from '../core/device-types.js';
 import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey, type ActivityParameters } from '../core/api-routes.js';
 
 interface ErrorResponse {

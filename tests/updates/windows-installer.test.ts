@@ -2,7 +2,7 @@
 // unavailable off Windows or in an unpackaged App, and reports an installer error before handoff as
 // an update failure, while an error after the App has handed off does not crash it.
 import { expect, it, vi } from 'vitest';
-import type { UpdateOffer } from '../../src/core/types.js';
+import type { UpdateOffer } from '../../src/core/update-types.js';
 import { PinnedNsisUpdater, WindowsNativeInstaller, type WindowsUpdaterAdapter } from '../../src/updates/windows-installer.js';
 
 const offer = {

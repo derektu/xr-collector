@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { SubscriptionRecord } from '../../src/core/types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { protectSecret } from '../../src/core/redact.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../../src/notifications/notification-center.js';
 import { notificationNavigation } from '../../src/electron/notification-navigation.js';

@@ -1,22 +1,24 @@
 import type { NoteChange } from './change-feed.js';
 import type {
+  DeletionRecord,
   DocumentDeletion,
   DocumentFilter,
+  DocumentKey,
   DocumentMetadata,
   DocumentPage,
   DocumentSourcePublisher,
   DocumentSources,
   SavedDocument,
-  SubscriptionRecord,
-  TranscriptSearch,
-} from './types.js';
-import { CollectorError } from './types.js';
+} from './document-types.js';
+import type { SubscriptionRecord } from './subscription-types.js';
+import type { TranscriptSearch } from './search-types.js';
+import { CollectorError } from './collector-error.js';
 import { documentExcerpt } from './document-text.js';
 import type { SourceDeclarations } from './source-registry.js';
 import type { CapturedDocument } from './source-contract.js';
-import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
-import { documentId, type DocumentKey } from '../vault/document-paths.js';
-import type { NewJobEvent } from './types.js';
+import { collectedBeforeDeletion } from './deletion-rule.js';
+import { documentId } from './document-id.js';
+import type { NewJobEvent } from './activity-types.js';
 
 /** Filter value that selects documents saved without a publisher ID. */
 export const NO_PUBLISHER_ID = 'none';
@@ -38,9 +40,18 @@ export interface DocumentVault {
   read(id: string): Promise<SavedDocument | null>;
   /** Removes a document file. Vaults without deletion records cannot delete. */
   remove?(id: string): Promise<void>;
-  deletions?: DeletionLedger;
+  deletions?: DeletionRecords;
   /** The clock behind collection and deletion times. */
   now?: () => Date;
+}
+
+/** The deletion records of one Vault, keyed by document ID. */
+export interface DeletionRecords {
+  get(id: string): Promise<DeletionRecord | null>;
+  /** Records a deletion stamped with the Vault clock, replacing an earlier record of the same item. */
+  record(entry: Omit<DeletionRecord, 'deletedAt'>): Promise<DeletionRecord>;
+  /** Lifts the deletion of one item; nothing happens when it has none. */
+  clear(id: string): Promise<void>;
 }
 
 export interface IndexOutcome {
@@ -216,7 +227,7 @@ export class Collector {
    * comes after the record. An item already in the Vault or already deleted is left alone.
    */
   recordDeletion(entry: Omit<DeletionRecord, 'deletedAt'>): Promise<void> {
-    const id = deletionId(entry);
+    const id = documentId(entry);
     return this.exclusive(id, async () => {
       const { deletions } = this.vault;
       if (!deletions) throw new CollectorError('invalid_request', '這個知識庫不支援刪除文件。');

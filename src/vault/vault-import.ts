@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CollectorError } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
 import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import type { SourceRegistry } from '../core/source-registry.js';

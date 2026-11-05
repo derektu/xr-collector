@@ -4,7 +4,7 @@
 // failure.
 import { readFile, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { CollectorError } from '../../../src/core/types.js';
+import { CollectorError } from '../../../src/core/collector-error.js';
 import { classifyYtDlpError, parseJson3Transcript, YtDlpCapture } from '../../../src/plugins/youtube/ytdlp-capture.js';
 
 describe('parseJson3Transcript', () => {

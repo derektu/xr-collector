@@ -1,4 +1,5 @@
-import { CollectorError, type UpdateOffer } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { UpdateOffer } from '../core/update-types.js';
 import { fetchJson, fetchOptionalText, offerFromIndex, platformIndexName } from './release-index.js';
 import type { UpdateIdentity, UpdateSource } from './types.js';
 

@@ -1,4 +1,5 @@
-import { CollectorError, type LoginStartupState, type LoginStartupStatus } from './types.js';
+import { CollectorError } from './collector-error.js';
+import type { LoginStartupState, LoginStartupStatus } from './device-types.js';
 
 /** The one device setting exposed to both UI and Agent HTTP listeners. */
 export interface LoginStartupAccess {

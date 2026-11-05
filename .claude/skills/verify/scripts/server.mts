@@ -48,7 +48,7 @@ const port = (name: string) => Number(process.env[`XR_VERIFY_${name}_PORT`]);
 const load = (relative: string) => import(pathToFileURL(path.join(checkout, relative)).href);
 
 const { createSourcePlugins, sourceRegistry } = await load('src/plugins/index.ts');
-const { CollectorError } = await load('src/core/types.ts');
+const { CollectorError } = await load('src/core/collector-error.ts');
 const { publishedSince } = await load('src/core/published.ts');
 const { CollectorRuntime } = await load('src/runtime/collector-runtime.ts');
 const { bundledResources } = await load('src/runtime/bundled-resources.ts');

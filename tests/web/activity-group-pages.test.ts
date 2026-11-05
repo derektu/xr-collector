@@ -3,7 +3,12 @@
 // old level into the new list, or switching levels throws away the checks the reader had loaded.
 import { describe, expect, it } from 'vitest';
 import { ActivityGroupPages, type GroupPageReader, type GroupPagesState } from '../../src/web/activity-group-pages.js';
-import type { ActivityCheckDetail, ActivityCheckSummary, ActivityGroupPage, ActivityQuery } from '../../src/core/types.js';
+import type {
+  ActivityCheckDetail,
+  ActivityCheckSummary,
+  ActivityGroupPage,
+  ActivityQuery,
+} from '../../src/core/activity-types.js';
 
 const TOTAL = 12;
 

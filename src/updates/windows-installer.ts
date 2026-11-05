@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { NsisUpdater } from 'electron-updater';
 import type { AppAdapter } from 'electron-updater/out/AppAdapter.js';
 import { DownloadedUpdateHelper } from 'electron-updater/out/DownloadedUpdateHelper.js';
-import { CollectorError, type UpdateOffer } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { UpdateOffer } from '../core/update-types.js';
 import type { NativeInstaller, PreparedInstall } from './types.js';
 
 /** Exposes electron-updater's standard verified-cache to silent NSIS install seam. */

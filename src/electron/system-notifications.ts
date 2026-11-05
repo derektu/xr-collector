@@ -1,6 +1,6 @@
 import { Notification } from 'electron';
 import type { SystemNotificationAdapter } from '../notifications/notification-center.js';
-import type { AutoPauseNotification, NotificationAvailability } from '../core/types.js';
+import type { AutoPauseNotification, NotificationAvailability } from '../core/device-types.js';
 import { limitText, redact } from '../core/redact.js';
 
 export class ElectronSystemNotifications implements SystemNotificationAdapter {

@@ -1,4 +1,4 @@
-import type { JobState } from './types.js';
+import type { JobState } from './job-types.js';
 
 /**
  * What changed, without the data itself: readers fetch the resource again. `vault` with `scope:

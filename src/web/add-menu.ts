@@ -1,5 +1,5 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { SourceKindInfo, UrlRecognition } from '../core/types.js';
+import type { SourceKindInfo, UrlRecognition } from '../core/source-info-types.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 
 /**

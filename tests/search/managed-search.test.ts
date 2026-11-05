@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { MAX_PENDING_REMOVALS } from '../../src/search/managed-transcript-search.js';
-import type { SavedDocument } from '../../src/core/types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import {
   ManagedTranscriptSearch,
   type SearchBackend,

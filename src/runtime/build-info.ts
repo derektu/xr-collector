@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { BuildInfo } from '../core/types.js';
+import type { BuildInfo } from '../core/update-types.js';
 
 const manifestUrl = new URL('../build-info.json', import.meta.url);
 let developmentInfo: Promise<BuildInfo> | undefined;

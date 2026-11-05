@@ -1,5 +1,5 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { JobError, JobOverviewEntry } from '../core/types.js';
+import type { JobError, JobOverviewEntry } from '../core/job-types.js';
 import { displayUrl, failureLabel, retryCause, retryCauseText } from './source-presentation.js';
 import type { RetryCauseView } from './source-presentation.js';
 import { clockTime, retryAtText, targetNoun } from './subscription-presentation.js';

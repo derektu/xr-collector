@@ -1,5 +1,5 @@
 import type { CollectionPause } from './collection-pause.js';
-import type { ConnectivityState, ConnectivityStatus } from './types.js';
+import type { ConnectivityState, ConnectivityStatus } from './device-types.js';
 
 /** Answers whether this device reaches the internet; aborting `signal` gives up the answer. */
 export type ConnectivityProbe = (signal: AbortSignal) => Promise<boolean>;

@@ -1,5 +1,5 @@
 import { canonicalJson } from '../core/canonical-json.js';
-import type { SubscriptionRecord } from '../core/types.js';
+import type { SubscriptionRecord } from '../core/subscription-types.js';
 
 /**
  * The part of a subscription each field of its record belongs to. What a change stamps, what an
