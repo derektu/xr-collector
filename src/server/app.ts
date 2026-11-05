@@ -5,7 +5,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { API_ROUTES } from '../core/api-routes.js';
+import { serve } from './api-route.js';
 import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
 import { registerChangeRoutes } from './change-routes.js';
@@ -13,10 +15,8 @@ import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { redact } from '../core/redact.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
-import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
-import type { NotificationState } from '../notifications/notification-center.js';
-import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
-import type { UpdateAccess, UpdateSelection } from '../updates/types.js';
+import type { AgentConnectionAccess } from './agent-access.js';
+import type { UpdateAccess } from '../updates/types.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../core/source-contract.js';
@@ -24,6 +24,10 @@ import { SourceCatalog } from '../sources/source-catalog.js';
 import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {
   CollectorError,
+  type AgentPortSetting,
+  type UpdateSelection,
+  type CollectorRuntimeStatus,
+  type NotificationState,
   type CoreErrorCode,
   type BuildInfo,
   type ActivityLogHealth,
@@ -310,12 +314,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
   };
   const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
-  // A device-data route reads or changes state outside the Vault, so it answers before a Vault is
-  // ready and during Vault operations. Every other API route answers `vault_not_ready` until a Vault
-  // is ready and passes through the Vault lock.
-  // Fastify normalizes route options in place, so every route receives a fresh object.
+  // The Vault access of a route outside the API table; `RouteVaultAccess` in src/core/api-routes.ts
+  // says what each access means. Fastify normalizes route options in place, so every route receives
+  // a fresh object.
   const deviceData = () => ({ config: { vaultAccess: 'device-data' as const } });
-  const vaultOperation = () => ({ config: { vaultAccess: 'vault-operation' as const } });
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -382,24 +384,24 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   }
 
-  if (options.changes) registerChangeRoutes(app, options.changes, deviceData);
+  if (options.changes) registerChangeRoutes(app, options.changes);
 
   if (options.vaultSetup) {
     const vaultSetup = options.vaultSetup;
-    app.get('/api/vault/setup', deviceData(), async () => ({ vault: vaultSetup.status() }));
-    app.post<{ Body: { path?: unknown } }>('/api/vault/inspect', deviceData(), async (request) => {
+    serve(app, API_ROUTES.vaultSetup, async () => ({ vault: vaultSetup.status() }));
+    serve(app, API_ROUTES.inspectVault, async (request: FastifyRequest<{ Body: { path?: unknown } }>) => {
       if (typeof request.body?.path !== 'string' || request.body.path.trim() === '') {
         throw new CollectorError('invalid_request', '請提供要檢查的目錄路徑。');
       }
       return { inspection: await vaultSetup.inspect(request.body.path) };
     });
-    app.post<{ Body: { location?: unknown; name?: unknown } | undefined }>('/api/vault/new/check', deviceData(), async (request) => ({
+    serve(app, API_ROUTES.checkNewVault, async (request: FastifyRequest<{ Body: { location?: unknown; name?: unknown } | undefined }>) => ({
       check: await vaultSetup.checkNew(request.body?.location, request.body?.name),
     }));
-    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/package/describe', deviceData(), async (request) => ({
+    serve(app, API_ROUTES.describePackage, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => ({
       package: await vaultSetup.describePackage(request.body?.path),
     }));
-    app.post<{ Body: Record<string, unknown> | undefined }>('/api/vault/setup', deviceData(), async (request) => {
+    serve(app, API_ROUTES.setupVault, async (request: FastifyRequest<{ Body: Record<string, unknown> | undefined }>) => {
       return vaultSetup.setup(setupRequest(request.body ?? {}));
     });
   }
@@ -417,28 +419,24 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
-    app.get('/api/vault/status', deviceData(), async () => transfer.status());
+    serve(app, API_ROUTES.vaultStatus, async () => transfer.status());
     // Export and import name local files by absolute path. JSON requests need a CORS preflight,
     // which this server never grants, so only the app's own pages and authorized Agents can name files.
-    app.get('/api/vault/export/suggestion', vaultOperation(), async () => transfer.exportSuggestion());
-    app.post<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>('/api/vault/export', vaultOperation(), async (request) => {
+    serve(app, API_ROUTES.exportSuggestion, async () => transfer.exportSuggestion());
+    serve(app, API_ROUTES.exportVault, async (request: FastifyRequest<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>) => {
       return transfer.exportTo(request.body?.path, request.body?.overwrite === true);
     });
-    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/import/preview', vaultOperation(), async (request) => transfer.previewImport(request.body?.path));
-    app.post<{ Body: { id?: unknown; mode?: unknown } | undefined }>('/api/vault/import/apply', vaultOperation(), async (request, reply) => {
-      return reply.code(202).send(transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode));
+    serve(app, API_ROUTES.previewImport, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => transfer.previewImport(request.body?.path));
+    serve(app, API_ROUTES.applyImport, async (request: FastifyRequest<{ Body: { id?: unknown; mode?: unknown } | undefined }>) => {
+      return transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode);
     });
-    app.post<{ Body: { id?: unknown } | undefined }>('/api/vault/import/cancel', vaultOperation(), async (request) => {
+    serve(app, API_ROUTES.cancelImport, async (request: FastifyRequest<{ Body: { id?: unknown } | undefined }>) => {
       transfer.cancelImport(String(request.body?.id ?? ''));
-      return { cancelled: true };
+      return { cancelled: true as const };
     });
-    app.post('/api/vault/cancel', vaultOperation(), async () => transfer.cancelWait());
-    app.post<{ Body: { path?: unknown } | undefined }>('/api/vault/open', vaultOperation(), async (request, reply) => {
-      return reply.code(202).send(await transfer.openOther(request.body?.path));
-    });
-    app.post<{ Body: { location?: unknown; name?: unknown } | undefined }>('/api/vault/create', vaultOperation(), async (request, reply) => {
-      return reply.code(202).send(await transfer.createNew(request.body?.location, request.body?.name));
-    });
+    serve(app, API_ROUTES.cancelVaultWait, async () => transfer.cancelWait());
+    serve(app, API_ROUTES.openVault, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => transfer.openOther(request.body?.path));
+    serve(app, API_ROUTES.createVault, async (request: FastifyRequest<{ Body: { location?: unknown; name?: unknown } | undefined }>) => transfer.createNew(request.body?.location, request.body?.name));
   }
 
   app.addHook('onSend', async (_request, reply, payload) => {
@@ -470,10 +468,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   });
 
-  app.get('/api/health', deviceData(), async () => {
+  serve(app, API_ROUTES.health, async () => {
     const runtime = options.runtimeStatus?.();
     return {
-      status: runtime && runtime.state !== 'ready' ? 'unavailable' : 'ok',
+      status: runtime && runtime.state !== 'ready' ? 'unavailable' as const : 'ok' as const,
       ...(runtime ? { runtime } : {}),
       connectivity: connectivityStatus(),
       ...(options.activity ? { activityLog: options.activity.health() } : {}),
@@ -481,10 +479,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   const loginStartup = options.loginStartup ?? unavailableLoginStartup;
-  app.get('/api/device/build-info', deviceData(), async () => ({ buildInfo }));
+  serve(app, API_ROUTES.buildInfo, async () => ({ buildInfo }));
   {
-    app.get('/api/device/notifications', deviceData(), async () => ({ notifications: await notifications.read() }));
-    app.put<{ Body: { enabled?: unknown } }>('/api/device/notifications', deviceData(), async (request) => {
+    serve(app, API_ROUTES.notifications, async () => ({ notifications: await notifications.read() }));
+    serve(app, API_ROUTES.setNotifications, async (request: FastifyRequest<{ Body: { enabled?: unknown } }>) => {
       if (!request.body || typeof request.body.enabled !== 'boolean' || Object.keys(request.body).some((key) => key !== 'enabled')) {
         throw new CollectorError('invalid_request', '系統通知設定必須提供 enabled。');
       }
@@ -510,15 +508,15 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       return { version: value.version, sha256: value.sha256 };
     };
-    app.get('/api/device/updates', deviceData(), async () => ({ update: updates.status() }));
-    app.post('/api/device/updates/check', deviceData(), async () => ({ update: await updates.check() }));
-    app.post<{ Body: unknown }>('/api/device/updates/download', deviceData(), async (request) => ({ update: await updates.download(selection(request.body)) }));
-    app.post<{ Body: unknown }>('/api/device/updates/apply', deviceData(), async (request) => ({ update: await updates.apply(selection(request.body)) }));
-    app.post('/api/device/updates/cancel', deviceData(), async () => ({ update: await updates.cancel() }));
+    serve(app, API_ROUTES.update, async () => ({ update: updates.status() }));
+    serve(app, API_ROUTES.checkUpdate, async () => ({ update: await updates.check() }));
+    serve(app, API_ROUTES.downloadUpdate, async (request: FastifyRequest<{ Body: unknown }>) => ({ update: await updates.download(selection(request.body)) }));
+    serve(app, API_ROUTES.applyUpdate, async (request: FastifyRequest<{ Body: unknown }>) => ({ update: await updates.apply(selection(request.body)) }));
+    serve(app, API_ROUTES.cancelUpdate, async () => ({ update: await updates.cancel() }));
   }
 
-  app.get('/api/device/login-startup', deviceData(), async () => ({ loginStartup: await loginStartup.status() }));
-  app.put<{ Body: { enabled?: unknown } }>('/api/device/login-startup', deviceData(), async (request) => {
+  serve(app, API_ROUTES.loginStartup, async () => ({ loginStartup: await loginStartup.status() }));
+  serve(app, API_ROUTES.setLoginStartup, async (request: FastifyRequest<{ Body: { enabled?: unknown } }>) => {
     const body = request.body ?? {};
     if (typeof body.enabled !== 'boolean' || Object.keys(body).some((field) => field !== 'enabled')) {
       throw new CollectorError('invalid_request', '請只提供 enabled，值必須是布林值。');
@@ -527,17 +525,17 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   // Each pacing group is labelled with the name its source type declares for it.
-  app.get('/api/pacing', deviceData(), async () => ({
+  serve(app, API_ROUTES.pacing, async () => ({
     groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(options.sources, gate.group), ...gate.status() })),
   }));
 
   if (options.agentConnection) {
     const agent = options.agentConnection;
-    app.get('/api/device/agent', deviceData(), async () => ({ agent: agent.status() }));
-    app.get('/api/device/agent/connection', deviceData(), async () => ({ connection: agent.connection() }));
-    app.put<{ Body: AgentPortSetting }>('/api/device/agent/port', deviceData(), async (request) => ({ agent: await agent.configure(request.body) }));
-    app.post('/api/device/agent/key/reset', deviceData(), async () => ({ connection: await agent.resetKey(), agent: agent.status() }));
-    app.get('/api/device/agent/skill', deviceData(), async (_request, reply) => reply.type('application/zip')
+    serve(app, API_ROUTES.agent, async () => ({ agent: agent.status() }));
+    serve(app, API_ROUTES.agentConnection, async () => ({ connection: agent.connection() }));
+    serve(app, API_ROUTES.setAgentPort, async (request: FastifyRequest<{ Body: AgentPortSetting }>) => ({ agent: await agent.configure(request.body) }));
+    serve(app, API_ROUTES.resetAgentKey, async () => ({ connection: await agent.resetKey(), agent: agent.status() }));
+    serve(app, API_ROUTES.agentSkill, async (_request, reply) => reply.type('application/zip')
       .header('Content-Disposition', 'attachment; filename="xr-collector-agent.zip"').send(await agent.download()));
   }
 
@@ -644,7 +642,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
     });
 
-    app.get('/api/jobs/overview', deviceData(), async () => ({ overview: await jobs.overview() }));
+    serve(app, API_ROUTES.jobOverview, async () => ({ overview: await jobs.overview() }));
 
     app.get<{ Params: { id: string } }>('/api/jobs/:id', deviceData(), async (request) => ({
       job: jobs.get(request.params.id),
@@ -684,11 +682,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (options.schedule) {
     const schedule = options.schedule;
     // One switch covers the subscriptions of every source type.
-    app.get('/api/schedule', async () => ({
+    serve(app, API_ROUTES.schedule, async () => ({
       schedule: scheduleView(await schedule.getSchedule()),
     }));
 
-    app.put<{ Body: Record<string, unknown> | null }>('/api/schedule', async (request) => {
+    serve(app, API_ROUTES.setSchedule, async (request: FastifyRequest<{ Body: Record<string, unknown> | null }>) => {
       const body = request.body;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
@@ -763,7 +761,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { removed: true, documentsKept, documentsDeleted, documentsFailed };
     });
 
-    app.post<{ Body?: { subscriptions?: unknown } | null }>('/api/subscription-checks', async (request, reply) => {
+    serve(app, API_ROUTES.checkSubscriptions, async (request: FastifyRequest<{ Body?: { subscriptions?: unknown } | null }>) => {
       const body = request.body ?? {};
       if (typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', '檢查範圍必須是 JSON 物件。');
       const unknown = Object.keys(body).find((key) => key !== 'subscriptions');
@@ -777,10 +775,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         // Checking every subscription goes through the scheduler, which refuses while a Vault operation runs.
         if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
         const submissions = await options.schedule.runNow();
-        return reply.code(202).send({ submissions: submissions });
+        return { submissions };
       }
       const submissions = await startChecks(options.sources, (type) => collectionOf(type).collection, listed);
-      return reply.code(202).send({ submissions: submissions });
+      return { submissions };
     });
   }
 

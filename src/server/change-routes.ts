@@ -1,4 +1,6 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { API_ROUTES } from '../core/api-routes.js';
+import { serve } from './api-route.js';
 import {
   CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeFeed, type ChangeKind,
 } from '../core/change-feed.js';
@@ -15,7 +17,7 @@ const MAX_WAIT_SECONDS = 60;
  * `/api/events` and the waiting read at `/api/changes`. A read's header names the revision its
  * data is at least as new as; a write's header includes the changes the write itself made.
  */
-export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed, routeConfig: () => object): void {
+export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed): void {
   const started = new WeakMap<object, string>();
   app.addHook('onRequest', async (request) => { started.set(request, changes.revision); });
   // A request that an earlier hook refused (wrong host, missing token) never reached the hook above
@@ -36,7 +38,7 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed, 
     for (const wake of [...waiting]) wake();
   });
 
-  app.get<{ Querystring: { after?: string } }>('/api/events', routeConfig(), async (request, reply) => {
+  serve(app, API_ROUTES.events, async (request: FastifyRequest<{ Querystring: { after?: string } }>, reply) => {
     if (streams.size >= MAX_STREAMS) throw new CollectorError('too_many_streams', '同時開啟的事件連線過多，請關閉其他連線後再試。');
     const lastEventId = request.headers['last-event-id'];
     const after = parseCursor(typeof lastEventId === 'string' ? lastEventId : request.query.after);
@@ -71,7 +73,7 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed, 
     response.once('close', end);
   }
 
-  app.get<{ Querystring: Record<string, unknown> }>('/api/changes', routeConfig(), async (request, reply) => {
+  serve(app, API_ROUTES.changes, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>, reply) => {
     const query = request.query;
     const wait = query.wait === undefined ? 0 : Number(query.wait);
     if (!Number.isInteger(wait) || wait < 0 || wait > MAX_WAIT_SECONDS) {

@@ -8,7 +8,7 @@ import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import type { BuildInfo, TranscriptSearch } from '../core/types.js';
-import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
+import type { CollectorRuntimeStatus } from '../core/types.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
 import type { AgentConnectionAccess } from './agent-access.js';
 import type { UpdateAccess } from '../updates/types.js';

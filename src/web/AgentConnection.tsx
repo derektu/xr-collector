@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, type AgentConnectionStatus, type AgentPortSetting } from './api-client.js';
+import { api } from './api-client.js';
+import type { AgentConnectionStatus, AgentPortSetting } from '../core/types.js';
 import { AgentConnectionHelp } from './AgentConnectionHelp.js';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : '發生未預期的錯誤。'; }

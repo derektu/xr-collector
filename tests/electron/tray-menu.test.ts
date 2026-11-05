@@ -9,7 +9,7 @@ import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOvervi
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { menuStaleAfter, trayModel } from '../../src/electron/tray-menu.js';
 import type { TrayModel } from '../../src/electron/tray-menu.js';
-import type { AutoPauseNotification } from '../../src/notifications/types.js';
+import type { AutoPauseNotification } from '../../src/core/types.js';
 
 const now = new Date('2026-10-24T10:24:00+08:00');
 const entry = (overrides: Partial<JobOverviewEntry>): JobOverviewEntry => ({

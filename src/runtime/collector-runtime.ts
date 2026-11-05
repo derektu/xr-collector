@@ -32,16 +32,8 @@ import { VaultSelection } from '../vault/vault-selection.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
 import type { UpdateLease } from '../vault/operation-lock.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../notifications/notification-center.js';
+import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus } from '../core/types.js';
 
-export type CollectorRuntimeState = 'starting' | 'ready' | 'not_ready' | 'stopping' | 'stopped' | 'unavailable';
-
-export interface CollectorRuntimeStatus {
-  state: CollectorRuntimeState;
-  instanceId: string;
-  profilePath: string;
-  vaultPath: string | null;
-  message: string;
-}
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */
 export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity' | 'sources'>;
@@ -136,7 +128,7 @@ export class CollectorRuntime {
   get workspace(): VaultWorkspace | null { return this.workspaceValue; }
 
   /** A persisted old notification or an actionable row synthesized from the current Vault. */
-  async resolveNotification(id: string): Promise<import('../notifications/types.js').AutoPauseNotification | null> {
+  async resolveNotification(id: string): Promise<AutoPauseNotification | null> {
     const persisted = this.notifications.event(id);
     if (persisted) return persisted;
     const workspace = this.workspaceValue;

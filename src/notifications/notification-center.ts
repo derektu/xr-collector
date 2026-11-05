@@ -1,11 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import type { SubscriptionRecord } from '../core/types.js';
-import type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
+import type { AutoPauseNotification, NotificationAvailability, NotificationState, SubscriptionRecord } from '../core/types.js';
 import { limitText, redact } from '../core/redact.js';
 import { replaceFile } from '../core/json-file.js';
-export type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
 
 export interface SystemNotificationAdapter {
   availability(): { state: NotificationAvailability; message: string | null };

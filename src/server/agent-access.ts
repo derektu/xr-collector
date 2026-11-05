@@ -3,18 +3,12 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import yazl from 'yazl';
-import { CollectorError } from '../core/types.js';
+import { CollectorError, type AgentConnection, type AgentConnectionStatus, type AgentPortSetting } from '../core/types.js';
 import { AGENT_PORT_RANGE } from '../runtime/agent-connection-defaults.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 import { replaceFile } from '../core/json-file.js';
 import { protectSecret } from '../core/redact.js';
 
-export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
-export interface AgentConnection { url: string; token: string }
-export interface AgentConnectionStatus {
-  state: 'available' | 'unavailable'; activeUrl: string | null; activePort: number | null;
-  configured: AgentPortSetting; restartRequired: boolean; message: string;
-}
 export interface AgentConnectionAccess {
   status(): AgentConnectionStatus;
   connection(): AgentConnection;

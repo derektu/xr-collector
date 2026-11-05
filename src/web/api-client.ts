@@ -37,7 +37,11 @@ import type {
   VaultSetupStatus,
   LoginStartupStatus,
   DeviceUpdateStatus,
+  AgentConnection,
+  AgentConnectionStatus,
+  AgentPortSetting,
 } from '../core/types.js';
+import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey } from '../core/api-routes.js';
 
 interface ErrorResponse {
   error?: {
@@ -46,12 +50,6 @@ interface ErrorResponse {
   };
 }
 
-export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
-export interface AgentConnection { url: string; token: string }
-export interface AgentConnectionStatus {
-  state: 'available' | 'unavailable'; activeUrl: string | null; activePort: number | null;
-  configured: AgentPortSetting; restartRequired: boolean; message: string;
-}
 
 /** The route of one subscription, named by its source type and its ID within the type. */
 function subscriptionPath(type: string, id: string): string {
@@ -87,76 +85,89 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** What calling `Route` takes: its path parameters, its JSON body and its query, each when the route has one. */
+type CallInput<Route extends { path: string }> = { signal?: AbortSignal }
+  & ([PathParams<Route['path']>] extends [never] ? unknown : { params: Record<PathParams<Route['path']>, string> })
+  & (undefined extends BodyOf<Route> ? { body?: BodyOf<Route> } : { body: BodyOf<Route> })
+  & (undefined extends QueryOf<Route> ? { query?: QueryOf<Route> } : { query: QueryOf<Route> });
+
+/** Calls a JSON route of the API table and answers its response type. */
+function call<Route extends ApiRoute<unknown, unknown, unknown> & { path: string }>(
+  route: Route, ...[input]: Record<string, never> extends CallInput<Route> ? [CallInput<Route>?] : [CallInput<Route>]
+): Promise<ResponseOf<Route>> {
+  const given = (input ?? {}) as { signal?: AbortSignal; params?: Record<string, string>; body?: unknown; query?: Record<string, unknown> };
+  const parameters = new URLSearchParams();
+  for (const [key, value] of Object.entries(given.query ?? {})) if (value !== undefined) parameters.set(key, String(value));
+  const path = given.params ? routePath(route, given.params as never) : route.path;
+  return request<ResponseOf<Route>>(parameters.size > 0 ? `${path}?${parameters.toString()}` : path, {
+    method: route.method,
+    ...(given.body !== undefined ? { body: JSON.stringify(given.body) } : {}),
+    ...(given.signal ? { signal: given.signal } : {}),
+  });
+}
+
 export const api = {
   async updateStatus(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates', signal ? { signal } : undefined)).update;
+    return (await call(API_ROUTES.update, { signal })).update;
   },
   async checkForUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/check', { method: 'POST', ...(signal ? { signal } : {}) })).update;
+    return (await call(API_ROUTES.checkUpdate, { signal })).update;
   },
   async downloadUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/download', {
-      method: 'POST', body: JSON.stringify({ version, sha256 }), ...(signal ? { signal } : {}),
-    })).update;
+    return (await call(API_ROUTES.downloadUpdate, { body: { version, sha256 }, signal })).update;
   },
   async applyUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/apply', {
-      method: 'POST', body: JSON.stringify({ version, sha256 }), ...(signal ? { signal } : {}),
-    })).update;
+    return (await call(API_ROUTES.applyUpdate, { body: { version, sha256 }, signal })).update;
   },
   async cancelUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await request<{ update: DeviceUpdateStatus }>('/api/device/updates/cancel', { method: 'POST', ...(signal ? { signal } : {}) })).update;
+    return (await call(API_ROUTES.cancelUpdate, { signal })).update;
   },
   async buildInfo(signal?: AbortSignal): Promise<BuildInfo> {
-    return (await request<{ buildInfo: BuildInfo }>('/api/device/build-info', signal ? { signal } : undefined)).buildInfo;
+    return (await call(API_ROUTES.buildInfo, { signal })).buildInfo;
   },
 
   async getLoginStartup(signal?: AbortSignal): Promise<LoginStartupStatus> {
-    return (await request<{ loginStartup: LoginStartupStatus }>('/api/device/login-startup', signal ? { signal } : undefined)).loginStartup;
+    return (await call(API_ROUTES.loginStartup, { signal })).loginStartup;
   },
 
   async setLoginStartup(enabled: boolean, signal?: AbortSignal): Promise<LoginStartupStatus> {
-    return (await request<{ loginStartup: LoginStartupStatus }>('/api/device/login-startup', {
-      method: 'PUT', body: JSON.stringify({ enabled }), ...(signal ? { signal } : {}),
-    })).loginStartup;
+    return (await call(API_ROUTES.setLoginStartup, { body: { enabled }, signal })).loginStartup;
   },
 
   async getVaultSetup(signal?: AbortSignal): Promise<VaultSetupStatus> {
-    return (await request<{ vault: VaultSetupStatus }>('/api/vault/setup', signal ? { signal } : undefined)).vault;
+    return (await call(API_ROUTES.vaultSetup, { signal })).vault;
   },
 
   async inspectVault(path: string): Promise<VaultInspection> {
-    return (await request<{ inspection: VaultInspection }>('/api/vault/inspect', { method: 'POST', body: JSON.stringify({ path }) })).inspection;
+    return (await call(API_ROUTES.inspectVault, { body: { path } })).inspection;
   },
 
   setupVault(setup: VaultSetupRequest): Promise<VaultSetupResult> {
-    return request<VaultSetupResult>('/api/vault/setup', { method: 'POST', body: JSON.stringify(setup) });
+    return call(API_ROUTES.setupVault, { body: setup });
   },
 
   async checkNewVault(location: string, name: string, signal?: AbortSignal): Promise<NewVaultCheck> {
-    return (await request<{ check: NewVaultCheck }>('/api/vault/new/check', {
-      method: 'POST', body: JSON.stringify({ location, name }), ...(signal ? { signal } : {}),
-    })).check;
+    return (await call(API_ROUTES.checkNewVault, { body: { location, name }, signal })).check;
   },
 
   async describePackage(path: string): Promise<PackageDescription> {
-    return (await request<{ package: PackageDescription }>('/api/vault/package/describe', { method: 'POST', body: JSON.stringify({ path }) })).package;
+    return (await call(API_ROUTES.describePackage, { body: { path } })).package;
   },
 
   async getAgentConnectionStatus(): Promise<AgentConnectionStatus> {
-    return (await request<{ agent: AgentConnectionStatus }>('/api/device/agent')).agent;
+    return (await call(API_ROUTES.agent)).agent;
   },
   async agentConnection(): Promise<AgentConnection> {
-    return (await request<{ connection: AgentConnection }>('/api/device/agent/connection')).connection;
+    return (await call(API_ROUTES.agentConnection)).connection;
   },
   async setAgentPort(port: AgentPortSetting): Promise<AgentConnectionStatus> {
-    return (await request<{ agent: AgentConnectionStatus }>('/api/device/agent/port', { method: 'PUT', body: JSON.stringify(port) })).agent;
+    return (await call(API_ROUTES.setAgentPort, { body: port })).agent;
   },
   async resetAgentKey(): Promise<AgentConnection> {
-    return (await request<{ connection: AgentConnection }>('/api/device/agent/key/reset', { method: 'POST' })).connection;
+    return (await call(API_ROUTES.resetAgentKey)).connection;
   },
   async downloadAgentSkill(): Promise<Blob> {
-    const response = await fetch('/api/device/agent/skill');
+    const response = await fetch(API_ROUTES.agentSkill.path);
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as ErrorResponse;
       throw new ApiError(body.error?.message ?? `HTTP ${response.status}`, body.error?.code ?? 'unknown_error');
@@ -165,17 +176,12 @@ export const api = {
   },
   /** The automatic collection switch; one switch covers the subscriptions of every type. */
   async getSchedule(): Promise<CollectionScheduleView> {
-    const result = await request<{ schedule: CollectionScheduleView }>('/api/schedule');
-    return result.schedule;
+    return (await call(API_ROUTES.schedule)).schedule;
   },
 
   /** Turns automatic collection on or off. */
   async setAutoCollection(enabled: boolean): Promise<CollectionScheduleView> {
-    const result = await request<{ schedule: CollectionScheduleView }>('/api/schedule', {
-      method: 'PUT',
-      body: JSON.stringify({ enabled }),
-    });
-    return result.schedule;
+    return (await call(API_ROUTES.setSchedule, { body: { enabled } })).schedule;
   },
 
   /** Saves some of one subscription's settings; fields left out keep their value. */
@@ -208,17 +214,12 @@ export const api = {
 
   /** Checks every enabled subscription of every type now. */
   async checkAllSubscriptions(): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>('/api/subscription-checks', { method: 'POST' });
-    return result.submissions;
+    return (await call(API_ROUTES.checkSubscriptions)).submissions;
   },
 
   /** Checks the listed subscriptions now. */
-  async checkSubscriptions(subscriptions: Array<{ type: string; id: string }>): Promise<JobSubmission[]> {
-    const result = await request<{ submissions: JobSubmission[] }>('/api/subscription-checks', {
-      method: 'POST',
-      body: JSON.stringify({ subscriptions }),
-    });
-    return result.submissions;
+  async checkSubscriptions(subscriptions: SubscriptionKey[]): Promise<JobSubmission[]> {
+    return (await call(API_ROUTES.checkSubscriptions, { body: { subscriptions } })).submissions;
   },
 
   listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPage> {
@@ -243,7 +244,7 @@ export const api = {
   },
 
   async jobOverview(signal?: AbortSignal): Promise<JobOverview> {
-    return (await request<{ overview: JobOverview }>('/api/jobs/overview', signal ? { signal } : undefined)).overview;
+    return (await call(API_ROUTES.jobOverview, { signal })).overview;
   },
 
   async dismissJob(id: string): Promise<JobView> {
@@ -366,45 +367,45 @@ export const api = {
   },
 
   vaultTransferStatus(signal?: AbortSignal): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/status', signal ? { signal } : undefined);
+    return call(API_ROUTES.vaultStatus, { signal });
   },
 
   /** The export folder and today's export file in it. */
   exportSuggestion(): Promise<ExportSuggestion> {
-    return request<ExportSuggestion>('/api/vault/export/suggestion');
+    return call(API_ROUTES.exportSuggestion);
   },
 
   /** Writes the export of the active Vault to an absolute `.zip` path on this computer. */
   exportVault(path: string, overwrite: boolean): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/export', { method: 'POST', body: JSON.stringify({ path, overwrite }) });
+    return call(API_ROUTES.exportVault, { body: { path, overwrite } });
   },
 
   /** Compares an export file with the active Vault. */
   previewImport(path: string): Promise<ImportPreview> {
-    return request<ImportPreview>('/api/vault/import/preview', { method: 'POST', body: JSON.stringify({ path }) });
+    return call(API_ROUTES.previewImport, { body: { path } });
   },
 
   /** Applies a compared import; follow `vaultTransferStatus`. */
   applyImport(id: string, mode: ImportMode): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/import/apply', { method: 'POST', body: JSON.stringify({ id, mode }) });
+    return call(API_ROUTES.applyImport, { body: { id, mode } });
   },
 
   async cancelImport(id: string): Promise<void> {
-    await request('/api/vault/import/cancel', { method: 'POST', body: JSON.stringify({ id }) });
+    await call(API_ROUTES.cancelImport, { body: { id } });
   },
 
   /** Switches to another existing Vault; follow `vaultTransferStatus`. */
   openOtherVault(path: string): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/open', { method: 'POST', body: JSON.stringify({ path }) });
+    return call(API_ROUTES.openVault, { body: { path } });
   },
 
   createVault(location: string, name: string): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/create', { method: 'POST', body: JSON.stringify({ location, name }) });
+    return call(API_ROUTES.createVault, { body: { location, name } });
   },
 
   /** Cancels a Vault operation that is still waiting for collection steps. */
   cancelTransfer(): Promise<TransferStatus> {
-    return request<TransferStatus>('/api/vault/cancel', { method: 'POST' });
+    return call(API_ROUTES.cancelVaultWait);
   },
 };
 

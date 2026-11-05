@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { API_ROUTES } from '../core/api-routes.js';
 import { receive, replacesEverything, staleAfter, type Change, type Refresh, type Resource, type StreamMessage } from './change-feed.js';
 
 type Listener = (refresh: Exclude<Refresh, { kind: 'none' }>) => void;
@@ -47,7 +48,7 @@ class ChangeHub {
   }
 
   private open(): void {
-    const source = new EventSource(this.revision ? `/api/events?after=${encodeURIComponent(this.revision)}` : '/api/events');
+    const source = new EventSource(this.revision ? `${API_ROUTES.events.path}?after=${encodeURIComponent(this.revision)}` : API_ROUTES.events.path);
     const handle = (type: StreamMessage['type']) => (event: MessageEvent<string>) => {
       const data = JSON.parse(event.data) as { revision: string };
       this.receive(type === 'change' ? { type, batch: data as never } : { type, revision: data.revision } as StreamMessage);
