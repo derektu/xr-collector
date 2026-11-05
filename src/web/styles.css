@@ -399,7 +399,7 @@ dialog::backdrop { background:var(--overlay); }
 .search-field input::-webkit-search-cancel-button { display:none; }
 .search-clear { width:26px; height:26px; border:0; border-radius:50%; color:var(--secondary); background:var(--card); font-size:16px; line-height:1; }
 .source-select { display:flex; align-items:center; gap:8px; padding:0 12px; border:1px solid var(--border); border-radius:6px; background:var(--frame); color:var(--secondary); font-size:13px; }
-.source-select select { max-width:300px; padding:10px 0; border:0; color:var(--primary); background:transparent; font:inherit; font-weight:550; }
+.source-select select { max-width:300px; padding:10px 6px 10px 0; border:0; color:var(--primary); background:transparent; font:inherit; font-weight:550; }
 .source-select select[data-pointer-focus] { outline:none; }
 .source-select option,.source-select optgroup { color:var(--primary); background:var(--frame); }
 
