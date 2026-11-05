@@ -39,14 +39,15 @@ const started = async (pid: number, text: string) => {
 describe.skipIf(process.platform === 'win32')('stop with real processes', () => {
   it('ends the run\'s server with its group and leaves processes that mention the run alone', async () => {
     const runDir = path.join(temp('runs'), '111-run');
+    // The log exists before `tail -f` opens it; a missing file would end `tail` on its own.
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'server.log'), '');
     // The server leads its group and starts a child, as server.mts starts Meilisearch.
     const server = start('sh', ['-c', `"${process.execPath}" -e '${IDLE}' & sleep 60`, 'server.mts', runMarker(runDir)], { detached: true });
     const decoys = [
       start(process.execPath, ['-e', IDLE, 'flow.mjs', runMarker(runDir)], { detached: true }),
       start('tail', ['-f', path.join(runDir, 'server.log')], { detached: true }),
     ];
-    mkdirSync(runDir, { recursive: true });
-    writeFileSync(path.join(runDir, 'server.log'), '');
     const evidence = temp('evidence');
     writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ kind: 'web', issue: '111', runDir, evidence, ports: { slot: 0 }, pid: server.pid }));
     await started(server.pid!, runMarker(runDir));
