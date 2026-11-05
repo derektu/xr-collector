@@ -34,6 +34,7 @@ const runtime = await startCollectorServer({
       listVideos: async () => [],
     },
     searchBinary: 'unused',
+    searchLexicon: 'unused',
     searchData: path.join(profilePath, 'search'),
     exportFolder: path.join(profilePath, 'exports'),
     backupFolder: path.join(profilePath, 'backups'),

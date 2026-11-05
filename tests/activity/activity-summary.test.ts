@@ -11,6 +11,7 @@ import { ActivityViews } from '../../src/activity/activity-views.js';
 import { openJobRecords } from '../../src/runtime/job-records.js';
 import { collectionRecord } from '../../src/sources/source-catalog.js';
 import type { ActivityCheckSummary, JobEvent } from '../../src/core/activity-types.js';
+import type { EventType } from '../../src/core/event-catalog.js';
 import type { CollectionJob } from '../../src/core/job-types.js';
 import type { Subscription } from '../../src/core/subscription-types.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
@@ -40,6 +41,12 @@ function terminal(id: string, at: string, options: {
   };
 }
 
+/** `event` without its check summary, as the events before and beside a check's end are written. */
+function checkless(event: JobEvent): JobEvent {
+  const { check: _check, ...rest } = event;
+  return rest;
+}
+
 function at(minute: number): string { return new Date(Date.UTC(2026, 9, 20, 8, minute)).toISOString(); }
 const scope = { vaultPath: VAULT };
 
@@ -49,7 +56,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
     const views = new ActivityViews(log);
     for (let index = 0; index < 12; index += 1) {
       log.record({ ...terminal(`check-${index}`, at(index), { existing: 5 }), eventId: `done-${index}` });
-      log.record({ ...terminal(`retry-${index}`, at(index)), eventId: `retry-${index}`, jobId: `check-${index}`, eventType: 'job.retry_scheduled', check: undefined, severity: 'warning' });
+      log.record({ ...checkless(terminal(`retry-${index}`, at(index))), eventId: `retry-${index}`, jobId: `check-${index}`, eventType: 'job.retry_scheduled', severity: 'warning' });
     }
     const page = await views.summary({ view: 'summary' }, scope);
     const groups = page.entries.filter((entry) => entry.kind === 'check');
@@ -75,9 +82,9 @@ describe('activity check summaries (#96 A1-A5)', () => {
     log.record(terminal('a2', at(3)));
     log.record(terminal('manual', at(4), { trigger: 'manual' }));
     log.record(terminal('content', at(5), { result: 'other', created: 1 }));
-    log.record({ ...terminal('child-failed', at(5), { result: 'other' }), eventId: 'child-item', jobId: 'item-1', parentJobId: 'content', check: undefined, eventType: 'subscription.item_failed', severity: 'warning' });
+    log.record({ ...checkless(terminal('child-failed', at(5), { result: 'other' })), eventId: 'child-item', jobId: 'item-1', parentJobId: 'content', eventType: 'subscription.item_failed', severity: 'warning' });
     log.record(terminal('skipped', at(6), { result: 'other', skipped: 1 }));
-    log.record({ ...terminal('child-skipped', at(6), { result: 'other' }), eventId: 'child-skip-a3', jobId: 'item-2', parentJobId: 'skipped', check: undefined, eventType: 'subscription.item_skipped' });
+    log.record({ ...checkless(terminal('child-skipped', at(6), { result: 'other' })), eventId: 'child-skip-a3', jobId: 'item-2', parentJobId: 'skipped', eventType: 'subscription.item_skipped' });
     log.record(terminal('a3', at(7)));
     log.record(terminal('rss-a', at(8), { sourceType: 'rss' }));
     log.record(terminal('subscribe', at(9), { trigger: 'subscribe' }));
@@ -96,8 +103,8 @@ describe('activity check summaries (#96 A1-A5)', () => {
   it('returns exact group membership and complete root/child events while raw remains unchanged (A4)', async () => {
     const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
-    log.record({ ...terminal('c1', at(2)), eventId: 'c1-start', timestamp: at(1), eventType: 'job.started', check: undefined });
-    log.record({ ...terminal('child', at(2), { result: 'other' }), eventId: 'child-skip', jobId: 'item-1', parentJobId: 'c1', check: undefined, eventType: 'subscription.item_skipped' });
+    log.record({ ...checkless(terminal('c1', at(2))), eventId: 'c1-start', timestamp: at(1), eventType: 'job.started' });
+    log.record({ ...checkless(terminal('child', at(2), { result: 'other' })), eventId: 'child-skip', jobId: 'item-1', parentJobId: 'c1', eventType: 'subscription.item_skipped' });
     log.record(terminal('c1', at(3)));
     log.record(terminal('c2', at(4)));
     const raw = await views.query({}, scope);
@@ -113,7 +120,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   it('projects one readable lifecycle while raw retains subscription and job diagnostics (F3)', async () => {
     const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
-    const event = (eventId: string, minute: number, eventType: string, jobId: string, jobRole: 'add' | 'check' | 'item'): JobEvent => ({
+    const event = (eventId: string, minute: number, eventType: EventType, jobId: string, jobRole: 'add' | 'check' | 'item'): JobEvent => ({
       eventId, timestamp: at(minute), severity: 'info', eventType, message: eventType,
       vaultPath: VAULT, jobId, jobRole, sourceType: 'youtube', sourceTitle: 'A', subscriptionId: 'sub-a',
     });
@@ -154,7 +161,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   it('applies severity only after result boundaries (A5)', async () => {
     const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
-    log.record({ ...terminal('old', at(1)), eventId: 'system', jobId: null, check: undefined, eventType: 'collection.resumed' });
+    log.record({ ...checkless(terminal('old', at(1))), eventId: 'system', jobId: null, eventType: 'collection.resumed' });
     log.record(terminal('e1', at(2), { result: 'network_error' }));
     log.record(terminal('empty', at(3)));
     log.record(terminal('e2', at(4), { result: 'network_error' }));
@@ -167,7 +174,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
     const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     log.record(terminal('empty-a', at(1)));
-    log.record({ ...terminal('empty-a', at(1)), eventId: 'saved', jobId: 'item-a', parentJobId: 'empty-a', check: undefined,
+    log.record({ ...checkless(terminal('empty-a', at(1))), eventId: 'saved', jobId: 'item-a', parentJobId: 'empty-a',
       severity: 'info', eventType: 'document.saved', documentId: 'youtube:v1' });
     log.record(terminal('error', at(2), { result: 'network_error' }));
     log.record(terminal('empty-b', at(3)));
@@ -186,7 +193,7 @@ describe('durable summary retention (#96 A6)', () => {
     let now = new Date('2026-10-31T08:00:00.000Z');
     const log = ActivityLog.memory({ now: () => now });
     const views = new ActivityViews(log);
-    log.record({ ...terminal('edge', '2026-10-01T09:30:00.000Z'), eventId: 'edge-start', timestamp: '2026-10-01T08:30:00.000Z', eventType: 'job.started', check: undefined });
+    log.record({ ...checkless(terminal('edge', '2026-10-01T09:30:00.000Z')), eventId: 'edge-start', timestamp: '2026-10-01T08:30:00.000Z', eventType: 'job.started' });
     log.record(terminal('edge', '2026-10-01T09:30:00.000Z'));
     const group = (await views.summary({ view: 'summary' }, scope)).entries.find((entry) => entry.kind === 'check')!;
     expect((await views.group(group.groupId, scope)).checks[0]!.events).toHaveLength(2);

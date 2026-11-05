@@ -4,7 +4,7 @@
 // recognition applied only to the address it answered.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/job-types.js';
-import type { SubscriptionEntry } from '../../src/core/subscription-types.js';
+import type { ScheduledCheck, SubscriptionEntry } from '../../src/core/subscription-types.js';
 import type { UrlRecognition } from '../../src/core/source-info-types.js';
 import { rssDeclaration } from '../../src/plugins/rss/shared.js';
 import { youtubeDeclaration } from '../../src/plugins/youtube/shared.js';
@@ -35,7 +35,7 @@ afterEach(() => { process.env.TZ = originalZone; });
 function source(overrides: Partial<SubscriptionEntry>): SubscriptionEntry {
   return {
     id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: null }, lastError: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
+    settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-10-15T07:00:00.000Z' }, capturing: false, lastError: null, checkFailures: null, autoPausedAt: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
     type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', ...overrides,
   };
 }
@@ -111,7 +111,7 @@ describe('source presentation (T-09)', () => {
     });
     expect(collectionRow({ ...group, firstAt: at, result: 'network_error', count: 5, errorCode: 'network_error' }, now))
       .toMatchObject({ result: 'network_error', count: 5, span: { sameDay: true } });
-    expect(collectionRow({ ...group, result: 'created', count: 1 }, now)).toMatchObject({ result: 'other', count: 1, span: null });
+    expect(collectionRow({ ...group, result: 'other', count: 1 }, now)).toMatchObject({ result: 'other', count: 1, span: null });
   });
 
   it('says why work waits for a retry, in the source type\'s words for a failure it names', () => {
@@ -138,8 +138,8 @@ describe('source presentation (T-09)', () => {
 
   it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {
     const now = new Date('2026-10-15T06:00:00.000Z');
-    const lastCheck = { channelId: 'UC1', title: 'Money 800', at: '2026-10-15T06:00:00.000Z' };
-    const next = { channelId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
+    const lastCheck: ScheduledCheck = { type: 'youtube', subscriptionId: 'UC1', title: 'Money 800', at: '2026-10-15T06:00:00.000Z' };
+    const next: ScheduledCheck = { type: 'youtube', subscriptionId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
     const last = { at: { day: 'today', time: '14:00' }, title: lastCheck.title };
     expect(checkTimes({ enabled: true, lastCheck, nextCheck: next }, now)).toEqual({ last, next: { state: 'scheduled', at: { day: 'today', time: '14:30' }, title: next.title } });
     expect(checkTimes({ enabled: false, lastCheck, nextCheck: next }, now)).toEqual({ last, next: { state: 'auto_check_off' } });
@@ -163,7 +163,7 @@ describe('source presentation (T-09)', () => {
     const recognition: UrlRecognition = {
       status: 'ready', sourceType: 'youtube', kind: 'video', kindLabel: 'YouTube 影片', url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
       target: { id: 'aaaaaaaaaaa', title: null, url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' },
-      subscription: null, policy: null, actions: [collect], login: null, message: null,
+      subscription: null, settings: null, autoCollection: null, actions: [collect], login: null, message: null,
     };
     const answer = { input: 'youtu.be/aaaaaaaaaaa', recognition };
     expect(currentRecognition(answer, '  youtu.be/aaaaaaaaaaa ')).toEqual({ recognition, primary: collect });

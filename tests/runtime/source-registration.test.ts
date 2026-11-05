@@ -33,7 +33,7 @@ async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]
   return {
     profilePath: path.join(root, 'profile'), sources, explicitVaultPath: path.join(root, 'vault'),
     workspace: {
-      plugins, searchBinary: 'unused', searchData: path.join(root, 'search'),
+      plugins, searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'),
       exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
       createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
     },

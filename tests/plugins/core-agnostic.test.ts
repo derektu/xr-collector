@@ -326,7 +326,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const keys = w.sources.fake.addFeed('resume', w.clock.now, [1, 2]);
     w.sources.fake.held.add(keys[0]!);
     const added = await w.jobs.whenSettled((await w.service('fake').add(feedUrl('fake', 'resume'))).job.id);
-    await w.sources.fake.holds.reach([keys[0]]);
+    await w.sources.fake.holds.reach([keys[0]!]);
 
     // The manager stops while the first capture runs: it finishes and saves, the second never starts.
     const restarting = w.restart();
@@ -644,7 +644,7 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     const documents = (await w.collector.list()).filter((document) => document.publisher.id === 'r');
     const record = collectionRecord(SOURCES, 'fake', subscription, documents, w.service('fake').checkJobs('r'));
     // The second check, a minute later, tried the failing item again; a check comes before the items of the same instant.
-    expect(record.map((entry) => entry.kind === 'check' ? `check:${entry.created}/${entry.failed}` : `${entry.kind}:${entry.key}`)).toEqual([
+    expect(record.map((entry) => entry.kind === 'check' ? `check:${entry.created}/${entry.failed}` : `${entry.kind}:${'key' in entry ? entry.key : undefined}`)).toEqual([
       'check:0/1', `failed:${failing}`, 'check:1/2', `collected:${ok}`, `skipped:${gone}`,
     ]);
     // Pausing skips nothing that ran, so no extra check row appears.

@@ -283,7 +283,7 @@ it('refuses a document deletion while an import holds the Vault (A7)', async () 
   const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
   try {
     const preview = await workspace.previewImport(await fileOf(a.exports, 'a.zip', await packageBytes(a.vault)));
-    workspace.applyImport(preview.id, 'merge', {});
+    workspace.applyImport(preview.id, 'merge');
     const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
     await eventually(async () => expect(await (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409));
     release(); await workspace.operationFinished();

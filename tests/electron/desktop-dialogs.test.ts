@@ -81,7 +81,7 @@ describe('desktop dialogs', () => {
     await subject.invoke('xrCollector:desktop:revealExport', '/somewhere/else.zip');
     expect(subject.revealed).toEqual(['/vault', '/exports/a.zip']);
 
-    const running = dialogs({ status: { ...exported, state: 'running' } as TransferStatus });
+    const running = dialogs({ status: { ...exported, state: 'exporting' } as TransferStatus });
     await running.invoke('xrCollector:desktop:revealExport');
     expect(running.revealed).toEqual([]);
     const closed = dialogs();

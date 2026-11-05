@@ -17,6 +17,7 @@ import { CollectionPause } from '../../src/core/collection-pause.js';
 import { Connectivity } from '../../src/core/connectivity.js';
 import { CollectorError } from '../../src/core/collector-error.js';
 import type { JobSubmission } from '../../src/core/job-types.js';
+import type { NewJobEvent } from '../../src/core/activity-types.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
@@ -150,7 +151,7 @@ describe('per-subscription scheduling (A2)', () => {
     const [video] = w.source.publish(id, 'n', w.clock.now, [0.001], 5);
     w.advance(15 * MINUTE);
     await w.scheduler.checkNow();
-    await w.source.holds.reach([video]);
+    await w.source.holds.reach([video!]);
     w.advance(15 * MINUTE);
     await w.scheduler.checkNow();
     expect(w.scheduledChecks(id)).toBe(1);
@@ -169,7 +170,7 @@ describe('per-subscription scheduling (A2)', () => {
     const [video] = w.source.publish(id, 'l', w.clock.now, [0.001], 5);
     w.advance(15 * MINUTE);
     await w.scheduler.checkNow();
-    await w.source.holds.reach([video]);
+    await w.source.holds.reach([video!]);
     // The check listed at 04:15 and finishes after 04:30 came due, before the next poll.
     w.advance(15 * MINUTE);
     w.source.holdCaptures = false;
@@ -337,7 +338,7 @@ describe('system sleep (#97)', () => {
 
   it('records each pause reason that comes into force or lifts, and nothing when it is already so', async () => {
     const pause = new CollectionPause();
-    const entries: Array<{ severity: string; eventType: string; pauseReason?: string; message: string }> = [];
+    const entries: Array<Omit<NewJobEvent, 'vaultPath' | 'jobId'>> = [];
     const w = await world({ enabled: true }, pause);
     const scheduler = new CollectionScheduler([w.channels], w.scheduleStore, {
       now: () => w.clock.now, pollIntervalMs: 24 * 60 * MINUTE, pause, recordEvent: (entry) => entries.push(entry),

@@ -27,7 +27,7 @@ function github(indexes: Array<ReturnType<typeof platformIndex>>, release: Recor
   const base = 'https://github.com/derektu/xr-collector/releases/download/v0.1.1/';
   const bodies = new Map<string, unknown>(indexes.map((index) => [`release-${index.target}.json`, index]));
   const names = [...bodies.keys(), ...indexes.flatMap((index) => [index.installer.name, index.update.name])];
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
   const request = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input); calls.push({ url, init });
     if (url.endsWith('/releases/latest')) {

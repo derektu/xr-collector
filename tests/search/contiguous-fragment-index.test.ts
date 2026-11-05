@@ -3,7 +3,11 @@
 // scattered, and updates and deletions leave no stale matches.
 import { describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../src/core/document-types.js';
+import type { SearchQuery } from '../../src/core/search-types.js';
 import { ContiguousFragmentIndex } from '../../src/search/contiguous-fragment-index.js';
+
+/** A query without filters; the index reads only a query's filters. */
+const unfiltered: SearchQuery = { query: '' };
 
 function document(id: string, title: string, publisher: string, body: string): SavedDocument {
   return {
@@ -20,21 +24,21 @@ describe('ContiguousFragmentIndex', () => {
     const scattered = document('scattered', '半年展望', '導師頻道', '直觀地賣光股票');
     const crossField = document('crossfield', '半', '導', '體');
     const index = ContiguousFragmentIndex.fromDocuments([exact, scattered, crossField]);
-    expect(index.eligibleIds(['半導'], {}, new Set())).toEqual([exact.id]);
-    expect(index.eligibleIds(['導體'], {}, new Set())).toEqual([exact.id]);
-    expect(index.eligibleIds(['觀光', '產業'], {}, new Set())).toEqual([exact.id]);
-    expect(index.eligibleIds(['股'], {}, new Set())).toEqual([exact.id, scattered.id]);
-    expect(index.eligibleIds(['半導體'], {}, new Set())).toEqual([exact.id]);
+    expect(index.eligibleIds(['半導'], unfiltered, new Set())).toEqual([exact.id]);
+    expect(index.eligibleIds(['導體'], unfiltered, new Set())).toEqual([exact.id]);
+    expect(index.eligibleIds(['觀光', '產業'], unfiltered, new Set())).toEqual([exact.id]);
+    expect(index.eligibleIds(['股'], unfiltered, new Set())).toEqual([exact.id, scattered.id]);
+    expect(index.eligibleIds(['半導體'], unfiltered, new Set())).toEqual([exact.id]);
   });
 
   it('updates and deletes the derived postings without resurrecting stale documents', () => {
     const first = document('first', '舊標題', '頻道', '半導體');
     const index = ContiguousFragmentIndex.fromDocuments([first]);
-    expect(index.eligibleIds(['導體'], {}, new Set())).toEqual([first.id]);
+    expect(index.eligibleIds(['導體'], unfiltered, new Set())).toEqual([first.id]);
     index.upsert({ ...first, bodyMarkdown: '觀光' });
-    expect(index.eligibleIds(['導體'], {}, new Set())).toEqual([]);
-    expect(index.eligibleIds(['觀光'], {}, new Set())).toEqual([first.id]);
+    expect(index.eligibleIds(['導體'], unfiltered, new Set())).toEqual([]);
+    expect(index.eligibleIds(['觀光'], unfiltered, new Set())).toEqual([first.id]);
     index.remove([first.id]);
-    expect(index.eligibleIds(['觀光'], {}, new Set())).toEqual([]);
+    expect(index.eligibleIds(['觀光'], unfiltered, new Set())).toEqual([]);
   });
 });

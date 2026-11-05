@@ -211,10 +211,10 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect(overview.queued.map((entry) => entry.jobId)).not.toContain(betaCheck);
 
     w.source.release(alphaVideos[0]!);
-    await w.source.holds.reach([alphaVideos[1]]);
+    await w.source.holds.reach([alphaVideos[1]!]);
     expect((await w.status(beta)).state).not.toBe('queued');
     w.source.release(alphaVideos[1]!);
-    await w.source.holds.reach([betaVideos[0]]);
+    await w.source.holds.reach([betaVideos[0]!]);
     w.source.release(betaVideos[0]!);
     await w.jobs.whenSettled(first.result!.followUpJobId!);
     await w.jobs.whenSettled(betaCheck);

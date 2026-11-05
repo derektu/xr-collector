@@ -75,7 +75,7 @@ describe('Meilisearch runtime preparation', () => {
     const at = await root();
     const binary = machoArm64();
     const pins = fixturePins(binary);
-    const fetch = vi.fn(async () => new Response(binary));
+    const fetch = vi.fn(async () => new Response(new Uint8Array(binary)));
     const options = {
       target: 'darwin-arm64', environment,
       cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'),
@@ -111,7 +111,7 @@ describe('Meilisearch runtime preparation', () => {
       { fetch: noDownload, pins, run: versionRun });
     await expect(cacheOnly(path.join(at, 'checkout-a'))).rejects.toThrow(/Meilisearch 1\.53\.2 for darwin-arm64 is missing from the runtime cache.*npm run prepare:runtime -- mac first/u);
     await prepareMeilisearch({ target: 'darwin-arm64', environment, cacheRoot, runtimeRoot: path.join(at, 'checkout-a') },
-      { fetch: vi.fn(async () => new Response(binary)), pins, run: versionRun });
+      { fetch: vi.fn(async () => new Response(new Uint8Array(binary))), pins, run: versionRun });
     const installed = await cacheOnly(path.join(at, 'checkout-b'));
     expect(installed).toMatchObject({ cacheHit: true });
     expect(await readFile(installed.binaryPath)).toEqual(binary);
@@ -147,7 +147,7 @@ describe('Meilisearch runtime preparation', () => {
       target: 'darwin-arm64', environment,
       cacheRoot: path.join(at, 'cache'), runtimeRoot,
     }, {
-      fetch: async () => new Response(binary), pins: fixturePins(binary), run: versionRun,
+      fetch: async () => new Response(new Uint8Array(binary)), pins: fixturePins(binary), run: versionRun,
       installFault: async (phase: string) => { if (phase === 'binary-installed') throw new Error('injected install failure'); },
     })).rejects.toThrow(/injected install failure/u);
     expect(await readFile(path.join(runtimeRoot, 'meilisearch'), 'utf8')).toBe('old-binary');
@@ -167,7 +167,7 @@ describe('Meilisearch runtime preparation', () => {
       environment: { platform: 'win32', processArch: 'x64', hostArch: 'x64' },
       cacheRoot: path.join(at, 'cache'), runtimeRoot: path.join(at, 'runtime'),
     }, {
-      fetch: async () => new Response(binary), pins,
+      fetch: async () => new Response(new Uint8Array(binary)), pins,
       run: async () => { throw new Error('missing dependency'); },
     })).rejects.toThrow(/Microsoft Visual C\+\+ v14 x64 runtime/u);
   });
@@ -177,7 +177,7 @@ describe('Meilisearch runtime preparation', () => {
     expect(packageJson.scripts['package:mac']).toBe('node scripts/package-app.mjs --target darwin-arm64');
     expect(packageJson.scripts['package:win']).toBe('node scripts/package-app.mjs --target win32-x64');
     const { getConfig } = await import('app-builder-lib/out/util/config/config.js');
-    const config = await getConfig(process.cwd(), 'electron-builder.yml');
+    const config = await getConfig(process.cwd(), 'electron-builder.yml', null);
     expect(config.directories?.output).toBe('release');
     expect(config.mac?.artifactName).toBe('XR-Collector-${version}-mac-${arch}.${ext}');
     expect(config.win?.artifactName).toBe('XR-Collector-${version}-win-${arch}-setup.${ext}');

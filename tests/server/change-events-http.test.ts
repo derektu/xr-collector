@@ -12,7 +12,8 @@ import type { SearchResponse, SearchStatus, TranscriptSearch } from '../../src/c
 import type { Pacing, PacingEvent } from '../../src/pacing/pacing-gate.js';
 import type { DiscoveredYouTubeVideo } from '../../src/plugins/youtube/adapter.js';
 import { startCollectorServer, type CollectorServerOptions } from '../../src/server/collector-server.js';
-import type { DeviceUpdateStatus, UpdateAccess } from '../../src/updates/types.js';
+import type { DeviceUpdateStatus } from '../../src/core/update-types.js';
+import type { UpdateAccess } from '../../src/updates/types.js';
 import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
@@ -123,7 +124,7 @@ async function start(options: { vault?: boolean } = {}) {
       }) },
       channelSource: { resolve: async () => CHANNEL, listVideos: async (_channel, page) => listed.slice(page.offset, page.offset + page.limit) },
       pacing: [pacing],
-      searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(outside, 'exports'), backupFolder: path.join(outside, 'backups'),
+      searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(outside, 'exports'), backupFolder: path.join(outside, 'backups'),
       createSearch: async (_root, statusChanged) => { search.statusChanged = statusChanged; return { search, close: async () => undefined }; },
     }),
     updates,

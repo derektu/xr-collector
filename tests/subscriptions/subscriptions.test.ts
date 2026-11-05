@@ -231,7 +231,7 @@ describe('full queue', () => {
     const ids = w.source.publish(id, 'q', w.clock.now, [1, 2, 3, 4, 5]);
     w.source.holdCaptures = true;
     const first = w.jobs.whenSettled((await w.jobs.whenSettled((await w.channels.add('@crowded')).job.id)).result!.followUpJobId!);
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
     w.source.holdCaptures = false;
     for (const video of w.source.holds.running()) w.source.release(video);
     const settled = await first;
@@ -367,7 +367,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@pausing')).job.id);
     const jobId = added.result!.followUpJobId!;
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
 
     await w.channels.setEnabled(id, false);
     w.source.release(ids[0]!);
@@ -407,7 +407,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@quick')).job.id);
     const oldJobId = added.result!.followUpJobId!;
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
 
     await w.channels.setEnabled(id, false);
     const resumed = await w.channels.setEnabled(id, true);
@@ -430,7 +430,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@again2')).job.id);
     const oldJobId = added.result!.followUpJobId!;
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
 
     await w.channels.remove(id);
     const again = await w.jobs.whenSettled((await w.channels.add('@again2')).job.id);
@@ -476,7 +476,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@claimed')).job.id);
     const jobId = added.result!.followUpJobId!;
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
 
     const manual = await w.jobs.submitItem('youtube', `https://www.youtube.com/watch?v=${ids[2]}`);
     expect(manual.deduplicated).toBe(true);
@@ -498,9 +498,9 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     const ids = w.source.publish(id, 'l', w.clock.now, [1, 2, 3]);
     w.source.holdCaptures = true;
     const added = await w.jobs.whenSettled((await w.channels.add('@leaving')).job.id);
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
     w.source.release(ids[0]!);
-    await w.source.holds.reach([ids[1]]);
+    await w.source.holds.reach([ids[1]!]);
 
     expect(await w.channels.remove(id)).toEqual({ documentsKept: 1, documentsDeleted: 0, documentsFailed: 0 });
     w.source.release(ids[1]!);
@@ -541,7 +541,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     const ids = w.source.publish(id, 'v', w.clock.now, [1, 2]);
     w.source.holdCaptures = true;
     await w.channels.add('@listed');
-    await w.source.holds.reach([ids[0]]);
+    await w.source.holds.reach([ids[0]!]);
     expect((await w.channels.listSubscriptions())[0]).toMatchObject({
       id, status: 'collecting', activeJob: { done: 0, total: 2 }, documentCount: 0, lastCollectedAt: null,
     });

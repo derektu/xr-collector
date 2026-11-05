@@ -144,7 +144,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
     w.source.holdCaptures = true;
     const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await w.source.holds.reach([late]);
+    await w.source.holds.reach([late!]);
 
     let answered = false;
     const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`).finally(() => { answered = true; });
@@ -183,7 +183,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
     w.source.holdCaptures = true;
     await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] });
-    await w.source.holds.reach([late]);
+    await w.source.holds.reach([late!]);
     await w.channels.setEnabled(leaving, false);
     expect((await w.send('GET', '/api/subscriptions?type=youtube')).body.subscriptions[0]).toMatchObject({ capturing: true, checkStatus: { state: 'paused' } });
 
@@ -206,7 +206,7 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [single] = w.source.publish(leaving, 's', w.clock.now, [0]);
     w.source.holdCaptures = true;
     const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await w.source.holds.reach([single]);
+    await w.source.holds.reach([single!]);
 
     // Whether the capture ends before or while the removal waits, its document is saved and then deleted.
     const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
@@ -226,9 +226,9 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const [late, single] = w.source.publish(leaving, 'n', w.clock.now, [0, 0]);
     w.source.holdCaptures = true;
     const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await w.source.holds.started(late);
+    await w.source.holds.started(late!);
     const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await w.source.holds.started(single);
+    await w.source.holds.started(single!);
 
     // The removal answers after its bounded wait while both captures still run.
     const removed = await w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);

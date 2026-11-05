@@ -22,7 +22,7 @@ import { MANIFEST, registeredFiles, writePackage } from '../../src/vault/vault-p
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { exportFileName } from '../../src/vault/transfer-files.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
-import { VaultWorkspace } from '../../src/runtime/vault-workspace.js';
+import { VaultWorkspace, type WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
 } from '../support/package-fixtures.js';
@@ -97,7 +97,7 @@ async function addPersonalFiles(root: string): Promise<number> {
 function fakeSearch(root: string): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
-    status: () => ({ state: 'ready', indexedDocuments: docs.length }),
+    status: () => ({ state: 'ready', indexedDocuments: docs.length, lastRebuiltAt: null }),
     async index(doc) { docs.push(doc); },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
@@ -109,11 +109,11 @@ function fakeSearch(root: string): TranscriptSearch {
 }
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> & YouTubeTestSources = {}) {
   await ensureMarker(root);
-  const workspace = await VaultWorkspace.open(withYouTube({
+  const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
     sources: PRODUCT_SOURCES, root, selection: new VaultSelection(`${root}.selection.json`), profilePath: `${root}.profile`, createdBy: 'XR Collector test',
     capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: `${root}-search`, exportFolder: `${root}.exports`, backupFolder: `${root}.backups`,
+    searchBinary: '', searchLexicon: '', searchData: `${root}-search`, exportFolder: `${root}.exports`, backupFolder: `${root}.backups`,
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     ...overrides,
   }));
@@ -204,7 +204,7 @@ describe('refusing packages (PKG-03)', () => {
     const files = [...(await packageFiles(bytes))].map(([file, data]) => ({ path: file, data }));
     await refused(await tampered(bytes, 'documents/youtube/dQw4w9WgXcQ.md', 'changed'), '不一致');
     const document = (await packageFiles(bytes)).get('documents/youtube/dQw4w9WgXcQ.md')!;
-    const sameSize = Buffer.from(document); sameSize[sameSize.length - 2] ^= 1;
+    const sameSize = Buffer.from(document); const flipped = sameSize.length - 2; sameSize[flipped] = sameSize[flipped]! ^ 1;
     await refused(await tampered(bytes, 'documents/youtube/dQw4w9WgXcQ.md', sameSize), '不一致');
     await refused(await packageOf(files.slice(1), { files: manifest.files }), '缺少');
     await refused(await packageOf(files, {}, [{ name: 'extra.txt', data: 'x' }]), '沒有列出');

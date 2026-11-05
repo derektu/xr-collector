@@ -8,6 +8,7 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 // @ts-expect-error The build doctor is intentionally executable JavaScript.
 import { assertBuildEnvironment, checkBuildEnvironment, formatResults, hostBuildTarget } from '../../scripts/build-doctor.mjs';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { DEVELOPER_ID_INTERMEDIATE_FIX, selectDeveloperIdIdentity } from '../../scripts/mac-signing.mjs';
 
 type Responses = Record<string, string | Error>;

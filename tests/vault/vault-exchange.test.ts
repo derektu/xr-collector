@@ -21,10 +21,9 @@ import { importNewVault, type ImportFault } from '../../src/vault/vault-import.j
 import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
-import type { VaultWorkspace, WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
+import type { VaultWorkspace } from '../../src/runtime/vault-workspace.js';
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
-import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from '../support/exchange-fixtures.js';
-import type { YouTubeTestSources } from '../support/youtube-sources.js';
+import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine, type OpenOverrides } from '../support/exchange-fixtures.js';
 import { manifestOf, packageOf, tampered } from '../support/package-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
@@ -72,7 +71,7 @@ const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', numbe
 });
 
 /** Runs `use` on a workspace of the machine and closes it afterwards. */
-async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise<T>, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}): Promise<T> {
+async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise<T>, overrides: OpenOverrides = {}): Promise<T> {
   const workspace = await open(at, overrides, false);
   try { return await use(workspace); } finally { await workspace.close(); }
 }

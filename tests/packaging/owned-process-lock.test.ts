@@ -7,7 +7,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { withOwnedDirectoryLock } from '../../scripts/owned-directory-lock.mjs';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { runOwnedProcess, terminateOwnedProcessTree, UnsafeProcessTreeError } from '../../scripts/owned-process.mjs';
 import { eventually } from '../support/wait.js';
 
@@ -51,8 +53,8 @@ it('allows only one of two synchronized stale-owner reapers to acquire the repla
   const first = contender('first', 'b2');
   const second = contender('second', 'c3');
   const loser = await Promise.race([
-    first.then(() => null, (error) => error),
-    second.then(() => null, (error) => error),
+    first.then(() => null, (error: unknown) => error),
+    second.then(() => null, (error: unknown) => error),
   ]);
   expect(loser).toBeInstanceOf(Error);
   expect(String(loser)).toMatch(/busy/u);
@@ -163,7 +165,7 @@ it('does not reclaim a dead parent lock whose normally recorded child group is s
   await expect(withOwnedDirectoryLock(lock, async () => undefined, {
     ownerIdentity: async () => ({ pid: 42, uid, startedAt: 'next' }),
     inspectOwner: async () => null,
-    inspectUnsafeTree: async (recorded) => { expect(recorded).toEqual(processTree); return true; },
+    inspectUnsafeTree: async (recorded: unknown) => { expect(recorded).toEqual(processTree); return true; },
     waitForBusy: false,
     busyMessage: 'recorded writer remains active',
     randomToken: () => 'b2',
@@ -177,7 +179,7 @@ it.skipIf(process.platform === 'win32')('fails closed on legacy files and symlin
   const legacy = path.join(root, 'legacy.lock');
   await writeFile(legacy, 'old file protocol');
   const options = {
-    ownerIdentity: async () => ({ pid: process.pid, uid: process.getuid(), startedAt: 'current' }),
+    ownerIdentity: async () => ({ pid: process.pid, uid: process.getuid!(), startedAt: 'current' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => false,
     waitForBusy: false,
@@ -246,7 +248,7 @@ it.skipIf(process.platform === 'win32')('rejects and preserves its lock when nor
   roots.push(root);
   const lock = path.join(root, 'lock');
   const uid = process.getuid?.() ?? 501;
-  await expect(withOwnedDirectoryLock(lock, (processTracker) => runOwnedProcess(process.execPath, ['-e', 'process.exit(0)'], {
+  await expect(withOwnedDirectoryLock(lock, (processTracker: unknown) => runOwnedProcess(process.execPath, ['-e', 'process.exit(0)'], {
     processTracker,
     groupExists: () => { throw new Error('process-group probe denied'); },
   }), {

@@ -75,8 +75,9 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | --- | --- |
 | `npm test` | 全部 Vitest 測試 |
 | `npm run test:watch` | Vitest watch 模式 |
-| `npm run typecheck` | 產品程式 typecheck |
-| `npm run verify` | Vitest、typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
+| `npm run typecheck` | 產品程式 typecheck；`build` 先跑它 |
+| `npm run typecheck:tests` | 測試（`tests/`）typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
+| `npm run verify` | Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
 
 **Vitest 測試**在 `tests/`，依功能分目錄：`core`、`plugins`、`sources`、`jobs`、`activity`、`subscriptions`、`vault`、`search`、`server`、`runtime`、`electron`、`updates`、`web`、`tooling` 等。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 

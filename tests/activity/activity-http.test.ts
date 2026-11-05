@@ -30,15 +30,17 @@ afterEach(async () => {
 function services(failures: CollectorError[] = []) {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
+    sources: PRODUCT_SOURCES,
     getByKey: async () => saved,
     add: async (document) => {
       const input = transcriptOf(document);
-      saved = {
+      const added: SavedDocument = {
         id: `youtube:${input.videoId}`, type: 'Transcript', sourceType: 'youtube', title: input.title, sourceUrl: input.sourceUrl,
-        sourceId: input.videoId, publisher: { id: null, name: null }, publishedAt: null, collectedAt: '2026-10-15T00:00:00.000Z',
+        sourceId: input.videoId, publisher: { id: null, name: 'HTTP 頻道' }, publishedAt: null, collectedAt: '2026-10-15T00:00:00.000Z',
         youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' }, bodyMarkdown: input.bodyMarkdown,
       };
-      return saved;
+      saved = added;
+      return added;
     },
     list: async () => [],
     read: async () => saved,
@@ -55,12 +57,11 @@ function services(failures: CollectorError[] = []) {
         const failure = failures.shift();
         if (failure) throw failure;
         return {
-          videoId: video.videoId, sourceUrl: video.canonicalUrl, title: 'HTTP 影片', channelId: null, channelTitle: null,
+          videoId: video.videoId, sourceUrl: video.canonicalUrl, title: 'HTTP 影片', channelId: null, channelTitle: 'HTTP 頻道',
           publishedAt: null, languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual', bodyMarkdown: '正文',
         };
       },
     })],
-    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null, update: async () => null } as never },
   });
   const activity: ActivityAccess = {
     query: (query) => records.views.query(query, { vaultPath: VAULT }),
@@ -191,7 +192,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       workspace: withYouTube({
         capture: { capture: async () => { throw new Error('unused'); } } as never,
         channelSource: { resolve: async () => { throw new Error('unused'); }, listVideos: async () => [] },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
+        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       }),
       agentSettingsFile: path.join(root, 'agent-settings.json'),

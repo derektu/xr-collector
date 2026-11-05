@@ -45,8 +45,8 @@ export function draftForQuery(draft: string, query: string): string {
 export function sourceFilter(source: string): DocumentFilter {
   if (!source) return {};
   const separator = source.indexOf(':');
-  if (separator < 0) return { sourceType: source as DocumentFilter['sourceType'] };
-  return { sourceType: source.slice(0, separator) as DocumentFilter['sourceType'], publisherId: source.slice(separator + 1) };
+  if (separator < 0) return { sourceType: source as NonNullable<DocumentFilter['sourceType']> };
+  return { sourceType: source.slice(0, separator) as NonNullable<DocumentFilter['sourceType']>, publisherId: source.slice(separator + 1) };
 }
 
 export interface SourceOption {

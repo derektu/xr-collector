@@ -67,7 +67,7 @@ async function options(
           resolve,
           listVideos: async () => [],
         },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
+        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: search ?? new UnavailableTranscriptSearch('test'), close: closeSearch }),
       }),
       agentSettingsFile: path.join(root, 'agent-settings.json'),
@@ -152,7 +152,7 @@ describe('CollectorRuntime', () => {
     let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
     let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
     const runtime = await startCollectorServer({ ...notReady, workspace: { ...notReady.workspace!,
-      createSearch: async (root) => { entered(); await held; return originalCreateSearch(root); },
+      createSearch: async (root, statusChanged) => { entered(); await held; return originalCreateSearch(root, statusChanged); },
     } });
     cleanups.push(() => runtime.close());
     const settingUp = fetch(`${runtime.listeners.ui.url}/api/vault/setup`, {
@@ -570,10 +570,10 @@ describe('CollectorRuntime', () => {
     await mkdir(settings, { recursive: true });
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
     // The Vault passes inspection; its schedule file goes bad once search has started, so the scheduler fails to load it.
-    const createSearch = setup.value.workspace.createSearch;
-    setup.value.workspace.createSearch = async (root) => {
+    const createSearch = setup.value.workspace.createSearch!;
+    setup.value.workspace.createSearch = async (root, statusChanged) => {
       await writeFile(path.join(settings, 'youtube-schedule.json'), JSON.stringify({ version: 2, enabled: 'bad' }));
-      return createSearch(root);
+      return createSearch(root, statusChanged);
     };
     await expect(startCollectorServer(setup.value)).rejects.toThrow();
     expect(setup.closeSearch).toHaveBeenCalledOnce();
@@ -587,6 +587,7 @@ describe('CollectorRuntime', () => {
       status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null, message: '' }),
       search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
       index: async () => undefined,
+      remove: async () => undefined,
       rebuild,
     };
     const setup = await options({ capture: vi.fn() }, search);
@@ -632,7 +633,7 @@ describe('CollectorRuntime start and stop order', () => {
   // report it; the listeners serve an open Vault; and they stop accepting requests before the Vault
   // stops, so no request reaches a closed Vault.
   it('opens the Agent credential, then the Vault, then the listeners, and closes the listeners before the Vault', async () => {
-    const setup = await options(vi.fn());
+    const setup = await options({ capture: vi.fn() });
     const steps: string[] = [];
     const settingsSaved = () => access(setup.value.agentSettingsFile).then(() => true, () => false);
     const { uiPort: _port, ...runtimeOptions } = setup.value;
@@ -672,7 +673,7 @@ describe('CollectorRuntime Vault setup', () => {
 
   it('keeps device-only login and Agent settings outside Vault export, switch and import (L33-A2)', async () => {
     const search: TranscriptSearch = {
-      status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
+      status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }), index: async () => undefined, remove: async () => undefined,
       rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
     };
     const base = await options({ capture: vi.fn() }, search);
@@ -928,14 +929,14 @@ describe('CollectorRuntime Vault setup', () => {
     await writeFile(file, await packageBytes(source));
     const target = path.join(setup.root, 'Imported');
     let searchFails = true;
-    const createSearch = setup.value.workspace.createSearch;
+    const createSearch = setup.value.workspace.createSearch!;
     const runtime = await startCollectorServer({
       ...setup.value,
       workspace: {
         ...setup.value.workspace,
-        createSearch: async (root: string) => {
+        createSearch: async (root: string, statusChanged: () => void) => {
           if (searchFails && root === target) throw new Error('search stopped');
-          return createSearch(root);
+          return createSearch(root, statusChanged);
         },
       },
     });
@@ -973,14 +974,14 @@ describe('CollectorRuntime Vault setup', () => {
     const setup = await selected();
     const target = path.join(setup.root, 'Fresh');
     let searchFails = true;
-    const createSearch = setup.value.workspace.createSearch;
+    const createSearch = setup.value.workspace.createSearch!;
     const runtime = await startCollectorServer({
       ...setup.value,
       workspace: {
         ...setup.value.workspace,
-        createSearch: async (root: string) => {
+        createSearch: async (root: string, statusChanged: () => void) => {
           if (searchFails && root === target) throw new Error('search stopped');
-          return createSearch(root);
+          return createSearch(root, statusChanged);
         },
       },
     });
@@ -1010,7 +1011,7 @@ describe('CollectorRuntime Vault setup', () => {
 
   it('lets an Agent open another Vault, reopens it after restart and keeps the Agent entry (A-11)', async () => {
     const search: TranscriptSearch = {
-      status: () => ({ state: 'ready', indexedDocuments: 0 }), index: async () => undefined, remove: async () => undefined,
+      status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }), index: async () => undefined, remove: async () => undefined,
       rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
     };
     const base = await options({ capture: vi.fn() }, search);
