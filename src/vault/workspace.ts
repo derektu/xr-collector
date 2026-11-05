@@ -77,8 +77,8 @@ export interface WorkspaceOptions {
   /** The assembled source plugins every job of this workspace collects through; the types of `sources`, in its order. */
   plugins: readonly SourcePlugin[];
   searchBinary: string;
-  /** External main lexicon. Production callers provide its resource path; tests may replace search entirely. */
-  searchLexicon?: string;
+  /** The search lexicon (`bundledResources().searchLexicon` in the App). */
+  searchLexicon: string;
   searchData: string;
   searchPort?: number;
   /** Replaces the search engine; `statusChanged` is called on each change of its status. */
@@ -672,7 +672,7 @@ export class VaultWorkspace {
     const searchChanged = () => this.noteChange({ kind: 'search' });
     const runtime = this.options.createSearch ? await this.options.createSearch(root, searchChanged) : await startSearchRuntime({
       vault, sources: this.options.sources, binaryPath: this.options.searchBinary, databasePath,
-      lexiconPath: this.options.searchLexicon ?? path.resolve('resources/search/coct-main.txt'),
+      lexiconPath: this.options.searchLexicon,
       prepareProjection: (profile) => prepareOwnedSearchProjection({
         searchData: this.options.searchData,
         vaultRoot: root,

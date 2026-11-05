@@ -19,7 +19,7 @@ import type { SavedDocument } from '../../src/core/types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from '../support/exchange-fixtures.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
-import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
+import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
@@ -134,7 +134,7 @@ it('builds real Meilisearch for a Vault imported from A that is gone, and search
   const file = await fileOf(a.exports, 'a.zip', await packageBytes(a.vault));
   await rm(a.vault, { recursive: true });
   await importAsNew(b, file);
-  const real = { searchBinary: bundledMeilisearch, createSearch: undefined };
+  const real = { searchBinary: bundledMeilisearch, searchLexicon: bundledLexicon, createSearch: undefined };
   const workspace = await open(b, real, false);
   try {
     await eventually(() => expect(workspace.search.status().state).toBe('ready'));

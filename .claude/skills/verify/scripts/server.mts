@@ -51,6 +51,7 @@ const { createSourcePlugins, sourceRegistry } = await load('src/plugins/index.ts
 const { CollectorError } = await load('src/core/types.ts');
 const { publishedSince } = await load('src/core/published.ts');
 const { CollectorRuntime } = await load('src/runtime/collector-runtime.ts');
+const { bundledResources } = await load('src/runtime/bundled-resources.ts');
 const { PacingGate } = await load('src/pacing/pacing-gate.ts');
 const { youtubeSource } = await load('src/plugins/youtube/adapter.ts');
 const { youtubePlugin, YOUTUBE_PACING } = await load('src/plugins/youtube/server.ts');
@@ -104,8 +105,9 @@ const cutOff = () => { if (offline()) throw new CollectorError('network_error', 
 /** Longer than any flow runs; the flow ends the cooldown. */
 const HELD_COOLDOWN_MS = 60 * 60_000;
 const createdBy = `XR Collector (verify skill, ${data} data)`;
-const program = (name: string, environmentName: string) => process.env[environmentName]
-  ?? path.join(checkout, 'resources', 'bin', 'mac', name);
+// The checkout's runtime programs and lexicon, found as the development App finds them.
+const resources = bundledResources({ packaged: false, checkout });
+const program = resources.program;
 
 // Opt-in fixture for the recorded update flow. It serves the real generic-index protocol and runs
 // the real UpdateService, but validates a semantic test file instead of pretending Web mode can
@@ -339,7 +341,8 @@ const runtime = await CollectorRuntime.start({
   workspace: {
     plugins: sources.plugins,
     pacing: sources.pacing,
-    searchBinary: program('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
+    searchBinary: resources.searchBinary,
+    searchLexicon: resources.searchLexicon,
     searchData: path.join(profilePath, 'search'),
     searchPort: port('SEARCH'),
     // The product's folder names under the run, as the app puts them under ~/Documents.
@@ -364,7 +367,7 @@ const runtime = await CollectorRuntime.start({
   newVaultLocation: path.join(run, 'documents'),
   createdBy,
   agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
-  skillPath: path.join(checkout, 'skills', 'xr-collector-agent'),
+  skillPath: resources.skill,
   agentPort: port('AGENT'),
   uiPort: port('UI'),
   webRoot: path.join(run, 'web'),

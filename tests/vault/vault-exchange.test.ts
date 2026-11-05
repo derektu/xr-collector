@@ -22,7 +22,7 @@ import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
-import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
+import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from '../support/exchange-fixtures.js';
 import type { YouTubeTestSources } from '../support/youtube-sources.js';
 import { manifestOf, packageOf, tampered } from '../support/package-fixtures.js';
@@ -917,7 +917,7 @@ it('updates real Meilisearch with what an import wrote and removed, and keeps it
   await changeB(b);
   await modify(b.vault, D3, '匯入後的珊瑚觀察', at(2));
   const file = await exportFrom(b, 'b-1');
-  const real = { searchBinary: bundledMeilisearch, createSearch: undefined };
+  const real = { searchBinary: bundledMeilisearch, searchLexicon: bundledLexicon, createSearch: undefined };
   const ids = async (workspace: VaultWorkspace, query: string) => (await workspace.search.search({ query })).hits.map((hit) => hit.id);
   await using(a, async (workspace) => {
     await eventually(() => expect(workspace.search.status().state).toBe('ready'));

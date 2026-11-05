@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateMeilisearchRuntime, verifySignedMeilisearchIdentity } from '../../src/search/meilisearch-runtime.js';
 import { startSearchRuntime } from '../../src/search/runtime.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { bundledLexicon } from '../support/real-engine.js';
 
 const roots: string[] = [];
 const correctVersion = async () => 'meilisearch 1.53.2\n';
@@ -91,6 +92,7 @@ describe('Meilisearch runtime identity', () => {
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: built.binary,
       databasePath: path.join(built.root, 'search'),
+      lexiconPath: bundledLexicon,
       prepareProjection,
     });
     expect(prepareProjection).not.toHaveBeenCalled();
@@ -104,6 +106,7 @@ describe('Meilisearch runtime identity', () => {
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: built.binary,
       databasePath: path.join(built.root, 'search'),
+      lexiconPath: bundledLexicon,
       prepareProjection,
     });
     expect(runtime.search.status()).toMatchObject({ state: 'error' });
@@ -202,6 +205,7 @@ describe('Meilisearch runtime identity', () => {
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: binary,
       databasePath: database,
+      lexiconPath: bundledLexicon,
       prepareProjection,
     });
     expect(runtime.search.status()).toMatchObject({ state: 'error' });
