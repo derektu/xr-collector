@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { jobRole } from '../core/source-registry.js';
 import { appendFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -45,7 +44,7 @@ export interface ActivityLogOptions {
   append?: (file: string, data: string) => Promise<void>;
   /** Called for each event dropped because too many events waited to be written. */
   onDropped?: (event: JobEvent) => void;
-  /** Looks up the job an event belongs to, to fill in titles and parents older entries lack. */
+  /** Looks up the job an event belongs to, for the title of an item or target the job learned after the event. */
   lookupJob?: (id: string) => CollectionJob | undefined;
 }
 
@@ -186,7 +185,7 @@ export class ActivityLog {
       if (stored.timestamp < cutoff) continue;
       if (!inScope(stored, scope)) continue;
       const event = this.enrich(stored, lookup);
-      if (!matchesQuery(event, query, lookup)) continue;
+      if (!matchesQuery(event, query)) continue;
       if (after && compareEvents(event, after) >= 0) continue;
       matches.push(event);
     }
@@ -562,26 +561,12 @@ export class ActivityLog {
     return result;
   }
 
-  /** Fills in the title, parent, source type and subscription that entries written before they were recorded lack. */
+  /** Fills in the title of a job whose events were written before it knew the title of its item or target. */
   private enrich(stored: JobEvent, lookup: (id: string) => CollectionJob | undefined): JobEvent {
     const event = this.sanitize(stored);
-    if (!event.subscriptionId && event.sourceId && event.eventType.startsWith('subscription.')) {
-      event.subscriptionId = event.sourceId;
-    }
-    if (!event.jobId) return event;
-    const job = lookup(event.jobId);
-    if (!job) return event;
-    if (!event.sourceTitle && job.source.title) event.sourceTitle = job.source.title;
-    const role = jobRole(job.kind)?.role;
-    if (!event.jobRole && role) event.jobRole = role;
-    if (!event.parentJobId && job.parentId) event.parentJobId = job.parentId;
-    if (!event.sourceType) event.sourceType = job.source.type;
-    if (!event.subscriptionId) {
-      const owner = job.parentId ? lookup(job.parentId) : job;
-      const role = owner ? jobRole(owner.kind)?.role : undefined;
-      if (role === 'check' && owner!.source.id) event.subscriptionId = owner!.source.id;
-      else if (role === 'add' && owner!.result?.subscriptionId) event.subscriptionId = owner!.result.subscriptionId;
-    }
+    if (event.sourceTitle || !event.jobId) return event;
+    const title = lookup(event.jobId)?.source.title;
+    if (title) event.sourceTitle = title;
     return event;
   }
 }
@@ -612,7 +597,7 @@ function eligibleRoutineCheck(event: JobEvent): boolean {
     && check.created === 0 && check.failed === 0 && check.skipped === 0;
 }
 
-function matchesQuery(event: JobEvent, query: ActivityQuery, lookup: (id: string) => CollectionJob | undefined): boolean {
+function matchesQuery(event: JobEvent, query: ActivityQuery): boolean {
   if (query.severity && !query.severity.includes(event.severity)) return false;
   if (query.eventType && !query.eventType.includes(event.eventType)) return false;
   if (query.subscriptionId && event.subscriptionId !== query.subscriptionId) return false;
@@ -621,9 +606,7 @@ function matchesQuery(event: JobEvent, query: ActivityQuery, lookup: (id: string
   if (query.until && event.timestamp >= query.until) return false;
   if (query.jobId) {
     const id = query.jobId;
-    const related = event.jobId === id || event.parentJobId === id || event.retryOf === id
-      || (event.jobId !== null && lookup(event.jobId)?.parentId === id);
-    if (!related) return false;
+    if (event.jobId !== id && event.parentJobId !== id && event.retryOf !== id) return false;
   }
   return true;
 }

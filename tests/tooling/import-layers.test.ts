@@ -43,7 +43,7 @@ const FILE_MODULES: Readonly<Record<string, string>> = {
 };
 
 const EXCEPTIONS = [
-  // core -> plugin contract: the cycle core/types -> core/source-registry -> plugins/types -> core/types.
+  // core -> plugin contract: core modules that read the source types' declarations.
   'src/core/collection-settings.ts -> src/plugins/types.ts',
   'src/core/collector.ts -> src/plugins/types.ts',
   'src/core/source-registry.ts -> src/plugins/types.ts',
@@ -106,7 +106,7 @@ describe('imports that follow the layers', () => {
     expect(files.length).toBeGreaterThan(150);
     expect(edges).toEqual(expect.arrayContaining([
       'src/jobs/job-manager.ts -> src/core/types.ts',
-      'src/web/App.tsx -> src/core/source-registry.ts',
+      'src/web/App.tsx -> src/core/job-role.ts',
       'src/electron/main.ts -> src/runtime/collector-runtime.ts',
     ]));
   });

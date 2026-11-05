@@ -943,3 +943,53 @@ describe('repeated unclean stops (R-T8)', () => {
     });
   });
 });
+
+describe('interrupted work in its subscription\'s activity (#255)', () => {
+  /** The event types of one job that the activity filter of a subscription returns. */
+  async function subscriptionEvents(store: JobStore, subscriptionId: string, jobId: string): Promise<string[]> {
+    const page = await store.activity.query({ subscriptionId, limit: 500 }, { vaultPath: VAULT });
+    return page.events.filter((event) => event.jobId === jobId).map((event) => event.eventType);
+  }
+
+  it('files the interruption of a subscription request that stopped while subscribing under the subscription', async () => {
+    const w = await world();
+    w.subs.hangAfterSubscribe = true;
+    const g1 = await w.boot();
+    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@interrupted');
+    await eventually(() => expect(w.subs.subscriptions.size).toBe(1));
+    const subscribed = onlySubscription(w.subs);
+
+    // The next process records the interruption; until the job resumes and ends it has no result.
+    await g1.store.flush();
+    const g2 = await w.boot();
+    expect(g2.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', result: null });
+
+    expect(await subscriptionEvents(g2.store, subscribed.id, adding.job.id)).toContain('job.interrupted');
+  });
+
+  it('files the interruption of a check\'s item under the subscription after the job records are gone', async () => {
+    const w = await world();
+    const subscribed = subscribe(w.subs, 'UC-interrupted-item');
+    w.script.channelVideos.set(subscribed.id, listed(1, 'p'));
+    const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
+    const check = await g1.manager.submitCheck('youtube', subscribed, 'manual');
+    await g1.source.holds.started(videoId(0, 'p'));
+    const itemId = g1.manager.get(check.job.id).items![0]!.jobId!;
+
+    const g2 = await w.crash(g1);
+    await g2.manager.whenSettled(check.job.id);
+    // Finished jobs beyond the store's limit drop out oldest first, so these push out the check and its item.
+    for (let index = 0; index < 1001; index += 1) {
+      const at = new Date(T0.getTime() + 86_400_000 + index).toISOString();
+      g2.store.put({
+        id: `later-${index}`, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, parentId: null,
+        source: { type: 'youtube', id: `later-${index}`, url: watchUrl(`later-${index}`), title: null },
+        createdAt: at, startedAt: at, finishedAt: at, updatedAt: at, progress: null, items: null, result: { outcome: 'existing' }, error: null,
+      });
+    }
+    expect(g2.store.get(itemId)).toBeUndefined();
+    expect(g2.store.get(check.job.id)).toBeUndefined();
+
+    expect(await subscriptionEvents(g2.store, subscribed.id, itemId)).toContain('job.interrupted');
+  });
+});

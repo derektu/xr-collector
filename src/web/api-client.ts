@@ -10,8 +10,8 @@ import type {
   DocumentDeletion,
   DocumentPage,
   DocumentSources,
-  JobPageView,
-  JobSubmissionView,
+  JobPage,
+  JobSubmission,
   JobView,
   TransferStatus,
   SavedDocument,
@@ -192,8 +192,8 @@ export const api = {
     return request<{ updated: number; paused: number }>(`${subscriptionPath(type, id)}/apply-settings`, { method: 'POST' });
   },
 
-  async setSubscriptionEnabled(type: string, id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmissionView | null }> {
-    return request<{ subscription: SubscriptionRecord; submission: JobSubmissionView | null }>(subscriptionPath(type, id), {
+  async setSubscriptionEnabled(type: string, id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmission | null }> {
+    return request<{ subscription: SubscriptionRecord; submission: JobSubmission | null }>(subscriptionPath(type, id), {
       method: 'PATCH',
       body: JSON.stringify({ enabled }),
     });
@@ -207,27 +207,27 @@ export const api = {
   },
 
   /** Checks every enabled subscription of every type now. */
-  async checkAllSubscriptions(): Promise<JobSubmissionView[]> {
-    const result = await request<{ submissions: JobSubmissionView[] }>('/api/subscription-checks', { method: 'POST' });
+  async checkAllSubscriptions(): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>('/api/subscription-checks', { method: 'POST' });
     return result.submissions;
   },
 
   /** Checks the listed subscriptions now. */
-  async checkSubscriptions(subscriptions: Array<{ type: string; id: string }>): Promise<JobSubmissionView[]> {
-    const result = await request<{ submissions: JobSubmissionView[] }>('/api/subscription-checks', {
+  async checkSubscriptions(subscriptions: Array<{ type: string; id: string }>): Promise<JobSubmission[]> {
+    const result = await request<{ submissions: JobSubmission[] }>('/api/subscription-checks', {
       method: 'POST',
       body: JSON.stringify({ subscriptions }),
     });
     return result.submissions;
   },
 
-  listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPageView> {
+  listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPage> {
     const parameters = new URLSearchParams();
     if (query.state) parameters.set('state', query.state);
     if (query.limit) parameters.set('limit', String(query.limit));
     if (query.cursor) parameters.set('cursor', query.cursor);
     const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
-    return request<JobPageView>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
+    return request<JobPage>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
   },
 
   async getJob(id: string, signal?: AbortSignal): Promise<JobView> {
@@ -238,8 +238,8 @@ export const api = {
     return (await request<{ summary: JobSummary }>(`/api/jobs/summary?${new URLSearchParams({ since }).toString()}`, signal ? { signal } : undefined)).summary;
   },
 
-  retryJob(id: string): Promise<JobSubmissionView> {
-    return request<JobSubmissionView>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  retryJob(id: string): Promise<JobSubmission> {
+    return request<JobSubmission>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
   },
 
   async jobOverview(signal?: AbortSignal): Promise<JobOverview> {
@@ -310,8 +310,8 @@ export const api = {
   },
 
   /** Collects one item by its address; the service finds the source type the address belongs to. */
-  collect(url: string): Promise<JobSubmissionView> {
-    return request<JobSubmissionView>('/api/items', {
+  collect(url: string): Promise<JobSubmission> {
+    return request<JobSubmission>('/api/items', {
       method: 'POST',
       body: JSON.stringify({ url }),
     });

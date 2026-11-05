@@ -86,15 +86,3 @@ export function jobKind(type: string, role: JobRole): string | null {
   const name = declarations.get(type)?.jobKindNames[role];
   return name ? `${type}.${name}` : null;
 }
-
-/** The source type and role of a job kind; null for a kind of an unregistered type or an unknown name. */
-export function jobRole(kind: string): { type: string; role: JobRole } | null {
-  const separator = kind.indexOf('.');
-  if (separator < 0) return null;
-  const type = kind.slice(0, separator);
-  const name = kind.slice(separator + 1);
-  const names = declarations.get(type)?.jobKindNames;
-  if (!names) return null;
-  const role = (['item', 'check', 'add'] as const).find((candidate) => names[candidate] === name);
-  return role ? { type, role } : null;
-}

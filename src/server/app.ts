@@ -35,10 +35,8 @@ import {
   type EventSeverity,
   type JobSummary,
   type JobOverview,
-  type CollectionJob,
   type JobPage,
   type JobSubmission,
-  type JobSubmissionView,
   type JobView,
   type CollectionSchedule,
   type CollectionScheduleView,
@@ -78,21 +76,21 @@ export interface SubscriptionCollection {
   /** The listed subscriptions a manual check covers; refuses a missing or paused one. */
   checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
   startRun(request: { trigger: 'manual'; subscriptionIds?: string[] }): Promise<JobSubmission[]>;
-  checkJobs(id: string): CollectionJob[];
+  checkJobs(id: string): JobView[];
 }
 
 /** Accepts collection work and answers job queries for the active Vault. */
 export interface CollectionJobs {
   submit(type: string, url: string): Promise<JobSubmission>;
   submitItem(type: string, url: string): Promise<JobSubmission>;
-  get(id: string): CollectionJob;
+  get(id: string): JobView;
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
   summary(since: string): JobSummary;
   retry(id: string): Promise<JobSubmission>;
   /** The jobs page: running, queued and failed work. */
   overview(): Promise<JobOverview>;
   /** Removes a failed single item or subscription request from the failed section. */
-  dismiss(id: string): Promise<CollectionJob>;
+  dismiss(id: string): Promise<JobView>;
 }
 
 /** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
@@ -623,13 +621,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.post<{ Body: { url?: unknown } }>('/api/submissions', async (request, reply) => {
       const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要加入的網址。'));
       requireOnline();
-      return reply.code(202).send(submissionView(await jobs.submit(type, input)));
+      return reply.code(202).send(await jobs.submit(type, input));
     });
 
     app.post<{ Body: { url?: unknown } }>('/api/items', async (request, reply) => {
       const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要收集的網址。'));
       requireOnline();
-      return reply.code(202).send(submissionView(await jobs.submitItem(type, input)));
+      return reply.code(202).send(await jobs.submitItem(type, input));
     });
 
     app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', deviceData(), async (request) => {
@@ -642,7 +640,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       }
       const { limit } = pagination({ limit: request.query.limit ?? '20' });
       const page = jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
-      return { jobs: page.jobs.map(jobView), nextCursor: page.nextCursor };
+      return page;
     });
 
     app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', deviceData(), async (request) => {
@@ -654,16 +652,16 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.get('/api/jobs/overview', deviceData(), async () => ({ overview: await jobs.overview() }));
 
     app.get<{ Params: { id: string } }>('/api/jobs/:id', deviceData(), async (request) => ({
-      job: jobView(jobs.get(request.params.id)),
+      job: jobs.get(request.params.id),
     }));
 
     app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) => {
       requireOnline();
-      return reply.code(202).send(submissionView(await jobs.retry(request.params.id)));
+      return reply.code(202).send(await jobs.retry(request.params.id));
     });
 
     app.post<{ Params: { id: string } }>('/api/jobs/:id/dismiss', async (request) => ({
-      job: jobView(await jobs.dismiss(request.params.id)),
+      job: await jobs.dismiss(request.params.id),
     }));
   }
 
@@ -736,7 +734,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const { collection, subscription, input } = subscriptionAddress(request.body?.url);
       const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
       requireOnline();
-      return reply.code(202).send(submissionView(await collection.add(input, settings)));
+      return reply.code(202).send(await collection.add(input, settings));
     });
 
     // Settings change first, so the check a resume in the same request starts uses the new range.
@@ -755,7 +753,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       let record = settings ? await collection.updateSettings(request.params.id, settings) : null;
       let submission: JobSubmission | null = null;
       if (typeof body.enabled === 'boolean') ({ subscription: record, submission } = await collection.setEnabled(request.params.id, body.enabled));
-      return { subscription: record, submission: submission ? submissionView(submission) : null };
+      return { subscription: record, submission };
     });
 
     app.post<{ Params: { type: string; id: string } }>('/api/subscriptions/:type/:id/apply-settings', async (request) =>
@@ -784,10 +782,10 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         // Checking every subscription goes through the scheduler, which refuses while a Vault operation runs.
         if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
         const submissions = await options.schedule.runNow();
-        return reply.code(202).send({ submissions: submissions.map(submissionView) });
+        return reply.code(202).send({ submissions: submissions });
       }
       const submissions = await startChecks((type) => collectionOf(type).collection, listed);
-      return reply.code(202).send({ submissions: submissions.map(submissionView) });
+      return reply.code(202).send({ submissions: submissions });
     });
   }
 
@@ -850,16 +848,6 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   return app;
-}
-
-/** A job as the HTTP API returns it: restart data left out. */
-function jobView(job: CollectionJob): JobView {
-  const { checkpoint: _checkpoint, claimedByUser: _claimed, ...view } = job;
-  return view;
-}
-
-function submissionView(submission: JobSubmission): JobSubmissionView {
-  return { job: jobView(submission.job), deduplicated: submission.deduplicated };
 }
 
 function requiredUrl(value: unknown, prompt: string): string {

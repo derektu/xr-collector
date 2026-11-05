@@ -1,4 +1,3 @@
-import { jobRole } from './source-registry.js';
 import type { PauseReason } from './collection-pause.js';
 
 /** ID of a source type whose documents the Vault can hold: the ID of a registered source plugin. */
@@ -633,24 +632,18 @@ export interface CollectionJob {
   activityIncomplete?: boolean;
 }
 
+/** A job as the job manager, the UI and Agents read it, without the data that only serves restarts. */
+export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser'>;
+
 export interface JobSubmission {
-  job: CollectionJob;
+  job: JobView;
   /** True when an active job for the same item already existed and was returned instead. */
   deduplicated: boolean;
 }
 
 export interface JobPage {
-  jobs: CollectionJob[];
+  jobs: JobView[];
   nextCursor: string | null;
-}
-
-/** A job as the HTTP API returns it, without the data that only serves restarts. */
-export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser'>;
-
-export interface JobSubmissionView {
-  job: JobView;
-  /** True when an active job for the same item already existed and was returned instead. */
-  deduplicated: boolean;
 }
 
 /**
@@ -685,11 +678,6 @@ export interface JobOverview {
   running: JobOverviewEntry[];
   queued: JobOverviewEntry[];
   failed: JobOverviewEntry[];
-}
-
-export interface JobPageView {
-  jobs: JobView[];
-  nextCursor: string | null;
 }
 
 export type EventSeverity = 'debug' | 'info' | 'warning' | 'error';
@@ -1154,15 +1142,6 @@ export interface ImportPreview {
    * count. Writing them keeps those items from being collected again and coming back on later imports.
    */
   mergeRecords: boolean;
-}
-
-/**
- * A top-level job the user can retry: a failed one, or a check job that completed with some of its
- * items failing.
- */
-export function isRetryable(job: Pick<CollectionJob, 'state' | 'kind' | 'parentId' | 'result'>): boolean {
-  if (job.parentId !== null) return false;
-  return job.state === 'failed' || (jobRole(job.kind)?.role === 'check' && job.state === 'completed' && job.result?.outcome === 'partial');
 }
 
 /** The immutable artifact identity shared by the UI and authorized Agents. */

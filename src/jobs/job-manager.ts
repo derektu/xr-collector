@@ -4,12 +4,12 @@ import type { Collector } from '../core/collector.js';
 import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
 import { COLLECTION_COMPLETED } from '../core/job-completion.js';
-import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
+import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, subscriptionOf, workKey, type RoleJob } from '../core/job-role.js';
+import { jobKind, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
   type ChannelJobTrigger,
   type CollectionJob,
-  isRetryable,
   type JobError,
   type JobItem,
   type JobOverview,
@@ -22,6 +22,7 @@ import {
   type JobState,
   type JobStopKind,
   type JobSubmission,
+  type JobView,
   type JobSummary,
   type ItemFailureEntry,
   MAX_CHECK_ATTEMPTS,
@@ -197,7 +198,7 @@ export class JobManager {
   private readonly running = new Set<Promise<void>>();
   /** Check jobs that wait for an item job, keyed by the item job. */
   private readonly watchers = new Map<string, Set<string>>();
-  private readonly settleWaiters = new Map<string, Array<(job: CollectionJob) => void>>();
+  private readonly settleWaiters = new Map<string, Array<(job: JobView) => void>>();
   /**
    * Running check jobs of a paused or removed subscription, with the reason. They no longer hold
    * the subscription's dedupe key, so a resume or new subscription starts its own job at once.
@@ -391,7 +392,7 @@ export class JobManager {
     }
     const accepted = settings ?? plugin.subscription.defaults;
     const target = this.options.recentTarget?.(type, input.url);
-    const submission = this.enqueue(kind, type, `${type}:add:${input.url.toLowerCase()}`, {
+    const submission = this.enqueue(kind, type, workKey(type, 'add', input.url), {
       id: null, url: input.url, title: target?.title ?? null,
     }, null, {
       scope: { trigger: 'subscribe' },
@@ -415,12 +416,12 @@ export class JobManager {
     return submission;
   }
 
-  get(id: string): CollectionJob {
+  get(id: string): JobView {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) {
       throw new CollectorError('job_not_found', '找不到這個收集工作。');
     }
-    return publicJob(job);
+    return jobView(job);
   }
 
   /**
@@ -436,7 +437,7 @@ export class JobManager {
       if (index < 0) throw new CollectorError('invalid_request', '分頁位置已失效，請重新讀取第一頁。');
       jobs = jobs.slice(index + 1);
     }
-    const page = jobs.slice(0, limit).map((job) => this.withLiveItems(publicJob(job)));
+    const page = jobs.slice(0, limit).map((job) => this.withLiveItems(jobView(job)));
     return { jobs: page, nextCursor: jobs.length > limit ? page[page.length - 1]!.id : null };
   }
 
@@ -444,12 +445,12 @@ export class JobManager {
    * Check jobs of one source type in the active Vault, grouped by subscription, newest first.
    * Finished jobs are kept up to the job store's limit, so older records drop out.
    */
-  checkJobs(type: string): Map<string, CollectionJob[]> {
-    const bySubscription = new Map<string, CollectionJob[]>();
+  checkJobs(type: string): Map<string, JobView[]> {
+    const bySubscription = new Map<string, JobView[]>();
     for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
       if (!isRole(job, type, 'check') || !job.source.id) continue;
       const jobs = bySubscription.get(job.source.id) ?? [];
-      jobs.push(job);
+      jobs.push(jobView(job));
       bySubscription.set(job.source.id, jobs);
     }
     return bySubscription;
@@ -478,11 +479,12 @@ export class JobManager {
       .filter((job) => isRole(job, type, 'add'))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((job): SubscriptionRequestWork => {
-        const subscribing = job.checkpoint?.subscribing;
+        const view = roleView(job);
+        const request = view?.role === 'add' ? view : null;
         return {
           jobId: job.id, url: job.source.url,
-          targetId: job.result?.subscriptionId ?? subscribing?.subscriptionId ?? null,
-          title: job.source.title ?? subscribing?.title ?? null,
+          targetId: request?.subscriptionId ?? null,
+          title: request?.title ?? null,
           status: workStatus(job),
         };
       });
@@ -490,7 +492,7 @@ export class JobManager {
   }
 
   /** Items record their item job's outcome when it ends; meanwhile a running item shows as `running`. */
-  private withLiveItems(job: CollectionJob): CollectionJob {
+  private withLiveItems<T extends JobView>(job: T): T {
     if (!job.items) return job;
     return {
       ...job,
@@ -565,7 +567,7 @@ export class JobManager {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
     const type = job.source.type;
-    const role = jobRole(job.kind)?.role;
+    const role = roleOf(job);
     const plugin = this.plugin(type);
     if (!role || !plugin) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
     const { noun } = plugin.item;
@@ -617,7 +619,7 @@ export class JobManager {
   /** The jobs page: what runs now, what waits in the order it starts, and the failed section. */
   async overview(): Promise<JobOverview> {
     const jobs = this.options.store.list(this.options.vaultPath, this.vaultId)
-      .map((job) => this.withLiveItems(publicJob(this.jobs.get(job.id) ?? job)));
+      .map((job) => this.withLiveItems(jobView(this.jobs.get(job.id) ?? job)));
     return jobOverview(jobs, {
       now: this.now(),
       queuePosition: (job) => this.queueOrder.get(job.id),
@@ -629,7 +631,7 @@ export class JobManager {
    * Removes a failed single item or subscription request from the failed section; its record and
    * activity stay. Any other job is not in that section and cannot be removed.
    */
-  async dismiss(id: string): Promise<CollectionJob> {
+  async dismiss(id: string): Promise<JobView> {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
     const listed = await failedJobs(this.options.store.list(this.options.vaultPath, this.vaultId), {
@@ -642,7 +644,7 @@ export class JobManager {
     this.updateStored(job, { dismissedAt: timestamp, updatedAt: timestamp });
     this.event(job, { severity: 'info', eventType: 'job.dismissed', message: '已從失敗清單移除。' });
     await this.options.store.flush();
-    return publicJob(this.options.store.get(id)!);
+    return jobView(this.options.store.get(id)!);
   }
 
   private async hasDocument(type: string, key: string): Promise<boolean> {
@@ -742,7 +744,7 @@ export class JobManager {
   }
 
   /** Resolves when the job finishes, fails or is interrupted. */
-  whenSettled(id: string): Promise<CollectionJob> {
+  whenSettled(id: string): Promise<JobView> {
     if (!this.jobs.has(id) && !this.endingChecks.has(id)) return Promise.resolve(this.get(id));
     return new Promise((resolve) => {
       const waiters = this.settleWaiters.get(id) ?? [];
@@ -779,7 +781,7 @@ export class JobManager {
     const unknownTypes = new Set<string>();
     // The list is newest first, so a job whose key was already seen has a later job of the same target.
     for (const job of store.list(this.options.vaultPath, this.vaultId)) {
-      if (job.state === 'interrupted' && (!jobRole(job.kind) || !this.plugin(job.source.type))) {
+      if (job.state === 'interrupted' && (!roleOf(job) || !this.plugin(job.source.type))) {
         unknownTypes.add(job.kind);
         continue;
       }
@@ -962,7 +964,7 @@ export class JobManager {
     type: string, ref: Pick<ItemRef, 'key' | 'url'>, parentId: string | null, publishedNotBefore: string | null = null,
     extra: Pick<CollectionJob, 'retryOf'> = {}, title: string | null = null,
   ): JobSubmission {
-    return this.enqueue(jobKind(type, 'item')!, type, `${type}:item:${ref.key}`, {
+    return this.enqueue(jobKind(type, 'item')!, type, workKey(type, 'item', ref.key), {
       id: ref.key, url: ref.url, title,
     }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
   }
@@ -970,7 +972,7 @@ export class JobManager {
   private enqueueCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger, dueAt?: string): JobSubmission {
     const kind = jobKind(type, 'check');
     if (!kind) throw new Error(`Source type ${type} has no check jobs`);
-    const key = `${type}:check:${subscription.id}`;
+    const key = workKey(type, 'check', subscription.id);
     const listing = dueAt && !this.activeByKey.has(key) ? this.listings.get(key) : undefined;
     if (listing && listing.at >= new Date(dueAt!).getTime() && this.options.store.get(listing.jobId)) {
       return { job: this.get(listing.jobId), deduplicated: true };
@@ -1035,7 +1037,7 @@ export class JobManager {
     this.markWaiting(job);
     this.options.store.put(job);
     this.event(job, { severity: 'debug', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
-    return { job: structuredClone(job), deduplicated: false };
+    return { job: jobView(structuredClone(job)), deduplicated: false };
   }
 
   /**
@@ -1451,11 +1453,13 @@ export class JobManager {
 
   /** The check job's subscription an item job collects for, with the item's key; null for any other job. */
   private checkItemOf(item: CollectionJob): { type: string; subscriptionId: string; key: string } | null {
-    if (roleOf(item) !== 'item' || !item.parentId || !item.source.id) return null;
-    const parent = this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId);
-    if (!parent || roleOf(parent) !== 'check' || !parent.source.id) return null;
-    return { type: item.source.type, subscriptionId: parent.source.id, key: item.source.id };
+    if (roleOf(item) !== 'item' || !item.source.id) return null;
+    const subscriptionId = subscriptionOf(item, this.parentOf);
+    return subscriptionId ? { type: item.source.type, subscriptionId, key: item.source.id } : null;
   }
+
+  /** A job's parent, live or stored. */
+  private readonly parentOf = (id: string): RoleJob | undefined => this.jobs.get(id) ?? this.options.store.get(id);
 
   /** The target of the subscription whose check found an item; undefined for an item submitted on its own. */
   private subscriptionTargetOf(item: CollectionJob): SubscriptionTarget | undefined {
@@ -1647,7 +1651,7 @@ export class JobManager {
   private notifySettled(job: CollectionJob): void {
     const waiters = this.settleWaiters.get(job.id) ?? [];
     this.settleWaiters.delete(job.id);
-    for (const resolve of waiters) resolve(publicJob(job));
+    for (const resolve of waiters) resolve(jobView(job));
   }
 
   private update(job: CollectionJob, patch: Partial<CollectionJob>): void {
@@ -1660,28 +1664,7 @@ export class JobManager {
    * subscription, parent and trigger.
    */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
-    const subscriptionId = this.subscriptionOf(job);
-    const role = roleOf(job);
-    this.options.store.event({
-      ...entry, vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
-      ...(role ? { jobRole: role } : {}),
-      sourceType: job.source.type,
-      ...(job.source.id ? { sourceId: job.source.id } : {}),
-      ...(job.source.title ? { sourceTitle: job.source.title } : {}),
-      ...(subscriptionId ? { subscriptionId } : {}),
-      ...(job.parentId ? { parentJobId: job.parentId } : {}),
-      ...(job.scope ? { trigger: job.scope.trigger } : {}),
-    });
-  }
-
-  /** The subscription a job collects for: its own, its parent check job's, or the one a subscription request added. */
-  private subscriptionOf(job: CollectionJob): string | null {
-    const role = roleOf(job);
-    if (role === 'check') return job.source.id;
-    if (role === 'add') return job.result?.subscriptionId ?? job.checkpoint?.subscribing?.subscriptionId ?? null;
-    if (!job.parentId) return null;
-    const parent = this.jobs.get(job.parentId) ?? this.options.store.get(job.parentId);
-    return parent && roleOf(parent) === 'check' ? parent.source.id : null;
+    this.options.store.event({ ...entry, ...jobEventSubject(job, this.parentOf) });
   }
 
   /** How the job's source type treats a failure; an unregistered type's failures are not retried. */
@@ -1734,11 +1717,9 @@ function settledItem(item: JobItem, child: CollectionJob): JobItem {
 }
 
 /** The job as UI and Agents read it; the checkpoint and the user-claim flag only serve restarts. */
-function publicJob(job: CollectionJob): CollectionJob {
-  const copy = { ...job };
-  delete copy.checkpoint;
-  delete copy.claimedByUser;
-  return copy;
+function jobView(job: CollectionJob): JobView {
+  const { checkpoint: _checkpoint, claimedByUser: _claimed, ...view } = job;
+  return view;
 }
 
 /**
@@ -1750,26 +1731,8 @@ function itemRefOf(job: CollectionJob, plugin: SourcePlugin): ItemRef {
   return plugin.parseItem(job.source.url);
 }
 
-/** The role of a job's kind; undefined for a kind of an unregistered type. */
-function roleOf(job: CollectionJob): JobRole | undefined {
-  return jobRole(job.kind)?.role;
-}
-
 function isRole(job: CollectionJob, type: string, role: JobRole): boolean {
   return job.source.type === type && roleOf(job) === role;
-}
-
-/**
- * The dedupe key an accepted job holds while it is unfinished: `<type>:item:<key>`,
- * `<type>:check:<subscription ID>` or `<type>:add:<address>`. The keys live in memory only.
- */
-function jobKey(job: CollectionJob): string {
-  const type = job.source.type;
-  const role = roleOf(job);
-  if (role === 'item') return `${type}:item:${job.source.id}`;
-  if (role === 'check') return `${type}:check:${job.source.id}`;
-  if (role === 'add') return `${type}:add:${job.source.url.toLowerCase()}`;
-  return `${job.kind}:${job.source.id ?? job.source.url}`;
 }
 
 function progressOf(items: JobItem[]): JobProgress {

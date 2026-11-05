@@ -9,7 +9,7 @@ import {
   AUTO_PAUSE_FAILURES,
   CollectorError,
   type ChannelJobTrigger,
-  type CollectionJob,
+  type JobView,
   type DocumentMetadata,
   type ItemFailureEntry,
   type JobError,
@@ -179,7 +179,7 @@ export class SubscriptionService {
   }
 
   /** Check jobs of one subscription, newest first, as far back as the job history keeps them. */
-  checkJobs(id: string): CollectionJob[] {
+  checkJobs(id: string): JobView[] {
     return this.jobs.checkJobs(this.type).get(id) ?? [];
   }
 
@@ -601,7 +601,7 @@ export class SubscriptionService {
     return this.definition.storage!.outOfRangeKeyField;
   }
 
-  whenSettled(jobId: string): Promise<CollectionJob> {
+  whenSettled(jobId: string): Promise<JobView> {
     return this.jobs.whenSettled(jobId);
   }
 
