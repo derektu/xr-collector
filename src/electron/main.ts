@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import type { EventType } from '../core/event-catalog.js';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
@@ -349,7 +350,7 @@ app.whenReady().then(async () => {
   const nativeInstaller: NativeInstaller = process.platform === 'darwin'
     ? new MacNativeInstaller({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, executablePath: process.execPath, current: buildInfo })
     : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
-  const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: string; message: string; code?: string }> = [];
+  const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: EventType; message: string; code?: string }> = [];
   updateService = await UpdateService.open({
     identity: { version: buildInfo.version, target: buildInfo.target },
     currentBuildId: buildInfo.buildId,

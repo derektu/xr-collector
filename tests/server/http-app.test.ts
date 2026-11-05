@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
@@ -60,7 +60,7 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
     vaultPath: '/vault',
-    store: JobStore.memory(PRODUCT_SOURCES),
+    store: memoryJobRecords(PRODUCT_SOURCES).jobs,
     sources: PRODUCT_SOURCES,
     plugins: [youtubePlugin({
       resolveChannel: async () => ({ id: 'UC-http', title: 'HTTP 頻道', url: 'https://www.youtube.com/channel/UC-http/videos' }),

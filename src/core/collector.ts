@@ -16,7 +16,7 @@ import type { SourceDeclarations } from './source-registry.js';
 import type { CapturedDocument } from './source-contract.js';
 import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
 import { documentId, type DocumentKey } from '../vault/document-paths.js';
-import type { NewJobEvent } from '../jobs/job-store.js';
+import type { NewJobEvent } from './types.js';
 
 /** Filter value that selects documents saved without a publisher ID. */
 export const NO_PUBLISHER_ID = 'none';
@@ -127,7 +127,7 @@ export class Collector {
       await this.vault.deletions!.clear(id);
       this.noted(id);
       this.options.recordEvent?.({
-        severity: 'info', eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
+        eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
         documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true,
       });
       return { document, recollected: true };
@@ -180,7 +180,7 @@ export class Collector {
       } catch (error) {
         console.error('Document file removal failed', error);
         this.options.recordEvent?.({
-          severity: 'error', eventType: 'document.delete_failed', ...event,
+          eventType: 'document.delete_failed', ...event,
           message: `「${document.title}」已標記為刪除，但檔案無法移除；下次開啟知識庫時會再移除。`,
         });
       }
@@ -194,14 +194,14 @@ export class Collector {
         void this.search.remove(id).catch((error: unknown) => {
           console.error('Search index removal failed', error);
           this.options.recordEvent?.({
-            severity: 'warning', eventType: 'document.index_remove_failed', ...event,
+            eventType: 'document.index_remove_failed', ...event,
             message: `「${document.title}」已刪除，搜尋索引稍後更新；搜尋結果已排除這份文件。`,
           });
         });
       }
       // Noted once searches exclude the document, so a reader searching again after it no longer finds it.
       this.noted(id);
-      this.options.recordEvent?.({ severity: 'info', eventType: 'document.deleted', message: `已刪除「${document.title}」。`, ...event });
+      this.options.recordEvent?.({ eventType: 'document.deleted', message: `已刪除「${document.title}」。`, ...event });
       return {
         deleted: { id, sourceType: record.sourceType, sourceId: record.sourceId, title: record.title, deletedAt: record.deletedAt },
         indexed,

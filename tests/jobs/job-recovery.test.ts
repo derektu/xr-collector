@@ -15,7 +15,8 @@ import {
   type SavedDocument,
 } from '../../src/core/types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import type { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import { CollectionPause } from '../../src/core/collection-pause.js';
 import { Connectivity } from '../../src/core/connectivity.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -135,6 +136,7 @@ interface Timer { ms: number; run: () => void; cancelled: boolean }
 
 interface Generation {
   store: JobStore;
+  records: JobRecords;
   manager: JobManager;
   source: ScriptedSource;
   timers: Timer[];
@@ -149,7 +151,7 @@ interface Generation {
 }
 
 let directories: string[] = [];
-let stores: JobStore[] = [];
+let stores: JobRecords[] = [];
 afterEach(async () => {
   for (const store of stores) await store.close();
   for (const directory of directories) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -170,8 +172,9 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   let indexHangs = false;
 
   async function boot(prepare: (source: ScriptedSource) => void = () => undefined): Promise<Generation> {
-    const store = await JobStore.open(directory, PRODUCT_SOURCES, () => clock.now);
-    stores.push(store);
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => clock.now });
+    const store = records.jobs;
+    stores.push(records);
     const source = new ScriptedSource(script);
     prepare(source);
     const hangIndex = indexHangs;
@@ -194,7 +197,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     });
     subs.attach(manager);
     return {
-      store, manager, source, timers,
+      store, records, manager, source, timers,
       fireTimers() {
         for (const timer of timers.splice(0)) if (!timer.cancelled) timer.run();
       },
@@ -224,7 +227,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     async events(): Promise<Array<{
       eventType: string; jobId: string | null; errorCode?: string; attempt?: number; nextAttemptAt?: string; stopReason?: string; message: string;
     }>> {
-      for (const store of stores) await store.activity.flush();
+      for (const records of stores) await records.activity.flush();
       return readEventFiles(directory);
     },
   };
@@ -949,8 +952,8 @@ describe('repeated unclean stops (R-T8)', () => {
 
 describe('interrupted work in its subscription\'s activity (#255)', () => {
   /** The event types of one job that the activity filter of a subscription returns. */
-  async function subscriptionEvents(store: JobStore, subscriptionId: string, jobId: string): Promise<string[]> {
-    const page = await store.activity.query({ subscriptionId, limit: 500 }, { vaultPath: VAULT });
+  async function subscriptionEvents(records: JobRecords, subscriptionId: string, jobId: string): Promise<string[]> {
+    const page = await records.views.query({ subscriptionId, limit: 500 }, { vaultPath: VAULT });
     return page.events.filter((event) => event.jobId === jobId).map((event) => event.eventType);
   }
 
@@ -967,7 +970,7 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
     const g2 = await w.boot();
     expect(g2.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', result: null });
 
-    expect(await subscriptionEvents(g2.store, subscribed.id, adding.job.id)).toContain('job.interrupted');
+    expect(await subscriptionEvents(g2.records, subscribed.id, adding.job.id)).toContain('job.interrupted');
   });
 
   it('files the interruption of a check\'s item under the subscription after the job records are gone', async () => {
@@ -993,6 +996,6 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
     expect(g2.store.get(itemId)).toBeUndefined();
     expect(g2.store.get(check.job.id)).toBeUndefined();
 
-    expect(await subscriptionEvents(g2.store, subscribed.id, itemId)).toContain('job.interrupted');
+    expect(await subscriptionEvents(g2.records, subscribed.id, itemId)).toContain('job.interrupted');
   });
 });

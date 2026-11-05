@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ChangeFeed, type ChangeBatch } from '../../src/core/change-feed.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import type { CheckEnd } from '../../src/jobs/subscription-port.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
@@ -49,7 +49,8 @@ describe('a check ending', () => {
     const changes = new ChangeFeed({ defer: () => undefined });
     const batches: ChangeBatch[] = [];
     changes.subscribe((batch) => batches.push(batch));
-    const store = JobStore.memory(PRODUCT_SOURCES, undefined, changes.note);
+    const records = memoryJobRecords(PRODUCT_SOURCES, { noteChange: changes.note });
+    const store = records.jobs;
     const subs = new SlowEnd(changes);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
@@ -66,7 +67,7 @@ describe('a check ending', () => {
     await subs.entered;
     changes.flush();
     const waiting = { state: manager.get(submission.job.id).state, listed: store.list(VAULT)[0]?.state,
-      ended: subs.of('ended').length, events: store.activity.query({ limit: 50 }, { vaultPath: null }) };
+      ended: subs.of('ended').length, events: records.views.query({ limit: 50 }, { vaultPath: null }) };
     expect(waiting).toMatchObject({ state: 'running', listed: 'running', ended: 0 });
     const again = await manager.submitCheck('youtube', subscription, 'manual');
     expect(again).toMatchObject({ deduplicated: true, job: { id: submission.job.id } });
@@ -87,7 +88,7 @@ describe('a check ending', () => {
     const finished = order.findIndex((change) => change.kind === 'job' && change.id === job.id && change.state === 'completed');
     expect(recorded).toBeGreaterThanOrEqual(0);
     expect(finished).toBeGreaterThan(recorded);
-    expect((await store.activity.query({ limit: 50 }, { vaultPath: null })).events.map((event) => event.eventType)).toContain('job.completed');
+    expect((await records.views.query({ limit: 50 }, { vaultPath: null })).events.map((event) => event.eventType)).toContain('job.completed');
     await manager.close();
   });
 });

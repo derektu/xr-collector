@@ -9,7 +9,7 @@ import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type { SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import type { YouTubeSource } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
@@ -73,7 +73,7 @@ function setup(source: Partial<YouTubeSource> = {}) {
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
     vaultPath: '/vault',
-    store: JobStore.memory(PRODUCT_SOURCES),
+    store: memoryJobRecords(PRODUCT_SOURCES).jobs,
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new Error('not used'); },
       discover: async () => [],

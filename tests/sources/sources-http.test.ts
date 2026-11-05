@@ -12,7 +12,7 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MemoryDocuments, SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
@@ -36,7 +36,7 @@ async function world() {
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 },
     // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },

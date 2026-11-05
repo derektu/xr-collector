@@ -10,7 +10,7 @@ import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -34,7 +34,8 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
   const source = new SyntheticYouTube();
-  const store = JobStore.memory(PRODUCT_SOURCES, now);
+  const records = memoryJobRecords(PRODUCT_SOURCES, { now });
+  const store = records.jobs;
   const removedFromSearch: string[] = [];
   const search = { index: async () => undefined, remove: async (id: string) => { removedFromSearch.push(id); } };
   const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
@@ -62,7 +63,7 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
     const added = await jobs.whenSettled((await channels.add(`@${name}`)).job.id);
     return jobs.whenSettled(added.result!.followUpJobId!);
   };
-  const events = async () => (await store.activity.query({ limit: 200 }, { vaultPath: root })).events;
+  const events = async () => (await records.views.query({ limit: 200 }, { vaultPath: root })).events;
   /** Resolves once a removal has written the deletion record of a video that is still capturing. */
   const deletionRecorded = (videoId: string) => eventually(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
   const close = async () => { await eventually(() => expect(jobs.isBusy()).toBe(false)); await agent.close(); };

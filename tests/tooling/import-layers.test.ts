@@ -45,12 +45,9 @@ const FILE_MODULES: Readonly<Record<string, string>> = {
 };
 
 const EXCEPTIONS = [
-  // core -> jobs, vault: core and vault import each other.
-  'src/core/collector.ts -> src/jobs/job-store.ts',
+  // core -> vault: core and vault import each other.
   'src/core/collector.ts -> src/vault/deleted-documents.ts',
   'src/core/collector.ts -> src/vault/document-paths.ts',
-  // jobs -> activity: the activity log owned by the job store (#262).
-  'src/jobs/job-store.ts -> src/activity/activity-log.ts',
   // jobs -> subscriptions: the candidate rules run in the job manager (#263).
   'src/jobs/job-manager.ts -> src/subscriptions/candidates.ts',
   // updates -> runtime: the build identity.

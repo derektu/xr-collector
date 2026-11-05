@@ -1,5 +1,5 @@
 import type { StartRunRequest } from './subscription-service.js';
-import type { NewJobEvent } from '../jobs/job-store.js';
+import type { NewJobEvent } from '../core/types.js';
 import { PAUSE_MESSAGES, type CollectionPause } from '../core/collection-pause.js';
 import {
   CollectorError,
@@ -127,7 +127,7 @@ export class CollectionScheduler {
       await this.store.save(current);
       if (current.enabled) for (const runner of this.runners) await runner.planChecks({ overdue: true });
       this.options.recordEvent?.({
-        severity: 'info', eventType: 'schedule.updated', message: current.enabled ? '已開啟自動檢查。' : '已關閉自動檢查。',
+        eventType: 'schedule.updated', message: current.enabled ? '已開啟自動檢查。' : '已關閉自動檢查。',
       });
     }
     return this.getSchedule();
@@ -191,13 +191,13 @@ export class CollectionScheduler {
     const count = due.reduce((sum, entry) => sum + entry.ids.length, 0);
     if (count === 0) return;
     this.options.recordEvent?.({
-      severity: 'debug', eventType: 'schedule.dispatched', message: `定時檢查開始：${count} 個訂閱到了檢查時間。`,
+      eventType: 'schedule.dispatched', message: `定時檢查開始：${count} 個訂閱到了檢查時間。`,
     });
     for (const { runner, ids } of due) {
       await runner.startRun({ trigger: 'scheduled', subscriptionIds: ids }).catch((error: unknown) => {
         reportScheduleError(error);
         this.options.recordEvent?.({
-          severity: 'error', eventType: 'schedule.failed',
+          eventType: 'schedule.failed',
           message: error instanceof CollectorError ? `定時檢查無法派工：${error.message}` : '定時檢查無法派工。',
           ...(error instanceof CollectorError ? { errorCode: error.code } : {}),
         });

@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
@@ -50,7 +50,7 @@ async function fixture() {
   const collector = new Collector(vault);
   const jobs = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: path.join(root, 'vault'), store: JobStore.memory(PRODUCT_SOURCES), documents: collector,
+    vaultPath: path.join(root, 'vault'), store: memoryJobRecords(PRODUCT_SOURCES).jobs, documents: collector,
     plugins: [youtubePlugin({ capture, resolveChannel: vi.fn(), discover: vi.fn() })],
   });
   return { root, vault, collector, capture, jobs };

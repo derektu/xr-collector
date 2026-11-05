@@ -226,7 +226,7 @@ export class SubscriptionService {
       return new Map(current ? [[id, settingsPatch(current, { ...current.settings, ...patch } as SubscriptionSettings, now)]] : []);
     });
     if (!record) throw this.notFound();
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.settings_updated', message: `已更新「${record.title}」的收集設定。`, ...this.subject(id, record.title) });
+    this.jobs.recordEvent({ eventType: 'subscription.settings_updated', message: `已更新「${record.title}」的收集設定。`, ...this.subject(id, record.title) });
     return record;
   }
 
@@ -248,7 +248,7 @@ export class SubscriptionService {
     if (!source) throw this.notFound();
     const paused = updated.filter((record) => !record.enabled).length;
     this.jobs.recordEvent({
-      severity: 'info', eventType: 'subscription.settings_applied',
+      eventType: 'subscription.settings_applied',
       message: `已把「${source.title}」的收集設定套用到其他 ${updated.length} 個 ${this.options.sources.subscriptionKindLabel(this.type)}。`, ...this.subject(id, source.title),
     });
     return { updated: updated.length, paused };
@@ -278,7 +278,7 @@ export class SubscriptionService {
       const record = await this.store.update(id, { enabled: false, nextCheckAt: null, autoPausedAt: undefined });
       if (!record) throw this.notFound();
       this.jobs.stopSubscription(this.type, id, 'subscription_paused');
-      this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.paused', message: `已暫停「${record.title}」。`, ...this.subject(id, record.title) });
+      this.jobs.recordEvent({ eventType: 'subscription.paused', message: `已暫停「${record.title}」。`, ...this.subject(id, record.title) });
       return { subscription: record, submission: null };
     }
     const now = this.now();
@@ -287,7 +287,7 @@ export class SubscriptionService {
       lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, current.settings.intervalMinutes).toISOString(),
     });
     if (!record) throw this.notFound();
-    this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.resumed', message: `已恢復「${record.title}」。`, ...this.subject(id, record.title) });
+    this.jobs.recordEvent({ eventType: 'subscription.resumed', message: `已恢復「${record.title}」。`, ...this.subject(id, record.title) });
     const submission = await this.jobs.submitCheck(this.type, record, 'resume');
     return { subscription: record, submission };
   }
@@ -522,7 +522,7 @@ export class SubscriptionService {
     if (!paused || !record) return;
     this.jobs.stopSubscription(this.type, id, 'subscription_paused');
     this.jobs.recordEvent({
-      severity: 'warning', eventType: 'subscription.auto_paused',
+      eventType: 'subscription.auto_paused',
       message: `「${record.title}」連續 ${record.checkFailures!.count} 次檢查失敗，已自動暫停：${record.checkFailures!.error.message}`,
       errorCode: record.checkFailures!.error.code, ...this.subject(id, record.title),
     });
@@ -592,7 +592,7 @@ export class SubscriptionService {
         id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), lastCheckedAt: null,
         settings: { ...settings }, lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, settings.intervalMinutes).toISOString(),
       });
-      this.jobs.recordEvent({ severity: 'info', eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
+      this.jobs.recordEvent({ eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
     }
     // The dispatch times were written with the subscription, so a first check resumed after a stop keeps them.
     const check = await this.jobs.submitCheck(this.type, subscription, 'subscribe');

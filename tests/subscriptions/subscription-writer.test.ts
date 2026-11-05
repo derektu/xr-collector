@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords } from '../../src/runtime/job-records.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
 import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
@@ -55,7 +55,8 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
   const plugins = [createFakePlugin(FAKE, sources.fake), createFakePlugin(FAKE2, sources.fake2)];
   const scheduleStore = new MemoryScheduleStore();
   const build = async () => {
-    const store = await JobStore.open(jobsDirectory, SOURCES, now);
+    const records = await openJobRecords(jobsDirectory, SOURCES, { now });
+    const store = records.jobs;
     const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));
     const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
     let services!: SubscriptionServices;
@@ -74,13 +75,13 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
     });
     services = new SubscriptionServices(SOURCES, [service('fake'), service('fake2')]);
     const scheduler = new CollectionScheduler(services.all(), scheduleStore, { now, pollIntervalMs: DAY });
-    return { store, jobs, services, stores, scheduler };
+    return { records, store, jobs, services, stores, scheduler };
   };
   let current = await build();
   return {
     clock, sources,
     async events() {
-      await current.store.activity.flush();
+      await current.records.activity.flush();
       return readEventFiles(jobsDirectory);
     },
     get jobs() { return current.jobs; },

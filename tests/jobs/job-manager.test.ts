@@ -14,7 +14,7 @@ import {
   type SavedDocument,
 } from '../../src/core/types.js';
 import { JobManager, type JobLimits } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords, openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { readEventFiles } from '../activity/event-files.js';
 import type {
@@ -97,14 +97,15 @@ class ControlledSource implements YouTubeSource {
   }
 }
 
-function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
+function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
   const vault = new MemoryVault();
   const subs = new SubscriptionRecorder();
   const source = new ControlledSource();
   const search = {
     index: vi.fn(async () => { if (options.failIndex) throw new Error('meilisearch down'); }),
   };
-  const store = options.store ?? JobStore.memory(PRODUCT_SOURCES);
+  const records = options.records ?? memoryJobRecords(PRODUCT_SOURCES);
+  const store = records.jobs;
   let sequence = 0;
   const manager = new JobManager({
     sources: PRODUCT_SOURCES,
@@ -121,7 +122,7 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
       ?? subs.add('youtube', target, { settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 } });
     return manager.submitCheck('youtube', subscribed, 'manual');
   };
-  return { manager, vault, subs, source, search, store, collect };
+  return { manager, vault, subs, source, search, store, records, collect };
 }
 
 function channel(id: string, title = id): SubscriptionTarget {
@@ -153,7 +154,7 @@ describe('JobManager', () => {
   });
 
   it('keeps the saved document and marks the job when the index update fails', async () => {
-    const { manager, source, vault, store } = setup({ failIndex: true });
+    const { manager, source, vault, records } = setup({ failIndex: true });
     source.holdCaptures = false;
     const id = videoId(2);
     const job = await manager.whenSettled((await manager.submitItem('youtube', watchUrl(id))).job.id);
@@ -161,7 +162,7 @@ describe('JobManager', () => {
     expect(job.result?.indexMessage).toBeTruthy();
     expect(vault.documents.has(id)).toBe(true);
     // The Activity page reads the index failure from the completion event, not from its message.
-    const { events } = await store.activity.query({ jobId: job.id, eventType: ['job.completed'] }, { vaultPath: job.vaultPath });
+    const { events } = await records.views.query({ jobId: job.id, eventType: ['job.completed'] }, { vaultPath: job.vaultPath });
     expect(events[0]).toMatchObject({ jobRole: 'item', outcome: 'created', indexed: false });
   });
 
@@ -314,8 +315,9 @@ describe('JobManager', () => {
   });
 
   it('lists top-level jobs newest first with a cursor and hides another Vault', async () => {
-    const store = JobStore.memory(PRODUCT_SOURCES);
-    const { manager, source } = setup({ store });
+    const records = memoryJobRecords(PRODUCT_SOURCES);
+    const store = records.jobs;
+    const { manager, source } = setup({ records });
     source.holdCaptures = false;
     for (let index = 0; index < 3; index += 1) await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(index)))).job.id);
     const first = manager.list({ limit: 2 });
@@ -387,8 +389,9 @@ describe('JobStore', () => {
 
   it('persists accepted jobs and events, and marks unfinished jobs interrupted on reopen', async () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
-    const store = await JobStore.open(directory, PRODUCT_SOURCES);
-    const { manager, source, collect } = setup({ store, limits: { discovery: 1, capture: 1 } });
+    const records = await openJobRecords(directory, PRODUCT_SOURCES);
+    const store = records.jobs;
+    const { manager, source, collect } = setup({ records, limits: { discovery: 1, capture: 1 } });
     source.channelVideos.set('UC-STOP', videos(2, 's'));
     const accepted = await collect(channel('UC-STOP', '停止中的頻道'));
 
@@ -400,16 +403,17 @@ describe('JobStore', () => {
     source.release(videoId(0, 's'));
     await eventually(() => expect(manager.get(accepted.job.id).progress?.done).toBe(1));
     await store.flush();
-    await store.activity.flush();
+    await records.activity.flush();
 
     // A process that stops without closing leaves running and queued jobs on disk.
-    const reopened = await JobStore.open(directory, PRODUCT_SOURCES);
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES);
+    const reopened = reopenedRecords.jobs;
     const channelJob = reopened.get(accepted.job.id)!;
     expect(channelJob).toMatchObject({ state: 'interrupted', source: { title: '停止中的頻道' }, progress: { done: 1, created: 1 } });
     expect(channelJob.items?.map((item) => item.state)).toEqual(['completed', 'interrupted']);
     expect(reopened.list(VAULT).filter((job) => job.state === 'interrupted').length).toBeGreaterThanOrEqual(2);
 
-    await reopened.activity.flush();
+    await reopenedRecords.activity.flush();
     const events = await readEventFiles(directory);
     expect(events.map((event) => event.eventType)).toEqual(expect.arrayContaining([
       'job.accepted', 'job.started', 'channel.discovered', 'document.saved', 'job.completed', 'job.interrupted',
@@ -423,11 +427,12 @@ describe('JobStore', () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
     const flushTimers: Array<() => void> = [];
     let appends = 0;
-    const store = await JobStore.open(directory, PRODUCT_SOURCES, undefined, {
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, {
       setTimer: (callback, ms) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; },
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
-    const { manager, source, collect } = setup({ store, limits: { discovery: 1, capture: 1 } });
+    const store = records.jobs;
+    const { manager, source, collect } = setup({ records, limits: { discovery: 1, capture: 1 } });
     source.channelVideos.set('UC-BUSY', videos(2, 'b'));
     const accepted = await collect(channel('UC-BUSY', '忙碌的頻道'));
     await source.holds.reach([videoId(0, 'b')]);
@@ -439,15 +444,15 @@ describe('JobStore', () => {
     expect(appends).toBe(0);
 
     for (const fire of flushTimers.splice(0)) fire();
-    await store.activity.flush();
+    await records.activity.flush();
     expect(appends).toBe(1);
     expect((await readEventFiles(directory)).map((event) => event.eventType)).toEqual(expect.arrayContaining(['job.accepted', 'document.saved', 'job.completed']));
     await manager.close();
-    await store.close();
+    await records.close();
   });
 
   it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
-    const store = JobStore.memory(PRODUCT_SOURCES);
+    const store = memoryJobRecords(PRODUCT_SOURCES).jobs;
     const record = (id: string, state: 'completed' | 'interrupted', minute: number): CollectionJob => ({
       id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, parentId: null,
       source: { type: 'youtube', id: null, url: watchUrl(videoId(minute)), title: null },
@@ -471,13 +476,14 @@ describe('JobStore', () => {
       await writeFile(path.join(directory, 'jobs.json'), contents);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
-        const store = await JobStore.open(directory, PRODUCT_SOURCES, () => new Date('2026-10-15T01:02:03.456Z'));
+        const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => new Date('2026-10-15T01:02:03.456Z') });
+        const store = records.jobs;
         expect(store.list(VAULT)).toEqual([]);
         expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
         expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);
         expect(error).toHaveBeenCalledOnce();
 
-        const { manager, source } = setup({ store });
+        const { manager, source } = setup({ records });
         source.holdCaptures = false;
         await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(9)))).job.id);
         await store.flush();

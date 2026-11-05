@@ -11,7 +11,8 @@ import {
   type SavedDocument,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import type { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import type {
   CaptureOptions,
   DiscoveredYouTubeVideo,
@@ -115,11 +116,11 @@ class GatedSource implements YouTubeSource {
 }
 
 const directories: string[] = [];
-const processes: Array<{ gate: PacingGate; manager: JobManager; store: JobStore }> = [];
+const processes: Array<{ gate: PacingGate; manager: JobManager; store: JobStore; records: JobRecords }> = [];
 afterEach(async () => {
   for (const running of processes.splice(0)) {
     await running.manager.close().catch(() => undefined);
-    await running.store.close().catch(() => undefined);
+    await running.records.close().catch(() => undefined);
     await running.gate.flush();
   }
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -159,7 +160,8 @@ async function world(options: { waitMs?: number } = {}) {
   /** One process: a gate read from its state file, a job store on disk and a manager. */
   const boot = async () => {
     const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, setTimer, waitRangeMs: { min: wait, max: wait } });
-    const store = await JobStore.open(jobsPath, PRODUCT_SOURCES, clock);
+    const records = await openJobRecords(jobsPath, PRODUCT_SOURCES, { now: clock });
+    const store = records.jobs;
     const source = new GatedSource(gate);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
@@ -167,11 +169,11 @@ async function world(options: { waitMs?: number } = {}) {
       now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
     });
     subs.attach(manager);
-    processes.push({ gate, store, manager });
-    return { gate, store, source, manager };
+    processes.push({ gate, store, records, manager });
+    return { gate, store, records, source, manager };
   };
   const events = async () => {
-    for (const { store } of processes) await store.activity.flush();
+    for (const { records } of processes) await records.activity.flush();
     return (await readEventFiles(jobsPath)).filter((event) => event.vaultPath === VAULT);
   };
   return { boot, advance, clock: () => now, vault, subs, events };
@@ -340,7 +342,7 @@ describe('cooldown across restarts (P-T6)', () => {
     await eventually(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();
     await first.manager.close();
-    await first.store.close();
+    await first.records.close();
 
     await w.advance(2 * MINUTE);
     const second = await w.boot();
@@ -352,7 +354,7 @@ describe('cooldown across restarts (P-T6)', () => {
     await w.advance(3 * MINUTE);
     expect(await second.manager.whenSettled(job.job.id)).toMatchObject({ state: 'completed' });
     await second.manager.close();
-    await second.store.close();
+    await second.records.close();
   });
 
   it('continues at once when the cooldown ended while the service was stopped', async () => {
@@ -364,7 +366,7 @@ describe('cooldown across restarts (P-T6)', () => {
     await eventually(() => expect(first.manager.get(job.job.id).wait).toBeDefined());
     await first.gate.flush();
     await first.manager.close();
-    await first.store.close();
+    await first.records.close();
 
     await w.advance(6 * MINUTE);
     const second = await w.boot();
@@ -374,6 +376,6 @@ describe('cooldown across restarts (P-T6)', () => {
     expect(done).toMatchObject({ state: 'completed' });
     expect(done.wait).toBeUndefined();
     await second.manager.close();
-    await second.store.close();
+    await second.records.close();
   });
 });

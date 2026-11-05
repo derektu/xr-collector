@@ -8,7 +8,7 @@ import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords } from '../../src/runtime/job-records.js';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { CollectionScheduler, type ScheduleStore, type StoredSchedule } from '../../src/subscriptions/scheduler.js';
 import { SubscriptionService, SubscriptionServices } from '../../src/subscriptions/subscription-service.js';
@@ -83,7 +83,8 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
   };
   const schedule = new MemoryScheduleStore();
   const build = async () => {
-    const store = await JobStore.open(jobsDirectory, SOURCES, now);
+    const records = await openJobRecords(jobsDirectory, SOURCES, { now });
+    const store = records.jobs;
     const vault = new MarkdownVault(new VaultFileWriter(root, SOURCES), { now });
     const collector: Collector = new Collector(vault, search, { recordEvent: (entry) => jobs.recordEvent(entry) });
     const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
@@ -108,7 +109,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     });
     services = { fake: service('fake'), fake2: service('fake2') };
     scheduler = new CollectionScheduler([services.fake, services.fake2], schedule, { now, pollIntervalMs: 24 * 60 * MINUTE });
-    return { store, vault, collector, stores, jobs, services, scheduler };
+    return { records, store, vault, collector, stores, jobs, services, scheduler };
   };
   let current = await build();
   const w = {
@@ -145,14 +146,14 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     },
     async restart() {
       await current.jobs.close();
-      await current.store.close();
+      await current.records.close();
       current = await build();
       await current.jobs.resume();
     },
     async close() {
       await current.scheduler.close();
       await current.jobs.close();
-      await current.store.close();
+      await current.records.close();
     },
   };
   return w;
@@ -349,7 +350,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     expect(w.sources.fake2.captures).toEqual(['busy-1']);
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const reopened = await JobStore.open(w.jobsDirectory, SOURCES, () => w.clock.now);
+    const reopened = (await openJobRecords(w.jobsDirectory, SOURCES, { now: () => w.clock.now })).jobs;
     const remaining = new FakeSource('fake');
     const manager = new JobManager({
       sources: SOURCES,

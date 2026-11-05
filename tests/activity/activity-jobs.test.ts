@@ -17,7 +17,7 @@ import {
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { eventLine, eventText } from '../../src/web/activity-presentation.js';
 import { forwardingPort, type SubscriptionPort } from '../../src/jobs/subscription-port.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords, openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import type {
   YouTubeVideoRef,
@@ -114,7 +114,8 @@ let tick = 0;
 const clock = () => new Date(T0.getTime() + tick++);
 
 /** A job manager over a scripted source that reports to `subscriptions`. */
-function build(subscriptions: SubscriptionPort, store: JobStore, limits: { capture?: number } = {}) {
+function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { capture?: number } = {}) {
+  const store = records.jobs;
   const vault = new MemoryVault();
   const source = new ScriptedSource();
   const timers: Array<() => void> = [];
@@ -131,14 +132,14 @@ function build(subscriptions: SubscriptionPort, store: JobStore, limits: { captu
     await eventually(() => expect(timers).not.toHaveLength(0));
     runTimers();
   };
-  const events = async (query: Parameters<typeof store.activity.query>[0] = {}) => (await store.activity.query(query, { vaultPath: VAULT })).events;
-  return { manager, store, source, vault, runTimers, runNextTimers, events };
+  const events = async (query: Parameters<typeof records.views.query>[0] = {}) => (await records.views.query(query, { vaultPath: VAULT })).events;
+  return { manager, store, records, source, vault, runTimers, runNextTimers, events };
 }
 
 /** Jobs whose subscriptions are an in-memory recorder of what the jobs report. */
-function setup(store: JobStore = JobStore.memory(PRODUCT_SOURCES, clock), limits: { capture?: number } = {}) {
+function setup(records: JobRecords = memoryJobRecords(PRODUCT_SOURCES, { now: clock }), limits: { capture?: number } = {}) {
   const subs = new SubscriptionRecorder();
-  const world = build(subs, store, limits);
+  const world = build(subs, records, limits);
   subs.attach(world.manager);
   return { ...world, subs };
 }
@@ -149,7 +150,7 @@ async function setupWithService() {
   directories.push(root);
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', clock);
   let service: SubscriptionService | null = null;
-  const world = build(forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [service!])), JobStore.memory(PRODUCT_SOURCES, clock));
+  const world = build(forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [service!])), memoryJobRecords(PRODUCT_SOURCES, { now: clock }));
   service = new SubscriptionService('youtube', channelStore, world.manager, {
     sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => world.source.resolveChannel(url), documents: async () => [], now: clock,
@@ -439,7 +440,7 @@ describe('job summary and event fields', () => {
 
 describe('check summaries from real jobs (#96 A2, L6)', () => {
   it('summarizes scheduled checks that cannot list the channel as one network error run between empty runs', async () => {
-    const { manager, source, subs, store, runNextTimers } = setup();
+    const { manager, source, subs, records, runNextTimers } = setup();
     const channel = subscribe(subs, 'UC-runs');
     const check = async (failing: boolean) => {
       if (failing) source.discoverFailures.push(network(), network(), network());
@@ -452,30 +453,30 @@ describe('check summaries from real jobs (#96 A2, L6)', () => {
     for (const failing of [false, false, true, true, false]) states.push((await check(failing)).state);
     expect(states).toEqual(['completed', 'completed', 'failed', 'failed', 'completed']);
 
-    const summary = await store.activity.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-runs' }, { vaultPath: VAULT });
+    const summary = await records.views.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-runs' }, { vaultPath: VAULT });
     const runs = summary.entries.filter((entry) => entry.kind === 'check').map((entry) => [entry.result, entry.count]);
     expect(runs).toEqual([['empty', 1], ['network_error', 2], ['empty', 2]]);
   });
 
   it('shows a first collection of three videos as one subscription, one start, three documents and one result, with queue events only at DEBUG', async () => {
-    const { manager, source, service, store } = await setupWithService();
+    const { manager, source, service, records } = await setupWithService();
     const id = (await source.resolveChannel('https://www.youtube.com/@lifecycle')).id;
     source.channelVideos.set(id, ['lllllllll01', 'lllllllll02', 'lllllllll03'].map((video) => ({
       id: video, title: `影片 ${video}`, url: watchUrl(video), publishedAt: T0.toISOString(), upcoming: false,
     })));
     await manager.whenSettled((await service.add('https://www.youtube.com/@lifecycle')).job.id);
     const scope = { vaultPath: VAULT };
-    await eventually(async () => expect((await store.activity.summary({ view: 'summary', subscriptionId: id }, scope)).entries
+    await eventually(async () => expect((await records.views.summary({ view: 'summary', subscriptionId: id }, scope)).entries
       .some((entry) => entry.kind === 'check')).toBe(true));
 
     const info: ['info', 'warning', 'error'] = ['info', 'warning', 'error'];
-    const summary = (await store.activity.summary({ view: 'summary', subscriptionId: id, severity: info }, scope)).entries;
+    const summary = (await records.views.summary({ view: 'summary', subscriptionId: id, severity: info }, scope)).entries;
     const shown = summary.map((entry) => (entry.kind === 'check' ? `check:${entry.result}:${entry.created}` : entry.event.eventType)).sort();
     expect(shown).toEqual(['check:other:3', 'document.saved', 'document.saved', 'document.saved', 'job.started', 'subscription.added']);
-    const raw = (await store.activity.query({ subscriptionId: id, severity: info }, scope)).events.map((event) => event.eventType);
+    const raw = (await records.views.query({ subscriptionId: id, severity: info }, scope)).events.map((event) => event.eventType);
     expect(raw.filter((type) => type === 'document.saved')).toHaveLength(3);
     expect(raw).not.toContain('job.accepted');
-    const debug = (await store.activity.query({ subscriptionId: id }, scope)).events.map((event) => event.eventType);
+    const debug = (await records.views.query({ subscriptionId: id }, scope)).events.map((event) => event.eventType);
     expect(debug).toContain('job.accepted');
   });
 });
@@ -484,8 +485,9 @@ describe('retention leaves job records alone (A-T3)', () => {
   it('keeps real check summaries and detail after their jobs are pruned and the store restarts (#96 A6)', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-summary-jobs-'));
     directories.push(directory);
-    const store = await JobStore.open(directory, PRODUCT_SOURCES, clock);
-    const first = setup(store);
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: clock });
+    const store = records.jobs;
+    const first = setup(records);
     const channel = subscribe(first.subs, 'UC-summary');
     for (let index = 0; index < 12; index += 1) {
       const submission = await first.manager.submitCheck('youtube', channel, 'scheduled');
@@ -493,41 +495,44 @@ describe('retention leaves job records alone (A-T3)', () => {
     }
     for (let index = 0; index < 1001; index += 1) store.put(finished(`later-${index}`, new Date(T0.getTime() + 86_400_000 + index).toISOString()));
     await first.manager.close();
-    await store.close();
+    await records.close();
 
-    const reopened = await JobStore.open(directory, PRODUCT_SOURCES, clock);
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: clock });
+    const reopened = reopenedRecords.jobs;
     expect(reopened.list(VAULT).some((job) => job.kind === 'youtube.channel')).toBe(false);
-    const summary = await reopened.activity.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-summary' }, { vaultPath: VAULT });
+    const summary = await reopenedRecords.views.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-summary' }, { vaultPath: VAULT });
     const group = summary.entries.find((entry) => entry.kind === 'check')!;
     expect(group).toMatchObject({ count: 12, result: 'empty' });
-    expect((await reopened.activity.group(group.groupId, { vaultPath: VAULT })).checks).toHaveLength(12);
-    await reopened.close();
+    expect((await reopenedRecords.views.group(group.groupId, { vaultPath: VAULT })).checks).toHaveLength(12);
+    await reopenedRecords.close();
   });
 
   it('keeps an interrupted job and an index failure after every event expired, and resumes the job', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-jobs-'));
     directories.push(directory);
     let now = T0;
-    const store = await JobStore.open(directory, PRODUCT_SOURCES, () => now);
-    const first = setup(store);
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => now });
+    const store = records.jobs;
+    const first = setup(records);
     first.source.hold.add('jjjjjjjjjjj');
     const interrupted = (await first.manager.submitItem('youtube', watchUrl('jjjjjjjjjjj'))).job.id;
     await first.source.holds.started('jjjjjjjjjjj');
     await store.flush();
     // The process stops while the capture runs; reopening marks the job interrupted.
     now = new Date(T0.getTime() + 40 * 86_400_000);
-    const reopened = await JobStore.open(directory, PRODUCT_SOURCES, () => now);
-    await reopened.activity.purge();
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => now });
+    const reopened = reopenedRecords.jobs;
+    await reopenedRecords.activity.purge();
     const before = await readFile(path.join(directory, 'jobs.json'), 'utf8');
-    expect((await reopened.activity.query({}, { vaultPath: VAULT })).events.every((entry) => entry.timestamp >= new Date(now.getTime() - 30 * 86_400_000).toISOString())).toBe(true);
+    expect((await reopenedRecords.views.query({}, { vaultPath: VAULT })).events.every((entry) => entry.timestamp >= new Date(now.getTime() - 30 * 86_400_000).toISOString())).toBe(true);
     expect(reopened.get(interrupted)).toMatchObject({ state: 'interrupted' });
     expect(await readFile(path.join(directory, 'jobs.json'), 'utf8')).toBe(before);
 
-    const second = setup(reopened);
+    const second = setup(reopenedRecords);
     await second.manager.resume();
     expect(await second.manager.whenSettled(interrupted)).toMatchObject({ state: 'completed', recovery: { resumedCount: 1 } });
-    await reopened.close();
-    await store.close();
+    await reopenedRecords.close();
+    await records.close();
   });
 });
 

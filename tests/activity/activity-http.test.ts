@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { createHttpApp, type ActivityAccess, type HttpAppOptions } from '../../src/server/app.js';
@@ -41,7 +41,8 @@ function services(failures: CollectorError[] = []) {
     list: async () => [],
     read: async () => saved,
   };
-  const store = JobStore.memory(PRODUCT_SOURCES);
+  const records = memoryJobRecords(PRODUCT_SOURCES);
+  const store = records.jobs;
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
     vaultPath: VAULT, store, sources: PRODUCT_SOURCES, documents: collector,
@@ -60,10 +61,10 @@ function services(failures: CollectorError[] = []) {
     subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null, update: async () => null } as never },
   });
   const activity: ActivityAccess = {
-    query: (query) => store.activity.query(query, { vaultPath: VAULT }),
-    summary: (query) => store.activity.summary(query, { vaultPath: VAULT }),
-    group: (groupId, limit, cursor, severity) => store.activity.group(groupId, { vaultPath: VAULT }, limit, cursor, severity),
-    health: () => store.activity.health(),
+    query: (query) => records.views.query(query, { vaultPath: VAULT }),
+    summary: (query) => records.views.summary(query, { vaultPath: VAULT }),
+    group: (groupId, limit, cursor, severity) => records.views.group(groupId, { vaultPath: VAULT }, limit, cursor, severity),
+    health: () => records.views.health(),
   };
   return { collector, jobs, store, activity };
 }

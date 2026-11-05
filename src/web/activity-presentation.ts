@@ -1,3 +1,4 @@
+import type { EventType } from '../core/event-catalog.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { ActivityLogHealth, ActivityQuery, JobError, JobPhase, JobState, JobView, JobEvent } from '../core/types.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
@@ -72,6 +73,9 @@ export function localDayStart(now: Date, daysBack = 0): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack);
 }
 
+/** The events the "新增文件" record type lists. */
+const DOCUMENT_EVENTS: readonly EventType[] = ['document.saved'];
+
 /** The activity query for the page's record type and inclusive minimum severity. */
 export function activityQuery(state: ActivityViewState, now: Date): ActivityQuery {
   const query: ActivityQuery = {};
@@ -82,7 +86,7 @@ export function activityQuery(state: ActivityViewState, now: Date): ActivityQuer
     error: ['error'],
   } as const;
   query.severity = [...severity[state.minLevel]];
-  if (state.recordType === 'documents') query.eventType = ['document.saved'];
+  if (state.recordType === 'documents') query.eventType = [...DOCUMENT_EVENTS];
   if (state.source) query.subscriptionId = state.source;
   if (state.job) query.jobId = state.job;
   if (state.range === 'today') query.since = localDayStart(now).toISOString();
