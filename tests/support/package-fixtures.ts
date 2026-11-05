@@ -8,7 +8,7 @@ import yauzl from 'yauzl';
 import yazl from 'yazl';
 import { VAULT_MARKER, writeVaultMarker } from '../../src/vault/vault-directory.js';
 import {
-  checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION, unpackPackage, writePackage, type PackageReader,
+  checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, packageFormatVersion, unpackPackage, writePackage, type PackageReader,
 } from '../../src/vault/vault-package.js';
 import type { SourceRegistry } from '../../src/core/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
@@ -89,7 +89,7 @@ export async function packageOf(
   return zipOf([
     ...files.map((file) => ({ name: file.path, data: file.data })),
     ...extra,
-    { name: MANIFEST, data: JSON.stringify({ format: PACKAGE_FORMAT, formatVersion: PACKAGE_FORMAT_VERSION, files: rows, ...manifest }) },
+    { name: MANIFEST, data: JSON.stringify({ format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(PRODUCT_SOURCES), files: rows, ...manifest }) },
   ]);
 }
 
@@ -109,7 +109,7 @@ export async function streamBytes(stream: Readable): Promise<Buffer> {
 /** Gives a folder the marker of a current Vault unless it has one, so a workspace opens it. */
 export async function ensureMarker(root: string): Promise<void> {
   await mkdir(root, { recursive: true });
-  if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test');
+  if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test', PRODUCT_SOURCES);
 }
 
 /** Runs `use` on package bytes opened as a package file of the types of `sources`. */

@@ -22,7 +22,7 @@ async function temp(): Promise<string> {
 }
 async function vault(root: string, documents = 0): Promise<string> {
   await mkdir(path.join(root, 'documents', 'youtube'), { recursive: true });
-  await writeVaultMarker(root, 'XR Collector test');
+  await writeVaultMarker(root, 'XR Collector test', PRODUCT_SOURCES);
   for (let index = 0; index < documents; index += 1) {
     await writeFile(path.join(root, 'documents', 'youtube', `video${index}.md`), '---\n---\n');
   }
@@ -75,7 +75,7 @@ describe('createVaultDirectory', () => {
     expect(await createVaultDirectory(root, 'XR Collector 9.9.9', PRODUCT_SOURCES)).toBe(root);
     const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'));
     expect(marker).toEqual({
-      format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector 9.9.9',
+      format: 'xr-collector-vault', formatVersion: 2, createdBy: 'XR Collector 9.9.9',
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/u),
       id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     });

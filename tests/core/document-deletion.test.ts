@@ -331,7 +331,7 @@ describe('deletion transaction and recovery (A2)', () => {
   ])('refuses to open a Vault whose deletions file has %s', async (_name, contents) => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-deletion-invalid-'));
     directories.push(root);
-    await writeVaultMarker(root, 'test');
+    await writeVaultMarker(root, 'test', PRODUCT_SOURCES);
     await mkdir(path.join(root, 'settings'), { recursive: true });
     await writeFile(path.join(root, DELETIONS_FILE), contents);
 

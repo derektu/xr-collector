@@ -5,8 +5,8 @@ import { productFiles } from '../support/source-imports.js';
 // Guards the developer, not the user: the Vault marker is raised by the one way into a Vault's files
 // (`src/vault/vault-files.ts`), so no store can write a file of a newer format into a Vault an older
 // program still opens. A store that raised the marker itself, or wrote its file without the entry,
-// would make that safety depend on each store remembering it. What the entry writes and which
-// marker each kind of file gets is in tests/plugins/format-versions.test.ts.
+// would make that safety depend on each store remembering it. The version the entry raises the
+// marker to is in tests/plugins/format-versions.test.ts.
 
 /** The file that defines the marker hook, and the entry, the only file that calls it. */
 const DEFINES = 'src/vault/vault-directory.ts';

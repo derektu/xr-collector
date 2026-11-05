@@ -25,7 +25,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 ## Vault 目錄與選址
 
-每個 Vault 是自成一體的目錄。根目錄的標記檔記錄 `format`（固定為 `xr-collector-vault`）、`formatVersion`、建立時間、建立程式與 `id`（UUID），不含路徑或其他裝置資訊，因此整個目錄複製到另一台電腦後仍是同一份有效 Vault。`id` 在建立與從匯出檔建立時寫入，在 App 外搬動資料夾時隨之保留；匯出檔不含標記檔，所以從匯出檔建立的 Vault 得到新的 `id`。程式只開啟現行格式的 Vault：標記檔有 `id`、`formatVersion` 不高於已登錄來源類型宣告的最高 `vaultFormatVersion`（至少 1），設定檔（各已登錄來源類型的訂閱檔、自動檢查總開關與刪除紀錄）都是現行版本。標記檔沒有 `id`、設定檔是其他版本，或格式版本較新時，Vault 不開啟並說明原因，檔案保持原樣。某個來源類型的文件或訂閱檔第一次寫入 Vault 前（包括匯入帶入這些檔案時），標記檔的 `formatVersion` 提高到該類型宣告的 `vaultFormatVersion`；已經同版或更高時標記檔不變，所以只有 YouTube 的 Vault 維持 1，標記檔逐位元不動。
+每個 Vault 是自成一體的目錄。根目錄的標記檔記錄 `format`（固定為 `xr-collector-vault`）、`formatVersion`、建立時間、建立程式與 `id`（UUID），不含路徑或其他裝置資訊，因此整個目錄複製到另一台電腦後仍是同一份有效 Vault。`id` 在建立與從匯出檔建立時寫入，在 App 外搬動資料夾時隨之保留；匯出檔不含標記檔，所以從匯出檔建立的 Vault 得到新的 `id`。Vault 的格式版本是程式的設定：已登錄來源類型宣告的最高 `vaultFormatVersion`，至少為 1，與 Vault 裡有哪些檔案無關。程式只開啟現行格式的 Vault：標記檔有 `id`、`formatVersion` 不高於程式的版本，設定檔（各已登錄來源類型的訂閱檔、自動檢查總開關與刪除紀錄）都是現行版本。標記檔沒有 `id`、設定檔是其他版本，或格式版本較新時，Vault 不開啟並說明原因，檔案保持原樣。建立 Vault 與從匯出檔建立 Vault 時，標記檔直接寫成程式的版本。程式寫入版本較低的 Vault 時（任何 Vault 檔案第一次寫入前，包括原地匯入放入第一個檔案前），先把標記檔的 `formatVersion` 提高到程式的版本，其餘欄位不變；只讀取不寫入時標記檔不變。所以程式寫過的 Vault，較舊的程式一律不開啟，不會誤讀它不認得的檔案。新增的來源類型宣告比既有類型都高的 `vaultFormatVersion` 與 `packageFormatVersion`，`tests/plugins/format-versions.test.ts` 檢查產品的類型各自宣告 1 到類型數的不同版本。
 
 開啟前先檢查目錄：有效標記檔與現行版本的設定檔構成可開啟的 Vault；其他內容一律不是知識庫。檢查不改動目錄。
 
@@ -80,14 +80,14 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 匯出檔是 `.zip`：裡面的檔案與它在 Vault 內的相對路徑一一對應，以 deflate 壓縮，另附 `manifest.json`：
 
 ```json
-{ "format": "xr-collector-package", "formatVersion": 1,
+{ "format": "xr-collector-package", "formatVersion": 2,
   "exportedAt": "<ISO 時間>", "createdBy": "<程式與版本>",
   "source": { "vaultId": "<UUID>", "machine": "<機器名稱>" },
   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
   "files": [{ "path": "documents/youtube/<來源 ID>.md", "size": 0, "sha256": "<hex>" }] }
 ```
 
-`formatVersion` 是匯出檔內有文件或訂閱檔的來源類型所宣告的 `packageFormatVersion` 中最高者，至少為 1；只有 YouTube 的匯出檔是 1。讀取時接受 1 到已登錄來源類型宣告的最高版本，較新的版本拒絕匯入。`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
+`formatVersion` 是程式的設定：已登錄來源類型宣告的最高 `packageFormatVersion`，至少為 1，每個匯出檔都用這個版本，與匯出檔帶了哪些文件、訂閱或刪除紀錄無關。讀取時接受 1 到這個版本，較新的版本拒絕匯入。`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
 
 匯出檔只放 Vault 登記的檔案，內容由 Vault 的紀錄決定，不掃描資料夾：
 

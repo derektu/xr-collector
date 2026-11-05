@@ -165,7 +165,7 @@ describe('CollectorRuntime', () => {
 
   it('refuses update preparation while a Vault import owns the operation lock', async () => {
     const base = await options({ capture: vi.fn() }); const { explicitVaultPath: _explicit, ...value } = base.value;
-    await writeVaultMarker(await mkdir(base.vaultPath, { recursive: true }).then(() => base.vaultPath), 'XR Collector test');
+    await writeVaultMarker(await mkdir(base.vaultPath, { recursive: true }).then(() => base.vaultPath), 'XR Collector test', PRODUCT_SOURCES);
     await writeFile(path.join(value.profilePath, 'vault-selection.json'), JSON.stringify({ path: base.vaultPath }));
     let importEntered!: () => void; const importing = new Promise<void>((resolve) => { importEntered = resolve; });
     let releaseImport!: () => void; const importHeld = new Promise<void>((resolve) => { releaseImport = resolve; });
@@ -568,7 +568,7 @@ describe('CollectorRuntime', () => {
     const setup = await options({ capture: vi.fn() });
     const settings = path.join(setup.vaultPath, 'settings');
     await mkdir(settings, { recursive: true });
-    await writeVaultMarker(setup.vaultPath, 'XR Collector test');
+    await writeVaultMarker(setup.vaultPath, 'XR Collector test', PRODUCT_SOURCES);
     // The Vault passes inspection; its schedule file goes bad once search has started, so the scheduler fails to load it.
     const createSearch = setup.value.workspace.createSearch!;
     setup.value.workspace.createSearch = async (root, statusChanged) => {
@@ -684,7 +684,7 @@ describe('CollectorRuntime Vault setup', () => {
       channelId: 'UC-runtime', channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
       subtitleKind: 'manual', bodyMarkdown: 'Body.',
     }));
-    await writeVaultMarker(setup.vaultPath, 'XR Collector test');
+    await writeVaultMarker(setup.vaultPath, 'XR Collector test', PRODUCT_SOURCES);
     await new VaultSelection(path.join(setup.value.profilePath, 'vault-selection.json')).write(setup.vaultPath);
     await writeFile(path.join(setup.value.profilePath, 'login-startup.json'), '{"deviceOnly":true}\n');
     let enabled = true;
@@ -732,7 +732,7 @@ describe('CollectorRuntime Vault setup', () => {
 
     const other = path.join(path.dirname(setup.value.profilePath), `${path.basename(setup.value.profilePath)}-other-vault`);
     cleanups.push(() => rm(other, { recursive: true, force: true }));
-    await writeVaultMarker(await mkdir(other, { recursive: true }).then(() => other), 'XR Collector test');
+    await writeVaultMarker(await mkdir(other, { recursive: true }).then(() => other), 'XR Collector test', PRODUCT_SOURCES);
     const opened = await fetch(`${runtime.listeners.ui.url}/api/vault/open`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: other }),
     });
@@ -838,7 +838,7 @@ describe('CollectorRuntime Vault setup', () => {
 
     const existing = path.join(setup.root, 'existing');
     await mkdir(path.join(existing, 'documents', 'youtube'), { recursive: true });
-    await writeVaultMarker(existing, 'XR Collector test');
+    await writeVaultMarker(existing, 'XR Collector test', PRODUCT_SOURCES);
     await writeFile(path.join(existing, 'documents', 'youtube', 'video.md'), '---\n---\n');
     const opened = await ui({ action: 'open', path: existing });
     expect(opened.status).toBe(200);
@@ -908,7 +908,7 @@ describe('CollectorRuntime Vault setup', () => {
     const setup = await selected();
     const source = path.join(setup.root, 'source');
     await mkdir(source);
-    await writeVaultMarker(source, 'XR Collector test');
+    await writeVaultMarker(source, 'XR Collector test', PRODUCT_SOURCES);
     const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
     const target = path.join(setup.root, 'Imported');
@@ -924,7 +924,7 @@ describe('CollectorRuntime Vault setup', () => {
     const setup = await selected();
     const source = path.join(setup.root, 'source');
     await mkdir(source);
-    await writeVaultMarker(source, 'XR Collector test');
+    await writeVaultMarker(source, 'XR Collector test', PRODUCT_SOURCES);
     const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
     const target = path.join(setup.root, 'Imported');
@@ -1017,7 +1017,7 @@ describe('CollectorRuntime Vault setup', () => {
     const base = await options({ capture: vi.fn() }, search);
     const { explicitVaultPath: _explicit, ...value } = base.value;
     const setup = { ...base, value };
-    await writeVaultMarker(await mkdir(setup.vaultPath, { recursive: true }).then(() => setup.vaultPath), 'XR Collector test');
+    await writeVaultMarker(await mkdir(setup.vaultPath, { recursive: true }).then(() => setup.vaultPath), 'XR Collector test', PRODUCT_SOURCES);
     await writeFile(path.join(setup.value.profilePath, 'vault-selection.json'), JSON.stringify({ path: setup.vaultPath }));
     const first = await startCollectorServer(setup.value);
     const agent = await agentClient(first);
@@ -1030,7 +1030,7 @@ describe('CollectorRuntime Vault setup', () => {
     const savedAgentSettings = await readFile(setup.value.agentSettingsFile, 'utf8');
     const target = path.join(setup.value.profilePath, '..', `${path.basename(setup.value.profilePath)}-other`);
     cleanups.push(() => rm(target, { recursive: true, force: true }));
-    await writeVaultMarker(await mkdir(target, { recursive: true }).then(() => target), 'XR Collector test');
+    await writeVaultMarker(await mkdir(target, { recursive: true }).then(() => target), 'XR Collector test', PRODUCT_SOURCES);
     const changes: Change[] = [];
     first.changes.subscribe((batch) => changes.push(...batch.changes));
     const opened = await agent('/api/vault/open', { path: target });
@@ -1076,7 +1076,7 @@ describe('CollectorRuntime Vault setup', () => {
     await damagedSelection.close();
 
     await mkdir(path.join(setup.vaultPath, 'settings'), { recursive: true });
-    await writeVaultMarker(setup.vaultPath, 'XR Collector test');
+    await writeVaultMarker(setup.vaultPath, 'XR Collector test', PRODUCT_SOURCES);
     await writeFile(path.join(setup.vaultPath, 'settings', 'youtube-channels.json'), '{');
     await writeFile(path.join(setup.value.profilePath, 'vault-selection.json'), JSON.stringify({ path: setup.vaultPath }));
     const damagedVault = await startCollectorServer(setup.value);

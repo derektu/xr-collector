@@ -392,7 +392,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       let root: string;
       let documentCount = 0;
       if (request.action === 'create') {
-        root = await createNewVault(request.location, request.name, createdBy, this.appFolders());
+        root = await createNewVault(request.location, request.name, createdBy, this.options.sources, this.appFolders());
       } else if (request.action === 'import') {
         root = await importNewVault({
           packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, this.appFolders()), profilePath: this.profilePath, createdBy, sources: this.options.sources,

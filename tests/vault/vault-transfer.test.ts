@@ -50,7 +50,7 @@ describe('workspace transfer through HTTP', () => {
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
       expect((await app.inject(`/api/documents/youtube:${capture.videoId}`)).json().document.bodyMarkdown).toBe(capture.bodyMarkdown);
       expect((await app.inject('/api/schedule')).json().schedule.enabled).toBe(true);
-      expect(JSON.parse(await readFile(path.join(target, VAULT_MARKER), 'utf8'))).toMatchObject({ format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector test' });
+      expect(JSON.parse(await readFile(path.join(target, VAULT_MARKER), 'utf8'))).toMatchObject({ format: 'xr-collector-vault', formatVersion: 2, createdBy: 'XR Collector test' });
     } finally { await app.close(); }
     await workspace.close();
     const restarted = await open(b);

@@ -135,7 +135,7 @@ describe('package format (PKG-01)', () => {
 
     const manifest = await manifestOf(bytes);
     expect(manifest).toMatchObject({
-      format: 'xr-collector-package', formatVersion: 1, exportedAt: '2026-10-18T00:00:00.000Z', createdBy: 'XR Collector test',
+      format: 'xr-collector-package', formatVersion: 2, exportedAt: '2026-10-18T00:00:00.000Z', createdBy: 'XR Collector test',
       summary: { documents: 2, subscriptions: 1, deletions: 1 },
     });
     const files = await packageFiles(bytes);

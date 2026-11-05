@@ -251,7 +251,7 @@ describe('a site that limits requests', () => {
 });
 
 describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
-  it('exports RSS at package version 2, YouTube alone at version 1, and imports, merges and replaces both types', async () => {
+  it('exports at the program\'s package version with or without RSS, and imports, merges and replaces both types', async () => {
     feeds.set('/feed.xml', { body: rss2('【合成】部落格', BLOG.slice(0, 2)) });
     const root = await temp();
     const a = await machine('A', root);
@@ -262,7 +262,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     await mkdir(c.exports, { recursive: true });
     const plain = (await youtubeOnly.exportTo(path.join(c.exports, 'youtube.zip'))).result!.exportPath!;
     const plainReader = await openPackage(plain, PRODUCT_SOURCES);
-    expect(plainReader.manifest.formatVersion).toBe(1);
+    expect(plainReader.manifest.formatVersion).toBe(2);
     plainReader.close();
 
     const workspace = await workspaceOf(a);

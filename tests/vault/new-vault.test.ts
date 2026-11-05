@@ -86,7 +86,7 @@ describe('createNewVault', () => {
   it('creates the named folder as an empty Vault and leaves the location otherwise as it was', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'Other'));
-    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test');
+    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test', PRODUCT_SOURCES);
     expect(root).toBe(path.join(parent, 'XR Collector'));
     expect(await readdir(root)).toEqual([VAULT_MARKER]);
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toMatchObject({ createdBy: 'XR Collector test' });
@@ -97,7 +97,7 @@ describe('createNewVault', () => {
   it('never creates a Vault in an existing folder, even an empty one', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'XR Collector'));
-    await expect(createNewVault(parent, 'XR Collector', 'test')).rejects.toMatchObject({
+    await expect(createNewVault(parent, 'XR Collector', 'test', PRODUCT_SOURCES)).rejects.toMatchObject({
       code: 'vault_invalid', message: '這個位置已經有「XR Collector」，請換個名稱。',
     });
     expect(await readdir(path.join(parent, 'XR Collector'))).toEqual([]);
