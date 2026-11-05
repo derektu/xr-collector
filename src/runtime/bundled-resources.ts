@@ -23,7 +23,7 @@ export interface BundledResources {
   program(name: string, environmentName: string): string;
   /** The Meilisearch program. */
   readonly searchBinary: string;
-  /** The search lexicon. `XR_COLLECTOR_SEARCH_LEXICON` may name it instead, in a package too. */
+  /** The search lexicon. Outside a package `XR_COLLECTOR_SEARCH_LEXICON` may name it instead. */
   readonly searchLexicon: string;
   /** The folder of the Agent Skill the App hands to Agents. */
   readonly skill: string;
@@ -45,14 +45,13 @@ export function bundledResources(layout: ResourceLayout, environment: ResourceEn
   const paths = platform === 'win32' ? path.win32 : path.posix;
   const root = layout.packaged ? layout.resourcesPath : paths.join(layout.checkout, 'resources');
   const runtimeFolder = layout.packaged ? paths.join(root, 'bin') : paths.join(root, 'bin', platform === 'win32' ? 'win' : 'mac');
-  const program = (name: string, environmentName: string): string => {
-    const override = layout.packaged ? undefined : env[environmentName];
-    return override ?? paths.join(runtimeFolder, platform === 'win32' ? `${name}.exe` : name);
-  };
+  const override = (environmentName: string): string | undefined => layout.packaged ? undefined : env[environmentName];
+  const program = (name: string, environmentName: string): string =>
+    override(environmentName) ?? paths.join(runtimeFolder, platform === 'win32' ? `${name}.exe` : name);
   return {
     program,
     searchBinary: program('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
-    searchLexicon: paths.resolve(env.XR_COLLECTOR_SEARCH_LEXICON ?? paths.join(root, 'search', 'coct-main.txt')),
+    searchLexicon: paths.resolve(override('XR_COLLECTOR_SEARCH_LEXICON') ?? paths.join(root, 'search', 'coct-main.txt')),
     skill: paths.join(layout.packaged ? layout.resourcesPath : layout.checkout, 'skills', 'xr-collector-agent'),
     trayIcons: paths.join(root, 'tray'),
   };
