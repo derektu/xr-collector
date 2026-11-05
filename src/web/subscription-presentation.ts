@@ -2,7 +2,7 @@ import type { ChannelJobTrigger, Subscription, SubscriptionCheckStatus, Subscrip
 import { intervalLabel } from '../core/check-interval.js';
 import { upcomingTime, upcomingTimeText, type UpcomingTime } from '../core/upcoming-time.js';
 import { sourceDeclaration } from '../core/source-registry.js';
-import type { SubscriptionDeclaration } from '../plugins/types.js';
+import type { SubscriptionDeclaration } from '../core/source-contract.js';
 
 export { intervalLabel };
 

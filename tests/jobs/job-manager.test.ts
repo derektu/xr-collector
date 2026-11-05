@@ -21,7 +21,7 @@ import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/core/source-contract.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
 import { RecentTargets } from '../../src/subscriptions/recent-targets.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';

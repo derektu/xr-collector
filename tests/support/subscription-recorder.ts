@@ -2,7 +2,7 @@ import { requireDefinition } from '../../src/core/source-registry.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../../src/core/types.js';
 import type { JobManager } from '../../src/jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
-import type { FailureClass, SubscriptionTarget } from '../../src/plugins/types.js';
+import type { FailureClass, SubscriptionTarget } from '../../src/core/source-contract.js';
 
 /** A subscription as the recorder holds it. */
 export interface RecordedSubscription extends SubscriptionTarget {

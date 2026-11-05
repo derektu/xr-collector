@@ -3,7 +3,7 @@ import type { SubscriptionRemoval } from './subscription-files.js';
 import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
 import { requireDefinition, subscriptionKindLabel } from '../core/source-registry.js';
-import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../plugins/types.js';
+import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../core/source-contract.js';
 import {
   AUTO_PAUSE_AFTER_MS,
   AUTO_PAUSE_FAILURES,

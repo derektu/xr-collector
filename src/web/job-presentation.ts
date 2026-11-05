@@ -1,7 +1,7 @@
 import type { ChannelJobTrigger, JobError, JobView, JobPhase, SkipReason } from '../core/types.js';
 import { assertNever, roleOf, roleView } from '../core/job-role.js';
 import { sourceDeclaration } from '../core/source-registry.js';
-import type { SourcePluginDeclaration } from '../plugins/types.js';
+import type { SourcePluginDeclaration } from '../core/source-contract.js';
 import { triggerLabel } from './subscription-presentation.js';
 
 /** The declaration of a job's source type. */

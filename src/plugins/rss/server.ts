@@ -8,7 +8,7 @@ import type {
   SourceDefinition,
   SourcePlugin,
   SubscriptionTarget,
-} from '../types.js';
+} from '../../core/source-contract.js';
 import { findFeedLinks } from './discovery.js';
 import { type Feed, type FeedEntry, looksLikeFeed, parseFeed } from './feed.js';
 import { htmlToMarkdown } from './html.js';

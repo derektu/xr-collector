@@ -3,16 +3,16 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // The core knows source types only through the plugin contract and the registry (P-T3, R11-T8). Only the plugins
-// and the two assembly lists name a type: `src/plugins/index.ts` for the server processes and
-// `src/web/plugins.tsx` (with its stylesheet) for the UI. The contract itself names none.
+// and the product's source list name a type: `src/plugins/declarations.ts` and `src/plugins/index.ts`, and
+// for the UI `src/web/plugins.tsx` (with its stylesheet). The contract itself names none.
 
 const CORE_DIRECTORIES = [
   'src/core', 'src/jobs', 'src/subscriptions', 'src/pacing', 'src/vault', 'src/search', 'src/activity', 'src/server',
   'src/sources', 'src/runtime', 'src/web',
 ];
-const CONTRACT = 'src/plugins/types.ts';
-/** The files under `src/plugins` a core file may import: the contract and the server assembly list. */
-const PLUGIN_ENTRIES = new Set([CONTRACT, 'src/plugins/index.ts']);
+const CONTRACT = 'src/core/source-contract.ts';
+/** The files under `src/plugins` a core file may import: the product's source list. */
+const PLUGIN_ENTRIES = new Set(['src/plugins/declarations.ts', 'src/plugins/index.ts']);
 const WEB_ASSEMBLY = new Set(['src/web/plugins.tsx', 'src/web/plugins.css']);
 const TYPE_NAME = /youtube|yt-?dlp|rss/iu;
 /** A subscription is a `subscriptionId` in the core; `channelId` is YouTube's word. */
@@ -26,7 +26,7 @@ function filesUnder(directory: string): string[] {
   });
 }
 
-const coreFiles = [...CORE_DIRECTORIES.flatMap(filesUnder), CONTRACT]
+const coreFiles = CORE_DIRECTORIES.flatMap(filesUnder)
   .filter((file) => /\.(?:ts|tsx|css)$/u.test(file) && !WEB_ASSEMBLY.has(file));
 
 describe('a core that names no source type (P-T3)', () => {
@@ -59,7 +59,7 @@ describe('a core that names no source type (P-T3)', () => {
     expect(imports).toEqual([]);
   });
 
-  it('imports nothing under src/plugins from the core but the contract and the server assembly list', () => {
+  it('imports nothing under src/plugins from the core but the product\'s source list', () => {
     const imports = coreFiles.flatMap((file) => [...readFileSync(file, 'utf8').matchAll(IMPORT)]
       .map((match) => match[1]!)
       .filter((specifier) => specifier.startsWith('.'))

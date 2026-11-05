@@ -9,7 +9,7 @@ import type {
   SourceDefinition,
   SourcePlugin,
   SubscriptionTarget,
-} from '../../src/plugins/types.js';
+} from '../../src/core/source-contract.js';
 import { HeldCaptures } from './held-captures.js';
 
 /**

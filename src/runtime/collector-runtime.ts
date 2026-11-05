@@ -15,6 +15,7 @@ import {
 import { loadBuildInfo } from './build-info.js';
 import { ChangeFeed } from '../core/change-feed.js';
 import { CollectionPause } from '../core/collection-pause.js';
+import { checkRegisteredSources } from '../core/source-registry.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { JobStore } from '../jobs/job-store.js';
@@ -143,7 +144,9 @@ export class CollectorRuntime {
     this.jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
   }
 
+  /** Throws before opening anything when the registered source types are not `workspace.plugins`. */
   static async start(options: CollectorRuntimeOptions): Promise<CollectorRuntime> {
+    checkRegisteredSources(options.workspace?.plugins ?? null);
     const instanceId = randomUUID();
     const selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };

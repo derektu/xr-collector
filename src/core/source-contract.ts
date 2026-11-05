@@ -4,7 +4,7 @@ import type {
   JobPhase,
   SourceTypeInfo,
   SubscriptionSettings,
-} from '../core/types.js';
+} from './types.js';
 
 /**
  * The contract between the type-agnostic core and one source type. A source plugin owns everything

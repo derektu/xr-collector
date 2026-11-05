@@ -7,7 +7,7 @@ import type {
   YouTubeChannelSource,
 } from './adapter.js';
 import { CollectorError } from '../../core/types.js';
-import type { SubscriptionTarget } from '../types.js';
+import type { SubscriptionTarget } from '../../core/source-contract.js';
 import { classifyYtDlpError, UNGATED, type RequestGate } from './ytdlp-capture.js';
 
 interface YtDlpChannelEntry {

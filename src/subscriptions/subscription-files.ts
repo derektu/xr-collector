@@ -1,6 +1,6 @@
 import { scheduleFileDescription } from '../core/source-registry.js';
 import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
-import type { SourceDefinition } from '../plugins/types.js';
+import type { SourceDefinition } from '../core/source-contract.js';
 
 /**
  * Vault files of subscriptions, relative to the Vault root. Each source type with subscriptions has

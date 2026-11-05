@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import type { DocumentMetadata, SavedDocument } from '../../src/core/types.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument } from '../../src/core/source-contract.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';

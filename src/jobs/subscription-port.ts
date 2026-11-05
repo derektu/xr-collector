@@ -1,4 +1,4 @@
-import type { FailureClass, CheckRange, SubscriptionTarget } from '../plugins/types.js';
+import type { FailureClass, CheckRange, SubscriptionTarget } from '../core/source-contract.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../core/types.js';
 
 /** What a check of one subscription discovers with, read when its discovery starts. */

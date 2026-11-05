@@ -1,6 +1,6 @@
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
 import type { SourceKindInfo, UrlRecognition } from '../core/types.js';
-import type { SourcePluginDeclaration } from '../plugins/types.js';
+import type { SourcePluginDeclaration } from '../core/source-contract.js';
 
 /**
  * The add dialogs that exist: `url` adds one item from a URL, and `<type>-<kind>` subscribes with a

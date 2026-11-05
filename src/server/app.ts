@@ -19,7 +19,7 @@ import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js'
 import type { UpdateAccess, UpdateSelection } from '../updates/types.js';
 import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
-import type { SubscriptionDeclaration } from '../plugins/types.js';
+import type { SubscriptionDeclaration } from '../core/source-contract.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
 import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
 import {

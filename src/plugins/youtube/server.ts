@@ -8,7 +8,7 @@ import type {
   SourceDefinition,
   SourcePlugin,
   SubscriptionTarget,
-} from '../types.js';
+} from '../../core/source-contract.js';
 import { youtubeSource, type CapturedTranscript, type DiscoveredYouTubeVideo, type RequestOptions, type YouTubeSource } from './adapter.js';
 import type { CollectionPolicy } from './settings.js';
 import { youtubeDeclaration, type YouTubeDocumentMetadata } from './shared.js';

@@ -1,4 +1,4 @@
-import type { SubscriptionTarget } from '../plugins/types.js';
+import type { SubscriptionTarget } from '../core/source-contract.js';
 
 /** How long a preview's target stands in for resolving the same address again. */
 export const RECENT_TARGET_TTL_MS = 10 * 60_000;
