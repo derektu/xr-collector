@@ -36,6 +36,7 @@ import type {
   AgentPortSetting,
 } from '../core/device-types.js';
 import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey, type ActivityParameters } from '../core/api-routes.js';
+import { pageOfView } from './activity-view.js';
 
 interface ErrorResponse {
   error?: {
@@ -226,15 +227,11 @@ export const api = {
   },
 
   async activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {
-    const page = await call(API_ROUTES.activity, { query: { ...activityParameters(query), jobId: query.jobId || undefined, view: query.view || undefined }, signal });
-    if (!('events' in page)) throw new Error('The activity log answered a summary page to a raw query.');
-    return page;
+    return pageOfView(await call(API_ROUTES.activity, { query: { ...activityParameters(query), jobId: query.jobId || undefined, view: query.view || undefined }, signal }), 'raw');
   },
 
   async activitySummary(query: ActivityQuery, signal?: AbortSignal): Promise<ActivitySummaryPage> {
-    const page = await call(API_ROUTES.activity, { query: { ...activityParameters(query), view: 'summary' }, signal });
-    if (!('entries' in page)) throw new Error('The activity log answered a raw page to a summary query.');
-    return page;
+    return pageOfView(await call(API_ROUTES.activity, { query: { ...activityParameters(query), view: 'summary' }, signal }), 'summary');
   },
 
   activityGroup(groupId: string, query: { limit?: number; cursor?: string; severity?: ActivityQuery['severity'] } = {}): Promise<ActivityGroupPage> {

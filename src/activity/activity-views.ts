@@ -70,6 +70,7 @@ export class ActivityViews {
     const events = matches.slice(0, limit);
     const last = events[events.length - 1];
     return {
+      view: 'raw',
       events,
       nextCursor: matches.length > limit && last ? encodeCursor(last, filterKey) : null,
       retentionDays: RETENTION_DAYS,
@@ -106,6 +107,7 @@ export class ActivityViews {
     const entries = snapshot.entries.slice(offset, offset + limit);
     const next = offset + entries.length;
     return {
+      view: 'summary',
       entries,
       nextCursor: next < snapshot.entries.length ? encodeSummaryCursor(snapshotId, next, filter) : null,
       retentionDays: RETENTION_DAYS,

@@ -125,6 +125,7 @@ export interface ActivityCheckSummary {
 export type ActivitySummaryEntry = { kind: 'event'; event: JobEvent } | ActivityCheckSummary;
 
 export interface ActivitySummaryPage {
+  view: 'summary';
   entries: ActivitySummaryEntry[];
   nextCursor: string | null;
   retentionDays: number;
@@ -165,6 +166,7 @@ export interface ActivityLogHealth {
 }
 
 export interface ActivityPage {
+  view: 'raw';
   /** Newest first. */
   events: JobEvent[];
   nextCursor: string | null;

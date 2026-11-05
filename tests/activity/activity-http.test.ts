@@ -122,6 +122,31 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect(infoUp.events.every((event: { severity: string }) => event.severity !== 'debug')).toBe(true);
   });
 
+  it('names the shape of each activity page in view, including a summary query that names a job', async () => {
+    const { collector, jobs, store, activity } = services();
+    store.event({
+      severity: 'info', eventType: 'job.completed', message: '沒有新影片。', vaultPath: VAULT, jobId: 'check-0',
+      sourceType: 'youtube', sourceId: 'UC-view', subscriptionId: 'UC-view', sourceTitle: '格式頻道', trigger: 'scheduled', outcome: 'empty',
+      check: { trigger: 'scheduled', result: 'empty', created: 0, existing: 1, failed: 0, skipped: 0 },
+    });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity });
+    cleanups.push(() => ui.close());
+    const read = async (query: string) => (await ui.inject({ method: 'GET', url: `/api/activity?${query}` })).json();
+
+    for (const query of ['limit=10', 'view=raw&limit=10']) {
+      const page = await read(query);
+      expect(page.view).toBe('raw');
+      expect(page.events).toHaveLength(1);
+    }
+    const summary = await read('view=summary&limit=10');
+    expect(summary.view).toBe('summary');
+    expect(summary.entries).toHaveLength(1);
+    const forJob = await read('view=summary&jobId=check-0&limit=10');
+    expect(forJob.view).toBe('raw');
+    expect(forJob.events).toHaveLength(1);
+    expect(forJob.entries).toBeUndefined();
+  });
+
   it('stays readable while an import holds the Vault, and before a Vault is chosen', async () => {
     const { collector, jobs, activity } = services();
     const transfer = {
