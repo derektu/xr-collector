@@ -18,6 +18,8 @@ serve(app, API_ROUTES.update, async () => ({ updates: update }));
 // @ts-expect-error A response key left out.
 serve(app, API_ROUTES.resetAgentKey, async () => ({ connection }));
 serve(app, API_ROUTES.vaultStatus, async () => transfer);
+// @ts-expect-error A JSON route answers its response, not a reply it sent.
+serve(app, API_ROUTES.vaultStatus, async (_request, reply) => reply.send(transfer));
 // An event stream or a file route answers with the reply it sent.
 serve(app, API_ROUTES.agentSkill, async (_request, reply) => reply.send('zip'));
 
