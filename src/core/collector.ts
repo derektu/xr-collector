@@ -128,7 +128,7 @@ export class Collector {
       this.noted(id);
       this.options.recordEvent?.({
         severity: 'info', eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
-        documentId: id, sourceId: document.sourceId, sourceTitle: document.title,
+        documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true,
       });
       return { document, recollected: true };
     });
@@ -174,7 +174,7 @@ export class Collector {
         sourceType: document.sourceType, sourceId: document.sourceId, sourceUrl: document.sourceUrl, title: document.title,
         publisherId: document.publisher.id, publisherName: document.publisher.name,
       });
-      const event = { documentId: id, sourceId: document.sourceId, sourceTitle: document.title };
+      const event = { documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true as const };
       try {
         await remove.call(this.vault, id);
       } catch (error) {

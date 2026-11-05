@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CollectorError, type LoginStartupStatus } from '../core/types.js';
-import type { LoginStartupAccess } from '../core/login-startup.js';
+import { loginStartupStatus, type LoginStartupAccess } from '../core/login-startup.js';
 import { replaceFile } from '../core/json-file.js';
 
 export const LOGIN_STARTUP_ARGUMENT = '--login-startup';
@@ -53,10 +53,7 @@ export class DesktopLoginStartup implements LoginStartupAccess {
       const current = windowsStatus(this.adapter.get(this.currentWindowsQueryOptions()), this.adapter.executablePath);
       if (!current.enabled) {
         const remembered = await this.readRecord();
-        if (remembered && !samePath(remembered.path, this.adapter.executablePath)) return {
-          ...current,
-          message: 'XR Collector 的 App 位置已變更；如要使用登入自啟，請在此重新開啟。',
-        };
+        if (remembered && !samePath(remembered.path, this.adapter.executablePath)) return loginStartupStatus('relocated');
       }
       return current;
     } catch (cause) {
@@ -214,22 +211,18 @@ export class DesktopLoginStartup implements LoginStartupAccess {
 }
 
 function unavailableStatus(): LoginStartupStatus {
-  return { supported: false, enabled: false, state: 'unavailable', message: '登入自啟只可在已安裝的 macOS 或 Windows App 中設定。' };
+  return loginStartupStatus('unavailable');
 }
 
 function macStatus(settings: LoginItemSettings): LoginStartupStatus {
-  if (settings.status === 'requires-approval') return {
-    supported: true, enabled: false, state: 'requires_approval',
-    message: '請到「系統設定 → 一般 → 登入項目與延伸功能」允許 XR Collector。',
-  };
+  if (settings.status === 'requires-approval') return loginStartupStatus('requires_approval');
   const enabled = settings.status ? settings.status === 'enabled' : settings.openAtLogin;
-  return { supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: enabled ? '已在登入電腦時自動啟動。' : '登入自啟已關閉。' };
+  return loginStartupStatus(enabled ? 'enabled' : 'disabled');
 }
 
 function windowsStatus(settings: LoginItemSettings, executablePath: string): LoginStartupStatus {
   const owned = ownedWindowsItem(settings, executablePath);
-  const enabled = settings.openAtLogin && owned?.enabled === true;
-  return { supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: enabled ? '已在登入電腦時自動啟動。' : '登入自啟已關閉。' };
+  return loginStartupStatus(settings.openAtLogin && owned?.enabled === true ? 'enabled' : 'disabled');
 }
 
 function ownedWindowsItem(settings: LoginItemSettings, executablePath: string): LaunchItem | undefined {

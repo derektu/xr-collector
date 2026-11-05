@@ -611,9 +611,12 @@ export class SubscriptionService {
     return new CollectorError('subscription_not_found', `找不到這個 ${this.options.sources.subscriptionKindLabel(this.type)}訂閱。`);
   }
 
-  /** The fields that tie a subscription event to its subscription, so the activity view can show and filter it by source. */
-  private subject(id: string, title: string): { sourceType: string; sourceId: string; sourceTitle: string; subscriptionId: string } {
-    return { sourceType: this.type, sourceId: id, sourceTitle: title, subscriptionId: id };
+  /**
+   * The fields that tie a subscription event to its subscription, so the activity view can show and
+   * filter it by source. Every subscription event's message names the subscription.
+   */
+  private subject(id: string, title: string): { sourceType: string; sourceId: string; sourceTitle: string; subscriptionId: string; namesSource: true } {
+    return { sourceType: this.type, sourceId: id, sourceTitle: title, subscriptionId: id, namesSource: true };
   }
 }
 

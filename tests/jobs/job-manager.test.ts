@@ -153,13 +153,16 @@ describe('JobManager', () => {
   });
 
   it('keeps the saved document and marks the job when the index update fails', async () => {
-    const { manager, source, vault } = setup({ failIndex: true });
+    const { manager, source, vault, store } = setup({ failIndex: true });
     source.holdCaptures = false;
     const id = videoId(2);
     const job = await manager.whenSettled((await manager.submitItem('youtube', watchUrl(id))).job.id);
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created', saved: true, indexed: false } });
     expect(job.result?.indexMessage).toBeTruthy();
     expect(vault.documents.has(id)).toBe(true);
+    // The Activity page reads the index failure from the completion event, not from its message.
+    const { events } = await store.activity.query({ jobId: job.id, eventType: ['job.completed'] }, { vaultPath: job.vaultPath });
+    expect(events[0]).toMatchObject({ jobRole: 'item', outcome: 'created', indexed: false });
   });
 
   it('returns the active job for a repeated video and captures it once', async () => {

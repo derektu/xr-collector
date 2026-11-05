@@ -259,7 +259,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
             </li>)}</ol>
           : <ol className="log-rows">{log.events.map((event) => {
             const level = eventLevel(event);
-            const text = eventText(event);
+            const text = eventText(declarations, event);
             const documentId = event.documentId;
             const subscriptionId = event.subscriptionId;
             // An entry written before events named their source type belongs to the first type with subscriptions.
@@ -290,9 +290,9 @@ function SummaryEvent({ event }: { event: JobEvent }) {
   const declarations = useSourceDeclarations();
   const subscriptionType = event.sourceType ?? declarations.list.find((declaration) => declaration.subscription)?.id;
   return <li className="summary-row" data-testid="summary-event" data-event-type={event.eventType} data-severity={event.severity}><Icon name="activity" size={16} />
-    <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(event)}</a>
-      : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(event)}</a>
-        : eventText(event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
+    <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(declarations, event)}</a>
+      : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(declarations, event)}</a>
+        : eventText(declarations, event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
 }
 
 function summaryCheckTitle(declarations: SourceDeclarations, entry: Extract<ActivitySummaryEntry, { kind: 'check' }>): string {
@@ -344,7 +344,7 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
               data-event-type={event.eventType} data-severity={event.severity}><time>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span><span className={type ? `log-type type-${type.icon}` : 'log-type'}>
-                {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}</span><span>{eventText(event)}</span></li>;
+                {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}</span><span>{eventText(declarations, event)}</span></li>;
           })}</ol>}
         </details>)}
         {page.nextCursor ? <div className="activity-more"><button className="button small" disabled={loading} onClick={() => void older()}>{loading ? '正在讀取…' : '載入更早的檢查'}</button></div> : null}

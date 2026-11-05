@@ -1,7 +1,7 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { ActivityLogHealth, ActivityQuery, JobError, JobPhase, JobState, JobView, JobEvent } from '../core/types.js';
-import { COLLECTION_COMPLETED } from '../core/job-completion.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
+import { itemCount, itemNoun } from './subscription-presentation.js';
 
 export type ActivityRecordType = 'all' | 'documents';
 export type ActivityMinLevel = 'debug' | 'info' | 'warning' | 'error';
@@ -101,20 +101,38 @@ export function eventLevel(event: Pick<JobEvent, 'severity'>): EventLevel {
 }
 
 /**
- * What a log line says. `source` is the source's title that leads the line; a plain message that
- * already names its source keeps its own wording and has none. `adding` marks a subscription
- * request. `collected` is a completion whose message opens with the job manager's
- * `COLLECTION_COMPLETED`, with the rest of that message as `detail`; any other completion keeps its
- * message.
+ * What a log line says. `source` is the source's title that leads the line; an event whose message
+ * names its source itself (`namesSource`) keeps its own wording and has none. `adding` marks a
+ * subscription request. `collected` is a completion that collected: an item stored new, or a check
+ * that was not skipped and recorded its counts. Any other completion keeps its message.
  */
 export type EventLine =
   | { line: 'accepted' | 'started'; source: string | null; adding: boolean }
   | { line: 'document_saved' | 'subscribed'; source: string | null }
   | { line: 'subscription_added'; source: string | null }
-  | { line: 'collected'; source: string | null; detail: string }
+  | { line: 'collected'; source: string | null; collected: Collected }
   | { line: 'failed' | 'completed' | 'message'; source: string | null; message: string };
 
-export function eventLine(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole'>): EventLine {
+/**
+ * What a collection produced: an item stored (`indexed` false when search was not updated), a check
+ * that found nothing new, or a check's counts of items.
+ */
+export type Collected =
+  | { result: 'stored'; indexed: boolean }
+  | { result: 'nothing_new' }
+  | { result: 'counts'; created: number; existing: number; skipped: number; failed: number };
+
+type LineEvent = Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole' | 'outcome' | 'check' | 'indexed' | 'namesSource'>;
+
+function collected(event: LineEvent): Collected | null {
+  if (event.jobRole === 'item') return event.outcome === 'created' ? { result: 'stored', indexed: event.indexed !== false } : null;
+  if (event.jobRole !== 'check' || !event.check || event.outcome === undefined || event.outcome === 'skipped') return null;
+  if (event.outcome === 'empty') return { result: 'nothing_new' };
+  const { created, existing, skipped, failed } = event.check;
+  return { result: 'counts', created, existing, skipped, failed };
+}
+
+export function eventLine(event: LineEvent): EventLine {
   const source = event.sourceTitle || null;
   const adding = event.jobRole === 'add';
   switch (event.eventType) {
@@ -123,20 +141,32 @@ export function eventLine(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'm
     case 'document.saved': return { line: 'document_saved', source };
     case 'subscription.added': return { line: 'subscription_added', source };
     case 'job.failed': return { line: 'failed', source, message: event.message };
-    case 'job.completed':
+    case 'job.completed': {
       if (adding) return { line: 'subscribed', source };
-      return event.message.startsWith(COLLECTION_COMPLETED)
-        ? { line: 'collected', source, detail: event.message.slice(COLLECTION_COMPLETED.length) }
-        : { line: 'completed', source, message: event.message };
-    default: return { line: 'message', source: source && !event.message.includes(source) ? source : null, message: event.message };
+      const result = collected(event);
+      return result ? { line: 'collected', source, collected: result } : { line: 'completed', source, message: event.message };
+    }
+    default: return { line: 'message', source: event.namesSource ? null : source, message: event.message };
   }
+}
+
+function collectedText(declarations: SourceDeclarations, sourceType: string | undefined, result: Collected): string {
+  if (result.result === 'stored') return result.indexed ? '。' : '，搜尋更新失敗。';
+  if (result.result === 'nothing_new') return `，沒有新${itemNoun(declarations, sourceType) || '項目'}。`;
+  const parts = [
+    ...(result.created ? [`新增 ${itemCount(declarations, sourceType, result.created)}`] : []),
+    ...(result.existing ? [`已存在 ${itemCount(declarations, sourceType, result.existing)}`] : []),
+    ...(result.skipped ? [`略過 ${itemCount(declarations, sourceType, result.skipped)}`] : []),
+    ...(result.failed ? [`失敗 ${itemCount(declarations, sourceType, result.failed)}`] : []),
+  ];
+  return parts.length ? `：${parts.join('・')}。` : '。';
 }
 
 /**
  * The log line: the source's title, the reason a channel job started it, then the message. A message
  * that already names the source, such as a subscription change, keeps its own wording.
  */
-export function eventText(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole'>): string {
+export function eventText(declarations: SourceDeclarations, event: LineEvent & Pick<JobEvent, 'sourceType'>): string {
   const line = eventLine(event);
   const prefix = line.source ? `${line.source}：` : '';
   switch (line.line) {
@@ -146,7 +176,7 @@ export function eventText(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'm
     case 'subscription_added': return `新增訂閱${line.source ? `：${line.source}` : ''}。`;
     case 'failed': return `${prefix}發生錯誤：${line.message}`;
     case 'subscribed': return `${prefix}已新增訂閱。`;
-    case 'collected': return `${prefix}完成收集${line.detail}`;
+    case 'collected': return `${prefix}完成收集${collectedText(declarations, event.sourceType, line.collected)}`;
     case 'completed': return `${prefix}${line.message}`;
     case 'message': return `${prefix}${line.message}`;
   }

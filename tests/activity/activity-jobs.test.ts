@@ -10,11 +10,12 @@ import {
   CollectorError,
   type CollectionJob,
   type DocumentSummary,
+  type JobEvent,
   type SavedDocument,
   type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { eventLine } from '../../src/web/activity-presentation.js';
+import { eventLine, eventText } from '../../src/web/activity-presentation.js';
 import { forwardingPort, type SubscriptionPort } from '../../src/jobs/subscription-port.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -29,13 +30,24 @@ import { transcriptOf } from '../support/youtube-documents.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
-import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { PRODUCT_DECLARATIONS, PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
 
 const VAULT = '/vaults/activity';
 const T0 = new Date('2026-10-15T06:00:00.000Z');
 const directories: string[] = [];
+
+/**
+ * The Activity line of a collected completion reads its result from the event's fields and says what
+ * the server's message says after its opening words.
+ */
+function expectCollectedLine(completed: JobEvent): void {
+  const opening = '收集完成';
+  expect(completed.message.startsWith(opening)).toBe(true);
+  expect(eventLine(completed).line).toBe('collected');
+  expect(eventText(PRODUCT_DECLARATIONS, completed)).toBe(`${completed.sourceTitle ? `${completed.sourceTitle}：` : ''}完成收集${completed.message.slice(opening.length)}`);
+}
 
 afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
@@ -359,9 +371,8 @@ describe('job summary and event fields', () => {
     const { manager, events } = setup();
     const done = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('zzzzzzzzzzz'))).job.id);
     const completed = (await events({ jobId: done.id, eventType: ['job.completed'] }))[0]!;
-    expect(completed).toMatchObject({ message: '收集完成。', jobRole: 'item', outcome: 'created' });
-    // The Activity page recognizes the job manager's completion wording; a change to it fails here.
-    expect(eventLine(completed)).toMatchObject({ line: 'collected', detail: '。' });
+    expect(completed).toMatchObject({ jobRole: 'item', outcome: 'created' });
+    expectCollectedLine(completed);
   });
 
   it('counts active jobs and jobs finished since a time, leaving out retried failures', async () => {
@@ -394,8 +405,8 @@ describe('job summary and event fields', () => {
     const accepted = (await events({ jobId: submission!.job.id, eventType: ['job.accepted'] })).find((entry) => entry.jobId === submission!.job.id)!;
     expect(accepted).toMatchObject({ trigger: 'scheduled', sourceTitle: '頻道 UC9', subscriptionId: 'UC9', jobRole: 'check' });
     const completed = (await events({ jobId: submission!.job.id, eventType: ['job.completed'] })).find((entry) => entry.jobId === submission!.job.id)!;
-    expect(completed.message).toBe('收集完成：新增 1 支影片。');
-    expect(eventLine(completed)).toMatchObject({ line: 'collected', detail: '：新增 1 支影片。' });
+    expect(completed).toMatchObject({ outcome: 'created', check: { created: 1, existing: 0, failed: 0, skipped: 0 } });
+    expectCollectedLine(completed);
     const videoAccepted = (await events({ eventType: ['job.accepted'] })).find((entry) => entry.parentJobId === submission!.job.id)!;
     expect(videoAccepted).toMatchObject({ sourceTitle: '頻道影片', jobRole: 'item' });
     const chronology = await events({ jobId: submission!.job.id });
@@ -403,7 +414,26 @@ describe('job summary and event fields', () => {
       .toBeLessThan(chronology.findIndex((entry) => entry.eventType === 'channel.discovered'));
     expect((await events({ subscriptionId: 'UC9' })).length).toBeGreaterThanOrEqual(6);
     await service.setEnabled('UC9', false);
-    expect((await events({ subscriptionId: 'UC9', eventType: ['subscription.paused'] }))[0]).toMatchObject({ sourceTitle: '頻道 UC9' });
+    expect((await events({ subscriptionId: 'UC9', eventType: ['subscription.paused'] }))[0]).toMatchObject({ sourceTitle: '頻道 UC9', namesSource: true });
+  });
+
+  it('says a check that found nothing new, and one whose video failed, from the event fields', async () => {
+    const { manager, source, subs, events } = setup();
+    const channel = subscribe(subs, 'UC-results');
+    const completion = async (id: string) => (await events({ jobId: id, eventType: ['job.completed'] })).find((entry) => entry.jobId === id)!;
+    const empty = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'manual')).job.id);
+    expect(await completion(empty.id)).toMatchObject({ outcome: 'empty' });
+    expectCollectedLine(await completion(empty.id));
+
+    source.channelVideos.set('UC-results', [
+      { id: 'uuuuuuuuuuu', title: '失敗', url: watchUrl('uuuuuuuuuuu'), publishedAt: T0.toISOString(), upcoming: false },
+    ]);
+    source.captureFailures.set('uuuuuuuuuuu', [noSubtitles()]);
+    const failing = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'manual')).job.id);
+    expect(await completion(failing.id)).toMatchObject({ outcome: 'partial', check: { created: 0, failed: 1 } });
+    expectCollectedLine(await completion(failing.id));
+    // A failed video's event names the video in its message, so its line does not lead with the title.
+    expect((await events({ jobId: failing.id, eventType: ['subscription.item_failed'] }))[0]).toMatchObject({ sourceTitle: '失敗', namesSource: true });
   });
 });
 

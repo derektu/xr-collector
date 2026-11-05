@@ -731,20 +731,20 @@ export class VaultWorkspace {
     for (const record of recovery.completed) {
       jobs.recordEvent({
         severity: 'info', eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
-        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }
     for (const record of recovery.unresolved) {
       jobs.recordEvent({
         severity: 'warning', eventType: 'document.delete_unresolved',
         message: `「${record.title}」有刪除紀錄，但文件檔缺少可讀的收集時間；文件維持隱藏，檔案與刪除紀錄都保留。`,
-        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }
     for (const record of recovery.cleared) {
       jobs.recordEvent({
         severity: 'info', eventType: 'document.recollected', message: `已重新收集「${record.title}」，解除刪除紀錄。`,
-        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
+        documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }
     const partial = { root, files, vaultId, runtime, collector, subscriptions, jobs };

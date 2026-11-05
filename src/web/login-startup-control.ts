@@ -85,3 +85,21 @@ export class LoginStartupControl {
     this.onChange(state);
   }
 }
+
+/**
+ * What the setting says below the switch. The switch alone shows the routine `enabled` and
+ * `disabled` states; every other state carries guidance, shown in the server's own message.
+ */
+export type LoginStartupNote =
+  | { kind: 'pending' | 'loading' | 'unavailable' }
+  | { kind: 'error' | 'status'; message: string }
+  | null;
+
+export function loginStartupNote({ status, pending, error }: LoginStartupState): LoginStartupNote {
+  if (pending) return { kind: 'pending' };
+  if (error) return { kind: 'error', message: error };
+  if (!status) return { kind: 'loading' };
+  if (!status.supported) return { kind: 'unavailable' };
+  if (status.state === 'enabled' || status.state === 'disabled') return null;
+  return { kind: 'status', message: status.message };
+}

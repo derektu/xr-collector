@@ -682,8 +682,11 @@ export interface JobOverview {
 
 export type EventSeverity = 'debug' | 'info' | 'warning' | 'error';
 
-/** Device login-startup state, shared by the Settings UI and authorized Agents. */
-export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'unavailable';
+/**
+ * Device login-startup state, shared by the Settings UI and authorized Agents. `relocated` is off
+ * because the App was registered from another location (Windows) and can be turned on again here.
+ */
+export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'relocated' | 'unavailable';
 
 export interface LoginStartupStatus {
   supported: boolean;
@@ -731,6 +734,10 @@ export interface JobEvent {
   sourceId?: string;
   /** Display title of the item or subscription target. */
   sourceTitle?: string;
+  /** The message names the event's source itself, so a line showing it does not lead with `sourceTitle`. */
+  namesSource?: true;
+  /** `job.completed` of an item: false when the document was stored but the search index was not updated. */
+  indexed?: false;
   /** Durable role of a job event, so summary projection does not depend on retained job records. */
   jobRole?: JobRole;
   /** The subscription the event belongs to, for check jobs and the items they queued. */
