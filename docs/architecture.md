@@ -8,8 +8,8 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 | 模組 | 現行責任 |
 | --- | --- |
-| `src/electron` | 主視窗、profile、內附 runtime 路徑與程式生命週期 |
-| `src/runtime` | 單一 VaultWorkspace、UI／Agent listeners 與啟動／關閉順序 |
+| `src/electron` | 主視窗、profile 與程式生命週期 |
+| `src/runtime` | 單一 VaultWorkspace、UI／Agent listeners 與啟動／關閉順序；隨附資源（runtime 程式、搜尋詞庫、Agent Skill、系統匣圖示）的路徑只由 `bundled-resources.ts` 依開發版或打包版與平台算出，Electron、開發 server 與 verify skill 都向它要 |
 | `src/server` | UI／Agent HTTP routes、Bearer 授權與 listener |
 | `src/core` | 共用型別、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引 |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |

@@ -8,6 +8,7 @@ import type { BuildInfo } from '../core/types.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
+import { bundledResources } from '../runtime/bundled-resources.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { CloseHintRecord } from './close-hint.js';
@@ -78,13 +79,10 @@ if (process.platform === 'win32') {
     ? validationAppId : appIdFromPackageMetadata(packageMetadata));
 }
 
-/** An external program's path, by its path under the runtime folder without extension; outside a package an environment variable may name it instead. */
-function runtimePath(name: string, environmentName: string): string {
-  const executable = process.platform === 'win32' ? `${name}.exe` : name;
-  if (app.isPackaged) return path.join(process.resourcesPath, 'bin', executable);
-  return process.env[environmentName]
-    ?? path.join(app.getAppPath(), 'resources', 'bin', process.platform === 'win32' ? 'win' : 'mac', executable);
-}
+/** The files the App ships beside its code, from the package's resources or the checkout. */
+const resources = bundledResources(app.isPackaged
+  ? { packaged: true, resourcesPath: process.resourcesPath }
+  : { packaged: false, checkout: app.getAppPath() });
 
 /**
  * Returns the closest existing directory at or above the given path. The
@@ -337,7 +335,7 @@ app.whenReady().then(async () => {
   const sources = await createSourcePlugins({
     profilePath: app.getPath('userData'),
     env: process.env,
-    program: runtimePath,
+    program: resources.program,
   });
   const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
   startupBuildInfo = buildInfo;
@@ -371,11 +369,8 @@ app.whenReady().then(async () => {
     connectivity: { probe: internetProbe((input, init) => net.fetch(input instanceof URL ? input.href : input, init)) },
     workspace: {
       plugins: sources.plugins, pacing: sources.pacing,
-      searchBinary: runtimePath('meilisearch', 'XR_COLLECTOR_MEILISEARCH'),
-      searchLexicon: path.resolve(process.env.XR_COLLECTOR_SEARCH_LEXICON
-        ?? (app.isPackaged
-          ? path.join(process.resourcesPath, 'search', 'coct-main.txt')
-          : path.join(app.getAppPath(), 'resources', 'search', 'coct-main.txt'))),
+      searchBinary: resources.searchBinary,
+      searchLexicon: resources.searchLexicon,
       searchData: path.join(app.getPath('userData'), 'search'),
       exportFolder: exports,
       backupFolder: backupFolder(app.getPath('documents')),
@@ -384,7 +379,7 @@ app.whenReady().then(async () => {
     newVaultLocation: app.getPath('documents'),
     createdBy: `XR Collector ${app.getVersion()}`,
     agentSettingsFile: path.join(app.getPath('userData'), 'agent-settings.json'),
-    skillPath: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'skills', 'xr-collector-agent'),
+    skillPath: resources.skill,
     agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DESKTOP_AGENT_PORT,
     uiPort: 0,
     webRoot: path.join(app.getAppPath(), 'dist', 'web'),
@@ -420,7 +415,7 @@ app.whenReady().then(async () => {
   tray = new AppTray({
     serverUrl: runtime.server.url,
     changes: runtime.changes,
-    iconFolder: path.join(app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'), 'tray'),
+    iconFolder: resources.trayIcons,
     show: showWindow,
     quit: () => app.quit(),
   });

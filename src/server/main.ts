@@ -4,27 +4,24 @@ import path from 'node:path';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DEVELOPMENT_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
+import { bundledResources, checkoutRoot } from '../runtime/bundled-resources.js';
 import { CollectorRuntime } from '../runtime/collector-runtime.js';
 import { backupFolder, exportFolder } from '../vault/transfer-files.js';
 
-const projectRoot = process.cwd();
+const projectRoot = checkoutRoot();
+const resources = bundledResources({ packaged: false, checkout: projectRoot });
 const profilePath = path.resolve(process.env.XR_COLLECTOR_PROFILE ?? path.join(projectRoot, '.data'));
 const explicitVaultPath = process.env.XR_COLLECTOR_VAULT;
 const webRoot = path.join(projectRoot, 'dist', 'web');
-const platformDirectory = process.platform === 'win32' ? 'win' : 'mac';
-const runtimeRoot = path.join(projectRoot, 'resources', 'bin', platformDirectory);
 const port = Number.parseInt(process.env.XR_COLLECTOR_PORT ?? '7175', 10);
 const searchPort = process.env.XR_COLLECTOR_MEILISEARCH_PORT
   ? Number.parseInt(process.env.XR_COLLECTOR_MEILISEARCH_PORT, 10)
   : undefined;
-const executable = (name: string) => process.platform === 'win32' ? `${name}.exe` : name;
-const binary = (environmentName: string, name: string) => process.env[environmentName]
-  ?? path.join(runtimeRoot, executable(name));
 
 const sources = await createSourcePlugins({
   profilePath,
   env: process.env,
-  program: (name, environmentName) => binary(environmentName, name),
+  program: resources.program,
 });
 const runtime = await CollectorRuntime.start({
   buildInfo: await loadBuildInfo(),
@@ -33,8 +30,8 @@ const runtime = await CollectorRuntime.start({
   workspace: {
     plugins: sources.plugins,
     pacing: sources.pacing,
-    searchBinary: binary('XR_COLLECTOR_MEILISEARCH', 'meilisearch'),
-    searchLexicon: path.resolve(process.env.XR_COLLECTOR_SEARCH_LEXICON ?? path.join(projectRoot, 'resources', 'search', 'coct-main.txt')),
+    searchBinary: resources.searchBinary,
+    searchLexicon: resources.searchLexicon,
     searchData: path.resolve(process.env.XR_COLLECTOR_SEARCH_DATA ?? path.join(profilePath, 'dev-search')),
     ...(searchPort ? { searchPort } : {}),
     exportFolder: exportFolder(path.join(homedir(), 'Documents')),
@@ -43,7 +40,7 @@ const runtime = await CollectorRuntime.start({
   ...(explicitVaultPath ? { explicitVaultPath: path.resolve(explicitVaultPath) } : {}),
   createdBy: 'XR Collector (development server)',
   agentSettingsFile: path.join(profilePath, 'agent-settings.json'),
-  skillPath: path.join(projectRoot, 'skills', 'xr-collector-agent'),
+  skillPath: resources.skill,
   agentPort: process.env.XR_COLLECTOR_AGENT_PORT ? Number.parseInt(process.env.XR_COLLECTOR_AGENT_PORT, 10) : DEVELOPMENT_AGENT_PORT,
   uiPort: port,
   ...(existsSync(webRoot) ? { webRoot } : {}),

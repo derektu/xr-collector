@@ -22,7 +22,7 @@ interface StartSearchRuntimeOptions {
   /** The source types whose details blocks a search returns. */
   sources: SourceDeclarations;
   binaryPath: string;
-  lexiconPath?: string;
+  lexiconPath: string;
   databasePath: string;
   port?: number;
   prepareProjection(profile: SearchIndexProfile): Promise<PreparedSearchProjection>;
@@ -40,7 +40,7 @@ export async function startSearchRuntime(
 ): Promise<SearchRuntime> {
   try {
     const runtime = await validateMeilisearchRuntime(options.binaryPath);
-    const lexicon = await loadSearchLexicon(options.lexiconPath ?? path.resolve('resources/search/coct-main.txt'));
+    const lexicon = await loadSearchLexicon(options.lexiconPath);
     const searchProfile: SearchIndexProfile = {
       ...runtime.searchProfile,
       lexicon: lexicon.identity,

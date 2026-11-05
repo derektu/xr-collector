@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { bundledResources, checkoutRoot } from '../../src/runtime/bundled-resources.js';
 
 // Real-engine tests carry the `real-engine` tag (vitest.config.ts) and run the Meilisearch that
 // `npm run download:runtime` (Mac arm64) or `npm run download:runtime:win` (Windows x64) installs.
@@ -14,3 +15,5 @@ export const realEngineSupported = runtime !== undefined;
 /** The pinned Meilisearch of this platform; on an unsupported platform the tagged tests are skipped. */
 export const bundledMeilisearch = path.resolve(runtime?.binary ?? 'resources/bin/unsupported/meilisearch');
 export const installRuntime = runtime?.install ?? '';
+/** The checkout's search lexicon, as the development App finds it. */
+export const bundledLexicon = bundledResources({ packaged: false, checkout: checkoutRoot() }, { env: {} }).searchLexicon;
