@@ -21,6 +21,7 @@ import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 afterEach(cleanUp);
 
@@ -174,7 +175,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     await seed(a.vault);
     const settings = { intervalMinutes: 180, backfillDays: 45, backfillMaxItems: 20 };
     const outOfRange = [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }];
-    await new JsonSubscriptionStore(a.vault, 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
+    await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
     const exported = await packageBytes(a.vault);
     expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()))
       .toMatchObject({ version: 3, channels: [{ id: 'UC123', settings, outOfRange }] });
@@ -237,8 +238,8 @@ describe('deletion records in export files (A6)', () => {
   it('exports deletions and a Vault imported from the export keeps them in force', async () => {
     const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
     await seed(a.vault);
-    await new MarkdownVault(a.vault).add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title }));
-    await new Collector(new MarkdownVault(a.vault)).delete(`youtube:${deletedId}`);
+    await new MarkdownVault(new VaultFileWriter(a.vault)).add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title }));
+    await new Collector(new MarkdownVault(new VaultFileWriter(a.vault))).delete(`youtube:${deletedId}`);
     const exported = await packageBytes(a.vault);
     const paths = (await manifestOf(exported)).files.map((file) => file.path);
     expect(paths).toContain(DELETIONS_FILE);
@@ -273,7 +274,7 @@ describe('deletion records in export files (A6)', () => {
 it('refuses a document deletion while an import holds the Vault (A7)', async () => {
   const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
   await seed(a.vault); await seed(b.vault);
-  await new MarkdownVault(a.vault).add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }));
+  await new MarkdownVault(new VaultFileWriter(a.vault)).add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }));
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   // The import stops once its files are staged, so it keeps the Vault locked.

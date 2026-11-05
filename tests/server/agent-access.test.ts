@@ -25,6 +25,7 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { zipEntries } from '../support/package-fixtures.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -34,7 +35,7 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-agent-test-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
-  const vault = new MarkdownVault(path.join(root, 'vault'));
+  const vault = new MarkdownVault(new VaultFileWriter(path.join(root, 'vault')));
   for (const id of ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc']) {
     const capture: CapturedTranscript = {
       videoId: id, sourceUrl: `https://www.youtube.com/watch?v=${id}`,

@@ -180,9 +180,10 @@ export function supportedVaultFormatVersion(): number {
 
 /**
  * Raises the marker of the Vault at `root` to the format version the given source types declare,
- * before their documents or subscription files are written. A Vault already at that version or
- * higher is left as it is, so a Vault holding only types of the base format keeps its marker byte
- * for byte. A directory without a readable marker is not a Vault this hook changes.
+ * before files of those types are written. `VaultFileWriter` calls it for every Vault file it
+ * writes, and nothing else does. A Vault already at that version or higher is left as it is, so a
+ * Vault holding only types of the base format keeps its marker byte for byte. A directory without
+ * a readable marker is not a Vault this hook changes.
  */
 export async function ensureVaultFormat(root: string, types: Iterable<string>): Promise<void> {
   const required = Math.max(0, ...[...types].map((type) => sourceDefinitions().find((definition) => definition.id === type)?.vaultFormatVersion ?? 0));

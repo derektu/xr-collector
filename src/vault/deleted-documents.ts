@@ -1,6 +1,7 @@
 import path from 'node:path';
-import { readJsonFile, writeJsonFile } from '../core/json-file.js';
+import { readJsonFile } from '../core/json-file.js';
 import type { DocumentSourceType } from '../core/types.js';
+import type { VaultFiles } from '../core/vault-files.js';
 import { documentId, isSourceId, isSourceType } from './document-paths.js';
 
 /**
@@ -82,8 +83,8 @@ export class DeletionLedger {
   private readonly filePath: string;
   private writeTail: Promise<void> = Promise.resolve();
 
-  constructor(root: string, private readonly now: () => Date) {
-    this.filePath = path.join(root, DELETIONS_FILE);
+  constructor(private readonly files: VaultFiles, private readonly now: () => Date) {
+    this.filePath = path.join(files.root, ...DELETIONS_FILE.split('/'));
   }
 
   async list(): Promise<DeletionRecord[]> {
@@ -111,7 +112,7 @@ export class DeletionLedger {
       const records = await this.list();
       const next = await change(records);
       if (next.length === records.length && next.every((record, index) => record === records[index])) return;
-      await writeJsonFile(this.filePath, deletionsToJson(next));
+      await this.files.writeJson(DELETIONS_FILE, deletionsToJson(next));
     });
     this.writeTail = run.catch(() => undefined);
     return run;

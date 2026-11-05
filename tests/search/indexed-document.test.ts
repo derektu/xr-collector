@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -30,7 +31,7 @@ describe('the indexed form of a YouTube document', () => {
   it('keeps the content hash of an existing index', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-indexed-'));
     roots.push(root);
-    const vault = new MarkdownVault(root, { now: () => new Date('2026-10-15T04:00:00.000Z') });
+    const vault = new MarkdownVault(new VaultFileWriter(root), { now: () => new Date('2026-10-15T04:00:00.000Z') });
     await vault.add(transcriptDocument({
       videoId: 'aaaaaaaaaa1', sourceUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaa1', title: '人工字幕',
       channelId: 'UC111', channelTitle: '頻道一', publishedAt: '2026-10-01T08:00:00.000Z',

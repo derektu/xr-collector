@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SubscriptionRecord } from '../../src/core/types.js';
 import { importedSubscription, subscriptionContent, SUBSCRIPTION_FIELDS } from '../../src/subscriptions/subscription-fields.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
 
@@ -54,7 +55,7 @@ describe('the field table', () => {
     for (const field of fields.filter((candidate) => !['id', 'addedAt', 'updatedAt'].includes(candidate))) {
       const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-fields-'));
       roots.push(root);
-      const store = new JsonSubscriptionStore(root, 'youtube', () => new Date('2030-01-01T00:00:00.000Z'));
+      const store = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', () => new Date('2030-01-01T00:00:00.000Z'));
       await store.add(record);
       await store.update(record.id, { [field]: other[field] });
       const file = JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8')) as { channels: SubscriptionRecord[] };

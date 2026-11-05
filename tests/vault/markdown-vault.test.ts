@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const temporaryRoots: string[] = [];
 
@@ -17,7 +18,7 @@ afterEach(async () => {
 async function makeVault(): Promise<{ root: string; vault: MarkdownVault }> {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-collector-vault-test-'));
   temporaryRoots.push(root);
-  return { root, vault: new MarkdownVault(root) };
+  return { root, vault: new MarkdownVault(new VaultFileWriter(root)) };
 }
 
 const capture: CapturedTranscript = {

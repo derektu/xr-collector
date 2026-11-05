@@ -20,6 +20,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE_DEFAULTS, FakeSource } from '../support/fake-source-plugin.js';
 import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 // The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
@@ -66,8 +67,8 @@ async function world(connectivity?: ConnectivityAccess) {
     await PacingGate.open(FAKE.pacing!, { now, setTimer, statePath: null }),
   ];
   const plugins = [youtubePlugin(youtube), createFakePlugin(FAKE, fake, gates[1])];
-  const collector = new Collector(new MarkdownVault(root, { now }));
-  const stores = { youtube: new JsonSubscriptionStore(root, 'youtube', now), fake: new JsonSubscriptionStore(root, 'fake', now) };
+  const collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }));
+  const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake', now) };
   const jobs: JobManager = new JobManager({
     vaultPath: root, store: JobStore.memory(now), plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },

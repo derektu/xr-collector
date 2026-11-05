@@ -55,8 +55,6 @@ const EXCEPTIONS = [
   'src/jobs/job-store.ts -> src/activity/activity-log.ts',
   // jobs -> subscriptions: the candidate rules run in the job manager (#263).
   'src/jobs/job-manager.ts -> src/subscriptions/candidates.ts',
-  // subscriptions -> vault: the vault format mark (#257).
-  'src/subscriptions/subscription-store.ts -> src/vault/vault-directory.ts',
   // updates -> runtime: the build identity.
   'src/updates/release-index.ts -> src/runtime/build-info.ts',
   // runtime -> server: runtime and server import each other (#265).

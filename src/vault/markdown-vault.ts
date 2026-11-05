@@ -1,15 +1,14 @@
-import { constants } from 'node:fs';
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
 import { sourceDefinition, sourceDefinitions } from '../core/source-registry.js';
 import type { ContentExtent, DocumentMetadata, SavedDocument } from '../core/types.js';
 import { CollectorError } from '../core/types.js';
+import type { VaultFiles } from '../core/vault-files.js';
 import type { CapturedDocument } from '../plugins/types.js';
 import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
 import { documentId, documentKeyFromId, documentKeyFromPath, documentPath, type DocumentKey } from './document-paths.js';
-import { ensureVaultFormat } from './vault-directory.js';
 
 /**
  * A document file's frontmatter. The core owns these keys; the `collector` block also carries the
@@ -125,12 +124,13 @@ export interface PortableDeletions {
 export class MarkdownVault implements DocumentVault {
   readonly deletions: DeletionLedger;
   readonly now: () => Date;
-  /** Source types whose first document this instance has written, with the Vault format they need in place. */
-  private readonly formatsEnsured = new Set<string>();
+  private readonly rootDir: string;
 
-  constructor(private readonly rootDir: string, options: MarkdownVaultOptions = {}) {
+  /** Writes go through `files`, the Vault's own. */
+  constructor(private readonly files: VaultFiles, options: MarkdownVaultOptions = {}) {
+    this.rootDir = files.root;
     this.now = options.now ?? (() => new Date());
-    this.deletions = new DeletionLedger(rootDir, this.now);
+    this.deletions = new DeletionLedger(files, this.now);
   }
 
   async getByKey(key: DocumentKey): Promise<SavedDocument | null> {
@@ -145,17 +145,12 @@ export class MarkdownVault implements DocumentVault {
     const definition = sourceDefinition(capture.sourceType);
     if (!definition) throw new Error(`Source type ${capture.sourceType} is not registered`);
     const key: DocumentKey = { sourceType: capture.sourceType, sourceId: capture.key };
-    const finalPath = this.pathFor(key);
-    await mkdir(path.dirname(finalPath), { recursive: true });
+    const file = documentPath(key);
     const id = documentId(key);
     const existing = await this.read(id);
     if (existing) return existing;
-    if (!this.formatsEnsured.has(capture.sourceType)) {
-      await ensureVaultFormat(this.rootDir, [capture.sourceType]);
-      this.formatsEnsured.add(capture.sourceType);
-    }
     // A file hidden by its deletion record is the deleted document; the new one takes its place.
-    await rm(finalPath, { force: true });
+    await this.files.remove(file);
 
     const collectedAt = (options.collectedAt ?? this.now()).toISOString();
     const metadata: StoredMetadata = {
@@ -179,17 +174,8 @@ export class MarkdownVault implements DocumentVault {
 
     const body = capture.bodyMarkdown.trim();
     const serialized = `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body}\n`;
-    const temporaryPath = `${finalPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-
-    await writeFile(temporaryPath, serialized, { encoding: 'utf8', flag: 'wx' });
-    try {
-      await copyFile(temporaryPath, finalPath, constants.COPYFILE_EXCL);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') throw error;
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    // A file another writer created first stays; the read below returns whichever file is there.
+    await this.files.create(file, serialized);
 
     const saved = await this.readStored(id);
     if (!saved) throw new Error('Document was not saved');
@@ -258,7 +244,7 @@ export class MarkdownVault implements DocumentVault {
   async remove(id: string): Promise<void> {
     const key = documentKeyFromId(id);
     if (!key) return;
-    await rm(this.pathFor(key), { force: true });
+    await this.files.remove(documentPath(key));
   }
 
   /**

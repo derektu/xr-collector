@@ -17,6 +17,7 @@ import { createHttpApp } from '../../src/server/app.js';
 import { MemoryDocuments, SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -31,7 +32,7 @@ async function world() {
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
-  const channelStore = new JsonSubscriptionStore(root, 'youtube');
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
   const jobs: JobManager = new JobManager({
     vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
     limits: { discovery: 1, capture: 4 },
