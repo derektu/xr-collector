@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
-import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { CollectorError, type CollectionJob, type SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
@@ -13,6 +12,7 @@ import { SubscriptionService, SubscriptionServices } from '../../src/subscriptio
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE2, FakeSource } from '../support/fake-source-plugin.js';
+import { productSourcesWith } from '../support/product-sources.js';
 import { readEventFiles } from '../activity/event-files.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
@@ -22,7 +22,7 @@ import { VaultFileWriter } from '../../src/vault/vault-files.js';
 // dispatch times and the check time, failed checks in a row and the pause they lead to, and
 // refusing a check request as a whole.
 
-registerSourceDefinitions([FAKE, FAKE2]);
+const SOURCES = productSourcesWith(FAKE, FAKE2);
 
 const DAY = 24 * 60 * 60_000;
 const MINUTE = 60_000;
@@ -55,22 +55,24 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
   const plugins = [createFakePlugin(FAKE, sources.fake), createFakePlugin(FAKE2, sources.fake2)];
   const scheduleStore = new MemoryScheduleStore();
   const build = async () => {
-    const store = await JobStore.open(jobsDirectory, now);
-    const collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }));
-    const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake2', now) };
+    const store = await JobStore.open(jobsDirectory, SOURCES, now);
+    const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));
+    const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
     let services!: SubscriptionServices;
     const jobs: JobManager = new JobManager({
+      sources: SOURCES,
       vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,
       limits: { discovery: 1, capture: 1 }, retry: { maxAttempts: 1 }, setTimer: () => () => undefined,
     });
     const service = (type: FakeType) => new SubscriptionService(type, stores[type], jobs, {
+      sources: SOURCES,
       autoCollection: async () => true,
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
       documents: () => collector.list(),
       now,
       ...(onAutoPaused ? { onAutoPaused: (subscription: SubscriptionRecord) => onAutoPaused(type, subscription) } : {}),
     });
-    services = new SubscriptionServices([service('fake'), service('fake2')]);
+    services = new SubscriptionServices(SOURCES, [service('fake'), service('fake2')]);
     const scheduler = new CollectionScheduler(services.all(), scheduleStore, { now, pollIntervalMs: DAY });
     return { store, jobs, services, stores, scheduler };
   };

@@ -1,4 +1,4 @@
-import { sourceDefinition } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import {
   CollectorError,
   type ActivityCheckSummary,
@@ -36,7 +36,9 @@ export interface CatalogSubscriptions {
  * single-item summary.
  */
 export class SourceCatalog {
+  /** `sources` gives each type's failure labels and item addresses for the collection record. */
   constructor(
+    private readonly sources: SourceRegistry,
     private readonly declarations: SourceTypeDeclaration[],
     private readonly subscriptions: readonly CatalogSubscriptions[],
     private readonly documents: () => Promise<DocumentMetadata[]>,
@@ -85,7 +87,7 @@ export class SourceCatalog {
     const summaries = await this.checkSummaries?.(type, id);
     return {
       subscription: this.entry(type, subscription),
-      collection: collectionRecord(type, subscription, documents, collection.checkJobs(id), summaries),
+      collection: collectionRecord(this.sources, type, subscription, documents, collection.checkJobs(id), summaries),
     };
   }
 
@@ -102,10 +104,10 @@ export class SourceCatalog {
  * check. Checks still running, interrupted, or stopped by a pause, a removal or a later job are left out.
  */
 export function collectionRecord(
-  type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly JobView[],
+  sources: SourceRegistry, type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly JobView[],
   summaries?: readonly ActivityCheckSummary[],
 ): SubscriptionCollectionEntry[] {
-  const definition = sourceDefinition(type);
+  const definition = sources.definition(type);
   const keyField = definition?.storage?.outOfRangeKeyField;
   const entries: SubscriptionCollectionEntry[] = documents.map((document) => ({
     kind: 'collected', at: document.collectedAt, key: document.sourceId, title: document.title, documentId: document.id,

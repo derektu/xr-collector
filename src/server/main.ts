@@ -29,6 +29,7 @@ const sources = await createSourcePlugins({
 const runtime = await CollectorRuntime.start({
   buildInfo: await loadBuildInfo(),
   profilePath,
+  sources: sources.registry,
   workspace: {
     plugins: sources.plugins,
     pacing: sources.pacing,

@@ -1,10 +1,12 @@
 import type { SourceDefinition, SourcePluginDeclaration } from './source-contract.js';
+import type { SubscriptionExchange } from './subscription-exchange.js';
 import type { JobRole } from './types.js';
 
 /**
  * The declarations of a set of source types, in their order, as one value that cannot change. Who
  * assembles a process builds it once from the source list and hands it to what reads it; the web UI
- * reads it from React context (`src/web/source-declarations.tsx`). Core modules look types up here instead of
+ * reads it from React context (`src/web/source-declarations.tsx`), the server modules from the
+ * `SourceRegistry` they are given. Core modules look types up here instead of
  * naming them, so a document, job or subscription of a type the value lacks is data the core keeps
  * but does not act on.
  */
@@ -23,7 +25,8 @@ export class SourceDeclarations {
     }
     this.list = Object.freeze([...list]);
     this.byId = byId;
-    Object.freeze(this);
+    // A subclass adds its fields after this constructor returns and freezes itself.
+    if (new.target === SourceDeclarations) Object.freeze(this);
   }
 
   get(type: string): SourcePluginDeclaration | undefined {
@@ -43,119 +46,68 @@ export class SourceDeclarations {
   }
 }
 
+/** The Vault file of the automatic collection switch, relative to the Vault root, and how diagnostics name its content. */
+export interface ScheduleFileInfo {
+  file: string;
+  description: string;
+}
+
 /**
- * The source types the server modules of this process know, in registration order. The composition
- * roots register the product's definitions before anything reads a Vault (`src/plugins/index.ts`).
- * The web UI registers the product's declarations too, for a declaration whose `owns` reads the
- * other registered types. Reading the registry before any type is registered throws: a process that
- * skipped the registration would otherwise run without any source type.
+ * The source types a server process runs with: their declarations, their server definitions, the
+ * Vault file of the automatic collection switch that covers every type's subscriptions, and the
+ * subscription files through which the Vault reads their subscriptions. The assembly builds it once
+ * from the source plugins (`src/plugins/index.ts`) and hands it to the Vault, the subscriptions, the
+ * jobs, search and the HTTP API; two registries in one process answer each from its own types.
  *
- * The module holds no Node-only code, so the web build shares it (tests/tooling/web-bundle-node.test.ts).
+ * The module holds no Node-only code and no state of its own, so the web build shares it
+ * (tests/tooling/web-bundle-node.test.ts, tests/tooling/source-registry-state.test.ts).
  */
+export class SourceRegistry extends SourceDeclarations {
+  /** Every server definition, in order. */
+  readonly definitions: readonly SourceDefinition[];
+  /** The definitions whose type has subscriptions, in order. */
+  readonly subscriptionDefinitions: readonly SourceDefinition[];
+  readonly schedule: Readonly<ScheduleFileInfo>;
+  /** How opening, exporting and importing a Vault read the subscription and schedule files of these types. */
+  readonly exchange: SubscriptionExchange;
+  private readonly definitionById: ReadonlyMap<string, SourceDefinition>;
 
-const declarations = new Map<string, SourcePluginDeclaration>();
-const definitions = new Map<string, SourceDefinition>();
-let schedule: { file: string; description: string } | null = null;
-let snapshot: SourceDeclarations | null = null;
+  /** `exchange` builds the subscription exchange of this registry once its definitions are in place. */
+  constructor(
+    definitions: readonly SourceDefinition[],
+    schedule: ScheduleFileInfo,
+    exchange: (registry: SourceRegistry) => SubscriptionExchange,
+  ) {
+    super(definitions);
+    this.definitions = Object.freeze([...definitions]);
+    this.subscriptionDefinitions = Object.freeze(this.definitions.filter((definition) => definition.subscription && definition.storage));
+    this.schedule = Object.freeze({ ...schedule });
+    this.definitionById = new Map(this.definitions.map((definition) => [definition.id, definition]));
+    this.exchange = exchange(this);
+    Object.freeze(this);
+  }
 
-/** Registers the declarations of source types; a type registered again keeps its place in the order. */
-export function registerSourceDeclarations(list: readonly SourcePluginDeclaration[]): void {
-  for (const declaration of list) declarations.set(declaration.id, declaration);
-  snapshot = null;
-}
+  definition(type: string): SourceDefinition | undefined {
+    return this.definitionById.get(type);
+  }
 
-/** Registers the server definitions of source types, and their declarations with them. */
-export function registerSourceDefinitions(list: readonly SourceDefinition[]): void {
-  for (const definition of list) definitions.set(definition.id, definition);
-  registerSourceDeclarations(list);
-}
+  /** The server definition of a type the caller knows is in this registry. */
+  require(type: string): SourceDefinition {
+    const definition = this.definitionById.get(type);
+    if (!definition) throw new Error(`Source type ${type} is not registered`);
+    return definition;
+  }
 
-/**
- * Names the Vault file of the automatic collection switch, relative to the Vault root, and how
- * diagnostics name its content. One switch covers the subscriptions of every type; the assembly
- * names its file.
- */
-export function registerScheduleFile(file: string, description: string): void {
-  schedule = { file, description };
-}
-
-export function scheduleFile(): string {
-  if (!schedule) throw new Error('No schedule file is registered');
-  return schedule.file;
-}
-
-export function scheduleFileDescription(): string {
-  if (!schedule) throw new Error('No schedule file is registered');
-  return schedule.description;
-}
-
-function registeredDeclarations(): Map<string, SourcePluginDeclaration> {
-  if (declarations.size === 0) throw new Error('No source types are registered');
-  return declarations;
-}
-
-/** The registered declarations, as the value the modules that take a `SourceDeclarations` read. */
-export function registeredSourceDeclarations(): SourceDeclarations {
-  snapshot ??= new SourceDeclarations([...registeredDeclarations().values()]);
-  return snapshot;
-}
-
-function registeredDefinitions(): Map<string, SourceDefinition> {
-  if (definitions.size === 0) throw new Error('No source definitions are registered');
-  return definitions;
-}
-
-/** Every registered declaration, in registration order. */
-export function sourceDeclarations(): SourcePluginDeclaration[] {
-  return [...registeredDeclarations().values()];
-}
-
-export function sourceDeclaration(type: string): SourcePluginDeclaration | undefined {
-  return registeredDeclarations().get(type);
-}
-
-/** Every registered server definition, in registration order. */
-export function sourceDefinitions(): SourceDefinition[] {
-  return [...registeredDefinitions().values()];
-}
-
-export function sourceDefinition(type: string): SourceDefinition | undefined {
-  return registeredDefinitions().get(type);
-}
-
-/** The server definition of a type the caller knows is registered. */
-export function requireDefinition(type: string): SourceDefinition {
-  const definition = registeredDefinitions().get(type);
-  if (!definition) throw new Error(`Source type ${type} is not registered`);
-  return definition;
-}
-
-/** Registered definitions whose type has subscriptions, in registration order. */
-export function subscriptionDefinitions(): SourceDefinition[] {
-  return sourceDefinitions().filter((definition) => definition.subscription && definition.storage);
-}
-
-/** How the UI names a type's subscriptions, e.g. the label of its subscription kind; the type's label without one. */
-export function subscriptionKindLabel(type: string): string {
-  return registeredSourceDeclarations().subscriptionKindLabel(type);
-}
-
-/** The wire kind of a type's job with this role; null when the type has no job of that role. */
-export function jobKind(type: string, role: JobRole): string | null {
-  return registeredSourceDeclarations().jobKind(type, role);
-}
-
-/**
- * Throws unless source types are registered and `plugins` are the registered server definitions'
- * types, in registration order: a process's jobs collect through its plugins while the Vault, the
- * subscriptions and the HTTP API read the registry, so the two name the same types. Null checks only
- * that types are registered, for a process that runs without plugins.
- */
-export function checkRegisteredSources(plugins: readonly { id: string }[] | null): void {
-  const registered = sourceDefinitions().map((definition) => definition.id);
-  if (!plugins) return;
-  const given = plugins.map((plugin) => plugin.id);
-  if (registered.join('\n') !== given.join('\n')) {
-    throw new Error(`The plugins (${given.join(', ') || 'none'}) are not the registered source types (${registered.join(', ')})`);
+  /**
+   * Throws unless `plugins` are this registry's types, in its order: a process's jobs collect through
+   * its plugins while the Vault, the subscriptions and the HTTP API read the registry, so the two name
+   * the same types.
+   */
+  checkPlugins(plugins: readonly { id: string }[]): void {
+    const registered = this.definitions.map((definition) => definition.id);
+    const given = plugins.map((plugin) => plugin.id);
+    if (registered.join('\n') !== given.join('\n')) {
+      throw new Error(`The plugins (${given.join(', ') || 'none'}) are not the registered source types (${registered.join(', ')})`);
+    }
   }
 }

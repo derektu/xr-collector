@@ -7,6 +7,7 @@ import type { CapturedDocument } from '../../src/core/source-contract.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const captureResult: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -22,6 +23,7 @@ const captureResult: CapturedTranscript = {
 };
 
 class MemoryVault implements DocumentVault {
+  readonly sources = PRODUCT_SOURCES;
   document: SavedDocument | null = null;
 
   async getByKey(): Promise<SavedDocument | null> {

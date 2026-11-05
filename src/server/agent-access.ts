@@ -142,6 +142,7 @@ export async function openAgentAccess(options: AgentSettingsOptions): Promise<Ag
 /** Starts the Agent listener of `access`, or of a service opened here when none is given. */
 export async function startAgentAccess(options: AgentSettingsOptions & {
   access?: AgentConnectionService;
+  sources: StartServerOptions['sources'];
   buildInfo?: StartServerOptions['buildInfo']; collector?: StartServerOptions['collector']; jobs?: StartServerOptions['jobs']; activity?: StartServerOptions['activity'];
   transfer?: StartServerOptions['transfer']; subscriptions?: StartServerOptions['subscriptions']; schedule?: StartServerOptions['schedule']; search?: StartServerOptions['search'];
   pacing?: StartServerOptions['pacing']; connectivity?: StartServerOptions['connectivity'];

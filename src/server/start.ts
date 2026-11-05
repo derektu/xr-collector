@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
 import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import type { BuildInfo, TranscriptSearch } from '../core/types.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
@@ -13,6 +14,7 @@ import type { AgentConnectionAccess } from './agent-access.js';
 import type { UpdateAccess } from '../updates/types.js';
 
 export interface StartServerOptions {
+  sources: SourceRegistry;
   buildInfo?: BuildInfo;
   changes?: ChangeFeed;
   collector?: Collector;
@@ -47,6 +49,7 @@ export interface RunningServer {
 
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
+    sources: options.sources,
     ...(options.buildInfo ? { buildInfo: options.buildInfo } : {}),
     ...(options.changes ? { changes: options.changes } : {}),
     ...(options.collector ? { collector: options.collector } : {}),

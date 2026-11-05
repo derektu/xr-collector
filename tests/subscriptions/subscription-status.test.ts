@@ -19,6 +19,7 @@ import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -54,17 +55,19 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
-  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const pacing = new ScriptedPacing();
   let autoCheck = true;
   const jobs: JobManager = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector,
-    subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now, pacing: [pacing],
+    sources: PRODUCT_SOURCES,
+    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector,
+    subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },
     setTimer: () => () => undefined,
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    sources: PRODUCT_SOURCES,
     autoCollection: async () => autoCheck, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   const subscribe = async (name: string): Promise<{ id: string; first: CollectionJob }> => {
@@ -223,13 +226,13 @@ describe('subscription check status computed by the service (N75-T5)', () => {
       source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
       createdAt: at, startedAt: at, finishedAt: null, updatedAt: at, progress: null, items: null, result: null, error: null,
     };
-    expect(workStatus(requeued)).toEqual({ state: 'checking' });
-    expect(workStatus({ ...requeued, startedAt: null })).toEqual({ state: 'queued' });
+    expect(workStatus(PRODUCT_SOURCES, requeued)).toEqual({ state: 'checking' });
+    expect(workStatus(PRODUCT_SOURCES, { ...requeued, startedAt: null })).toEqual({ state: 'queued' });
     // Its own cooldown or next attempt reads as retrying, and adding a channel reads as checking.
     const later = '2026-10-15T05:00:00.000Z';
-    expect(workStatus({ ...requeued, wait: { reason: 'rate_limited', until: later } }))
+    expect(workStatus(PRODUCT_SOURCES, { ...requeued, wait: { reason: 'rate_limited', until: later } }))
       .toEqual({ state: 'retrying', at: later, cause: { reason: 'rate_limited' } });
-    expect(workStatus({ ...requeued, state: 'running', kind: 'youtube.channel-add', phase: 'resolve' })).toEqual({ state: 'checking' });
+    expect(workStatus(PRODUCT_SOURCES, { ...requeued, state: 'running', kind: 'youtube.channel-add', phase: 'resolve' })).toEqual({ state: 'checking' });
   });
 
   it('orders paused, sign-in, active work, the auto check switch and the schedule', () => {

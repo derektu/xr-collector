@@ -33,6 +33,7 @@ import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
 // through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
@@ -45,6 +46,7 @@ const limited = () => new CollectorError('rate_limited', 'YouTube 暫時限制�
 const network = () => new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。');
 
 class MemoryVault implements DocumentVault {
+  readonly sources = PRODUCT_SOURCES;
   readonly documents = new Map<string, SavedDocument>();
   async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
   async add(item: CapturedDocument) {
@@ -157,9 +159,10 @@ async function world(options: { waitMs?: number } = {}) {
   /** One process: a gate read from its state file, a job store on disk and a manager. */
   const boot = async () => {
     const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, setTimer, waitRangeMs: { min: wait, max: wait } });
-    const store = await JobStore.open(jobsPath, clock);
+    const store = await JobStore.open(jobsPath, PRODUCT_SOURCES, clock);
     const source = new GatedSource(gate);
     const manager = new JobManager({
+      sources: PRODUCT_SOURCES,
       vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
       now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
     });

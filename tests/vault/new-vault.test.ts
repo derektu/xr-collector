@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { checkNewVault, createNewVault, describePackage, nameProblem } from '../../src/vault/new-vault.js';
 import { inspectVaultDirectory, VAULT_MARKER } from '../../src/vault/vault-directory.js';
 import { packageOf } from '../support/package-fixtures.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -89,7 +90,7 @@ describe('createNewVault', () => {
     expect(root).toBe(path.join(parent, 'XR Collector'));
     expect(await readdir(root)).toEqual([VAULT_MARKER]);
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toMatchObject({ createdBy: 'XR Collector test' });
-    expect(await inspectVaultDirectory(root)).toEqual({ kind: 'existing', path: root, documentCount: 0 });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: root, documentCount: 0 });
     expect((await readdir(parent)).sort()).toEqual(['Other', 'XR Collector']);
   });
 
@@ -112,7 +113,7 @@ describe('describePackage', () => {
       source: { vaultId: '00000000-0000-4000-8000-000000000000', machine: 'A', folderName: 'XR-A' },
       summary: { documents: 128, subscriptions: 6, deletions: 0 },
     }));
-    expect(await describePackage(file)).toEqual({
+    expect(await describePackage(file, PRODUCT_SOURCES)).toEqual({
       path: file, fileName: 'XR-A-2026-10-30.zip', exportedAt: '2026-10-30T02:00:00.000Z', documents: 128, subscriptions: 6, folderName: 'XR-A',
     });
   });
@@ -121,14 +122,14 @@ describe('describePackage', () => {
     const folder = await temp();
     const file = path.join(folder, 'export.zip');
     await writeFile(file, await packageOf([], { source: { vaultId: '00000000-0000-4000-8000-000000000000', machine: 'A', folderName: 'a:b' } }));
-    expect(await describePackage(file)).toMatchObject({ folderName: 'XR Collector', exportedAt: null, documents: 0, subscriptions: 0 });
+    expect(await describePackage(file, PRODUCT_SOURCES)).toMatchObject({ folderName: 'XR Collector', exportedAt: null, documents: 0, subscriptions: 0 });
   });
 
   it('refuses a file that is no export', async () => {
     const folder = await temp();
     const file = path.join(folder, 'other.zip');
     await writeFile(file, 'not a zip');
-    await expect(describePackage(file)).rejects.toMatchObject({ code: 'invalid_request' });
-    await expect(describePackage(path.join(folder, 'missing.zip'))).rejects.toMatchObject({ message: '找不到這個匯出檔。' });
+    await expect(describePackage(file, PRODUCT_SOURCES)).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(describePackage(path.join(folder, 'missing.zip'), PRODUCT_SOURCES)).rejects.toMatchObject({ message: '找不到這個匯出檔。' });
   });
 });

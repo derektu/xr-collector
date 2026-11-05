@@ -229,7 +229,8 @@ export async function launchElectron({
       const load = (relative) => import(pathToFileURL(path.join(checkout, 'dist', 'node', relative)).href);
       const { createVaultDirectory } = await load('vault/vault-directory.js');
       const { VaultSelection } = await load('vault/vault-selection.js');
-      await createVaultDirectory(vaultPath, 'XR Collector (verify skill, Electron)');
+      const { sourceRegistry } = await load('plugins/index.js');
+      await createVaultDirectory(vaultPath, 'XR Collector (verify skill, Electron)', sourceRegistry());
       await new VaultSelection(path.join(profile, 'vault-selection.json')).write(vaultPath);
       if (prepareVault) await prepareVault({ vault: vaultPath, profile });
     }

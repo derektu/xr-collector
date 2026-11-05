@@ -2,7 +2,7 @@ import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
 import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
-import { requireDefinition, subscriptionKindLabel } from '../core/source-registry.js';
+import type { SourceDeclarations, SourceRegistry } from '../core/source-registry.js';
 import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../core/source-contract.js';
 import {
   AUTO_PAUSE_AFTER_MS,
@@ -57,6 +57,8 @@ export interface PendingDeletion {
 }
 
 export interface SubscriptionServiceOptions {
+  /** The source types of the Vault; the service's type is one of them with subscriptions. */
+  sources: SourceRegistry;
   /** Whether automatic collection is on; previews report it. */
   autoCollection: () => Promise<boolean>;
   /** Resolves a subscription address for a preview; aborting `signal` drops a request that has not started. */
@@ -115,7 +117,7 @@ export class SubscriptionService {
     private readonly options: SubscriptionServiceOptions,
   ) {
     this.now = options.now ?? (() => new Date());
-    this.definition = requireDefinition(type);
+    this.definition = options.sources.require(type);
     if (!this.definition.subscription) throw new Error(`Source type ${type} has no subscriptions`);
     this.subscription = this.definition.subscription;
   }
@@ -247,7 +249,7 @@ export class SubscriptionService {
     const paused = updated.filter((record) => !record.enabled).length;
     this.jobs.recordEvent({
       severity: 'info', eventType: 'subscription.settings_applied',
-      message: `已把「${source.title}」的收集設定套用到其他 ${updated.length} 個 ${subscriptionKindLabel(this.type)}。`, ...this.subject(id, source.title),
+      message: `已把「${source.title}」的收集設定套用到其他 ${updated.length} 個 ${this.options.sources.subscriptionKindLabel(this.type)}。`, ...this.subject(id, source.title),
     });
     return { updated: updated.length, paused };
   }
@@ -606,7 +608,7 @@ export class SubscriptionService {
   }
 
   private notFound(): CollectorError {
-    return new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(this.type)}訂閱。`);
+    return new CollectorError('subscription_not_found', `找不到這個 ${this.options.sources.subscriptionKindLabel(this.type)}訂閱。`);
   }
 
   /** The fields that tie a subscription event to its subscription, so the activity view can show and filter it by source. */
@@ -712,18 +714,19 @@ function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: nu
 }
 
 /**
- * The subscription services of one Vault, one per source type with subscriptions, in registration
- * order. HTTP routes and the scheduler reach a subscription through its type's service; the job
+ * The subscription services of one Vault, one per source type with subscriptions, in the order of
+ * its source types. HTTP routes and the scheduler reach a subscription through its type's service; the job
  * manager reaches every type through this object as its subscription port.
  */
 export class SubscriptionServices implements SubscriptionPort {
   private readonly byType: Map<string, SubscriptionService>;
 
-  constructor(services: Iterable<SubscriptionService>) {
+  /** `sources` names a type in the error for a subscription of a type without a service. */
+  constructor(private readonly sources: SourceDeclarations, services: Iterable<SubscriptionService>) {
     this.byType = new Map([...services].map((service) => [service.type, service]));
   }
 
-  /** The service of a type; null for a type without subscriptions or not registered. */
+  /** The service of a type; null for a type without subscriptions or one the Vault lacks. */
   of(type: string): SubscriptionService | null {
     return this.byType.get(type) ?? null;
   }
@@ -738,7 +741,7 @@ export class SubscriptionServices implements SubscriptionPort {
    * any job starts.
    */
   async startChecks(listed: ReadonlyArray<{ type: string; id: string }>): Promise<JobSubmission[]> {
-    return startChecks((type) => this.of(type), listed);
+    return startChecks(this.sources, (type) => this.of(type), listed);
   }
 
   planCheck(type: string, id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
@@ -796,6 +799,7 @@ export interface CheckEntry {
  * starts, so a refused request starts nothing.
  */
 export async function startChecks(
+  sources: SourceDeclarations,
   serviceOf: (type: string) => CheckEntry | null,
   listed: ReadonlyArray<{ type: string; id: string }>,
 ): Promise<JobSubmission[]> {
@@ -803,7 +807,7 @@ export async function startChecks(
   for (const { type, id } of listed) byType.set(type, [...byType.get(type) ?? [], id]);
   const runs = await Promise.all([...byType].map(async ([type, ids]) => {
     const service = serviceOf(type);
-    if (!service) throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
+    if (!service) throw new CollectorError('subscription_not_found', `找不到這個 ${sources.subscriptionKindLabel(type)}訂閱。`);
     await service.checkable(ids);
     return { service, ids };
   }));

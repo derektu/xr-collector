@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../src/server/app.js';
 import type { NotificationState } from '../../src/notifications/types.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const state = (enabled: boolean): NotificationState => ({
   enabled, availability: 'unavailable', availabilityMessage: 'desktop only', active: [], events: [],
@@ -13,7 +14,7 @@ describe('device notification API (#136)', () => {
   it('is shared by UI and authorized Agent and validates the one preference', async () => {
     let enabled = true;
     const update = vi.fn(async (value: boolean) => state(enabled = value));
-    const access = { notifications: { read: async () => state(enabled), update } };
+    const access = { sources: PRODUCT_SOURCES, notifications: { read: async () => state(enabled), update } };
     const ui = await createHttpApp(access);
     const app = await createHttpApp({ ...access, agentAuthorize: (header) => header === 'Bearer secret' });
     expect((await ui.inject('/api/device/notifications')).json()).toEqual({ notifications: state(true) });
@@ -31,7 +32,7 @@ describe('device notification API (#136)', () => {
 
   it('remains readable and writable as device data when no Vault is selected', async () => {
     let enabled = true;
-    const uiWithoutVault = await createHttpApp({ notifications: {
+    const uiWithoutVault = await createHttpApp({ sources: PRODUCT_SOURCES, notifications: {
       read: async () => state(enabled),
       update: async (value: boolean) => state(enabled = value),
     } });

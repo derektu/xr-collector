@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
-import { sourceDefinition, sourceDefinitions } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import type { ContentExtent, DocumentMetadata, SavedDocument } from '../core/types.js';
 import { CollectorError } from '../core/types.js';
 import type { VaultFiles } from '../core/vault-files.js';
@@ -33,11 +33,11 @@ interface StoredMetadata {
   };
 }
 
-function parseFrontmatter(content: string): { metadata: StoredMetadata; body: string } {
+function parseFrontmatter(sources: SourceRegistry, content: string): { metadata: StoredMetadata; body: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match?.[1]) throw new Error('Invalid document frontmatter');
   const metadata = parse(match[1]) as StoredMetadata;
-  const definition = typeof metadata?.collector?.source === 'string' ? sourceDefinition(metadata.collector.source) : undefined;
+  const definition = typeof metadata?.collector?.source === 'string' ? sources.definition(metadata.collector.source) : undefined;
   if (!definition || metadata.type !== definition.item.documentType) {
     throw new Error('Unsupported document format');
   }
@@ -59,18 +59,18 @@ export class DocumentFileError extends CollectorError {
   }
 }
 
-/** A document from the text of its file; throws when the text is not a document of a registered type. */
-export function parseDocument(content: string): SavedDocument {
-  const { metadata, body } = parseFrontmatter(content);
-  return toSavedDocument(metadata, body.trim());
+/** A document from the text of its file; throws when the text is not a document of a type of `sources`. */
+export function parseDocument(sources: SourceRegistry, content: string): SavedDocument {
+  const { metadata, body } = parseFrontmatter(sources, content);
+  return toSavedDocument(sources, metadata, body.trim());
 }
 
 /** How many document files a listing reads at once, so memory stays flat however large the Vault is. */
 const READ_CONCURRENCY = 16;
 
-function toSavedDocument(metadata: StoredMetadata, bodyMarkdown: string): SavedDocument {
+function toSavedDocument(sources: SourceRegistry, metadata: StoredMetadata, bodyMarkdown: string): SavedDocument {
   const sourceType = metadata.collector.source;
-  const details = sourceDefinition(sourceType)!.frontmatter.read(metadata.collector);
+  const details = sources.require(sourceType).frontmatter.read(metadata.collector);
   return {
     id: metadata.collector.id,
     type: metadata.type,
@@ -124,11 +124,14 @@ export interface PortableDeletions {
 export class MarkdownVault implements DocumentVault {
   readonly deletions: DeletionLedger;
   readonly now: () => Date;
+  /** The source types whose documents this Vault reads and writes; those of `files`. */
+  readonly sources: SourceRegistry;
   private readonly rootDir: string;
 
   /** Writes go through `files`, the Vault's own. */
   constructor(private readonly files: VaultFiles, options: MarkdownVaultOptions = {}) {
     this.rootDir = files.root;
+    this.sources = files.sources;
     this.now = options.now ?? (() => new Date());
     this.deletions = new DeletionLedger(files, this.now);
   }
@@ -142,7 +145,7 @@ export class MarkdownVault implements DocumentVault {
    * instead. `collectedAt` stamps an explicit re-collection after its deletion time.
    */
   async add(capture: CapturedDocument, options: { collectedAt?: Date } = {}): Promise<SavedDocument> {
-    const definition = sourceDefinition(capture.sourceType);
+    const definition = this.sources.definition(capture.sourceType);
     if (!definition) throw new Error(`Source type ${capture.sourceType} is not registered`);
     const key: DocumentKey = { sourceType: capture.sourceType, sourceId: capture.key };
     const file = documentPath(key);
@@ -183,14 +186,14 @@ export class MarkdownVault implements DocumentVault {
   }
 
   /**
-   * Metadata of every visible document of every registered source type, without bodies or content
+   * Metadata of every visible document of every source type of `sources`, without bodies or content
    * extent, newest collection first. Only files named `documents/<source type>/<source ID>.md` with a valid source
    * ID are documents; any other file belongs to someone else and is not read. A document file that
    * cannot be read fails the listing with a `DocumentFileError`.
    */
   async list(): Promise<DocumentMetadata[]> {
     const relatives: string[] = [];
-    for (const definition of sourceDefinitions()) {
+    for (const definition of this.sources.definitions) {
       const folder = `documents/${definition.id}`;
       let files: string[];
       try {
@@ -201,7 +204,7 @@ export class MarkdownVault implements DocumentVault {
       }
       for (const file of files) {
         const relative = `${folder}/${file}`;
-        if (documentKeyFromPath(relative) !== null) relatives.push(relative);
+        if (documentKeyFromPath(this.sources, relative) !== null) relatives.push(relative);
       }
     }
 
@@ -221,7 +224,7 @@ export class MarkdownVault implements DocumentVault {
 
   /** A listed document file; its ID must match its name. */
   private async readListed(relative: string): Promise<SavedDocument | null> {
-    const key = documentKeyFromPath(relative)!;
+    const key = documentKeyFromPath(this.sources, relative)!;
     let document: SavedDocument | null;
     try {
       document = await this.readFile(this.pathFor(key));
@@ -242,7 +245,7 @@ export class MarkdownVault implements DocumentVault {
 
   /** Removes a document file; a missing file is already removed. */
   async remove(id: string): Promise<void> {
-    const key = documentKeyFromId(id);
+    const key = documentKeyFromId(this.sources, id);
     if (!key) return;
     await this.files.remove(documentPath(key));
   }
@@ -293,7 +296,7 @@ export class MarkdownVault implements DocumentVault {
 
   /** A document file as stored, whether or not a deletion hides it. */
   private async readStored(id: string): Promise<SavedDocument | null> {
-    const key = documentKeyFromId(id);
+    const key = documentKeyFromId(this.sources, id);
     if (!key) return null;
     return this.readFile(this.pathFor(key));
   }
@@ -308,7 +311,7 @@ export class MarkdownVault implements DocumentVault {
 
   private async readFile(filePath: string): Promise<SavedDocument | null> {
     try {
-      return parseDocument(await readFile(filePath, 'utf8'));
+      return parseDocument(this.sources, await readFile(filePath, 'utf8'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;

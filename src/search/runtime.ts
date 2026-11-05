@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DocumentVault } from '../core/collector.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SavedDocument, TranscriptSearch } from '../core/types.js';
 import {
   ManagedTranscriptSearch,
@@ -18,6 +19,8 @@ import { limitText, redact } from '../core/redact.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
+  /** The source types whose details blocks a search returns. */
+  sources: SourceDeclarations;
   binaryPath: string;
   lexiconPath?: string;
   databasePath: string;
@@ -59,6 +62,7 @@ export async function startSearchRuntime(
       new MeilisearchBackend({
         baseUrl: process.url,
         apiKey: process.apiKey,
+        sources: options.sources,
         lexicon,
       }),
       () => loadAllDocuments(options.vault),

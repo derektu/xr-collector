@@ -4,7 +4,7 @@ import { REAL_ENGINE_TAG, realEngineSupported } from './tests/support/real-engin
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
-    setupFiles: ['tests/support/register-sources.ts', 'tests/support/require-real-engine.ts'],
+    setupFiles: ['tests/support/require-real-engine.ts'],
     tags: [{
       name: REAL_ENGINE_TAG,
       description: 'Runs the bundled Meilisearch; skipped on platforms other than Mac arm64 and Windows x64',

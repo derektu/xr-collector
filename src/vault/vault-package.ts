@@ -7,8 +7,7 @@ import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
-import { subscriptionExchange } from '../core/subscription-exchange.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
@@ -34,7 +33,7 @@ import type { FileSource } from './vault-merge.js';
  * compares the files themselves, whose documents, subscriptions and records carry their own times.
  *
  * The registered files are the documents `MarkdownVault.list` returns and the settings files:
- * the subscriptions file each registered source type declares, the schedule file and the deletion
+ * the subscriptions file each source type of the registry declares, the schedule file and the deletion
  * file. Nothing else in the Vault folder is read or packed, so files a person keeps there never
  * fail an export. Packages are written and read as streams: memory holds the manifest and the file
  * in hand, never the whole package. A file read into memory to be checked (a document or a
@@ -54,16 +53,16 @@ const SYSTEM_FILES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.i
 export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
 /** The settings files a package may hold, in the order an export packs them. */
-function settingsFiles(): string[] {
-  return [...subscriptionDefinitions().map((definition) => definition.storage!.subscriptionsFile), scheduleFile(), DELETIONS_FILE];
+function settingsFiles(sources: SourceRegistry): string[] {
+  return [...sources.subscriptionDefinitions.map((definition) => definition.storage!.subscriptionsFile), sources.schedule.file, DELETIONS_FILE];
 }
 
-/** The registered source types whose documents or subscription files are among `paths`. */
-export function sourceTypesOf(paths: Iterable<string>): Set<string> {
-  const subscriptionFiles = new Map(subscriptionDefinitions().map((definition) => [definition.storage!.subscriptionsFile, definition.id]));
+/** The source types of `sources` whose documents or subscription files are among `paths`. */
+export function sourceTypesOf(sources: SourceRegistry, paths: Iterable<string>): Set<string> {
+  const subscriptionFiles = new Map(sources.subscriptionDefinitions.map((definition) => [definition.storage!.subscriptionsFile, definition.id]));
   const types = new Set<string>();
   for (const file of paths) {
-    const type = documentKeyFromPath(file)?.sourceType ?? subscriptionFiles.get(file);
+    const type = documentKeyFromPath(sources, file)?.sourceType ?? subscriptionFiles.get(file);
     if (type) types.add(type);
   }
   return types;
@@ -74,14 +73,14 @@ export function sourceTypesOf(paths: Iterable<string>): Set<string> {
  * among the source types whose documents or subscription files it holds, and at least
  * `PACKAGE_FORMAT_VERSION`.
  */
-export function packageFormatVersion(paths: readonly string[]): number {
-  const types = sourceTypesOf(paths);
-  return Math.max(PACKAGE_FORMAT_VERSION, ...sourceDefinitions().filter((definition) => types.has(definition.id)).map((definition) => definition.packageFormatVersion));
+export function packageFormatVersion(sources: SourceRegistry, paths: readonly string[]): number {
+  const types = sourceTypesOf(sources, paths);
+  return Math.max(PACKAGE_FORMAT_VERSION, ...sources.definitions.filter((definition) => types.has(definition.id)).map((definition) => definition.packageFormatVersion));
 }
 
-/** The highest package format version this program reads: its own, or a higher one a registered source type declares. */
-export function supportedPackageFormatVersion(): number {
-  return Math.max(PACKAGE_FORMAT_VERSION, ...sourceDefinitions().map((definition) => definition.packageFormatVersion));
+/** The highest package format version this program reads: its own, or a higher one a source type of `sources` declares. */
+export function supportedPackageFormatVersion(sources: SourceRegistry): number {
+  return Math.max(PACKAGE_FORMAT_VERSION, ...sources.definitions.map((definition) => definition.packageFormatVersion));
 }
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
@@ -113,8 +112,8 @@ export function machineName(): string {
 }
 
 /** Whether a path names a file a package may hold: a document file or one of the settings files. */
-export function packagePath(value: string): boolean {
-  return documentKeyFromPath(value) !== null || settingsFiles().includes(value);
+export function packagePath(sources: SourceRegistry, value: string): boolean {
+  return documentKeyFromPath(sources, value) !== null || settingsFiles(sources).includes(value);
 }
 
 /** A file of a Vault that a package holds: read from `absolute`, or `bytes` the export wrote itself. */
@@ -133,23 +132,23 @@ export interface RegisteredFiles {
  * whose document is newer stays out, so a package never holds a document next to the record that
  * hides it, even while a deletion is unfinished.
  */
-export async function registeredFiles(root: string): Promise<RegisteredFiles> {
-  const vault = new MarkdownVault(new VaultFileWriter(root));
+export async function registeredFiles(root: string, sources: SourceRegistry): Promise<RegisteredFiles> {
+  const vault = new MarkdownVault(new VaultFileWriter(root, sources));
   const documents = await vault.list();
   const portable = await vault.portableDeletions();
   const files: RegisteredFile[] = [];
   for (const document of documents) {
-    const file = documentPathFromId(document.id)!;
+    const file = documentPathFromId(sources, document.id)!;
     const absolute = await regularFile(root, file);
     if (absolute) files.push({ path: file, absolute });
   }
   let subscriptions: number | null = null;
-  const subscriptionFiles = new Map(subscriptionExchange().files().map((exchange) => [exchange.file, exchange]));
-  for (const file of settingsFiles()) {
+  const subscriptionFiles = new Map(sources.exchange.files().map((exchange) => [exchange.file, exchange]));
+  for (const file of settingsFiles(sources)) {
     const absolute = await regularFile(root, file);
     if (!absolute) continue;
     if (file === DELETIONS_FILE) {
-      const stored = deletionsFromJson(JSON.parse(await readFile(absolute, 'utf8')));
+      const stored = deletionsFromJson(JSON.parse(await readFile(absolute, 'utf8')), sources);
       files.push(stored.length === portable.records.length ? { path: file, absolute }
         : { path: file, bytes: Buffer.from(`${JSON.stringify(deletionsToJson(portable.records), null, 2)}\n`) });
     } else {
@@ -158,7 +157,7 @@ export async function registeredFiles(root: string): Promise<RegisteredFiles> {
       files.push({ path: file, absolute });
     }
   }
-  const owned = new Set([...files.map((file) => file.path), ...[...portable.hidden].flatMap((id) => documentPathFromId(id) ?? [])]);
+  const owned = new Set([...files.map((file) => file.path), ...[...portable.hidden].flatMap((id) => documentPathFromId(sources, id) ?? [])]);
   return {
     files,
     unregisteredFiles: await countOthers(root, '', owned),
@@ -221,9 +220,9 @@ export interface WrittenPackage { unregisteredFiles: number; summary: PackageSum
  * `info` describes the package for people choosing it and for an import comparing it.
  */
 export async function writePackage(
-  root: string, file: string, info: { createdBy?: string; exportedAt?: Date; source?: PackageSource } = {},
+  root: string, sources: SourceRegistry, file: string, info: { createdBy?: string; exportedAt?: Date; source?: PackageSource } = {},
 ): Promise<WrittenPackage> {
-  const registered = await registeredFiles(root);
+  const registered = await registeredFiles(root, sources);
   // Opening first refuses an existing file before any entry is read, so only a file this call created is removed on failure.
   const handle = await open(file, 'wx', 0o600);
   const zip = new yazl.ZipFile();
@@ -245,7 +244,7 @@ export async function writePackage(
   }
   zip.addReadStreamLazy(MANIFEST, { mtime }, (done) => {
     const manifest: PackageManifest = {
-      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(rows.map((row) => row.path)),
+      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(sources, rows.map((row) => row.path)),
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
       ...(info.source ? { source: info.source } : {}),
       summary: registered.summary, files: rows,
@@ -282,7 +281,7 @@ export interface PackageReader {
  * and the files the manifest lists, each at a path a package may hold, with the size the manifest
  * gives. Contents are checked as they are read.
  */
-export async function openPackage(file: string): Promise<PackageReader> {
+export async function openPackage(file: string, sources: SourceRegistry): Promise<PackageReader> {
   let zip: yauzl.ZipFile;
   try {
     zip = await yauzl.openPromise(file, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true });
@@ -310,7 +309,7 @@ export async function openPackage(file: string): Promise<PackageReader> {
     if (!manifestEntry) invalid('這不是 XR Collector 的匯出檔（缺少 manifest.json）。');
     if (manifestEntry.uncompressedSize > MANIFEST_LIMIT) invalid('匯出檔的 manifest.json 超過 64 MiB。');
     const manifestBytes = await readEntry(zip, manifestEntry, MANIFEST_LIMIT);
-    const manifest = parseManifest(manifestBytes);
+    const manifest = parseManifest(manifestBytes, sources);
     const rows = new Map(manifest.files.map((row) => [row.path, row]));
     for (const row of manifest.files) {
       const entry = entries.get(row.path);
@@ -382,17 +381,17 @@ async function readEntry(zip: yauzl.ZipFile, entry: yauzl.Entry, limit: number):
   return Buffer.concat(chunks);
 }
 
-function parseManifest(bytes: Buffer): PackageManifest {
+function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest {
   let value: Partial<PackageManifest>;
   try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
   if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
   const formatVersion = value.formatVersion;
-  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > supportedPackageFormatVersion()) invalid('不支援這個匯出檔的格式版本。');
+  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > supportedPackageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
   if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
   const seen = new Set<string>();
   for (const row of value.files as unknown[]) {
     const file = row as Partial<ManifestFile> | null;
-    if (!file || typeof file.path !== 'string' || !packagePath(file.path)) {
+    if (!file || typeof file.path !== 'string' || !packagePath(sources, file.path)) {
       invalid(`匯出檔含有不支援的路徑：${typeof file?.path === 'string' ? file.path : '(無效)'}`);
     }
     if (!Number.isSafeInteger(file.size) || file.size! < 0 || file.size! > FILE_LIMIT) invalid(`匯出檔中的檔案大小無效或超過 64 MiB：${file.path}`);
@@ -428,19 +427,19 @@ export function unpackedBytes(reader: PackageReader): number {
  * record that would hide it, and no subscription next to its removal record (an export never
  * writes either pair).
  */
-export async function checkPackageContent(reader: PackageReader): Promise<void> {
+export async function checkPackageContent(reader: PackageReader, sources: SourceRegistry): Promise<void> {
   const json = async (file: string) => (reader.has(file) ? JSON.parse((await reader.read(file)).toString('utf8')) as unknown : undefined);
   let records;
-  try { records = deletionsFromJson(await json(DELETIONS_FILE)); } catch (error) {
+  try { records = deletionsFromJson(await json(DELETIONS_FILE), sources); } catch (error) {
     if (error instanceof CollectorError) throw error;
     invalid('匯出檔中的刪除紀錄格式無效。');
   }
   if (records.some((record) => reader.has(documentPath(record)))) invalid('匯出檔中同一份文件同時有內容與刪除紀錄。');
-  const exchange = subscriptionExchange();
+  const exchange = sources.exchange;
   const types = [];
   try {
     for (const { file, read } of exchange.files()) types.push(read(await json(file)));
-    exchange.checkSchedule(await json(scheduleFile()));
+    exchange.checkSchedule(await json(sources.schedule.file));
   } catch (error) {
     if (error instanceof CollectorError) throw error;
     invalid('匯出檔中的訂閱或排程設定格式無效。');
@@ -459,11 +458,11 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
     }
   }
   for (const file of reader.paths()) {
-    const key = documentKeyFromPath(file);
+    const key = documentKeyFromPath(sources, file);
     if (!key) continue;
     const bytes = await reader.read(file);
     let document;
-    try { document = parseDocument(bytes.toString('utf8')); } catch { invalid(`匯出檔中的文件格式無效：${file}`); }
+    try { document = parseDocument(sources, bytes.toString('utf8')); } catch { invalid(`匯出檔中的文件格式無效：${file}`); }
     if (document.id !== documentId(key) || document.sourceType !== key.sourceType || document.sourceId !== key.sourceId
       || typeof document.title !== 'string' || typeof document.publisher?.name !== 'string'
       || typeof document.collectedAt !== 'string' || typeof document.sourceUrl !== 'string') {

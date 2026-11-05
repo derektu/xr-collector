@@ -3,6 +3,7 @@ import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // The pacing state and a channel preview during a cooldown over HTTP: the preview answers
 // rate_limited at once with the time it resumes, and the state clears when the cooldown ends.
@@ -20,7 +21,7 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
       preview: (): Promise<SubscriptionPreview> => gate.run('interactive', async () => { throw new Error('not sent during a cooldown'); }),
     } as unknown as SubscriptionCollection;
 
-    const ui = await createHttpApp({ pacing: [gate], subscriptions: [channels] });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, pacing: [gate], subscriptions: [channels] });
     const expected = { groups: [{ group: 'youtube', label: 'YouTube', state: 'cooldown', cooldownUntil: until, level: 1, waitRangeMs: { min: 4_000, max: 12_000 } }] };
     expect((await ui.inject({ method: 'GET', url: '/api/pacing' })).json()).toEqual(expected);
 
@@ -38,7 +39,7 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
 
   it('reads the request channels while the Vault is not ready', async () => {
     const gate = await PacingGate.open(YOUTUBE_PACING, { now: () => new Date(T0), setTimer: () => () => undefined });
-    const app = await createHttpApp({ pacing: [gate], notReady: () => '尚未設定知識庫。' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, pacing: [gate], notReady: () => '尚未設定知識庫。' });
     const pacing = await app.inject({ method: 'GET', url: '/api/pacing' });
     expect(pacing.statusCode).toBe(200);
     expect(pacing.json()).toMatchObject({ groups: [{ group: 'youtube', label: 'YouTube', state: 'idle' }] });

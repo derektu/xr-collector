@@ -1,4 +1,5 @@
-import { requireDefinition } from '../../src/core/source-registry.js';
+import type { SourceRegistry } from '../../src/core/source-registry.js';
+import { PRODUCT_SOURCES } from './product-sources.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../../src/core/types.js';
 import type { JobManager } from '../../src/jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
@@ -39,6 +40,9 @@ export class SubscriptionRecorder implements SubscriptionPort {
   hangOnChecked = false;
   private jobs: JobManager | null = null;
 
+  /** `sources` gives each type's subscription defaults and range rule. */
+  constructor(private readonly sources: SourceRegistry = PRODUCT_SOURCES) {}
+
   /** The job manager a subscribe or manual check dispatches to. */
   attach(jobs: JobManager): this {
     this.jobs = jobs;
@@ -48,7 +52,7 @@ export class SubscriptionRecorder implements SubscriptionPort {
   add(type: string, target: SubscriptionTarget, options: { enabled?: boolean; settings?: Partial<SubscriptionSettings> } = {}): RecordedSubscription {
     const subscription: RecordedSubscription = {
       type, id: target.id, title: target.title, url: target.url, enabled: options.enabled ?? true,
-      settings: { ...requireDefinition(type).subscription!.defaults, ...options.settings } as SubscriptionSettings,
+      settings: { ...this.sources.require(type).subscription!.defaults, ...options.settings } as SubscriptionSettings,
       excluded: new Set(),
     };
     this.subscriptions.set(key(type, target.id), subscription);
@@ -73,7 +77,7 @@ export class SubscriptionRecorder implements SubscriptionPort {
     if (!subscription?.enabled) return { stopped: subscription ? 'subscription_paused' : 'subscription_removed' };
     return {
       target: { id: subscription.id, title: subscription.title, url: subscription.url },
-      range: requireDefinition(type).subscription!.checkRange(subscription.settings, at),
+      range: this.sources.require(type).subscription!.checkRange(subscription.settings, at),
       excluded: new Set(subscription.excluded),
     };
   }

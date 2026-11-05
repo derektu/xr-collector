@@ -79,7 +79,8 @@ export async function run({ instance, record, waitFor, visible }) {
 
       const other = path.join(instance.runDir, 'other-vault');
       const { createVaultDirectory } = await import(pathToFileURL(path.join(instance.checkout, 'dist/node/vault/vault-directory.js')).href);
-      await createVaultDirectory(other, 'XR Collector notification-clicks flow');
+      const { sourceRegistry } = await import(pathToFileURL(path.join(instance.checkout, 'dist/node/plugins/index.js')).href);
+      await createVaultDirectory(other, 'XR Collector notification-clicks flow', sourceRegistry());
       await mkdir(path.join(other, 'settings'), { recursive: true });
       await writeFile(path.join(other, 'settings', 'rss-subscriptions.json'), `${JSON.stringify({ ...stored, subscriptions: [first], removed: [] }, null, 2)}\n`);
       note('fixture', { ids, originalVaultId, other });

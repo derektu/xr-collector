@@ -1,4 +1,4 @@
-import { subscriptionDefinitions } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import type { SubscriptionExchange, SubscriptionFileExchange } from '../core/subscription-exchange.js';
 import type { SourceDefinition } from '../core/source-contract.js';
 import { importedSubscription, subscriptionContent } from './subscription-fields.js';
@@ -38,8 +38,10 @@ function fileExchange(definition: SourceDefinition): SubscriptionFileExchange {
   };
 }
 
-/** The subscription and schedule files of the registered source types, for the Vault. */
-export const subscriptionFileExchange: SubscriptionExchange = {
-  files: () => subscriptionDefinitions().map(fileExchange),
-  checkSchedule: (value) => { scheduleEnabledFromJson(value); },
-};
+/** The subscription and schedule files of the registry's source types, for the Vault. */
+export function subscriptionFileExchange(registry: SourceRegistry): SubscriptionExchange {
+  return {
+    files: () => registry.subscriptionDefinitions.map(fileExchange),
+    checkSchedule: (value) => { scheduleEnabledFromJson(value, registry.schedule.description); },
+  };
+}

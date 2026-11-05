@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../src/server/app.js';
 import type { DeviceUpdateStatus } from '../../src/core/types.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const hash = 'a'.repeat(64);
 const status: DeviceUpdateStatus = {
@@ -17,7 +18,7 @@ describe('device update HTTP API', () => {
       status: vi.fn(() => status), check: vi.fn(async () => status),
       download: vi.fn(async () => status), apply: vi.fn(async () => status), cancel: vi.fn(async () => status),
     };
-    const app = await createHttpApp({ updates, notReady: () => 'Vault 尚未設定。' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, updates, notReady: () => 'Vault 尚未設定。' });
     try {
       expect((await app.inject({ method: 'GET', url: '/api/device/updates' })).statusCode).toBe(200);
       const response = await app.inject({ method: 'POST', url: '/api/device/updates/download', payload: { version: '0.1.1', sha256: hash } });

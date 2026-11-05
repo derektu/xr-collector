@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BuildInfo } from '../../src/core/types.js';
 import { createHttpApp } from '../../src/server/app.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
@@ -23,8 +24,8 @@ const info: BuildInfo = {
 describe('build information HTTP contract', () => {
   it('gives UI and authorized Agent the same immutable artifact while the Vault is not ready', async () => {
     const source = { ...info };
-    const ui = await createHttpApp({ buildInfo: source, notReady: () => '尚未設定 Vault。' });
-    const agent = await createHttpApp({ buildInfo: source, notReady: () => '尚未設定 Vault。', agentToken: 'test-secret' });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: source, notReady: () => '尚未設定 Vault。' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: source, notReady: () => '尚未設定 Vault。', agentToken: 'test-secret' });
     apps.push(ui, agent);
     source.version = '9.9.9';
     const response = await ui.inject('/api/device/build-info');
@@ -49,7 +50,7 @@ describe('build information HTTP contract', () => {
     }, failed: () => ({ message: 'failed' }) });
     await bodyEntered;
     try {
-      const app = await createHttpApp({ buildInfo: info,
+      const app = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: info,
         transfer: { enterRequest: (access: VaultAccess) => lock.enter(access) } as VaultWorkspace,
         collector: { listDocuments: async () => ({ documents: [], total: 0, nextOffset: null }) } as never,
       });
@@ -61,7 +62,7 @@ describe('build information HTTP contract', () => {
 
   it('forwards one identity through the real UI and Agent listeners with existing Host and token guards', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-build-http-'));
-    const runtime = await CollectorRuntime.start({ buildInfo: info, profilePath: root, workspace: null,
+    const runtime = await CollectorRuntime.start({ sources: PRODUCT_SOURCES, buildInfo: info, profilePath: root, workspace: null,
       agentSettingsFile: path.join(root, 'agent-settings.json'), skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     try {

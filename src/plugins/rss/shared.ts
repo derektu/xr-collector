@@ -1,4 +1,3 @@
-import { sourceDeclarations } from '../../core/source-registry.js';
 import { CollectorError } from '../../core/types.js';
 import type { SourcePluginDeclaration } from '../../core/source-contract.js';
 import { RSS_SETTINGS, type RssSettings } from './settings.js';
@@ -13,8 +12,9 @@ function isWebAddress(url: URL | null): url is URL {
 
 /**
  * RSS and Atom feeds as a source type: subscriptions only, to a feed address or to a site whose
- * pages announce a feed. A feed's address has no fixed form, so RSS owns every web address no other
- * registered type owns, and resolving the subscription decides whether a feed is there. Articles have
+ * pages announce a feed. A feed's address has no fixed form, so RSS owns every web address and comes
+ * last in the source list, where an address another type owns goes to that type first; resolving
+ * the subscription decides whether a feed is there. Articles have
  * no address of their own to collect from: an article is collected from the feed that lists it.
  */
 export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
@@ -50,8 +50,8 @@ export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
     subscriptionPlaceholder: '貼上 RSS feed 或網站網址',
     itemCard: '',
   },
-  owns: (input, url) => isWebAddress(url)
-    && !sourceDeclarations().some((declaration) => declaration.id !== 'rss' && declaration.owns(input, url)),
+  // Every web address; an address another type also owns goes to that type, which comes first in the list.
+  owns: (_input, url) => isWebAddress(url),
   classify(input) {
     let url: URL;
     try {

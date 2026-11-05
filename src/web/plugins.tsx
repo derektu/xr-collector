@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { registerSourceDeclarations, SourceDeclarations } from '../core/source-registry.js';
+import { SourceDeclarations } from '../core/source-registry.js';
 import { SOURCE_DECLARATIONS } from '../plugins/declarations.js';
 import { registerIcons } from './icons.js';
 import './plugins.css';
@@ -21,6 +21,4 @@ export const SOURCE_ICONS: Readonly<Record<string, ReactNode>> = {
   rss: <><path d="M5 11a8 8 0 0 1 8 8" /><path d="M5 5a14 14 0 0 1 14 14" /><circle cx="6" cy="18" r="1.2" /></>,
 };
 
-// The RSS declaration's `owns` reads the other registered types (`src/plugins/rss/shared.ts`).
-registerSourceDeclarations(SOURCE_DECLARATIONS);
 registerIcons(SOURCE_ICONS);

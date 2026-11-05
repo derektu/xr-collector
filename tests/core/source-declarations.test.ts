@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { roleOf } from '../../src/core/job-role.js';
 import { SourceDeclarations } from '../../src/core/source-registry.js';
+import { sourceRegistry } from '../../src/plugins/index.js';
 import { fakeDefinition } from '../support/fake-source-plugin.js';
 
 const fake = fakeDefinition('fake', 'fake-net');
@@ -39,5 +40,16 @@ describe('source declarations', () => {
     expect(roleOf(one, { kind: 'fake.feed' })).toBe('check');
     expect(roleOf(other, { kind: 'fake.feed' })).toBeNull();
     expect(roleOf(other, { kind: 'fake2.feed' })).toBe('check');
+  });
+
+  it('as a registry, holds the definitions, the schedule file and a subscription exchange of its own types, and does not change', () => {
+    const one = sourceRegistry([fake]);
+    const both = sourceRegistry([fake2, fake]);
+    expect(one.require('fake')).toBe(fake);
+    expect(() => one.require('fake2')).toThrow('Source type fake2 is not registered');
+    expect(one.exchange.files().map((file) => file.type)).toEqual(['fake']);
+    expect(both.exchange.files().map((file) => file.type)).toEqual(['fake2', 'fake']);
+    expect(Object.isFrozen(one)).toBe(true);
+    expect(() => (one.definitions as unknown[]).push(fake2)).toThrow(TypeError);
   });
 });

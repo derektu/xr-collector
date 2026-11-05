@@ -14,6 +14,7 @@ import { fileSearchStateStore } from '../../src/search/runtime.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -87,7 +88,7 @@ describe('documents HTTP contract', () => {
       videoId: 'current0001', publisherId: 'UC-a', collectedAt: '2026-10-01T00:00:00.000Z', publishedAt: '2026-09-30T00:00:00.000Z',
       extra: { aliases: ['未知欄位'], collector_extension: { note: 'kept' } },
     });
-    const app = await createHttpApp({ collector: new Collector(new MarkdownVault(new VaultFileWriter(root))) });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES))) });
 
     const page = (await app.inject('/api/documents?limit=20')).json();
     expect(page).toMatchObject({ total: 2, offset: 0, limit: 20, nextOffset: null });
@@ -125,7 +126,7 @@ describe('documents HTTP contract', () => {
     await Promise.all(ids.map((videoId, index) => writeDocument(root, {
       videoId, publisherId: 'UC-a', collectedAt: new Date(Date.UTC(2026, 9, 1, 0, Math.floor(index / 2))).toISOString(),
     })));
-    const app = await createHttpApp({ collector: new Collector(new MarkdownVault(new VaultFileWriter(root))) });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES))) });
 
     const pages = await Promise.all([0, 20, 40].map(async (offset) => (await app.inject(`/api/documents?offset=${offset}&limit=20`)).json()));
     expect(pages.map((page) => [page.total, page.documents.length, page.nextOffset])).toEqual([[45, 20, 20], [45, 20, 40], [45, 5, null]]);
@@ -144,7 +145,8 @@ describe('documents HTTP contract', () => {
     await writeDocument(root, { videoId: 'removed0001', publisherId: 'UC-gone', publisher: '已移除頻道', collectedAt: '2026-10-04T00:00:00.000Z' });
     await writeDocument(root, { videoId: 'nopubid0001', publisher: '未記錄 ID 的頻道', collectedAt: '2026-10-05T00:00:00.000Z' });
     const app = await createHttpApp({
-      collector: new Collector(new MarkdownVault(new VaultFileWriter(root))),
+      sources: PRODUCT_SOURCES,
+      collector: new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES))),
       subscriptions: [channels([channel('UC-a', '同名頻道'), channel('UC-b', '同名頻道'), channel('UC-empty', '沒有文件的頻道')])],
     });
 
@@ -181,7 +183,7 @@ describe('documents HTTP contract', () => {
   it('keeps browse, sources and read available while search is unavailable', async () => {
     const root = await vaultRoot();
     await writeDocument(root, { videoId: 'available01', publisherId: 'UC-a', collectedAt: '2026-10-01T00:00:00.000Z' });
-    const vault = new MarkdownVault(new VaultFileWriter(root));
+    const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
     const backend: SearchBackend = {
       initialize: async () => { throw new Error('engine stopped'); },
       count: async () => 0, isCurrent: async () => false, replaceAll: async () => undefined,
@@ -189,7 +191,7 @@ describe('documents HTTP contract', () => {
     };
     const search = new ManagedTranscriptSearch(backend, async () => []);
     await search.start().catch(() => undefined);
-    const app = await createHttpApp({ collector: new Collector(vault), search });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: new Collector(vault), search });
 
     const searched = await app.inject('/api/search?q=%E5%AD%97%E5%B9%95');
     expect([searched.statusCode, searched.json().error.code]).toEqual([503, 'search_unavailable']);
@@ -206,7 +208,7 @@ describe('documents HTTP contract', () => {
     const root = await vaultRoot();
     await writeDocument(root, { videoId: 'status00001', publisherId: 'UC-a', collectedAt: '2026-10-01T00:00:00.000Z' });
     await writeDocument(root, { videoId: 'status00002', publisherId: 'UC-a', collectedAt: '2026-10-02T00:00:00.000Z' });
-    const vault = new MarkdownVault(new VaultFileWriter(root));
+    const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
     const indexed = new Map<string, SavedDocument>();
     const backend: SearchBackend = {
       initialize: async () => undefined,
@@ -221,7 +223,7 @@ describe('documents HTTP contract', () => {
     const start = async (now: string) => {
       const search = new ManagedTranscriptSearch(backend, load, fileSearchStateStore(stateFile), () => new Date(now));
       await search.start();
-      return createHttpApp({ collector: new Collector(vault), search });
+      return createHttpApp({ sources: PRODUCT_SOURCES, collector: new Collector(vault), search });
     };
 
     const app = await start('2026-10-15T01:00:00.000Z');

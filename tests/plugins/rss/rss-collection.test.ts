@@ -20,6 +20,7 @@ import { youtubePlugins } from '../../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../support/exchange-fixtures.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 // RSS through the product's core: a workspace with the YouTube and RSS plugins over synthetic feeds
 // on a local server. Subscribing, checking, removing and exchanging use the same services the
@@ -154,7 +155,7 @@ describe('a site that limits requests', () => {
     const events: PacingEvent[] = [];
     gate.subscribe((event) => events.push(event));
     const rss = createRssPlugin({ gate: () => gate } as unknown as PluginRuntime) as unknown as SourcePlugin;
-    const jobStore = JobStore.memory();
+    const jobStore = JobStore.memory(PRODUCT_SOURCES);
     const a = await machine('A', await temp());
     await seed(a.vault);
     const workspace = await open(a, { plugins: [...youtubePlugins(), rss], pacing: [gate], jobStore });
@@ -259,7 +260,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     const youtubeOnly = await workspaceOf(c);
     await mkdir(c.exports, { recursive: true });
     const plain = (await youtubeOnly.exportTo(path.join(c.exports, 'youtube.zip'))).result!.exportPath!;
-    const plainReader = await openPackage(plain);
+    const plainReader = await openPackage(plain, PRODUCT_SOURCES);
     expect(plainReader.manifest.formatVersion).toBe(1);
     plainReader.close();
 
@@ -267,13 +268,13 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     await subscribe(workspace, feeds.url('/feed.xml'));
     await mkdir(a.exports, { recursive: true });
     const file = (await workspace.exportTo(path.join(a.exports, 'both.zip'))).result!.exportPath!;
-    const reader = await openPackage(file);
+    const reader = await openPackage(file, PRODUCT_SOURCES);
     expect(reader.manifest.formatVersion).toBe(2);
     expect(reader.manifest.files.map((entry: { path: string }) => entry.path)).toEqual(expect.arrayContaining(['settings/rss-subscriptions.json', 'settings/youtube-channels.json']));
     reader.close();
-    const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault)).list()).map((document) => document.id).sort();
+    const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault, PRODUCT_SOURCES)).list()).map((document) => document.id).sort();
 
-    const created = await importNewVault({ packageFile: file, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     expect(await ids(created)).toEqual(await ids(a.vault));
     expect(JSON.parse(await readFile(path.join(created, VAULT_MARKER), 'utf8')).formatVersion).toBe(2);

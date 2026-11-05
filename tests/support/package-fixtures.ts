@@ -10,17 +10,21 @@ import { VAULT_MARKER, writeVaultMarker } from '../../src/vault/vault-directory.
 import {
   checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION, unpackPackage, writePackage, type PackageReader,
 } from '../../src/vault/vault-package.js';
+import type { SourceRegistry } from '../../src/core/source-registry.js';
+import { PRODUCT_SOURCES } from './product-sources.js';
 
 /** Package files for tests, held in memory: a package is small there and easier to change. */
 
 export const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 
-/** The package of a Vault as bytes. */
-export async function packageBytes(root: string, info: { createdBy?: string; exportedAt?: Date } = {}): Promise<Buffer> {
+/** The package of a Vault of the types of `sources` as bytes. */
+export async function packageBytes(
+  root: string, info: { createdBy?: string; exportedAt?: Date } = {}, sources: SourceRegistry = PRODUCT_SOURCES,
+): Promise<Buffer> {
   const folder = await mkdtemp(path.join(tmpdir(), 'xr-package-'));
   try {
     const file = path.join(folder, `${randomUUID()}.zip`);
-    await writePackage(root, file, info);
+    await writePackage(root, sources, file, info);
     return await readFile(file);
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -108,13 +112,15 @@ export async function ensureMarker(root: string): Promise<void> {
   if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test');
 }
 
-/** Runs `use` on package bytes opened as a package file. */
-export async function withPackage<T>(bytes: Buffer, use: (reader: PackageReader) => Promise<T>): Promise<T> {
+/** Runs `use` on package bytes opened as a package file of the types of `sources`. */
+export async function withPackage<T>(
+  bytes: Buffer, use: (reader: PackageReader) => Promise<T>, sources: SourceRegistry = PRODUCT_SOURCES,
+): Promise<T> {
   const folder = await mkdtemp(path.join(tmpdir(), 'xr-package-'));
   try {
     const file = path.join(folder, 'package.zip');
     await writeFile(file, bytes);
-    const reader = await openPackage(file);
+    const reader = await openPackage(file, sources);
     try { return await use(reader); } finally { reader.close(); }
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -122,10 +128,10 @@ export async function withPackage<T>(bytes: Buffer, use: (reader: PackageReader)
 }
 
 /** Checks package bytes as an import does and writes their files into `destination`. */
-export async function unpackBytes(bytes: Buffer, destination: string): Promise<void> {
+export async function unpackBytes(bytes: Buffer, destination: string, sources: SourceRegistry = PRODUCT_SOURCES): Promise<void> {
   await withPackage(bytes, async (reader) => {
-    await checkPackageContent(reader);
+    await checkPackageContent(reader, sources);
     await mkdir(destination, { recursive: true });
     await unpackPackage(reader, destination, () => undefined);
-  });
+  }, sources);
 }

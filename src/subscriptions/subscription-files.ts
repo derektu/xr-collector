@@ -1,4 +1,3 @@
-import { scheduleFileDescription } from '../core/source-registry.js';
 import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
 import type { SourceDefinition } from '../core/source-contract.js';
 
@@ -80,12 +79,15 @@ function isRemoval(value: unknown): value is SubscriptionRemoval {
     && typeof record.removedAt === 'string' && !Number.isNaN(Date.parse(record.removedAt));
 }
 
-/** The automatic collection switch of a schedule file; a Vault without one collects automatically. */
-export function scheduleEnabledFromJson(value: unknown): boolean {
+/**
+ * The automatic collection switch of a schedule file; a Vault without one collects automatically.
+ * `description` names the file's content in the error for an invalid file.
+ */
+export function scheduleEnabledFromJson(value: unknown, description: string): boolean {
   if (value === undefined) return true;
   const file = value as { version?: unknown; enabled?: unknown } | null;
   if (!file || typeof file !== 'object' || file.version !== 2 || typeof file.enabled !== 'boolean') {
-    throw new InvalidSubscriptionFile(`Invalid ${scheduleFileDescription()} settings`);
+    throw new InvalidSubscriptionFile(`Invalid ${description} settings`);
   }
   return file.enabled;
 }

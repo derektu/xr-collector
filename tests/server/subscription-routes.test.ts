@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CollectorError } from '../../src/core/types.js';
 import { Collector } from '../../src/core/collector.js';
-import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
@@ -18,6 +17,7 @@ import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE_DEFAULTS, FakeSource } from '../support/fake-source-plugin.js';
+import { productSourcesWith } from '../support/product-sources.js';
 import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
@@ -26,7 +26,7 @@ import { VaultFileWriter } from '../../src/vault/vault-files.js';
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
 // an Agent listener with a token. Every field these routes return is named in the Agent Skill.
 
-registerSourceDefinitions([FAKE]);
+const SOURCES = productSourcesWith(FAKE);
 
 const TOKEN = 'routes-token';
 const roots: string[] = [];
@@ -67,14 +67,16 @@ async function world(connectivity?: ConnectivityAccess) {
     await PacingGate.open(FAKE.pacing!, { now, setTimer, statePath: null }),
   ];
   const plugins = [youtubePlugin(youtube), createFakePlugin(FAKE, fake, gates[1])];
-  const collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }));
-  const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake', now) };
+  const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));
+  const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now) };
   const jobs: JobManager = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(services)), now,
+    sources: SOURCES,
+    vaultPath: root, store: JobStore.memory(SOURCES, now), plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },
   });
   let scheduler!: CollectionScheduler;
   const service = (type: 'youtube' | 'fake') => new SubscriptionService(type, stores[type], jobs, {
+    sources: SOURCES,
     autoCollection: () => scheduler.isEnabled(),
     resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
     documents: () => collector.list(),
@@ -83,7 +85,7 @@ async function world(connectivity?: ConnectivityAccess) {
   });
   const services = [service('youtube'), service('fake')];
   scheduler = new CollectionScheduler(services, new MemoryScheduleStore(), { now, pollIntervalMs: 24 * 60 * 60_000 });
-  const options = { collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates, ...(connectivity ? { connectivity } : {}) };
+  const options = { sources: SOURCES, collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates, ...(connectivity ? { connectivity } : {}) };
   const ui = await createHttpApp(options);
   const agent = await createHttpApp({ ...options, agentToken: TOKEN });
   const send = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown, app: FastifyInstance = agent) => {

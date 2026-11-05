@@ -5,7 +5,6 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { Collector } from '../../src/core/collector.js';
-import { registerSourceDefinitions } from '../../src/core/source-registry.js';
 import { CollectorError, type CollectionJob, type SubscriptionRecord } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
@@ -24,6 +23,7 @@ import type { VaultWorkspace } from '../../src/vault/workspace.js';
 import type { CapturedDocument, SourcePlugin } from '../../src/core/source-contract.js';
 import { createFakePlugin, FAKE, FAKE2, FAKE_DEFAULTS, FakeSource, type FakeSettings } from '../support/fake-source-plugin.js';
 import { youtubePlugins } from '../support/youtube-sources.js';
+import { productSourcesWith } from '../support/product-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../support/exchange-fixtures.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
@@ -32,7 +32,7 @@ import { VaultFileWriter } from '../../src/vault/vault-files.js';
 // fake types in separate pacing groups run through the same job manager, subscription services,
 // scheduler and Markdown Vault the product assembles for YouTube.
 
-registerSourceDefinitions([FAKE, FAKE2]);
+const SOURCES = productSourcesWith(FAKE, FAKE2);
 
 const DAY = 24 * 60 * 60_000;
 const MINUTE = 60_000;
@@ -83,19 +83,21 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
   };
   const schedule = new MemoryScheduleStore();
   const build = async () => {
-    const store = await JobStore.open(jobsDirectory, now);
-    const vault = new MarkdownVault(new VaultFileWriter(root), { now });
+    const store = await JobStore.open(jobsDirectory, SOURCES, now);
+    const vault = new MarkdownVault(new VaultFileWriter(root, SOURCES), { now });
     const collector: Collector = new Collector(vault, search, { recordEvent: (entry) => jobs.recordEvent(entry) });
-    const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake2', now) };
+    const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
     let services!: Record<'fake' | 'fake2', SubscriptionService>;
     const jobs: JobManager = new JobManager({
-      vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(Object.values(services))), now, setTimer,
+      sources: SOURCES,
+      vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, setTimer,
       pacing: [gates.fake, gates.fake2],
       limits: { discovery: 1, capture: options.capture ?? 2 },
       retry: options.retry ?? { maxAttempts: 1, delaysMs: [MINUTE] },
     });
     let scheduler!: CollectionScheduler;
     const service = (type: 'fake' | 'fake2') => new SubscriptionService(type, stores[type], jobs, {
+      sources: SOURCES,
       autoCollection: () => scheduler.isEnabled(),
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
       documents: () => collector.list(),
@@ -347,11 +349,12 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     expect(w.sources.fake2.captures).toEqual(['busy-1']);
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const reopened = await JobStore.open(w.jobsDirectory, () => w.clock.now);
+    const reopened = await JobStore.open(w.jobsDirectory, SOURCES, () => w.clock.now);
     const remaining = new FakeSource('fake');
     const manager = new JobManager({
+      sources: SOURCES,
       vaultPath: w.root, store: reopened, plugins: [createFakePlugin(FAKE, remaining)],
-      documents: new Collector(new MarkdownVault(new VaultFileWriter(w.root))),
+      documents: new Collector(new MarkdownVault(new VaultFileWriter(w.root, SOURCES))),
     });
     await manager.resume();
     await eventually(() => expect(manager.isBusy()).toBe(false));
@@ -427,10 +430,10 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     id, title: `${type} 動態 ${id}`, url: feedUrl(type, id), enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings: FAKE_DEFAULTS, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
-  const items = async (root: string) => new Map([...await itemStates(registeredSource(await registeredFiles(root)))]
+  const items = async (root: string) => new Map([...await itemStates(SOURCES, registeredSource(await registeredFiles(root, SOURCES)))]
     .map(([key, state]) => [key, state.state === 'present' ? `present:${state.digest}` : `deleted:${state.at}`]));
   async function using<T>(machineOf: Machine, use: (workspace: VaultWorkspace) => Promise<T>): Promise<T> {
-    const workspace = await open(machineOf, { plugins: plugins() }, false);
+    const workspace = await open(machineOf, { sources: SOURCES, plugins: plugins() }, false);
     try { return await use(workspace); } finally { await workspace.close(); }
   }
   async function exportFrom(machineOf: Machine, name: string): Promise<string> {
@@ -443,18 +446,18 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     const a = await machine('A', root);
     const b = await machine('B', root);
     await seed(a.vault);
-    await new MarkdownVault(new VaultFileWriter(a.vault)).add(document('fake', 'shared-1'));
-    await new MarkdownVault(new VaultFileWriter(a.vault)).add(document('fake2', 'shared-2'));
-    await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'fake').add(feed('fake', 'news'));
+    await new MarkdownVault(new VaultFileWriter(a.vault, SOURCES)).add(document('fake', 'shared-1'));
+    await new MarkdownVault(new VaultFileWriter(a.vault, SOURCES)).add(document('fake2', 'shared-2'));
+    await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add(feed('fake', 'news'));
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     expect(await items(b.vault)).toEqual(await items(a.vault));
 
     // B adds a document of one type, deletes one of the other and subscribes to a feed of the other.
-    await new MarkdownVault(new VaultFileWriter(b.vault), { now: () => new Date(at(1)) }).add(document('fake', 'b-only'));
-    await new Collector(new MarkdownVault(new VaultFileWriter(b.vault), { now: () => new Date(at(1)) })).delete('fake2:shared-2');
-    await new JsonSubscriptionStore(new VaultFileWriter(b.vault), 'fake2', () => new Date(at(1))).add(feed('fake2', 'b-feed'));
+    await new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) }).add(document('fake', 'b-only'));
+    await new Collector(new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) })).delete('fake2:shared-2');
+    await new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake2', () => new Date(at(1))).add(feed('fake2', 'b-feed'));
     const file = await exportFrom(b, 'b-1');
     const replacing = await machine('A-replace', root);
     await cp(a.vault, replacing.vault, { recursive: true });
@@ -484,30 +487,30 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     const b = await machine('B', root);
     await seed(a.vault);
     const failed = (key: string, attempts: number) => ({ itemKey: key, title: key, attempts, errorCode: 'no_subtitles', failedAt: at(1), skipped: attempts >= 3 });
-    await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
+    await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     const failuresIn = async (vault: string, type: string, id: string) =>
-      (await new JsonSubscriptionStore(new VaultFileWriter(vault), type).list()).find((row) => row.id === id)?.failures;
+      (await new JsonSubscriptionStore(new VaultFileWriter(vault, SOURCES), type).list()).find((row) => row.id === id)?.failures;
     expect(await failuresIn(b.vault, 'fake', 'news')).toEqual([failed('news-a', 1)]);
 
     // B renames the feed and records its own failures; it also subscribes to a feed A does not have.
-    const later = new JsonSubscriptionStore(new VaultFileWriter(b.vault), 'fake', () => new Date(at(2)));
+    const later = new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake', () => new Date(at(2)));
     await later.update('news', { title: '新名稱', failures: [failed('news-b', 3)] });
-    await new JsonSubscriptionStore(new VaultFileWriter(b.vault), 'fake2', () => new Date(at(2))).add({ ...feed('fake2', 'b-feed'), failures: [failed('b-1', 2)] });
+    await new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake2', () => new Date(at(2))).add({ ...feed('fake2', 'b-feed'), failures: [failed('b-1', 2)] });
     const file = await exportFrom(b, 'b-1');
     const replacing = await machine('A-replace', root);
     await cp(a.vault, replacing.vault, { recursive: true });
 
     await using(a, async (workspace) => { await importFile(workspace, file); });
-    const merged = (await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'fake').list()).find((row) => row.id === 'news')!;
+    const merged = (await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').list()).find((row) => row.id === 'news')!;
     expect(merged).toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
     expect(await failuresIn(a.vault, 'fake2', 'b-feed')).toEqual([failed('b-1', 2)]);
 
     // Replacing takes the package's subscriptions too, and like a merge keeps this Vault's collection progress of one it has.
     await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
-    expect((await new JsonSubscriptionStore(new VaultFileWriter(replacing.vault), 'fake').list()).find((row) => row.id === 'news'))
+    expect((await new JsonSubscriptionStore(new VaultFileWriter(replacing.vault, SOURCES), 'fake').list()).find((row) => row.id === 'news'))
       .toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
     expect(await failuresIn(replacing.vault, 'fake2', 'b-feed')).toEqual([failed('b-1', 2)]);
   });
@@ -516,9 +519,9 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     const root = await temp();
     const a = await machine('A', root);
     await seed(a.vault);
-    await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'fake').add(feed('fake', 'news'));
+    await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add(feed('fake', 'news'));
     const source = new FakeSource('fake');
-    const workspace = await open(a, { plugins: [...youtubePlugins(), createFakePlugin(FAKE, source), createFakePlugin(FAKE2, new FakeSource('fake2'))] }, false);
+    const workspace = await open(a, { sources: SOURCES, plugins: [...youtubePlugins(), createFakePlugin(FAKE, source), createFakePlugin(FAKE2, new FakeSource('fake2'))] }, false);
     try {
       const status = async () => (await workspace.subscriptions.of('fake')!.listSubscriptions()).find((entry) => entry.id === 'news')?.checkStatus.state;
       expect(await status()).not.toBe('login_required');
@@ -636,7 +639,7 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     await w.service('fake').setEnabled('r', false);
     const subscription = (await w.service('fake').listSubscriptions()).find((entry) => entry.id === 'r')!;
     const documents = (await w.collector.list()).filter((document) => document.publisher.id === 'r');
-    const record = collectionRecord('fake', subscription, documents, w.service('fake').checkJobs('r'));
+    const record = collectionRecord(SOURCES, 'fake', subscription, documents, w.service('fake').checkJobs('r'));
     // The second check, a minute later, tried the failing item again; a check comes before the items of the same instant.
     expect(record.map((entry) => entry.kind === 'check' ? `check:${entry.created}/${entry.failed}` : `${entry.kind}:${entry.key}`)).toEqual([
       'check:0/1', `failed:${failing}`, 'check:1/2', `collected:${ok}`, `skipped:${gone}`,

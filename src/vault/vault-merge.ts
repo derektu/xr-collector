@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
 import { canonicalJson } from '../core/canonical-json.js';
-import { requireDefinition } from '../core/source-registry.js';
-import { subscriptionExchange, type ExchangedSubscriptions, type SubscriptionFileExchange } from '../core/subscription-exchange.js';
+import type { SourceRegistry } from '../core/source-registry.js';
+import type { ExchangedSubscriptions, SubscriptionFileExchange } from '../core/subscription-exchange.js';
 import { CollectorError, type ChangeCounts, type ImportMode } from '../core/types.js';
 import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
 import { documentIdFromPath, documentPathFromId } from './document-paths.js';
@@ -92,7 +92,7 @@ interface TypeSubscriptions extends ExchangedSubscriptions {
 }
 
 interface Settings {
-  /** Keyed by source type, for every registered type with subscriptions. */
+  /** Keyed by source type, for every type of the registry with subscriptions. */
   subscriptions: Map<string, TypeSubscriptions>;
   records: Map<string, DeletionRecord>;
   /** The top-level fields of the deletion file, which a rewrite keeps. */
@@ -101,14 +101,14 @@ interface Settings {
 
 const top = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
 
-async function settingsOf(files: FileSource): Promise<Settings> {
+async function settingsOf(sources: SourceRegistry, files: FileSource): Promise<Settings> {
   const subscriptions = new Map<string, TypeSubscriptions>();
-  for (const exchange of subscriptionExchange().files()) {
+  for (const exchange of sources.exchange.files()) {
     const value = await json(files, exchange.file);
     const read = exchange.read(value);
     const ids = new Set<string>();
     for (const { id } of read.subscriptions) {
-      if (ids.has(id)) throw new CollectorError('invalid_request', `${requireDefinition(exchange.type).subscription!.targetNoun} ID 重複：${id}`);
+      if (ids.has(id)) throw new CollectorError('invalid_request', `${sources.require(exchange.type).subscription!.targetNoun} ID 重複：${id}`);
       ids.add(id);
     }
     subscriptions.set(exchange.type, { ...read, exchange, value });
@@ -116,7 +116,7 @@ async function settingsOf(files: FileSource): Promise<Settings> {
   const deletions = await json(files, DELETIONS_FILE);
   return {
     subscriptions,
-    records: new Map(deletionsFromJson(deletions).map((record) => [deletionId(record), record])),
+    records: new Map(deletionsFromJson(deletions, sources).map((record) => [deletionId(record), record])),
     deletionsTop: top(deletions),
   };
 }
@@ -126,14 +126,14 @@ function subscriptionKey(type: string, id: string): string {
   return `subscription:${type}:${id}`;
 }
 
-/** The items of one side. */
-export async function itemStates(files: FileSource): Promise<ItemStates> {
+/** The items of one side, as the types of `sources` read them. */
+export async function itemStates(sources: SourceRegistry, files: FileSource): Promise<ItemStates> {
   const states: ItemStates = new Map();
   for (const file of [...files.paths()].sort()) {
-    const id = documentIdFromPath(file);
+    const id = documentIdFromPath(sources, file);
     if (id) states.set(`document:${id}`, documentState(await files.read(file), file));
   }
-  const settings = await settingsOf(files);
+  const settings = await settingsOf(sources, files);
   for (const [id, record] of settings.records) {
     const key = `document:${id}`;
     if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.deletedAt });
@@ -260,18 +260,20 @@ export interface ImportPlan {
  * records are taken as the subscriptions block merges two copies of its file (`SubscriptionFileExchange.take`).
  * Settings files keep their other top-level fields; the automatic collection switch is never touched.
  */
-export async function planChanges(local: FileSource, incoming: FileSource, keys: readonly string[], localStates: ItemStates): Promise<ImportPlan> {
+export async function planChanges(
+  sources: SourceRegistry, local: FileSource, incoming: FileSource, keys: readonly string[], localStates: ItemStates,
+): Promise<ImportPlan> {
   const changes: FileChanges = new Map();
   const displaced: DisplacedDocument[] = [];
-  const mine = await settingsOf(local);
-  const theirs = await settingsOf(incoming);
+  const mine = await settingsOf(sources, local);
+  const theirs = await settingsOf(sources, incoming);
   let recordsChanged = false;
   /** The subscription IDs taken from the file, by source type. */
   const subscriptionsTaken = new Map<string, string[]>();
   for (const key of keys) {
     if (key.startsWith('document:')) {
       const id = key.slice('document:'.length);
-      const file = documentPathFromId(id);
+      const file = documentPathFromId(sources, id);
       if (!file) throw new Error(`Not a document ID: ${id}`);
       const arriving = incoming.has(file);
       if (localStates.get(key)?.state === 'present') displaced.push({ id, path: file, reason: arriving ? 'replaced' : 'deleted' });

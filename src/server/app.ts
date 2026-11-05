@@ -17,7 +17,7 @@ import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
 import type { NotificationState } from '../notifications/notification-center.js';
 import type { AgentConnectionAccess, AgentPortSetting } from './agent-access.js';
 import type { UpdateAccess, UpdateSelection } from '../updates/types.js';
-import { sourceDeclaration, sourceDeclarations, sourceDefinitions } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { startChecks } from '../subscriptions/subscription-service.js';
 import type { SubscriptionDeclaration } from '../core/source-contract.js';
 import { SourceCatalog } from '../sources/source-catalog.js';
@@ -165,6 +165,8 @@ export interface NotificationAccess {
 }
 
 export interface HttpAppOptions {
+  /** The source types the service offers: addresses, documents, subscriptions, error statuses and pacing labels. */
+  sources: SourceRegistry;
   buildInfo?: BuildInfo;
   /** The process's change stream; every API response names its revision and `/api/events` serves it. */
   changes?: ChangeFeed;
@@ -194,7 +196,7 @@ export interface HttpAppOptions {
   loginStartup?: LoginStartupAccess;
   updates?: UpdateAccess;
   notifications?: NotificationAccess;
-  /** Source types the service offers; tests replace them to exercise other declarations. */
+  /** Address recognition of the source types; those of `sources` unless tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
   /**
    * Host names a request may address, each accepted only with the port this server listens on;
@@ -273,11 +275,11 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   activity_group_expired: 410,
 };
 
-/** The HTTP status of an error code: the core's own, else the one a registered source type declares, else 500. */
-export function errorStatus(code: string): number {
+/** The HTTP status of an error code: the core's own, else the one a source type of `sources` declares, else 500. */
+export function errorStatus(sources: SourceRegistry, code: string): number {
   const core = (ERROR_STATUS as Record<string, number>)[code];
   if (core !== undefined) return core;
-  for (const definition of sourceDefinitions()) {
+  for (const definition of sources.definitions) {
     const declared = definition.errorStatus?.[code];
     if (declared !== undefined) return declared;
   }
@@ -459,7 +461,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         const seconds = Math.max(1, Math.ceil((new Date(error.retryAt).getTime() - Date.now()) / 1000));
         void reply.header('Retry-After', String(seconds));
       }
-      void reply.status(errorStatus(error.code)).send({
+      void reply.status(errorStatus(options.sources, error.code)).send({
         error: { code: error.code, message: redact(error.message), ...(error.retryAt ? { retryAt: error.retryAt } : {}) },
       });
       return;
@@ -533,7 +535,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   // Each pacing group is labelled with the name its source type declares for it.
   app.get('/api/pacing', deviceData(), async () => ({
-    groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(gate.group), ...gate.status() })),
+    groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(options.sources, gate.group), ...gate.status() })),
   }));
 
   if (options.agentConnection) {
@@ -548,7 +550,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   app.get<{ Querystring: Record<string, unknown> }>('/api/documents', async (request) => {
     const query = singleValues(request.query);
-    return options.collector!.listDocuments(documentFilter(query), pagination(query));
+    return options.collector!.listDocuments(documentFilter(options.sources, query), pagination(query));
   });
 
   app.get('/api/documents/sources', async () => {
@@ -582,7 +584,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
     return options.search.search({
       query,
-      ...documentFilter(parameters),
+      ...documentFilter(options.sources, parameters),
       ...(publishedFrom ? { publishedFrom } : {}),
       ...(publishedTo ? { publishedTo } : {}),
       ...page,
@@ -619,13 +621,13 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (options.jobs) {
     const jobs = options.jobs;
     app.post<{ Body: { url?: unknown } }>('/api/submissions', async (request, reply) => {
-      const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要加入的網址。'));
+      const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要加入的網址。'));
       requireOnline();
       return reply.code(202).send(await jobs.submit(type, input));
     });
 
     app.post<{ Body: { url?: unknown } }>('/api/items', async (request, reply) => {
-      const { type, input } = ownedAddress(requiredUrl(request.body?.url, '請貼上要收集的網址。'));
+      const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要收集的網址。'));
       requireOnline();
       return reply.code(202).send(await jobs.submitItem(type, input));
     });
@@ -709,14 +711,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   /** The subscriptions of a type, or `subscription_not_found` for a type without subscriptions. */
   const collectionOf = (type: string): { collection: SubscriptionCollection; subscription: SubscriptionDeclaration; targetNoun: string } => {
     const collection = subscriptions.find((candidate) => candidate.type === type);
-    const subscription = sourceDeclaration(type)?.subscription;
+    const subscription = options.sources.get(type)?.subscription;
     if (!collection || !subscription) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
     return { collection, subscription, targetNoun: subscription.targetNoun };
   };
 
   /** The type of a subscription address; an address of a type without subscriptions is not one. */
   const subscriptionAddress = (url: unknown): { type: string; input: string } & ReturnType<typeof collectionOf> => {
-    const { type, input } = ownedAddress(requiredUrl(url, '請貼上要訂閱的網址。'));
+    const { type, input } = ownedAddress(options.sources, requiredUrl(url, '請貼上要訂閱的網址。'));
     if (!subscriptions.some((candidate) => candidate.type === type)) {
       throw new CollectorError('invalid_subscription', '這個網址不能訂閱。');
     }
@@ -784,16 +786,16 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         const submissions = await options.schedule.runNow();
         return reply.code(202).send({ submissions: submissions });
       }
-      const submissions = await startChecks((type) => collectionOf(type).collection, listed);
+      const submissions = await startChecks(options.sources, (type) => collectionOf(type).collection, listed);
       return reply.code(202).send({ submissions: submissions });
     });
   }
 
-  const sourceTypes = options.sourceTypes ?? sourceTypeDeclarations();
+  const sourceTypes = options.sourceTypes ?? sourceTypeDeclarations(options.sources);
   app.get('/api/source-types', async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
 
   if (subscriptions.length > 0) {
-    const catalog = new SourceCatalog(sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
+    const catalog = new SourceCatalog(options.sources, sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
       options.activity?.summary ? async (type, id) => {
         const summaries: ActivityCheckSummary[] = [];
         let cursor: string | undefined;
@@ -856,11 +858,11 @@ function requiredUrl(value: unknown, prompt: string): string {
 }
 
 /**
- * The registered source type that owns an address, with the address as that type reads it. An
+ * The source type of `sources` that owns an address, with the address as that type reads it. An
  * address no type owns is `unsupported_url`, or `invalid_url` when it is not an address at all.
  */
-function ownedAddress(value: string): { type: string; input: string } {
-  const { input, url, owner } = addressOwner(value, sourceDeclarations());
+function ownedAddress(sources: SourceRegistry, value: string): { type: string; input: string } {
+  const { input, url, owner } = addressOwner(value, sources.list);
   if (!owner) {
     throw url
       ? new CollectorError('unsupported_url', '目前還不支援這個網站的網址。')
@@ -876,9 +878,9 @@ function isSubscriptionKey(value: unknown): value is { type: string; id: string 
     && typeof type === 'string' && type.length > 0 && typeof id === 'string' && id.length > 0;
 }
 
-/** The label a source type gives its pacing group; the group ID when no registered type declares it. */
-function pacingLabel(group: string): string {
-  return sourceDefinitions().find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
+/** The label a source type gives its pacing group; the group ID when no type of `sources` declares it. */
+function pacingLabel(sources: SourceRegistry, group: string): string {
+  return sources.definitions.find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
 }
 
 const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['debug', 'info', 'warning', 'error']);
@@ -949,12 +951,12 @@ function singleValues(query: Record<string, unknown>): Record<string, string | u
 }
 
 /** Source filters use stable IDs; publisher names are display text and never filter. */
-function documentFilter(query: Record<string, string | undefined>): DocumentFilter {
+function documentFilter(sources: SourceRegistry, query: Record<string, string | undefined>): DocumentFilter {
   if (query.channel !== undefined) {
     throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');
   }
   const { sourceType, publisherId } = query;
-  if (sourceType !== undefined && !sourceDeclaration(sourceType)) {
+  if (sourceType !== undefined && !sources.get(sourceType)) {
     throw new CollectorError('invalid_request', '不支援的 sourceType。');
   }
   if (publisherId !== undefined && (sourceType === undefined || publisherId === '' || publisherId.length > 200)) {

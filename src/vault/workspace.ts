@@ -7,7 +7,7 @@ import {
   CollectorError, type ChangeCounts, type ExportSuggestion, type ImportMode, type ImportPreview,
   type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
 } from '../core/types.js';
-import { subscriptionDefinitions } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { SubscriptionService, SubscriptionServices } from '../subscriptions/subscription-service.js';
 import { forwardingPort } from '../jobs/subscription-port.js';
 import { CollectionScheduler } from '../subscriptions/scheduler.js';
@@ -72,7 +72,9 @@ export interface WorkspaceOptions {
   holdTimeoutMs?: number;
   /** Application name and version written into markers of Vaults it creates. */
   createdBy: string;
-  /** The assembled source plugins every job of this workspace collects through. */
+  /** The source types of every Vault this workspace opens: their documents, subscriptions and jobs. */
+  sources: SourceRegistry;
+  /** The assembled source plugins every job of this workspace collects through; the types of `sources`, in its order. */
   plugins: readonly SourcePlugin[];
   searchBinary: string;
   /** External main lexicon. Production callers provide its resource path; tests may replace search entirely. */
@@ -141,12 +143,12 @@ export function forwarding<T extends object>(target: () => T): T {
 }
 
 /**
- * One collection per source type with subscriptions, each forwarding to that type's service of
- * whatever Vault `services` returns at call time. A collection names its type without reaching the
- * Vault, so routes can be laid out before one is open.
+ * One collection per source type of `sources` with subscriptions, each forwarding to that type's
+ * service of whatever Vault `services` returns at call time. A collection names its type without
+ * reaching the Vault, so routes can be laid out before one is open.
  */
-export function subscriptionCollections(services: () => SubscriptionServices): SubscriptionService[] {
-  return subscriptionDefinitions().map(({ id: type }) => new Proxy({} as SubscriptionService, {
+export function subscriptionCollections(sources: SourceRegistry, services: () => SubscriptionServices): SubscriptionService[] {
+  return sources.subscriptionDefinitions.map(({ id: type }) => new Proxy({} as SubscriptionService, {
     get(_object, key) {
       if (key === 'type') return type;
       const service = services().of(type);
@@ -170,7 +172,7 @@ export class VaultWorkspace {
   private readonly holdTimeoutMs: number | undefined;
 
   private constructor(private readonly options: WorkspaceOptions) {
-    this.jobStore = options.jobStore ?? JobStore.memory();
+    this.jobStore = options.jobStore ?? JobStore.memory(options.sources);
     this.holdTimeoutMs = options.holdTimeoutMs;
     this.machine = options.machineName ?? machineName();
     this.operationLock = new VaultOperationLock({
@@ -206,7 +208,7 @@ export class VaultWorkspace {
     // The selected Vault and the one being opened are never taken back, whatever the journal says.
     if (!options.pendingImport) await recoverImport(options.profilePath, [selected, root]);
     // An import a stop interrupted after its commit point is finished before anything reads the Vault.
-    const finished = await finishInPlaceImports(root);
+    const finished = await finishInPlaceImports(root, options.sources);
     workspace.current = await workspace.makeBundle(root, options.searchPort);
     try {
       if (finished) await workspace.current.runtime.search.rebuild();
@@ -322,7 +324,7 @@ export class VaultWorkspace {
 
   private async pack(file: string, exportedAt: Date, reporter: OperationReporter): Promise<WrittenPackage> {
     reporter.progress('exporting', '正在匯出…');
-    return writePackage(this.current.root, file, {
+    return writePackage(this.current.root, this.options.sources, file, {
       createdBy: this.options.createdBy, exportedAt, source: { vaultId: this.current.vaultId, machine: this.machine, folderName: path.basename(this.current.root) },
     });
   }
@@ -374,7 +376,7 @@ export class VaultWorkspace {
         ? '這就是目前使用中的知識庫。' : '不能開啟目前知識庫裡的資料夾。');
     }
     if (await isWithin(root, this.options.profilePath)) throw new CollectorError('invalid_request', '不能開啟程式資料目錄裡的資料夾。');
-    const inspection = await inspectVaultDirectory(root);
+    const inspection = await inspectVaultDirectory(root, this.options.sources);
     if (inspection.kind !== 'existing') throw new CollectorError('vault_invalid', notAVault(inspection));
     this.dropPreview();
     void this.run('open', '開啟其他知識庫', (reporter) => this.openOnce(inspection.path, reporter)).catch(() => undefined);
@@ -414,7 +416,7 @@ export class VaultWorkspace {
       reporter.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
       // An import a stop interrupted after its commit point is finished before anything reads the Vault;
       // the rebuild below then indexes the finished content.
-      await finishInPlaceImports(root);
+      await finishInPlaceImports(root, this.options.sources);
       candidate = await this.makeBundle(root);
       await candidate.runtime.search.rebuild();
       await candidate.schedule.getSchedule();
@@ -452,9 +454,9 @@ export class VaultWorkspace {
       // A comparison refused for a busy Vault leaves the previous one usable.
       this.dropPreview();
       reporter.progress('validating', '正在檢查匯出檔…');
-      const reader = await openPackage(source);
+      const reader = await openPackage(source, this.options.sources);
       try {
-        await checkPackageContent(reader);
+        await checkPackageContent(reader, this.options.sources);
         reporter.progress('validating', '正在比對…');
         const { comparison, baseline } = await this.compare(reader);
         const { exportedAt, source: from } = reader.manifest;
@@ -478,8 +480,9 @@ export class VaultWorkspace {
    * the scheduler runs after a preview leaves the baseline as it was.
    */
   private async compare(reader: PackageReader): Promise<{ comparison: Comparison; baseline: string; local: ItemStates; incoming: ItemStates }> {
-    const local = await itemStates(registeredSource(await registeredFiles(this.current.root)));
-    const incoming = await itemStates(reader);
+    const sources = this.options.sources;
+    const local = await itemStates(sources, registeredSource(await registeredFiles(this.current.root, sources)));
+    const incoming = await itemStates(sources, reader);
     const comparison = compareItems(local, incoming);
     const baseline = createHash('sha256').update(canonicalJson([[...local], reader.identity])).digest('hex');
     return { comparison, baseline, local, incoming };
@@ -538,13 +541,13 @@ export class VaultWorkspace {
     let applied: AppliedImport | null = null;
     try {
       reporter.progress('validating', '正在檢查本機資料…');
-      reader = await openPackage(preview.file);
+      reader = await openPackage(preview.file, this.options.sources);
       const current = reader.identity === preview.identity ? await this.compare(reader) : null;
       if (!current || current.baseline !== preview.baseline) {
         this.dropPreview();
         throw new CollectorError('invalid_request', '本機資料或匯入檔在比對後有變更，請重新選擇匯入檔。');
       }
-      const plan = await planChanges(registeredSource(await registeredFiles(root)), reader, chosenKeys(current.comparison, mode), current.local);
+      const plan = await planChanges(this.options.sources, registeredSource(await registeredFiles(root, this.options.sources)), reader, chosenKeys(current.comparison, mode), current.local);
       const counts = mode === 'replace' ? current.comparison.replace : current.comparison.merge;
       reporter.progress('exporting', '正在匯出目前的內容…');
       const backup = await this.backUp(reporter);
@@ -554,7 +557,7 @@ export class VaultWorkspace {
       reporter.blockReads();
       applied = { preview, mode, counts, plan, backup };
       reporter.progress('extracting', '正在套用匯入的內容…', { completed: 0, total: plan.changes.size });
-      await applyInPlace(root, reader, plan.changes, (done, total) => {
+      await applyInPlace(root, this.options.sources, reader, plan.changes, (done, total) => {
         reporter.files(done, total);
       }, this.options.importFaults);
       return await this.importApplied(applied, mode === 'replace', reporter);
@@ -563,7 +566,7 @@ export class VaultWorkspace {
       // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
       let finished: boolean;
       try {
-        finished = await finishInPlaceImports(root);
+        finished = await finishInPlaceImports(root, this.options.sources);
       } catch (again) {
         console.error('Finishing an interrupted import failed', again);
         reporter.stop(new CollectorError('vault_busy', '匯入未完成，已停止寫入與排程。請重新啟動程式以完成匯入。'));
@@ -619,7 +622,7 @@ export class VaultWorkspace {
   private async indexChanged(changes: ReadonlyMap<string, unknown>): Promise<void> {
     const vault = new MarkdownVault(this.current.files);
     for (const relative of changes.keys()) {
-      const id = documentIdFromPath(relative);
+      const id = documentIdFromPath(this.options.sources, relative);
       if (!id) continue;
       const document = await vault.read(id).catch(() => null);
       if (document) await this.current.runtime.search.index(document);
@@ -661,14 +664,14 @@ export class VaultWorkspace {
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
     const vaultId = await readVaultId(root);
     if (!vaultId) throw new CollectorError('vault_invalid', '知識庫標記檔沒有識別碼，不是目前支援的知識庫格式，無法開啟。');
-    const files = new VaultFileWriter(root);
+    const files = new VaultFileWriter(root, this.options.sources);
     const vault = new MarkdownVault(files);
     // Deletions a stop left unfinished are settled before the search index is compared with the Vault.
     const recovery = await vault.recoverDeletions();
     const databasePath = this.searchPath(root);
     const searchChanged = () => this.noteChange({ kind: 'search' });
     const runtime = this.options.createSearch ? await this.options.createSearch(root, searchChanged) : await startSearchRuntime({
-      vault, binaryPath: this.options.searchBinary, databasePath,
+      vault, sources: this.options.sources, binaryPath: this.options.searchBinary, databasePath,
       lexiconPath: this.options.searchLexicon ?? path.resolve('resources/search/coct-main.txt'),
       prepareProjection: (profile) => prepareOwnedSearchProjection({
         searchData: this.options.searchData,
@@ -691,6 +694,7 @@ export class VaultWorkspace {
       vaultPath: root,
       vaultId,
       store: this.jobStore,
+      sources: this.options.sources,
       plugins,
       documents: collector,
       // The subscriptions are built with the jobs they dispatch to, so the port reaches them through the bundle.
@@ -703,8 +707,9 @@ export class VaultWorkspace {
       ...(this.options.connectivity ? { connectivity: this.options.connectivity } : {}),
       recentTarget: (type, url) => recentTargets.get(type, url),
     });
-    const subscriptions = new SubscriptionServices(plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>
+    const subscriptions = new SubscriptionServices(this.options.sources, plugins.filter((plugin) => stores[plugin.id]).map((plugin) =>
       new SubscriptionService(plugin.id, stores[plugin.id]!, jobs, {
+        sources: this.options.sources,
         autoCollection,
         resolveTarget: async (url, signal) => {
           const target = await plugin.resolveTarget!(url, { priority: 'interactive', signal });

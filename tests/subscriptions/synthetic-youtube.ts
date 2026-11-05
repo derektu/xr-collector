@@ -20,6 +20,7 @@ import { HeldCaptures } from '../support/held-captures.js';
 import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -123,6 +124,7 @@ export class SyntheticYouTube implements YouTubeSource {
 
 /** Documents kept in memory, newest collection first, stamped with a controllable clock. */
 export class MemoryDocuments implements DocumentVault {
+  readonly sources = PRODUCT_SOURCES;
   readonly documents = new Map<string, SavedDocument>();
 
   constructor(private readonly now: () => Date) {}

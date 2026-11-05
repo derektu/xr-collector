@@ -12,7 +12,7 @@ import type {
 } from './types.js';
 import { CollectorError } from './types.js';
 import { documentExcerpt } from './document-text.js';
-import { sourceDeclaration } from './source-registry.js';
+import type { SourceDeclarations } from './source-registry.js';
 import type { CapturedDocument } from './source-contract.js';
 import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
 import { documentId, type DocumentKey } from '../vault/document-paths.js';
@@ -30,6 +30,8 @@ export interface TypeSubscriptions {
 
 /** Documents of one Vault; `read`, `list` and `getByKey` return only visible documents. */
 export interface DocumentVault {
+  /** The source types whose documents the Vault holds. */
+  readonly sources: SourceDeclarations;
   getByKey(key: DocumentKey): Promise<SavedDocument | null>;
   add(document: CapturedDocument, options?: { collectedAt?: Date }): Promise<SavedDocument>;
   list(): Promise<DocumentMetadata[]>;
@@ -116,7 +118,7 @@ export class Collector {
         return { document, recollected: false };
       }
       if (!explicitAfter(intent, deletion.deletedAt)) {
-        const target = sourceDeclaration(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
+        const target = this.vault.sources.get(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
         throw new CollectorError('document_deleted', `這份文件已刪除，自動與${target}收集會略過。`);
       }
       const now = (this.vault.now ?? (() => new Date()))();
@@ -278,7 +280,7 @@ export class Collector {
     return {
       total: documents.length,
       groups: [...groups.entries()].map(([sourceType, publishers]) => {
-        const declaration = sourceDeclaration(sourceType);
+        const declaration = this.vault.sources.get(sourceType);
         const subscribed = new Map((byType[sourceType]?.subscriptions ?? []).map((record) => [record.id, record]));
         const removals = new Map((byType[sourceType]?.removals ?? []).map((record) => [record.id, record]));
         const unknown = `未知${declaration?.subscription?.targetNoun ?? '發布者'}`;

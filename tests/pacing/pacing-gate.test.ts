@@ -14,6 +14,7 @@ import { rssDefinition } from '../../src/plugins/rss/server.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
 import { SubscriptionService } from '../../src/subscriptions/subscription-service.js';
 import type { SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // The request channel runs with a manual clock and timers, so every wait is checked exactly.
 
@@ -171,6 +172,7 @@ describe('YouTube request channel (P-T3)', () => {
     let previewRequests = 0;
     const store = { list: async () => [] } as unknown as SubscriptionStore;
     const subscriptions = new SubscriptionService('youtube', store, {} as never, {
+      sources: PRODUCT_SOURCES,
       autoCollection: async () => true,
       documents: async () => [],
       previewTimeoutMs: 50,

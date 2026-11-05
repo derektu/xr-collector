@@ -1,4 +1,4 @@
-import { sourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import {
   CollectorError,
   type SourceTypeInfo,
@@ -90,9 +90,9 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
   };
 }
 
-/** Every registered source type, in display order, as address recognition uses it. */
-export function sourceTypeDeclarations(): SourceTypeDeclaration[] {
-  return sourceDeclarations().map(recognizingSourceType);
+/** Every source type of `sources`, in display order, as address recognition uses it. */
+export function sourceTypeDeclarations(sources: SourceDeclarations): SourceTypeDeclaration[] {
+  return sources.list.map(recognizingSourceType);
 }
 
 /** The serializable part of a declaration that `GET /api/source-types` returns. */

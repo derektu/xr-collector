@@ -19,6 +19,7 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -33,16 +34,18 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
   const source = new SyntheticYouTube();
-  const store = JobStore.memory(now);
+  const store = JobStore.memory(PRODUCT_SOURCES, now);
   const removedFromSearch: string[] = [];
   const search = { index: async () => undefined, remove: async (id: string) => { removedFromSearch.push(id); } };
-  const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
-  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', now);
+  const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', now);
   const jobs: JobManager = new JobManager({
-    vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
+    sources: PRODUCT_SOURCES,
+    vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     deleteDocument: async (id) => {
       if (options.failDeleting?.(id)) throw new Error('disk error');
@@ -50,7 +53,7 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
     },
     recordDeletion: (entry) => collector.recordDeletion(entry), removalSettleMs: options.removalSettleMs ?? 5_000,
   });
-  const agent = await createHttpApp({ collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
+  const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
   const send = async (method: 'GET' | 'DELETE', url: string) => {
     const response = await agent.inject({ method, url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };

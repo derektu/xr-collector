@@ -17,6 +17,7 @@ import {
 } from '../../src/search/meilisearch-process.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();
@@ -65,7 +66,7 @@ async function withSearch<T>(
   try {
     let rebuilds = 0;
     const search = new ManagedTranscriptSearch(
-      new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon }),
+      new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon }),
       async () => documents(),
       { load: async () => ({ lastRebuiltAt: null }), save: async () => { rebuilds += 1; } },
     );
@@ -296,7 +297,7 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
     await withSearch(databasePath, () => vault, async (search, engine) => {
       expect((await search.search({ query: '草原' })).total).toBe(2);
       // The exclusion filter a pending removal uses, against the real engine.
-      const backend = new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey });
+      const backend = new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey });
       const excluded = await backend.search({ query: '草原' }, [deleted.id]);
       expect([excluded.total, excluded.hits.map(({ id }) => id)]).toEqual([1, [kept.id]]);
       vault = [kept];

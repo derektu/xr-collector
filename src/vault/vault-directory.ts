@@ -2,8 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { scheduleFile, sourceDefinitions } from '../core/source-registry.js';
-import { subscriptionExchange } from '../core/subscription-exchange.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 import { replaceFile } from '../core/json-file.js';
@@ -30,17 +29,17 @@ const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 /** Operating-system files that do not make a directory non-empty. */
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
 /**
- * Settings files and what each must read as: the subscriptions file of every registered type with
+ * Settings files and what each must read as: the subscriptions file of every type of `sources` with
  * subscriptions, the schedule file and the deletion file. An unreadable deletion file would let
  * deleted documents return, and a subscription or schedule file of another version would be
  * misread, so any of them failing makes the directory no Vault this program opens.
  */
-function settingsFiles(): Array<{ file: string; check: (value: unknown) => unknown }> {
-  const exchange = subscriptionExchange();
+function settingsFiles(sources: SourceRegistry): Array<{ file: string; check: (value: unknown) => unknown }> {
+  const exchange = sources.exchange;
   return [
     ...exchange.files().map(({ file, read }) => ({ file, check: read })),
-    { file: scheduleFile(), check: exchange.checkSchedule },
-    { file: DELETIONS_FILE, check: deletionsFromJson },
+    { file: sources.schedule.file, check: exchange.checkSchedule },
+    { file: DELETIONS_FILE, check: (value) => deletionsFromJson(value, sources) },
   ];
 }
 
@@ -65,13 +64,13 @@ function localTimestamp(date: Date): string {
     + `${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(offset / 60)}:${pad(offset % 60)}`;
 }
 
-function markerProblem(value: unknown): string | null {
+function markerProblem(value: unknown, sources: SourceRegistry): string | null {
   if (!value || typeof value !== 'object') return '知識庫標記檔格式錯誤。';
   const marker = value as Partial<VaultMarker>;
   if (marker.format !== VAULT_FORMAT || !Number.isInteger(marker.formatVersion) || (marker.formatVersion ?? 0) < 1) {
     return '知識庫標記檔格式錯誤。';
   }
-  if ((marker.formatVersion ?? 0) > supportedVaultFormatVersion()) {
+  if ((marker.formatVersion ?? 0) > supportedVaultFormatVersion(sources)) {
     return `此知識庫由較新版本的 XR Collector 建立（格式版本 ${marker.formatVersion}），請更新程式後再開啟。`;
   }
   if (typeof marker.id !== 'string' || !VAULT_ID.test(marker.id)) {
@@ -80,10 +79,10 @@ function markerProblem(value: unknown): string | null {
   return null;
 }
 
-/** The `.md` files in the document folder of every registered source type. */
-async function countDocuments(root: string): Promise<number> {
+/** The `.md` files in the document folder of every source type of `sources`. */
+async function countDocuments(root: string, sources: SourceRegistry): Promise<number> {
   let count = 0;
-  for (const definition of sourceDefinitions()) {
+  for (const definition of sources.definitions) {
     try {
       const entries = await readdir(path.join(root, 'documents', definition.id));
       count += entries.filter((name) => name.endsWith('.md')).length;
@@ -95,8 +94,11 @@ async function countDocuments(root: string): Promise<number> {
   return count;
 }
 
-/** Reads a directory and classifies it without changing anything inside it. */
-export async function inspectVaultDirectory(input: string): Promise<VaultInspection> {
+/**
+ * Reads a directory and classifies it without changing anything inside it; the settings files and
+ * document folders it reads are those of the types of `sources`.
+ */
+export async function inspectVaultDirectory(input: string, sources: SourceRegistry): Promise<VaultInspection> {
   if (!path.isAbsolute(input)) return { kind: 'invalid', path: input, reason: '請提供完整的絕對路徑。' };
   const root = path.resolve(input);
   let entries: string[];
@@ -132,10 +134,10 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
   } catch (error) {
     return { kind: 'invalid', path: root, reason: error instanceof SyntaxError ? '知識庫標記檔格式錯誤。' : unreadableReason(error, '知識庫標記檔') };
   }
-  const problem = markerProblem(marker);
+  const problem = markerProblem(marker, sources);
   if (problem) return { kind: 'invalid', path: root, reason: problem };
 
-  for (const { file, check } of settingsFiles()) {
+  for (const { file, check } of settingsFiles(sources)) {
     let value: unknown;
     try {
       value = JSON.parse(await readFile(path.join(root, file), 'utf8'));
@@ -149,7 +151,7 @@ export async function inspectVaultDirectory(input: string): Promise<VaultInspect
     }
   }
   try {
-    return { kind: 'existing', path: root, documentCount: await countDocuments(root) };
+    return { kind: 'existing', path: root, documentCount: await countDocuments(root, sources) };
   } catch (error) {
     return { kind: 'invalid', path: root, reason: unreadableReason(error, '知識庫的文件目錄') };
   }
@@ -173,9 +175,9 @@ export async function writeVaultMarker(root: string, createdBy: string, now = ne
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
 }
 
-/** The highest Vault format version this program opens: its own, or a higher one a registered source type declares. */
-export function supportedVaultFormatVersion(): number {
-  return Math.max(VAULT_FORMAT_VERSION, ...sourceDefinitions().map((definition) => definition.vaultFormatVersion));
+/** The highest Vault format version this program opens: its own, or a higher one a source type of `sources` declares. */
+export function supportedVaultFormatVersion(sources: SourceRegistry): number {
+  return Math.max(VAULT_FORMAT_VERSION, ...sources.definitions.map((definition) => definition.vaultFormatVersion));
 }
 
 /**
@@ -185,8 +187,8 @@ export function supportedVaultFormatVersion(): number {
  * Vault holding only types of the base format keeps its marker byte for byte. A directory without
  * a readable marker is not a Vault this hook changes.
  */
-export async function ensureVaultFormat(root: string, types: Iterable<string>): Promise<void> {
-  const required = Math.max(0, ...[...types].map((type) => sourceDefinitions().find((definition) => definition.id === type)?.vaultFormatVersion ?? 0));
+export async function ensureVaultFormat(root: string, types: Iterable<string>, sources: SourceRegistry): Promise<void> {
+  const required = Math.max(0, ...[...types].map((type) => sources.definition(type)?.vaultFormatVersion ?? 0));
   if (required <= VAULT_FORMAT_VERSION) return;
   const file = path.join(root, VAULT_MARKER);
   let marker: VaultMarker;
@@ -195,15 +197,15 @@ export async function ensureVaultFormat(root: string, types: Iterable<string>): 
   } catch {
     return;
   }
-  if (markerProblem(marker) || marker.formatVersion >= required) return;
+  if (markerProblem(marker, sources) || marker.formatVersion >= required) return;
   const temporary = `${file}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: required }, null, 2)}\n`, { flag: 'wx' });
   await replaceFile(temporary, file);
 }
 
 /** Creates a Vault only in a missing or empty directory. */
-export async function createVaultDirectory(input: string, createdBy: string): Promise<string> {
-  const inspection = await inspectVaultDirectory(input);
+export async function createVaultDirectory(input: string, createdBy: string, sources: SourceRegistry): Promise<string> {
+  const inspection = await inspectVaultDirectory(input, sources);
   if (inspection.kind === 'existing') throw new CollectorError('vault_invalid', '這個目錄已經是知識庫，請改用開啟。');
   if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
   try {
