@@ -59,6 +59,11 @@ export interface ApiRoute<Response = unknown, Body = undefined, Query = undefine
   /** The status of a successful answer; 200 when left out. */
   readonly status?: number;
   /**
+   * The successful answer hands out the Agent key, which the server otherwise masks in every answer;
+   * an error answer of the route stays masked.
+   */
+  readonly revealsSecret?: true;
+  /**
    * Types only, never present at run time. A route that answers an event stream or a file has the
    * response type `never`.
    */
@@ -75,7 +80,7 @@ export type PathParams<Path extends string> =
     : Path extends `${string}:${infer Name}` ? Name : never;
 
 interface RouteFields<Method extends HttpMethod, Path extends string> {
-  method: Method; path: Path; access?: RouteVaultAccess; status?: number;
+  method: Method; path: Path; access?: RouteVaultAccess; status?: number; revealsSecret?: true;
 }
 
 /** A JSON route answering `Response`, taking a JSON `Body` and a `Query` when given. */
@@ -138,9 +143,9 @@ export const API_ROUTES = {
   loginStartup: json<{ loginStartup: LoginStartupStatus }>()({ method: 'GET', path: '/api/device/login-startup', access: 'device-data' }),
   setLoginStartup: json<{ loginStartup: LoginStartupStatus }, EnabledSetting>()({ method: 'PUT', path: '/api/device/login-startup', access: 'device-data' }),
   agent: json<{ agent: AgentConnectionStatus }>()({ method: 'GET', path: '/api/device/agent', access: 'device-data' }),
-  agentConnection: json<{ connection: AgentConnection }>()({ method: 'GET', path: '/api/device/agent/connection', access: 'device-data' }),
+  agentConnection: json<{ connection: AgentConnection }>()({ method: 'GET', path: '/api/device/agent/connection', access: 'device-data', revealsSecret: true }),
   setAgentPort: json<{ agent: AgentConnectionStatus }, AgentPortSetting>()({ method: 'PUT', path: '/api/device/agent/port', access: 'device-data' }),
-  resetAgentKey: json<{ connection: AgentConnection; agent: AgentConnectionStatus }>()({ method: 'POST', path: '/api/device/agent/key/reset', access: 'device-data' }),
+  resetAgentKey: json<{ connection: AgentConnection; agent: AgentConnectionStatus }>()({ method: 'POST', path: '/api/device/agent/key/reset', access: 'device-data', revealsSecret: true }),
   agentSkill: unformatted({ method: 'GET', path: '/api/device/agent/skill', access: 'device-data' }),
 
   vaultSetup: json<{ vault: VaultSetupStatus }>()({ method: 'GET', path: '/api/vault/setup', access: 'device-data' }),
