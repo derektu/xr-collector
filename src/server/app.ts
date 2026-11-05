@@ -150,15 +150,6 @@ function setupRequest(body: Record<string, unknown>): VaultSetupRequest {
   return { action, location, name, packagePath };
 }
 
-/** Routes a not-ready runtime still serves so UI and Agents can finish setup. */
-const NOT_READY_ROUTES = new Set([
-  '/api/health', '/api/events', '/api/changes', '/api/vault/setup', '/api/vault/inspect', '/api/vault/new/check', '/api/vault/package/describe', '/api/activity', '/api/pacing',
-  '/api/device/login-startup', '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/port',
-  '/api/device/agent/key/reset', '/api/device/agent/skill', '/api/device/build-info',
-  '/api/device/updates', '/api/device/updates/check', '/api/device/updates/download',
-  '/api/device/updates/apply', '/api/device/updates/cancel', '/api/device/notifications',
-]);
-
 export interface NotificationAccess {
   read(): Promise<NotificationState>;
   update(enabled: boolean): Promise<NotificationState>;
@@ -319,6 +310,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
   };
   const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
+  // A device-data route reads or changes state outside the Vault, so it answers before a Vault is
+  // ready and during Vault operations. Every other API route answers `vault_not_ready` until a Vault
+  // is ready and passes through the Vault lock.
   // Fastify normalizes route options in place, so every route receives a fresh object.
   const deviceData = () => ({ config: { vaultAccess: 'device-data' as const } });
   const vaultOperation = () => ({ config: { vaultAccess: 'vault-operation' as const } });
@@ -380,8 +374,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const notReady = options.notReady;
     app.addHook('onRequest', async (request, reply) => {
       const access = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
-      const pathname = request.url.split('?', 1)[0] ?? request.url;
-      if (!request.url.startsWith('/api/') || access === 'device-data' || NOT_READY_ROUTES.has(pathname)) return;
+      if (!request.url.startsWith('/api/') || access === 'device-data') return;
       const message = notReady();
       if (message) {
         return reply.code(503).send({ error: { code: 'vault_not_ready', message } });

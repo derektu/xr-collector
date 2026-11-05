@@ -24,6 +24,7 @@ import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { apiRouteLines } from '../support/api-routes.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -36,22 +37,6 @@ async function connectionOf(runtime: CollectorRuntime): Promise<{ url: string; t
   const response = await fetch(`${runtime.server.url}/api/device/agent/connection`);
   expect(response.status).toBe(200);
   return ((await response.json()) as { connection: { url: string; token: string } }).connection;
-}
-
-/** Each `/api` route of a Fastify route tree, as its full path and methods, e.g. "/api/jobs/:id (GET, HEAD)". */
-function apiRoutes(tree: string): string[] {
-  const prefixes: string[] = [];
-  const routes: string[] = [];
-  for (const line of tree.split('\n')) {
-    const match = /^((?:[│ ] {3})*)[├└]── (\S+)(?: \(([^)]+)\))?$/u.exec(line);
-    if (!match) continue;
-    const depth = match[1]!.length / 4;
-    prefixes.length = depth;
-    const full = `${prefixes.join('')}${match[2]}`;
-    prefixes.push(match[2]!);
-    if (match[3] && full.startsWith('/api/')) routes.push(`${full} (${match[3]})`);
-  }
-  return routes.sort();
 }
 
 async function options(
@@ -263,8 +248,8 @@ describe('CollectorRuntime', () => {
     const runtime = await CollectorRuntime.start(setup.value);
     cleanups.push(() => runtime.close());
     expect(runtime.status()).toMatchObject({ state: 'ready' });
-    const ui = apiRoutes(runtime.server.app.printRoutes({ commonPrefix: false }));
-    const agent = apiRoutes(runtime.agentAccess.listener()!.app.printRoutes({ commonPrefix: false }));
+    const ui = apiRouteLines(runtime.server.app.printRoutes({ commonPrefix: false }));
+    const agent = apiRouteLines(runtime.agentAccess.listener()!.app.printRoutes({ commonPrefix: false }));
     // Both lists cover the business routes, not only the device routes served before a Vault is set.
     expect(ui).toContain('/api/subscriptions/:type/:id (PATCH, DELETE, GET, HEAD)');
     expect(ui).toContain('/api/jobs/:id/retry (POST)');

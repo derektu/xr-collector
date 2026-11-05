@@ -1,20 +1,29 @@
-// The Agent Skill (skills/xr-collector-agent/SKILL.md) matches the server: every route in its
-// HTTP contract table is registered. A stale Skill sends an Agent to routes that do not exist.
+// The Agent Skill (skills/xr-collector-agent/SKILL.md) and the server name the same API: every route
+// in the Skill's HTTP contract table is registered, and every registered route is in the table or in
+// the UI-only list below with its reason. A stale Skill sends an Agent to routes that do not exist; a
+// route missing from it is an API the Agent never learns about.
 // The fields the subscription routes return are checked against the Skill in
 // subscription-routes.test.ts, where those routes run.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ChangeFeed } from '../../src/core/change-feed.js';
-import { describe, expect, it } from 'vitest';
-import { createHttpApp, type HttpAppOptions } from '../../src/server/app.js';
-import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { apiRoutes, appWithEveryRoute, type ApiRoute } from '../support/api-routes.js';
 
 const skillPath = path.resolve('skills/xr-collector-agent/SKILL.md');
 
+/**
+ * Routes the server registers for the UI alone, each with the reason the Agent does not use it.
+ * The UI and Agent listeners serve the same routes, so an entry here is still reachable by an Agent.
+ */
+const UI_ONLY: ReadonlyArray<ApiRoute & { reason: string }> = [];
+
+const key = (route: ApiRoute): string => `${route.method} ${route.url}`;
+
 /** Every `METHOD /api/...` pair the Skill's HTTP contract table lists, e.g. "`GET`／`PUT /api/x`". */
-function contractRoutes(skill: string): Array<{ method: string; url: string }> {
+function contractRoutes(skill: string): ApiRoute[] {
   const table = skill.slice(skill.indexOf('## HTTP 契約'));
-  const routes: Array<{ method: string; url: string }> = [];
+  const routes: ApiRoute[] = [];
   for (const row of table.split('\n').filter((line) => line.startsWith('| `'))) {
     const firstCell = row.split('|')[1] ?? '';
     let methods: string[] = [];
@@ -31,29 +40,23 @@ function contractRoutes(skill: string): Array<{ method: string; url: string }> {
   return routes;
 }
 
+const apps: FastifyInstance[] = [];
+afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
+
 describe('Agent Skill', () => {
-  it('lists only routes the server registers', async () => {
-    const stub = {} as never;
-    const options: HttpAppOptions = {
-      sources: PRODUCT_SOURCES,
-      collector: stub, jobs: stub, activity: stub, transfer: stub, subscriptions: [{ type: 'youtube' } as never], schedule: stub, search: stub, vaultSetup: stub,
-      pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test', changes: new ChangeFeed(),
-      agentConnection: {
-        status: () => ({ state: 'available', activeUrl: 'http://127.0.0.1:1', activePort: 1, configured: { mode: 'auto' }, restartRequired: false, message: 'test' }),
-        connection: () => ({ url: 'http://127.0.0.1:1', token: 'test' }), authorize: () => true,
-        configure: async () => ({ state: 'available', activeUrl: 'http://127.0.0.1:1', activePort: 1, configured: { mode: 'auto' }, restartRequired: false, message: 'test' }),
-        resetKey: async () => ({ url: 'http://127.0.0.1:1', token: 'test' }), download: async () => Buffer.from('zip'),
-      },
-    };
-    const app = await createHttpApp(options);
+  it('lists every route the server registers, apart from the UI-only ones, and no other', async () => {
+    const app = await appWithEveryRoute();
+    apps.push(app);
     await app.ready();
-    const routes = contractRoutes(await readFile(skillPath, 'utf8'));
+    const registered = apiRoutes(app).map(key);
+    const listed = contractRoutes(await readFile(skillPath, 'utf8')).map(key);
+    const uiOnly = UI_ONLY.map(key);
 
     // The table parser still finds the contract.
-    expect(routes.length).toBeGreaterThan(25);
-    for (const route of routes) {
-      expect(app.hasRoute(route), `${route.method} ${route.url}`).toBe(true);
-    }
-    await app.close();
+    expect(listed.length).toBeGreaterThan(25);
+    expect(registered.filter((route) => !listed.includes(route) && !uiOnly.includes(route)), 'registered but not in the Skill').toEqual([]);
+    expect(listed.filter((route) => !registered.includes(route)), 'in the Skill but not registered').toEqual([]);
+    expect(uiOnly.filter((route) => !registered.includes(route) || listed.includes(route)), 'UI-only entries that are stale').toEqual([]);
+    expect(UI_ONLY.filter((route) => route.reason.trim() === ''), 'UI-only entries without a reason').toEqual([]);
   });
 });
