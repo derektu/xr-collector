@@ -120,8 +120,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
       : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
       if (currentFilter.current !== requested) return;
       if (effectiveMode === 'summary' && summaryLocked.current) return;
-      const events = 'events' in page ? page.events : [];
-      const entries = 'entries' in page ? page.entries : [];
+      const events = page.view === 'raw' ? page.events : [];
+      const entries = page.view === 'summary' ? page.entries : [];
       setLog((previous) => previous && previous.filter === requested && effectiveMode === 'raw'
         ? { ...previous, events: mergeNewest(previous.events, events), entries: [], health: page.log }
         : { filter: requested, events, entries, nextCursor: page.nextCursor, health: page.log });
@@ -165,8 +165,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
       setLog((previous) => requestedGeneration === logGeneration.current
         && previous?.filter === requestedFilter && previous.nextCursor === requestedCursor
         ? { ...previous,
-          events: [...previous.events, ...('events' in page ? page.events : [])],
-          entries: [...previous.entries, ...('entries' in page ? page.entries : [])],
+          events: [...previous.events, ...(page.view === 'raw' ? page.events : [])],
+          entries: [...previous.entries, ...(page.view === 'summary' ? page.entries : [])],
           nextCursor: page.nextCursor, health: page.log }
         : previous);
     } catch (error) {

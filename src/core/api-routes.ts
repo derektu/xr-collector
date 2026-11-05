@@ -178,7 +178,10 @@ export const API_ROUTES = {
   job: json<{ job: JobView }>()({ method: 'GET', path: '/api/jobs/:id', access: 'device-data' }),
   retryJob: json<JobSubmission>()({ method: 'POST', path: '/api/jobs/:id/retry', status: 202 }),
   dismissJob: json<{ job: JobView }>()({ method: 'POST', path: '/api/jobs/:id/dismiss' }),
-  /** A `summary` view answers an `ActivitySummaryPage` unless it names a job; any other view an `ActivityPage`. */
+  /**
+   * The response's `view` names what it holds: `summary` for an `ActivitySummaryPage`, `raw` for an
+   * `ActivityPage`. A `summary` query answers raw events when it names a job.
+   */
   activity: json<ActivityPage | ActivitySummaryPage, undefined, ActivityParameters>()({ method: 'GET', path: '/api/activity', access: 'device-data' }),
   activityGroup: json<ActivityGroupPage, undefined, ActivityGroupQuery>()({ method: 'GET', path: '/api/activity/groups/:groupId', access: 'device-data' }),
 
