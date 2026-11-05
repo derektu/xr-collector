@@ -4,9 +4,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
+import { startCollectorServer } from '../../src/server/collector-server.js';
 import { VaultOperationLock, type VaultAccess } from '../../src/vault/operation-lock.js';
-import type { VaultWorkspace } from '../../src/vault/workspace.js';
+import type { VaultWorkspace } from '../../src/runtime/vault-workspace.js';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BuildInfo } from '../../src/core/update-types.js';
@@ -62,20 +62,20 @@ describe('build information HTTP contract', () => {
 
   it('forwards one identity through the real UI and Agent listeners with existing Host and token guards', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-build-http-'));
-    const runtime = await CollectorRuntime.start({ sources: PRODUCT_SOURCES, buildInfo: info, profilePath: root, workspace: null,
+    const runtime = await startCollectorServer({ sources: PRODUCT_SOURCES, buildInfo: info, profilePath: root, workspace: null,
       agentSettingsFile: path.join(root, 'agent-settings.json'), skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     try {
-      const connection = runtime.agentAccess.connection();
+      const connection = runtime.agentConnection.connection();
       const read = (base: string, headers: Record<string, string> = {}) => fetch(`${base}/api/device/build-info`, { headers: { connection: 'close', ...headers } });
-      const ui = await read(runtime.server.url);
+      const ui = await read(runtime.listeners.ui.url);
       const agent = await read(connection.url, { authorization: `Bearer ${connection.token}` });
       expect(ui.status).toBe(200);
       expect(agent.status).toBe(200);
       expect(await ui.json()).toEqual({ buildInfo: info });
       expect(await agent.json()).toEqual({ buildInfo: info });
       expect((await read(connection.url)).status).toBe(401);
-      expect((await runtime.server.app.inject({ url: '/api/device/build-info', headers: { host: 'untrusted.invalid' } })).statusCode).toBe(403);
+      expect((await runtime.listeners.ui.app.inject({ url: '/api/device/build-info', headers: { host: 'untrusted.invalid' } })).statusCode).toBe(403);
     } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
   });
 });

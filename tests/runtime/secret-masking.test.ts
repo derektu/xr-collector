@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CollectorError } from '../../src/core/collector-error.js';
-import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
+import { startCollectorServer } from '../../src/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
@@ -43,7 +43,7 @@ describe('secrets in source errors', () => {
     const agentSettingsFile = path.join(root, 'agent-settings.json');
     let token = '';
     const leak = () => `ERROR: agent ${token} Authorization: Bearer ${BEARER} https://cdn.test/v?id=1&access_token=${PARAMETER}`;
-    const runtime = await CollectorRuntime.start({
+    const runtime = await startCollectorServer({
       sources: PRODUCT_SOURCES,
       profilePath,
       explicitVaultPath: path.join(root, 'vault'),
@@ -64,7 +64,7 @@ describe('secrets in source errors', () => {
       uiPort: 0,
     });
     cleanups.push(() => runtime.close());
-    const ui = runtime.server.url;
+    const ui = runtime.listeners.ui.url;
     const connection = ((await (await fetch(`${ui}/api/device/agent/connection`)).json()) as { connection: { url: string; token: string } }).connection;
     token = connection.token;
     const agent = (route: string, init?: RequestInit) => fetch(`${connection.url}${route}`, {
@@ -174,14 +174,14 @@ describe('secrets in source errors', () => {
     };
 
     // Before the restart: a subscription and a single video that waits behind a running capture.
-    const first = await CollectorRuntime.start(runtimeOptions);
-    const post = (route: string, body: unknown) => fetch(`${first.server.url}${route}`, {
+    const first = await startCollectorServer(runtimeOptions);
+    const post = (route: string, body: unknown) => fetch(`${first.listeners.ui.url}${route}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     const addJob = (await (await post('/api/subscriptions', { url: channel.url })).json()).job.id as string;
     await eventually(async () => {
-      expect((await (await fetch(`${first.server.url}/api/jobs/${addJob}`)).json()).job.state).toBe('completed');
-      const subscription = (await (await fetch(`${first.server.url}/api/subscriptions/youtube/${channel.id}`)).json()).subscription;
+      expect((await (await fetch(`${first.listeners.ui.url}/api/jobs/${addJob}`)).json()).job.state).toBe('completed');
+      const subscription = (await (await fetch(`${first.listeners.ui.url}/api/subscriptions/youtube/${channel.id}`)).json()).subscription;
       expect(subscription.lastCheckedAt).not.toBeNull();
     });
     await post('/api/items', { url: 'https://www.youtube.com/watch?v=runningvid1' });
@@ -200,11 +200,11 @@ describe('secrets in source errors', () => {
     for (const subscription of records) subscription.nextCheckAt = '2000-01-01T00:00:00.000Z';
     await writeFile(channels, `${JSON.stringify(saved, null, 2)}\n`);
     behavior = 'leak';
-    const second = await CollectorRuntime.start(runtimeOptions);
+    const second = await startCollectorServer(runtimeOptions);
     cleanups.push(() => second.close());
     await eventually(async () => {
-      expect((await (await fetch(`${second.server.url}/api/jobs/${queued}`)).json()).job.state).toBe('failed');
-      const subscription = (await (await fetch(`${second.server.url}/api/subscriptions/youtube/${channel.id}`)).json()).subscription;
+      expect((await (await fetch(`${second.listeners.ui.url}/api/jobs/${queued}`)).json()).job.state).toBe('failed');
+      const subscription = (await (await fetch(`${second.listeners.ui.url}/api/subscriptions/youtube/${channel.id}`)).json()).subscription;
       expect(subscription.checkFailures).toMatchObject({ count: 1, error: { code: 'channel_not_found' } });
     });
     await second.close();

@@ -121,20 +121,18 @@ vi.mock('../../src/updates/sources.js', async (importOriginal) => {
   return { ...actual, GitHubReleasesSource: class { constructor(repository: string) { harness.updateRepositories.push(repository); } } };
 });
 vi.mock('../../src/updates/windows-installer.js', () => ({ WindowsNativeInstaller: class {} }));
-vi.mock('../../src/runtime/collector-runtime.js', () => ({
-  CollectorRuntime: {
-    start: async (options: any) => {
-      harness.runtimeStarts += 1;
-      harness.systemNotifications = options.systemNotifications;
-      return {
-        server: { url: 'http://127.0.0.1:1' },
-        connectivity: { check: async () => undefined },
-        recordDeviceEvent: () => undefined,
-        close: async () => undefined,
-        workspace: { activeVaultId: () => 'vault-a', status: () => ({ vaultPath: '/vault' }) },
-        resolveNotification: async () => ({ id: 'event', vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' }),
-      };
-    },
+vi.mock('../../src/server/collector-server.js', () => ({
+  startCollectorServer: async (options: any) => {
+    harness.runtimeStarts += 1;
+    harness.systemNotifications = options.systemNotifications;
+    return {
+      listeners: { ui: { url: 'http://127.0.0.1:1' } },
+      connectivity: { check: async () => undefined },
+      recordDeviceEvent: () => undefined,
+      close: async () => undefined,
+      workspace: { activeVaultId: () => 'vault-a', status: () => ({ vaultPath: '/vault' }) },
+      resolveNotification: async () => ({ id: 'event', vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' }),
+    };
   },
 }));
 vi.mock('../../src/electron/tray.js', () => ({

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SourcePlugin } from '../../src/core/source-contract.js';
 import type { SourceRegistry } from '../../src/core/source-registry.js';
 import { sourceRegistry } from '../../src/plugins/index.js';
-import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
+import { startCollectorServer, type CollectorServer, type CollectorServerOptions } from '../../src/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { createFakePlugin, FAKE, FakeSource } from '../support/fake-source-plugin.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
@@ -28,7 +28,7 @@ async function temp(): Promise<string> {
 }
 
 /** Options of a runtime over its own profile and Vault, with no search engine. */
-async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorRuntimeOptions> {
+async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorServerOptions> {
   const root = await temp();
   return {
     profilePath: path.join(root, 'profile'), sources, explicitVaultPath: path.join(root, 'vault'),
@@ -41,8 +41,8 @@ async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]
   };
 }
 
-async function start(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorRuntime> {
-  const runtime = await CollectorRuntime.start(await options(sources, plugins));
+async function start(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorServer> {
+  const runtime = await startCollectorServer(await options(sources, plugins));
   cleanups.push(() => runtime.close());
   return runtime;
 }
@@ -50,20 +50,20 @@ async function start(sources: SourceRegistry, plugins: readonly SourcePlugin[]):
 describe('a runtime and its source types', () => {
   it('does not start with plugins other than its types, in their order, and opens nothing', async () => {
     const missing = await options(PRODUCT_SOURCES, youtubePlugins());
-    await expect(CollectorRuntime.start(missing)).rejects.toThrow('The plugins (youtube) are not the registered source types (youtube, rss)');
+    await expect(startCollectorServer(missing)).rejects.toThrow('The plugins (youtube) are not the registered source types (youtube, rss)');
     expect(await readdir(path.dirname(missing.profilePath))).toEqual([]);
     const reordered = await options(PRODUCT_SOURCES, [...productPlugins()].reverse());
-    await expect(CollectorRuntime.start(reordered)).rejects.toThrow('The plugins (rss, youtube) are not the registered source types (youtube, rss)');
+    await expect(startCollectorServer(reordered)).rejects.toThrow('The plugins (rss, youtube) are not the registered source types (youtube, rss)');
   });
 
   it('runs beside a runtime of other types in the same process, each with its own', async () => {
     const product = await start(PRODUCT_SOURCES, productPlugins());
     const fake = await start(sourceRegistry([FAKE]), [createFakePlugin(FAKE, new FakeSource('fake'))]);
-    const get = (runtime: CollectorRuntime, route: string) => fetch(`${runtime.server.url}${route}`);
-    const post = (runtime: CollectorRuntime, route: string, body: unknown) => fetch(`${runtime.server.url}${route}`, {
+    const get = (runtime: CollectorServer, route: string) => fetch(`${runtime.listeners.ui.url}${route}`);
+    const post = (runtime: CollectorServer, route: string, body: unknown) => fetch(`${runtime.listeners.ui.url}${route}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    const types = async (runtime: CollectorRuntime) =>
+    const types = async (runtime: CollectorServer) =>
       ((await (await get(runtime, '/api/source-types')).json()) as { sourceTypes: { id: string }[] }).sourceTypes.map((type) => type.id);
 
     expect(await types(product)).toEqual(['youtube', 'rss']);

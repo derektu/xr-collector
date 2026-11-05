@@ -50,7 +50,7 @@ const load = (relative: string) => import(pathToFileURL(path.join(checkout, rela
 const { createSourcePlugins, sourceRegistry } = await load('src/plugins/index.ts');
 const { CollectorError } = await load('src/core/collector-error.ts');
 const { publishedSince } = await load('src/core/published.ts');
-const { CollectorRuntime } = await load('src/runtime/collector-runtime.ts');
+const { startCollectorServer } = await load('src/server/collector-server.ts');
 const { bundledResources } = await load('src/runtime/bundled-resources.ts');
 const { PacingGate } = await load('src/pacing/pacing-gate.ts');
 const { youtubeSource } = await load('src/plugins/youtube/adapter.ts');
@@ -333,7 +333,7 @@ const syntheticConnectivity = {
     .then((response) => response.status === 204, () => false),
   offlineRecheckMs: 2_000,
 };
-const runtime = await CollectorRuntime.start({
+const runtime = await startCollectorServer({
   profilePath,
   sources: sources.registry,
   ...(updateService ? { buildInfo: fixtureBuildInfo, updates: updateService } : {}),
@@ -389,8 +389,8 @@ const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
     .then(() => writeFileSync(`${scheduleTriggerPath}.done`, value))
     .catch((error) => console.error('verify schedule trigger failed', error));
 }, 50) : null;
-console.log(`verify server ready at ${runtime.server.url} (${data} data, Vault ${vaultMode})`);
-logFailedRequests(runtime.server.app.server);
+console.log(`verify server ready at ${runtime.listeners.ui.url} (${data} data, Vault ${vaultMode})`);
+logFailedRequests(runtime.listeners.ui.app.server);
 
 // The product's HTTP app runs without a logger, so server.log records each answer with status 400
 // or above: method, path, status and the code and message of its { error } body. Watching the

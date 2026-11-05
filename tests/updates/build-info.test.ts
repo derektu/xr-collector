@@ -3,7 +3,7 @@
 // shows a packaged identity or claims a clean source.
 import * as fs from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadBuildInfo, validateBuildInfo } from '../../src/runtime/build-info.js';
+import { loadBuildInfo, validateBuildInfo } from '../../src/updates/build-info.js';
 
 const artifact = {
   schemaVersion: 1, kind: 'packaged', version: '0.7.0', builtAt: '2026-10-25T09:00:00.000Z',

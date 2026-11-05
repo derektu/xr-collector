@@ -8,32 +8,37 @@ import type { TranscriptSearch } from '../core/search-types.js';
 import type {
   VaultInspection,
   NewVaultCheck,
+  VaultSetup,
   VaultSetupRequest,
   VaultSetupResult,
   VaultSetupStatus,
 } from '../core/vault-types.js';
-import { loadBuildInfo } from './build-info.js';
+import type { ActivityAccess } from '../core/activity-types.js';
+import { loadBuildInfo } from '../updates/build-info.js';
 import { ChangeFeed } from '../core/change-feed.js';
 import { CollectionPause } from '../core/collection-pause.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { openJobRecords, type JobRecords } from './job-records.js';
-import type { ActivityAccess, VaultSetup } from '../server/app.js';
-import { openAgentAccess, startAgentAccess, type AgentAccess } from '../server/agent-access.js';
+import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
 import type { UpdateAccess } from '../updates/types.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
-import { startServer, type RunningServer } from '../server/start.js';
 import { clearImportJournal, recoverImport } from '../vault/transfer-files.js';
 import { createVaultDirectory, inspectVaultDirectory, notAVault } from '../vault/vault-directory.js';
 import { checkNewVault, createNewVault, DEFAULT_VAULT_NAME, describePackage, newVaultFolder, type AppFolders } from '../vault/new-vault.js';
 import { importNewVault } from '../vault/vault-import.js';
 import { VaultSelection } from '../vault/vault-selection.js';
-import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from '../vault/workspace.js';
+import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
+import type { Collector } from '../core/collector.js';
+import type { JobManager } from '../jobs/job-manager.js';
+import type { Pacing } from '../pacing/pacing-gate.js';
+import type { CollectionScheduler } from '../subscriptions/scheduler.js';
+import type { SubscriptionService } from '../subscriptions/subscription-service.js';
 import type { UpdateLease } from '../vault/operation-lock.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../notifications/notification-center.js';
 import type { EventType } from '../core/event-catalog.js';
-import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus } from '../core/device-types.js';
+import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../core/device-types.js';
 
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */
@@ -63,9 +68,6 @@ export interface CollectorRuntimeOptions {
   skillPath: string;
   /** Preferred Agent API port; the Agent API takes any free port when omitted. */
   agentPort?: number;
-  uiPort: number;
-  uiHost?: string;
-  webRoot?: string;
   /** Packaged desktop login-startup service; absent servers report the setting unavailable. */
   loginStartup?: LoginStartupAccess;
   /** Records a packaged OS login launch in the device activity log. */
@@ -75,14 +77,57 @@ export interface CollectorRuntimeOptions {
   systemNotifications?: SystemNotificationAdapter;
 }
 
+/**
+ * What the runtime serves through its listeners. The Vault services forward to whichever Vault is
+ * open and are absent when the runtime runs without Vault services.
+ */
+export interface RuntimeServices {
+  sources: SourceRegistry;
+  buildInfo: BuildInfo;
+  changes: ChangeFeed;
+  connectivity: Connectivity;
+  notifications: NotificationAccess;
+  loginStartup?: LoginStartupAccess;
+  updates?: UpdateAccess;
+  collector?: Collector;
+  jobs?: JobManager;
+  transfer?: VaultWorkspace;
+  subscriptions?: SubscriptionService[];
+  schedule?: CollectionScheduler;
+  search?: TranscriptSearch;
+  pacing?: readonly Pacing[];
+  activity?: ActivityAccess;
+  runtimeStatus: () => CollectorRuntimeStatus;
+  /** Why business routes are unavailable, or null once a Vault is open. */
+  notReady: () => string | null;
+  vaultSetup: VaultSetup;
+  /** The Agent credential, opened before any Vault; a listener that serves Agents attaches to it. */
+  agentConnection: AgentConnectionService;
+}
+
+/** The listeners a runtime serves through; the runtime closes them before its Vault. */
+export interface RuntimeListeners {
+  close(): Promise<void>;
+}
+
+/**
+ * Starts the listeners of a runtime once its Agent credential and Vault are open; the transport
+ * layer provides it. It closes whatever it started before it throws.
+ */
+export type StartListeners<L extends RuntimeListeners> = (services: RuntimeServices) => Promise<L>;
+
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
 
-/** Owns the one workspace, scheduler and pair of UI/Agent HTTP listeners for a process. */
-export class CollectorRuntime {
+/**
+ * Owns the one workspace, scheduler and Agent credential of a process, and the listeners it serves
+ * them through. Starting opens the Agent credential, then the Vault, then the listeners; closing
+ * stops the listeners, then the Vault, then the job records.
+ */
+export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   readonly instanceId: string;
   readonly profilePath: string;
-  readonly server: RunningServer;
-  readonly agentAccess: AgentAccess;
+  readonly listeners: L;
+  readonly agentConnection: AgentConnectionService;
   /** The device's collection pause, followed by the scheduler and jobs of whichever Vault is open. */
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
@@ -103,8 +148,8 @@ export class CollectorRuntime {
     private readonly selection: VaultSelection,
     instanceId: string,
     initial: Opening,
-    agentAccess: AgentAccess,
-    server: RunningServer,
+    agentConnection: AgentConnectionService,
+    listeners: L,
     private readonly records: JobRecords | null,
     pause: CollectionPause,
     connectivity: Connectivity,
@@ -120,8 +165,8 @@ export class CollectorRuntime {
     this.profilePath = path.resolve(options.profilePath);
     this.workspaceValue = initial.workspace;
     this.failure = initial.failure;
-    this.agentAccess = agentAccess;
-    this.server = server;
+    this.agentConnection = agentConnection;
+    this.listeners = listeners;
     this.stateValue = initial.workspace ? 'ready' : 'not_ready';
     this.message = initial.workspace ? '服務已就緒。' : initial.message;
   }
@@ -142,15 +187,18 @@ export class CollectorRuntime {
     this.records?.activity.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
   }
 
-  /** Throws before opening anything when `workspace.plugins` are not the types of `sources`. */
-  static async start(options: CollectorRuntimeOptions): Promise<CollectorRuntime> {
+  /**
+   * Opens the Agent credential and the Vault, then starts the listeners with `listen`. Throws before
+   * opening anything when `workspace.plugins` are not the types of `sources`.
+   */
+  static async start<L extends RuntimeListeners>(options: CollectorRuntimeOptions, listen: StartListeners<L>): Promise<CollectorRuntime<L>> {
     if (options.workspace) options.sources.checkPlugins(options.workspace.plugins);
     const sources = options.sources;
     const instanceId = randomUUID();
     const selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
-    let agentAccess: AgentAccess | null = null;
-    let runtime: CollectorRuntime | null = null;
+    let agentConnection: AgentConnectionService | null = null;
+    let runtime: CollectorRuntime<L> | null = null;
     const current = (): VaultWorkspace => {
       const workspace = runtime ? runtime.workspaceValue : initial.workspace;
       if (!workspace) throw new CollectorError('vault_not_ready', runtime?.message ?? initial.message);
@@ -218,7 +266,7 @@ export class CollectorRuntime {
         }
       },
     } : undefined;
-    const notificationAccess = {
+    const notificationAccess: NotificationAccess = {
       read: async () => { const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
       update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
     };
@@ -237,32 +285,22 @@ export class CollectorRuntime {
     };
     try {
       // The Agent token is protected before the Vault opens, where resumed and due work can fail at once.
-      agentAccess = await openAgentAccess(agentSettings);
+      agentConnection = await openAgentConnection(agentSettings);
       if (workspaceServices) {
         // An import from Onboarding a stop interrupted is taken back unless the selection already names its Vault.
         await recoverImport(options.profilePath, [await selection.read().catch(() => null)]);
         initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       }
-      await startAgentAccess({
+      const listeners = await listen({
         ...shared,
         ...(activity ? { activity } : {}),
-        ...agentSettings, access: agentAccess,
-        runtimeStatus, notReady, vaultSetup,
+        runtimeStatus, notReady, vaultSetup, agentConnection,
       });
-      const server = await startServer({
-        ...shared,
-        ...(activity ? { activity } : {}),
-        port: options.uiPort,
-        ...(options.uiHost ? { host: options.uiHost } : {}),
-        ...(options.webRoot ? { webRoot: options.webRoot } : {}),
-        agentConnection: agentAccess,
-        runtimeStatus, notReady, vaultSetup,
-      });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentAccess, server, records, pause, connectivity,
+      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentConnection, listeners, records, pause, connectivity,
         notifications, changes, stopFollowing);
       return runtime;
     } catch (error) {
-      await agentAccess?.close().catch(() => undefined);
+      await agentConnection?.close().catch(() => undefined);
       await initial.workspace?.close().catch(() => undefined);
       await records?.close().catch(() => undefined);
       connectivity.close();
@@ -459,7 +497,7 @@ export class CollectorRuntime {
     // A confirmation under way is given up, so no job waits on it while the workspace stops.
     this.connectivity.close();
     this.stopFollowing();
-    const listeners = await Promise.allSettled([this.server.close(), this.agentAccess.close()]);
+    const listeners = await Promise.allSettled([this.listeners.close()]);
     const workspace = this.workspaceValue ? await Promise.allSettled([this.workspaceValue.close()]) : [];
     // Jobs and activity close last; the workspace records interrupted jobs into them while it stops.
     const store = this.records ? await Promise.allSettled([this.records.close()]) : [];

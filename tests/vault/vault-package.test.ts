@@ -22,7 +22,7 @@ import { MANIFEST, registeredFiles, writePackage } from '../../src/vault/vault-p
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { exportFileName } from '../../src/vault/transfer-files.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
-import { VaultWorkspace } from '../../src/vault/workspace.js';
+import { VaultWorkspace } from '../../src/runtime/vault-workspace.js';
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
 } from '../support/package-fixtures.js';

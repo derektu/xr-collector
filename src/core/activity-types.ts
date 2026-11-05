@@ -171,3 +171,11 @@ export interface ActivityPage {
   retentionDays: number;
   log: ActivityLogHealth;
 }
+
+/** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
+export interface ActivityAccess {
+  query(query: ActivityQuery): Promise<ActivityPage>;
+  summary?(query: ActivityQuery): Promise<ActivitySummaryPage>;
+  group?(groupId: string, limit?: number, cursor?: string, severity?: EventSeverity[]): Promise<ActivityGroupPage>;
+  health(): ActivityLogHealth;
+}

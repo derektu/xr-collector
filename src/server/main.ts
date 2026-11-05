@@ -3,9 +3,9 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DEVELOPMENT_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
-import { loadBuildInfo } from '../runtime/build-info.js';
+import { loadBuildInfo } from '../updates/build-info.js';
 import { bundledResources, checkoutRoot } from '../runtime/bundled-resources.js';
-import { CollectorRuntime } from '../runtime/collector-runtime.js';
+import { startCollectorServer } from './collector-server.js';
 import { backupFolder, exportFolder } from '../vault/transfer-files.js';
 
 const projectRoot = checkoutRoot();
@@ -23,7 +23,7 @@ const sources = await createSourcePlugins({
   env: process.env,
   program: resources.program,
 });
-const runtime = await CollectorRuntime.start({
+const runtime = await startCollectorServer({
   buildInfo: await loadBuildInfo(),
   profilePath,
   sources: sources.registry,
@@ -46,7 +46,7 @@ const runtime = await CollectorRuntime.start({
   ...(existsSync(webRoot) ? { webRoot } : {}),
 });
 
-console.log(`XR Collector API listening at ${runtime.server.url}`);
+console.log(`XR Collector API listening at ${runtime.listeners.ui.url}`);
 console.log(`Vault: ${runtime.status().vaultPath ?? `not ready — ${runtime.status().message}`}`);
 
 let stopping = false;

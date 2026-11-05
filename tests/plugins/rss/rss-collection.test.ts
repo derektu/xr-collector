@@ -14,7 +14,7 @@ import { VAULT_MARKER } from '../../../src/vault/vault-directory.js';
 import { importNewVault } from '../../../src/vault/vault-import.js';
 import { openPackage } from '../../../src/vault/vault-package.js';
 import { VaultSelection } from '../../../src/vault/vault-selection.js';
-import type { VaultWorkspace } from '../../../src/vault/workspace.js';
+import type { VaultWorkspace } from '../../../src/runtime/vault-workspace.js';
 import { atom, page, rss2, type SyntheticArticle, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../support/exchange-fixtures.js';

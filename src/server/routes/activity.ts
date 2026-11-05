@@ -1,24 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../core/api-routes.js';
 import { CollectorError } from '../../core/collector-error.js';
-import type {
-  ActivityGroupPage,
-  ActivityLogHealth,
-  ActivityPage,
-  ActivityQuery,
-  ActivitySummaryPage,
-  EventSeverity,
-} from '../../core/activity-types.js';
+import type { ActivityAccess, ActivityQuery, EventSeverity } from '../../core/activity-types.js';
 import { serve } from '../api-route.js';
 import { isInstant, pagination, singleValues } from './query-params.js';
-
-/** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
-export interface ActivityAccess {
-  query(query: ActivityQuery): Promise<ActivityPage>;
-  summary?(query: ActivityQuery): Promise<ActivitySummaryPage>;
-  group?(groupId: string, limit?: number, cursor?: string, severity?: EventSeverity[]): Promise<ActivityGroupPage>;
-  health(): ActivityLogHealth;
-}
 
 /** The activity log: raw events or check summaries, and the events of one group. */
 export function registerActivityRoutes(app: FastifyInstance, activity: ActivityAccess): void {

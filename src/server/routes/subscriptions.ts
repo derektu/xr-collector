@@ -17,7 +17,7 @@ import { SourceCatalog } from '../../sources/source-catalog.js';
 import { recognizeUrl, sourceTypeInfo, type SourceTypeDeclaration } from '../../sources/source-types.js';
 import { startChecks } from '../../subscriptions/subscription-service.js';
 import { serve } from '../api-route.js';
-import type { ActivityAccess } from './activity.js';
+import type { ActivityAccess } from '../../core/activity-types.js';
 import { ownedAddress, requiredUrl } from './addresses.js';
 import type { NetworkGuard } from './network.js';
 import { singleValues } from './query-params.js';

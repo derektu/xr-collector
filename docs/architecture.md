@@ -8,9 +8,9 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 | 模組 | 現行責任 |
 | --- | --- |
-| `src/electron` | 主視窗、profile 與程式生命週期 |
-| `src/runtime` | 單一 VaultWorkspace、UI／Agent listeners 與啟動／關閉順序；隨附資源（runtime 程式、搜尋詞庫、Agent Skill、系統匣圖示）的路徑只由 `bundled-resources.ts` 依開發版或打包版與平台算出，Electron、開發 server 與 verify skill 都向它要 |
-| `src/server` | UI／Agent HTTP listener。`app.ts` 依序掛上每個請求都會經過的 hook 鏈（Host 檢查、Bearer 授權、Vault 未就緒的 503、知識庫操作鎖、回應標頭與錯誤狀態，錯誤碼對應的 HTTP 狀態在 `error-status.ts`），再依傳入的服務註冊各區塊的 route；每個區塊的 route 在 `routes/` 下自己的檔案（Vault 設定、資料交換、裝置、Agent 連線、文件與搜尋、收集工作、活動記錄、排程、訂閱與來源類型、變動串流），查詢參數的解析與驗證在 `routes/query-params.ts` |
+| `src/electron` | 主視窗、profile 與程式生命週期；以 `src/server/collector-server.ts` 啟動本程序的 runtime 與 HTTP listener |
+| `src/runtime` | 組裝：`CollectorRuntime` 持有程序內唯一的 Vault workspace、Agent 連線金鑰與設定（`agent-connection.ts`）及啟動／關閉順序，listener 由傳輸層交給它啟動；`vault-workspace.ts` 為每個開啟的 Vault 組出收集、訂閱、工作、排程與搜尋服務，並負責開啟其他知識庫與建立新的知識庫；隨附資源（runtime 程式、搜尋詞庫、Agent Skill、系統匣圖示）的路徑只由 `bundled-resources.ts` 依開發版或打包版與平台算出，Electron、開發 server 與 verify skill 都向它要 |
+| `src/server` | UI／Agent HTTP listener。`collector-server.ts` 以 runtime 啟動兩個 listener：先在 Agent 連線的埠開 Agent listener，再開 UI listener。`app.ts` 依序掛上每個請求都會經過的 hook 鏈（Host 檢查、Bearer 授權、Vault 未就緒的 503、知識庫操作鎖、回應標頭與錯誤狀態，錯誤碼對應的 HTTP 狀態在 `error-status.ts`），再依傳入的服務註冊各區塊的 route；每個區塊的 route 在 `routes/` 下自己的檔案（Vault 設定、資料交換、裝置、Agent 連線、文件與搜尋、收集工作、活動記錄、排程、訂閱與來源類型、變動串流），查詢參數的解析與驗證在 `routes/query-params.ts` |
 | `src/core` | 共用型別、共用的值、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引（`collector.ts`，刪除紀錄經它的 `DeletionRecords` 介面讀寫，實作在 `src/vault`）。型別依區塊分檔為 `*-types.ts`（文件、搜尋、訂閱、來源資訊、工作、活動記錄、Vault、更新、裝置），這些檔只有型別、只 import 型別，所以 server、Electron 與 Web 引用它們不會帶進任何程式；共用的值各在自己的模組，例如 `CollectorError`（`collector-error.ts`）與訂閱的失敗上限（`subscription-limits.ts`） |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
@@ -18,9 +18,12 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/activity` | 裝置活動記錄。`activity-log.ts` 只負責事件的儲存、遮蔽、保留與事件 ID：ID 開頭的序號由記錄發出，開啟時從保留中的事件的最大序號接續；`activity-views.ts` 依事件寫入時就帶著的欄位與事件目錄，提供原始分頁與檢查摘要。事件種類與摘要的顯示規則（是否列出、是否列為檢查底下的子列、預設嚴重度）列在 `src/core/event-catalog.ts`，目錄沒有的種類 typecheck 失敗。收集工作的紀錄只把事件交給活動記錄，不持有它；兩者在 `src/runtime/job-records.ts` 組合：記錄補上工作後來得知的標題，掉了事件的工作標記為紀錄不完整 |
 | `src/subscriptions` | 訂閱資料唯一的寫入者：建立訂閱、派工與派工時間、收集進度（上次檢查時間、範圍外項目、失敗項目與跨檢查的失敗次數、連續失敗的檢查次數與自動暫停），以及每次檢查的收集規則（範圍內最新 N 則）；整份清單驗證通過才開始的手動檢查、依各訂閱頻率的週期檢查，並把工作事實與訂閱本身的狀態組合成訂閱狀態。訂閱檔的格式、紀錄欄位的分類（`subscription-fields.ts`）與兩份訂閱檔的合併也屬於這裡；Vault 的開啟、匯出與匯入經 `core/subscription-exchange.ts` 的契約使用它們，實作由 `subscriptionFileExchange(registry)` 建立、存在 `SourceRegistry.exchange` |
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
-| `src/vault` | Markdown 保存、active Vault、知識庫操作鎖、匯出檔、以較新為準的匯入合併、開啟其他知識庫與中斷恢復 |
+| `src/vault` | Markdown 保存、知識庫操作鎖、匯出檔、以較新為準的匯入合併、使用中 Vault 的匯出與匯入（`vault-exchange.ts`，經 `ExchangeHost` 介面取得使用中的 Vault 與操作鎖）與中斷恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
 | `src/web` | React 操作畫面與 HTTP client；來源類型的文字、設定句與文件細節取自元件經 React context 拿到的宣告（`src/plugins/declarations.ts`） |
+
+
+模組由下而上分五層：共用型別、純函式與來源契約（`src/core`）；領域服務（工作、訂閱、Vault、搜尋、活動記錄、請求通道、通知、更新、來源與各來源類型的 plugin）；組裝（`src/runtime` 與產品的來源清單 `src/plugins/index.ts`、`declarations.ts`）；傳輸（`src/server`、`src/web`）；桌面殼層（`src/electron`），它啟動本程序的 HTTP server。每個模組只 import 自己、較低層，以及同層中明列允許的模組，型別 import 也算；較低層中也有明列不准 import 的模組：桌面殼層只經 IPC 與 HTTP 跟畫面溝通，不 import `src/web`；`tests/tooling/import-layers.test.ts` 檢查每條 import。
 
 UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及 profile 持久保存的 Bearer token，可操作所有現有業務 routes；人或 Agent 從設定頁下載 Skill 與目前 active 連線資料，不掃描裝置入口。
 
@@ -50,7 +53,7 @@ Vault 保存正式文件與可攜設定；搜尋 database 是裝置上的可重�
 
 Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工作與資料能力。Sources、Documents、Jobs、Activity、Search、VaultWorkspace 的責任及遷移順序以 [Round 2 第 5 節](round-2-plan.md#5-建議模組分工) 為準；來源類型以上述 plugin 介面加入。
 
-`CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都由同一個 runtime factory 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。關閉時先停止 listeners 並等待已接受的 handler，再等待資料交換與執行中的收集步驟，把尚未開始的工作記為已中斷，最後關閉搜尋 process。開啟 Vault 時，workspace 先接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`，保留 health、Agent 授權與 Vault 設定 API，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
+`CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都經 `startCollectorServer` 由同一個 runtime 建立 VaultWorkspace、scheduler、搜尋 process 及已授權 Agent listener。啟動時先讀出 Agent 金鑰並在所有輸出中遮蔽，再開啟 Vault（接續的工作此時就可能失敗並寫出錯誤），最後啟動 listener。關閉時先停止 listeners 並等待已接受的 handler，再等待資料交換與執行中的收集步驟，把尚未開始的工作記為已中斷，最後關閉搜尋 process。開啟 Vault 時，workspace 先接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`，保留 health、Agent 授權與 Vault 設定 API，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
 
 `VaultWorkspace` 持有一個知識庫操作鎖，匯出、匯入、建立新的知識庫與開啟其他知識庫都經同一個生命週期執行：停止派工、等待進行中的收集、執行操作、恢復收集，再發布完成或錯誤狀態。套用匯入時鎖會升級為連讀取也拒絕；如果匯入無法收尾，鎖進入停止狀態並維持寫入與排程停止，等待重新啟動恢復。HTTP route config 把路由分為知識庫讀取、知識庫寫入、裝置資料與知識庫操作；沒有宣告時依 method 推定，鎖依分類決定是否接受請求。
 

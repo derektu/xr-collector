@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../core/api-routes.js';
 import type { AgentPortSetting } from '../../core/device-types.js';
-import type { AgentConnectionAccess } from '../agent-access.js';
+import type { AgentConnectionAccess } from '../../runtime/agent-connection.js';
 import { serve } from '../api-route.js';
 
 /** The Agent connection: its status, the connection data, the port setting, a new key and the Skill download. */
