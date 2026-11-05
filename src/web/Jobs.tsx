@@ -5,6 +5,7 @@ import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { jobEntryLabel } from './jobs-presentation.js';
 import { useLiveRead } from './use-changes.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 /**
  * Everything the app is doing now: work that started with what it is doing, work queued in the
@@ -15,6 +16,7 @@ export function Jobs({ offline, onChanged }: {
   offline: boolean;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
+  const declarations = useSourceDeclarations();
   const [acting, setActing] = useState<string | null>(null);
   const read = useLiveRead(['jobs'], (signal) => api.jobOverview(signal), []);
   const overview: JobOverview | null = read.value;
@@ -27,7 +29,7 @@ export function Jobs({ offline, onChanged }: {
     try {
       if (action === 'retry') await api.retryJob(entry.jobId);
       else await api.dismissJob(entry.jobId);
-      onChanged(action === 'retry' ? `已重新排入「${jobEntryLabel(entry).title}」。` : `已移除「${jobEntryLabel(entry).title}」。`);
+      onChanged(action === 'retry' ? `已重新排入「${jobEntryLabel(declarations, entry).title}」。` : `已移除「${jobEntryLabel(declarations, entry).title}」。`);
     } catch (reason) {
       onChanged(reason instanceof Error ? reason.message : '操作失敗，請稍後再試。', 'error');
     } finally {
@@ -43,7 +45,7 @@ export function Jobs({ offline, onChanged }: {
   }
 
   const row = (entry: JobOverviewEntry, extra: { order?: number; running?: boolean; failed?: boolean }) => {
-    const label = jobEntryLabel(entry);
+    const label = jobEntryLabel(declarations, entry);
     const progress = extra.running && entry.progress && entry.progress.total > 0 ? entry.progress : null;
     return <li key={entry.jobId} className="job-row" data-testid={`job-${entry.jobId}`}>
       {extra.order !== undefined ? <span className="job-order">{extra.order}</span> : null}

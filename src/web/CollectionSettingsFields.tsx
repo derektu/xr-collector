@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { settingFieldError, settingsErrors } from '../core/collection-settings.js';
-import { sourceDeclaration } from '../core/source-registry.js';
 import type { SourceSettingField, SubscriptionSettings } from '../core/types.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 /** A typed number as a number when it is all digits; anything else stays text, which no number field accepts. */
 function typedNumber(text: string): string | number {
@@ -26,6 +26,7 @@ export function CollectionSettingsFields({ idPrefix, type, fields, value, onChan
   onChange: (patch: Partial<SubscriptionSettings>) => void;
   disabled?: boolean;
 }) {
+  const declarations = useSourceDeclarations();
   const field = (key: string) => fields.find((candidate) => candidate.key === key);
   const errorId = (key: string) => `${idPrefix}-${key}-error`;
   const control = (key: string, attributes: { id?: string; 'aria-label'?: string }) => {
@@ -49,7 +50,7 @@ export function CollectionSettingsFields({ idPrefix, type, fields, value, onChan
     </select>;
   };
   const interval = field('intervalMinutes');
-  const sentence = type ? sourceDeclaration(type)?.subscription?.sentence : undefined;
+  const sentence = type ? declarations.get(type)?.subscription?.sentence : undefined;
   const rangeFields = fields.filter((candidate) => candidate.key !== 'intervalMinutes');
   const errors = settingsErrors(fields, value);
   return <div className="collection-settings">

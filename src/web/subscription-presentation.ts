@@ -1,35 +1,35 @@
 import type { ChannelJobTrigger, Subscription, SubscriptionCheckStatus, SubscriptionSettings } from '../core/types.js';
 import { intervalLabel } from '../core/check-interval.js';
 import { upcomingTime, upcomingTimeText, type UpcomingTime } from '../core/upcoming-time.js';
-import { sourceDeclaration } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SubscriptionDeclaration } from '../core/source-contract.js';
 
 export { intervalLabel };
 
 /** The subscription declaration of a registered type; undefined without one. */
-function subscriptionOf(type: string | null | undefined): SubscriptionDeclaration | undefined {
-  return type ? sourceDeclaration(type)?.subscription : undefined;
+function subscriptionOf(declarations: SourceDeclarations, type: string | null | undefined): SubscriptionDeclaration | undefined {
+  return type ? declarations.get(type)?.subscription : undefined;
 }
 
 /** What a subscription of the type follows, e.g. "頻道"; empty without a registered type. */
-export function targetNoun(type: string | null | undefined): string {
-  return subscriptionOf(type)?.targetNoun ?? '';
+export function targetNoun(declarations: SourceDeclarations, type: string | null | undefined): string {
+  return subscriptionOf(declarations, type)?.targetNoun ?? '';
 }
 
 /** What one item of the type is called, e.g. "影片"; empty without a registered type. */
-export function itemNoun(type: string | null | undefined): string {
-  return (type ? sourceDeclaration(type)?.item.noun : undefined) ?? '';
+export function itemNoun(declarations: SourceDeclarations, type: string | null | undefined): string {
+  return (type ? declarations.get(type)?.item.noun : undefined) ?? '';
 }
 
 /** A source-neutral item count, e.g. "2 支影片" or "3 篇文章". */
-export function itemCount(type: string | null | undefined, count: number): string {
-  const item = type ? sourceDeclaration(type)?.item : undefined;
+export function itemCount(declarations: SourceDeclarations, type: string | null | undefined, count: number): string {
+  const item = type ? declarations.get(type)?.item : undefined;
   return `${count}${item ? ` ${item.measure}${item.noun}` : ''}`;
 }
 
 /** The range every check collects, in words, as the source type describes its settings. */
-export function backfillPhrase(settings: Partial<SubscriptionSettings>, type: string | null | undefined): string {
-  return subscriptionOf(type)?.describeSettings(settings as SubscriptionSettings) ?? '';
+export function backfillPhrase(declarations: SourceDeclarations, settings: Partial<SubscriptionSettings>, type: string | null | undefined): string {
+  return subscriptionOf(declarations, type)?.describeSettings(settings as SubscriptionSettings) ?? '';
 }
 
 /** What subscribing does after its first check: check again at the subscription's interval, or wait until automatic checks are on. */
@@ -40,16 +40,16 @@ export function subscribePlan(settings: SubscriptionSettings, autoCollection: bo
 }
 
 /** What subscribing with `settings` does, as the confirmation card says it. */
-export function subscribeSummary(settings: SubscriptionSettings, autoCollection: boolean, type: string | null | undefined): string {
+export function subscribeSummary(declarations: SourceDeclarations, settings: SubscriptionSettings, autoCollection: boolean, type: string | null | undefined): string {
   const plan = subscribePlan(settings, autoCollection);
   return plan.autoCheck
-    ? `訂閱後立即檢查，之後${intervalLabel(plan.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings, type)}，已收集或刪除的不再收集。`
-    : `訂閱後立即檢查，收集${backfillPhrase(settings, type)}。自動檢查已關閉，開啟後才會定時檢查。`;
+    ? `訂閱後立即檢查，之後${intervalLabel(plan.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(declarations, settings, type)}，已收集或刪除的不再收集。`
+    : `訂閱後立即檢查，收集${backfillPhrase(declarations, settings, type)}。自動檢查已關閉，開啟後才會定時檢查。`;
 }
 
 /** What resuming a paused subscription does with its own settings. */
-export function resumeSummary(settings: SubscriptionSettings, type: string | null | undefined): string {
-  return `這個訂閱已暫停。恢復後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(settings, type)}，已收集或刪除的不再收集。`;
+export function resumeSummary(declarations: SourceDeclarations, settings: SubscriptionSettings, type: string | null | undefined): string {
+  return `這個訂閱已暫停。恢復後立即檢查，之後${intervalLabel(settings.intervalMinutes)}檢查一次；每次檢查收集${backfillPhrase(declarations, settings, type)}，已收集或刪除的不再收集。`;
 }
 
 /** A choice of removing a subscription for its documents, with their count; null when it has none. */
@@ -199,6 +199,6 @@ const TRIGGER_LABELS: Record<ChannelJobTrigger, string> = {
   subscribe: '首次收集', resume: '恢復後檢查', scheduled: '定時檢查', manual: '立即檢查',
 };
 
-export function triggerLabel(trigger: ChannelJobTrigger | null, type?: string | null): string {
-  return (trigger && TRIGGER_LABELS[trigger]) || `${targetNoun(type)}收集`;
+export function triggerLabel(declarations: SourceDeclarations, trigger: ChannelJobTrigger | null, type?: string | null): string {
+  return (trigger && TRIGGER_LABELS[trigger]) || `${targetNoun(declarations, type)}收集`;
 }

@@ -1,30 +1,30 @@
 import type { ChannelJobTrigger, JobError, JobView, JobPhase, SkipReason } from '../core/types.js';
 import { assertNever, roleOf, roleView } from '../core/job-role.js';
-import { sourceDeclaration } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 import { triggerLabel } from './subscription-presentation.js';
 
 /** The declaration of a job's source type. */
-function declarationOf(job: Pick<JobView, 'source'>): SourcePluginDeclaration | undefined {
-  return sourceDeclaration(job.source.type);
+function declarationOf(declarations: SourceDeclarations, job: Pick<JobView, 'source'>): SourcePluginDeclaration | undefined {
+  return declarations.get(job.source.type);
 }
 
-function nounOf(job: Pick<JobView, 'source'>): string {
-  return declarationOf(job)?.item.noun ?? '';
+function nounOf(declarations: SourceDeclarations, job: Pick<JobView, 'source'>): string {
+  return declarationOf(declarations, job)?.item.noun ?? '';
 }
 
-function targetOf(job: Pick<JobView, 'source'>): string {
-  return declarationOf(job)?.subscription?.targetNoun ?? '';
+function targetOf(declarations: SourceDeclarations, job: Pick<JobView, 'source'>): string {
+  return declarationOf(declarations, job)?.subscription?.targetNoun ?? '';
 }
 
 /** The label of a step; the source type names the steps that depend on its items and targets. */
-function phaseLabel(job: JobView, phase: JobPhase): string {
-  const own = declarationOf(job)?.phaseLabels?.[phase];
+function phaseLabel(declarations: SourceDeclarations, job: JobView, phase: JobPhase): string {
+  const own = declarationOf(declarations, job)?.phaseLabels?.[phase];
   if (own) return own;
   switch (phase) {
-    case 'resolve': return `解析${targetOf(job)}`;
-    case 'discover': return `尋找${nounOf(job)}`;
-    case 'capture': return `擷取${nounOf(job)}`;
+    case 'resolve': return `解析${targetOf(declarations, job)}`;
+    case 'discover': return `尋找${nounOf(declarations, job)}`;
+    case 'capture': return `擷取${nounOf(declarations, job)}`;
     case 'save': return '保存文件';
     case 'index': return '更新搜尋';
   }
@@ -33,8 +33,8 @@ function phaseLabel(job: JobView, phase: JobPhase): string {
 /** What a job is: one item, a check of a subscription and why it ran, or subscribing to an address (also a job of an unknown kind). */
 export type JobKindView = { kind: 'item' } | { kind: 'check'; trigger: ChannelJobTrigger | null } | { kind: 'subscribe' };
 
-export function jobKind(job: JobView): JobKindView {
-  const view = roleView(job);
+export function jobKind(declarations: SourceDeclarations, job: JobView): JobKindView {
+  const view = roleView(declarations, job);
   if (view === null) return { kind: 'subscribe' };
   switch (view.role) {
     case 'item': return { kind: 'item' };
@@ -44,12 +44,12 @@ export function jobKind(job: JobView): JobKindView {
   }
 }
 
-export function jobKindLabel(job: JobView): string {
-  const kind = jobKind(job);
+export function jobKindLabel(declarations: SourceDeclarations, job: JobView): string {
+  const kind = jobKind(declarations, job);
   switch (kind.kind) {
-    case 'item': return nounOf(job);
-    case 'check': return triggerLabel(kind.trigger, job.source.type);
-    case 'subscribe': return `訂閱${targetOf(job)}`;
+    case 'item': return nounOf(declarations, job);
+    case 'check': return triggerLabel(declarations, kind.trigger, job.source.type);
+    case 'subscribe': return `訂閱${targetOf(declarations, job)}`;
   }
 }
 
@@ -68,17 +68,17 @@ export function recoveryLabel(job: Pick<JobView, 'state' | 'recovery'>): string 
 /** The step of a running job; `collect_items` is a check past discovery, waiting for its items. */
 export type JobStep = JobPhase | 'collect_items';
 
-export function jobStep(job: JobView): JobStep | null {
+export function jobStep(declarations: SourceDeclarations, job: JobView): JobStep | null {
   if (job.state !== 'running' || !job.phase) return null;
-  if (roleOf(job) === 'check' && job.phase === 'capture') return 'collect_items';
+  if (roleOf(declarations, job) === 'check' && job.phase === 'capture') return 'collect_items';
   return job.phase;
 }
 
 /** The step a running job is in. */
-export function jobPhaseLabel(job: JobView): string | null {
-  const step = jobStep(job);
+export function jobPhaseLabel(declarations: SourceDeclarations, job: JobView): string | null {
+  const step = jobStep(declarations, job);
   if (step === null) return null;
-  return step === 'collect_items' ? `收集${nounOf(job)}` : phaseLabel(job, step);
+  return step === 'collect_items' ? `收集${nounOf(declarations, job)}` : phaseLabel(declarations, job, step);
 }
 
 export function jobTitle(job: JobView): string {
@@ -131,12 +131,12 @@ export type JobResultView =
   | { result: 'subscribed' | 'already_subscribed' }
   | { result: 'collected' | 'partial' | 'nothing_new' };
 
-export function jobResult(job: JobView): JobResultView | null {
+export function jobResult(declarations: SourceDeclarations, job: JobView): JobResultView | null {
   if (job.state === 'interrupted') return { result: 'interrupted' };
   if (job.state === 'failed') return { result: 'failed', error: job.error ?? null };
   if (job.state !== 'completed' || !job.result) return null;
   const { result } = job;
-  const role = roleOf(job);
+  const role = roleOf(declarations, job);
   if (role === 'item') {
     if (result.outcome === 'skipped') return { result: 'skipped', reason: result.skipReason };
     return { result: 'item', stored: result.outcome === 'created' ? 'created' : 'existing', indexed: Boolean(result.indexed) };
@@ -149,8 +149,8 @@ export function jobResult(job: JobView): JobResultView | null {
 }
 
 /** What the finished job left behind, with saving and indexing stated separately. */
-export function jobResultLabel(job: JobView): string | null {
-  const view = jobResult(job);
+export function jobResultLabel(declarations: SourceDeclarations, job: JobView): string | null {
+  const view = jobResult(declarations, job);
   if (view === null) return null;
   switch (view.result) {
     case 'interrupted': return '已中斷，重新開啟時接續';
@@ -161,9 +161,9 @@ export function jobResultLabel(job: JobView): string | null {
       return view.indexed ? `${stored}・已更新搜尋` : `${stored}，搜尋更新失敗`;
     }
     case 'subscribed': return '已訂閱，開始首次收集';
-    case 'already_subscribed': return `這個${targetOf(job)}已在訂閱清單中`;
-    case 'partial': return `部分${nounOf(job)}收集失敗`;
+    case 'already_subscribed': return `這個${targetOf(declarations, job)}已在訂閱清單中`;
+    case 'partial': return `部分${nounOf(declarations, job)}收集失敗`;
     case 'collected': return '收集完成';
-    case 'nothing_new': return `沒有新${nounOf(job)}`;
+    case 'nothing_new': return `沒有新${nounOf(declarations, job)}`;
   }
 }

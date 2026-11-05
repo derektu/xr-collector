@@ -24,6 +24,7 @@ import {
   sourceRouteForPath,
   timeSpan,
 } from '../../src/web/source-presentation.js';
+import { PRODUCT_DECLARATIONS } from '../support/product-sources.js';
 
 const originalZone = process.env.TZ;
 beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
@@ -113,12 +114,12 @@ describe('source presentation (T-09)', () => {
 
   it('says why work waits for a retry, in the source type\'s words for a failure it names', () => {
     const error = { code: 'network_error', message: 'unreachable' };
-    expect(retryCause('youtube', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: youtubeDeclaration.label });
-    expect(retryCause('unregistered', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: 'unregistered' });
-    expect(retryCause('rss', { reason: 'failed', error, attempt: 2, maxAttempts: 3 })).toEqual({ reason: 'failed', error, attempt: 2, maxAttempts: 3 });
-    expect(failureLabel('rss', error)).toBe(rssDeclaration.failureLabels?.network_error);
-    expect(failureLabel('rss', { code: 'no_subtitles', message: 'own message' })).toBe('own message');
-    expect(failureLabel('unregistered', error)).toBe(error.message);
+    expect(retryCause(PRODUCT_DECLARATIONS, 'youtube', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: youtubeDeclaration.label });
+    expect(retryCause(PRODUCT_DECLARATIONS, 'unregistered', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: 'unregistered' });
+    expect(retryCause(PRODUCT_DECLARATIONS, 'rss', { reason: 'failed', error, attempt: 2, maxAttempts: 3 })).toEqual({ reason: 'failed', error, attempt: 2, maxAttempts: 3 });
+    expect(failureLabel(PRODUCT_DECLARATIONS, 'rss', error)).toBe(rssDeclaration.failureLabels?.network_error);
+    expect(failureLabel(PRODUCT_DECLARATIONS, 'rss', { code: 'no_subtitles', message: 'own message' })).toBe('own message');
+    expect(failureLabel(PRODUCT_DECLARATIONS, 'unregistered', error)).toBe(error.message);
   });
 
   it('compacts same-day ranges and keeps both dates and crossing years', () => {

@@ -1,4 +1,5 @@
 import { assertNever, jobKey, roleView, type RoleView } from '../core/job-role.js';
+import { registeredSourceDeclarations } from '../core/source-registry.js';
 import type { JobOverview, JobOverviewEntry, JobView, WorkStatus } from '../core/types.js';
 
 /** How long a failed single item or subscription request stays in the failed section. */
@@ -26,7 +27,7 @@ export function workStatus(job: JobView): WorkStatus {
   const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
   const items = unfinished.map(retryOf);
   if (items.length > 0 && items.every((item) => item !== null)) return earliest(items, (item) => item.at)!;
-  const view = roleView(job);
+  const view = roleView(registeredSourceDeclarations(), job);
   if (view === null) return { state: 'downloading' };
   switch (view.role) {
     case 'check': return view.progress?.total ? { state: 'downloading' } : { state: 'checking' };
@@ -53,7 +54,7 @@ export async function jobOverview(jobs: readonly JobView[], context: JobBoardCon
   const running: JobOverviewEntry[] = [];
   const queued: Array<{ entry: JobOverviewEntry; position: number }> = [];
   for (const job of jobs) {
-    const view = roleView(job);
+    const view = roleView(registeredSourceDeclarations(), job);
     if (!view || job.parentId !== null || (job.state !== 'queued' && job.state !== 'running')) continue;
     const status = workStatus(job);
     const entry = entryOf(job, view, status);
@@ -64,7 +65,7 @@ export async function jobOverview(jobs: readonly JobView[], context: JobBoardCon
   return {
     running,
     queued: queued.map(({ entry }) => entry),
-    failed: (await failedJobs(jobs, context)).map((job) => entryOf(job, roleView(job)!, null)),
+    failed: (await failedJobs(jobs, context)).map((job) => entryOf(job, roleView(registeredSourceDeclarations(), job)!, null)),
   };
 }
 
@@ -76,9 +77,9 @@ export async function jobOverview(jobs: readonly JobView[], context: JobBoardCon
 export async function failedJobs(jobs: readonly JobView[], context: Pick<JobBoardContext, 'now' | 'hasDocument'>): Promise<JobView[]> {
   const newest = new Map<string, JobView>();
   for (const job of jobs) {
-    const role = roleView(job)?.role;
+    const role = roleView(registeredSourceDeclarations(), job)?.role;
     if (job.parentId !== null || (role !== 'item' && role !== 'add')) continue;
-    const key = jobKey(job);
+    const key = jobKey(registeredSourceDeclarations(), job);
     const current = newest.get(key);
     if (!current || job.createdAt > current.createdAt) newest.set(key, job);
   }
@@ -87,7 +88,7 @@ export async function failedJobs(jobs: readonly JobView[], context: Pick<JobBoar
   for (const job of newest.values()) {
     if (job.state !== 'failed' || job.retriedBy || job.dismissedAt) continue;
     if (!job.finishedAt || new Date(job.finishedAt).getTime() < bound) continue;
-    const view = roleView(job);
+    const view = roleView(registeredSourceDeclarations(), job);
     if (view?.role === 'item' && view.key && await context.hasDocument(view.type, view.key)) continue;
     failed.push(job);
   }

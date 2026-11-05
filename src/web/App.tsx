@@ -27,6 +27,7 @@ import { useChangeStream, useLiveRead } from './use-changes.js';
 import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
 import { useDay } from './use-day.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 const NOTICE_MS = 5000;
 
@@ -51,6 +52,7 @@ function useSystemDark(): boolean {
 }
 
 export default function App() {
+  const declarations = useSourceDeclarations();
 
   // Day-relative labels ("今天", "明天") draw again at midnight.
   useDay();
@@ -168,14 +170,14 @@ export default function App() {
   const subscribing = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!status.active) return;
-    const current = new Set(status.active.filter((job) => roleOf(job) === 'add').map((job) => job.id));
+    const current = new Set(status.active.filter((job) => roleOf(declarations, job) === 'add').map((job) => job.id));
     const missing = [...subscribing.current].filter((id) => !current.has(id));
     for (const id of missing) subscribing.current.delete(id);
     for (const id of missing) {
       void api.getJob(id).then((job) => {
         // A list read before the request was accepted does not show it yet.
         if (job.state === 'queued' || job.state === 'running') subscribing.current.add(id);
-        else if (job.state === 'failed') announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(job.source.type)}失敗。`}`, 'error');
+        else if (job.state === 'failed') announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(declarations, job.source.type)}失敗。`}`, 'error');
       }).catch(() => undefined);
     }
   }, [status.active]);
@@ -229,7 +231,7 @@ export default function App() {
   function added(response: unknown): void {
     setAdding(null);
     const job = (response as { job?: { id?: unknown; kind?: unknown } } | null)?.job;
-    if (typeof job?.kind === 'string' && roleOf({ kind: job.kind }) === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
+    if (typeof job?.kind === 'string' && roleOf(declarations, { kind: job.kind }) === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
   }
   function persist(next: ThemePreference): void {
     setThemePreference(next);

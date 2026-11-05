@@ -26,6 +26,7 @@ import { createLatestRequest } from './latest-request.js';
 import { useChanges } from './use-changes.js';
 import { useFloatingMenu } from './floating-menu.js';
 import { Icon } from './icons.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 interface Row {
   document: DocumentMetadata;
@@ -58,6 +59,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   /** Reports the result of a row action. */
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
+  const declarations = useSourceDeclarations();
   const [draft, setDraft] = useState(state.query);
   const [sources, setSources] = useState<DocumentSources | null>(null);
   const [results, setResults] = useState<Results | null>(null);
@@ -232,7 +234,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
               : excerpt}</span>
           </span>
           <span className="document-meta">
-            <span className="source-tag">{sourceTag(document)}</span>
+            <span className="source-tag">{sourceTag(declarations, document)}</span>
             <span className={document.publishedAt ? 'document-date' : 'document-date unknown'}>{publishedLabel(document.publishedAt)}</span>
             <span className="document-collected">{collectedShortLabel(document.collectedAt)}</span>
           </span>

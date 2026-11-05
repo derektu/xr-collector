@@ -1,6 +1,6 @@
 import { markdownToPlainText } from '../core/document-text.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
-import { sourceDeclaration } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/types.js';
 
 export const DOCUMENTS_PAGE_SIZE = 20;
@@ -98,8 +98,8 @@ export function sourceOptions(sources: DocumentSources | null): { all: SourceOpt
   return { all: option(menu.all), groups: menu.groups.map((group) => ({ label: group.label, options: group.entries.map(option) })) };
 }
 
-export function sourceTag(document: DocumentMetadata): string {
-  return `${sourceDeclaration(document.sourceType)?.label ?? document.sourceType} · ${document.publisher.name}`;
+export function sourceTag(declarations: SourceDeclarations, document: DocumentMetadata): string {
+  return `${declarations.get(document.sourceType)?.label ?? document.sourceType} · ${document.publisher.name}`;
 }
 
 /** Date-only values are shown as recorded; timestamps use the viewer's local date. */
@@ -130,8 +130,8 @@ export function dateTimeLabel(value: string): string {
 }
 
 /** The line of type-specific details the source type shows under a document's title; null when it has none. */
-export function subtitleLabel(document: DocumentMetadata): string | null {
-  return sourceDeclaration(document.sourceType)?.documentDetailLine?.(document) ?? null;
+export function subtitleLabel(declarations: SourceDeclarations, document: DocumentMetadata): string | null {
+  return declarations.get(document.sourceType)?.documentDetailLine?.(document) ?? null;
 }
 
 export interface SnippetPart {
@@ -209,10 +209,10 @@ export function pageWithRows(page: number, rowsOnPage: number, total: number): n
  * The source address of a document ID, for collecting a deleted document again; null for an unknown
  * ID and for a type whose keys do not determine an address.
  */
-export function sourceUrlOfDocumentId(id: string): string | null {
+export function sourceUrlOfDocumentId(declarations: SourceDeclarations, id: string): string | null {
   const separator = id.indexOf(':');
   if (separator < 0) return null;
-  const item = sourceDeclaration(id.slice(0, separator))?.item;
+  const item = declarations.get(id.slice(0, separator))?.item;
   const key = id.slice(separator + 1);
   return item?.urlForKey && item.keyPattern.test(key) ? item.urlForKey(key) : null;
 }

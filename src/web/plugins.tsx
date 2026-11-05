@@ -1,15 +1,19 @@
 import type { ReactNode } from 'react';
-import { registerSourceDeclarations } from '../core/source-registry.js';
+import { registerSourceDeclarations, SourceDeclarations } from '../core/source-registry.js';
 import { SOURCE_DECLARATIONS } from '../plugins/declarations.js';
 import { registerIcons } from './icons.js';
 import './plugins.css';
 
 /**
- * The web assembly of the source types: the UI registers the product's declarations
- * (`src/plugins/declarations.ts`), from which it reads every type-specific word, settings sentence
- * and document detail, and draws each type with its icon here and its badge colors from
- * `plugins.css`. Every declared type has both (tests/plugins/source-list.test.ts).
+ * The web assembly of the source types: the UI reads every type-specific word, settings sentence and
+ * document detail from the product's declarations (`src/plugins/declarations.ts`), which `main.tsx`
+ * provides to the components as `PRODUCT_SOURCES` (`source-declarations.tsx`), and draws each type with its icon
+ * here and its badge colors from `plugins.css`. Every declared type has both
+ * (tests/plugins/source-list.test.ts).
  */
+
+/** The product's source types, as the components read them. */
+export const PRODUCT_SOURCES = new SourceDeclarations(SOURCE_DECLARATIONS);
 
 /** The icon of each source type, by the declaration's `icon` key. */
 export const SOURCE_ICONS: Readonly<Record<string, ReactNode>> = {
@@ -17,5 +21,6 @@ export const SOURCE_ICONS: Readonly<Record<string, ReactNode>> = {
   rss: <><path d="M5 11a8 8 0 0 1 8 8" /><path d="M5 5a14 14 0 0 1 14 14" /><circle cx="6" cy="18" r="1.2" /></>,
 };
 
+// The RSS declaration's `owns` reads the other registered types (`src/plugins/rss/shared.ts`).
 registerSourceDeclarations(SOURCE_DECLARATIONS);
 registerIcons(SOURCE_ICONS);

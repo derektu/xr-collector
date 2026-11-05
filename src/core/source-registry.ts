@@ -2,12 +2,53 @@ import type { SourceDefinition, SourcePluginDeclaration } from './source-contrac
 import type { JobRole } from './types.js';
 
 /**
- * The source types this process knows, in registration order. The composition roots register the
- * product's definitions before anything reads a Vault (`src/plugins/index.ts`); the web UI registers
- * the product's declarations (`src/web/plugins.tsx`). Core modules look types up here instead of
- * naming them, so a document, job or subscription of an unregistered type is data the core keeps but
- * does not act on. Reading the registry before any type is registered throws: a process that skipped
- * the registration would otherwise run without any source type.
+ * The declarations of a set of source types, in their order, as one value that cannot change. Who
+ * assembles a process builds it once from the source list and hands it to what reads it; the web UI
+ * reads it from React context (`src/web/source-declarations.tsx`). Core modules look types up here instead of
+ * naming them, so a document, job or subscription of a type the value lacks is data the core keeps
+ * but does not act on.
+ */
+export class SourceDeclarations {
+  /** Every declaration, in order. */
+  readonly list: readonly SourcePluginDeclaration[];
+  private readonly byId: ReadonlyMap<string, SourcePluginDeclaration>;
+
+  /** Throws for an empty list or a type ID listed twice: a process runs with at least one source type, each once. */
+  constructor(list: readonly SourcePluginDeclaration[]) {
+    if (list.length === 0) throw new Error('No source types are given');
+    const byId = new Map<string, SourcePluginDeclaration>();
+    for (const declaration of list) {
+      if (byId.has(declaration.id)) throw new Error(`Source type ${declaration.id} is given twice`);
+      byId.set(declaration.id, declaration);
+    }
+    this.list = Object.freeze([...list]);
+    this.byId = byId;
+    Object.freeze(this);
+  }
+
+  get(type: string): SourcePluginDeclaration | undefined {
+    return this.byId.get(type);
+  }
+
+  /** How the UI names a type's subscriptions, e.g. the label of its subscription kind; the type's label without one. */
+  subscriptionKindLabel(type: string): string {
+    const declaration = this.byId.get(type);
+    return declaration?.kinds.find((kind) => kind.capability === 'subscription')?.label ?? declaration?.label ?? type;
+  }
+
+  /** The wire kind of a type's job with this role; null when the type has no job of that role. */
+  jobKind(type: string, role: JobRole): string | null {
+    const name = this.byId.get(type)?.jobKindNames[role];
+    return name ? `${type}.${name}` : null;
+  }
+}
+
+/**
+ * The source types the server modules of this process know, in registration order. The composition
+ * roots register the product's definitions before anything reads a Vault (`src/plugins/index.ts`).
+ * The web UI registers the product's declarations too, for a declaration whose `owns` reads the
+ * other registered types. Reading the registry before any type is registered throws: a process that
+ * skipped the registration would otherwise run without any source type.
  *
  * The module holds no Node-only code, so the web build shares it (tests/tooling/web-bundle-node.test.ts).
  */
@@ -15,10 +56,12 @@ import type { JobRole } from './types.js';
 const declarations = new Map<string, SourcePluginDeclaration>();
 const definitions = new Map<string, SourceDefinition>();
 let schedule: { file: string; description: string } | null = null;
+let snapshot: SourceDeclarations | null = null;
 
 /** Registers the declarations of source types; a type registered again keeps its place in the order. */
 export function registerSourceDeclarations(list: readonly SourcePluginDeclaration[]): void {
   for (const declaration of list) declarations.set(declaration.id, declaration);
+  snapshot = null;
 }
 
 /** Registers the server definitions of source types, and their declarations with them. */
@@ -49,6 +92,12 @@ export function scheduleFileDescription(): string {
 function registeredDeclarations(): Map<string, SourcePluginDeclaration> {
   if (declarations.size === 0) throw new Error('No source types are registered');
   return declarations;
+}
+
+/** The registered declarations, as the value the modules that take a `SourceDeclarations` read. */
+export function registeredSourceDeclarations(): SourceDeclarations {
+  snapshot ??= new SourceDeclarations([...registeredDeclarations().values()]);
+  return snapshot;
 }
 
 function registeredDefinitions(): Map<string, SourceDefinition> {
@@ -88,14 +137,12 @@ export function subscriptionDefinitions(): SourceDefinition[] {
 
 /** How the UI names a type's subscriptions, e.g. the label of its subscription kind; the type's label without one. */
 export function subscriptionKindLabel(type: string): string {
-  const declaration = registeredDeclarations().get(type);
-  return declaration?.kinds.find((kind) => kind.capability === 'subscription')?.label ?? declaration?.label ?? type;
+  return registeredSourceDeclarations().subscriptionKindLabel(type);
 }
 
 /** The wire kind of a type's job with this role; null when the type has no job of that role. */
 export function jobKind(type: string, role: JobRole): string | null {
-  const name = registeredDeclarations().get(type)?.jobKindNames[role];
-  return name ? `${type}.${name}` : null;
+  return registeredSourceDeclarations().jobKind(type, role);
 }
 
 /**

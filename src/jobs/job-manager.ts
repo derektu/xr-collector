@@ -5,7 +5,7 @@ import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
 import { COLLECTION_COMPLETED } from '../core/job-completion.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, subscriptionOf, workKey, type RoleJob } from '../core/job-role.js';
-import { jobKind, subscriptionKindLabel } from '../core/source-registry.js';
+import { jobKind, registeredSourceDeclarations, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
   type ChannelJobTrigger,
@@ -479,7 +479,7 @@ export class JobManager {
       .filter((job) => isRole(job, type, 'add'))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((job): SubscriptionRequestWork => {
-        const view = roleView(job);
+        const view = roleView(registeredSourceDeclarations(), job);
         const request = view?.role === 'add' ? view : null;
         return {
           jobId: job.id, url: job.source.url,
@@ -567,7 +567,7 @@ export class JobManager {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
     const type = job.source.type;
-    const role = roleOf(job);
+    const role = roleOf(registeredSourceDeclarations(), job);
     const plugin = this.plugin(type);
     if (!role || !plugin) throw new CollectorError('job_not_retryable', '這個工作無法重試。');
     const { noun } = plugin.item;
@@ -575,14 +575,14 @@ export class JobManager {
     if (job.parentId !== null) {
       throw new CollectorError('job_not_retryable', `${target}收集中的${noun}隨${target}工作處理，請重試${target}工作。`);
     }
-    if (!isRetryable(job)) throw new CollectorError('job_not_retryable', `只有失敗或有${noun}失敗的工作可以重試。`);
+    if (!isRetryable(registeredSourceDeclarations(), job)) throw new CollectorError('job_not_retryable', `只有失敗或有${noun}失敗的工作可以重試。`);
     if (job.retriedBy) throw new CollectorError('job_not_retryable', '這個工作已經重試過，請查看重試的工作。');
     let submission: JobSubmission;
     if (role === 'item') {
       submission = this.enqueueItem(type, itemRefOf(job, plugin), null, null, { retryOf: job.id }, job.source.title);
     } else if (role === 'add') {
       const settings = this.acceptedSettings(job);
-      submission = this.enqueue(job.kind, type, jobKey(job), { id: null, url: job.source.url, title: null }, null, {
+      submission = this.enqueue(job.kind, type, jobKey(registeredSourceDeclarations(), job), { id: null, url: job.source.url, title: null }, null, {
         scope: { trigger: 'subscribe' }, checkpoint: { settings: { ...settings } }, retryOf: job.id,
       });
     } else if (job.items && job.items.length > 0) {
@@ -593,7 +593,7 @@ export class JobManager {
       const stopped = await this.subscriptions.stopped(type, job.source.id!);
       if (stopped === 'subscription_removed') throw new CollectorError('subscription_not_found', `找不到這個 ${subscriptionKindLabel(type)}訂閱。`);
       if (stopped) throw new CollectorError('subscription_paused', `「${job.source.title ?? job.source.id}」已暫停，請先恢復訂閱。`);
-      submission = this.enqueue(job.kind, type, jobKey(job), {
+      submission = this.enqueue(job.kind, type, jobKey(registeredSourceDeclarations(), job), {
         id: job.source.id, url: job.source.url, title: job.source.title,
       }, null, { scope: { trigger: 'manual' }, checkpoint: { retryItems }, retryOf: job.id });
     } else {
@@ -781,11 +781,11 @@ export class JobManager {
     const unknownTypes = new Set<string>();
     // The list is newest first, so a job whose key was already seen has a later job of the same target.
     for (const job of store.list(this.options.vaultPath, this.vaultId)) {
-      if (job.state === 'interrupted' && (!roleOf(job) || !this.plugin(job.source.type))) {
+      if (job.state === 'interrupted' && (!roleOf(registeredSourceDeclarations(), job) || !this.plugin(job.source.type))) {
         unknownTypes.add(job.kind);
         continue;
       }
-      const key = jobKey(job);
+      const key = jobKey(registeredSourceDeclarations(), job);
       const later = seen.has(key);
       seen.add(key);
       if (job.state === 'interrupted') (later ? superseded : pending).push(job);
@@ -822,13 +822,13 @@ export class JobManager {
     const repeated: JobError = { code: INTERRUPTED_REPEATEDLY, message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
 
     for (const job of superseded) {
-      if (roleOf(job) === 'check') skipCheck(job, 'superseded');
+      if (roleOf(registeredSourceDeclarations(), job) === 'check') skipCheck(job, 'superseded');
       else if (!settled.has(job.id)) settle(job, 'completed', { outcome: 'skipped', skipReason: 'superseded' }, null);
     }
     const checkJobs: CollectionJob[] = [];
     // Subscription work first, so its items follow the subscription's state.
     for (const job of pending) {
-      const role = roleOf(job);
+      const role = roleOf(registeredSourceDeclarations(), job);
       if (role === 'item' || settled.has(job.id)) continue;
       if (tooManyStops(job)) {
         settle(job, 'failed', { outcome: 'failed' }, repeated);
@@ -853,7 +853,7 @@ export class JobManager {
       this.restore(job);
     }
     for (const job of pending) {
-      if (roleOf(job) !== 'item' || settled.has(job.id)) continue;
+      if (roleOf(registeredSourceDeclarations(), job) !== 'item' || settled.has(job.id)) continue;
       if (tooManyStops(job)) settle(job, 'failed', { outcome: 'failed' }, repeated);
       else this.restore(job);
     }
@@ -881,7 +881,7 @@ export class JobManager {
    */
   private restore(stored: CollectionJob, options: { queue: boolean } = { queue: true }): CollectionJob {
     const timestamp = this.now().toISOString();
-    const waitsForItems = roleOf(stored) === 'check' && stored.items !== null;
+    const waitsForItems = roleOf(registeredSourceDeclarations(), stored) === 'check' && stored.items !== null;
     const job: CollectionJob = {
       ...stored,
       state: waitsForItems ? 'running' : 'queued',
@@ -896,7 +896,7 @@ export class JobManager {
       },
       updatedAt: timestamp,
     };
-    const key = jobKey(job);
+    const key = jobKey(registeredSourceDeclarations(), job);
     this.jobs.set(job.id, job);
     this.keys.set(job.id, key);
     this.activeByKey.set(key, job.id);
@@ -994,7 +994,7 @@ export class JobManager {
     const activeId = this.activeByKey.get(key);
     if (activeId) {
       const active = this.jobs.get(activeId);
-      if (active && parentId === null && roleOf(active) === 'item') {
+      if (active && parentId === null && roleOf(registeredSourceDeclarations(), active) === 'item') {
         const checkpoint = { ...active.checkpoint, claimedAt: this.now().toISOString() };
         if (active.parentId !== null) {
           // A direct submission is the user's own request: no range bound and no subscription stop applies.
@@ -1046,7 +1046,7 @@ export class JobManager {
    */
   private requeue(job: CollectionJob, front = false): void {
     this.queueOrder.set(job.id, front ? --this.queueFront : ++this.queueBack);
-    if (roleOf(job) !== 'item') {
+    if (roleOf(registeredSourceDeclarations(), job) !== 'item') {
       if (front) this.discoveryQueue.unshift(job.id);
       else this.discoveryQueue.push(job.id);
       return;
@@ -1272,7 +1272,7 @@ export class JobManager {
     if (!job) return;
     const { signal } = this.stepAbort;
     try {
-      if (roleOf(job) === 'add') await this.addSubscription(job, signal);
+      if (roleOf(registeredSourceDeclarations(), job) === 'add') await this.addSubscription(job, signal);
       else await this.discover(job, signal);
     } catch (error) {
       // A step cut short by shutdown is left for close() to record as interrupted.
@@ -1392,7 +1392,7 @@ export class JobManager {
       return;
     }
     // Collecting failed items again lists nothing.
-    if (!retryItems) this.listings.set(jobKey(job), { jobId: job.id, at: at.getTime() });
+    if (!retryItems) this.listings.set(jobKey(registeredSourceDeclarations(), job), { jobId: job.id, at: at.getTime() });
     const target = { ...plan.target, title: job.source.title ?? plan.target.title, url: job.source.url };
     const discovery = retryItems
       ? {
@@ -1453,8 +1453,8 @@ export class JobManager {
 
   /** The check job's subscription an item job collects for, with the item's key; null for any other job. */
   private checkItemOf(item: CollectionJob): { type: string; subscriptionId: string; key: string } | null {
-    if (roleOf(item) !== 'item' || !item.source.id) return null;
-    const subscriptionId = subscriptionOf(item, this.parentOf);
+    if (roleOf(registeredSourceDeclarations(), item) !== 'item' || !item.source.id) return null;
+    const subscriptionId = subscriptionOf(registeredSourceDeclarations(), item, this.parentOf);
     return subscriptionId ? { type: item.source.type, subscriptionId, key: item.source.id } : null;
   }
 
@@ -1464,7 +1464,7 @@ export class JobManager {
   /** The target of the subscription whose check found an item; undefined for an item submitted on its own. */
   private subscriptionTargetOf(item: CollectionJob): SubscriptionTarget | undefined {
     const parent = item.parentId ? this.jobs.get(item.parentId) ?? this.options.store.get(item.parentId) : undefined;
-    if (!parent || roleOf(parent) !== 'check' || !parent.source.id) return undefined;
+    if (!parent || roleOf(registeredSourceDeclarations(), parent) !== 'check' || !parent.source.id) return undefined;
     return { id: parent.source.id, title: parent.source.title ?? '', url: parent.source.url };
   }
 
@@ -1560,7 +1560,7 @@ export class JobManager {
     // Check items stop showing the wait once the next attempt starts.
     this.notifyItemRetry(job);
     this.syncItemWait(job);
-    const role = roleOf(job);
+    const role = roleOf(registeredSourceDeclarations(), job);
     const majorStart = firstStart && role !== 'add' && !(role === 'item' && job.parentId !== null);
     this.event(job, { severity: majorStart ? 'info' : 'debug', eventType: 'job.started', message: '開始執行收集工作。', phase });
   }
@@ -1591,7 +1591,7 @@ export class JobManager {
   private settle(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null, finishedAt: string, detail?: string): void {
     this.update(job, { state, result, error, finishedAt });
     const progress = job.progress ?? { total: 0, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
-    const check = roleOf(job) === 'check' && job.scope ? {
+    const check = roleOf(registeredSourceDeclarations(), job) === 'check' && job.scope ? {
       trigger: job.scope.trigger,
       result: (state === 'failed' && error?.code === 'network_error' ? 'network_error'
         : state === 'completed' && result.outcome !== 'skipped'
@@ -1599,7 +1599,7 @@ export class JobManager {
           ? 'empty' : 'other') as 'empty' | 'network_error' | 'other',
       created: progress.created, existing: progress.existing, failed: progress.failed, skipped: progress.skipped ?? 0,
     } : undefined;
-    const role = roleOf(job);
+    const role = roleOf(registeredSourceDeclarations(), job);
     const completedSeverity = role === 'check'
       ? (result.outcome === 'partial' || progress.failed > 0 ? 'warning' : result.outcome === 'skipped' ? 'debug' : 'info')
       : role === 'add' || job.parentId !== null || result.outcome === 'created' || result.outcome === 'skipped'
@@ -1627,7 +1627,7 @@ export class JobManager {
    * job skipped before it collected anything, and for a retry of earlier items, which lists nothing.
    */
   private checkEnd(job: CollectionJob): CheckEnd | null {
-    if (roleOf(job) !== 'check' || !job.source.id || !job.finishedAt || job.checkpoint?.retryItems) return null;
+    if (roleOf(registeredSourceDeclarations(), job) !== 'check' || !job.source.id || !job.finishedAt || job.checkpoint?.retryItems) return null;
     if (job.state !== 'completed' && job.state !== 'failed') return null;
     if (job.result?.skipReason && STOP_REASONS.has(job.result.skipReason)) return null;
     const error = job.state === 'failed' ? job.error ?? null : null;
@@ -1664,7 +1664,7 @@ export class JobManager {
    * subscription, parent and trigger.
    */
   private event(job: CollectionJob, entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
-    this.options.store.event({ ...entry, ...jobEventSubject(job, this.parentOf) });
+    this.options.store.event({ ...entry, ...jobEventSubject(registeredSourceDeclarations(), job, this.parentOf) });
   }
 
   /** How the job's source type treats a failure; an unregistered type's failures are not retried. */
@@ -1675,7 +1675,7 @@ export class JobManager {
   /** What a finished job's activity entry says; skip reasons and counts make the log readable on its own. */
   private completionMessage(job: CollectionJob, result: JobResult): string {
     if (result.outcome === 'skipped') return `略過：${SKIP_MESSAGES[result.skipReason ?? 'out_of_range']}。`;
-    const role = roleOf(job);
+    const role = roleOf(registeredSourceDeclarations(), job);
     const plugin = this.plugin(job.source.type);
     if (role === 'item') {
       const stored = result.outcome === 'created' ? COLLECTION_COMPLETED : '文件已存在';
@@ -1732,7 +1732,7 @@ function itemRefOf(job: CollectionJob, plugin: SourcePlugin): ItemRef {
 }
 
 function isRole(job: CollectionJob, type: string, role: JobRole): boolean {
-  return job.source.type === type && roleOf(job) === role;
+  return job.source.type === type && roleOf(registeredSourceDeclarations(), job) === role;
 }
 
 function progressOf(items: JobItem[]): JobProgress {
@@ -1757,7 +1757,7 @@ const SKIP_MESSAGES: Record<SkipReason, string> = {
  * when the user also submitted it. Null for subscription work.
  */
 function explicitRequestTime(job: CollectionJob): string | null {
-  if (roleOf(job) !== 'item') return null;
+  if (roleOf(registeredSourceDeclarations(), job) !== 'item') return null;
   if (job.parentId === null) return job.checkpoint?.claimedAt ?? job.createdAt;
   return job.claimedByUser ? job.checkpoint?.claimedAt ?? null : null;
 }

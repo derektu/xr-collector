@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
 import { replaceFile } from '../core/json-file.js';
 import { inOwnStep, jobEventSubject } from '../core/job-role.js';
+import { registeredSourceDeclarations } from '../core/source-registry.js';
 import type { NoteChange } from '../core/change-feed.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
@@ -87,7 +88,7 @@ export class JobStore {
     if (latestSequence) store.eventSequence = Number(latestSequence);
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
-      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(job) });
+      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(registeredSourceDeclarations(), job) });
     }
     if (stopped.length > 0) await store.flush();
     return store;
@@ -144,7 +145,7 @@ export class JobStore {
     const planned = options.stop !== 'crash';
     this.event({
       severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message, ...(job.phase ? { phase: job.phase } : {}),
-      ...jobEventSubject(job, (id) => this.jobs.get(id)),
+      ...jobEventSubject(registeredSourceDeclarations(), job, (id) => this.jobs.get(id)),
     });
     this.scheduleFlush();
   }

@@ -1,3 +1,4 @@
+import type { SourceDeclarations } from '../core/source-registry.js';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { CollectionSchedule, PendingSubscription, SubscriptionEntry, SubscriptionList, SourceTypeInfo } from '../core/types.js';
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
@@ -19,6 +20,7 @@ import {
 } from './source-presentation.js';
 import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 import { useDay } from './use-day.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 export interface SourcesProps {
   state: SourceListState;
@@ -39,6 +41,7 @@ export interface SourcesProps {
  * actions. A subscription request appears at once and becomes its subscription row when resolved.
  */
 export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd, onOpenSource, onChanged }: SourcesProps) {
+  const declarations = useSourceDeclarations();
   // Day-relative labels ("今天", "明天") draw again at midnight.
   useDay();
   const read = useLiveRead(['subscriptions'], (signal) => api.listSubscriptions(signal), []);
@@ -75,7 +78,7 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
   }
 
   const sources = list?.subscriptions ?? [];
-  const pending = (list?.pending ?? []).filter((entry) => matchesPending(entry, state));
+  const pending = (list?.pending ?? []).filter((entry) => matchesPending(declarations, entry, state));
   const visible = filterSources(sources, state);
   const enabledCount = sources.filter((source) => source.enabled).length;
   const empty = list !== null && sources.length === 0 && list.pending.length === 0;
@@ -95,7 +98,7 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
         <button type="button" className="button" disabled={checking || enabledCount === 0} onClick={() => void checkAll()} data-testid="check-all">
           <Icon name="refresh" size={15} />{checking ? '檢查中…' : '立即檢查'}
         </button>
-        <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription" />
+        <AddMenu label="新增訂閱" items={subscriptionAddItems(declarations)} onChoose={onAdd} disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription" />
       </div>
     </div>
 
@@ -104,7 +107,7 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
 
     {empty ? <section className="empty-state" data-testid="sources-empty">
       <h2>還沒有訂閱</h2>
-      <AddMenu label="新增訂閱" items={subscriptionAddItems()} onChoose={onAdd} primary align="start" disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription-empty" />
+      <AddMenu label="新增訂閱" items={subscriptionAddItems(declarations)} onChoose={onAdd} primary align="start" disabledReason={offline ? OFFLINE_UNAVAILABLE : null} testId="add-subscription-empty" />
     </section> : null}
 
     {list && !empty ? <>
@@ -127,7 +130,7 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
         </div>
         {visible.map((source) => <SourceRow key={`${source.type}:${source.id}`} source={source} icon={typeLabel(source.type)?.icon ?? 'file'} now={now}
           onOpen={() => onOpenSource(source.type, source.id)} onChanged={onChanged} />)}
-        {pending.map((entry) => { const owner = pendingOwner(entry); return <div key={entry.jobId} className="source-row pending" role="row" data-testid={`pending-row-${entry.jobId}`}>
+        {pending.map((entry) => { const owner = pendingOwner(declarations, entry); return <div key={entry.jobId} className="source-row pending" role="row" data-testid={`pending-row-${entry.jobId}`}>
           <span role="cell" className="source-name"><SourceTypeBadge icon={owner?.declaration.icon ?? 'file'} />
             <span><span className="name">{entry.title ?? displayUrl(entry.url)}</span><span className="kind">{owner?.kindLabel}</span></span></span>
           <span role="cell" className="numeric">—</span>
@@ -144,9 +147,9 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
 }
 
 /** A subscription request matches the filters by the type that owns its address and by its address or resolved title. */
-function matchesPending(entry: PendingSubscription, state: SourceListState): boolean {
+function matchesPending(declarations: SourceDeclarations, entry: PendingSubscription, state: SourceListState): boolean {
   const query = state.query.trim().toLocaleLowerCase();
-  return (!state.type || state.type === pendingOwner(entry)?.declaration.id)
+  return (!state.type || state.type === pendingOwner(declarations, entry)?.declaration.id)
     && (!query || (entry.title ?? entry.url).toLocaleLowerCase().includes(query));
 }
 
