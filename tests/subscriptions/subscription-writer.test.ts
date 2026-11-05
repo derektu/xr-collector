@@ -165,6 +165,18 @@ describe('failed items across checks', () => {
     expect((await w.record('fake', 'f')).failures).toBeUndefined();
   });
 
+  it('counts no attempt for a reported item failure that a limit or a needed sign-in caused', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    await w.subscribe('fake', 'f');
+    const item = { key: 'reported', title: '回報的項目', url: 'https://fake.example/item/reported' };
+    expect(await w.services.itemFailed('fake', 'f', item, { code: 'login_needed', message: '需要重新登入。' }, 'login_required')).toBeNull();
+    expect(await w.services.itemFailed('fake', 'f', item, { code: 'rate_limited', message: '限制連線。' }, 'rate_limited')).toBeNull();
+    expect((await w.record('fake', 'f')).failures).toBeUndefined();
+    expect(await w.services.itemFailed('fake', 'f', item, { code: 'capture_failed', message: '收集失敗。' }, 'retry_next_check'))
+      .toMatchObject({ attempts: 1, skipped: false });
+  });
+
   it('keeps a skipped item in the newest N without taking an older one, and keeps the records of two types apart', async () => {
     const w = await world();
     const keys = w.sources.fake.addFeed('n', w.clock.now, [1, 2, 3]);
@@ -386,6 +398,19 @@ describe('failed checks in a row', () => {
     const after = await w.record('fake', 'f');
     expect({ lastCheckedAt: after.lastCheckedAt, checkFailures: after.checkFailures })
       .toEqual({ lastCheckedAt: settled.lastCheckedAt, checkFailures: settled.checkFailures });
+  });
+
+  it('records the time of a reported check end that needs a new sign-in without counting it', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    const first = await w.subscribe('fake', 'f');
+    const at = (minutes: number) => new Date(new Date(first.finishedAt!).getTime() + minutes * MINUTE).toISOString();
+    const port = w.services;
+    await port.checkEnded('fake', 'f', { at: at(10), error: { code: 'feed_gone', message: '這個動態已不存在。' }, failureClass: 'skip', counted: true });
+    await port.checkEnded('fake', 'f', { at: at(20), error: { code: 'login_needed', message: '需要重新登入。' }, failureClass: 'login_required', counted: true });
+    expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: at(20), checkFailures: { count: 1, since: at(10), error: { code: 'feed_gone' } } });
+    await port.checkEnded('fake', 'f', { at: at(30), error: { code: 'feed_gone', message: '這個動態已不存在。' }, failureClass: 'skip', counted: true });
+    expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: at(30), checkFailures: { count: 2, since: at(10) } });
   });
 
   it('pauses after five failures despite a notification profile write failure, then resumes and checks', async () => {

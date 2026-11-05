@@ -488,8 +488,9 @@ export class SubscriptionService {
   /**
    * Port entry: records when a check ended, keeping a later time already recorded. A counted success
    * clears the failures in a row; a counted failure adds one, and the subscription pauses itself
-   * once AUTO_PAUSE_FAILURES of them span AUTO_PAUSE_AFTER_MS. An end that does not count, such as a
-   * source that needs a new sign-in, leaves the count as it is.
+   * once AUTO_PAUSE_FAILURES of them span AUTO_PAUSE_AFTER_MS. An end the job does not count, and a
+   * failure because the source needs a new sign-in, which concerns every subscription of its type,
+   * leave the count as it is.
    */
   async checkEnded(id: string, end: CheckEnd): Promise<void> {
     let paused: SubscriptionRecord | undefined;
@@ -498,7 +499,7 @@ export class SubscriptionService {
       if (!current) return new Map();
       const patch: Partial<SubscriptionRecord> = {};
       if (!current.lastCheckedAt || current.lastCheckedAt < end.at) patch.lastCheckedAt = end.at;
-      if (!end.counted) {
+      if (!end.counted || end.failureClass === 'login_required') {
         // The time alone.
       } else if (!end.error) {
         if (current.checkFailures) patch.checkFailures = undefined;
@@ -538,9 +539,12 @@ export class SubscriptionService {
 
   /**
    * Port entry: counts one failed check of an item. `skip`, and reaching MAX_CHECK_ATTEMPTS, mark
-   * it skipped. Returns the item's failure record, or null when the subscription is gone.
+   * it skipped. A source's limit or a source that needs a new sign-in is no failure of the item and
+   * counts nothing. Returns the item's failure record, or null when nothing was counted or the
+   * subscription is gone.
    */
   async itemFailed(id: string, item: { key: string; title: string | null; url: string }, error: JobError, failureClass: FailureClass): Promise<ItemFailureEntry | null> {
+    if (failureClass === 'login_required' || failureClass === 'rate_limited') return null;
     let recorded: ItemFailureEntry | null = null;
     await this.store.updateWith((records) => {
       const current = records.find((candidate) => candidate.id === id);

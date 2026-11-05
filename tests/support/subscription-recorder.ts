@@ -19,7 +19,7 @@ export interface RecordedSubscription extends SubscriptionTarget {
 /** One call a job manager made to the port, in call order. */
 export type PortReport =
   | { kind: 'checked'; type: string; id: string; candidates?: string[]; collecting?: string[] }
-  | { kind: 'ended'; type: string; id: string; at: string; errorCode: string | null; counted: boolean }
+  | { kind: 'ended'; type: string; id: string; at: string; errorCode: string | null; failureClass: FailureClass | null; counted: boolean }
   | { kind: 'collected'; type: string; id: string; key: string }
   | { kind: 'failed'; type: string; id: string; key: string; title: string | null; errorCode: string; failureClass: FailureClass }
   | { kind: 'outOfRange'; type: string; id: string; key: string; before: string }
@@ -100,7 +100,7 @@ export class SubscriptionRecorder implements SubscriptionPort {
 
   async checkEnded(type: string, id: string, end: CheckEnd): Promise<void> {
     this.reports.push({
-      kind: 'ended', type, id, at: end.at, errorCode: end.error?.code ?? null, counted: end.counted,
+      kind: 'ended', type, id, at: end.at, errorCode: end.error?.code ?? null, failureClass: end.failureClass, counted: end.counted,
     });
   }
 
