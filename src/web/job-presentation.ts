@@ -1,5 +1,6 @@
 import type { ChannelJobTrigger, JobError, JobView, JobPhase, SkipReason } from '../core/types.js';
-import { jobRole, sourceDeclaration } from '../core/source-registry.js';
+import { assertNever, roleOf, roleView } from '../core/job-role.js';
+import { sourceDeclaration } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../plugins/types.js';
 import { triggerLabel } from './subscription-presentation.js';
 
@@ -33,10 +34,14 @@ function phaseLabel(job: JobView, phase: JobPhase): string {
 export type JobKindView = { kind: 'item' } | { kind: 'check'; trigger: ChannelJobTrigger | null } | { kind: 'subscribe' };
 
 export function jobKind(job: JobView): JobKindView {
-  const role = jobRole(job.kind)?.role;
-  if (role === 'item') return { kind: 'item' };
-  if (role === 'check') return { kind: 'check', trigger: job.scope?.trigger ?? null };
-  return { kind: 'subscribe' };
+  const view = roleView(job);
+  if (view === null) return { kind: 'subscribe' };
+  switch (view.role) {
+    case 'item': return { kind: 'item' };
+    case 'check': return { kind: 'check', trigger: view.trigger };
+    case 'add': return { kind: 'subscribe' };
+    default: return assertNever(view);
+  }
 }
 
 export function jobKindLabel(job: JobView): string {
@@ -65,7 +70,7 @@ export type JobStep = JobPhase | 'collect_items';
 
 export function jobStep(job: JobView): JobStep | null {
   if (job.state !== 'running' || !job.phase) return null;
-  if (jobRole(job.kind)?.role === 'check' && job.phase === 'capture') return 'collect_items';
+  if (roleOf(job) === 'check' && job.phase === 'capture') return 'collect_items';
   return job.phase;
 }
 
@@ -131,12 +136,13 @@ export function jobResult(job: JobView): JobResultView | null {
   if (job.state === 'failed') return { result: 'failed', error: job.error ?? null };
   if (job.state !== 'completed' || !job.result) return null;
   const { result } = job;
-  const role = jobRole(job.kind)?.role;
+  const role = roleOf(job);
   if (role === 'item') {
     if (result.outcome === 'skipped') return { result: 'skipped', reason: result.skipReason };
     return { result: 'item', stored: result.outcome === 'created' ? 'created' : 'existing', indexed: Boolean(result.indexed) };
   }
   if (role === 'add') return { result: result.outcome === 'created' ? 'subscribed' : 'already_subscribed' };
+  // A check, and a finished job of an unregistered type, which reads like one.
   if (result.outcome === 'skipped') return { result: 'skipped', reason: result.skipReason };
   if (result.outcome === 'partial') return { result: 'partial' };
   return { result: result.outcome === 'created' ? 'collected' : 'nothing_new' };

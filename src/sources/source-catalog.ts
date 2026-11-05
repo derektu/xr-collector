@@ -2,7 +2,7 @@ import { sourceDefinition } from '../core/source-registry.js';
 import {
   CollectorError,
   type ActivityCheckSummary,
-  type CollectionJob,
+  type JobView,
   type DocumentMetadata,
   MAX_CHECK_ATTEMPTS,
   type PendingSubscription,
@@ -25,7 +25,7 @@ const UNLISTED_SKIPS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 
 export interface CatalogSubscriptions {
   readonly type: string;
   listSubscriptions(): Promise<Subscription[]>;
-  checkJobs(id: string): CollectionJob[];
+  checkJobs(id: string): JobView[];
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
 }
 
@@ -102,7 +102,7 @@ export class SourceCatalog {
  * check. Checks still running, interrupted, or stopped by a pause, a removal or a later job are left out.
  */
 export function collectionRecord(
-  type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly CollectionJob[],
+  type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly JobView[],
   summaries?: readonly ActivityCheckSummary[],
 ): SubscriptionCollectionEntry[] {
   const definition = sourceDefinition(type);

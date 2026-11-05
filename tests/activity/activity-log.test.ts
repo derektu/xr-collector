@@ -81,7 +81,10 @@ describe('activity log files (A-T1)', () => {
 
     const page = await log.query({}, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.eventType)).toEqual(['job.completed', 'job.started', 'job.accepted']);
-    expect(page.events[2]).toMatchObject({ sourceTitle: '影片標題', parentJobId: 'job-channel', subscriptionId: 'UC1' });
+    // The job learned its title after the event was written; parent and subscription are the event's own.
+    expect(page.events[2]).toMatchObject({ sourceTitle: '影片標題' });
+    expect(page.events[2]).not.toHaveProperty('parentJobId');
+    expect(page.events[2]).not.toHaveProperty('subscriptionId');
     expect(page.log.skippedLines).toBe(2);
     expect((await readdir(path.join(directory, 'events'))).sort()).toEqual(['2026-10-14.jsonl', '2026-10-15.jsonl']);
     expect(page.retentionDays).toBe(RETENTION_DAYS);
@@ -246,12 +249,11 @@ describe('filters (A-T5)', () => {
     };
     const log = ActivityLog.memory({ now: () => clock.now, lookupJob: (id) => jobs[id] });
     log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', severity: 'debug', eventType: 'job.accepted', subscriptionId: 'UC1' }));
-    // Written before subscriptions and parents were recorded; the job record fills them in.
-    log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', eventType: 'document.saved', documentId: 'youtube:v1' }));
-    log.record(event('2026-10-15T01:02:00.000Z', { jobId: 'child', severity: 'warning', eventType: 'job.retry_scheduled' }));
+    log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', eventType: 'document.saved', documentId: 'youtube:v1' }));
+    log.record(event('2026-10-15T01:02:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', severity: 'warning', eventType: 'job.retry_scheduled' }));
     log.record(event('2026-10-15T01:03:00.000Z', { jobId: 'other', severity: 'error', eventType: 'job.failed', subscriptionId: 'UC2' }));
     log.record(event('2026-10-15T01:04:00.000Z', { jobId: 'again', eventType: 'job.retry_requested', retryOf: 'other' }));
-    log.record(event('2026-10-15T01:05:00.000Z', { eventType: 'subscription.paused', sourceId: 'UC1' }));
+    log.record(event('2026-10-15T01:05:00.000Z', { eventType: 'subscription.paused', sourceId: 'UC1', subscriptionId: 'UC1' }));
     log.record(event('2026-10-15T01:06:00.000Z', { vaultPath: '/vaults/b', eventType: 'job.started' }));
     log.record(event('2026-10-15T01:07:00.000Z', { vaultPath: null, eventType: 'vault.imported' }));
     const types = async (query: Parameters<ActivityLog['query']>[0], vaultPath: string | null = VAULT) =>

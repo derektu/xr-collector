@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DeviceUpdateStatus, SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
-import { jobRole } from '../core/source-registry.js';
+import { roleOf } from '../core/job-role.js';
 import { Activity } from './Activity.js';
 import { Jobs } from './Jobs.js';
 import { activityStateSearch, type ActivityViewState } from './activity-presentation.js';
@@ -168,7 +168,7 @@ export default function App() {
   const subscribing = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!status.active) return;
-    const current = new Set(status.active.filter((job) => jobRole(job.kind)?.role === 'add').map((job) => job.id));
+    const current = new Set(status.active.filter((job) => roleOf(job) === 'add').map((job) => job.id));
     const missing = [...subscribing.current].filter((id) => !current.has(id));
     for (const id of missing) subscribing.current.delete(id);
     for (const id of missing) {
@@ -229,7 +229,7 @@ export default function App() {
   function added(response: unknown): void {
     setAdding(null);
     const job = (response as { job?: { id?: unknown; kind?: unknown } } | null)?.job;
-    if (typeof job?.kind === 'string' && jobRole(job.kind)?.role === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
+    if (typeof job?.kind === 'string' && roleOf({ kind: job.kind }) === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
   }
   function persist(next: ThemePreference): void {
     setThemePreference(next);

@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
 import { replaceFile } from '../core/json-file.js';
-import { jobRole } from '../core/source-registry.js';
+import { inOwnStep, jobEventSubject } from '../core/job-role.js';
 import type { NoteChange } from '../core/change-feed.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
@@ -87,7 +87,7 @@ export class JobStore {
     if (latestSequence) store.eventSequence = Number(latestSequence);
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
-      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inStep(job) });
+      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(job) });
     }
     if (stopped.length > 0) await store.flush();
     return store;
@@ -142,16 +142,9 @@ export class JobStore {
     this.noteChange({ kind: 'job', id: job.id, parentId: job.parentId, state: 'interrupted' });
     // A crash is the only unexpected interruption. Shutdowns and Vault operations resume normally.
     const planned = options.stop !== 'crash';
-    const role = jobRole(job.kind)?.role;
     this.event({
-      severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message,
-      vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id, ...(job.phase ? { phase: job.phase } : {}),
-      ...(role ? { jobRole: role } : {}), sourceType: job.source.type,
-      ...(job.source.id ? { sourceId: job.source.id } : {}),
-      ...(job.source.title ? { sourceTitle: job.source.title } : {}),
-      ...(job.parentId ? { parentJobId: job.parentId } : {}),
-      ...(job.scope ? { trigger: job.scope.trigger } : {}),
-      ...(job.scope && role === 'check' && job.source.id ? { subscriptionId: job.source.id } : {}),
+      severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message, ...(job.phase ? { phase: job.phase } : {}),
+      ...jobEventSubject(job, (id) => this.jobs.get(id)),
     });
     this.scheduleFlush();
   }
@@ -236,20 +229,6 @@ export class JobStore {
 
 function belongsTo(job: CollectionJob, vaultPath: string, vaultId: string | null): boolean {
   return job.vaultPath === vaultPath && (job.vaultId ?? null) === vaultId;
-}
-
-/**
- * True for a job that was doing its own work: capturing, saving or indexing an item, discovering a
- * subscription's items or resolving a subscription address. A check job past discovery only waits
- * for its items. A job of an unregistered source type counts as doing its own work in any phase.
- */
-function inStep(job: CollectionJob): boolean {
-  if (job.state !== 'running') return false;
-  const role = jobRole(job.kind)?.role;
-  if (role === 'item') return job.phase === 'capture' || job.phase === 'save' || job.phase === 'index';
-  if (role === 'check') return job.phase === 'discover';
-  if (role === 'add') return job.phase === 'resolve';
-  return job.phase !== null;
 }
 
 function parseJobs(contents: string): CollectionJob[] | null {
