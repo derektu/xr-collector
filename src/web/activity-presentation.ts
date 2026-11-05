@@ -1,6 +1,6 @@
-import type { ActivityLogHealth, ActivityQuery, JobView, JobEvent } from '../core/types.js';
-import { jobRole } from '../core/source-registry.js';
-import { jobKindLabel, jobTitle } from './job-presentation.js';
+import type { ActivityLogHealth, ActivityQuery, JobError, JobPhase, JobState, JobView, JobEvent } from '../core/types.js';
+import { COLLECTION_COMPLETED } from '../core/job-completion.js';
+import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
 
 export type ActivityRecordType = 'all' | 'documents';
 export type ActivityMinLevel = 'debug' | 'info' | 'warning' | 'error';
@@ -100,23 +100,54 @@ export function eventLevel(event: Pick<JobEvent, 'severity'>): EventLevel {
 }
 
 /**
+ * What a log line says. `source` is the source's title that leads the line; a plain message that
+ * already names its source keeps its own wording and has none. `adding` marks a subscription
+ * request. `collected` is a completion whose message opens with the job manager's
+ * `COLLECTION_COMPLETED`, with the rest of that message as `detail`; any other completion keeps its
+ * message.
+ */
+export type EventLine =
+  | { line: 'accepted' | 'started'; source: string | null; adding: boolean }
+  | { line: 'document_saved' | 'subscribed'; source: string | null }
+  | { line: 'subscription_added'; source: string | null }
+  | { line: 'collected'; source: string | null; detail: string }
+  | { line: 'failed' | 'completed' | 'message'; source: string | null; message: string };
+
+export function eventLine(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole'>): EventLine {
+  const source = event.sourceTitle || null;
+  const adding = event.jobRole === 'add';
+  switch (event.eventType) {
+    case 'job.accepted': return { line: 'accepted', source, adding };
+    case 'job.started': return { line: 'started', source, adding };
+    case 'document.saved': return { line: 'document_saved', source };
+    case 'subscription.added': return { line: 'subscription_added', source };
+    case 'job.failed': return { line: 'failed', source, message: event.message };
+    case 'job.completed':
+      if (adding) return { line: 'subscribed', source };
+      return event.message.startsWith(COLLECTION_COMPLETED)
+        ? { line: 'collected', source, detail: event.message.slice(COLLECTION_COMPLETED.length) }
+        : { line: 'completed', source, message: event.message };
+    default: return { line: 'message', source: source && !event.message.includes(source) ? source : null, message: event.message };
+  }
+}
+
+/**
  * The log line: the source's title, the reason a channel job started it, then the message. A message
  * that already names the source, such as a subscription change, keeps its own wording.
  */
 export function eventText(event: Pick<JobEvent, 'sourceTitle' | 'eventType' | 'message' | 'jobRole'>): string {
-  const prefix = event.sourceTitle ? `${event.sourceTitle}：` : '';
-  switch (event.eventType) {
-    case 'job.accepted': return event.jobRole === 'add' ? `${prefix}訂閱請求已排入佇列。` : `${prefix}加入收集佇列。`;
-    case 'job.started': return event.jobRole === 'add' ? `${prefix}開始新增訂閱。` : `${prefix}開始收集。`;
-    case 'document.saved': return `${prefix}已新增文件。`;
-    case 'subscription.added': return `新增訂閱${event.sourceTitle ? `：${event.sourceTitle}` : ''}。`;
-    case 'job.failed': return `${prefix}發生錯誤：${event.message}`;
-    case 'job.completed': {
-      if (event.jobRole === 'add') return `${prefix}已新增訂閱。`;
-      const completed = event.message.replace(/^收集完成，文件已保存/u, '完成收集').replace(/^收集完成/u, '完成收集');
-      return `${prefix}${completed}`;
-    }
-    default: return `${event.sourceTitle && !event.message.includes(event.sourceTitle) ? prefix : ''}${event.message}`;
+  const line = eventLine(event);
+  const prefix = line.source ? `${line.source}：` : '';
+  switch (line.line) {
+    case 'accepted': return line.adding ? `${prefix}訂閱請求已排入佇列。` : `${prefix}加入收集佇列。`;
+    case 'started': return line.adding ? `${prefix}開始新增訂閱。` : `${prefix}開始收集。`;
+    case 'document_saved': return `${prefix}已新增文件。`;
+    case 'subscription_added': return `新增訂閱${line.source ? `：${line.source}` : ''}。`;
+    case 'failed': return `${prefix}發生錯誤：${line.message}`;
+    case 'subscribed': return `${prefix}已新增訂閱。`;
+    case 'collected': return `${prefix}完成收集${line.detail}`;
+    case 'completed': return `${prefix}${line.message}`;
+    case 'message': return `${prefix}${line.message}`;
   }
 }
 
@@ -136,43 +167,98 @@ export function summaryRange(first: string, last: string): string {
   return `${logTime(first)}–${logTime(last)}`;
 }
 
+/** Why the log may miss events: writes fail with events waiting (`dropped` null while none were lost), or some were lost earlier. */
+export type LogProblem = { state: 'failing'; pending: number; dropped: number | null } | { state: 'lost'; dropped: number };
+
+export function logProblem(health: ActivityLogHealth | null): LogProblem | null {
+  if (!health) return null;
+  if (health.state === 'failing') return { state: 'failing', pending: health.pending, dropped: health.dropped > 0 ? health.dropped : null };
+  if (health.dropped > 0) return { state: 'lost', dropped: health.dropped };
+  return null;
+}
+
 /** The warning above the log while events cannot be written, or after some were lost. */
 export function logWarning(health: ActivityLogHealth | null): string | null {
-  if (!health) return null;
-  if (health.state === 'failing') {
-    return `記錄暫時無法寫入，${health.pending} 筆記錄等待補寫${health.dropped > 0 ? `，${health.dropped} 筆已遺失` : ''}。`;
+  const problem = logProblem(health);
+  if (!problem) return null;
+  if (problem.state === 'failing') {
+    return `記錄暫時無法寫入，${problem.pending} 筆記錄等待補寫${problem.dropped !== null ? `，${problem.dropped} 筆已遺失` : ''}。`;
   }
-  if (health.dropped > 0) return `有 ${health.dropped} 筆記錄未能寫入而遺失。`;
-  return null;
+  return `有 ${problem.dropped} 筆記錄未能寫入而遺失。`;
 }
 
 /** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
 export function jobBadge(job: JobView): string {
-  return jobRole(job.kind)?.role === 'item' ? '單篇' : jobKindLabel(job);
+  return jobKind(job).kind === 'item' ? '單篇' : jobKindLabel(job);
+}
+
+/** A job's diagnostics as data: its record, what is known of failures, retries and restarts, and its events oldest first. */
+export interface Diagnostics {
+  id: string;
+  kind: string;
+  url: string;
+  state: JobState;
+  phase: JobPhase | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: JobError | null;
+  retry: { attempts: number; maxAttempts: number } | null;
+  resumedCount: number | null;
+  retryOf: string | null;
+  retriedBy: string | null;
+  events: Array<{ timestamp: string; level: EventLevel; eventType: string; errorCode: string | null; message: string; detail: string[] }>;
+}
+
+export function diagnostics(job: JobView, events: JobEvent[]): Diagnostics {
+  return {
+    id: job.id,
+    kind: job.kind,
+    url: job.source.url,
+    state: job.state,
+    phase: job.phase,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    error: job.error ?? null,
+    retry: job.retry ? { attempts: job.retry.attempts, maxAttempts: job.retry.maxAttempts } : null,
+    resumedCount: job.recovery ? job.recovery.resumedCount : null,
+    retryOf: job.retryOf || null,
+    retriedBy: job.retriedBy || null,
+    events: [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).map((event) => ({
+      timestamp: event.timestamp,
+      level: eventLevel(event),
+      eventType: event.eventType,
+      errorCode: event.errorCode || null,
+      message: event.message,
+      detail: event.detail ? event.detail.split('\n') : [],
+    })),
+  };
 }
 
 /** Plain-text diagnostics of a job for a bug report; event text is already masked by the service. */
 export function diagnosticsText(job: JobView, events: JobEvent[]): string {
+  const data = diagnostics(job, events);
   const lines = [
     'XR Collector 工作診斷資訊',
-    `工作：${job.id}`,
-    `類型：${jobBadge(job)}（${job.kind}）`,
+    `工作：${data.id}`,
+    `類型：${jobBadge(job)}（${data.kind}）`,
     `對象：${jobTitle(job)}`,
-    `網址：${job.source.url}`,
-    `狀態：${job.state}${job.phase ? `／${job.phase}` : ''}`,
-    `建立：${job.createdAt}`,
-    `開始：${job.startedAt ?? '—'}`,
-    `結束：${job.finishedAt ?? '—'}`,
+    `網址：${data.url}`,
+    `狀態：${data.state}${data.phase ? `／${data.phase}` : ''}`,
+    `建立：${data.createdAt}`,
+    `開始：${data.startedAt ?? '—'}`,
+    `結束：${data.finishedAt ?? '—'}`,
   ];
-  if (job.error) lines.push(`錯誤：${job.error.code}：${job.error.message}`);
-  if (job.retry) lines.push(`自動重試：已嘗試 ${job.retry.attempts}／${job.retry.maxAttempts} 次`);
-  if (job.recovery) lines.push(`重新啟動後接續：${job.recovery.resumedCount} 次`);
-  if (job.retryOf) lines.push(`重試自：${job.retryOf}`);
-  if (job.retriedBy) lines.push(`已重試為：${job.retriedBy}`);
+  if (data.error) lines.push(`錯誤：${data.error.code}：${data.error.message}`);
+  if (data.retry) lines.push(`自動重試：已嘗試 ${data.retry.attempts}／${data.retry.maxAttempts} 次`);
+  if (data.resumedCount !== null) lines.push(`重新啟動後接續：${data.resumedCount} 次`);
+  if (data.retryOf) lines.push(`重試自：${data.retryOf}`);
+  if (data.retriedBy) lines.push(`已重試為：${data.retriedBy}`);
   lines.push('', '記錄：');
-  for (const event of [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp))) {
-    lines.push(`${event.timestamp} ${eventLevel(event)} ${event.eventType}${event.errorCode ? ` [${event.errorCode}]` : ''} ${event.message}`);
-    if (event.detail) lines.push(...event.detail.split('\n').map((line) => `    ${line}`));
+  for (const event of data.events) {
+    lines.push(`${event.timestamp} ${event.level} ${event.eventType}${event.errorCode ? ` [${event.errorCode}]` : ''} ${event.message}`);
+    lines.push(...event.detail.map((line) => `    ${line}`));
   }
   return lines.join('\n');
 }

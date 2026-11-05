@@ -7,8 +7,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
-import { menuStaleAfter, trayMenu } from '../../src/electron/tray-menu.js';
-import type { TrayMenu } from '../../src/electron/tray-menu.js';
+import { menuStaleAfter, trayModel } from '../../src/electron/tray-menu.js';
+import type { TrayModel } from '../../src/electron/tray-menu.js';
 import type { AutoPauseNotification } from '../../src/notifications/types.js';
 
 const now = new Date('2026-10-24T10:24:00+08:00');
@@ -23,15 +23,18 @@ const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionSc
 });
 const update = (overrides: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus => ({ phase: 'up_to_date', currentVersion: '0.1.0',
   target: 'darwin-arm64', installerAvailable: true, offer: null, ready: null, lastAttempt: null, progress: null,
-  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '已是最新版。', errorCode: null, ...overrides });
+  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '', errorCode: null, ...overrides });
 
-const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
-const actions = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'action' ? [item.label] : []);
+const status = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
+const actions = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'action' ? [item.action] : []);
+const action = (menu: TrayModel, id: string) => menu.items.find((item) => item.kind === 'action' && item.action === id);
 const alert = (id: string, title: string): AutoPauseNotification => ({
   id, title, vaultId: 'vault', sourceType: 'youtube', subscriptionId: id, failureCount: 5,
-  error: { code: 'network_error', message: '無法連線' }, autoPausedAt: `2026-10-24T0${id.length}:00:00.000Z`,
+  error: { code: 'network_error', message: 'unreachable' }, autoPausedAt: `2026-10-24T0${id.length}:00:00.000Z`,
   delivery: 'attempted', deliveryMessage: null,
 });
+const offline = { state: 'offline' as const, checkedAt: '2026-10-24T02:20:00.000Z' };
+const quiet = { attention: 0, work: null, newVersion: null };
 
 describe('tray menu (#32 T1)', () => {
   const timeZone = process.env.TZ;
@@ -39,83 +42,89 @@ describe('tray menu (#32 T1)', () => {
   afterEach(() => { process.env.TZ = timeZone; });
 
   it('offers only opening and quitting while no Vault is open', () => {
-    const menu = trayMenu(null, now);
-    expect(menu).toMatchObject({ icon: 'idle', tooltip: 'XR Collector' });
+    const menu = trayModel(null, now);
+    expect(menu).toMatchObject({ icon: 'idle', tooltip: quiet });
     expect(status(menu)).toEqual([]);
-    expect(actions(menu)).toEqual(['開啟 XR Collector', '結束 XR Collector']);
+    expect(actions(menu)).toEqual(['open', 'quit']);
   });
 
   it('shows when the next check runs while idle, today, tomorrow or later', () => {
-    const menu = trayMenu({ overview: overview(), schedule: schedule() }, now);
-    expect(menu).toMatchObject({ icon: 'idle', tooltip: 'XR Collector' });
-    expect(status(menu)).toEqual(['沒有進行中的工作', '下次檢查 18:52']);
-    expect(actions(menu)).toEqual(['開啟 XR Collector', '立即檢查所有訂閱', '自動檢查', '工作', '記錄', '結束 XR Collector']);
-    expect(menu.items).toContainEqual({ kind: 'action', action: 'toggle_auto_check', label: '自動檢查', checked: true });
-    const at = (value: string) => status(trayMenu({ overview: overview(), schedule: schedule({ nextCheck: { type: 'youtube', subscriptionId: 's', title: 'A', at: value } }) }, now))[1];
-    expect(at('2026-10-25T08:00:00+08:00')).toBe('下次檢查 明天 08:00');
-    expect(at('2026-10-26T08:00:00+08:00')).toBe('下次檢查 10-26 08:00');
-    expect(status(trayMenu({ overview: overview(), schedule: schedule({ nextCheck: null }) }, now))).toEqual(['沒有進行中的工作']);
+    const menu = trayModel({ overview: overview(), schedule: schedule() }, now);
+    expect(menu).toMatchObject({ icon: 'idle', tooltip: quiet });
+    expect(status(menu)).toEqual([{ text: 'no_work' }, { text: 'next_check', at: { day: 'today', time: '18:52' } }]);
+    expect(actions(menu)).toEqual(['open', 'check_now', 'toggle_auto_check', 'jobs', 'activity', 'quit']);
+    expect(action(menu, 'toggle_auto_check')).toMatchObject({ checked: true });
+    const at = (value: string) => status(trayModel({ overview: overview(), schedule: schedule({ nextCheck: { type: 'youtube', subscriptionId: 's', title: 'A', at: value } }) }, now))[1];
+    expect(at('2026-10-24T09:00:00+08:00')).toEqual({ text: 'next_check', at: { day: 'today', time: '09:00' } });
+    expect(at('2026-10-25T08:00:00+08:00')).toEqual({ text: 'next_check', at: { day: 'tomorrow', time: '08:00' } });
+    expect(at('2026-10-26T08:00:00+08:00')).toEqual({ text: 'next_check', at: { day: 'later', date: '10-26', time: '08:00' } });
+    expect(status(trayModel({ overview: overview(), schedule: schedule({ nextCheck: null }) }, now))).toEqual([{ text: 'no_work' }]);
   });
 
   it('says automatic checks are off, with its own icon and an unchecked switch', () => {
-    const menu = trayMenu({ overview: overview(), schedule: schedule({ enabled: false, status: 'paused', nextCheck: null }) }, now);
-    expect(menu).toMatchObject({ icon: 'auto_check_off', tooltip: 'XR Collector・自動檢查已關閉' });
-    expect(status(menu)).toEqual(['沒有進行中的工作', '自動檢查已關閉']);
-    expect(menu.items).toContainEqual({ kind: 'action', action: 'toggle_auto_check', label: '自動檢查', checked: false });
+    const menu = trayModel({ overview: overview(), schedule: schedule({ enabled: false, status: 'paused', nextCheck: null }) }, now);
+    expect(menu).toMatchObject({ icon: 'auto_check_off', tooltip: { attention: 0, work: { state: 'auto_check_off' } } });
+    expect(status(menu)).toEqual([{ text: 'no_work' }, { text: 'auto_check_off' }]);
+    expect(action(menu, 'toggle_auto_check')).toMatchObject({ checked: false });
   });
 
   it('names the running work with its progress, and counts the queue', () => {
     const running = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
-    const menu = trayMenu({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule({ enabled: false }) }, now);
-    expect(menu).toMatchObject({ icon: 'collecting', tooltip: 'XR Collector・收集中 3/10' });
-    expect(status(menu)).toEqual(['正在收集：Acquired　3/10', '排隊中 2 項']);
+    const menu = trayModel({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule({ enabled: false }) }, now);
+    expect(menu).toMatchObject({ icon: 'collecting', tooltip: { work: { state: 'collecting', progress: { done: 3, total: 10 } } } });
+    expect(status(menu)).toEqual([
+      { text: 'running', activity: 'collecting', name: running.title, progress: { done: 3, total: 10 } },
+      { text: 'queued', count: 2 },
+    ]);
   });
 
   it('describes a check that is listing, work waiting for a retry, untitled work, and work that only waits', () => {
-    const line = (running: JobOverviewEntry[], queued: JobOverviewEntry[] = []) => status(trayMenu({ overview: overview({ running, queued }), schedule: schedule() }, now));
-    expect(line([entry({ status: { state: 'checking' } })])).toEqual(['正在檢查：Acquired']);
-    expect(line([entry({ status: { state: 'retrying', at: '2026-10-24T10:30:00+08:00', cause: { reason: 'rate_limited' } } })])).toEqual(['等待重試：Acquired']);
-    expect(line([entry({ role: 'item', title: null, url: 'https://www.youtube.com/watch?v=dQ8vR2kLm4E', status: { state: 'downloading' } })])).toEqual(['正在收集：youtube.com/watch?v=dQ8vR2kLm4E']);
-    const queuedOnly = trayMenu({ overview: overview({ queued: [entry({})] }), schedule: schedule() }, now);
-    expect(queuedOnly).toMatchObject({ icon: 'collecting', tooltip: 'XR Collector・收集中' });
-    expect(status(queuedOnly)).toEqual(['排隊中 1 項']);
+    const line = (running: JobOverviewEntry[], queued: JobOverviewEntry[] = []) => status(trayModel({ overview: overview({ running, queued }), schedule: schedule() }, now));
+    expect(line([entry({ status: { state: 'checking' } })])).toEqual([{ text: 'running', activity: 'checking', name: 'Acquired', progress: null }]);
+    expect(line([entry({ status: { state: 'checking' }, progress: { done: 1, total: 2 } })])).toEqual([{ text: 'running', activity: 'collecting', name: 'Acquired', progress: { done: 1, total: 2 } }]);
+    expect(line([entry({ status: { state: 'retrying', at: '2026-10-24T10:30:00+08:00', cause: { reason: 'rate_limited' } }, progress: { done: 1, total: 2 } })]))
+      .toEqual([{ text: 'running', activity: 'retrying', name: 'Acquired', progress: null }]);
+    expect(line([entry({ role: 'item', title: null, url: 'https://www.youtube.com/watch?v=dQ8vR2kLm4E', status: { state: 'downloading' } })]))
+      .toEqual([{ text: 'running', activity: 'collecting', name: 'youtube.com/watch?v=dQ8vR2kLm4E', progress: null }]);
+    const queuedOnly = trayModel({ overview: overview({ queued: [entry({})] }), schedule: schedule() }, now);
+    expect(queuedOnly).toMatchObject({ icon: 'collecting', tooltip: { work: { state: 'collecting', progress: null } } });
+    expect(status(queuedOnly)).toEqual([{ text: 'queued', count: 1 }]);
   });
 
   it('shows the offline icon and says what resumes once the network is back (#128, #179)', () => {
-    const offline = { state: 'offline' as const, checkedAt: '2026-10-24T02:20:00.000Z' };
-    const idle = trayMenu({ overview: overview(), schedule: schedule({ connectivity: offline }) }, now);
-    expect(idle).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
-    expect(status(idle)).toEqual(['目前沒有網路', '恢復後自動檢查']);
-    const off = trayMenu({ overview: overview(), schedule: schedule({ enabled: false, connectivity: offline }) }, now);
-    expect(off).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
-    expect(status(off)).toEqual(['目前沒有網路', '自動檢查已關閉']);
+    const idle = trayModel({ overview: overview(), schedule: schedule({ connectivity: offline }) }, now);
+    expect(idle).toMatchObject({ icon: 'offline', tooltip: { work: { state: 'offline' } } });
+    expect(status(idle)).toEqual([{ text: 'offline' }, { text: 'check_on_reconnect' }]);
+    const off = trayModel({ overview: overview(), schedule: schedule({ enabled: false, connectivity: offline }) }, now);
+    expect(off).toMatchObject({ icon: 'offline', tooltip: { work: { state: 'offline' } } });
+    expect(status(off)).toEqual([{ text: 'offline' }, { text: 'auto_check_off' }]);
     const running = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
-    const waiting = trayMenu({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule({ connectivity: offline }) }, now);
-    expect(waiting).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
-    expect(status(waiting)).toEqual(['目前沒有網路', '3 項工作等待中，恢復後自動接續']);
-    expect(actions(waiting)).toContain('立即檢查所有訂閱');
-    const back = trayMenu({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule() }, now);
-    expect(back).toMatchObject({ icon: 'collecting', tooltip: 'XR Collector・收集中 3/10' });
-    expect(status(back)).toEqual(['正在收集：Acquired　3/10', '排隊中 2 項']);
+    const waiting = trayModel({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule({ connectivity: offline }) }, now);
+    expect(waiting).toMatchObject({ icon: 'offline', tooltip: { work: { state: 'offline' } } });
+    expect(status(waiting)).toEqual([{ text: 'offline' }, { text: 'offline_waiting', waiting: 3 }]);
+    expect(actions(waiting)).toContain('check_now');
+    const back = trayModel({ overview: overview({ running: [running], queued: [entry({}), entry({})] }), schedule: schedule() }, now);
+    expect(back).toMatchObject({ icon: 'collecting', tooltip: { work: { state: 'collecting', progress: { done: 3, total: 10 } } } });
+    expect(status(back)).toEqual([{ text: 'running', activity: 'collecting', name: 'Acquired', progress: { done: 3, total: 10 } }, { text: 'queued', count: 2 }]);
   });
 
   it('ranks offline below attention and above an available update, without an update badge (#179)', () => {
-    const offline = schedule({ connectivity: { state: 'offline', checkedAt: '2026-10-24T02:20:00.000Z' } });
     const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
-    const withAttention = trayMenu({ overview: overview({ queued: [entry({})] }), schedule: offline, actionable: [alert('a', 'A')], update: offered }, now);
-    expect(withAttention).toMatchObject({ icon: 'attention', tooltip: 'XR Collector・1 個訂閱需要處理・沒有網路' });
+    const withAttention = trayModel({ overview: overview({ queued: [entry({})] }), schedule: schedule({ connectivity: offline }), actionable: [alert('a', 'A')], update: offered }, now);
+    expect(withAttention).toMatchObject({ icon: 'attention', tooltip: { attention: 1, work: { state: 'offline' }, newVersion: null } });
     expect(withAttention.updateBadge).toBeUndefined();
-    expect(status(withAttention).slice(0, 2)).toEqual(['目前沒有網路', '1 項工作等待中，恢復後自動接續']);
-    const withUpdate = trayMenu({ overview: overview(), schedule: offline, updateAvailable: true, update: offered }, now);
-    expect(withUpdate).toMatchObject({ icon: 'offline', tooltip: 'XR Collector・沒有網路' });
+    expect(status(withAttention).slice(0, 2)).toEqual([{ text: 'offline' }, { text: 'offline_waiting', waiting: 1 }]);
+    const withUpdate = trayModel({ overview: overview(), schedule: schedule({ connectivity: offline }), updateAvailable: true, update: offered }, now);
+    expect(withUpdate).toMatchObject({ icon: 'offline', tooltip: { work: { state: 'offline' }, newVersion: null } });
     expect(withUpdate.updateBadge).toBeUndefined();
-    expect(actions(withUpdate)).toContain('App 更新：可下載 0.1.1');
+    expect(action(withUpdate, 'check_app_update')).toMatchObject({ label: { text: 'app_update', phase: 'available', version: '0.1.1' } });
   });
 
   it('counts failed work on the jobs item', () => {
-    const failed = entry({ status: null, error: { code: 'not_found', message: '影片不存在' }, failedAt: '2026-10-24T09:00:00+08:00' });
-    const menu = trayMenu({ overview: overview({ failed: [failed, failed] }), schedule: schedule() }, now);
-    expect(menu.items).toContainEqual({ kind: 'action', action: 'jobs', label: '工作（2 項失敗）' });
+    const failed = entry({ status: null, error: { code: 'not_found', message: 'gone' }, failedAt: '2026-10-24T09:00:00+08:00' });
+    const menu = trayModel({ overview: overview({ failed: [failed, failed] }), schedule: schedule() }, now);
+    expect(action(menu, 'jobs')).toMatchObject({ label: { text: 'jobs', failed: 2 } });
+    expect(action(trayModel({ overview: overview(), schedule: schedule() }, now), 'jobs')).toMatchObject({ label: { text: 'jobs', failed: 0 } });
     expect(menu.icon).toBe('idle');
   });
 
@@ -127,56 +136,65 @@ describe('tray menu (#32 T1)', () => {
       { overview: overview(), schedule: schedule({ enabled: false }), icon: 'auto_check_off' },
     ] as const;
     for (const state of cases) {
-      const menu = trayMenu({ ...state, update: available }, now);
+      const menu = trayModel({ ...state, update: available }, now);
       expect(menu.icon).toBe(state.icon);
       expect(menu.updateBadge).toBe(true);
-      expect(menu.tooltip).toContain('有新版本 0.1.1');
-      expect(actions(menu)).toContain('App 更新：可下載 0.1.1');
-      expect(actions(menu)).toContain('結束 XR Collector');
+      expect(menu.tooltip.newVersion).toBe('0.1.1');
+      expect(action(menu, 'check_app_update')).toMatchObject({ label: { text: 'app_update', phase: 'available', version: '0.1.1' } });
+      expect(actions(menu).at(-1)).toBe('quit');
     }
-    expect(trayMenu({ update: available }, now).updateBadge).toBe(true);
-    expect(trayMenu({ update: update() }, now).updateBadge).toBeUndefined();
-    expect(trayMenu({ update: update({ phase: 'ready', ready: { version: '0.1.0' } as DeviceUpdateStatus['ready'] }) }, now).updateBadge).toBeUndefined();
+    expect(trayModel({ update: available }, now).updateBadge).toBe(true);
+    expect(trayModel({ update: update() }, now).updateBadge).toBeUndefined();
+    expect(trayModel({ update: update({ phase: 'ready', ready: { version: '0.1.0' } as DeviceUpdateStatus['ready'] }) }, now).updateBadge).toBeUndefined();
   });
 
   it('puts App version and its distinct update action immediately before Quit', () => {
-    const menu = trayMenu({ overview: overview(), schedule: schedule(), update: update() }, now);
-    expect(status(menu).at(-1)).toBe('版本 0.1.0');
-    expect(actions(menu).slice(-2)).toEqual(['檢查 App 更新', '結束 XR Collector']);
-    const withoutVault = trayMenu({ update: update() }, now);
-    expect(actions(withoutVault)).toEqual(['開啟 XR Collector', '檢查 App 更新', '結束 XR Collector']);
+    const menu = trayModel({ overview: overview(), schedule: schedule(), update: update() }, now);
+    expect(status(menu).at(-1)).toEqual({ text: 'app_version', version: '0.1.0' });
+    expect(actions(menu).slice(-2)).toEqual(['check_app_update', 'quit']);
+    expect(actions(trayModel({ update: update() }, now))).toEqual(['open', 'check_app_update', 'quit']);
   });
 
   it('describes each active App update phase without starting another check', () => {
-    const labels = (value: Partial<DeviceUpdateStatus>) => actions(trayMenu({ update: update(value) }, now))[1];
-    expect(labels({ phase: 'downloading', progress: { transferred: 62, total: 100 } })).toBe('App 更新：下載中 62%');
-    expect(labels({ phase: 'ready', ready: { version: '0.1.1' } as DeviceUpdateStatus['ready'] })).toBe('App 更新：已下載待安裝 0.1.1');
-    expect(labels({ phase: 'waiting' })).toBe('App 更新：等待工作完成');
-    expect(labels({ phase: 'installing' })).toBe('App 更新：安裝中');
-    expect(labels({ phase: 'error', errorCode: 'update_failed' })).toBe('App 更新：錯誤');
+    const label = (value: Partial<DeviceUpdateStatus>) => action(trayModel({ update: update(value) }, now), 'check_app_update');
+    const offer = { version: '0.1.1' } as DeviceUpdateStatus['offer'];
+    const progress = { transferred: 62, total: 100, percent: 62 };
+    expect(label({ phase: 'downloading', offer, progress })).toMatchObject({ label: { phase: 'downloading', version: null, percent: 62 } });
+    expect(label({ phase: 'downloading', progress: { transferred: 0, total: 0, percent: 0 } })).toMatchObject({ label: { phase: 'downloading', percent: null } });
+    expect(label({ phase: 'ready', ready: offer, progress })).toMatchObject({ label: { phase: 'ready', version: '0.1.1', percent: null } });
+    expect(label({ phase: 'available', offer })).toMatchObject({ label: { phase: 'available', version: '0.1.1' } });
+    expect(label({ phase: 'available' })).toMatchObject({ label: { phase: 'available', version: null } });
+    expect(label({ phase: 'waiting', ready: offer })).toMatchObject({ label: { phase: 'waiting', version: null, percent: null } });
+    expect(label({ phase: 'error', errorCode: 'update_failed' })).toMatchObject({ label: { phase: 'error' } });
   });
 
   it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational and future update icons (#136)', () => {
     const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true, updateAvailable = false) =>
-      trayMenu({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
+      trayModel({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
     expect(make([]).items.some((item) => item.kind === 'submenu')).toBe(false);
     const one = make([alert('a', 'A')], {}, false, true);
     expect(one.icon).toBe('attention');
-    expect(one.tooltip).toContain('自動檢查已關閉');
-    expect(one.items).toContainEqual({ kind: 'submenu', label: '需要處理的訂閱（1）', items: [{ action: 'subscription:a', label: 'A' }] });
+    expect(one.tooltip).toEqual({ attention: 1, work: { state: 'auto_check_off' }, newVersion: null });
+    expect(one.items).toContainEqual({ kind: 'submenu', label: { text: 'attention', count: 1 }, items: [{ action: 'subscription:a', label: { text: 'subscription', title: 'A' } }] });
     const busy = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
     const two = make([alert('a', 'A'), alert('bb', 'B')], { running: [busy] }, true, true);
     expect(two.icon).toBe('attention');
-    expect(two.tooltip).toContain('收集中 3/10');
-    expect(two.items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（2）' }));
-    expect(make([alert('bb', 'B')]).items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: '需要處理的訂閱（1）' }));
-    expect(make([], {}, true, true).icon).toBe('update_available');
+    expect(two.tooltip).toEqual({ attention: 2, work: { state: 'collecting', progress: { done: 3, total: 10 } }, newVersion: null });
+    expect(two.items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: { text: 'attention', count: 2 } }));
+    expect(make([alert('bb', 'B')]).tooltip).toEqual({ attention: 1, work: { state: 'idle' }, newVersion: null });
+    expect(make([], {}, true, true)).toMatchObject({ icon: 'update_available', tooltip: quiet });
+    expect(make([], { running: [busy] }, true, true)).toMatchObject({ icon: 'update_available', tooltip: quiet });
     expect(make([]).icon).toBe('idle');
     const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
-    const attentionWithUpdate = trayMenu({ overview: overview(), schedule: schedule(), actionable: [alert('a', 'A')], update: offered }, now);
+    const attentionWithUpdate = trayModel({ overview: overview(), schedule: schedule(), actionable: [alert('a', 'A')], update: offered }, now);
     expect(attentionWithUpdate.icon).toBe('attention');
     expect(attentionWithUpdate.updateBadge).toBeUndefined();
-    expect(actions(attentionWithUpdate)).toContain('App 更新：可下載 0.1.1');
+    expect(actions(attentionWithUpdate)).toContain('check_app_update');
+  });
+
+  it('counts subscriptions that need attention while the Vault\'s work is unknown', () => {
+    expect(trayModel({ actionable: [alert('a', 'A'), alert('b', 'B')] }, now)).toMatchObject({ icon: 'attention', tooltip: { attention: 2, work: null } });
+    expect(trayModel({ updateAvailable: true }, now)).toMatchObject({ icon: 'update_available', tooltip: quiet });
   });
 });
 

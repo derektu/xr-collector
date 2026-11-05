@@ -1,15 +1,9 @@
-// How a collection job reads in the window: what it saved and indexed, a channel's phase, progress
-// and skipped work, why a channel job ran, failures by their message, and whether it resumed after
+// How a collection job reads in the window: what it saved and indexed, a channel's step, progress
+// and skipped work, why a channel job ran, failures with their error, and whether it resumed after
 // a restart.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../src/core/types.js';
-import {
-  jobKindLabel,
-  jobPhaseLabel,
-  jobProgressLabel,
-  jobResultLabel,
-  recoveryLabel,
-} from '../../src/web/job-presentation.js';
+import { jobKind, jobProgress, jobResult, jobStep, recovery } from '../../src/web/job-presentation.js';
 
 const originalZone = process.env.TZ;
 beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
@@ -18,47 +12,59 @@ afterEach(() => { process.env.TZ = originalZone; });
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
     id: 'job-1', kind: 'youtube.video', state: 'completed', phase: 'index', vaultPath: '/vault', parentId: null,
-    source: { type: 'youtube', id: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk', title: '影片' },
+    source: { type: 'youtube', id: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'Video' },
     createdAt: '2026-10-15T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-10-15T00:00:00.000Z',
     progress: null, items: null, result: null, error: null, ...overrides,
   };
 }
 
 describe('job presentation', () => {
-  it('states saving and indexing separately for a video', () => {
-    expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toBe('文件已保存・已更新搜尋');
-    expect(jobResultLabel(job({ result: { outcome: 'created', saved: true, indexed: false } }))).toBe('文件已保存，搜尋更新失敗');
-    expect(jobResultLabel(job({ result: { outcome: 'existing', saved: true, indexed: true } }))).toBe('文件已存在・已更新搜尋');
+  it('states saving and indexing separately for an item', () => {
+    expect(jobResult(job({ result: { outcome: 'created', saved: true, indexed: true } }))).toEqual({ result: 'item', stored: 'created', indexed: true });
+    expect(jobResult(job({ result: { outcome: 'created', saved: true, indexed: false } }))).toEqual({ result: 'item', stored: 'created', indexed: false });
+    expect(jobResult(job({ result: { outcome: 'existing', saved: true } }))).toEqual({ result: 'item', stored: 'existing', indexed: false });
+    expect(jobResult(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toEqual({ result: 'skipped', reason: 'out_of_range' });
   });
 
-  it('describes channel progress and failures', () => {
-    const channel = job({
-      kind: 'youtube.channel', state: 'running', phase: 'capture',
-      progress: { total: 10, done: 3, created: 2, existing: 0, failed: 1 },
-    });
-    expect(jobPhaseLabel(channel)).toBe('收集影片');
-    expect(jobProgressLabel(channel)).toBe('已處理 3 / 10（新增 2・已存在 0・失敗 1）');
-    expect(jobResultLabel(job({ state: 'failed', error: { code: 'no_subtitles', message: '這支影片沒有字幕。' } }))).toBe('這支影片沒有字幕。');
-    expect(jobResultLabel(job({ kind: 'youtube.channel', result: { outcome: 'partial' } }))).toBe('部分影片收集失敗');
+  it('states what a check collected and whether a subscription request subscribed', () => {
+    const check = (outcome: 'created' | 'existing' | 'partial' | 'empty' | 'skipped') => jobResult(job({ kind: 'youtube.channel', result: { outcome, skipReason: 'subscription_paused' } }));
+    expect(check('created')).toEqual({ result: 'collected' });
+    expect(check('partial')).toEqual({ result: 'partial' });
+    expect(check('empty')).toEqual({ result: 'nothing_new' });
+    expect(check('existing')).toEqual({ result: 'nothing_new' });
+    expect(check('skipped')).toEqual({ result: 'skipped', reason: 'subscription_paused' });
+    expect(jobResult(job({ kind: 'rss.feed-add', result: { outcome: 'created' } }))).toEqual({ result: 'subscribed' });
+    expect(jobResult(job({ kind: 'rss.feed-add', result: { outcome: 'existing' } }))).toEqual({ result: 'already_subscribed' });
   });
 
-  it('labels channel jobs by why they ran and states skipped work', () => {
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'subscribe' } }))).toBe('首次收集');
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'resume' } }))).toBe('恢復後檢查');
-    expect(jobKindLabel(job({ kind: 'youtube.channel', scope: { trigger: 'manual' } }))).toBe('立即檢查');
-    expect(jobKindLabel(job({ kind: 'youtube.channel' }))).toBe('頻道收集');
-    expect(jobProgressLabel(job({ kind: 'youtube.channel', progress: { total: 3, done: 3, created: 1, existing: 0, failed: 0, skipped: 2 } })))
-      .toBe('已處理 3 / 3（新增 1・已存在 0・略過 2・失敗 0）');
-    expect(jobResultLabel(job({ kind: 'youtube.channel', result: { outcome: 'skipped', skipReason: 'subscription_paused' } }))).toBe('略過：訂閱已暫停');
-    expect(jobResultLabel(job({ result: { outcome: 'skipped', skipReason: 'out_of_range' } }))).toBe('略過：超出收集範圍');
+  it('describes channel steps, progress and failures', () => {
+    const channel = job({ kind: 'youtube.channel', state: 'running', phase: 'capture', progress: { total: 10, done: 3, created: 2, existing: 0, failed: 1 } });
+    expect(jobStep(channel)).toBe('collect_items');
+    expect(jobStep(job({ state: 'running', phase: 'capture' }))).toBe('capture');
+    expect(jobStep(job({ kind: 'youtube.channel', state: 'running', phase: 'discover' }))).toBe('discover');
+    expect(jobStep(job({ kind: 'youtube.channel', state: 'queued', phase: 'capture' }))).toBeNull();
+    expect(jobProgress(channel)).toEqual({ total: 10, done: 3, created: 2, existing: 0, failed: 1, skipped: null });
+    expect(jobProgress(job({ progress: { total: 3, done: 3, created: 1, existing: 0, failed: 0, skipped: 2 } }))).toMatchObject({ skipped: 2 });
+    expect(jobProgress(job({}))).toBeNull();
+    const error = { code: 'no_subtitles', message: 'no subtitles' };
+    expect(jobResult(job({ state: 'failed', error }))).toEqual({ result: 'failed', error });
+    expect(jobResult(job({ state: 'running' }))).toBeNull();
   });
 
+  it('labels channel jobs by why they ran', () => {
+    expect(jobKind(job({ kind: 'youtube.channel', scope: { trigger: 'subscribe' } }))).toEqual({ kind: 'check', trigger: 'subscribe' });
+    expect(jobKind(job({ kind: 'youtube.channel' }))).toEqual({ kind: 'check', trigger: null });
+    expect(jobKind(job({}))).toEqual({ kind: 'item' });
+    expect(jobKind(job({ kind: 'youtube.channel-add' }))).toEqual({ kind: 'subscribe' });
+  });
 
   it('states restarts and their outcome', () => {
-    const recovery = { resumedCount: 1, uncleanStops: 0, lastInterruptedAt: '2026-10-15T06:00:00.000Z', lastResumedAt: '2026-10-15T06:01:00.000Z' };
-    expect(recoveryLabel(job({ state: 'running', recovery }))).toBe('服務重新啟動後已接續');
-    expect(recoveryLabel(job({ state: 'completed', recovery }))).toBe('曾中斷後接續');
-    expect(recoveryLabel(job({ state: 'completed' }))).toBeNull();
-    expect(jobResultLabel(job({ state: 'interrupted', error: { code: 'interrupted', message: '服務停止。' } }))).toBe('已中斷，重新開啟時接續');
+    const resumed = { resumedCount: 1, uncleanStops: 0, lastInterruptedAt: '2026-10-15T06:00:00.000Z', lastResumedAt: '2026-10-15T06:01:00.000Z' };
+    expect(recovery(job({ state: 'running', recovery: resumed }))).toBe('continuing');
+    expect(recovery(job({ state: 'queued', recovery: resumed }))).toBe('continuing');
+    expect(recovery(job({ state: 'completed', recovery: resumed }))).toBe('continued');
+    expect(recovery(job({ state: 'running', recovery: { ...resumed, resumedCount: 0 } }))).toBeNull();
+    expect(recovery(job({ state: 'completed' }))).toBeNull();
+    expect(jobResult(job({ state: 'interrupted', error: { code: 'interrupted', message: 'stopped' } }))).toEqual({ result: 'interrupted' });
   });
 });

@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest';
+import { COLLECTION_COMPLETED } from '../../src/core/job-completion.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
 import {
   activityQuery,
   activityStateSearch,
-  diagnosticsText,
+  diagnostics,
   eventLevel,
-  eventText,
+  eventLine,
   localDayStart,
+  logProblem,
   logTime,
-  logWarning,
   mergeNewest,
   parseActivityState,
   summaryRange,
 } from '../../src/web/activity-presentation.js';
 
-// Activity page wording and filters (A-T11).
+// The Activity page: level labels, what each log line says and whose it is, filters kept in the
+// address and turned into a query, log write problems, check summary ranges, and diagnostics of a
+// job for a bug report (A-T11).
 
-const base = { eventId: 'e1', timestamp: '2026-10-15T06:00:00.000Z', vaultPath: '/v', jobId: 'j1', message: '訊息' } as const;
+const base = { eventId: 'e1', timestamp: '2026-10-15T06:00:00.000Z', vaultPath: '/v', jobId: 'j1', message: 'message' } as const;
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
@@ -35,22 +38,27 @@ describe('activity presentation', () => {
     expect(eventLevel({ severity: 'error' })).toBe('ERROR');
   });
 
-  it('uses explicit lifecycle wording without trigger noise, including subscription requests', () => {
-    expect(eventText({ ...base, eventType: 'job.accepted', sourceTitle: '3Blue1Brown', jobRole: 'check', message: '已接受收集工作。' }))
-      .toBe('3Blue1Brown：加入收集佇列。');
-    expect(eventText({ ...base, eventType: 'job.started', sourceTitle: '3Blue1Brown', jobRole: 'check', message: '開始執行收集工作。' }))
-      .toBe('3Blue1Brown：開始收集。');
-    expect(eventText({ ...base, eventType: 'job.accepted', sourceTitle: '3Blue1Brown', jobRole: 'add', message: '已接受收集工作。' }))
-      .toBe('3Blue1Brown：訂閱請求已排入佇列。');
-    expect(eventText({ ...base, eventType: 'job.started', sourceTitle: '3Blue1Brown', jobRole: 'add', message: '開始執行收集工作。' }))
-      .toBe('3Blue1Brown：開始新增訂閱。');
-    expect(eventText({ ...base, eventType: 'document.saved', sourceTitle: '影片', message: '文件已保存。' }))
-      .toBe('影片：已新增文件。');
-    expect(eventText({ ...base, eventType: 'job.completed', sourceTitle: '影片', jobRole: 'item', message: '收集完成，文件已保存。' }))
-      .toBe('影片：完成收集。');
-    expect(eventText({ ...base, eventType: 'schedule.updated', message: '已暫停自動收集。' })).toBe('已暫停自動收集。');
-    expect(eventText({ ...base, eventType: 'subscription.paused', sourceTitle: '3Blue1Brown', message: '已暫停「3Blue1Brown」。' }))
-      .toBe('已暫停「3Blue1Brown」。');
+  it('leads a line with its source and tells subscription requests from collection', () => {
+    const source = '3Blue1Brown';
+    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'accepted', source, adding: false });
+    expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'started', source, adding: false });
+    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'accepted', source, adding: true });
+    expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: null, jobRole: 'add' })).toEqual({ line: 'started', source: null, adding: true });
+    expect(eventLine({ ...base, eventType: 'document.saved', sourceTitle: source })).toEqual({ line: 'document_saved', source });
+    expect(eventLine({ ...base, eventType: 'subscription.added', sourceTitle: source })).toEqual({ line: 'subscription_added', source });
+    expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source })).toEqual({ line: 'failed', source, message: base.message });
+    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'item' })).toEqual({ line: 'completed', source, message: base.message });
+    const detail = ': 2 new';
+    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'check', message: `${COLLECTION_COMPLETED}${detail}` }))
+      .toEqual({ line: 'collected', source, detail });
+    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: null, jobRole: 'item', message: COLLECTION_COMPLETED }))
+      .toEqual({ line: 'collected', source: null, detail: '' });
+    expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source, message: COLLECTION_COMPLETED })).toMatchObject({ line: 'failed' });
+    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'subscribed', source });
+    expect(eventLine({ ...base, eventType: 'schedule.updated' })).toEqual({ line: 'message', source: null, message: base.message });
+    const naming = `paused ${source}`;
+    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source, message: naming })).toEqual({ line: 'message', source: null, message: naming });
+    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source })).toEqual({ line: 'message', source, message: base.message });
   });
 
   it('keeps filters in the address and turns them into a query with local day bounds', () => {
@@ -68,13 +76,13 @@ describe('activity presentation', () => {
     expect(localDayStart(now).getDate()).toBe(15);
   });
 
-  it('words the log warnings', () => {
-    expect(logWarning(null)).toBeNull();
-    expect(logWarning({ state: 'ok', pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 3 })).toBeNull();
-    expect(logWarning({ state: 'failing', pending: 4, dropped: 0, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))
-      .toBe('記錄暫時無法寫入，4 筆記錄等待補寫。');
-    expect(logWarning({ state: 'ok', pending: 0, dropped: 2, lastFailureAt: 'x', lastError: 'EACCES', skippedLines: 0 }))
-      .toBe('有 2 筆記錄未能寫入而遺失。');
+  it('reports events waiting to be written and events lost', () => {
+    const health = { state: 'ok' as const, pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 3 };
+    expect(logProblem(null)).toBeNull();
+    expect(logProblem(health)).toBeNull();
+    expect(logProblem({ ...health, state: 'failing', pending: 4 })).toEqual({ state: 'failing', pending: 4, dropped: null });
+    expect(logProblem({ ...health, state: 'failing', pending: 4, dropped: 1 })).toEqual({ state: 'failing', pending: 4, dropped: 1 });
+    expect(logProblem({ ...health, dropped: 2 })).toEqual({ state: 'lost', dropped: 2 });
   });
 
   it('shows both dates for a summary spanning local midnight and one time for a singleton', () => {
@@ -85,17 +93,20 @@ describe('activity presentation', () => {
   });
 
   it('builds diagnostics in time order with error codes and masked detail', () => {
-    const failed = job({ state: 'failed', error: { code: 'network_error', message: '無法連線' }, retry: { attempts: 3, maxAttempts: 3, nextAttemptAt: null, lastError: { code: 'network_error', message: '無法連線' } } });
+    const error = { code: 'network_error', message: 'unreachable' };
+    const failed = job({ state: 'failed', error, retry: { attempts: 3, maxAttempts: 3, nextAttemptAt: null, lastError: error } });
     const events: JobEvent[] = [
-      { ...base, eventId: 'b', timestamp: '2026-10-15T05:00:09.000Z', severity: 'error', eventType: 'job.failed', errorCode: 'network_error', message: '無法連線', detail: 'ERROR: timed out\nCookie: [已遮蔽]' },
-      { ...base, eventId: 'a', timestamp: '2026-10-15T05:00:00.000Z', severity: 'info', eventType: 'job.accepted', message: '已接受收集工作。' },
+      { ...base, eventId: 'b', timestamp: '2026-10-15T05:00:09.000Z', severity: 'error', eventType: 'job.failed', errorCode: 'network_error', message: 'unreachable', detail: 'ERROR: timed out\nCookie: [masked]' },
+      { ...base, eventId: 'a', timestamp: '2026-10-15T05:00:00.000Z', severity: 'info', eventType: 'job.accepted', message: 'accepted' },
     ];
-    const text = diagnosticsText(failed, events);
-    expect(text).toContain('工作：job-1');
-    expect(text).toContain('錯誤：network_error：無法連線');
-    expect(text).toContain('自動重試：已嘗試 3／3 次');
-    expect(text.indexOf('job.accepted')).toBeLessThan(text.indexOf('job.failed'));
-    expect(text).toContain('    Cookie: [已遮蔽]');
+    const report = diagnostics(failed, events);
+    expect(report).toMatchObject({ id: 'job-1', state: 'failed', error, retry: { attempts: 3, maxAttempts: 3 }, resumedCount: null, retryOf: null, retriedBy: null });
+    expect(report.events).toEqual([
+      { timestamp: '2026-10-15T05:00:00.000Z', level: 'INFO', eventType: 'job.accepted', errorCode: null, message: 'accepted', detail: [] },
+      { timestamp: '2026-10-15T05:00:09.000Z', level: 'ERROR', eventType: 'job.failed', errorCode: 'network_error', message: 'unreachable', detail: ['ERROR: timed out', 'Cookie: [masked]'] },
+    ]);
+    const resumed = { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: null, lastResumedAt: null };
+    expect(diagnostics(job({ recovery: resumed, retryOf: 'job-0', retriedBy: 'job-2' }), [])).toMatchObject({ resumedCount: 0, retryOf: 'job-0', retriedBy: 'job-2' });
   });
 
   it('adds a fresh first page above loaded entries without repeating any', () => {

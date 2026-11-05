@@ -59,23 +59,43 @@ export interface SourceOptionGroup {
   options: SourceOption[];
 }
 
+/** A source menu entry as data: every document, one source type, or one publisher (marked when its subscription was removed). */
+export type SourceMenuEntry =
+  | { value: string; scope: 'all'; count: number }
+  | { value: string; scope: 'type'; typeLabel: string; count: number }
+  | { value: string; scope: 'publisher'; name: string; removed: boolean; count: number };
+
 /**
  * One grouped menu: every document, then per source type its own "all" entry followed by its
  * publishers. A publisher whose subscription was removed is marked; one only added item by item is not.
  */
+export function sourceMenu(sources: DocumentSources | null): { all: SourceMenuEntry; groups: Array<{ label: string; entries: SourceMenuEntry[] }> } {
+  return {
+    all: { value: '', scope: 'all', count: sources?.total ?? 0 },
+    groups: (sources?.groups ?? []).map((group) => ({
+      label: group.label,
+      entries: [
+        { value: group.sourceType, scope: 'type', typeLabel: group.label, count: group.count },
+        ...group.publishers.map((publisher): SourceMenuEntry => ({
+          value: `${group.sourceType}:${publisher.id ?? 'none'}`, scope: 'publisher', name: publisher.name, removed: publisher.removed, count: publisher.count,
+        })),
+      ],
+    })),
+  };
+}
+
+function sourceMenuText(entry: SourceMenuEntry): string {
+  switch (entry.scope) {
+    case 'all': return `全部（${entry.count}）`;
+    case 'type': return `${entry.typeLabel}・全部（${entry.count}）`;
+    case 'publisher': return `${entry.name}${entry.removed ? '・已移除' : ''}（${entry.count}）`;
+  }
+}
+
 export function sourceOptions(sources: DocumentSources | null): { all: SourceOption; groups: SourceOptionGroup[] } {
-  const all = { value: '', label: `全部（${sources?.total ?? 0}）` };
-  const groups = (sources?.groups ?? []).map((group) => ({
-    label: group.label,
-    options: [
-      { value: group.sourceType, label: `${group.label}・全部（${group.count}）` },
-      ...group.publishers.map((publisher) => ({
-        value: `${group.sourceType}:${publisher.id ?? 'none'}`,
-        label: `${publisher.name}${publisher.removed ? '・已移除' : ''}（${publisher.count}）`,
-      })),
-    ],
-  }));
-  return { all, groups };
+  const menu = sourceMenu(sources);
+  const option = (entry: SourceMenuEntry) => ({ value: entry.value, label: sourceMenuText(entry) });
+  return { all: option(menu.all), groups: menu.groups.map((group) => ({ label: group.label, options: group.entries.map(option) })) };
 }
 
 export function sourceTag(document: DocumentMetadata): string {

@@ -1,41 +1,37 @@
-// How subscriptions read in the window: the summary of what subscribing or resuming will collect,
-// the choices and result of removal with or without documents, and the text and color of every
-// subscription status.
+// How subscriptions read in the window: whether subscribing checks again on its own, the choices
+// and result of removal with or without documents, and every subscription status with its
+// progress, retry time, failures in a row, next check, and color.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Subscription } from '../../src/core/types.js';
-import { asksAboutDocuments, backfillPhrase, removeChoices, removedMessage, resumeSummary, subscribeSummary, subscriptionStatusText, subscriptionStatusTone } from '../../src/web/subscription-presentation.js';
+import {
+  asksAboutDocuments, removalOutcome, removeOptions, subscribePlan, subscriptionStatus, subscriptionStatusTone,
+} from '../../src/web/subscription-presentation.js';
 
 const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
 
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {
-    id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
+    id: 'UC1', title: 'Channel', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
     settings, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, capturing: false, lastError: null, activeJob: null, documentCount: 12, lastCollectedAt: null, ...overrides,
   };
 }
 
 describe('subscription presentation (A6)', () => {
-  it('summarizes subscribing with the settings chosen on the card', () => {
-    expect(subscribeSummary(settings, true, 'youtube'))
-      .toBe('訂閱後立即檢查，之後每 30 分鐘檢查一次；每次檢查收集最近 30 天內最新的 10 支影片，已收集或刪除的不再收集。');
-    expect(subscribeSummary({ intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 }, true, 'youtube'))
-      .toBe('訂閱後立即檢查，之後每 3 小時檢查一次；每次檢查收集最近 14 天內最新的 5 支影片，已收集或刪除的不再收集。');
-    expect(subscribeSummary({ ...settings, intervalMinutes: 1440 }, true, 'youtube')).toContain('之後每天檢查一次；');
-    expect(subscribeSummary(settings, false, 'youtube')).toBe('訂閱後立即檢查，收集最近 30 天內最新的 10 支影片。自動檢查已關閉，開啟後才會定時檢查。');
+  it('checks again at the subscription\'s interval only while automatic checks are on', () => {
+    expect(subscribePlan(settings, true)).toEqual({ autoCheck: true, intervalMinutes: 30 });
+    expect(subscribePlan({ ...settings, intervalMinutes: 1440 }, true)).toEqual({ autoCheck: true, intervalMinutes: 1440 });
+    expect(subscribePlan(settings, false)).toEqual({ autoCheck: false });
   });
 
-  it('words the range of every check, a resume and the removal choices', () => {
-    expect(backfillPhrase({ backfillDays: 7, backfillMaxItems: 5 }, 'youtube')).toBe('最近 7 天內最新的 5 支影片');
-    expect(resumeSummary({ intervalMinutes: 60, backfillDays: 45, backfillMaxItems: 20 }, 'youtube'))
-      .toBe('這個訂閱已暫停。恢復後立即檢查，之後每 1 小時檢查一次；每次檢查收集最近 45 天內最新的 20 支影片，已收集或刪除的不再收集。');
-    expect(removeChoices(subscription())).toEqual([
-      { value: 'keep', label: '保留 12 份文件' },
-      { value: 'delete', label: '一併刪除 12 份文件' },
-    ]);
-    expect(removedMessage('頻道', null)).toBe('已移除「頻道」，文件保留。');
-    expect(removedMessage('頻道', { documentsDeleted: 12, documentsFailed: 0 })).toBe('已移除「頻道」，並刪除 12 份文件。');
-    expect(removedMessage('頻道', { documentsDeleted: 10, documentsFailed: 2 })).toBe('已移除「頻道」，刪除 10 份文件，2 份無法刪除。');
-    expect(removeChoices(subscription({ documentCount: 0 }))).toEqual([{ value: 'keep', label: '保留文件' }, { value: 'delete', label: '一併刪除文件' }]);
+  it('counts the documents in the removal choices and states what removal did with them', () => {
+    expect(removeOptions(subscription())).toEqual([{ value: 'keep', documents: 12 }, { value: 'delete', documents: 12 }]);
+    expect(removeOptions(subscription({ documentCount: 0 }))).toEqual([{ value: 'keep', documents: null }, { value: 'delete', documents: null }]);
+    expect(removalOutcome(null)).toEqual({ documents: 'kept' });
+    expect(removalOutcome({ documentsDeleted: 12, documentsFailed: 0 })).toEqual({ documents: 'deleted', deleted: 12 });
+    expect(removalOutcome({ documentsDeleted: 10, documentsFailed: 2 })).toEqual({ documents: 'partly_deleted', deleted: 10, failed: 2 });
+  });
+
+  it('asks about documents while the subscription has some or may still save one', () => {
     expect(asksAboutDocuments(subscription())).toBe(true);
     expect(asksAboutDocuments(subscription({ documentCount: 0 }))).toBe(false);
     expect(asksAboutDocuments(subscription({ documentCount: 0, capturing: true }))).toBe(true);
@@ -46,29 +42,25 @@ describe('subscription presentation (A6)', () => {
   });
 });
 
-describe('subscription status text (N75-T4)', () => {
+describe('subscription status (N75-T4)', () => {
   const originalZone = process.env.TZ;
   beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
   afterEach(() => { process.env.TZ = originalZone; });
 
-  it('words every status, progress once the total is known, and the next check by day', () => {
+  it('carries every status with its progress, retry time, failures in a row and next check', () => {
     const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
-    expect(subscriptionStatusText({ state: 'queued' }, now)).toBe('排隊中');
-    expect(subscriptionStatusText({ state: 'adding' }, now)).toBe('新增中');
-    expect(subscriptionStatusText({ state: 'checking' }, now)).toBe('檢查中');
-    expect(subscriptionStatusText({ state: 'downloading', done: 3, total: 10 }, now)).toBe('下載中 3/10');
-    const error = { code: 'network_error', message: '無法連線到 YouTube。' };
-    expect(subscriptionStatusText({ state: 'retrying', at: '2026-10-15T06:02:00.000Z', cause: { reason: 'failed', error, attempt: 2, maxAttempts: 3 } }, now)).toBe('錯誤・14:02 重試');
-    expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, now)).toBe('下次 18:52');
-    expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T00:05:00.000Z' }, now)).toBe('下次 明天 08:05');
-    expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: '2026-10-16T16:30:00.000Z' }, now)).toBe('下次 10-17 00:30');
-    expect(subscriptionStatusText({ state: 'failing', failures: 3, nextCheckAt: '2026-10-15T11:44:00.000Z' }, now)).toBe('錯誤（連續 3 次）・19:44 重試');
-    expect(subscriptionStatusText({ state: 'failing', failures: 3, nextCheckAt: '2026-10-16T00:05:00.000Z' }, now)).toBe('錯誤（連續 3 次）・明天 08:05 重試');
-    expect(subscriptionStatusText({ state: 'failing', failures: 1, nextCheckAt: null }, now)).toBe('錯誤（連續 1 次）');
-    expect(subscriptionStatusText({ state: 'paused' }, now)).toBe('已暫停');
-    expect(subscriptionStatusText({ state: 'auto_paused', failures: 5 }, now)).toBe('已暫停・連續失敗 5 次');
-    expect(subscriptionStatusText({ state: 'auto_check_off' }, now)).toBe('自動檢查已關閉');
-    expect(subscriptionStatusText({ state: 'login_required' }, now)).toBe('需要重新登入');
+    for (const state of ['queued', 'adding', 'checking', 'paused', 'auto_check_off', 'login_required'] as const) {
+      expect(subscriptionStatus({ state }, now)).toEqual({ state });
+    }
+    expect(subscriptionStatus({ state: 'downloading', done: 3, total: 10 }, now)).toEqual({ state: 'downloading', done: 3, total: 10 });
+    const error = { code: 'network_error', message: 'unreachable' };
+    expect(subscriptionStatus({ state: 'retrying', at: '2026-10-15T06:02:00.000Z', cause: { reason: 'failed', error, attempt: 2, maxAttempts: 3 } }, now))
+      .toEqual({ state: 'retrying', retryAt: '14:02' });
+    expect(subscriptionStatus({ state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, now)).toEqual({ state: 'scheduled', next: { day: 'today', time: '18:52' } });
+    expect(subscriptionStatus({ state: 'failing', failures: 3, nextCheckAt: '2026-10-16T00:05:00.000Z' }, now))
+      .toEqual({ state: 'failing', streak: 3, retryAt: { day: 'tomorrow', time: '08:05' } });
+    expect(subscriptionStatus({ state: 'failing', failures: 1, nextCheckAt: null }, now)).toEqual({ state: 'failing', streak: 1, retryAt: null });
+    expect(subscriptionStatus({ state: 'auto_paused', failures: 5 }, now)).toEqual({ state: 'auto_paused', streak: 5 });
   });
 
   it('colors working, retrying, scheduled, waiting, stopped, failing and sign-in states apart', () => {

@@ -9,12 +9,12 @@ import {
   pageItems,
   parseListState,
   draftForQuery,
-  publishedLabel,
+  publishedDate,
   readerIdForPath,
   readerPath,
   snippetParts,
   sourceFilter,
-  sourceOptions,
+  sourceMenu,
   sourceTag,
 } from '../../src/web/document-presentation.js';
 
@@ -42,38 +42,36 @@ describe('document presentation', () => {
   });
 
   it('groups the channel menu and marks removed subscriptions only', () => {
-    const menu = sourceOptions({
-      total: 4,
-      groups: [{
-        sourceType: 'youtube', label: 'YouTube', count: 4, publishers: [
-          { id: 'UC-a', name: '頻道 A', count: 2, subscribed: true, removed: false },
-          { id: 'UC-b', name: '頻道 B', count: 1, subscribed: false, removed: false },
-          { id: 'UC-c', name: '頻道 C', count: 1, subscribed: false, removed: true },
-          { id: null, name: '未知頻道', count: 1, subscribed: null, removed: false },
-        ],
-      }],
-    });
-    expect(menu.all).toEqual({ value: '', label: '全部（4）' });
-    expect(menu.groups[0]!.options).toEqual([
-      { value: 'youtube', label: 'YouTube・全部（4）' },
-      { value: 'youtube:UC-a', label: '頻道 A（2）' },
-      { value: 'youtube:UC-b', label: '頻道 B（1）' },
-      { value: 'youtube:UC-c', label: '頻道 C・已移除（1）' },
-      { value: 'youtube:none', label: '未知頻道（1）' },
+    const publishers = [
+      { id: 'UC-a', name: 'Channel A', count: 2, subscribed: true, removed: false },
+      { id: 'UC-b', name: 'Channel B', count: 1, subscribed: false, removed: false },
+      { id: 'UC-c', name: 'Channel C', count: 1, subscribed: false, removed: true },
+      { id: null, name: 'Unknown', count: 1, subscribed: null, removed: false },
+    ];
+    const menu = sourceMenu({ total: 4, groups: [{ sourceType: 'youtube', label: 'YouTube', count: 4, publishers }] });
+    expect(menu.all).toEqual({ value: '', scope: 'all', count: 4 });
+    expect(menu.groups[0]!.entries).toEqual([
+      { value: 'youtube', scope: 'type', typeLabel: 'YouTube', count: 4 },
+      { value: 'youtube:UC-a', scope: 'publisher', name: 'Channel A', removed: false, count: 2 },
+      { value: 'youtube:UC-b', scope: 'publisher', name: 'Channel B', removed: false, count: 1 },
+      { value: 'youtube:UC-c', scope: 'publisher', name: 'Channel C', removed: true, count: 1 },
+      { value: 'youtube:none', scope: 'publisher', name: 'Unknown', removed: false, count: 1 },
     ]);
+    expect(sourceMenu(null)).toEqual({ all: { value: '', scope: 'all', count: 0 }, groups: [] });
   });
 
   it('labels dates, sources and highlighted snippets for list rows', () => {
-    expect(publishedLabel(null)).toBe('發布日期未知');
-    expect(publishedLabel('2026-09-01')).toBe('發布 2026-09-01');
-    expect(sourceTag({ sourceType: 'youtube', publisher: { id: 'UC-a', name: '頻道 A' } } as DocumentMetadata)).toBe('YouTube · 頻道 A');
-    expect(snippetParts('…前<mark>森林</mark>中<mark>觀測</mark>…')).toEqual([
-      { text: '…前', match: false }, { text: '森林', match: true }, { text: '中', match: false },
-      { text: '觀測', match: true }, { text: '…', match: false },
+    expect(publishedDate(null)).toBeNull();
+    expect(publishedDate('2026-09-01')).toBe('2026-09-01');
+    expect(publishedDate('not a date')).toBeNull();
+    expect(sourceTag({ sourceType: 'youtube', publisher: { id: 'UC-a', name: 'Channel A' } } as DocumentMetadata)).toBe('YouTube · Channel A');
+    expect(snippetParts('…before <mark>forest</mark> and <mark>survey</mark>…')).toEqual([
+      { text: '…before ', match: false }, { text: 'forest', match: true }, { text: ' and ', match: false },
+      { text: 'survey', match: true }, { text: '…', match: false },
     ]);
     expect(snippetParts('<script>x</script>')).toEqual([{ text: '<script>x</script>', match: false }]);
-    expect(snippetParts('…- 第一點：<mark>森林</mark><mark>觀測</mark>前 **記錄** 28\\*28…')).toEqual([
-      { text: '…- 第一點：', match: false }, { text: '森林觀測', match: true }, { text: '前 記錄 28*28…', match: false },
+    expect(snippetParts('…- point one: <mark>forest</mark><mark>survey</mark> before **notes** 28\\*28…')).toEqual([
+      { text: '…- point one: ', match: false }, { text: 'forestsurvey', match: true }, { text: ' before notes 28*28…', match: false },
     ]);
   });
 
@@ -93,7 +91,6 @@ describe('document presentation', () => {
 describe('document deletion presentation (A8)', () => {
   it('states where the list goes and how to collect again', async () => {
     const { pageWithRows, sourceUrlOfDocumentId } = await import('../../src/web/document-presentation.js');
-    const { skipReasonLabel } = await import('../../src/web/job-presentation.js');
     expect(pageWithRows(3, 0, 40)).toBe(2);
     expect(pageWithRows(5, 0, 25)).toBe(2);
     expect(pageWithRows(3, 4, 44)).toBe(3);
@@ -101,6 +98,5 @@ describe('document deletion presentation (A8)', () => {
     expect(pageWithRows(2, 0, 0)).toBe(1);
     expect(sourceUrlOfDocumentId('youtube:dQw4w9WgXcQ')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     expect(sourceUrlOfDocumentId('youtube:bad')).toBeNull();
-    expect(skipReasonLabel('deleted')).toBe('文件已刪除');
   });
 });

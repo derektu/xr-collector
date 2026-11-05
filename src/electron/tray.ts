@@ -4,8 +4,8 @@ import type { MenuItemConstructorOptions } from 'electron';
 import type { ChangeBatch } from '../core/changes.js';
 import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview } from '../core/types.js';
 import type { NotificationState } from '../notifications/types.js';
-import { menuStaleAfter, trayMenu } from './tray-menu.js';
-import type { TrayAction, TrayIcon, TrayMenu, TrayState } from './tray-menu.js';
+import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
+import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
 
 /** The shortest time between the starts of two state reads; changes meanwhile share the next read. */
 export const READ_GAP_MS = 1000;
@@ -30,7 +30,8 @@ export interface AppTrayOptions {
  */
 export class AppTray {
   private readonly tray: Tray;
-  private menu: TrayMenu = trayMenu(null);
+  private shown: TrayModel = trayModel(null);
+  private menu: TrayMenu = trayMenuText(this.shown);
   private state: TrayState | null = null;
   private drawn = '';
   private pending: Promise<void> | null = null;
@@ -55,6 +56,9 @@ export class AppTray {
   /** The menu as last drawn. */
   current(): TrayMenu { return this.menu; }
 
+  /** What the menu last drawn shows, before it is put into words. */
+  model(): TrayModel { return this.shown; }
+
   /** Whether a state read is running or waiting for its turn; validation waits for it to end before it watches an idle period. */
   get reading(): boolean { return this.pending !== null; }
 
@@ -77,8 +81,7 @@ export class AppTray {
           const state = await this.read();
           if (this.stopped) return;
           this.state = state;
-          this.menu = trayMenu(state);
-          this.draw();
+          this.show(trayModel(state));
         } while (this.again);
       } finally {
         // Cleared in the same step as the last check of `again`, so a later call starts a new read.
@@ -118,10 +121,15 @@ export class AppTray {
     const next = new Date();
     next.setHours(24, 0, 1, 0);
     this.midnight = setTimeout(() => {
-      this.menu = trayMenu(this.state);
-      this.draw();
+      this.show(trayModel(this.state));
       this.atMidnight();
     }, next.getTime() - Date.now());
+  }
+
+  private show(model: TrayModel): void {
+    this.shown = model;
+    this.menu = trayMenuText(model);
+    this.draw();
   }
 
   private draw(): void {

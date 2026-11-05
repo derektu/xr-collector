@@ -1,24 +1,28 @@
 // What the Subscriptions pages show: times relative to today in the device time zone, type and name
-// filters and detail paths kept in the URL, active jobs counted once, collection record rows, the
-// last and next check, shortened names and addresses, and a URL recognition applied only to the
-// address it answered.
+// filters and detail paths kept in the URL, active jobs counted once, collection record rows, why
+// work waits for a retry, the last and next check, shortened names and addresses, and a URL
+// recognition applied only to the address it answered.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob, SubscriptionEntry, UrlRecognition } from '../../src/core/types.js';
+import { rssDeclaration } from '../../src/plugins/rss/shared.js';
+import { youtubeDeclaration } from '../../src/plugins/youtube/shared.js';
 import {
   activeJobs,
+  checkTimes,
+  collectionRow,
   currentRecognition,
   displayUrl,
+  failureLabel,
   filterSources,
   initials,
-  collectionEntryLabel,
+  nextCheck,
   parseSourceListState,
-  shortTimeLabel,
+  retryCause,
+  shortTime,
   sourceListSearch,
   sourcePath,
   sourceRouteForPath,
-  summaryTimeRange,
-  checkTimesLine,
-  nextCheckLabel,
+  timeSpan,
 } from '../../src/web/source-presentation.js';
 
 const originalZone = process.env.TZ;
@@ -45,11 +49,11 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 describe('source presentation (T-09)', () => {
   it('formats times relative to today in the device time zone', () => {
     const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
-    expect(shortTimeLabel('2026-10-15T05:30:00.000Z', now)).toBe('今天 13:30');
-    expect(shortTimeLabel('2026-10-14T13:05:00.000Z', now)).toBe('昨天 21:05');
-    expect(shortTimeLabel('2026-10-13T16:30:00.000Z', now)).toBe('昨天 00:30');
-    expect(shortTimeLabel('2026-10-12T16:30:00.000Z', now)).toBe('10-13 00:30');
-    expect(shortTimeLabel('2025-12-31T01:00:00.000Z', now)).toBe('2025-12-31');
+    expect(shortTime('2026-10-15T05:30:00.000Z', now)).toEqual({ day: 'today', time: '13:30' });
+    expect(shortTime('2026-10-14T13:05:00.000Z', now)).toEqual({ day: 'yesterday', time: '21:05' });
+    expect(shortTime('2026-10-13T16:30:00.000Z', now)).toEqual({ day: 'yesterday', time: '00:30' });
+    expect(shortTime('2026-10-12T16:30:00.000Z', now)).toEqual({ day: 'this_year', date: '10-13', time: '00:30' });
+    expect(shortTime('2025-12-31T01:00:00.000Z', now)).toEqual({ day: 'earlier', date: '2025-12-31' });
   });
 
   it('filters by type and by name', () => {
@@ -60,8 +64,9 @@ describe('source presentation (T-09)', () => {
   });
 
   it('keeps list filters and source detail addresses in the URL', () => {
-    expect(sourceListSearch({ type: 'youtube', query: '財經' })).toBe('?type=youtube&q=%E8%B2%A1%E7%B6%93');
-    expect(parseSourceListState('?type=youtube&q=%E8%B2%A1%E7%B6%93')).toEqual({ type: 'youtube', query: '財經' });
+    const filters = { type: 'youtube', query: '財經' };
+    expect(sourceListSearch(filters)).toBe('?type=youtube&q=%E8%B2%A1%E7%B6%93');
+    expect(parseSourceListState('?type=youtube&q=%E8%B2%A1%E7%B6%93')).toEqual(filters);
     expect(sourceListSearch({ type: '', query: '' })).toBe('');
     expect(sourcePath('youtube', 'UC/1')).toBe('/sources/youtube/UC%2F1');
     expect(sourceRouteForPath('/sources/youtube/UC%2F1')).toEqual({ type: 'youtube', id: 'UC/1' });
@@ -81,49 +86,72 @@ describe('source presentation (T-09)', () => {
   });
 
   it('describes the rows of a collection record (N69-T11)', () => {
+    const now = new Date('2026-10-15T06:00:00.000Z');
     const at = '2026-10-15T05:30:00.000Z';
-    const item = { at, key: 'v1', title: '影片一', url: 'https://www.youtube.com/watch?v=v1', errorCode: 'no_subtitles', reason: '沒有字幕', attempts: 2 };
-    expect(collectionEntryLabel({ kind: 'collected', at, key: 'v1', title: '影片一', documentId: 'youtube:v1' }, 'youtube')).toEqual({ title: '影片一', detail: '' });
-    expect(collectionEntryLabel({ kind: 'failed', ...item, maxAttempts: 3 }, 'youtube').detail).toBe('沒有字幕・已試 2/3 次');
-    expect(collectionEntryLabel({ kind: 'skipped', ...item, attempts: 3, skippedBy: 'limit' }, 'youtube').detail).toBe('已略過・已試 3 次');
-    expect(collectionEntryLabel({ kind: 'skipped', ...item, reason: '影片不存在', attempts: 1, skippedBy: 'failure' }, 'youtube').detail).toBe('已略過・影片不存在');
-    expect(collectionEntryLabel({ kind: 'failed', ...item, title: '', maxAttempts: 3 }, 'youtube').title).toBe('youtube.com/watch?v=v1');
+    const item = { at, key: 'v1', title: 'Video one', url: 'https://www.youtube.com/watch?v=v1', errorCode: 'no_subtitles', reason: 'no subtitles', attempts: 2 };
+    expect(collectionRow({ kind: 'collected', at, key: 'v1', title: item.title, documentId: 'youtube:v1' })).toEqual({ kind: 'collected', title: item.title });
+    expect(collectionRow({ kind: 'failed', ...item, maxAttempts: 3 })).toEqual({ kind: 'failed', title: item.title, reason: item.reason, attempts: 2, maxAttempts: 3 });
+    expect(collectionRow({ kind: 'skipped', ...item, attempts: 3, skippedBy: 'limit' })).toEqual({ kind: 'skipped', title: item.title, skippedBy: 'limit', attempts: 3 });
+    expect(collectionRow({ kind: 'skipped', ...item, reason: 'gone', attempts: 1, skippedBy: 'failure' })).toEqual({ kind: 'skipped', title: item.title, skippedBy: 'failure', reason: 'gone' });
+    expect(collectionRow({ kind: 'failed', ...item, title: '', maxAttempts: 3 })).toMatchObject({ title: 'youtube.com/watch?v=v1' });
     const check = { kind: 'check' as const, at, jobId: 'j', trigger: 'scheduled' as const, created: 0, failed: 0, error: null };
-    expect(collectionEntryLabel(check, 'youtube').title).toBe('完成檢查：沒有新影片');
-    expect(collectionEntryLabel({ ...check, created: 2 }, 'youtube').title).toBe('完成收集：新增 2 支影片');
-    expect(collectionEntryLabel({ ...check, trigger: 'manual', created: 1, failed: 1 }, 'youtube').title).toBe('完成收集：新增 1 支影片・失敗 1 支影片');
-    expect(collectionEntryLabel({ ...check, trigger: 'subscribe', error: { code: 'network_error', message: '無法連線到 YouTube。' } }, 'youtube').title)
-      .toBe('發生錯誤：網路錯誤');
-    expect(collectionEntryLabel({ kind: 'check-group', at, firstAt: '2026-10-14T05:30:00.000Z', groupId: 'g', trigger: 'scheduled', result: 'empty', count: 12, message: '完成。' }, 'youtube'))
-      .toMatchObject({ title: '完成檢查：沒有新影片・12 次' });
-    expect(collectionEntryLabel({ kind: 'check-group', at, firstAt: at, groupId: 'g2', trigger: 'scheduled', result: 'network_error', count: 5, errorCode: 'network_error', message: '逾時。' }, 'youtube').title)
-      .toBe('發生錯誤：網路錯誤・5 次');
+    expect(collectionRow(check)).toEqual({ kind: 'check', outcome: 'empty' });
+    expect(collectionRow({ ...check, created: 2 })).toEqual({ kind: 'check', outcome: 'collected', parts: [{ result: 'created', count: 2 }] });
+    expect(collectionRow({ ...check, trigger: 'manual', failed: 1 })).toEqual({ kind: 'check', outcome: 'collected', parts: [{ result: 'failed', count: 1 }] });
+    expect(collectionRow({ ...check, created: 3, failed: 2 })).toEqual({ kind: 'check', outcome: 'collected', parts: [{ result: 'created', count: 3 }, { result: 'failed', count: 2 }] });
+    const error = { code: 'network_error', message: 'unreachable' };
+    expect(collectionRow({ ...check, trigger: 'subscribe', created: 1, error })).toEqual({ kind: 'check', outcome: 'error', error });
+    const group = { kind: 'check-group' as const, at, firstAt: '2026-10-14T05:30:00.000Z', groupId: 'g', trigger: 'scheduled' as const, count: 12, message: 'done' };
+    expect(collectionRow({ ...group, result: 'empty' }, now)).toEqual({
+      kind: 'check-group', result: 'empty', message: 'done', count: 12,
+      span: { sameDay: false, start: { day: 'yesterday', time: '13:30' }, end: { day: 'today', time: '13:30' } },
+    });
+    expect(collectionRow({ ...group, firstAt: at, result: 'network_error', count: 5, errorCode: 'network_error' }, now))
+      .toMatchObject({ result: 'network_error', count: 5, span: { sameDay: true } });
+    expect(collectionRow({ ...group, result: 'created', count: 1 }, now)).toMatchObject({ result: 'other', count: 1, span: null });
+  });
+
+  it('says why work waits for a retry, in the source type\'s words for a failure it names', () => {
+    const error = { code: 'network_error', message: 'unreachable' };
+    expect(retryCause('youtube', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: youtubeDeclaration.label });
+    expect(retryCause('unregistered', { reason: 'rate_limited' })).toEqual({ reason: 'rate_limited', source: 'unregistered' });
+    expect(retryCause('rss', { reason: 'failed', error, attempt: 2, maxAttempts: 3 })).toEqual({ reason: 'failed', error, attempt: 2, maxAttempts: 3 });
+    expect(failureLabel('rss', error)).toBe(rssDeclaration.failureLabels?.network_error);
+    expect(failureLabel('rss', { code: 'no_subtitles', message: 'own message' })).toBe('own message');
+    expect(failureLabel('unregistered', error)).toBe(error.message);
   });
 
   it('compacts same-day ranges and keeps both dates and crossing years', () => {
     const now = new Date(2026, 9, 24, 12);
     const iso = (year: number, month: number, day: number, hour: number) => new Date(year, month, day, hour).toISOString();
-    expect(summaryTimeRange(iso(2026, 9, 24, 8), iso(2026, 9, 24, 14), now)).toBe('今天 08:00–14:00');
-    expect(summaryTimeRange(iso(2026, 9, 23, 23), iso(2026, 9, 24, 1), now)).toBe('昨天 23:00–今天 01:00');
-    expect(summaryTimeRange(iso(2025, 11, 31, 23), iso(2026, 0, 1, 1), now)).toBe('2025-12-31 23:00–2026-01-01 01:00');
+    expect(timeSpan(iso(2026, 9, 24, 8), iso(2026, 9, 24, 14), now)).toEqual({ sameDay: true, start: { day: 'today', time: '08:00' }, endTime: '14:00' });
+    expect(timeSpan(iso(2026, 9, 23, 23), iso(2026, 9, 24, 1), now)).toEqual({ sameDay: false, start: { day: 'yesterday', time: '23:00' }, end: { day: 'today', time: '01:00' } });
+    expect(timeSpan(iso(2026, 9, 10, 8), iso(2026, 9, 11, 9), now)).toEqual({ sameDay: false, start: { day: 'date', date: '10-10', time: '08:00' }, end: { day: 'date', date: '10-11', time: '09:00' } });
+    expect(timeSpan(iso(2025, 2, 1, 8), iso(2025, 2, 1, 9), now)).toMatchObject({ sameDay: true, start: { day: 'date', date: '2025-03-01' } });
+    expect(timeSpan(iso(2025, 11, 31, 23), iso(2026, 0, 1, 1), now)).toEqual({
+      sameDay: false, start: { day: 'date', date: '2025-12-31', time: '23:00' }, end: { day: 'date', date: '2026-01-01', time: '01:00' },
+    });
   });
 
   it('names the subscriptions of the last and next check under the list, as their detail pages show them (A6)', () => {
     const now = new Date('2026-10-15T06:00:00.000Z');
-    const lastCheck = { channelId: 'UC1', title: '財經八百', at: '2026-10-15T06:00:00.000Z' };
-    const nextCheck = { channelId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
-    expect(checkTimesLine({ enabled: true, lastCheck, nextCheck }, now)).toBe('上次檢查 今天 14:00（財經八百） · 下次檢查 今天 14:30（3Blue1Brown）');
-    expect(checkTimesLine({ enabled: false, lastCheck, nextCheck: null }, now)).toBe('上次檢查 今天 14:00（財經八百） · 自動檢查已關閉');
-    expect(checkTimesLine({ enabled: true, lastCheck: null, nextCheck: null }, now)).toBe('上次檢查 尚未檢查');
-    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, true, now)).toBe('今天 14:30');
-    expect(nextCheckLabel({ enabled: true, nextCheckAt: nextCheck.at }, false, now)).toBe('自動檢查已關閉');
-    expect(nextCheckLabel({ enabled: false, nextCheckAt: null }, true, now)).toBe('已暫停');
-    expect(nextCheckLabel({ enabled: true, nextCheckAt: null }, true, now)).toBe('排隊中');
+    const lastCheck = { channelId: 'UC1', title: 'Money 800', at: '2026-10-15T06:00:00.000Z' };
+    const next = { channelId: 'UC2', title: '3Blue1Brown', at: '2026-10-15T06:30:00.000Z' };
+    const last = { at: { day: 'today', time: '14:00' }, title: lastCheck.title };
+    expect(checkTimes({ enabled: true, lastCheck, nextCheck: next }, now)).toEqual({ last, next: { state: 'scheduled', at: { day: 'today', time: '14:30' }, title: next.title } });
+    expect(checkTimes({ enabled: false, lastCheck, nextCheck: next }, now)).toEqual({ last, next: { state: 'auto_check_off' } });
+    expect(checkTimes({ enabled: true, lastCheck: null, nextCheck: null }, now)).toEqual({ last: null, next: { state: 'none' } });
+    expect(nextCheck({ enabled: true, nextCheckAt: next.at }, true, now)).toEqual({ state: 'scheduled', at: { day: 'today', time: '14:30' } });
+    expect(nextCheck({ enabled: true, nextCheckAt: next.at }, null, now)).toEqual({ state: 'scheduled', at: { day: 'today', time: '14:30' } });
+    expect(nextCheck({ enabled: true, nextCheckAt: next.at }, false, now)).toEqual({ state: 'auto_check_off' });
+    expect(nextCheck({ enabled: false, nextCheckAt: null }, true, now)).toEqual({ state: 'paused' });
+    expect(nextCheck({ enabled: true, nextCheckAt: null }, true, now)).toEqual({ state: 'queued' });
   });
 
   it('shortens names and addresses for display', () => {
     expect(initials('3Blue1Brown')).toBe('3B');
-    expect(initials('合成頻道 A【合成】')).toBe('合成');
+    expect(initials('【Synthetic】 Channel')).toBe('SY');
+    expect(initials(' ')).toBe('?');
     expect(displayUrl('https://www.youtube.com/channel/UC1/videos')).toBe('youtube.com/channel/UC1');
   });
 

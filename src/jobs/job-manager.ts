@@ -3,6 +3,7 @@ import { selectCandidates } from '../subscriptions/candidates.js';
 import type { Collector } from '../core/collector.js';
 import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
+import { COLLECTION_COMPLETED } from '../core/job-completion.js';
 import { jobKind, jobRole, subscriptionKindLabel } from '../core/source-registry.js';
 import {
   CollectorError,
@@ -1694,22 +1695,22 @@ export class JobManager {
     const role = roleOf(job);
     const plugin = this.plugin(job.source.type);
     if (role === 'item') {
-      const stored = result.outcome === 'created' ? '收集完成' : '文件已存在';
+      const stored = result.outcome === 'created' ? COLLECTION_COMPLETED : '文件已存在';
       return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
     }
     if (role === 'add') {
       return result.outcome === 'created' ? '已新增訂閱。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
     }
-    if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
+    if (result.outcome === 'empty') return `${COLLECTION_COMPLETED}，沒有新${plugin?.item.noun ?? '項目'}。`;
     const progress = job.progress;
-    if (!progress) return '收集完成。';
+    if (!progress) return `${COLLECTION_COMPLETED}。`;
     const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measure}${plugin.item.noun}` : ''}`;
     const parts = progress.created ? [`新增 ${count(progress.created)}`] : [];
     if (progress.existing) parts.push(`已存在 ${count(progress.existing)}`);
     if (progress.skipped) parts.push(`略過 ${count(progress.skipped)}`);
     if (progress.failed) parts.push(`失敗 ${count(progress.failed)}`);
-    if (parts.length === 0) return '收集完成。';
-    return `收集完成：${parts.join('・')}。`;
+    if (parts.length === 0) return `${COLLECTION_COMPLETED}。`;
+    return `${COLLECTION_COMPLETED}：${parts.join('・')}。`;
   }
 }
 
