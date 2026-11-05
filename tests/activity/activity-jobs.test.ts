@@ -14,6 +14,7 @@ import {
   type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
+import { eventLine } from '../../src/web/activity-presentation.js';
 import { forwardingPort, type SubscriptionPort } from '../../src/jobs/subscription-port.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -327,7 +328,9 @@ describe('job summary and event fields', () => {
 
     const existing = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('qqqqqqqqqqq'))).job.id);
     expect(existing.result?.outcome).toBe('existing');
-    expect((await events({ jobId: existing.id, eventType: ['job.completed'] }))[0]).toMatchObject({ severity: 'info', outcome: 'existing' });
+    const existed = (await events({ jobId: existing.id, eventType: ['job.completed'] }))[0]!;
+    expect(existed).toMatchObject({ severity: 'info', outcome: 'existing' });
+    expect(eventLine(existed).line).toBe('completed');
 
     const channel = subscribe(subs, 'UC-levels');
     source.channelVideos.set('UC-levels', [{ id: 'rrrrrrrrrrr', title: '子工作', url: watchUrl('rrrrrrrrrrr'), publishedAt: T0.toISOString(), upcoming: false }]);
@@ -352,6 +355,8 @@ describe('job summary and event fields', () => {
     const done = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('zzzzzzzzzzz'))).job.id);
     const completed = (await events({ jobId: done.id, eventType: ['job.completed'] }))[0]!;
     expect(completed).toMatchObject({ message: '收集完成。', jobRole: 'item', outcome: 'created' });
+    // The Activity page recognizes the job manager's completion wording; a change to it fails here.
+    expect(eventLine(completed)).toMatchObject({ line: 'collected', detail: '。' });
   });
 
   it('counts active jobs and jobs finished since a time, leaving out retried failures', async () => {
@@ -385,6 +390,7 @@ describe('job summary and event fields', () => {
     expect(accepted).toMatchObject({ trigger: 'scheduled', sourceTitle: '頻道 UC9', subscriptionId: 'UC9', jobRole: 'check' });
     const completed = (await events({ jobId: submission!.job.id, eventType: ['job.completed'] })).find((entry) => entry.jobId === submission!.job.id)!;
     expect(completed.message).toBe('收集完成：新增 1 支影片。');
+    expect(eventLine(completed)).toMatchObject({ line: 'collected', detail: '：新增 1 支影片。' });
     const videoAccepted = (await events({ eventType: ['job.accepted'] })).find((entry) => entry.parentJobId === submission!.job.id)!;
     expect(videoAccepted).toMatchObject({ sourceTitle: '頻道影片', jobRole: 'item' });
     const chronology = await events({ jobId: submission!.job.id });

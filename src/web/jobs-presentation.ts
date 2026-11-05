@@ -1,7 +1,8 @@
 import { sourceDeclaration } from '../core/source-registry.js';
-import type { JobOverviewEntry } from '../core/types.js';
-import { displayUrl, failureLabel, retryCauseLabel } from './source-presentation.js';
-import { retryingText, targetNoun } from './subscription-presentation.js';
+import type { JobError, JobOverviewEntry } from '../core/types.js';
+import { displayUrl, failureLabel, retryCause, retryCauseText } from './source-presentation.js';
+import type { RetryCauseView } from './source-presentation.js';
+import { clockTime, retryAtText, targetNoun } from './subscription-presentation.js';
 
 /** The row of a jobs page entry: its type's icon, its title, the lines under it, and its status beside it. */
 export interface JobEntryLabel {
@@ -21,26 +22,68 @@ export interface JobEntryLabel {
   reason: string | null;
 }
 
-export function jobEntryLabel(entry: JobOverviewEntry): JobEntryLabel {
-  const named = Boolean(entry.title);
-  const action = entry.role === 'check' ? '檢查' : entry.role === 'add' ? '新增訂閱' : null;
-  const noun = targetNoun(entry.type);
+/** What started work is doing: a check listing (or a subscription request resolving), a download with its progress once known, or a wait for a retry at a time. */
+export type JobEntryStatus =
+  | { state: 'checking'; adding: boolean }
+  | { state: 'downloading'; progress: { done: number; total: number } | null }
+  | { state: 'retrying'; retryAt: string };
+
+/** A jobs page row as data; `jobEntryLabel` puts it into words. */
+export interface JobEntryView {
+  icon: string;
+  title: string;
+  named: boolean;
+  /** A check or subscription request with what its type follows (null for a type without one), or an item with its publisher (null while unknown). */
+  work: { role: 'check' | 'add'; target: string | null } | { role: 'item'; publisher: string | null };
+  status: JobEntryStatus | null;
+  retry: RetryCauseView | null;
+  failure: JobError | null;
+}
+
+export function jobEntry(entry: JobOverviewEntry): JobEntryView {
   return {
     icon: sourceDeclaration(entry.type)?.icon ?? 'file',
     title: entry.title ?? displayUrl(entry.url),
-    named,
-    subtitle: action ? (noun ? `${noun}・${action}` : action) : entry.publisher,
+    named: Boolean(entry.title),
+    work: entry.role === 'item' ? { role: 'item', publisher: entry.publisher } : { role: entry.role, target: targetNoun(entry.type) || null },
     status: statusOf(entry),
-    retryReason: entry.status?.state === 'retrying' ? retryCauseLabel(entry.type, entry.status.cause) : null,
-    reason: entry.error ? failureLabel(entry.type, entry.error) : null,
+    retry: entry.status?.state === 'retrying' ? retryCause(entry.type, entry.status.cause) : null,
+    failure: entry.error,
   };
 }
 
-function statusOf(entry: JobOverviewEntry): JobEntryLabel['status'] {
+function statusOf(entry: JobOverviewEntry): JobEntryStatus | null {
   switch (entry.status?.state) {
-    case 'checking': return { text: entry.role === 'add' ? '新增中' : '檢查中', tone: 'collecting' };
-    case 'downloading': return { text: entry.progress?.total ? `下載中 ${entry.progress.done}/${entry.progress.total}` : '下載中', tone: 'collecting' };
-    case 'retrying': return { text: retryingText(entry.status.at), tone: 'retrying' };
+    case 'checking': return { state: 'checking', adding: entry.role === 'add' };
+    case 'downloading': return { state: 'downloading', progress: entry.progress?.total ? entry.progress : null };
+    case 'retrying': return { state: 'retrying', retryAt: clockTime(entry.status.at) };
     default: return null;
+  }
+}
+
+export function jobEntryLabel(entry: JobOverviewEntry): JobEntryLabel {
+  const view = jobEntry(entry);
+  return {
+    icon: view.icon,
+    title: view.title,
+    named: view.named,
+    subtitle: subtitleText(view.work),
+    status: view.status ? { text: statusText(view.status), tone: view.status.state === 'retrying' ? 'retrying' : 'collecting' } : null,
+    retryReason: view.retry ? retryCauseText(entry.type, view.retry) : null,
+    reason: view.failure ? failureLabel(entry.type, view.failure) : null,
+  };
+}
+
+function subtitleText(work: JobEntryView['work']): string | null {
+  if (work.role === 'item') return work.publisher;
+  const action = work.role === 'check' ? '檢查' : '新增訂閱';
+  return work.target ? `${work.target}・${action}` : action;
+}
+
+function statusText(status: JobEntryStatus): string {
+  switch (status.state) {
+    case 'checking': return status.adding ? '新增中' : '檢查中';
+    case 'downloading': return status.progress ? `下載中 ${status.progress.done}/${status.progress.total}` : '下載中';
+    case 'retrying': return retryAtText(status.retryAt);
   }
 }

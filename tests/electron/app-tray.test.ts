@@ -4,7 +4,7 @@
 // without a read.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeBatch } from '../../src/core/changes.js';
-import type { TrayMenu } from '../../src/electron/tray-menu.js';
+import type { TrayModel } from '../../src/electron/tray-menu.js';
 
 vi.mock('electron', () => ({
   Tray: class { on() {} setImage() {} setToolTip() {} setContextMenu() {} destroy() {} },
@@ -16,7 +16,7 @@ const { AppTray, READ_GAP_MS } = await import('../../src/electron/tray.js');
 
 const jobChange: ChangeBatch = { revision: 'a:1', at: '2026-10-24T10:00:00.000Z', changes: [{ kind: 'job', id: 'j', parentId: null, state: 'running' }] };
 /** The status lines above the actions. */
-const status = (menu: TrayMenu) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []).slice(0, 2);
+const status = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []).slice(0, 2);
 
 /** The app's API as the tray reads it; `hold` keeps reads waiting until `release`. */
 function api(nextCheckAt = '2026-10-24T18:52:00+08:00') {
@@ -132,9 +132,9 @@ describe('tray reads', () => {
     api('2026-10-25T08:00:00+08:00');
     const tray = create(changes().feed);
     await vi.advanceTimersByTimeAsync(0);
-    expect(status(tray.current())).toEqual(['沒有進行中的工作', '下次檢查 明天 08:00']);
+    expect(status(tray.model())).toEqual([{ text: 'no_work' }, { text: 'next_check', at: { day: 'tomorrow', time: '08:00' } }]);
     await vi.advanceTimersByTimeAsync(61_000);
-    expect(status(tray.current())).toEqual(['沒有進行中的工作', '下次檢查 08:00']);
+    expect(status(tray.model())).toEqual([{ text: 'no_work' }, { text: 'next_check', at: { day: 'today', time: '08:00' } }]);
     expect(tray.reads).toBe(1);
     tray.destroy();
   });
