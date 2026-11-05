@@ -8,7 +8,7 @@ import type { JobRole } from './types.js';
  * them, so a document, job or subscription of an unregistered type is data the core keeps but does
  * not act on.
  *
- * The module holds no Node-only code, so the web build shares it.
+ * The module holds no Node-only code, so the web build shares it (tests/tooling/web-bundle-node.test.ts).
  */
 
 const declarations = new Map<string, SourcePluginDeclaration>();
