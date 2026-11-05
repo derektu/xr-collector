@@ -51,13 +51,10 @@ const EXCEPTIONS = [
   'src/core/collector.ts -> src/jobs/job-store.ts',
   'src/core/collector.ts -> src/vault/deleted-documents.ts',
   'src/core/collector.ts -> src/vault/document-paths.ts',
-  // jobs -> activity: redaction (#254), the activity log owned by the job store (#262).
-  'src/jobs/job-manager.ts -> src/activity/redact.ts',
+  // jobs -> activity: the activity log owned by the job store (#262).
   'src/jobs/job-store.ts -> src/activity/activity-log.ts',
   // jobs -> subscriptions: the candidate rules run in the job manager (#263).
   'src/jobs/job-manager.ts -> src/subscriptions/candidates.ts',
-  // notifications -> activity: redaction (#254).
-  'src/notifications/notification-center.ts -> src/activity/redact.ts',
   // subscriptions -> vault: the vault format mark (#257).
   'src/subscriptions/subscription-store.ts -> src/vault/vault-directory.ts',
   // vault -> subscriptions: the exchange reads and writes the subscription files (#256).

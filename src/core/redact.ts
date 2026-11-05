@@ -1,3 +1,13 @@
+/**
+ * Masking of credentials in text the app writes to a file or hands to the UI, an Agent or the OS:
+ * job errors, activity events, notifications, system notifications, HTTP error answers and status
+ * messages. Every such exit calls `redact`, so they all share one rule: the credential patterns below
+ * plus every literal secret the process holds, such as the Agent token and the search engine key.
+ *
+ * The secrets are kept for the whole process. The Agent token is protected when it is loaded and when
+ * it is reset; the search engine generates a new key each time it starts and protects it then. A
+ * secret replaced later stays masked, since older text can still carry it.
+ */
 const MASK = '[已遮蔽]';
 
 /**
@@ -14,12 +24,17 @@ const PATTERNS: Array<[RegExp, string]> = [
 /** Secrets shorter than this are not matched literally; they would mask ordinary words. */
 const MIN_SECRET_LENGTH = 8;
 
-/** Masks credentials in `text`, including every literal occurrence of the given secrets. */
-export function redact(text: string, secrets: Iterable<string> = []): string {
+const secrets = new Set<string>();
+
+/** Masks `secret` wherever it appears in text passed to `redact` from now on. */
+export function protectSecret(secret: string): void {
+  if (secret.length >= MIN_SECRET_LENGTH) secrets.add(secret);
+}
+
+/** Masks credentials in `text`: every literal occurrence of a protected secret, then the credential patterns. */
+export function redact(text: string): string {
   let result = text;
-  for (const secret of secrets) {
-    if (secret.length >= MIN_SECRET_LENGTH) result = result.split(secret).join(MASK);
-  }
+  for (const secret of secrets) result = result.split(secret).join(MASK);
   for (const [pattern, replacement] of PATTERNS) result = result.replace(pattern, replacement);
   return result;
 }

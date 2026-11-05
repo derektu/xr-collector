@@ -31,7 +31,7 @@ import {
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
-import { limitText, redact } from '../activity/redact.js';
+import { limitText, redact } from '../core/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
@@ -1805,7 +1805,7 @@ function diagnosticDetail(error: unknown): string | undefined {
 }
 
 function errorDetails(error: unknown): JobError {
-  // Job errors reach the UI, Agents and diagnostics, so credentials in a source's message are masked here too.
+  // Job errors are written to the job store and the Vault's subscription files and reach the UI and Agents.
   if (error instanceof CollectorError) return { code: error.code, message: limitText(redact(error.message), 500, 'head') };
   return { code: 'capture_failed', message: '收集失敗，請稍後再試。' };
 }

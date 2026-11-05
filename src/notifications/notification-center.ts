@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { SubscriptionRecord } from '../core/types.js';
 import type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
-import { limitText, redact } from '../activity/redact.js';
+import { limitText, redact } from '../core/redact.js';
 import { replaceFile } from '../core/json-file.js';
 export type { AutoPauseNotification, NotificationAvailability, NotificationState } from './types.js';
 

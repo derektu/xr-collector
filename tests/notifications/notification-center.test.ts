@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { SubscriptionRecord } from '../../src/core/types.js';
+import { protectSecret } from '../../src/core/redact.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../../src/notifications/notification-center.js';
 import { notificationNavigation } from '../../src/electron/notification-navigation.js';
+import { eventually } from '../support/wait.js';
 
 const record = (at = '2026-10-28T01:00:00.000Z'): SubscriptionRecord => ({
   id: 'channel-a', title: 'Channel A', url: 'https://example.test/a', enabled: false, addedAt: '2026-10-01T00:00:00.000Z',
@@ -36,16 +38,20 @@ describe('auto-pause notification center (#136)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-notifications-'));
     const shown: unknown[] = [];
     const adapter: SystemNotificationAdapter = { availability: () => ({ state: 'available', message: null }), show: async (event) => { shown.push(event); }, restore: async () => undefined };
+    const agentToken = 'f'.repeat(64);
+    protectSecret(agentToken);
     const unsafe = record();
     unsafe.title = `Cookie: session=top-secret ${'T'.repeat(200)}`;
-    unsafe.checkFailures!.error = { code: 'network_error', message: `Authorization: Bearer abcdefghijklmnop https://example.test/?access_token=very-secret ${'E'.repeat(500)}` };
+    unsafe.checkFailures!.error = { code: 'network_error', message: `agent ${agentToken} Authorization: Bearer abcdefghijklmnop https://example.test/?access_token=very-secret ${'E'.repeat(500)}` };
     const center = await NotificationCenter.open(root, adapter);
     await center.recordAutoPause('vault-a', 'youtube', unsafe);
     const raw = await readFile(path.join(root, 'notifications.json'), 'utf8');
     const event = center.view([{ vaultId: 'vault-a', sourceType: 'youtube', subscription: unsafe }], 'vault-a').events[0]!;
-    expect(raw).not.toContain('top-secret');
-    expect(raw).not.toContain('abcdefghijklmnop');
-    expect(raw).not.toContain('very-secret');
+    for (const secret of [agentToken, 'top-secret', 'abcdefghijklmnop', 'very-secret']) {
+      expect(raw).not.toContain(secret);
+      expect(JSON.stringify(event)).not.toContain(secret);
+    }
+    expect(event.error.message.startsWith('agent [已遮蔽] Authorization: [已遮蔽]')).toBe(true);
     expect(event.title.length).toBeLessThanOrEqual(120);
     expect(event.error.message.length).toBeLessThanOrEqual(300);
     expect(shown).toEqual([event]);
@@ -98,6 +104,28 @@ describe('auto-pause notification center (#136)', () => {
     await center.recordAutoPause('vault-a', 'rss', record());
     expect(center.view([{ vaultId: 'vault-a', sourceType: 'rss', subscription: record() }], 'vault-a').events[0])
       .toMatchObject({ delivery: 'failed', deliveryMessage: 'blocked by OS' });
+  });
+
+  it('masks secrets in a delivery failure the OS reports later', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-notifications-'));
+    const agentToken = 'e'.repeat(64);
+    protectSecret(agentToken);
+    let report!: (id: string, message: string) => void;
+    const adapter: SystemNotificationAdapter = {
+      availability: () => ({ state: 'available', message: null }), restore: async () => undefined, show: async () => undefined,
+      onDeliveryFailure: (listener) => { report = listener; },
+    };
+    const center = await NotificationCenter.open(root, adapter);
+    await center.recordAutoPause('vault-a', 'rss', record());
+    const id = center.view([{ vaultId: 'vault-a', sourceType: 'rss', subscription: record() }], 'vault-a').events[0]!.id;
+    report(id, `OS refused ${agentToken} Cookie: SID=os-secret`);
+    await eventually(async () => {
+      expect(center.event(id)).toMatchObject({ delivery: 'failed', deliveryMessage: 'OS refused [已遮蔽] Cookie: [已遮蔽]' });
+      const raw = await readFile(path.join(root, 'notifications.json'), 'utf8');
+      expect(raw).toContain('OS refused [已遮蔽]');
+      expect(raw).not.toContain(agentToken);
+      expect(raw).not.toContain('os-secret');
+    });
   });
 
   it('builds the active list from current Vault rows without sending backlog and scopes history to that Vault', async () => {

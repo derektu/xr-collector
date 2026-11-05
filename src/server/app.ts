@@ -10,6 +10,7 @@ import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
 import { registerChangeRoutes } from './change-routes.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
+import { redact } from '../core/redact.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { CollectorRuntimeStatus } from '../runtime/collector-runtime.js';
@@ -461,7 +462,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
         void reply.header('Retry-After', String(seconds));
       }
       void reply.status(errorStatus(error.code)).send({
-        error: { code: error.code, message: error.message, ...(error.retryAt ? { retryAt: error.retryAt } : {}) },
+        error: { code: error.code, message: redact(error.message), ...(error.retryAt ? { retryAt: error.retryAt } : {}) },
       });
       return;
     }

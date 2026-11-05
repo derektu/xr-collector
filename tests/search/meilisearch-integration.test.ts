@@ -1,11 +1,12 @@
 // Search on the bundled Meilisearch engine (real-engine cases): the index survives restarts and
 // rebuilds when the Vault changed; paging, filters, Traditional/Simplified and full-width forms,
 // contiguous Chinese fragments and Latin typos match as a user expects; a deleted document leaves
-// results at once.
+// results at once. The engine key the app generates is masked in any text the app writes or shows.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { redact } from '../../src/core/redact.js';
 import type { SavedDocument } from '../../src/core/types.js';
 import { ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
@@ -84,6 +85,17 @@ async function engineRequest(engine: RunningMeilisearch, pathName: string, init?
 }
 
 describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
+  it('masks the engine key in any text the app writes or shows', async () => {
+    const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: await tempDatabase() });
+    running.add(engine);
+    try {
+      expect(redact(`搜尋服務錯誤：${engine.apiKey}`)).toBe('搜尋服務錯誤：[已遮蔽]');
+    } finally {
+      running.delete(engine);
+      await engine.close();
+    }
+  });
+
   it('searches after restart and rebuilds after the local index is removed', async () => {
     const databasePath = await tempDatabase();
     const firstHit = (search: ManagedTranscriptSearch) => search.search({

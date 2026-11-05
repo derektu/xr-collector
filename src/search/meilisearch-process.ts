@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
+import { protectSecret } from '../core/redact.js';
 
 const run = promisify(execFile);
 
@@ -29,6 +30,7 @@ export async function startMeilisearchProcess(
   const port = options.port ?? await availableLoopbackPort();
   const url = `http://127.0.0.1:${port}`;
   const apiKey = randomBytes(32).toString('hex');
+  protectSecret(apiKey);
   await mkdir(databasePath, { recursive: true });
 
   const child = spawn(

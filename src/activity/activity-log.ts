@@ -15,7 +15,7 @@ import {
   type CollectionJob,
   type JobEvent,
 } from '../core/types.js';
-import { limitText, redact } from './redact.js';
+import { limitText, redact } from '../core/redact.js';
 
 /** Activity is kept this many days and then removed. */
 export const RETENTION_DAYS = 30;
@@ -98,7 +98,6 @@ export class ActivityLog {
   private readonly now: () => Date;
   private readonly setTimer: (callback: () => void, ms: number) => () => void;
   private readonly append: (file: string, data: string) => Promise<void>;
-  private readonly secrets = new Set<string>();
   private readonly memory: JobEvent[] = [];
   private pending: JobEvent[] = [];
   private writeTail: Promise<void> = Promise.resolve();
@@ -133,11 +132,6 @@ export class ActivityLog {
     await log.purge();
     log.schedulePurge();
     return log;
-  }
-
-  /** A value masked wherever it appears in an event, such as the Agent token. */
-  protectSecret(secret: string): void {
-    this.secrets.add(secret);
   }
 
   record(entry: JobEvent): void {
@@ -478,7 +472,7 @@ export class ActivityLog {
           ...this.healthValue,
           state: 'failing',
           lastFailureAt: this.now().toISOString(),
-          lastError: redact(error instanceof Error ? error.message : String(error), this.secrets),
+          lastError: redact(error instanceof Error ? error.message : String(error)),
         };
         console.error('Activity log write failed', error);
         this.scheduleRetry();
@@ -562,8 +556,8 @@ export class ActivityLog {
 
   /** Masks and shortens free text; stored events are masked again when read, so a secret protected after they were written stays hidden. */
   private sanitize(event: JobEvent): JobEvent {
-    const result: JobEvent = { ...event, message: limitText(redact(event.message, this.secrets), MESSAGE_LIMIT, 'head') };
-    if (event.detail !== undefined) result.detail = limitText(redact(event.detail, this.secrets), DETAIL_LIMIT, 'tail');
+    const result: JobEvent = { ...event, message: limitText(redact(event.message), MESSAGE_LIMIT, 'head') };
+    if (event.detail !== undefined) result.detail = limitText(redact(event.detail), DETAIL_LIMIT, 'tail');
     if (event.sourceTitle !== undefined) result.sourceTitle = limitText(event.sourceTitle, TITLE_LIMIT, 'head');
     return result;
   }
