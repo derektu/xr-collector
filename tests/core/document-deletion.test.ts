@@ -7,11 +7,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Collector, type CollectorOptions } from '../../src/core/collector.js';
-import {
-  CollectorError,
-  type SavedDocument,
-  type SubscriptionRecord,
-} from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import type { JobStore } from '../../src/jobs/job-store.js';
 import { openJobRecords } from '../../src/runtime/job-records.js';

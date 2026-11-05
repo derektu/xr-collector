@@ -5,11 +5,13 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../../src/core/types.js';
+import type { CollectionScheduleView } from '../../src/core/subscription-types.js';
+import type { DeviceUpdateStatus } from '../../src/core/update-types.js';
+import type { JobOverview, JobOverviewEntry } from '../../src/core/job-types.js';
 import { CloseHintRecord } from '../../src/electron/close-hint.js';
 import { menuStaleAfter, trayModel } from '../../src/electron/tray-menu.js';
 import type { TrayModel } from '../../src/electron/tray-menu.js';
-import type { AutoPauseNotification } from '../../src/core/types.js';
+import type { AutoPauseNotification } from '../../src/core/device-types.js';
 
 const now = new Date('2026-10-24T10:24:00+08:00');
 const entry = (overrides: Partial<JobOverviewEntry>): JobOverviewEntry => ({

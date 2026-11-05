@@ -7,8 +7,9 @@ import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, Subscripti
 import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
 import type { SourceRegistry } from '../core/source-registry.js';
-import type { BuildInfo, TranscriptSearch } from '../core/types.js';
-import type { CollectorRuntimeStatus } from '../core/types.js';
+import type { BuildInfo } from '../core/update-types.js';
+import type { TranscriptSearch } from '../core/search-types.js';
+import type { CollectorRuntimeStatus } from '../core/device-types.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
 import type { AgentConnectionAccess } from './agent-access.js';
 import type { UpdateAccess } from '../updates/types.js';

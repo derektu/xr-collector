@@ -3,12 +3,14 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
 import type { SourceRegistry } from '../core/source-registry.js';
-import type { ContentExtent, DocumentMetadata, SavedDocument } from '../core/types.js';
-import { CollectorError } from '../core/types.js';
+import type { ContentExtent, DeletionRecord, DocumentKey, DocumentMetadata, SavedDocument } from '../core/document-types.js';
+import { CollectorError } from '../core/collector-error.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import type { CapturedDocument } from '../core/source-contract.js';
-import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
-import { documentId, documentKeyFromId, documentKeyFromPath, documentPath, type DocumentKey } from './document-paths.js';
+import { collectedAtReadable, collectedBeforeDeletion } from '../core/deletion-rule.js';
+import { documentId } from '../core/document-id.js';
+import { DeletionLedger, deletionId } from './deleted-documents.js';
+import { documentKeyFromId, documentKeyFromPath, documentPath } from './document-paths.js';
 
 /**
  * A document file's frontmatter. The core owns these keys; the `collector` block also carries the

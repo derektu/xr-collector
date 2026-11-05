@@ -7,7 +7,7 @@ import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import type { SubscriptionPatch, SubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import type { SubscriptionRecord } from '../../src/core/types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import type { YouTubeSource } from '../../src/plugins/youtube/adapter.js';

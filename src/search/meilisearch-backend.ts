@@ -1,11 +1,6 @@
 import { createHash } from 'node:crypto';
-import type {
-  DocumentMetadata,
-  SavedDocument,
-  SearchHit,
-  SearchQuery,
-  SearchResponse,
-} from '../core/types.js';
+import type { DocumentMetadata, SavedDocument } from '../core/document-types.js';
+import type { SearchHit, SearchQuery, SearchResponse } from '../core/search-types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SearchBackend } from './managed-transcript-search.js';

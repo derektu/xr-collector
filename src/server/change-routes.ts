@@ -4,7 +4,7 @@ import { serve } from './api-route.js';
 import {
   CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeFeed, type ChangeKind,
 } from '../core/change-feed.js';
-import { CollectorError } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
 
 /** Event connections one listener serves at once. */
 export const MAX_STREAMS = 16;

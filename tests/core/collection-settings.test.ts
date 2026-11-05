@@ -10,7 +10,7 @@ import {
   settingsErrors,
 } from '../../src/core/collection-settings.js';
 import { publishedSince } from '../../src/core/published.js';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
 
 const { fields, subscription } = rangeSettings({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, { noun: '影片', measure: '支' });
 const field = (key: string) => fields.find((candidate) => candidate.key === key)!;

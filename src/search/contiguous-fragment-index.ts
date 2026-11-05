@@ -1,4 +1,5 @@
-import type { SavedDocument, SearchQuery } from '../core/types.js';
+import type { SavedDocument } from '../core/document-types.js';
+import type { SearchQuery } from '../core/search-types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
 import { normalizeSearchText } from './search-normalization.js';
 

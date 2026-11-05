@@ -1,4 +1,5 @@
-import { CollectorError, type BuildInfo, type UpdateOffer } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { BuildInfo, UpdateOffer } from '../core/update-types.js';
 import { validateBuildInfo } from '../runtime/build-info.js';
 import type { UpdateIdentity } from './types.js';
 

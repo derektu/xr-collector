@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
-import type { DocumentMetadata, DocumentSources } from '../core/types.js';
+import type { DocumentMetadata, DocumentSources } from '../core/document-types.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { ApiError, api } from './api-client.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';

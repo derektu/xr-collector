@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { ImportMode, ImportPreview, TransferResult, TransferStatus } from '../core/types.js';
+import type { ImportMode, ImportPreview, TransferResult, TransferStatus } from '../core/vault-types.js';
 import { api, ApiError } from './api-client.js';
 import { readUntil, useLiveRead } from './use-changes.js';
 import {

@@ -1,4 +1,4 @@
-import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../core/types.js';
+import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../core/subscription-types.js';
 import type { SourceDefinition } from '../core/source-contract.js';
 
 /**

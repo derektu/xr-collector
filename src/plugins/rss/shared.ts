@@ -1,4 +1,4 @@
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 import type { SourcePluginDeclaration } from '../../core/source-contract.js';
 import { RSS_SETTINGS, type RssSettings } from './settings.js';
 

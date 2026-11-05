@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { JobEvent } from '../../src/core/types.js';
+import type { JobEvent } from '../../src/core/activity-types.js';
 
 /** Every event written under a job store directory, in file and line order: the day files oldest first. */
 export async function readEventFiles(directory: string): Promise<JobEvent[]> {

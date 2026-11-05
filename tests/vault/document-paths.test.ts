@@ -4,8 +4,9 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { documentId } from '../../src/core/document-id.js';
 import {
-  documentId, documentIdFromPath, documentKeyFromId, documentKeyFromPath, documentPath, documentPathFromId,
+  documentIdFromPath, documentKeyFromId, documentKeyFromPath, documentPath, documentPathFromId,
 } from '../../src/vault/document-paths.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { packagePath } from '../../src/vault/vault-package.js';

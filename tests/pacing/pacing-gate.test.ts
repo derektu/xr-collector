@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
 import {
   type PacingEvent,
   waitRangeFromEnv,

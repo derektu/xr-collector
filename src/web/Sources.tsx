@@ -1,6 +1,12 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { CollectionSchedule, PendingSubscription, SubscriptionEntry, SubscriptionList, SourceTypeInfo } from '../core/types.js';
+import type {
+  CollectionSchedule,
+  PendingSubscription,
+  SubscriptionEntry,
+  SubscriptionList,
+} from '../core/subscription-types.js';
+import type { SourceTypeInfo } from '../core/source-info-types.js';
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';

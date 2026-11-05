@@ -2,7 +2,7 @@
 // announced only with a discovered offer, the current step from downloading through installing,
 // and nothing when this environment cannot install.
 import { describe, expect, it } from 'vitest';
-import type { DeviceUpdateStatus, UpdateOffer, UpdatePhase } from '../../src/core/types.js';
+import type { DeviceUpdateStatus, UpdateOffer, UpdatePhase } from '../../src/core/update-types.js';
 import { sidebarUpdate } from '../../src/web/update-presentation.js';
 
 const offer = { version: '0.1.3' } as UpdateOffer;

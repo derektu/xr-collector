@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DocumentMetadata } from '../core/types.js';
+import type { DocumentMetadata } from '../core/document-types.js';
 import { api, ApiError } from './api-client.js';
 
 /** Confirms deleting a document; the subscription it came from stays. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionJob, JobEvent } from '../../src/core/types.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
+import type { JobEvent } from '../../src/core/activity-types.js';
 import {
   activityQuery,
   activityStateSearch,

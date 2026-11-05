@@ -45,9 +45,6 @@ const FILE_MODULES: Readonly<Record<string, string>> = {
 };
 
 const EXCEPTIONS = [
-  // core -> vault: core and vault import each other.
-  'src/core/collector.ts -> src/vault/deleted-documents.ts',
-  'src/core/collector.ts -> src/vault/document-paths.ts',
   // updates -> runtime: the build identity.
   'src/updates/release-index.ts -> src/runtime/build-info.ts',
   // runtime -> server: runtime and server import each other (#265).
@@ -92,7 +89,7 @@ describe('imports that follow the layers', () => {
   it('reads the imports of every product file', () => {
     expect(files.length).toBeGreaterThan(150);
     expect(edges).toEqual(expect.arrayContaining([
-      'src/jobs/job-manager.ts -> src/core/types.ts',
+      'src/jobs/job-manager.ts -> src/core/job-types.ts',
       'src/web/App.tsx -> src/core/job-role.ts',
       'src/electron/main.ts -> src/runtime/collector-runtime.ts',
     ]));

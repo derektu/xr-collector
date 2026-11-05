@@ -1,5 +1,6 @@
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
-import { CollectorError, type PacingStatus } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { PacingStatus } from '../core/job-types.js';
 import type { PacingDeclaration } from '../core/source-contract.js';
 
 /** `interactive` requests (a preview the user waits for) go before queued background work. */

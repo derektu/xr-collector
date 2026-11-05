@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { importsOf, PRODUCT_SOURCE } from '../support/source-imports.js';
 
 // Guards the user: the window runs the web bundle in a browser, which has no Node. The bundle shares
-// modules with the server (core types, the source registry, collection settings, each plugin's shared
+// modules with the server (the core error, the source registry, collection settings, each plugin's shared
 // declarations), and a Node module imported into one of them still builds, but the window breaks when
 // it loads. This walks every file the bundle's entry reaches through imports that keep code, and fails
 // on an import of a Node built-in module. Type-only imports are erased from the bundle and not walked.
@@ -47,7 +47,7 @@ describe('a web bundle without Node code', () => {
     expect([...bundle.keys()]).toEqual(expect.arrayContaining([
       'src/web/main.tsx',
       'src/web/App.tsx',
-      'src/core/types.ts',
+      'src/core/collector-error.ts',
       'src/core/source-registry.ts',
       'src/core/collection-settings.ts',
       'src/plugins/youtube/shared.ts',

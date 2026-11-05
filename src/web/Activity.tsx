@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import type { ActivityGroupPage, ActivityLogHealth, ActivityQuery, ActivitySummaryEntry, JobView, JobEvent, Subscription } from '../core/types.js';
+import type {
+  ActivityGroupPage,
+  ActivityLogHealth,
+  ActivityQuery,
+  ActivitySummaryEntry,
+  JobEvent,
+} from '../core/activity-types.js';
+import type { JobView } from '../core/job-types.js';
+import type { Subscription } from '../core/subscription-types.js';
 import {
   activityQuery,
   activityStateSearch,

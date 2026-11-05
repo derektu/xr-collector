@@ -4,27 +4,26 @@ import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, workKey } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import {
-  CollectorError,
-  type ChannelJobTrigger,
-  type CollectionJob,
-  type JobError,
-  type JobItem,
-  type JobOverview,
-  type JobPage,
-  type JobPhase,
-  type JobResult,
-  type JobRetry,
-  type JobRole,
-  type JobStopKind,
-  type JobSubmission,
-  type JobView,
-  type JobSummary,
-  type NewJobEvent,
-  type SkipReason,
-  type SubscriptionSettings,
-  type WorkStatus,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type {
+  ChannelJobTrigger,
+  CollectionJob,
+  JobError,
+  JobItem,
+  JobOverview,
+  JobPage,
+  JobPhase,
+  JobResult,
+  JobRetry,
+  JobRole,
+  JobStopKind,
+  JobSubmission,
+  JobView,
+  JobSummary,
+  SkipReason,
+} from '../core/job-types.js';
+import type { NewJobEvent } from '../core/activity-types.js';
+import type { SubscriptionSettings, WorkStatus } from '../core/subscription-types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../core/source-contract.js';
 import { limitText, redact } from '../core/redact.js';

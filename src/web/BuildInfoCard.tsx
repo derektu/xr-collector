@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BuildInfo, DeviceUpdateStatus } from '../core/types.js';
+import type { BuildInfo, DeviceUpdateStatus } from '../core/update-types.js';
 import { api } from './api-client.js';
 import './build-info.css';
 import { SoftwareUpdate } from './SoftwareUpdate.js';

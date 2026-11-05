@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { CollectionScheduleView, JobView } from '../core/types.js';
+import type { CollectionScheduleView } from '../core/subscription-types.js';
+import type { JobView } from '../core/job-types.js';
 import { api } from './api-client.js';
 import { activeJobs } from './source-presentation.js';
 import { useChanges } from './use-changes.js';

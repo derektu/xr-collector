@@ -3,11 +3,11 @@ import type { EventType } from '../core/event-catalog.js';
 import { createReadStream } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { CollectorError, type DeviceUpdateStatus, type UpdateInstallAttempt, type UpdateOffer } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { DeviceUpdateStatus, UpdateInstallAttempt, UpdateOffer, UpdateSelection } from '../core/update-types.js';
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import { compareVersions } from './release-index.js';
 import type { NativeInstaller, NativeInstallRecovery, UpdateAccess, UpdateApplyRequest, UpdateIdentity, UpdateSource } from './types.js';
-import type { UpdateSelection } from '../core/types.js';
 
 interface SavedUpdateState {
   schemaVersion: 1;

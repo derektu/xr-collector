@@ -3,7 +3,7 @@
 // source tags, highlighted snippets, page numbers, Reader paths, and the page the list lands on
 // after a deletion.
 import { describe, expect, it } from 'vitest';
-import type { DocumentMetadata } from '../../src/core/types.js';
+import type { DocumentMetadata } from '../../src/core/document-types.js';
 import {
   listStateSearch,
   pageItems,

@@ -1,5 +1,6 @@
 import type { SourceDeclarations } from './source-registry.js';
-import type { ChannelJobTrigger, CollectionJob, JobEvent, JobProgress, JobRole } from './types.js';
+import type { ChannelJobTrigger, CollectionJob, JobProgress, JobRole } from './job-types.js';
+import type { JobEvent } from './activity-types.js';
 
 /**
  * The rules that depend on what a job does: collect one item, check a subscription, or subscribe to

@@ -2,7 +2,7 @@
 // and result of removal with or without documents, and every subscription status with its
 // progress, retry time, failures in a row, next check, and color.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Subscription } from '../../src/core/types.js';
+import type { Subscription } from '../../src/core/subscription-types.js';
 import {
   asksAboutDocuments, removalOutcome, removeOptions, subscribePlan, subscriptionStatus, subscriptionStatusTone,
 } from '../../src/web/subscription-presentation.js';

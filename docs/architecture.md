@@ -11,7 +11,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/electron` | 主視窗、profile 與程式生命週期 |
 | `src/runtime` | 單一 VaultWorkspace、UI／Agent listeners 與啟動／關閉順序；隨附資源（runtime 程式、搜尋詞庫、Agent Skill、系統匣圖示）的路徑只由 `bundled-resources.ts` 依開發版或打包版與平台算出，Electron、開發 server 與 verify skill 都向它要 |
 | `src/server` | UI／Agent HTTP routes、Bearer 授權與 listener |
-| `src/core` | 共用型別、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引 |
+| `src/core` | 共用型別、共用的值、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引（`collector.ts`，刪除紀錄經它的 `DeletionRecords` 介面讀寫，實作在 `src/vault`）。型別依區塊分檔為 `*-types.ts`（文件、搜尋、訂閱、來源資訊、工作、活動記錄、Vault、更新、裝置），這些檔只有型別、只 import 型別，所以 server、Electron 與 Web 引用它們不會帶進任何程式；共用的值各在自己的模組，例如 `CollectorError`（`collector-error.ts`）與訂閱的失敗上限（`subscription-limits.ts`） |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
 | `src/jobs` | 收集工作的接受、去重、有界佇列與公平派工（順序在 `job-queue.ts`）、自動重試、請求通道冷卻時的等待、重啟接續（`job-recovery.ts`）與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報（`subscription-reports.ts`），並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、新增中的請求） |

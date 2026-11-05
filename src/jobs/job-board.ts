@@ -1,6 +1,7 @@
 import { assertNever, jobKey, roleView, type RoleView } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { JobOverview, JobOverviewEntry, JobView, WorkStatus } from '../core/types.js';
+import type { JobOverview, JobOverviewEntry, JobView } from '../core/job-types.js';
+import type { WorkStatus } from '../core/subscription-types.js';
 
 /** How long a failed single item or subscription request stays in the failed section. */
 export const FAILED_RETENTION_MS = 7 * 86_400_000;

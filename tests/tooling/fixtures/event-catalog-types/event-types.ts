@@ -1,7 +1,7 @@
 // Compiled by tests/tooling/event-catalog.test.ts and never run. Each `@ts-expect-error` line is an
 // event kind the event catalog does not list, which the typecheck must refuse; when it stops refusing
 // it, the directive is unused and the compile fails.
-import type { EventRecorder, JobEvent } from '../../../../src/core/types.js';
+import type { EventRecorder, JobEvent } from '../../../../src/core/activity-types.js';
 import type { UpdateServiceOptions } from '../../../../src/updates/update-service.js';
 
 declare const recorder: EventRecorder;

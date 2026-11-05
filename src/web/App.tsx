@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DeviceUpdateStatus, SourceTypeInfo, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
+import type { DeviceUpdateStatus } from '../core/update-types.js';
+import type { SourceTypeInfo } from '../core/source-info-types.js';
+import type { VaultSetupResult, VaultSetupStatus } from '../core/vault-types.js';
 import { roleOf } from '../core/job-role.js';
 import { Activity } from './Activity.js';
 import { Jobs } from './Jobs.js';

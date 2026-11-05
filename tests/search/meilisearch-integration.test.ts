@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { redact } from '../../src/core/redact.js';
-import type { SavedDocument } from '../../src/core/types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { ManagedTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { loadSearchLexicon } from '../../src/search/search-lexicon.js';

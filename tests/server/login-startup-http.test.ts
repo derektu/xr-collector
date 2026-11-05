@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { LoginStartupAccess } from '../../src/core/login-startup.js';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';

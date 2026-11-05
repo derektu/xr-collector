@@ -1,4 +1,4 @@
-import type { ActivityGroupPage, ActivityQuery } from '../core/types.js';
+import type { ActivityGroupPage, ActivityQuery } from '../core/activity-types.js';
 
 /** One read of a check group's detail: up to `limit` checks after `cursor`, with events at `severity`. */
 export type GroupPageReader = (groupId: string, query: { limit: number; cursor?: string; severity?: ActivityQuery['severity'] }) => Promise<ActivityGroupPage>;

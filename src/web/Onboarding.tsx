@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import './onboarding.css';
-import type { PackageDescription } from '../core/types.js';
+import type { PackageDescription } from '../core/vault-types.js';
 import { AgentConnectionHelp } from './AgentConnectionHelp.js';
 import { AgentConnection } from './AgentConnection.js';
 import { ListRow } from './NewVaultFields.js';

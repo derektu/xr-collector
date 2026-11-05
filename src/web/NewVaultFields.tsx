@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { NewVaultCheck } from '../core/types.js';
+import type { NewVaultCheck } from '../core/vault-types.js';
 import { api } from './api-client.js';
 
 const CHECK_DELAY_MS = 250;

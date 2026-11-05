@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SearchStatusReport } from '../core/types.js';
+import type { SearchStatusReport } from '../core/search-types.js';
 import { api } from './api-client.js';
 import { dateTimeLabel } from './document-presentation.js';
 import { useLiveRead } from './use-changes.js';

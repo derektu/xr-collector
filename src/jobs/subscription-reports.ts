@@ -1,7 +1,10 @@
 import { roleOf, subscriptionOf } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { FailureClass, SubscriptionTarget } from '../core/source-contract.js';
-import { MAX_CHECK_ATTEMPTS, type CollectionJob, type ItemFailureEntry, type JobError, type NewJobEvent, type SkipReason } from '../core/types.js';
+import { MAX_CHECK_ATTEMPTS } from '../core/subscription-limits.js';
+import type { CollectionJob, JobError, SkipReason } from '../core/job-types.js';
+import type { ItemFailureEntry } from '../core/subscription-types.js';
+import type { NewJobEvent } from '../core/activity-types.js';
 import { INTERRUPTED_REPEATEDLY } from './job-recovery.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
 

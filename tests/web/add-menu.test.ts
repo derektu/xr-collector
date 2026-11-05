@@ -3,7 +3,7 @@
 // subscribing when the address is of the other kind. An address no source type owns reads as
 // unsupported.
 import { describe, expect, it } from 'vitest';
-import type { UrlRecognition } from '../../src/core/types.js';
+import type { UrlRecognition } from '../../src/core/source-info-types.js';
 import {
   addDialogTitles,
   addMismatch,

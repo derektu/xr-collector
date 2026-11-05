@@ -1,4 +1,4 @@
-import type { ChangeCounts, ItemCounts, TransferStatus } from '../core/types.js';
+import type { ChangeCounts, ItemCounts, TransferStatus } from '../core/vault-types.js';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 const day = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

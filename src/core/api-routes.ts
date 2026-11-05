@@ -3,15 +3,41 @@
 // renames no longer matches the type its clients read, so the change fails the typecheck instead of
 // reaching a screen as `undefined`.
 import type { ChangeBatch } from './changes.js';
+import type { ActivityLogHealth, ActivityGroupPage, ActivityPage, ActivitySummaryPage } from './activity-types.js';
 import type {
-  ActivityLogHealth, AgentConnection, AgentConnectionStatus, AgentPortSetting, BuildInfo, CollectionScheduleView,
-  CollectorRuntimeStatus, ConnectivityStatus, DeviceUpdateStatus, ExportSuggestion, ImportMode, ImportPreview, JobOverview,
-  JobSubmission, LoginStartupStatus, NewVaultCheck, NotificationState, PackageDescription, PacingStatus, TransferStatus,
-  UpdateSelection, VaultInspection, VaultSetupRequest, VaultSetupResult, VaultSetupStatus,
-  ActivityGroupPage, ActivityPage, ActivitySummaryPage, DocumentDeletion, DocumentPage, DocumentSources, JobPage, JobSummary,
-  JobView, SavedDocument, SearchResponse, SearchStatusReport, SourceTypeInfo, SubscriptionDetail, SubscriptionList,
-  SubscriptionPreview, SubscriptionRecord, SubscriptionSettings, UrlRecognition,
-} from './types.js';
+  AgentConnection,
+  AgentConnectionStatus,
+  AgentPortSetting,
+  CollectorRuntimeStatus,
+  ConnectivityStatus,
+  LoginStartupStatus,
+  NotificationState,
+} from './device-types.js';
+import type { BuildInfo, DeviceUpdateStatus, UpdateSelection } from './update-types.js';
+import type {
+  CollectionScheduleView,
+  SubscriptionDetail,
+  SubscriptionList,
+  SubscriptionPreview,
+  SubscriptionRecord,
+  SubscriptionSettings,
+} from './subscription-types.js';
+import type {
+  ExportSuggestion,
+  ImportMode,
+  ImportPreview,
+  NewVaultCheck,
+  PackageDescription,
+  TransferStatus,
+  VaultInspection,
+  VaultSetupRequest,
+  VaultSetupResult,
+  VaultSetupStatus,
+} from './vault-types.js';
+import type { JobOverview, JobSubmission, PacingStatus, JobPage, JobSummary, JobView } from './job-types.js';
+import type { DocumentDeletion, DocumentPage, DocumentSources, SavedDocument } from './document-types.js';
+import type { SearchResponse, SearchStatusReport } from './search-types.js';
+import type { SourceTypeInfo, UrlRecognition } from './source-info-types.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 

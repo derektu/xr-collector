@@ -1,7 +1,7 @@
 import { jobKey, roleOf } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SubscriptionTarget } from '../core/source-contract.js';
-import type { CollectionJob, JobError, JobItem, JobResult, SkipReason } from '../core/types.js';
+import type { CollectionJob, JobError, JobItem, JobResult, SkipReason } from '../core/job-types.js';
 import { ACTIVE, progressOf, settledItem } from './check-items.js';
 
 /**

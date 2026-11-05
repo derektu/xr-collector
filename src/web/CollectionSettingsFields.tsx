@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { settingFieldError, settingsErrors } from '../core/collection-settings.js';
-import type { SourceSettingField, SubscriptionSettings } from '../core/types.js';
+import type { SourceSettingField } from '../core/source-info-types.js';
+import type { SubscriptionSettings } from '../core/subscription-types.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 /** A typed number as a number when it is all digits; anything else stays text, which no number field accepts. */

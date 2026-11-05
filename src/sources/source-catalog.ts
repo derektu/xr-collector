@@ -1,18 +1,17 @@
 import type { SourceRegistry } from '../core/source-registry.js';
-import {
-  CollectorError,
-  type ActivityCheckSummary,
-  type JobView,
-  type DocumentMetadata,
-  MAX_CHECK_ATTEMPTS,
-  type PendingSubscription,
-  type SkipReason,
-  type SubscriptionCollectionEntry,
-  type SubscriptionEntry,
-  type SubscriptionList,
-  type Subscription,
-  type SubscriptionDetail,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { ActivityCheckSummary } from '../core/activity-types.js';
+import type { JobView, SkipReason } from '../core/job-types.js';
+import type { DocumentMetadata } from '../core/document-types.js';
+import { MAX_CHECK_ATTEMPTS } from '../core/subscription-limits.js';
+import type {
+  PendingSubscription,
+  SubscriptionCollectionEntry,
+  SubscriptionEntry,
+  SubscriptionList,
+  Subscription,
+  SubscriptionDetail,
+} from '../core/subscription-types.js';
 import type { SourceTypeDeclaration } from './source-types.js';
 
 /** Rows a subscription's collection record shows. */

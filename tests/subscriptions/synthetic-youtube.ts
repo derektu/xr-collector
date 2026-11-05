@@ -1,12 +1,9 @@
 import type { DocumentVault } from '../../src/core/collector.js';
 import type { CapturedDocument } from '../../src/core/source-contract.js';
-import type { DocumentKey } from '../../src/vault/document-paths.js';
-import {
-  CollectorError,
-  type DocumentMetadata,
-  type SavedDocument,
-  type SubscriptionRecord,
-} from '../../src/core/types.js';
+import type { DocumentKey } from '../../src/core/document-types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { DocumentMetadata, SavedDocument } from '../../src/core/document-types.js';
+import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import type {
   CaptureOptions,
   DiscoveredYouTubeVideo,

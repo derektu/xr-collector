@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseCursor, type Change, type ChangeBatch } from '../../src/core/change-feed.js';
-import type { SearchResponse, SearchStatus, TranscriptSearch } from '../../src/core/types.js';
+import type { SearchResponse, SearchStatus, TranscriptSearch } from '../../src/core/search-types.js';
 import type { Pacing, PacingEvent } from '../../src/pacing/pacing-gate.js';
 import type { DiscoveredYouTubeVideo } from '../../src/plugins/youtube/adapter.js';
 import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';

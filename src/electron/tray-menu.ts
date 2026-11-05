@@ -1,6 +1,8 @@
-import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview, JobOverviewEntry } from '../core/types.js';
+import type { CollectionScheduleView } from '../core/subscription-types.js';
+import type { DeviceUpdateStatus } from '../core/update-types.js';
+import type { JobOverview, JobOverviewEntry } from '../core/job-types.js';
 import type { Change } from '../core/changes.js';
-import type { AutoPauseNotification } from '../core/types.js';
+import type { AutoPauseNotification } from '../core/device-types.js';
 import { upcomingTime, upcomingTimeText, type UpcomingTime } from '../core/upcoming-time.js';
 
 /** What the menu shows comes from jobs and their pacing, the network, the schedule and subscriptions, updates and notifications, and the open Vault. */

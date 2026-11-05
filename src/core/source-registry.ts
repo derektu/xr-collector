@@ -1,6 +1,6 @@
 import type { SourceDefinition, SourcePluginDeclaration } from './source-contract.js';
 import type { SubscriptionExchange } from './subscription-exchange.js';
-import type { JobRole } from './types.js';
+import type { JobRole } from './job-types.js';
 
 /**
  * The declarations of a set of source types, in their order, as one value that cannot change. Who

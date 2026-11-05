@@ -10,7 +10,8 @@ import { SubscriptionService, SubscriptionServices } from '../../src/subscriptio
 import { forwardingPort } from '../../src/jobs/subscription-port.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { Collector } from '../../src/core/collector.js';
-import { CollectorError, type SavedDocument } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';

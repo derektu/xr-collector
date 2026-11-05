@@ -1,4 +1,4 @@
-import type { BuildInfo, DeviceUpdateStatus, UpdateOffer, UpdateSelection } from '../core/types.js';
+import type { BuildInfo, DeviceUpdateStatus, UpdateOffer, UpdateSelection } from '../core/update-types.js';
 
 export interface UpdateIdentity { version: string; target: string }
 export interface UpdateSource {

@@ -4,10 +4,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Collector } from '../core/collector.js';
-import {
-  CollectorError, type ChangeCounts, type ExportSuggestion, type ImportMode, type ImportPreview,
-  type TransferOperation, type TransferResult, type TransferStatus, type TranscriptSearch,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type {
+  ChangeCounts,
+  ExportSuggestion,
+  ImportMode,
+  ImportPreview,
+  TransferOperation,
+  TransferResult,
+  TransferStatus,
+} from '../core/vault-types.js';
+import type { TranscriptSearch } from '../core/search-types.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import { SubscriptionService, SubscriptionServices } from '../subscriptions/subscription-service.js';
 import { forwardingPort } from '../jobs/subscription-port.js';
@@ -115,7 +122,7 @@ export interface WorkspaceOptions {
   /** Hears each change of the Vault's data and of its operation status, once reads return it. */
   noteChange?: NoteChange;
   /** Device-profile notification sink; Vault data never contains notification delivery state. */
-  onAutoPaused?: (vaultId: string, sourceType: string, subscription: import('../core/types.js').SubscriptionRecord) => void | Promise<void>;
+  onAutoPaused?: (vaultId: string, sourceType: string, subscription: import('../core/subscription-types.js').SubscriptionRecord) => void | Promise<void>;
 }
 
 /**
@@ -193,8 +200,8 @@ export class VaultWorkspace {
   private readonly noteChange: NoteChange = (change) => this.options.noteChange?.(change);
 
   /** Active Vault subscription rows for device-profile notification reconciliation. */
-  async notificationSubscriptions(): Promise<Array<{ vaultId: string; sourceType: string; subscription: import('../core/types.js').SubscriptionRecord }>> {
-    const rows: Array<{ vaultId: string; sourceType: string; subscription: import('../core/types.js').SubscriptionRecord }> = [];
+  async notificationSubscriptions(): Promise<Array<{ vaultId: string; sourceType: string; subscription: import('../core/subscription-types.js').SubscriptionRecord }>> {
+    const rows: Array<{ vaultId: string; sourceType: string; subscription: import('../core/subscription-types.js').SubscriptionRecord }> = [];
     for (const service of this.current.subscriptions.all()) {
       for (const subscription of await service.list()) rows.push({ vaultId: this.current.vaultId, sourceType: service.type, subscription });
     }

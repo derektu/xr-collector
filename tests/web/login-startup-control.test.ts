@@ -3,7 +3,7 @@
 // hidden until the page reloads, and a slow read started before a write puts the old value back.
 import { describe, expect, it } from 'vitest';
 import { LoginStartupControl, loginStartupNote, type LoginStartupPort } from '../../src/web/login-startup-control.js';
-import type { LoginStartupStatus } from '../../src/core/types.js';
+import type { LoginStartupStatus } from '../../src/core/device-types.js';
 import { eventually } from '../support/wait.js';
 
 const status = (enabled: boolean): LoginStartupStatus => ({

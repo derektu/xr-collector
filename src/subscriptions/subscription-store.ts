@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { NoteChange } from '../core/change-feed.js';
 import { readJsonFile } from '../core/json-file.js';
-import type { SubscriptionRecord } from '../core/types.js';
+import type { SubscriptionRecord } from '../core/subscription-types.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import {
   removalsFromJson,

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import type { PackageDescription, VaultSetupRequest, VaultSetupResult, VaultSetupStatus } from '../core/types.js';
+import type { PackageDescription, VaultSetupRequest, VaultSetupResult, VaultSetupStatus } from '../core/vault-types.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { api, ApiError } from './api-client.js';
 import { useLiveRead } from './use-changes.js';

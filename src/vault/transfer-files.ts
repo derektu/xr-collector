@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CollectorError } from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
 import { VAULT_MARKER } from './vault-directory.js';
 
 /**

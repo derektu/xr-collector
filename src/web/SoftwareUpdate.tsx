@@ -1,5 +1,5 @@
 import { useRef, useState, type RefObject } from 'react';
-import type { DeviceUpdateStatus, UpdateOffer } from '../core/types.js';
+import type { DeviceUpdateStatus, UpdateOffer } from '../core/update-types.js';
 import { api } from './api-client.js';
 import { MarkdownBody } from './MarkdownBody.js';
 

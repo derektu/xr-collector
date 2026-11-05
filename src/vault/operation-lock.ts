@@ -1,4 +1,5 @@
-import { CollectorError, type CollectorErrorCode, type TransferOperation, type TransferResult, type TransferStatus } from '../core/types.js';
+import { CollectorError, type CollectorErrorCode } from '../core/collector-error.js';
+import type { TransferOperation, TransferResult, TransferStatus } from '../core/vault-types.js';
 
 export type VaultAccess = 'vault-read' | 'vault-write' | 'device-data' | 'vault-operation';
 export type OperationStatus = Omit<TransferStatus, 'vaultPath' | 'relocationUnavailable'>;

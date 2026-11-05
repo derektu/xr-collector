@@ -4,7 +4,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { protectSecret } from '../../src/core/redact.js';
-import type { AutoPauseNotification } from '../../src/core/types.js';
+import type { AutoPauseNotification } from '../../src/core/device-types.js';
 
 const created = vi.hoisted(() => [] as Array<{ title: string; body: string }>);
 vi.mock('electron', () => ({

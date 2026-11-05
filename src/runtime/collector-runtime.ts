@@ -2,16 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import {
-  CollectorError,
-  type BuildInfo,
-  type TranscriptSearch,
-  type VaultInspection,
-  type NewVaultCheck,
-  type VaultSetupRequest,
-  type VaultSetupResult,
-  type VaultSetupStatus,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { BuildInfo } from '../core/update-types.js';
+import type { TranscriptSearch } from '../core/search-types.js';
+import type {
+  VaultInspection,
+  NewVaultCheck,
+  VaultSetupRequest,
+  VaultSetupResult,
+  VaultSetupStatus,
+} from '../core/vault-types.js';
 import { loadBuildInfo } from './build-info.js';
 import { ChangeFeed } from '../core/change-feed.js';
 import { CollectionPause } from '../core/collection-pause.js';
@@ -33,7 +33,7 @@ import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOpti
 import type { UpdateLease } from '../vault/operation-lock.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../notifications/notification-center.js';
 import type { EventType } from '../core/event-catalog.js';
-import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus } from '../core/types.js';
+import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus } from '../core/device-types.js';
 
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */

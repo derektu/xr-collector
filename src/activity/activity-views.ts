@@ -1,17 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { eventSpec } from '../core/event-catalog.js';
-import {
-  CollectorError,
-  type ActivityCheckDetail,
-  type ActivityCheckSummary,
-  type ActivityGroupPage,
-  type ActivityLogHealth,
-  type ActivityPage,
-  type ActivityQuery,
-  type ActivitySummaryEntry,
-  type ActivitySummaryPage,
-  type JobEvent,
-} from '../core/types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type {
+  ActivityCheckDetail,
+  ActivityCheckSummary,
+  ActivityGroupPage,
+  ActivityLogHealth,
+  ActivityPage,
+  ActivityQuery,
+  ActivitySummaryEntry,
+  ActivitySummaryPage,
+  JobEvent,
+} from '../core/activity-types.js';
 import { RETENTION_DAYS, type ActivityLog, type ActivityScope } from './activity-log.js';
 
 const DEFAULT_LIMIT = 50;

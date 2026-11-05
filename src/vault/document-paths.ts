@@ -1,5 +1,6 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { DocumentSourceType } from '../core/types.js';
+import { documentId } from '../core/document-id.js';
+import type { DocumentKey, DocumentSourceType } from '../core/document-types.js';
 
 /**
  * Where documents live in a Vault and how a document ID maps to its file. A document ID is
@@ -9,21 +10,12 @@ import type { DocumentSourceType } from '../core/types.js';
  * document.
  */
 
-export interface DocumentKey {
-  sourceType: DocumentSourceType;
-  sourceId: string;
-}
-
 export function isSourceType(sources: SourceDeclarations, value: string): value is DocumentSourceType {
   return sources.get(value) !== undefined;
 }
 
 export function isSourceId(sources: SourceDeclarations, sourceType: DocumentSourceType, sourceId: string): boolean {
   return sources.get(sourceType)?.item.keyPattern.test(sourceId) ?? false;
-}
-
-export function documentId(key: DocumentKey): string {
-  return `${key.sourceType}:${key.sourceId}`;
 }
 
 export function documentPath(key: DocumentKey): string {

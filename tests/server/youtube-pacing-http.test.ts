@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../src/plugins/youtube/server.js';
-import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { SubscriptionPreview } from '../../src/core/subscription-types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 

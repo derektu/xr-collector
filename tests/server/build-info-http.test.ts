@@ -9,7 +9,7 @@ import { VaultOperationLock, type VaultAccess } from '../../src/vault/operation-
 import type { VaultWorkspace } from '../../src/vault/workspace.js';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BuildInfo } from '../../src/core/types.js';
+import type { BuildInfo } from '../../src/core/update-types.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 

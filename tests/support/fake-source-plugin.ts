@@ -1,4 +1,5 @@
-import { CollectorError, type SubscriptionSettings } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { SubscriptionSettings } from '../../src/core/subscription-types.js';
 import type { PacingGate } from '../../src/pacing/pacing-gate.js';
 import type {
   CapturedItem,

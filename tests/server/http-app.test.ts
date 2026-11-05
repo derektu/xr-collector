@@ -5,7 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector, type DocumentVault } from '../../src/core/collector.js';
-import { CollectorError, type CollectionJob, type SavedDocument } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { CollectionJob } from '../../src/core/job-types.js';
+import type { SavedDocument } from '../../src/core/document-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';

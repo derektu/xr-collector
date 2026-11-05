@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chooseSubtitleTrack, type SubtitleTrack } from './language.js';
 import { formatTranscriptSegments } from './transcript.js';
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 import { publishedSince } from '../../core/published.js';
 import type { GatePriority } from '../../pacing/pacing-gate.js';
 import type { CaptureOptions, CapturedTranscript, YouTubeCapture } from './adapter.js';

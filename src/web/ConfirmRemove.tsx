@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SubscriptionEntry } from '../core/types.js';
+import type { SubscriptionEntry } from '../core/subscription-types.js';
 import { api } from './api-client.js';
 import { asksAboutDocuments, removeChoices, removedMessage } from './subscription-presentation.js';
 

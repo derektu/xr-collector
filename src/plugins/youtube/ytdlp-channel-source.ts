@@ -6,7 +6,7 @@ import type {
   ResolvedYouTubeChannel,
   YouTubeChannelSource,
 } from './adapter.js';
-import { CollectorError } from '../../core/types.js';
+import { CollectorError } from '../../core/collector-error.js';
 import type { SubscriptionTarget } from '../../core/source-contract.js';
 import { classifyYtDlpError, UNGATED, type RequestGate } from './ytdlp-capture.js';
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { settingsErrors } from '../core/collection-settings.js';
-import type { RecognitionAction, SourceSettingField, SourceTypeInfo, SubscriptionSettings, UrlRecognition } from '../core/types.js';
+import type { RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../core/source-info-types.js';
+import type { SubscriptionSettings } from '../core/subscription-types.js';
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { TransferStatus } from '../core/types.js';
+import type { TransferStatus } from '../core/vault-types.js';
 import { api } from './api-client.js';
 import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
 import { useLiveRead } from './use-changes.js';

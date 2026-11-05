@@ -3,7 +3,7 @@ import path from 'node:path';
 
 /** One import or re-export in a product file, with its relative target resolved to a repo path. */
 export interface SourceImport {
-  /** The importing file, as a repo path such as `src/core/types.ts`. */
+  /** The importing file, as a repo path such as `src/core/collector.ts`. */
   from: string;
   /** The specifier as written, such as `../jobs/job-store.js` or `node:fs`. */
   specifier: string;

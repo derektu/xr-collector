@@ -5,7 +5,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { INTERVAL_OPTIONS } from '../../src/core/collection-settings.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
-import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
+import type { SubscriptionPreview } from '../../src/core/subscription-types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
 import { recognizeUrl, sourceTypeDeclarations, type SourceTypeDeclaration } from '../../src/sources/source-types.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';

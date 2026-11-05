@@ -3,7 +3,9 @@
 // table stops refusing it, the directive is unused and the compile fails.
 import type { FastifyInstance } from 'fastify';
 import { API_ROUTES, type ResponseOf } from '../../../../src/core/api-routes.js';
-import type { AgentConnection, DeviceUpdateStatus, TransferStatus } from '../../../../src/core/types.js';
+import type { AgentConnection } from '../../../../src/core/device-types.js';
+import type { DeviceUpdateStatus } from '../../../../src/core/update-types.js';
+import type { TransferStatus } from '../../../../src/core/vault-types.js';
 import { serve } from '../../../../src/server/api-route.js';
 
 declare const app: FastifyInstance;

@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
-import type { UpdateOffer } from '../../src/core/types.js';
+import type { UpdateOffer } from '../../src/core/update-types.js';
 import { UpdateService } from '../../src/updates/update-service.js';
 import type { UpdateApplyRequest } from '../../src/updates/types.js';
 import { eventually } from '../support/wait.js';

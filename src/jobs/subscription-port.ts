@@ -1,5 +1,6 @@
 import type { FailureClass, ListedItem, SubscriptionTarget } from '../core/source-contract.js';
-import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../core/types.js';
+import type { ItemFailureEntry, SubscriptionSettings } from '../core/subscription-types.js';
+import type { JobError, JobSubmission, SkipReason } from '../core/job-types.js';
 
 /** The items one check collects, picked from its subscription's listing. */
 export interface CandidateSelection {

@@ -1,7 +1,7 @@
 import { markdownToPlainText } from '../core/document-text.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/types.js';
+import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/document-types.js';
 
 export const DOCUMENTS_PAGE_SIZE = 20;
 export const SEARCH_DEBOUNCE_MS = 300;

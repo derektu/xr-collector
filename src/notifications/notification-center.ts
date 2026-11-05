@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import type { AutoPauseNotification, NotificationAvailability, NotificationState, SubscriptionRecord } from '../core/types.js';
+import type { AutoPauseNotification, NotificationAvailability, NotificationState } from '../core/device-types.js';
+import type { SubscriptionRecord } from '../core/subscription-types.js';
 import { limitText, redact } from '../core/redact.js';
 import { replaceFile } from '../core/json-file.js';
 

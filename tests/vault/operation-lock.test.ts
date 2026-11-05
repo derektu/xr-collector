@@ -2,7 +2,7 @@
 // can be cancelled without running the operation, reads and writes are refused while unsafe, and
 // work resumes once the operation finishes, fails or is cancelled.
 import { describe, expect, it, vi } from 'vitest';
-import { CollectorError } from '../../src/core/types.js';
+import { CollectorError } from '../../src/core/collector-error.js';
 import { VaultOperationLock } from '../../src/vault/operation-lock.js';
 import { eventually } from '../support/wait.js';
 
