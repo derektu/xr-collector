@@ -2,7 +2,7 @@
 // codes come from the plugin that declares them, a plugin cannot change the status of a code the
 // core owns, and an unknown code is 500.
 import { describe, expect, it } from 'vitest';
-import { errorStatus } from '../../src/server/app.js';
+import { errorStatus } from '../../src/server/error-status.js';
 import { fakeDefinition } from '../support/fake-source-plugin.js';
 import { PRODUCT_SOURCES, productSourcesWith } from '../support/product-sources.js';
 
