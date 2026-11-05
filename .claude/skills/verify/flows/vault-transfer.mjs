@@ -1,17 +1,48 @@
 // The Vault operations through Settings: export with keep or overwrite of an existing file, merge,
 // replace and nothing-to-import, opening another Vault, and an import that waits for a running
-// collection and lets it resume. A broken path loses or overwrites a user's documents. External
+// collection and lets it resume. Both Vaults subscribe to channel E, which has no videos; the other
+// Vault's E pauses itself after failing checks and then gets a person's newer range, so the merge
+// takes the range and leaves this Vault's E enabled; a later range set here, imported into the other
+// Vault, arrives there while its E stays paused by itself. A broken path loses or overwrites a user's documents. External
 // collection uses synthetic YouTube data; all transfers use the production HTTP handlers and real
 // files and search indexes. A fixed Vault location refusing other Vaults is in
 // tests/vault/vault-open.test.ts.
 import { cp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { collect, idle, launchWeb, subscribe } from '../scripts/lib/index.mjs';
+import { channel, channelUrl, collect, idle, launchWeb, subscribe, waitFor as settle } from '../scripts/lib/index.mjs';
+import { editJson } from './lib/files.mjs';
 import { recordRequests } from './lib/revision.mjs';
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';
 export const covers = ['vault-info', 'vault-actions', 'vault-export', 'vault-import-merge', 'vault-import-replace', 'vault-import-nothing', 'vault-open-other'];
+
+const DAY = 24 * 60 * 60_000;
+/** Channel E, without videos, so subscribing to it changes no document count. */
+const E = channel('E', 0, '頻道 E');
+/** The range the other Vault's person gives E after it paused itself. */
+const DONOR_BACKFILL_DAYS = 14;
+/** The range this Vault's person gives E after the merge, newer than the other Vault's. */
+const LATER_BACKFILL_DAYS = 21;
+
+/** Subscription E as the instance's API reports it. */
+const subscriptionE = async (instance) => (await instance.api('/api/subscriptions')).subscriptions.find((entry) => entry.id === E.id);
+const addChannelE = (instance) => instance.updateCatalog((catalog) => { catalog.youtube.channels.push(E); });
+
+/**
+ * Pauses E by itself in `instance`: four failures in a row, the first 25 hours ago, are written to
+ * the Vault file, and a fifth failing check pauses it, as `subscription-failures` does.
+ */
+async function autoPauseE(instance) {
+  await instance.updateCatalog((catalog) => { catalog.youtube.failListing = E.id; });
+  await editJson(path.join(instance.runDir, 'vault', 'settings', 'youtube-channels.json'), (file) => {
+    const entry = file.channels.find((candidate) => candidate.id === E.id);
+    entry.checkFailures = { count: 4, since: new Date(Date.now() - DAY - 60 * 60_000).toISOString(), error: { code: 'network_error', message: '無法連線。' } };
+  });
+  await instance.api('/api/subscription-checks', { method: 'POST', body: JSON.stringify({ subscriptions: [{ type: 'youtube', id: E.id }] }) });
+  await settle(async () => (await subscriptionE(instance))?.checkStatus?.state === 'auto_paused', 'E paused itself', { timeout: 5 * 60_000 });
+  await idle(instance);
+}
 
 export async function run({ instance, page, openPage, record, waitFor }) {
   const button = (id) => page.getByTestId(id);
@@ -22,6 +53,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   await mkdir(path.dirname(exportPath), { recursive: true });
   let donor;
   const donorRoot = path.join(instance.runDir, 'other-vault');
+  const laterZip = path.join(instance.runDir, 'exports', 'later-e.zip');
   const backupNames = () => readdir(path.join(instance.runDir, 'documents', 'XR Collector 備份')).catch(() => []);
   const exportThroughUI = async (file) => {
     await click('vault-export');
@@ -52,10 +84,16 @@ export async function run({ instance, page, openPage, record, waitFor }) {
   };
   try {
     await collect(instance, 'https://www.youtube.com/watch?v=vD000000001');
+    await addChannelE(instance);
+    await subscribe(instance, channelUrl(E));
     await idle(instance);
     donor = await launchWeb({ issue: instance.issue, checkout: instance.checkout, label: `${instance.label ?? 'transfer'}-donor` });
     await collect(donor, 'https://www.youtube.com/watch?v=vB000000001');
+    await addChannelE(donor);
+    await subscribe(donor, channelUrl(E));
     await idle(donor);
+    await autoPauseE(donor);
+    await donor.api(`/api/subscriptions/youtube/${E.id}`, { method: 'PATCH', body: JSON.stringify({ settings: { backfillDays: DONOR_BACKFILL_DAYS } }) });
     const donorZip = path.join(instance.runDir, 'exports', 'donor.zip');
     await donor.api('/api/vault/export', { method: 'POST', body: JSON.stringify({ path: donorZip }) });
     await collect(donor, 'https://www.youtube.com/watch?v=vB000000002');
@@ -121,6 +159,11 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await click('transfer-close');
       await documents(expect, 2);
       expect((await backupNames()).length > before.length, '寫出匯入前備份');
+      const merged = await subscriptionE(instance);
+      const mergedE = { enabled: merged?.enabled, state: merged?.checkStatus?.state, autoPausedAt: merged?.autoPausedAt, backfillDays: merged?.settings.backfillDays };
+      expect(mergedE.enabled === true && mergedE.state !== 'auto_paused' && mergedE.state !== 'paused' && mergedE.autoPausedAt === null
+        && mergedE.backfillDays === DONOR_BACKFILL_DAYS, '合併取得另一邊較新的訂閱設定，另一邊的自動暫停不暫停這邊的訂閱',
+        { id: 'merge.subscription', expected: { enabled: true, state: '非暫停', autoPausedAt: null, backfillDays: DONOR_BACKFILL_DAYS }, actual: mergedE });
       await compareThroughUI(donorZip);
       if (await button('import-replace-instead').count()) await click('import-replace-instead');
       else { await click('import-mode-replace'); await click('import-next'); }
@@ -140,6 +183,11 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       expect(await button('import-nothing').count() === 1, '自己匯出的 zip 沒有需要匯入的內容');
       await shot('nothing');
       await click('import-close');
+      // A newer change by the person, with E on, for R102-5 to bring to the other Vault where E paused itself.
+      // Turning E on changes nothing when the merge left it on; it keeps R102-5 apart from R102-2's outcome.
+      await instance.api(`/api/subscriptions/youtube/${E.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: true }) });
+      await instance.api(`/api/subscriptions/youtube/${E.id}`, { method: 'PATCH', body: JSON.stringify({ settings: { backfillDays: LATER_BACKFILL_DAYS } }) });
+      await instance.api('/api/vault/export', { method: 'POST', body: JSON.stringify({ path: laterZip }) });
     });
 
     await record.scenario('R102-3', '開啟其他知識庫', async ({ expect, shot }) => {
@@ -210,6 +258,25 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await page.getByTestId('page-sources').waitFor();
       await waitFor(async () => await page.getByTestId('source-row-UCverifyAAAAAAAAAAAAAAAA').getByTestId('subscription-status').getAttribute('data-phase') === 'scheduled', 'subscription scheduled on screen');
       await shot('collection-resumed');
+    });
+
+    await record.scenario('R102-5', '匯入較新的使用者修改：取用設定，這邊的自動暫停維持', async ({ expect, shot }) => {
+      await idle(instance);
+      await settings();
+      await compareThroughUI(laterZip);
+      await shot('later-preview');
+      await click('import-confirm');
+      await visible('import-done');
+      await click('transfer-close');
+      const pausedE = await subscriptionE(instance);
+      const actual = { enabled: pausedE?.enabled, state: pausedE?.checkStatus?.state, backfillDays: pausedE?.settings.backfillDays };
+      expect(actual.enabled === false && actual.state === 'auto_paused' && actual.backfillDays === LATER_BACKFILL_DAYS,
+        '取用匯入檔較新的設定，這邊自動暫停的訂閱維持自動暫停',
+        { id: 'import.local-auto-pause', expected: { enabled: false, state: 'auto_paused', backfillDays: LATER_BACKFILL_DAYS }, actual });
+      await click('nav-sources');
+      await page.getByTestId('page-sources').waitFor();
+      await waitFor(async () => await page.getByTestId(`source-row-${E.id}`).getByTestId('subscription-status').getAttribute('data-phase') === 'auto_paused', 'E auto paused on screen');
+      await shot('auto-paused-kept');
     });
   } finally {
     await donor?.stop();
