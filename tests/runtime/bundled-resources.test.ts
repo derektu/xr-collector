@@ -87,10 +87,17 @@ describe('the paths of the bundled resources', () => {
     }
   });
 
-  it('runs a package\'s own programs whatever the environment names, and takes the lexicon the environment names', () => {
+  it('uses a Mac package\'s own programs and lexicon whatever the environment names', () => {
     expect(answers({ packaged: true, resourcesPath: '/R' }, 'darwin', OVERRIDES)).toMatchObject({
       meilisearch: '/R/bin/meilisearch', ytDlp: '/R/bin/yt-dlp/yt-dlp', deno: '/R/bin/deno',
-      lexicon: '/custom/lexicon.txt',
+      lexicon: '/R/search/coct-main.txt',
+    });
+  });
+
+  it('uses a Windows package\'s own programs and lexicon whatever the environment names', () => {
+    expect(answers({ packaged: true, resourcesPath: 'C:\\R' }, 'win32', OVERRIDES)).toMatchObject({
+      meilisearch: 'C:\\R\\bin\\meilisearch.exe', ytDlp: 'C:\\R\\bin\\yt-dlp\\yt-dlp.exe', deno: 'C:\\R\\bin\\deno.exe',
+      lexicon: 'C:\\R\\search\\coct-main.txt',
     });
   });
 
