@@ -2,7 +2,7 @@
 // passing Gatekeeper with the expected Team, hardened runtime and a sealed runtime inventory. The
 // signing credentials and temporary keychain never disturb other sessions and are cleaned up after a
 // kill or signal; those cases skip Windows.
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -427,7 +427,7 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
     return { stdout: '', stderr: '' };
   };
   const sign = (lock: string) => withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, tempRoot: root,
     processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
   });
 
@@ -443,6 +443,8 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
 
   const ownerless = path.join(root, 'ownerless.lock');
   await mkdir(ownerless, { mode: 0o700 });
+  const longAgo = new Date(Date.now() - 60_000);
+  await utimes(ownerless, longAgo, longAgo);
   const ownerlessFailure = await sign(ownerless).catch((error: any) => error);
   expect(ownerlessFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ownerless });
   expect(ownerlessFailure.message).toContain(`then delete it with: rm -r '${ownerless}'`);

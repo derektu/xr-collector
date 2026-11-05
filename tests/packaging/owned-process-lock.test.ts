@@ -5,7 +5,7 @@
 // process tree. POSIX-only cases skip Windows.
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -129,9 +129,15 @@ it('reports a lock directory that never received an owner record once its creati
   const root = await lockRoot('xr-owned-lock-ownerless-');
   const lock = path.join(root, 'lock');
   await mkdir(lock, { mode: 0o700 });
-  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs: 60_000 }))
+  const ownerGraceMs = 60_000;
+  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
     .rejects.toThrow(/^busy$/u);
-  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs: 0 }))
+  // The directory's time moves back past the grace rather than the grace shrinking to 0 ms: a
+  // directory's time can read up to a clock tick ahead of Date.now(), most visibly on Windows,
+  // and a just-created lock then still counts as within a 0 ms grace.
+  const created = new Date(Date.now() - 2 * ownerGraceMs);
+  await utimes(lock, created, created);
+  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
     .rejects.toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', message: expect.stringContaining('has had no owner record') });
   expect(await readdir(lock)).toEqual([]);
 });
@@ -147,14 +153,19 @@ it('leaves the lock in place when its own was deleted and another run took the p
   expect(await readdir(lock)).toEqual(['owner-a1.json']);
 });
 
-it('quotes the delete command for the platform, including the typographic quotes PowerShell also reads as single quotes', async () => {
-  const quotes = "it's-\u2018\u2019\u201A\u201B";
-  const root = await lockRoot(`xr-owned-lock-${quotes}-`);
-  const lock = await staleLock(root, 'lock');
-  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), platform: 'darwin' }))
-    .rejects.toThrow(`rm -r '${lock.replace(quotes, "it'\\''s-\u2018\u2019\u201A\u201B")}'`);
+const quotes = "it's-\u2018\u2019\u201A\u201B";
+
+it('quotes the PowerShell delete command, including the typographic quotes PowerShell also reads as single quotes', async () => {
+  const lock = await staleLock(await lockRoot(`xr-owned-lock-${quotes}-`), 'lock');
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), platform: 'win32' }))
     .rejects.toThrow(`Remove-Item -LiteralPath '${lock.replace(quotes, "it''s-\u2018\u2018\u2019\u2019\u201A\u201A\u201B\u201B")}' -Recurse`);
+});
+
+// The POSIX lock checks owner-only permission bits, which a Windows directory does not carry.
+it.skipIf(process.platform === 'win32')('quotes the POSIX delete command', async () => {
+  const lock = await staleLock(await lockRoot(`xr-owned-lock-${quotes}-`), 'lock');
+  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), platform: 'darwin' }))
+    .rejects.toThrow(`rm -r '${lock.replace(quotes, "it'\\''s-\u2018\u2019\u201A\u201B")}'`);
 });
 
 /**
