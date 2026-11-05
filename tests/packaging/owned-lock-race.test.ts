@@ -1,4 +1,8 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+// Guards the developer, not the user: a packaging or signing run that reads the directory lock at
+// the moment its holder writes, rewrites or releases its owner record still reports busy, takes the
+// lock, or names the lock left behind, and one that cannot write its own record leaves no lock. When
+// this breaks, a developer packaging while another run finishes sees a spurious metadata error or a
+// lock that blocks every later run until deleted by hand.
 import { mkdir, mkdtemp, readdir, rm, rmdir, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,23 +11,20 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { withOwnedDirectoryLock } from '../../scripts/owned-directory-lock.mjs';
 
 /**
- * Every file-system call the lock makes passes through `schedule.intercept`, tagged with the contender
- * whose async context issued it, so a test can hold one contender at a chosen step while another runs.
+ * Every file-system call the lock makes passes through `schedule.intercept`, so a test can change the
+ * lock, as its holder would, at a chosen step of another process's inspection or acquisition.
  */
-type Step = { contender: string | undefined; name: string; target: string };
+type Step = { name: string; target: string };
 const schedule = vi.hoisted(() => ({
-  contender: undefined as unknown as AsyncLocalStorage<string>,
   intercept: undefined as undefined | ((step: Step, run: () => Promise<unknown>) => Promise<unknown>),
 }));
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof import('node:fs/promises')>();
-  const { AsyncLocalStorage: Storage } = await import('node:async_hooks');
-  schedule.contender = new Storage<string>();
   const names = ['lstat', 'mkdir', 'readFile', 'readdir', 'rename', 'rm', 'rmdir', 'unlink', 'writeFile'] as const;
   const wrapped = Object.fromEntries(names.map((name) => [name, (...args: unknown[]) => {
     const run = () => (actual[name] as (...values: unknown[]) => Promise<unknown>)(...args);
     const intercept = schedule.intercept;
-    return intercept ? intercept({ contender: schedule.contender.getStore(), name, target: String(args[0]) }, run) : run();
+    return intercept ? intercept({ name, target: String(args[0]) }, run) : run();
   }]));
   return { ...actual, ...wrapped, default: { ...actual, ...wrapped } };
 });
@@ -51,84 +52,6 @@ function lockOptions(token: string, inspectOwner: (pid: number) => Promise<unkno
   };
 }
 const liveOwner = async (pid: number) => ({ pid, uid, startedAt: 'current' });
-function gate() {
-  let open!: () => void;
-  const opened = new Promise<void>((resolve) => { open = resolve; });
-  return { open, opened };
-}
-
-/**
- * Both reapers read the dead owner, then: first unlinks it, removes the directory and creates its own;
- * second's unlink of the same path reports success; second finishes reaping and reaches its next mkdir;
- * only then does first inspect the directory it created, and second's mkdir runs after that inspection.
- */
-it('lets one of two stale-owner reapers acquire and reports the other busy when both unlinks succeed', async () => {
-  const lock = await lockRoot();
-  await mkdir(lock, { mode: 0o700 });
-  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 41, uid, startedAt: 'dead', token: 'a1' }), { mode: 0o600 });
-  const staleOwner = path.join(lock, 'owner-a1.json');
-  let inspected = 0;
-  const bothInspected = gate();
-  const inspectOwner = async (pid: number) => {
-    if (pid !== 41) return liveOwner(pid);
-    if (++inspected === 2) bothInspected.open();
-    await bothInspected.opened;
-    return null;
-  };
-  const firstCreated = gate();
-  const secondReaped = gate();
-  const firstClaimChecked = gate();
-  let firstMkdirs = 0;
-  let firstClaimHeld = false;
-  let secondUnlinked = false;
-  schedule.intercept = async ({ contender, name, target }, run) => {
-    if (contender === 'first' && name === 'mkdir' && target === lock) {
-      const result = run();
-      await result.catch(() => {});
-      if (++firstMkdirs === 2) firstCreated.open();
-      return result;
-    }
-    if (contender === 'first' && name === 'lstat' && target === lock && firstMkdirs === 2 && !firstClaimHeld) {
-      firstClaimHeld = true;
-      await secondReaped.opened;
-      const result = run();
-      result.catch(() => {}).finally(firstClaimChecked.open);
-      return result;
-    }
-    if (contender === 'second' && name === 'unlink' && target === staleOwner) {
-      // The first reaper has already removed this file and created its replacement directory. macOS
-      // still reports success to a concurrent unlink of the same path, which this step reproduces.
-      await firstCreated.opened;
-      secondUnlinked = true;
-      return undefined;
-    }
-    if (contender === 'second' && name === 'mkdir' && target === lock && secondUnlinked) {
-      secondReaped.open();
-      await firstClaimChecked.opened;
-    }
-    return run();
-  };
-  const workGate = gate();
-  const entered: string[] = [];
-  const contender = (label: string, token: string) => schedule.contender.run(label, () => withOwnedDirectoryLock(lock, async () => {
-    entered.push(label);
-    await workGate.opened;
-    return label;
-  }, lockOptions(token, inspectOwner)));
-  const first = contender('first', 'b2');
-  const second = contender('second', 'c3');
-  second.catch(() => {}).finally(secondReaped.open);
-  // Which contender wins depends on whether the file system reuses the freed inode number for a new
-  // directory; either way exactly one acquires and the other reports busy.
-  const loser = await Promise.race([first.then(() => null, (error: unknown) => error), second.then(() => null, (error: unknown) => error)]);
-  expect(String(loser)).toBe('Error: busy');
-  workGate.open();
-  const results = await Promise.allSettled([first, second]);
-  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-  expect(entered).toHaveLength(1);
-  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
-});
-
 /** A lock held by a live owner, pid 41, as `withOwnedDirectoryLock` leaves it while work runs. */
 async function heldLock(extraEntries: string[] = [], ownerContent = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'a1' })) {
   const lock = await lockRoot();
@@ -138,44 +61,6 @@ async function heldLock(extraEntries: string[] = [], ownerContent = JSON.stringi
   return lock;
 }
 const holderAlive = async (pid: number) => (pid === 41 ? { pid, uid, startedAt: 'holder' } : liveOwner(pid));
-
-it('starts over when its new directory is removed before the owner nonce is written', async () => {
-  const lock = await lockRoot();
-  let removed = false;
-  schedule.intercept = async ({ name, target }, run) => {
-    if (!removed && name === 'lstat' && target === lock) {
-      removed = true;
-      await rmdir(lock);
-    }
-    return run();
-  };
-  await expect(withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', liveOwner))).resolves.toBe('acquired');
-  expect(removed).toBe(true);
-  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
-});
-
-it('reports busy and leaves the competitor\'s nonce when a competitor takes over its new directory before the owner nonce is written', async () => {
-  const competitor = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'c3' });
-  for (const replace of [true, false]) {
-    const lock = await lockRoot();
-    let takenOver = false;
-    schedule.intercept = async ({ name, target }, run) => {
-      if (!takenOver && name === 'writeFile' && target === path.join(lock, 'owner-b2.json')) {
-        takenOver = true;
-        // A replacement directory can carry the inode number of the one it replaces, so the same
-        // directory with the competitor's nonce stands for that case too.
-        if (replace) {
-          await rmdir(lock);
-          await mkdir(lock, { mode: 0o700 });
-        }
-        await writeFile(path.join(lock, 'owner-c3.json'), competitor, { mode: 0o600 });
-      }
-      return run();
-    };
-    await expect(withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', holderAlive))).rejects.toThrow(/^busy$/u);
-    expect(await readdir(lock)).toEqual(['owner-c3.json']);
-  }
-});
 
 it('fails with the write error while its new directory is still in place', async () => {
   const lock = await lockRoot();
@@ -207,16 +92,16 @@ it('acquires when the holder releases between listing the lock and reading its o
   expect(released).toBe(true);
 });
 
-it('reports busy while a live holder replaces its owner file, and fails on an update file left by a dead owner', async () => {
+it('reports busy while a live holder replaces its owner file, and reports the lock left behind with an update file by a dead owner', async () => {
   const updating = await heldLock(['owner-a1.json.update-ff']);
   await expect(withOwnedDirectoryLock(updating, async () => 'acquired', lockOptions('b2', holderAlive))).rejects.toThrow(/^busy$/u);
   const interrupted = await heldLock(['owner-a1.json.update-ff']);
   await expect(withOwnedDirectoryLock(interrupted, async () => 'acquired', lockOptions('b2', async () => null)))
-    .rejects.toThrow(/ambiguous owner metadata/u);
+    .rejects.toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND' });
   expect((await readdir(interrupted)).sort()).toEqual(['owner-a1.json', 'owner-a1.json.update-ff']);
 });
 
-it('reports busy for an owner file not yet written, and fails on one that stays empty past the grace period or is corrupt', async () => {
+it('reports busy for an owner file not yet written, reports one that stays empty past the grace period as left behind, and fails on a corrupt one', async () => {
   const opening = await heldLock([], '');
   await expect(withOwnedDirectoryLock(opening, async () => 'acquired', { ...lockOptions('b2', holderAlive), ownerGraceMs: 60_000 }))
     .rejects.toThrow(/^busy$/u);
@@ -226,6 +111,10 @@ it('reports busy for an owner file not yet written, and fails on one that stays 
   const abandoned = await heldLock([], '');
   const longAgo = new Date(Date.now() - 60_000);
   await utimes(abandoned, longAgo, longAgo);
-  await expect(withOwnedDirectoryLock(abandoned, async () => 'acquired', lockOptions('b2', holderAlive)))
-    .rejects.toThrow(/invalid owner metadata/u);
+  const failure = await withOwnedDirectoryLock(abandoned, async () => 'acquired', lockOptions('b2', holderAlive)).catch((error: any) => error);
+  expect(failure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: abandoned });
+  expect(failure.message).toContain(`Owned lock ${abandoned} has had an empty owner record for `);
+  expect(failure.message).toContain('the process that created it ended before recording itself');
+  expect(failure.message).toContain('then delete it with: ');
+  expect(await readdir(abandoned)).toEqual(['owner-a1.json']);
 });

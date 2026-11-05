@@ -113,7 +113,7 @@ CI 不建置正式安裝包。各層驗證在哪裡執行見 [開發驗證流程
 | `npm run package:mac` | DMG 與 ZIP，在 `release/` |
 | `npm run package:win` | NSIS 安裝檔，在 `release/` |
 
-打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），執行期間持有整個 checkout 的獨占鎖，所有入口都使用 `--publish never`。完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256，任一不一致都不交付。每次建置另在 `release/` 寫出兩份檔案：
+打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），執行期間持有整個 checkout 的獨占鎖（`.local/package-app.lock`），所有入口都使用 `--publish never`。打包程序被強制結束時鎖會留下；下次打包報錯，指出留下鎖的程序、鎖的路徑與刪除指令。確認沒有打包在跑後刪掉該資料夾再打包。Developer ID 簽章共用的 keychain 搜尋清單鎖也是同樣的處理。完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256，任一不一致都不交付。每次建置另在 `release/` 寫出兩份檔案：
 
 - 該平台的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，記錄版本、完整 commit、BuildInfo，以及安裝檔與更新檔的檔名、大小與 SHA-256。它和安裝檔一起上傳，App 靠它找到自己平台的更新檔。
 - artifact manifest：`XR-Collector-<版本>-<target>-artifacts.json`，記錄這次建置的所有產物、runtime、簽章、工具版本與建置機架構，留在建置機，不上傳。
