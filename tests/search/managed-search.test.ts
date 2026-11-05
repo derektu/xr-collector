@@ -13,6 +13,7 @@ import {
 } from '../../src/search/managed-transcript-search.js';
 import { indexKey, MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const documents: SavedDocument[] = [
   {
@@ -204,6 +205,7 @@ describe('ManagedTranscriptSearch', () => {
       return Response.json({ message: `Unexpected request: ${method} ${url}` }, { status: 500 });
     };
     const backend = new MeilisearchBackend({
+      sources: PRODUCT_SOURCES,
       baseUrl: 'http://127.0.0.1:7177',
       apiKey: 'test-master-key-at-least-16-bytes',
       fetch: fakeFetch,
@@ -311,6 +313,7 @@ describe('ManagedTranscriptSearch', () => {
       return Response.json({ message: `Unexpected request: ${method} ${url}` }, { status: 500 });
     };
     const backend = new MeilisearchBackend({
+      sources: PRODUCT_SOURCES,
       baseUrl: 'http://127.0.0.1:7177', apiKey: 'test-master-key-at-least-16-bytes', fetch: fakeFetch,
       lexicon: await loadSearchLexicon(path.resolve('resources/search/coct-main.txt')),
     });

@@ -18,6 +18,7 @@ import { MemoryDocuments, SyntheticYouTube } from '../subscriptions/synthetic-yo
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -32,17 +33,19 @@ async function world() {
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
-  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const jobs: JobManager = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
+    sources: PRODUCT_SOURCES,
+    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 },
     // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
-  const app = await createHttpApp({ collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
+  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
   const get = async (url: string) => {
     const response = await app.inject({ method: 'GET', url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };

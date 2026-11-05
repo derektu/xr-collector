@@ -7,6 +7,7 @@ import path from 'node:path';
 import { ChangeFeed } from '../../src/core/change-feed.js';
 import { describe, expect, it } from 'vitest';
 import { createHttpApp, type HttpAppOptions } from '../../src/server/app.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const skillPath = path.resolve('skills/xr-collector-agent/SKILL.md');
 
@@ -34,6 +35,7 @@ describe('Agent Skill', () => {
   it('lists only routes the server registers', async () => {
     const stub = {} as never;
     const options: HttpAppOptions = {
+      sources: PRODUCT_SOURCES,
       collector: stub, jobs: stub, activity: stub, transfer: stub, subscriptions: [{ type: 'youtube' } as never], schedule: stub, search: stub, vaultSetup: stub,
       pacing: [{ group: 'youtube' } as never], agentToken: 'skill-test', changes: new ChangeFeed(),
       agentConnection: {

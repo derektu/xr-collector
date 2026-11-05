@@ -183,7 +183,10 @@ export interface SourcePluginDeclaration<S extends SubscriptionSettings = Subscr
   /** A line of type-specific details the reader shows under a document's title; null shows nothing. */
   documentDetailLine?(document: DocumentMetadata): string | null;
   prompts: InputPrompts;
-  /** Whether the input belongs to this type; decided by syntax alone. */
+  /**
+   * Whether the input belongs to this type; decided by syntax alone. Two types may own one address:
+   * it belongs to the first of them in the source list.
+   */
   owns(input: string, url: URL | null): boolean;
   /** What an owned address asks for; throws `invalid_url` or `unsupported_url` with the reason. */
   classify(input: string): InputClass;
@@ -289,7 +292,7 @@ export interface PluginRuntime {
   gate(group: string): RequestChannel;
 }
 
-/** One source type of the product: its definition, registered before any Vault opens, and the factory of its plugin. */
+/** One source type of the product: its definition, which the source registry holds, and the factory of its plugin. */
 export interface SourceEntry {
   definition: SourceDefinition;
   create(runtime: PluginRuntime): SourcePlugin;

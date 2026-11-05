@@ -1,7 +1,6 @@
 import path from 'node:path';
 import type { NoteChange } from '../core/change-feed.js';
 import { readJsonFile } from '../core/json-file.js';
-import { requireDefinition } from '../core/source-registry.js';
 import type { SubscriptionRecord } from '../core/types.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import {
@@ -48,12 +47,12 @@ export class JsonSubscriptionStore implements SubscriptionStore {
   private readonly filePath: string;
 
   /**
-   * `type` names a registered source type with subscriptions; `now` stamps `updatedAt` and
+   * `type` names a source type of `files` with subscriptions; `now` stamps `updatedAt` and
    * `removedAt`; `noteChange` hears each subscription a write changed, once the file holds it.
    */
   constructor(private readonly files: VaultFiles, readonly type: string, private readonly now: () => Date = () => new Date(),
     private readonly noteChange: NoteChange = () => undefined) {
-    this.spec = requireDefinition(type);
+    this.spec = files.sources.require(type);
     if (!this.spec.storage) throw new Error(`Source type ${type} has no subscriptions`);
     this.file = this.spec.storage.subscriptionsFile;
     this.filePath = path.join(files.root, ...this.file.split('/'));

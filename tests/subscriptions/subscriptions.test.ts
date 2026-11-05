@@ -20,6 +20,7 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const DAY = 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
@@ -45,17 +46,19 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   const policy: CollectionPolicy = { ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
-  const store = options.jobsDirectory ? await JobStore.open(options.jobsDirectory, now) : JobStore.memory(now);
+  const store = options.jobsDirectory ? await JobStore.open(options.jobsDirectory, PRODUCT_SOURCES, now) : JobStore.memory(PRODUCT_SOURCES, now);
   const build = () => {
-    const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+    const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     const collector = new Collector(documents);
     const jobs: JobManager = new JobManager({
-      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
+      sources: PRODUCT_SOURCES,
+      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
       // Failed checks here drive the catch-up rules; automatic retries have their own cases.
       retry: { maxAttempts: 1 },
     });
     const channels = new SubscriptionService('youtube', channelStore, jobs, {
+      sources: PRODUCT_SOURCES,
       autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     });
     return { channelStore, jobs, channels };

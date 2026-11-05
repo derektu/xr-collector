@@ -1,8 +1,8 @@
 /**
  * What opening, exporting and importing a Vault need from its subscription and schedule files. The
  * subscriptions block owns the files' format and the rules for merging two copies of a
- * subscription, and implements this contract; the Vault reaches the files only through it. The
- * assembly registers the implementation before anything reads a Vault (`src/plugins/index.ts`).
+ * subscription, and implements this contract (`subscriptionFileExchange`); the Vault reaches the
+ * files only through the exchange of the `SourceRegistry` it is given.
  *
  * Every `value` is a file's parsed JSON, or undefined when the Vault has no such file.
  */
@@ -34,19 +34,8 @@ export interface SubscriptionFileExchange {
 }
 
 export interface SubscriptionExchange {
-  /** One per registered source type with subscriptions, in registration order. */
+  /** One per source type of the registry with subscriptions, in its order. */
   files(): SubscriptionFileExchange[];
   /** Throws when a schedule file is no file of the current version. */
   checkSchedule(value: unknown): void;
-}
-
-let registered: SubscriptionExchange | null = null;
-
-export function registerSubscriptionExchange(exchange: SubscriptionExchange): void {
-  registered = exchange;
-}
-
-export function subscriptionExchange(): SubscriptionExchange {
-  if (!registered) throw new Error('No subscription exchange is registered');
-  return registered;
 }

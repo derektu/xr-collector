@@ -22,6 +22,7 @@ import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -51,10 +52,11 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const now = () => clock.now;
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
-  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const collector = new Collector(documents);
   const jobs: JobManager = new JobManager({
-    vaultPath: root, store: JobStore.memory(now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
+    sources: PRODUCT_SOURCES,
+    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}), ...(connectivity ? { connectivity } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
@@ -62,6 +64,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const eventRecords: Array<{ eventType: string; severity: string }> = [];
   let scheduler!: CollectionScheduler;
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    sources: PRODUCT_SOURCES,
     autoCollection: () => scheduler.isEnabled(), resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   scheduler = new CollectionScheduler([channels], scheduleStore, {

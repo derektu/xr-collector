@@ -4,14 +4,15 @@
 import path from 'node:path';
 import { CollectorRuntime } from '../../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../../src/search/managed-transcript-search.js';
-import '../../support/register-sources.js';
 import { withYouTube } from '../../support/youtube-sources.js';
+import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const [profilePath, vaultPath] = process.argv.slice(2) as [string, string];
 let holding!: () => void;
 const held = new Promise<void>((resolve) => { holding = resolve; });
 
 const runtime = await CollectorRuntime.start({
+  sources: PRODUCT_SOURCES,
   profilePath,
   explicitVaultPath: vaultPath,
   workspace: withYouTube({

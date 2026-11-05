@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readJsonFile } from '../core/json-file.js';
 import type { DocumentSourceType } from '../core/types.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import { documentId, isSourceId, isSourceType } from './document-paths.js';
 
@@ -54,12 +55,15 @@ export function collectedAtReadable(collectedAt: unknown): collectedAt is string
   return typeof collectedAt === 'string' && !Number.isNaN(Date.parse(collectedAt));
 }
 
-/** The records of a deletions file; a missing file has none. Unknown versions and malformed records are refused. */
-export function deletionsFromJson(value: unknown): DeletionRecord[] {
+/**
+ * The records of a deletions file; a missing file has none. Unknown versions and malformed records,
+ * among them records of a type `sources` lacks, are refused.
+ */
+export function deletionsFromJson(value: unknown, sources: SourceDeclarations): DeletionRecord[] {
   if (value === undefined) return [];
   const file = value as Partial<DeletionsFile> | null;
   if (!file || typeof file !== 'object' || file.version !== DELETIONS_VERSION || !Array.isArray(file.deleted)
-    || !file.deleted.every(isRecord)) {
+    || !file.deleted.every((record) => isRecord(record, sources))) {
     throw new InvalidDeletionsFile('Invalid deleted documents file');
   }
   const ids = new Set<string>();
@@ -88,7 +92,7 @@ export class DeletionLedger {
   }
 
   async list(): Promise<DeletionRecord[]> {
-    return deletionsFromJson(await readJsonFile(this.filePath));
+    return deletionsFromJson(await readJsonFile(this.filePath), this.files.sources);
   }
 
   async get(id: string): Promise<DeletionRecord | null> {
@@ -119,11 +123,11 @@ export class DeletionLedger {
   }
 }
 
-function isRecord(value: unknown): value is DeletionRecord {
+function isRecord(value: unknown, sources: SourceDeclarations): value is DeletionRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<DeletionRecord>;
-  return typeof record.sourceType === 'string' && isSourceType(record.sourceType)
-    && typeof record.sourceId === 'string' && isSourceId(record.sourceType, record.sourceId)
+  return typeof record.sourceType === 'string' && isSourceType(sources, record.sourceType)
+    && typeof record.sourceId === 'string' && isSourceId(sources, record.sourceType, record.sourceId)
     && typeof record.sourceUrl === 'string'
     && typeof record.title === 'string'
     && (record.publisherId === null || typeof record.publisherId === 'string')

@@ -10,6 +10,7 @@ import { ActivityLog } from '../../src/activity/activity-log.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import { collectionRecord } from '../../src/sources/source-catalog.js';
 import type { ActivityCheckSummary, CollectionJob, JobEvent, Subscription } from '../../src/core/types.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const VAULT = '/vault/activity-summary';
 const roots: string[] = [];
@@ -189,11 +190,11 @@ describe('durable summary retention (#96 A6)', () => {
       result: 'empty', created: 0, existing: 5, failed: 0, skipped: 0, count: 12,
       firstFinishedAt: at(index), lastFinishedAt: at(index), severity: 'info', message: '沒有新影片。',
     }));
-    const rows = collectionRecord('youtube', subscription, [], [], summaries);
+    const rows = collectionRecord(PRODUCT_SOURCES, 'youtube', subscription, [], [], summaries);
     expect(rows).toHaveLength(30);
     expect(rows.every((row) => row.kind === 'check-group' && row.count === 12)).toBe(true);
 
-    const failed = collectionRecord('youtube', subscription, [], [], [{
+    const failed = collectionRecord(PRODUCT_SOURCES, 'youtube', subscription, [], [], [{
       ...summaries[0]!, groupId: 'failed-group', jobId: 'actual-job', count: 1, result: 'other', severity: 'error',
       errorCode: 'login_required', message: '需要重新登入。',
     }]);
@@ -204,11 +205,11 @@ describe('durable summary retention (#96 A6)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-summary-'));
     roots.push(root);
     let now = new Date(Date.UTC(2026, 9, 20, 9));
-    let store = await JobStore.open(root, () => now);
+    let store = await JobStore.open(root, PRODUCT_SOURCES, () => now);
     for (let index = 0; index < 1005; index += 1) store.put(finishedJob(`f${index}`, at(index % 60)));
     for (let index = 0; index < 12; index += 1) store.activity.record(terminal(`durable-${index}`, at(index)));
     await store.close();
-    store = await JobStore.open(root, () => now);
+    store = await JobStore.open(root, PRODUCT_SOURCES, () => now);
     expect(store.list(VAULT)).toHaveLength(1000);
     let page = await store.activity.summary({ view: 'summary' }, scope);
     const group = page.entries.find((entry) => entry.kind === 'check')!;

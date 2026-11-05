@@ -12,6 +12,7 @@ import { JobManager } from '../../src/jobs/job-manager.js';
 import { JobStore } from '../../src/jobs/job-store.js';
 import type { YouTubeSource } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 class MemoryChannelStore implements SubscriptionStore {
   readonly channels: SubscriptionRecord[] = [];
@@ -60,6 +61,7 @@ class MemoryChannelStore implements SubscriptionStore {
 }
 
 const emptyVault: DocumentVault = {
+  sources: PRODUCT_SOURCES,
   getByKey: async () => null,
   add: async () => { throw new Error('not used'); },
   list: async () => [],
@@ -69,8 +71,9 @@ const emptyVault: DocumentVault = {
 function setup(source: Partial<YouTubeSource> = {}) {
   const store = new MemoryChannelStore();
   const jobs: JobManager = new JobManager({
+    sources: PRODUCT_SOURCES,
     vaultPath: '/vault',
-    store: JobStore.memory(),
+    store: JobStore.memory(PRODUCT_SOURCES),
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new Error('not used'); },
       discover: async () => [],
@@ -78,9 +81,10 @@ function setup(source: Partial<YouTubeSource> = {}) {
       ...source,
     })],
     documents: new Collector(emptyVault),
-    subscriptions: forwardingPort(() => new SubscriptionServices([channels])),
+    subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])),
   });
   const channels = new SubscriptionService('youtube', store, jobs, {
+    sources: PRODUCT_SOURCES,
     autoCollection: async () => true,
     resolveTarget: async () => { throw new Error('not used'); },
     documents: async () => [],

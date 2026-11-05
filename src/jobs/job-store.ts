@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ActivityLog, type ActivityLogOptions } from '../activity/activity-log.js';
 import { replaceFile } from '../core/json-file.js';
 import { inOwnStep, jobEventSubject } from '../core/job-role.js';
-import { registeredSourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { NoteChange } from '../core/change-feed.js';
 import type { CollectionJob, JobEvent, JobStopKind } from '../core/types.js';
 
@@ -42,13 +42,17 @@ export class JobStore {
 
   private constructor(
     private readonly directory: string | null,
+    private readonly sources: SourceDeclarations,
     private readonly now: () => Date,
     private readonly noteChange: NoteChange = () => undefined,
   ) {}
 
-  /** Keeps everything in memory; for tests and runtimes without a device profile. */
-  static memory(now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
-    const store = new JobStore(null, now, noteChange);
+  /**
+   * Keeps everything in memory; for tests and runtimes without a device profile. `sources` gives
+   * the roles of the stored jobs' kinds.
+   */
+  static memory(sources: SourceDeclarations, now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
+    const store = new JobStore(null, sources, now, noteChange);
     store.activityLog = ActivityLog.memory(store.activityOptions({}));
     return store;
   }
@@ -59,11 +63,13 @@ export class JobStore {
   /**
    * Loads the previous snapshot. Jobs still queued or running belong to a process that stopped
    * without closing, so they become interrupted with their scope and progress kept; a job caught in
-   * the middle of a step counts an unclean stop.
+   * the middle of a step counts an unclean stop. `sources` gives the roles of the stored jobs' kinds.
    */
-  static async open(directory: string, now: () => Date = () => new Date(), options: JobStoreOptions = {}): Promise<JobStore> {
+  static async open(
+    directory: string, sources: SourceDeclarations, now: () => Date = () => new Date(), options: JobStoreOptions = {},
+  ): Promise<JobStore> {
     const { noteChange, ...activity } = options;
-    const store = new JobStore(directory, now, noteChange);
+    const store = new JobStore(directory, sources, now, noteChange);
     store.activityLog = await ActivityLog.open(directory, store.activityOptions(activity));
     let contents: string | null = null;
     try {
@@ -88,7 +94,7 @@ export class JobStore {
     if (latestSequence) store.eventSequence = Number(latestSequence);
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
     for (const job of stopped) {
-      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(registeredSourceDeclarations(), job) });
+      store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(sources, job) });
     }
     if (stopped.length > 0) await store.flush();
     return store;
@@ -145,7 +151,7 @@ export class JobStore {
     const planned = options.stop !== 'crash';
     this.event({
       severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message, ...(job.phase ? { phase: job.phase } : {}),
-      ...jobEventSubject(registeredSourceDeclarations(), job, (id) => this.jobs.get(id)),
+      ...jobEventSubject(this.sources, job, (id) => this.jobs.get(id)),
     });
     this.scheduleFlush();
   }

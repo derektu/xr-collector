@@ -8,6 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateMeilisearchRuntime, verifySignedMeilisearchIdentity } from '../../src/search/meilisearch-runtime.js';
 import { startSearchRuntime } from '../../src/search/runtime.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 const correctVersion = async () => 'meilisearch 1.53.2\n';
@@ -86,6 +87,7 @@ describe('Meilisearch runtime identity', () => {
     await writeFile(built.manifest, JSON.stringify(manifest));
     const prepareProjection = vi.fn();
     await startSearchRuntime({
+      sources: PRODUCT_SOURCES,
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: built.binary,
       databasePath: path.join(built.root, 'search'),
@@ -98,6 +100,7 @@ describe('Meilisearch runtime identity', () => {
     const built = await fixture();
     const prepareProjection = vi.fn();
     const runtime = await startSearchRuntime({
+      sources: PRODUCT_SOURCES,
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: built.binary,
       databasePath: path.join(built.root, 'search'),
@@ -195,6 +198,7 @@ describe('Meilisearch runtime identity', () => {
     await writeFile(path.join(database, 'sentinel'), 'keep');
     const prepareProjection = vi.fn();
     const runtime = await startSearchRuntime({
+      sources: PRODUCT_SOURCES,
       vault: { list: vi.fn(), read: vi.fn() } as never,
       binaryPath: binary,
       databasePath: database,

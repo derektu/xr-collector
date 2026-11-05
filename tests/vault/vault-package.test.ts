@@ -29,6 +29,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 /** Runs before the export opens a file for reading, so a test can change the file at that moment. */
 const reads = vi.hoisted(() => ({ before: undefined as undefined | ((file: string) => void) }));
@@ -61,16 +62,16 @@ const capture: CapturedTranscript = {
 const settings = { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 };
 const deletedId = 'gone0000001';
 async function seed(root: string) {
-  const vault = new MarkdownVault(new VaultFileWriter(root));
+  const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
   await vault.add(transcriptDocument(capture));
   await vault.add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', title: '第二份' }));
   await vault.add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除' }));
   await new Collector(vault).delete(`youtube:${deletedId}`);
-  await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').add({
+  await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings, nextCheckAt: null, lastDispatchedAt: null, outOfRange: [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }],
   });
-  await new JsonScheduleStore(new VaultFileWriter(root)).save({ enabled: true });
+  await new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).save({ enabled: true });
 }
 const REGISTERED = [
   'documents/youtube/abcdefghijk.md', 'documents/youtube/dQw4w9WgXcQ.md',
@@ -99,7 +100,7 @@ function fakeSearch(root: string): TranscriptSearch {
     async index(doc) { docs.push(doc); },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
-      const vault = new MarkdownVault(new VaultFileWriter(root));
+      const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search() { return { hits: [], total: 0, offset: 0, limit: 50 }; },
@@ -108,7 +109,7 @@ function fakeSearch(root: string): TranscriptSearch {
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> & YouTubeTestSources = {}) {
   await ensureMarker(root);
   const workspace = await VaultWorkspace.open(withYouTube({
-    root, selection: new VaultSelection(`${root}.selection.json`), profilePath: `${root}.profile`, createdBy: 'XR Collector test',
+    sources: PRODUCT_SOURCES, root, selection: new VaultSelection(`${root}.selection.json`), profilePath: `${root}.profile`, createdBy: 'XR Collector test',
     capture: { capture: async () => capture },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: `${root}-search`, exportFolder: `${root}.exports`, backupFolder: `${root}.backups`,
@@ -153,7 +154,7 @@ describe('registered files only (PKG-02)', () => {
     const personal = await addPersonalFiles(root);
     await mkdir(path.join(root, 'locked'));
     await writeFile(path.join(root, 'locked', 'secret.txt'), 'x');
-    const registered = await registeredFiles(root);
+    const registered = await registeredFiles(root, PRODUCT_SOURCES);
     expect(registered.files.map((file) => file.path).sort()).toEqual(REGISTERED);
     expect(registered.unregisteredFiles).toBe(personal + 1);
 
@@ -171,17 +172,17 @@ describe('registered files only (PKG-02)', () => {
 
   it('reports no others for a Vault holding only its own files', async () => {
     const root = path.join(await temp(), 'Vault'); await seed(root); await ensureMarker(root);
-    expect((await registeredFiles(root)).unregisteredFiles).toBe(0);
+    expect((await registeredFiles(root, PRODUCT_SOURCES)).unregisteredFiles).toBe(0);
   });
 
   it('fails the listing and the export on a document file of the Vault that cannot be read, naming it', async () => {
     const root = path.join(await temp(), 'Vault'); await seed(root);
     await writeFile(path.join(root, 'documents/youtube/abcdefghijk.md'), 'no frontmatter');
-    await expect(new MarkdownVault(new VaultFileWriter(root)).list()).rejects.toMatchObject({ file: 'documents/youtube/abcdefghijk.md' });
-    await expect(registeredFiles(root)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
+    await expect(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).list()).rejects.toMatchObject({ file: 'documents/youtube/abcdefghijk.md' });
+    await expect(registeredFiles(root, PRODUCT_SOURCES)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
     // A document whose ID differs from its file name is no document of that name.
     await writeFile(path.join(root, 'documents/youtube/abcdefghijk.md'), (await readFile(path.join(root, 'documents/youtube/dQw4w9WgXcQ.md'), 'utf8')));
-    await expect(registeredFiles(root)).rejects.toMatchObject({ message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
+    await expect(registeredFiles(root, PRODUCT_SOURCES)).rejects.toMatchObject({ message: expect.stringContaining('documents/youtube/abcdefghijk.md') });
   });
 });
 
@@ -255,6 +256,7 @@ describe('disk space (PKG-04)', () => {
     const file = path.join(at, 'small.zip');
     await writeFile(file, await packageBytes(root));
     await expect(importNewVault({
+      sources: PRODUCT_SOURCES,
       packageFile: file, folder: path.join(at, 'Imported'), profilePath: `${root}.profile`, createdBy: 'test',
       statfs: async () => ({ bavail: 1, bsize: 4096 }),
     })).rejects.toMatchObject({ code: 'insufficient_space' });
@@ -273,7 +275,7 @@ describe('files that fail while an export reads them', () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     await documentFile(root, 'huge0000001', 'x'.repeat(65 * 1024 * 1024));
     const workspace = await open(root);
-    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     try {
       const response = await app.inject({
         method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' }, payload: { path: path.join(at, 'out.zip') },
@@ -287,7 +289,7 @@ describe('files that fail while an export reads them', () => {
 
   it('fails an export whose document disappears while it is written, naming the file and leaving none', async () => {
     const at = await temp(); const root = path.join(at, 'Vault');
-    const vault = new MarkdownVault(new VaultFileWriter(root));
+    const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
     await vault.add(transcriptDocument(capture));
     await vault.add(transcriptDocument({ ...capture, videoId: 'vanish00001', sourceUrl: 'https://www.youtube.com/watch?v=vanish00001' }));
     const vanishing = path.join(root, 'documents/youtube/vanish00001.md');
@@ -305,7 +307,7 @@ describe('document files that cannot be read', () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     const workspace = await open(root);
     await writeFile(path.join(root, 'documents/youtube/broken00001.md'), 'not a document');
-    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
     try {
       for (const url of ['/api/documents', '/api/search/status']) {
         const response = await app.inject({ url });
@@ -320,7 +322,7 @@ describe('local paths only over HTTP (PKG-05)', () => {
   it('writes an export without a path into the export folder and takes no package bodies', async () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     const workspace = await open(root);
-    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     const headers = { authorization: 'Bearer test-token' };
     try {
       const suggestion = (await app.inject({ url: '/api/vault/export/suggestion', headers })).json();
@@ -350,18 +352,18 @@ describe('Vaults of an earlier format (CMP-01)', () => {
     const original = await readFile(channels);
     await writeFile(channels, JSON.stringify([{ id: 'UC123', title: '頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01' }]));
     const before = await readFile(channels);
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('youtube-channels.json') });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('youtube-channels.json') });
     expect(await readFile(channels)).toEqual(before);
     await writeFile(channels, original);
     await writeFile(path.join(root, 'settings/youtube-schedule.json'), JSON.stringify({ version: 1, enabled: true, intervalMinutes: 60 }));
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('youtube-schedule.json') });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('youtube-schedule.json') });
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toHaveProperty('id');
   });
 
   it('writes the export taken before an import as a package of the same format, naming the Vault and machine it came from', async () => {
     const at = await temp(); const local = path.join(at, 'Local'); const incoming = path.join(at, 'Incoming');
     await seed(local); await seed(incoming);
-    await new MarkdownVault(new VaultFileWriter(incoming)).add(transcriptDocument({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' }));
+    await new MarkdownVault(new VaultFileWriter(incoming, PRODUCT_SOURCES)).add(transcriptDocument({ ...capture, videoId: 'new00000001', sourceUrl: 'https://www.youtube.com/watch?v=new00000001' }));
     const workspace = await open(local);
     const file = path.join(at, 'incoming.zip');
     await writeFile(file, await packageBytes(incoming));
@@ -384,6 +386,6 @@ it('never writes over an existing file', async () => {
   const root = path.join(await temp(), 'Vault'); await seed(root);
   const file = path.join(root, '..', 'exists.zip');
   await writeFile(file, 'keep');
-  await expect(writePackage(root, file)).rejects.toMatchObject({ code: 'EEXIST' });
+  await expect(writePackage(root, PRODUCT_SOURCES, file)).rejects.toMatchObject({ code: 'EEXIST' });
   expect(await readFile(file, 'utf8')).toBe('keep');
 });

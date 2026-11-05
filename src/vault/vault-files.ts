@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { writeJsonFile } from '../core/json-file.js';
-import { scheduleFile, subscriptionDefinitions } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import { DELETIONS_FILE } from './deleted-documents.js';
 import { documentKeyFromPath } from './document-paths.js';
@@ -15,12 +15,12 @@ import { ensureVaultFormat } from './vault-directory.js';
  * `content` reads the file's parsed JSON, and only the deletion file reads it. A path that names no
  * Vault file is refused.
  */
-async function formatTypes(relative: string, content: () => Promise<unknown>): Promise<string[]> {
-  const document = documentKeyFromPath(relative);
+async function formatTypes(sources: SourceRegistry, relative: string, content: () => Promise<unknown>): Promise<string[]> {
+  const document = documentKeyFromPath(sources, relative);
   if (document) return [document.sourceType];
-  const subscriptions = subscriptionDefinitions().find((definition) => definition.storage!.subscriptionsFile === relative);
+  const subscriptions = sources.subscriptionDefinitions.find((definition) => definition.storage!.subscriptionsFile === relative);
   if (subscriptions) return [subscriptions.id];
-  if (relative === scheduleFile()) return [];
+  if (relative === sources.schedule.file) return [];
   if (relative === DELETIONS_FILE) return recordTypes(await content());
   throw new Error(`Not a Vault file: ${relative}`);
 }
@@ -52,9 +52,9 @@ function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
-/** The files of the Vault at `root`; see `VaultFiles`. */
+/** The files of the Vault at `root` that holds the types of `sources`; see `VaultFiles`. */
 export class VaultFileWriter implements VaultFiles {
-  constructor(readonly root: string) {}
+  constructor(readonly root: string, readonly sources: SourceRegistry) {}
 
   async writeJson(relative: string, value: unknown): Promise<void> {
     await this.admitFile(relative, async () => value);
@@ -79,7 +79,7 @@ export class VaultFileWriter implements VaultFiles {
   }
 
   async remove(relative: string): Promise<void> {
-    await formatTypes(relative, async () => undefined);
+    await formatTypes(this.sources, relative, async () => undefined);
     await rm(this.absolute(relative), { force: true });
   }
 
@@ -117,16 +117,16 @@ export class VaultFileWriter implements VaultFiles {
     const types = new Set<string>();
     for (const { relative, at } of files) {
       try {
-        for (const type of await formatTypes(relative, () => readJson(at))) types.add(type);
+        for (const type of await formatTypes(this.sources, relative, () => readJson(at))) types.add(type);
       } catch (error) {
         if (!missing(error)) throw error;
       }
     }
-    await ensureVaultFormat(this.root, types);
+    await ensureVaultFormat(this.root, types, this.sources);
   }
 
   private async admitFile(relative: string, content: () => Promise<unknown>): Promise<void> {
-    await ensureVaultFormat(this.root, await formatTypes(relative, content));
+    await ensureVaultFormat(this.root, await formatTypes(this.sources, relative, content), this.sources);
   }
 
   private absolute(relative: string): string {

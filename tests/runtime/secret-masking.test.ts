@@ -12,6 +12,7 @@ import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -43,6 +44,7 @@ describe('secrets in source errors', () => {
     let token = '';
     const leak = () => `ERROR: agent ${token} Authorization: Bearer ${BEARER} https://cdn.test/v?id=1&access_token=${PARAMETER}`;
     const runtime = await CollectorRuntime.start({
+      sources: PRODUCT_SOURCES,
       profilePath,
       explicitVaultPath: path.join(root, 'vault'),
       workspace: withYouTube({
@@ -152,6 +154,7 @@ describe('secrets in source errors', () => {
     };
     const runtimeOptions = {
       profilePath,
+      sources: PRODUCT_SOURCES,
       explicitVaultPath: path.join(root, 'vault'),
       workspace: withYouTube({
         capture: { capture },

@@ -15,7 +15,7 @@ import {
 import { loadBuildInfo } from './build-info.js';
 import { ChangeFeed } from '../core/change-feed.js';
 import { CollectionPause } from '../core/collection-pause.js';
-import { checkRegisteredSources } from '../core/source-registry.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { JobStore } from '../jobs/job-store.js';
@@ -44,11 +44,16 @@ export interface CollectorRuntimeStatus {
 }
 
 /** Everything a workspace needs except the Vault location, which the runtime decides. */
-export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity'>;
+export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity' | 'sources'>;
 
 export interface CollectorRuntimeOptions {
   buildInfo?: BuildInfo;
   profilePath: string;
+  /**
+   * The source types of this process, which the Vault, the jobs and both listeners read; with a
+   * workspace, its plugins are these types in this order.
+   */
+  sources: SourceRegistry;
   /** Null runs only health and Agent identity, without any Vault services. */
   workspace: VaultServiceOptions | null;
   /** How the device's network is confirmed; the internet probe and its intervals by default. */
@@ -144,9 +149,10 @@ export class CollectorRuntime {
     this.jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
   }
 
-  /** Throws before opening anything when the registered source types are not `workspace.plugins`. */
+  /** Throws before opening anything when `workspace.plugins` are not the types of `sources`. */
   static async start(options: CollectorRuntimeOptions): Promise<CollectorRuntime> {
-    checkRegisteredSources(options.workspace?.plugins ?? null);
+    if (options.workspace) options.sources.checkPlugins(options.workspace.plugins);
+    const sources = options.sources;
     const instanceId = randomUUID();
     const selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
@@ -163,7 +169,7 @@ export class CollectorRuntime {
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
     const changes = new ChangeFeed();
-    const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs'), undefined, { noteChange: changes.note }) : null;
+    const jobStore = options.workspace ? await JobStore.open(path.join(options.profilePath, 'jobs'), sources, undefined, { noteChange: changes.note }) : null;
     const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: string, message: string, errorCode?: string) => {
       jobStore?.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
     };
@@ -178,7 +184,7 @@ export class CollectorRuntime {
     ];
     const stopFollowing = () => { for (const stop of following) stop(); };
     const workspaceServices: WorkspaceServices | null = options.workspace && jobStore ? {
-      ...options.workspace, jobStore, pause, connectivity, noteChange: changes.note,
+      ...options.workspace, sources, jobStore, pause, connectivity, noteChange: changes.note,
       onAutoPaused: async (vaultId, sourceType, record) => {
         await notifications.recordAutoPause(vaultId, sourceType, record);
         changes.note({ kind: 'notifications' });
@@ -198,7 +204,7 @@ export class CollectorRuntime {
       collector: forwarding(() => current().collector),
       jobs: forwarding(() => current().jobs),
       transfer: forwarding(() => current()),
-      subscriptions: subscriptionCollections(() => current().subscriptions),
+      subscriptions: subscriptionCollections(sources, () => current().subscriptions),
       schedule: forwarding(() => current().schedule),
       search: forwarding<TranscriptSearch>(() => current().search),
       ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),
@@ -223,13 +229,13 @@ export class CollectorRuntime {
       read: async () => { const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
       update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
     };
-    const shared = { ...services, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
+    const shared = { ...services, sources, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
-      inspect: (vaultPath) => inspectVaultDirectory(vaultPath),
+      inspect: (vaultPath) => inspectVaultDirectory(vaultPath, sources),
       checkNew: (location, name) => runtime!.checkNew(location, name),
-      describePackage: (file) => describePackage(file),
+      describePackage: (file) => describePackage(file, sources),
       setup: (request) => runtime!.setup(request),
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
@@ -290,8 +296,8 @@ export class CollectorRuntime {
     });
 
     if (options.explicitVaultPath) {
-      const inspection = await inspectVaultDirectory(path.resolve(options.explicitVaultPath));
-      if (inspection.kind === 'empty') return open(await createVaultDirectory(inspection.path, createdBy));
+      const inspection = await inspectVaultDirectory(path.resolve(options.explicitVaultPath), options.sources);
+      if (inspection.kind === 'empty') return open(await createVaultDirectory(inspection.path, createdBy, options.sources));
       if (inspection.kind === 'existing') return open(inspection.path);
       return unusable(inspection.path, inspection.reason);
     }
@@ -303,7 +309,7 @@ export class CollectorRuntime {
       return unusable(selection.file, '這台電腦的知識庫位置設定已損壞。');
     }
     if (!selected) return { workspace: null, failure: null, message: NOT_SET_MESSAGE };
-    const inspection = await inspectVaultDirectory(selected);
+    const inspection = await inspectVaultDirectory(selected, options.sources);
     if (inspection.kind === 'existing') return open(inspection.path);
     if (inspection.kind === 'empty') {
       // A selected Vault that is now missing or empty must not be recreated silently.
@@ -358,13 +364,13 @@ export class CollectorRuntime {
         root = await createNewVault(request.location, request.name, createdBy, this.appFolders());
       } else if (request.action === 'import') {
         root = await importNewVault({
-          packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, this.appFolders()), profilePath: this.profilePath, createdBy,
+          packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, this.appFolders()), profilePath: this.profilePath, createdBy, sources: this.options.sources,
           ...(this.services.statfs ? { statfs: this.services.statfs } : {}),
         });
-        documentCount = (await inspectVaultDirectory(root).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
+        documentCount = (await inspectVaultDirectory(root, this.options.sources).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
       } else {
         if (!path.isAbsolute(request.path)) throw new CollectorError('invalid_request', '請提供完整的絕對路徑。');
-        const inspection: VaultInspection = await inspectVaultDirectory(request.path);
+        const inspection: VaultInspection = await inspectVaultDirectory(request.path, this.options.sources);
         if (inspection.kind !== 'existing') throw new CollectorError('vault_invalid', notAVault(inspection));
         root = inspection.path;
         documentCount = inspection.documentCount;
@@ -478,7 +484,7 @@ export class CollectorRuntime {
 }
 
 /** The services every Vault this runtime opens shares: the caller's, with the device's job record, pause and network. */
-type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'jobStore' | 'pause' | 'connectivity'>>;
+type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'sources' | 'jobStore' | 'pause' | 'connectivity'>>;
 
 interface Opening {
   workspace: VaultWorkspace | null;

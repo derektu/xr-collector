@@ -1,6 +1,5 @@
 import path from 'node:path';
-import { registerScheduleFile, registerSourceDefinitions } from '../core/source-registry.js';
-import { registerSubscriptionExchange } from '../core/subscription-exchange.js';
+import { SourceRegistry } from '../core/source-registry.js';
 import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../pacing/pacing-gate.js';
 import type { SourceDefinition, SourceEntry, SourcePlugin, SourcePluginDeclaration } from '../core/source-contract.js';
 import { SOURCE_DECLARATIONS } from './declarations.js';
@@ -43,13 +42,12 @@ export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 const SCHEDULE_DESCRIPTION = 'YouTube channel schedule';
 
 /**
- * Registers the product's source types, and the subscription files through which the Vault reads
- * their subscriptions; the composition roots call it before opening a Vault.
+ * The registry of `definitions` with the product's schedule file and subscription files. The
+ * assembly builds it from the plugins it creates (`createSourcePlugins`); a process that runs
+ * without plugins, and a test, builds it from the definitions.
  */
-export function registerSources(): void {
-  registerSourceDefinitions(SOURCE_DEFINITIONS);
-  registerScheduleFile(SCHEDULE_FILE, SCHEDULE_DESCRIPTION);
-  registerSubscriptionExchange(subscriptionFileExchange);
+export function sourceRegistry(definitions: readonly SourceDefinition[] = SOURCE_DEFINITIONS): SourceRegistry {
+  return new SourceRegistry(definitions, { file: SCHEDULE_FILE, description: SCHEDULE_DESCRIPTION }, subscriptionFileExchange);
 }
 
 /**
@@ -65,15 +63,15 @@ export interface SourcePluginsOptions {
   program: ProgramLocator;
 }
 
-/** The assembled plugins and one request channel per pacing group they declare. */
+/** The registry of the assembled plugins, the plugins, and one request channel per pacing group they declare. */
 export interface AssembledSources {
+  registry: SourceRegistry;
   plugins: SourcePlugin[];
   pacing: PacingGate[];
 }
 
-/** Registers the source types and builds their plugins with the request channels they share. */
+/** Builds the product's plugins with the request channels they share, and the registry of those plugins. */
 export async function createSourcePlugins(options: SourcePluginsOptions): Promise<AssembledSources> {
-  registerSources();
   const gates = new Map<string, PacingGate>();
   for (const definition of SOURCE_DEFINITIONS) {
     const pacing = definition.pacing;
@@ -93,5 +91,6 @@ export async function createSourcePlugins(options: SourcePluginsOptions): Promis
       return gate;
     },
   };
-  return { plugins: SOURCES.map((entry) => entry.create(runtime)), pacing: [...gates.values()] };
+  const plugins = SOURCES.map((entry) => entry.create(runtime));
+  return { registry: sourceRegistry(plugins), plugins, pacing: [...gates.values()] };
 }

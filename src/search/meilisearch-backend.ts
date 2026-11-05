@@ -7,7 +7,7 @@ import type {
   SearchResponse,
 } from '../core/types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
-import { sourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SearchBackend } from './managed-transcript-search.js';
 import { ContiguousFragmentIndex, type NormalizedMatchPosition } from './contiguous-fragment-index.js';
 import { planFragmentQuery } from './fragment-query.js';
@@ -20,17 +20,19 @@ const INDEX_UID = 'documents_v3';
 const RETIRED_INDEX_UIDS = ['transcripts'];
 const MAX_TOTAL_HITS = 10_000;
 
-/** Fields a search returns: the core's own and the details block of every registered source type. */
-function retrievedAttributes(): string[] {
+/** Fields a search returns: the core's own and the details block of every source type of `sources`. */
+function retrievedAttributes(sources: SourceDeclarations): string[] {
   return [
     'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
-    'publishedAt', 'collectedAt', ...sourceDeclarations().map((declaration) => declaration.id), 'bodyMarkdown',
+    'publishedAt', 'collectedAt', ...sources.list.map((declaration) => declaration.id), 'bodyMarkdown',
   ];
 }
 
 interface MeilisearchBackendOptions {
   baseUrl: string;
   apiKey: string;
+  /** The source types whose details blocks a search returns. */
+  sources: SourceDeclarations;
   lexicon?: SearchLexicon;
   fetch?: typeof fetch;
 }
@@ -239,7 +241,7 @@ export class MeilisearchBackend implements SearchBackend {
           q: plan.normalized,
           hitsPerPage: limit,
           page: Math.floor(offset / limit) + 1,
-          attributesToRetrieve: retrievedAttributes(),
+          attributesToRetrieve: retrievedAttributes(this.options.sources),
           showMatchesPosition: true,
           matchingStrategy: 'all',
           ...(filter.length > 0 ? { filter } : {}),
@@ -342,7 +344,7 @@ export class MeilisearchBackend implements SearchBackend {
         q: latinQuery,
         hitsPerPage: ids.length,
         page: 1,
-        attributesToRetrieve: retrievedAttributes(),
+        attributesToRetrieve: retrievedAttributes(this.options.sources),
         ...(latinQuery ? { showMatchesPosition: true, matchingStrategy: 'all' } : {}),
         filter: [...filter, `id IN [${ids.map((id) => JSON.stringify(id)).join(', ')}]`],
       }),

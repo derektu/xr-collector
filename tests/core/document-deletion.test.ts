@@ -29,6 +29,7 @@ import { HeldCaptures } from '../support/held-captures.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
 const CHANNEL = 'UCdeletiontestchannel000';
@@ -102,7 +103,7 @@ async function world(options: { holdAdds?: boolean } = {}) {
       return saved;
     }
   }
-  const vault = options.holdAdds ? new GatedVault(new VaultFileWriter(root), { now: () => clock.now }) : new MarkdownVault(new VaultFileWriter(root), { now: () => clock.now });
+  const vault = options.holdAdds ? new GatedVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now }) : new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now });
   const indexed = new Map<string, SavedDocument>();
   const removed: string[] = [];
   let removeFails = false;
@@ -124,9 +125,10 @@ async function world(options: { holdAdds?: boolean } = {}) {
   let sequence = 0;
 
   async function boot(): Promise<{ store: JobStore; manager: JobManager }> {
-    const store = await JobStore.open(jobsDirectory, () => clock.now);
+    const store = await JobStore.open(jobsDirectory, PRODUCT_SOURCES, () => clock.now);
     stores.push(store);
     const manager = new JobManager({
+      sources: PRODUCT_SOURCES,
       vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: subs,
       limits: { discovery: 1, capture: 1 }, now: () => clock.now, createId: () => `job-${++sequence}`,
     });
@@ -226,7 +228,7 @@ describe('deleting a document (A1)', () => {
   it('reports no search exclusion when no search service runs', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-deletion-nosearch-'));
     directories.push(root);
-    const vault = new MarkdownVault(new VaultFileWriter(root));
+    const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
     await vault.add(transcriptDocument(captured(vid('alpha'))));
     const result = await new Collector(vault).delete(`youtube:${vid('alpha')}`);
     expect(result).toMatchObject({ indexed: false, indexMessage: expect.stringContaining('搜尋服務尚未啟用') });
@@ -246,7 +248,7 @@ describe('deletion transaction and recovery (A2)', () => {
     expect(await w.vault.read(`youtube:${a}`)).toBeNull();
     expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true);
 
-    const recovery = await new MarkdownVault(new VaultFileWriter(w.root)).recoverDeletions();
+    const recovery = await new MarkdownVault(new VaultFileWriter(w.root, PRODUCT_SOURCES)).recoverDeletions();
     expect(recovery.completed.map((record) => record.sourceId)).toEqual([a]);
     expect(recovery.cleared).toEqual([]);
     expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(false);
@@ -332,7 +334,7 @@ describe('deletion transaction and recovery (A2)', () => {
     await mkdir(path.join(root, 'settings'), { recursive: true });
     await writeFile(path.join(root, DELETIONS_FILE), contents);
 
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('deleted-documents.json') });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('deleted-documents.json') });
   });
 });
 

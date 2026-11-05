@@ -9,6 +9,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import type { CheckEnd } from '../../src/jobs/subscription-port.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const VAULT = '/vaults/order';
 const CHANNEL = { id: 'UCorder', title: '順序', url: 'https://www.youtube.com/channel/UCorder/videos' };
@@ -36,6 +37,7 @@ class SlowEnd extends SubscriptionRecorder {
 }
 
 const emptyVault: DocumentVault = {
+  sources: PRODUCT_SOURCES,
   getByKey: async () => null,
   add: async () => { throw new Error('nothing is collected'); },
   list: async () => [],
@@ -47,9 +49,10 @@ describe('a check ending', () => {
     const changes = new ChangeFeed({ defer: () => undefined });
     const batches: ChangeBatch[] = [];
     changes.subscribe((batch) => batches.push(batch));
-    const store = JobStore.memory(undefined, changes.note);
+    const store = JobStore.memory(PRODUCT_SOURCES, undefined, changes.note);
     const subs = new SlowEnd(changes);
     const manager = new JobManager({
+      sources: PRODUCT_SOURCES,
       vaultPath: VAULT, store, subscriptions: subs, documents: new Collector(emptyVault),
       plugins: [youtubePlugin({
         resolveChannel: async () => CHANNEL, discover: async () => [], capture: async () => { throw new Error('no capture'); },

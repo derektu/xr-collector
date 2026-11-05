@@ -1,3 +1,5 @@
+import type { SourceRegistry } from './source-registry.js';
+
 /**
  * The way into one Vault's files. Every file the Vault registers (a document, the subscriptions file
  * of a source type, the schedule file and the deletion file) is written through it, and it raises
@@ -9,6 +11,8 @@
 export interface VaultFiles {
   /** The Vault folder; reads go to it directly. */
   readonly root: string;
+  /** The source types whose documents and subscription files this Vault holds, and its schedule file. */
+  readonly sources: SourceRegistry;
   /** Replaces the file with pretty-printed JSON, through a temporary file and a rename. */
   writeJson(relative: string, value: unknown): Promise<void>;
   /** Creates the file with `text` unless it exists; returns whether this call created it. */

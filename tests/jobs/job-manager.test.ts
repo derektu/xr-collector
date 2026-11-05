@@ -28,6 +28,7 @@ import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const VAULT = '/vaults/a';
 
@@ -47,6 +48,7 @@ function captured(id: string): CapturedTranscript {
 }
 
 class MemoryVault implements DocumentVault {
+  readonly sources = PRODUCT_SOURCES;
   readonly documents = new Map<string, SavedDocument>();
   async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
   async add(item: CapturedDocument) {
@@ -102,9 +104,10 @@ function setup(options: { limits?: Partial<JobLimits>; store?: JobStore; failInd
   const search = {
     index: vi.fn(async () => { if (options.failIndex) throw new Error('meilisearch down'); }),
   };
-  const store = options.store ?? JobStore.memory();
+  const store = options.store ?? JobStore.memory(PRODUCT_SOURCES);
   let sequence = 0;
   const manager = new JobManager({
+    sources: PRODUCT_SOURCES,
     vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.recentTargets ? { recentTarget: (type: string, url: string) => options.recentTargets!.get(type, url) } : {}),
@@ -308,7 +311,7 @@ describe('JobManager', () => {
   });
 
   it('lists top-level jobs newest first with a cursor and hides another Vault', async () => {
-    const store = JobStore.memory();
+    const store = JobStore.memory(PRODUCT_SOURCES);
     const { manager, source } = setup({ store });
     source.holdCaptures = false;
     for (let index = 0; index < 3; index += 1) await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(index)))).job.id);
@@ -317,6 +320,7 @@ describe('JobManager', () => {
     expect(manager.list({ limit: 2, cursor: first.nextCursor! })).toMatchObject({ jobs: [{ source: { id: videoId(0) } }], nextCursor: null });
 
     const other = new JobManager({
+      sources: PRODUCT_SOURCES,
       vaultPath: '/vaults/b', store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: new SubscriptionRecorder(),
     });
     expect(other.list().jobs).toEqual([]);
@@ -380,7 +384,7 @@ describe('JobStore', () => {
 
   it('persists accepted jobs and events, and marks unfinished jobs interrupted on reopen', async () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
-    const store = await JobStore.open(directory);
+    const store = await JobStore.open(directory, PRODUCT_SOURCES);
     const { manager, source, collect } = setup({ store, limits: { discovery: 1, capture: 1 } });
     source.channelVideos.set('UC-STOP', videos(2, 's'));
     const accepted = await collect(channel('UC-STOP', '停止中的頻道'));
@@ -396,7 +400,7 @@ describe('JobStore', () => {
     await store.activity.flush();
 
     // A process that stops without closing leaves running and queued jobs on disk.
-    const reopened = await JobStore.open(directory);
+    const reopened = await JobStore.open(directory, PRODUCT_SOURCES);
     const channelJob = reopened.get(accepted.job.id)!;
     expect(channelJob).toMatchObject({ state: 'interrupted', source: { title: '停止中的頻道' }, progress: { done: 1, created: 1 } });
     expect(channelJob.items?.map((item) => item.state)).toEqual(['completed', 'interrupted']);
@@ -416,7 +420,7 @@ describe('JobStore', () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
     const flushTimers: Array<() => void> = [];
     let appends = 0;
-    const store = await JobStore.open(directory, undefined, {
+    const store = await JobStore.open(directory, PRODUCT_SOURCES, undefined, {
       setTimer: (callback, ms) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; },
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
@@ -440,7 +444,7 @@ describe('JobStore', () => {
   });
 
   it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
-    const store = JobStore.memory();
+    const store = JobStore.memory(PRODUCT_SOURCES);
     const record = (id: string, state: 'completed' | 'interrupted', minute: number): CollectionJob => ({
       id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, parentId: null,
       source: { type: 'youtube', id: null, url: watchUrl(videoId(minute)), title: null },
@@ -464,7 +468,7 @@ describe('JobStore', () => {
       await writeFile(path.join(directory, 'jobs.json'), contents);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
-        const store = await JobStore.open(directory, () => new Date('2026-10-15T01:02:03.456Z'));
+        const store = await JobStore.open(directory, PRODUCT_SOURCES, () => new Date('2026-10-15T01:02:03.456Z'));
         expect(store.list(VAULT)).toEqual([]);
         expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
         expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);

@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../src/server/app.js';
 import { VaultOperationLock, type VaultAccess } from '../../src/vault/operation-lock.js';
 import type { VaultWorkspace } from '../../src/vault/workspace.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
@@ -23,6 +24,7 @@ describe('Vault access declared by routes', () => {
       status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
     } as unknown as VaultWorkspace;
     const app = await createHttpApp({
+      sources: PRODUCT_SOURCES,
       transfer,
       loginStartup: {
         status: async () => ({ supported: true, enabled: false, state: 'disabled', message: 'off' }),

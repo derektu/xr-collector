@@ -30,6 +30,7 @@ import { type RecordedSubscription, SubscriptionRecorder } from '../support/subs
 import { transcriptOf } from '../support/youtube-documents.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // Interrupted work continues after a restart. A "crash" flushes the job store and opens the same
 // directory again without closing the manager: the atomic snapshot on disk is what a killed process
@@ -52,6 +53,7 @@ function captured(id: string): CapturedTranscript {
 }
 
 class MemoryVault implements DocumentVault {
+  readonly sources = PRODUCT_SOURCES;
   readonly documents = new Map<string, SavedDocument>();
   saves = 0;
   async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
@@ -168,7 +170,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   let indexHangs = false;
 
   async function boot(prepare: (source: ScriptedSource) => void = () => undefined): Promise<Generation> {
-    const store = await JobStore.open(directory, () => clock.now);
+    const store = await JobStore.open(directory, PRODUCT_SOURCES, () => clock.now);
     stores.push(store);
     const source = new ScriptedSource(script);
     prepare(source);
@@ -176,6 +178,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     const search = { index: async () => { if (hangIndex) await never(); } };
     const timers: Timer[] = [];
     const manager = new JobManager({
+      sources: PRODUCT_SOURCES,
       vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),

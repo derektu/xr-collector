@@ -10,10 +10,11 @@ import type { LoginStartupAccess } from '../../src/core/login-startup.js';
 import { CollectorError } from '../../src/core/types.js';
 import { startAgentAccess } from '../../src/server/agent-access.js';
 import { createHttpApp } from '../../src/server/app.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 describe('login startup HTTP API', () => {
   it('is readable before Vault setup and refuses changes in Web/development mode', async () => {
-    const app = await createHttpApp({ notReady: () => '尚未設定 Vault。' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, notReady: () => '尚未設定 Vault。' });
     const read = await app.inject({ method: 'GET', url: '/api/device/login-startup' });
     const write = await app.inject({ method: 'PUT', url: '/api/device/login-startup', payload: { enabled: true } });
     expect(read.json()).toMatchObject({ loginStartup: { supported: false, enabled: false, state: 'unavailable' } });
@@ -25,6 +26,7 @@ describe('login startup HTTP API', () => {
   it('refuses changes from an authorized Agent in Web/development mode too', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-login-startup-agent-'));
     const access = await startAgentAccess({
+      sources: PRODUCT_SOURCES,
       notReady: () => '尚未設定 Vault。', settingsFile: path.join(root, 'agent-settings.json'),
       preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent'),
     });
@@ -48,7 +50,7 @@ describe('login startup HTTP API', () => {
       status: async () => ({ supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: 'ok' }),
       update: async (next) => { enabled = next; return update(next); },
     };
-    const app = await createHttpApp({ loginStartup });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, loginStartup });
     const changed = await app.inject({ method: 'PUT', url: '/api/device/login-startup', payload: { enabled: true } });
     expect(changed.json()).toEqual({ loginStartup: { supported: true, enabled: true, state: 'enabled', message: 'ok' } });
     expect(update).toHaveBeenCalledWith(true);
@@ -62,7 +64,7 @@ describe('login startup HTTP API', () => {
 
   it('returns approval and read-back failures with stable codes', async () => {
     for (const [code, expected] of [['login_startup_requires_approval', 409], ['login_startup_failed', 500]] as const) {
-      const app = await createHttpApp({ loginStartup: {
+      const app = await createHttpApp({ sources: PRODUCT_SOURCES, loginStartup: {
         status: async () => ({ supported: true, enabled: false, state: 'disabled', message: 'off' }),
         update: async () => { throw new CollectorError(code, code); },
       } });

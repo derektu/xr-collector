@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { CollectorError, type NewVaultCheck, type PackageDescription } from '../core/types.js';
 import { checkPackageFile, isWithin, isWorkFolder } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
@@ -101,9 +102,9 @@ export async function createNewVault(location: unknown, name: unknown, createdBy
  * What an export file holds, read from its manifest once its structure is checked. Creating a Vault
  * from the file checks every document again.
  */
-export async function describePackage(file: unknown): Promise<PackageDescription> {
+export async function describePackage(file: unknown, sources: SourceRegistry): Promise<PackageDescription> {
   const checked = await checkPackageFile(file);
-  const reader = await openPackage(checked);
+  const reader = await openPackage(checked, sources);
   try {
     const { exportedAt, source, summary } = reader.manifest;
     const folderName = source?.folderName && !nameProblem(source.folderName) ? source.folderName : DEFAULT_VAULT_NAME;

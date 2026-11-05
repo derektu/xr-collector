@@ -8,6 +8,7 @@ import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
 import { CollectorError, type SubscriptionPreview } from '../../src/core/types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../src/server/app.js';
 import { recognizeUrl, sourceTypeDeclarations, type SourceTypeDeclaration } from '../../src/sources/source-types.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const own = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
 const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
@@ -29,7 +30,7 @@ function channelsWith(previews: Record<string, { enabled: boolean } | null>, fai
 }
 
 async function recognize(url: unknown, channels: SubscriptionCollection, sourceTypes?: SourceTypeDeclaration[]) {
-  const app = await createHttpApp({ subscriptions: [channels], ...(sourceTypes ? { sourceTypes } : {}) });
+  const app = await createHttpApp({ sources: PRODUCT_SOURCES, subscriptions: [channels], ...(sourceTypes ? { sourceTypes } : {}) });
   const response = await app.inject({ method: 'POST', url: '/api/url-recognitions', payload: url === undefined ? {} : { url } });
   await app.close();
   return response;
@@ -37,7 +38,7 @@ async function recognize(url: unknown, channels: SubscriptionCollection, sourceT
 
 describe('source type declarations (T-01)', () => {
   it('publishes YouTube with its kinds, login need and the setting options with their defaults', async () => {
-    const app = await createHttpApp({});
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, });
     const response = await app.inject({ method: 'GET', url: '/api/source-types' });
     await app.close();
 
@@ -153,7 +154,7 @@ describe('URL recognition (T-02 to T-05)', () => {
       recognize: recognizeFixture,
     } as unknown as SourceTypeDeclaration;
     const { channels, preview } = channelsWith({});
-    const recognition = (await recognize('https://login.example/page', channels, [fixture, ...sourceTypeDeclarations()])).json().recognition;
+    const recognition = (await recognize('https://login.example/page', channels, [fixture, ...sourceTypeDeclarations(PRODUCT_SOURCES)])).json().recognition;
 
     expect(recognition).toEqual({
       status: 'login_required', sourceType: 'fixture', kind: null, kindLabel: null, url: 'https://login.example/page',
@@ -195,7 +196,7 @@ describe('URL recognition (T-02 to T-05)', () => {
 
   it('lets the first declaration that owns an address recognize it', async () => {
     const { channels } = channelsWith({});
-    const recognition = await recognizeUrl(' https://youtu.be/dQw4w9WgXcQ ', sourceTypeDeclarations(), { previewSubscription: (_type, url) => channels.preview(url) });
+    const recognition = await recognizeUrl(' https://youtu.be/dQw4w9WgXcQ ', sourceTypeDeclarations(PRODUCT_SOURCES), { previewSubscription: (_type, url) => channels.preview(url) });
     expect(recognition).toMatchObject({ status: 'ready', kind: 'video' });
   });
 });

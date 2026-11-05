@@ -14,6 +14,7 @@ import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 // The activity and job query routes: device data readable while an import holds the Vault and before
 // one is chosen, the summary and retry contract, and parameter validation.
@@ -40,10 +41,10 @@ function services(failures: CollectorError[] = []) {
     list: async () => [],
     read: async () => saved,
   };
-  const store = JobStore.memory();
+  const store = JobStore.memory(PRODUCT_SOURCES);
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
-    vaultPath: VAULT, store, documents: collector,
+    vaultPath: VAULT, store, sources: PRODUCT_SOURCES, documents: collector,
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new CollectorError('invalid_subscription', '無法辨認'); },
       discover: async () => [],
@@ -89,7 +90,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
         check: { trigger: 'scheduled', result: 'empty', created: 0, existing: 5, failed: 0, skipped: 0 },
       });
     }
-    const ui = await createHttpApp({ collector, jobs, activity });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity });
     cleanups.push(() => ui.close());
     const query = '/api/activity?view=summary&sourceType=youtube&subscriptionId=UC-summary&limit=1';
     const uiPage = (await ui.inject({ method: 'GET', url: query })).json();
@@ -125,14 +126,14 @@ describe('activity and job routes (A-T8, A-T10)', () => {
         return () => undefined;
       },
     } as unknown as HttpAppOptions['transfer'];
-    const merging = await createHttpApp({ collector, jobs, activity, ...(transfer ? { transfer } : {}) });
+    const merging = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, ...(transfer ? { transfer } : {}) });
     cleanups.push(() => merging.close());
     expect((await merging.inject({ method: 'GET', url: '/api/documents' })).statusCode).toBe(409);
     for (const url of ['/api/activity', '/api/jobs', '/api/jobs/summary?since=2026-10-15T00:00:00%2B08:00']) {
       expect((await merging.inject({ method: 'GET', url })).statusCode, url).toBe(200);
     }
 
-    const notReady = await createHttpApp({ collector, jobs, activity, notReady: () => '尚未設定 Vault。' });
+    const notReady = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, notReady: () => '尚未設定 Vault。' });
     cleanups.push(() => notReady.close());
     expect((await notReady.inject({ method: 'GET', url: '/api/documents' })).statusCode).toBe(503);
     expect((await notReady.inject({ method: 'GET', url: '/api/activity' })).statusCode).toBe(200);
@@ -142,7 +143,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
 
   it('answers the activity, summary and retry contract, and rejects malformed queries', async () => {
     const { collector, jobs, activity } = services([new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。')]);
-    const app = await createHttpApp({ collector, jobs, activity, agentToken: 'agent-token-for-tests' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, agentToken: 'agent-token-for-tests' });
     cleanups.push(() => app.close());
     const headers = { authorization: 'Bearer agent-token-for-tests' };
     expect((await app.inject({ method: 'GET', url: '/api/activity' })).statusCode).toBe(401);
@@ -182,6 +183,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-runtime-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const runtime = await CollectorRuntime.start({
+      sources: PRODUCT_SOURCES,
       profilePath: root,
       workspace: withYouTube({
         capture: { capture: async () => { throw new Error('unused'); } } as never,

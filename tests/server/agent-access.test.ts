@@ -26,6 +26,7 @@ import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { zipEntries } from '../support/package-fixtures.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -35,7 +36,7 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-agent-test-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
-  const vault = new MarkdownVault(new VaultFileWriter(path.join(root, 'vault')));
+  const vault = new MarkdownVault(new VaultFileWriter(path.join(root, 'vault'), PRODUCT_SOURCES));
   for (const id of ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc']) {
     const capture: CapturedTranscript = {
       videoId: id, sourceUrl: `https://www.youtube.com/watch?v=${id}`,
@@ -48,7 +49,8 @@ async function fixture() {
   const capture = vi.fn();
   const collector = new Collector(vault);
   const jobs = new JobManager({
-    vaultPath: path.join(root, 'vault'), store: JobStore.memory(), documents: collector,
+    sources: PRODUCT_SOURCES,
+    vaultPath: path.join(root, 'vault'), store: JobStore.memory(PRODUCT_SOURCES), documents: collector,
     plugins: [youtubePlugin({ capture, resolveChannel: vi.fn(), discover: vi.fn() })],
   });
   return { root, vault, collector, capture, jobs };
@@ -72,7 +74,7 @@ describe('Agent authenticated HTTP access', () => {
       type: 'youtube', list: vi.fn(async () => []), add: vi.fn(), setEnabled: vi.fn(),
       remove: vi.fn(), startRun: vi.fn(),
     };
-    const app = await createHttpApp({ collector, jobs, search, schedule, subscriptions: [channels], agentToken: 'test-secret' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, search, schedule, subscriptions: [channels], agentToken: 'test-secret' });
     cleanup.push(() => app.close());
     for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/api/jobs', '/']) {
       for (const authorization of ['', 'Bearer wrong', 'Bearer test-secreX']) {
@@ -101,7 +103,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('paginates without omissions, validates bounds, and reads the full document', async () => {
     const { collector } = await fixture();
-    const agent = await createHttpApp({ collector, agentToken: 'secret' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentToken: 'secret' });
     cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const ids: string[] = [];
@@ -126,7 +128,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('deletes a document for an authorized Agent (A7)', async () => {
     const { collector } = await fixture();
-    const agent = await createHttpApp({ collector, agentToken: 'secret' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentToken: 'secret' });
     cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const url = `/api/documents/${encodeURIComponent('youtube:aaaaaaaaaaa')}`;
@@ -151,7 +153,7 @@ describe('Agent authenticated HTTP access', () => {
     const { collector } = await fixture();
     const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), search: vi.fn() };
     const search = new ManagedTranscriptSearch(backend, async () => []);
-    const app = await createHttpApp({ collector, search, agentToken: 'secret' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search, agentToken: 'secret' });
     cleanup.push(() => app.close());
     const headers = { authorization: 'Bearer secret' };
     expect((await app.inject({ url: '/api/search/status', headers })).json().status.state).toBe('starting');
@@ -168,11 +170,12 @@ describe('Agent authenticated HTTP access', () => {
     const lexiconPath = path.resolve('resources/search/coct-main.txt');
     const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: path.join(root, 'search') });
     cleanup.push(() => engine.close());
-    const search = new ManagedTranscriptSearch(new MeilisearchBackend({ baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
+    const search = new ManagedTranscriptSearch(new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
       async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));
     await search.start();
     const settingsFile = path.join(root, 'agent-settings.json');
     const options = {
+      sources: PRODUCT_SOURCES,
       collector, search, settingsFile, preferredPort: await freePort(),
       skillPath: path.resolve('skills/xr-collector-agent'),
     };
@@ -201,7 +204,7 @@ describe('Agent authenticated HTTP access', () => {
     expect(first.hits).toHaveLength(1);
     expect(second.hits).toHaveLength(1);
     expect(first.hits[0].id).not.toBe(second.hits[0].id);
-    const ui = await createHttpApp({ collector, search });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search });
     cleanup.push(() => ui.close());
     for (const query of ['limit=101', 'offset=-1', 'q=first&q=second', 'publishedFrom=2026-02-30']) {
       expect((await ui.inject(`/api/search?${query}`)).statusCode).toBe(400);
@@ -223,7 +226,7 @@ describe('Agent authenticated HTTP access', () => {
   it('listens on the preferred port, or the next free one when it is taken, and records the port it uses', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const options = { collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
+    const options = { sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
     const blocker = await listenOnFreePort();
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
     const taken = (blocker.address() as { port: number }).port;
@@ -284,7 +287,7 @@ describe('Agent authenticated HTTP access', () => {
     const ordinary = path.join(root, 'ordinary.txt');
     await writeFile(ordinary, 'x');
     const ownerOnly = process.platform === 'win32' ? await fileReaders(ordinary) : ['mode 600'];
-    const options = { collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
+    const options = { sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
     const first = await startAgentAccess(options);
     expect(await fileReaders(settingsFile)).toEqual(ownerOnly);
     await first.resetKey();
@@ -300,7 +303,7 @@ describe('Agent authenticated HTTP access', () => {
   it('serializes a port update and key reset without losing either saved field', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const before = access.connection();
 
@@ -322,7 +325,7 @@ describe('Agent authenticated HTTP access', () => {
     const fixed = (blocker.address() as { port: number }).port;
     const settingsFile = path.join(root, 'agent-settings.json');
     await writeFile(settingsFile, JSON.stringify({ schemaVersion: 1, token: 'persistent-test-key', port: { mode: 'fixed', port: fixed } }));
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     expect(access.status()).toMatchObject({ state: 'unavailable', activeUrl: null, configured: { mode: 'fixed', port: fixed } });
     expect(() => access.connection()).toThrow('無法使用');
@@ -336,7 +339,7 @@ describe('Agent authenticated HTTP access', () => {
   it('keeps the current key when saving a reset fails', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const current = access.connection();
     await rm(settingsFile);
@@ -352,9 +355,9 @@ describe('Agent authenticated HTTP access', () => {
     // write target a missing directory. This reaches the save failure rather than a read failure.
     const missingParent = path.join(root, 'missing-settings-parent');
     const settingsFile = `${missingParent}${path.sep}`;
-    const access = await startAgentAccess({ collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
+    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
-    const ui = await createHttpApp({ collector, agentConnection: access });
+    const ui = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentConnection: access });
     cleanup.push(() => ui.close());
 
     expect((await ui.inject('/api/health')).statusCode).toBe(200);

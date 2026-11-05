@@ -12,6 +12,7 @@ import { createHttpApp } from '../../src/server/app.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const captured: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -34,6 +35,7 @@ function makeCollector(): Collector {
 function makeServices(captureFailure?: CollectorError, captureGate?: Promise<void>): { collector: Collector; jobs: JobManager } {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
+    sources: PRODUCT_SOURCES,
     getByKey: async () => saved,
     add: async (document) => {
       const input = transcriptOf(document);
@@ -58,7 +60,8 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
     vaultPath: '/vault',
-    store: JobStore.memory(),
+    store: JobStore.memory(PRODUCT_SOURCES),
+    sources: PRODUCT_SOURCES,
     plugins: [youtubePlugin({
       resolveChannel: async () => ({ id: 'UC-http', title: 'HTTP 頻道', url: 'https://www.youtube.com/channel/UC-http/videos' }),
       discover: async () => [],
@@ -99,7 +102,7 @@ describe('HTTP app', () => {
       },
       runNow: async () => [],
     };
-    const app = await createHttpApp({ collector: makeCollector(), schedule });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), schedule });
 
     const read = await app.inject({ method: 'GET', url: '/api/schedule' });
     const updated = await app.inject({ method: 'PUT', url: '/api/schedule', payload: { enabled: false } });
@@ -191,7 +194,7 @@ describe('HTTP app', () => {
         return [{ job: job('run-2'), deduplicated: false }];
       },
     };
-    const app = await createHttpApp({ collector: makeCollector(), subscriptions: [channels], schedule });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), subscriptions: [channels], schedule });
 
     const previewed = await app.inject({
       method: 'POST', url: '/api/subscription-previews', payload: { url: '@channel-one' },
@@ -275,7 +278,7 @@ describe('HTTP app', () => {
       },
       rebuild: async () => undefined,
     };
-    const app = await createHttpApp({ collector: makeCollector(), search });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), search });
 
     const response = await app.inject({
       method: 'GET',
@@ -325,7 +328,7 @@ describe('HTTP app', () => {
       index: async () => undefined,
       rebuild: async () => undefined,
     };
-    const app = await createHttpApp({ collector: makeCollector(), search });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), search });
 
     const response = await app.inject({
       method: 'GET',
@@ -340,7 +343,7 @@ describe('HTTP app', () => {
 
   it('accepts a video with 202 and exposes its progress through the jobs API', async () => {
     const { collector, jobs } = makeServices();
-    const app = await createHttpApp({ collector, jobs });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
     const response = await app.inject({
       method: 'POST',
       url: '/api/items',
@@ -364,7 +367,7 @@ describe('HTTP app', () => {
   it('classifies a pasted address into a video or channel job', async () => {
     let release!: () => void;
     const { collector, jobs } = makeServices(undefined, new Promise<void>((resolve) => { release = resolve; }));
-    const app = await createHttpApp({ collector, jobs });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
     const submit = (url: string) => app.inject({ method: 'POST', url: '/api/submissions', payload: { url } });
 
     const video = await submit('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123');
@@ -387,7 +390,7 @@ describe('HTTP app', () => {
 
   it('reports a capture failure on the job with a stable error code', async () => {
     const { collector, jobs } = makeServices(new CollectorError('no_subtitles', '沒有字幕'));
-    const app = await createHttpApp({ collector, jobs });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
     const response = await app.inject({
       method: 'POST',
       url: '/api/items',
@@ -405,7 +408,7 @@ describe('HTTP app', () => {
 
   it('rejects malformed requests without accepting a job', async () => {
     const { collector, jobs } = makeServices();
-    const app = await createHttpApp({ collector, jobs });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
     const empty = await app.inject({ method: 'POST', url: '/api/items', payload: {} });
     const channelAsVideo = await app.inject({ method: 'POST', url: '/api/items', payload: { url: '@channel' } });
     const badState = await app.inject({ method: 'GET', url: '/api/jobs?state=done' });
@@ -425,7 +428,7 @@ describe('HTTP app', () => {
 describe('Host header', () => {
   it('answers only requests addressed to the server by its loopback name and port', async () => {
     const { startServer } = await import('../../src/server/start.js');
-    const server = await startServer({ port: 0, collector: makeCollector() });
+    const server = await startServer({ sources: PRODUCT_SOURCES, port: 0, collector: makeCollector() });
     try {
       const get = (host: string) => server.app.inject({ method: 'GET', url: '/api/health', headers: { host } });
       for (const host of [`127.0.0.1:${server.port}`, `localhost:${server.port}`, `LOCALHOST:${server.port}`]) {

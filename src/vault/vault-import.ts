@@ -4,6 +4,7 @@ import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
+import type { SourceRegistry } from '../core/source-registry.js';
 import { VaultFileWriter } from './vault-files.js';
 import { formatBytes, nearestExisting, spaceMargin, type StatFs } from './disk-space.js';
 import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
@@ -49,7 +50,7 @@ const STAGED = /^files\/\d+$/u;
  * Files taken from the export file stream out of `reader`.
  */
 export async function applyInPlace(
-  root: string, reader: PackageReader, changes: FileChanges,
+  root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges,
   progress: (done: number, total: number) => void,
   faults?: (phase: ImportFault, count?: number) => void | Promise<void>,
 ): Promise<void> {
@@ -73,7 +74,7 @@ export async function applyInPlace(
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  const files = new VaultFileWriter(root);
+  const files = new VaultFileWriter(root, sources);
   await files.admit(placed(work, entries));
   for (const [index, entry] of entries.entries()) {
     await placeEntry(files, work, entry);
@@ -98,7 +99,7 @@ async function placeEntry(files: VaultFileWriter, work: string, entry: InPlaceJo
  * journal has its entries carried out, one without is dropped. Returns whether any import was
  * carried out, in which case the search index needs a rebuild.
  */
-export async function finishInPlaceImports(root: string): Promise<boolean> {
+export async function finishInPlaceImports(root: string, sources: SourceRegistry): Promise<boolean> {
   let names: string[];
   try { names = await readdir(root); } catch { return false; }
   let finished = false;
@@ -107,10 +108,10 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
     let journal: InPlaceJournal | null = null;
     try { journal = JSON.parse(await readFile(path.join(work, 'journal.json'), 'utf8')) as InPlaceJournal; } catch { journal = null; }
     const valid = journal?.version === 1 && Array.isArray(journal.entries) && journal.entries.every((entry) =>
-      typeof entry?.path === 'string' && packagePath(entry.path)
+      typeof entry?.path === 'string' && packagePath(sources, entry.path)
       && (entry.staged === null || (typeof entry.staged === 'string' && STAGED.test(entry.staged))));
     if (journal && valid) {
-      const files = new VaultFileWriter(root);
+      const files = new VaultFileWriter(root, sources);
       await files.admit(placed(work, journal.entries));
       for (const entry of journal.entries) await placeEntry(files, work, entry);
       finished = true;
@@ -127,13 +128,13 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
  * The new Vault gets its own ID and keeps the automatic collection switch the export file holds.
  */
 export async function importNewVault(options: {
-  packageFile: unknown; folder: unknown; profilePath: string; createdBy: string; statfs?: StatFs;
+  packageFile: unknown; folder: unknown; profilePath: string; createdBy: string; sources: SourceRegistry; statfs?: StatFs;
 }): Promise<string> {
   const target = await checkImportFolder(options.folder);
-  const reader = await openPackage(await checkPackageFile(options.packageFile));
+  const reader = await openPackage(await checkPackageFile(options.packageFile), options.sources);
   let journal: ImportJournal | null = null;
   try {
-    await checkPackageContent(reader);
+    await checkPackageContent(reader, options.sources);
     await checkFreeSpace(path.dirname(target), unpackedBytes(reader), options.statfs);
     journal = { staging: stagingFolder(target), target, placed: false, marker: null };
     await writeImportJournal(options.profilePath, journal);
@@ -142,7 +143,7 @@ export async function importNewVault(options: {
     reader.close();
     await writeVaultMarker(journal.staging, options.createdBy);
     const staging = journal.staging;
-    await new VaultFileWriter(staging).admit(reader.paths().map((relative) => ({ relative, at: path.join(staging, ...relative.split('/')) })));
+    await new VaultFileWriter(staging, options.sources).admit(reader.paths().map((relative) => ({ relative, at: path.join(staging, ...relative.split('/')) })));
     await checkImportFolder(target);
     journal = { ...journal, placed: true, marker: await markerDigest(journal.staging) };
     await writeImportJournal(options.profilePath, journal);

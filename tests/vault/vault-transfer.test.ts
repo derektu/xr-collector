@@ -22,6 +22,7 @@ import { youtubeKey } from '../support/youtube-documents.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 afterEach(cleanUp);
 
@@ -30,7 +31,7 @@ const filesOf = async (root: string) => packageFiles(await packageBytes(root));
 
 /** Creates a machine's Vault from an export file as Onboarding does, and names it in the machine's selection. */
 async function importAsNew(at: Machine, file: string): Promise<string> {
-  const target = await importNewVault({ packageFile: file, folder: at.vault, profilePath: at.profile, createdBy: 'XR Collector test' });
+  const target = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: at.vault, profilePath: at.profile, createdBy: 'XR Collector test' });
   await new VaultSelection(path.join(at.profile, 'vault-selection.json')).write(target);
   return target;
 }
@@ -43,7 +44,7 @@ describe('workspace transfer through HTTP', () => {
     await rm(a.vault, { recursive: true }); // A is unavailable for the import, browse and search alike.
     const target = await importAsNew(b, file);
     const workspace = await open(b);
-    const app = await createHttpApp({ collector: workspace.collector, search: workspace.search, subscriptions: subscriptionCollections(() => workspace.subscriptions), schedule: workspace.schedule, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, search: workspace.search, subscriptions: subscriptionCollections(PRODUCT_SOURCES, () => workspace.subscriptions), schedule: workspace.schedule, transfer: workspace });
     try {
       expect(workspace.status().vaultPath).toBe(target);
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
@@ -91,7 +92,7 @@ describe('workspace transfer through HTTP', () => {
     const first = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
     const second = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=abcdefghijk');
     await eventually(() => expect(started.length).toBe(1));
-    const app = await createHttpApp({ collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
     try {
       // The export takes the Vault at once and waits for the capture already running.
       const pending = workspace.exportTo();
@@ -175,7 +176,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     await seed(a.vault);
     const settings = { intervalMinutes: 180, backfillDays: 45, backfillMaxItems: 20 };
     const outOfRange = [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }];
-    await new JsonSubscriptionStore(new VaultFileWriter(a.vault), 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
+    await new JsonSubscriptionStore(new VaultFileWriter(a.vault, PRODUCT_SOURCES), 'youtube').update('UC123', { lastCheckedAt: '2026-10-14T00:00:00.000Z', settings, outOfRange });
     const exported = await packageBytes(a.vault);
     expect(JSON.parse((await packageFiles(exported)).get('settings/youtube-channels.json')!.toString()))
       .toMatchObject({ version: 3, channels: [{ id: 'UC123', settings, outOfRange }] });
@@ -238,8 +239,8 @@ describe('deletion records in export files (A6)', () => {
   it('exports deletions and a Vault imported from the export keeps them in force', async () => {
     const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
     await seed(a.vault);
-    await new MarkdownVault(new VaultFileWriter(a.vault)).add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title }));
-    await new Collector(new MarkdownVault(new VaultFileWriter(a.vault))).delete(`youtube:${deletedId}`);
+    await new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES)).add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: record.sourceUrl, title: record.title }));
+    await new Collector(new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES))).delete(`youtube:${deletedId}`);
     const exported = await packageBytes(a.vault);
     const paths = (await manifestOf(exported)).files.map((file) => file.path);
     expect(paths).toContain(DELETIONS_FILE);
@@ -274,12 +275,12 @@ describe('deletion records in export files (A6)', () => {
 it('refuses a document deletion while an import holds the Vault (A7)', async () => {
   const root = await temp(); const a = await machine('A', root); const b = await machine('B', root);
   await seed(a.vault); await seed(b.vault);
-  await new MarkdownVault(new VaultFileWriter(a.vault)).add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }));
+  await new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES)).add(transcriptDocument({ ...capture, videoId: 'abcdefghijk', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk' }));
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   // The import stops once its files are staged, so it keeps the Vault locked.
   const workspace = await open(b, { importFaults: async (phase) => { if (phase === 'staged') await held; } });
-  const app = await createHttpApp({ collector: workspace.collector, transfer: workspace });
+  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
   try {
     const preview = await workspace.previewImport(await fileOf(a.exports, 'a.zip', await packageBytes(a.vault)));
     workspace.applyImport(preview.id, 'merge', {});

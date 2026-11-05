@@ -21,6 +21,7 @@ import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -45,9 +46,9 @@ const urlOf = (id: string) => `https://www.youtube.com/watch?v=${id}`;
 const IDS = ['open0000001', 'open0000002', 'open0000003', 'open0000004'];
 
 async function seed(root: string): Promise<void> {
-  await createVaultDirectory(root, 'XR Collector test');
-  await new MarkdownVault(new VaultFileWriter(root)).add(transcriptDocument(video('seed0000001')));
-  await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').add({
+  await createVaultDirectory(root, 'XR Collector test', PRODUCT_SOURCES);
+  await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).add(transcriptDocument(video('seed0000001')));
+  await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
@@ -66,7 +67,7 @@ function fakeSearch(root: string, failRebuild = false): TranscriptSearch {
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
       if (failRebuild) throw new Error('index unavailable');
-      const vault = new MarkdownVault(new VaultFileWriter(root));
+      const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search({ query }) {
@@ -110,10 +111,10 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
 
 /** Opens the Vault the device selection names (the source when none), as the runtime does at startup. */
 async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
-  const jobStore = overrides.jobStore ?? await JobStore.open(context.jobsDir);
+  const jobStore = overrides.jobStore ?? await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
   if (track && !overrides.jobStore) stores.push(jobStore);
   const workspace = await VaultWorkspace.open(withYouTube({
-    root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
+    sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
@@ -131,7 +132,7 @@ describe('Vault identity (A-08)', () => {
     const { root, source } = context;
     // Vault A stops with a queued job.
     const gated = gatedCapture(new Set([IDS[0]!]));
-    const jobStore = await JobStore.open(context.jobsDir);
+    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
     stores.push(jobStore);
     const a = await open(context, { jobStore, capture: gated.capture }, false);
     await a.jobs.submitItem('youtube', urlOf(IDS[0]!));
@@ -152,7 +153,7 @@ describe('Vault identity (A-08)', () => {
     const exported = path.join(root, 'A.zip');
     await writeFile(exported, await packageBytes(source));
     await rm(source, { recursive: true });
-    await importNewVault({ packageFile: exported, folder: source, profilePath: path.join(root, 'b-profile'), createdBy: 'XR Collector test' });
+    await importNewVault({ sources: PRODUCT_SOURCES, packageFile: exported, folder: source, profilePath: path.join(root, 'b-profile'), createdBy: 'XR Collector test' });
     const b = await open({ ...context, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore }, false);
     expect(b.status().vaultPath).toBe(source);
     expect(b.jobs.list({ state: 'all' }).jobs).toEqual([]);
@@ -172,7 +173,7 @@ describe('Vault identity (A-08)', () => {
     delete marker.id;
     const text = JSON.stringify(marker);
     await writeFile(path.join(context.source, VAULT_MARKER), text);
-    expect(await inspectVaultDirectory(context.source)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('識別碼') });
+    expect(await inspectVaultDirectory(context.source, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('識別碼') });
     await expect(open(context)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('識別碼') });
     expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(text);
   });
@@ -184,7 +185,7 @@ describe('opening another Vault (A-13)', () => {
     const { root, source: a } = context;
     const b = path.join(root, 'B');
     await seed(b);
-    const jobStore = await JobStore.open(context.jobsDir);
+    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
     stores.push(jobStore);
     // B stops with a queued job.
     const bGate = gatedCapture(new Set([IDS[2]!]));
@@ -213,7 +214,7 @@ describe('opening another Vault (A-13)', () => {
     expect(jobStore.get(aRunning.job.id)!.state).toBe('completed');
     expect((await workspace.jobs.whenSettled(bLeft.job.id)).state).toBe('completed');
     expect(jobStore.get(aLeft.job.id)).toMatchObject({ state: 'interrupted', vaultPath: a });
-    expect(await new MarkdownVault(new VaultFileWriter(b)).read(`youtube:${IDS[1]}`)).toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(b, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
     expect(await context.selection.read()).toBe(b);
     // A copy of A does not continue A's job; A itself does.
     const copy = path.join(root, 'A copy');
@@ -225,8 +226,8 @@ describe('opening another Vault (A-13)', () => {
     await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
-    expect(await new MarkdownVault(new VaultFileWriter(a)).read(`youtube:${IDS[1]}`)).not.toBeNull();
-    expect(await new MarkdownVault(new VaultFileWriter(copy)).read(`youtube:${IDS[1]}`)).toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(a, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).not.toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(copy, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
   });
 
   it('refuses to open another Vault when the location was fixed at startup', async () => {
@@ -256,11 +257,11 @@ describe('creating a new Vault while one is active', () => {
     expect(workspace.status()).toMatchObject({
       state: 'completed', operation: 'create', vaultPath: created, result: { previousVaultPath: context.source, interruptedJobs: 0 },
     });
-    expect(await inspectVaultDirectory(created)).toEqual({ kind: 'existing', path: created, documentCount: 0 });
+    expect(await inspectVaultDirectory(created, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: created, documentCount: 0 });
     expect(await readVaultId(created)).not.toBe(await readVaultId(context.source));
     expect(await context.selection.read()).toBe(created);
     expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(before);
-    expect(await new MarkdownVault(new VaultFileWriter(context.source)).read('youtube:seed0000001')).not.toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(context.source, PRODUCT_SOURCES)).read('youtube:seed0000001')).not.toBeNull();
 
     await workspace.openOther(context.source);
     await workspace.operationFinished();
@@ -293,7 +294,7 @@ describe('opening another Vault through HTTP (A-10)', () => {
     const b = path.join(context.root, 'B');
     await seed(b);
     const workspace = await open(context);
-    const app = await createHttpApp({ collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
     const agent = { authorization: 'Bearer test-token' };
     try {
       expect((await app.inject({ method: 'POST', url: '/api/vault/open', payload: { path: b } })).statusCode).toBe(401);
@@ -322,7 +323,7 @@ describe('opening another Vault through HTTP (A-10)', () => {
   it('answers 409 vault_location_fixed for a fixed location', async () => {
     const context = await setup();
     const fixed = await open(context, { fixedLocation: true });
-    const app = await createHttpApp({ transfer: fixed });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, transfer: fixed });
     try {
       for (const [url, payload] of [['/api/vault/open', { path: path.join(context.root, 'Other') }], ['/api/vault/create', { location: context.root, name: 'Other' }]] as const) {
         const response = await app.inject({ method: 'POST', url, payload });

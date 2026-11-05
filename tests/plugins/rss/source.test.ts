@@ -6,7 +6,9 @@ import { findFeedLinks } from '../../../src/plugins/rss/discovery.js';
 import { decode, fetchText } from '../../../src/plugins/rss/http.js';
 import { articleKey, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
 import { rssDeclaration } from '../../../src/plugins/rss/shared.js';
-import type { ListedItem, SourcePlugin, SubscriptionTarget } from '../../../src/core/source-contract.js';
+import type { ListedItem, SourcePlugin, SourcePluginDeclaration, SubscriptionTarget } from '../../../src/core/source-contract.js';
+import { SOURCE_DECLARATIONS } from '../../../src/plugins/declarations.js';
+import { addressOwner } from '../../../src/sources/source-types.js';
 import { atom, page, rss2, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 
 let feeds: SyntheticFeeds;
@@ -51,15 +53,27 @@ describe('finding the feed of an address (R11-T4)', () => {
     await expect(source.resolveTarget!(feeds.url('/nothing'), {})).rejects.toMatchObject({ code: 'feed_not_found' });
   });
 
-  it('owns web addresses no other type owns and classifies them as subscriptions', () => {
+  it('owns every web address and classifies it as a subscription', () => {
     const own = (input: string) => rssDeclaration.owns(input, (() => { try { return new URL(input); } catch { return null; } })());
     expect(own('https://example.com/feed')).toBe(true);
     expect(own('http://example.com/')).toBe(true);
-    expect(own('https://www.youtube.com/@someone')).toBe(false);
+    expect(own('https://www.youtube.com/@someone')).toBe(true);
     expect(own('ftp://example.com/feed')).toBe(false);
     expect(own('not a url')).toBe(false);
     expect(rssDeclaration.classify('https://example.com/feed#top')).toEqual({ kind: 'subscription', url: 'https://example.com/feed' });
     expect(() => rssDeclaration.parseItem('https://example.com/a')).toThrow(expect.objectContaining({ code: 'invalid_url' }));
+  });
+});
+
+describe('the type an address belongs to', () => {
+  it('is the first type in the list that owns it, so RSS, last in the product list, keeps no address another type owns', () => {
+    const owner = (input: string, list: readonly SourcePluginDeclaration[] = SOURCE_DECLARATIONS) => addressOwner(input, list).owner?.id;
+    expect(SOURCE_DECLARATIONS.at(-1)?.id).toBe('rss');
+    expect(owner('https://www.youtube.com/@someone')).toBe('youtube');
+    expect(owner('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('youtube');
+    expect(owner('youtu.be/dQw4w9WgXcQ')).toBe('youtube');
+    expect(owner('https://example.com/feed')).toBe('rss');
+    expect(owner('https://www.youtube.com/@someone', [...SOURCE_DECLARATIONS].reverse())).toBe('rss');
   });
 });
 

@@ -11,6 +11,7 @@ import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { channel, settings } from '../support/exchange-fixtures.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 
@@ -46,8 +47,8 @@ describe('subscription file versions', () => {
     const shared = { version: 1, enabled: true, intervalMinutes: 60, lastAttemptAt: null, nextRunAt: null };
     const root = await vault({ channels: [row('UCa')], schedule: shared });
     const before = await readFile(path.join(root, 'settings', 'youtube-channels.json'));
-    await expect(new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
-    await expect(new JsonScheduleStore(new VaultFileWriter(root)).load()).rejects.toThrow('Invalid YouTube channel schedule settings');
+    await expect(new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
+    await expect(new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).load()).rejects.toThrow('Invalid YouTube channel schedule settings');
     expect(await readFile(path.join(root, 'settings', 'youtube-channels.json'))).toEqual(before);
     expect(await read(root, 'youtube-schedule.json')).toEqual(shared);
   });
@@ -64,37 +65,37 @@ describe('subscription file versions', () => {
       { version: 3, channels: [{ ...row('UCa'), settings: valid, autoPausedAt: 1 }] },
     ]) {
       const root = await vault({ channels });
-      await expect(new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
+      await expect(new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
     }
     const root = await vault({ schedule: { version: 2 } });
-    await expect(new JsonScheduleStore(new VaultFileWriter(root)).load()).rejects.toThrow('Invalid YouTube channel schedule settings');
+    await expect(new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).load()).rejects.toThrow('Invalid YouTube channel schedule settings');
   });
 });
 
 describe('JsonSubscriptionStore', () => {
   it('persists subscriptions with their settings as version 3 across instances', async () => {
     const root = await vault({});
-    const first = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+    const first = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     const settings = { intervalMinutes: 15, backfillDays: 7, backfillMaxItems: 5 };
     await first.add({ ...row('UCa'), settings });
     await first.add({ ...row('UCb'), settings });
     await first.setEnabled('UCa', false);
     expect(await first.updateMany(new Map([['UCa', { nextCheckAt: null }], ['UCmissing', { nextCheckAt: null }]]))).toHaveLength(1);
 
-    const restarted = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+    const restarted = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     expect(await restarted.list()).toEqual([
       expect.objectContaining({ id: 'UCa', enabled: false, settings, nextCheckAt: null }),
       expect.objectContaining({ id: 'UCb', enabled: true, settings }),
     ]);
     expect(await read(root, 'youtube-channels.json')).toMatchObject({ version: 3 });
     await restarted.remove('UCa');
-    expect((await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').list()).map((channel) => channel.id)).toEqual(['UCb']);
+    expect((await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).map((channel) => channel.id)).toEqual(['UCb']);
   });
 
   it('keeps fields a subscription no longer uses, such as a discovery cursor, through reads and saves (R-10)', async () => {
     const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
     const root = await vault({ channels: { version: 3, channels: [{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }] } });
-    const store = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
+    const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     expect(await store.list()).toEqual([{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }]);
     await store.update('UCa', { enabled: false });
     const saved = await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> };
@@ -106,46 +107,46 @@ describe('JsonSubscriptionStore', () => {
     const failure = { videoId: 'aaaaaaaaaaa', title: '影片', attempts: 2, errorCode: 'no_subtitles', failedAt: '2026-10-15T03:30:00.000Z', skipped: false };
     // A file written before failures were recorded reads as a subscription without failures.
     const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
-    const store = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));
+    const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));
     expect((await store.list())[0]!.failures).toBeUndefined();
     await store.update('UCa', { failures: [failure] });
     const saved = await read(root, 'youtube-channels.json') as { version: number; channels: Array<Record<string, unknown>> };
     expect(saved.version).toBe(3);
     expect(saved.channels[0]).toMatchObject({ failures: [failure], updatedAt: '2026-09-01T00:00:00.000Z' });
-    expect((await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').list())[0]!.failures).toEqual([failure]);
+    expect((await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list())[0]!.failures).toEqual([failure]);
     await store.update('UCa', { failures: undefined });
     expect((await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> }).channels[0]).not.toHaveProperty('failures');
 
     for (const broken of [{ ...failure, attempts: 0 }, { ...failure, skipped: 'no' }, { title: '影片', attempts: 1, errorCode: 'x', failedAt: 'y', skipped: false }]) {
       const invalid = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, failures: [broken] }] } });
-      await expect(new JsonSubscriptionStore(new VaultFileWriter(invalid), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
+      await expect(new JsonSubscriptionStore(new VaultFileWriter(invalid, PRODUCT_SOURCES), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
     }
   });
 
   it('keeps other fields of the schedule file when saving the switch', async () => {
     const root = await vault({ schedule: { version: 2, enabled: true, note: 'kept' } });
-    await new JsonScheduleStore(new VaultFileWriter(root)).save({ enabled: false });
+    await new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).save({ enabled: false });
     expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: false, note: 'kept' });
   });
 
   it('saves the automatic collection switch as version 2; a Vault without the file collects automatically', async () => {
     const root = await vault({});
-    const store = new JsonScheduleStore(new VaultFileWriter(root));
+    const store = new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES));
     expect(await store.load()).toEqual({ enabled: true });
     await store.save({ enabled: false });
-    expect(await new JsonScheduleStore(new VaultFileWriter(root)).load()).toEqual({ enabled: false });
+    expect(await new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).load()).toEqual({ enabled: false });
     expect(await read(root, 'youtube-schedule.json')).toEqual({ version: 2, enabled: false });
   });
 });
 
 const at = (n: number) => `2030-01-${String(n).padStart(2, '0')}T00:00:00.000Z`;
-const store = (root: string, when?: string) => new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', when ? () => new Date(when) : undefined);
+const store = (root: string, when?: string) => new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', when ? () => new Date(when) : undefined);
 
 describe('subscription change and removal times', () => {
   it('stamps a subscription when a person changes its name, address, pause or settings, and not for collection progress', async () => {
     const root = await vault({});
     let day = 1;
-    const store = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', () => new Date(at(day)));
+    const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', () => new Date(at(day)));
     await store.add(channel('UC123'));
     expect((await store.list())[0]!.updatedAt).toBe('2026-09-18T00:00:00.000Z');
     const stamp = async () => (await store.list())[0]!.updatedAt;

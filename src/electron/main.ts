@@ -365,6 +365,7 @@ app.whenReady().then(async () => {
   runtime = await CollectorRuntime.start({
     buildInfo,
     profilePath: app.getPath('userData'),
+    sources: sources.registry,
     pause: collectionPause,
     // Electron's client follows the system's proxy settings, as the person's other apps do.
     connectivity: { probe: internetProbe((input, init) => net.fetch(input instanceof URL ? input.href : input, init)) },

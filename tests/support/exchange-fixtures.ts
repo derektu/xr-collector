@@ -12,6 +12,8 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import type { SourceRegistry } from '../../src/core/source-registry.js';
+import { PRODUCT_SOURCES } from './product-sources.js';
 
 /** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */
 
@@ -52,19 +54,21 @@ export function channel(id: string, overrides: Partial<SubscriptionRecord> = {})
 
 /** A Vault with one document, one subscription and automatic collection on. */
 export async function seed(root: string): Promise<void> {
-  await new MarkdownVault(new VaultFileWriter(root)).add(transcriptDocument(capture));
-  await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').add(channel('UC123', { title: '測試頻道' }));
-  await new JsonScheduleStore(new VaultFileWriter(root)).save({ enabled: true });
+  const files = new VaultFileWriter(root, PRODUCT_SOURCES);
+  await new MarkdownVault(files).add(transcriptDocument(capture));
+  await new JsonSubscriptionStore(files, 'youtube').add(channel('UC123', { title: '測試頻道' }));
+  await new JsonScheduleStore(files).save({ enabled: true });
 }
 
-export function fakeSearch(root: string): TranscriptSearch {
+/** A search over the documents of the Vault at `root`, as the types of `sources` read them. */
+export function fakeSearch(root: string, sources: SourceRegistry = PRODUCT_SOURCES): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
     status: () => ({ state: 'ready', indexedDocuments: docs.length }),
     async index(doc) { docs = [...docs.filter((existing) => existing.id !== doc.id), doc]; },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
-      const vault = new MarkdownVault(new VaultFileWriter(root));
+      const vault = new MarkdownVault(new VaultFileWriter(root, sources));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search({ query }) {
@@ -84,17 +88,21 @@ export async function machine(name: string, root?: string): Promise<Machine> {
   return { name, root: base, vault: path.join(folder, 'Vault'), profile: path.join(folder, 'profile'), exports: path.join(folder, 'exports'), backups: path.join(folder, 'backups') };
 }
 
-/** Opens the Vault the machine's selection names (its own Vault when none), as the runtime does at startup. */
+/**
+ * Opens the Vault the machine's selection names (its own Vault when none), as the runtime does at
+ * startup, with the product's source types unless `overrides` name others.
+ */
 export async function open(at: Machine, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
+  const sources = overrides.sources ?? PRODUCT_SOURCES;
   const selection = new VaultSelection(path.join(at.profile, 'vault-selection.json'));
   const selected = await selection.read();
   if (!selected) await ensureMarker(at.vault);
   const workspace = await VaultWorkspace.open(withYouTube({
-    root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
+    sources, root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchData: path.join(at.profile, 'search'),
-    createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
+    createSearch: async (destination) => ({ search: fakeSearch(destination, sources), close: async () => undefined }),
     ...overrides,
   }));
   if (track) workspaces.push(workspace);

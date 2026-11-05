@@ -47,7 +47,7 @@ const vaultMode = process.env.XR_VERIFY_VAULT_MODE ?? 'selected';
 const port = (name: string) => Number(process.env[`XR_VERIFY_${name}_PORT`]);
 const load = (relative: string) => import(pathToFileURL(path.join(checkout, relative)).href);
 
-const { createSourcePlugins, registerSources } = await load('src/plugins/index.ts');
+const { createSourcePlugins, sourceRegistry } = await load('src/plugins/index.ts');
 const { CollectorError } = await load('src/core/types.ts');
 const { publishedSince } = await load('src/core/published.ts');
 const { CollectorRuntime } = await load('src/runtime/collector-runtime.ts');
@@ -283,12 +283,12 @@ async function syntheticSources() {
       }, options.signal);
     },
   };
-  registerSources();
   const rss = createRssPlugin({
     profilePath, env: process.env, program,
     gate: (group: string) => gates.get(group)!,
   });
-  return { plugins: [youtubePlugin(youtubeSource(capture, channels)), rss], pacing: [...gates.values()] };
+  const plugins = [youtubePlugin(youtubeSource(capture, channels)), rss];
+  return { registry: sourceRegistry(plugins), plugins, pacing: [...gates.values()] };
 }
 
 const feeds = data === 'synthetic' ? await syntheticFeedServer() : null;
@@ -321,7 +321,7 @@ const updateService = updateEnabled() ? await UpdateService.open({
 const selectionFile = path.join(profilePath, 'vault-selection.json');
 mkdirSync(path.join(run, 'documents'), { recursive: true });
 if (vaultMode === 'selected' && !existsSync(selectionFile)) {
-  await createVaultDirectory(vaultPath, createdBy);
+  await createVaultDirectory(vaultPath, createdBy, sources.registry);
   await new VaultSelection(selectionFile).write(vaultPath);
 }
 // Synthetic data confirms the network against the feeds port, so `network: 'offline'` in the catalog
@@ -333,6 +333,7 @@ const syntheticConnectivity = {
 };
 const runtime = await CollectorRuntime.start({
   profilePath,
+  sources: sources.registry,
   ...(updateService ? { buildInfo: fixtureBuildInfo, updates: updateService } : {}),
   ...(data === 'synthetic' ? { connectivity: syntheticConnectivity } : {}),
   workspace: {

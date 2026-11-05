@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createVaultDirectory, inspectVaultDirectory, VAULT_MARKER, writeVaultMarker } from '../../src/vault/vault-directory.js';
+import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -31,16 +32,16 @@ async function vault(root: string, documents = 0): Promise<string> {
 describe('inspectVaultDirectory', () => {
   it('treats empty, system-file-only and creatable missing directories as empty', async () => {
     const root = await temp();
-    expect(await inspectVaultDirectory(root)).toEqual({ kind: 'empty', path: root, exists: true });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toEqual({ kind: 'empty', path: root, exists: true });
     await writeFile(path.join(root, '.DS_Store'), '');
     await writeFile(path.join(root, 'desktop.ini'), '');
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'empty', exists: true });
-    expect(await inspectVaultDirectory(path.join(root, 'new'))).toEqual({ kind: 'empty', path: path.join(root, 'new'), exists: false });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'empty', exists: true });
+    expect(await inspectVaultDirectory(path.join(root, 'new'), PRODUCT_SOURCES)).toEqual({ kind: 'empty', path: path.join(root, 'new'), exists: false });
   });
 
   it('recognizes a marked Vault and counts its documents', async () => {
     const root = await vault(await temp(), 2);
-    expect(await inspectVaultDirectory(root)).toEqual({ kind: 'existing', path: root, documentCount: 2 });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: root, documentCount: 2 });
   });
 
   it.each([
@@ -57,36 +58,36 @@ describe('inspectVaultDirectory', () => {
     const root = await temp();
     const target = await prepare(root);
     const before = await readdir(root, { recursive: true });
-    expect(await inspectVaultDirectory(target)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining(reason) });
+    expect(await inspectVaultDirectory(target, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining(reason) });
     expect(await readdir(root, { recursive: true })).toEqual(before);
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports an unreadable directory', async () => {
     const root = await vault(await temp());
     await chmod(root, 0o000);
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('沒有權限') });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('沒有權限') });
   });
 });
 
 describe('createVaultDirectory', () => {
   it('creates a missing directory with a self-contained marker', async () => {
     const root = path.join(await temp(), 'XR Collector');
-    expect(await createVaultDirectory(root, 'XR Collector 9.9.9')).toBe(root);
+    expect(await createVaultDirectory(root, 'XR Collector 9.9.9', PRODUCT_SOURCES)).toBe(root);
     const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'));
     expect(marker).toEqual({
       format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector 9.9.9',
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/u),
       id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     });
-    expect(await inspectVaultDirectory(root)).toMatchObject({ kind: 'existing', documentCount: 0 });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'existing', documentCount: 0 });
   });
 
   it('refuses existing Vaults and non-empty directories', async () => {
     const existing = await vault(await temp());
-    await expect(createVaultDirectory(existing, 'test')).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('改用開啟') });
+    await expect(createVaultDirectory(existing, 'test', PRODUCT_SOURCES)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('改用開啟') });
     const other = await temp();
     await writeFile(path.join(other, 'notes.txt'), 'x');
-    await expect(createVaultDirectory(other, 'test')).rejects.toMatchObject({ code: 'vault_invalid' });
+    await expect(createVaultDirectory(other, 'test', PRODUCT_SOURCES)).rejects.toMatchObject({ code: 'vault_invalid' });
     expect(await readdir(other)).toEqual(['notes.txt']);
   });
 });
