@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { API_ROUTES } from '../core/api-routes.js';
-import { serve } from './api-route.js';
+import { API_ROUTES } from '../../core/api-routes.js';
+import { serve } from '../api-route.js';
 import {
   CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeFeed, type ChangeKind,
-} from '../core/change-feed.js';
-import { CollectorError } from '../core/collector-error.js';
+} from '../../core/change-feed.js';
+import { CollectorError } from '../../core/collector-error.js';
 
 /** Event connections one listener serves at once. */
 export const MAX_STREAMS = 16;

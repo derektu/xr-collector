@@ -5,158 +5,37 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { API_ROUTES } from '../core/api-routes.js';
-import { serve } from './api-route.js';
+import Fastify, { type FastifyInstance } from 'fastify';
 import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
-import { registerChangeRoutes } from './change-routes.js';
-import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { redact } from '../core/redact.js';
-import { unavailableLoginStartup, type LoginStartupAccess } from '../core/login-startup.js';
+import type { LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../runtime/build-info.js';
 import type { AgentConnectionAccess } from './agent-access.js';
 import type { UpdateAccess } from '../updates/types.js';
 import type { SourceRegistry } from '../core/source-registry.js';
-import { startChecks } from '../subscriptions/subscription-service.js';
-import type { SubscriptionDeclaration } from '../core/source-contract.js';
-import { SourceCatalog } from '../sources/source-catalog.js';
-import { addressOwner, recognizeUrl, sourceTypeDeclarations, sourceTypeInfo, type SourceTypeDeclaration } from '../sources/source-types.js';
-import { CollectorError, type CoreErrorCode } from '../core/collector-error.js';
-import type {
-  AgentPortSetting,
-  CollectorRuntimeStatus,
-  NotificationState,
-  ConnectivityState,
-  ConnectivityStatus,
-} from '../core/device-types.js';
-import type { UpdateSelection, BuildInfo } from '../core/update-types.js';
-import type {
-  ActivityLogHealth,
-  ActivityPage,
-  ActivitySummaryPage,
-  ActivityGroupPage,
-  ActivityCheckSummary,
-  ActivityQuery,
-  EventSeverity,
-} from '../core/activity-types.js';
-import type { JobSummary, JobOverview, JobPage, JobSubmission, JobView } from '../core/job-types.js';
-import type {
-  CollectionSchedule,
-  CollectionScheduleView,
-  PendingSubscription,
-  Subscription,
-  SubscriptionPreview,
-  SubscriptionRecord,
-  SubscriptionSettings,
-} from '../core/subscription-types.js';
-import type { DocumentFilter } from '../core/document-types.js';
-import type { SearchStatusReport, TranscriptSearch } from '../core/search-types.js';
-import type {
-  VaultInspection,
-  NewVaultCheck,
-  PackageDescription,
-  VaultSetupRequest,
-  VaultSetupResult,
-  VaultSetupStatus,
-} from '../core/vault-types.js';
+import { sourceTypeDeclarations, type SourceTypeDeclaration } from '../sources/source-types.js';
+import { CollectorError } from '../core/collector-error.js';
+import type { CollectorRuntimeStatus } from '../core/device-types.js';
+import type { BuildInfo } from '../core/update-types.js';
+import type { TranscriptSearch } from '../core/search-types.js';
+import { errorStatus, requestErrorMessage, requestErrorStatus } from './error-status.js';
+import { registerActivityRoutes, type ActivityAccess } from './routes/activity.js';
+import { registerAgentRoutes } from './routes/agent.js';
+import { registerChangeRoutes } from './routes/changes.js';
+import { registerDeviceRoutes, type NotificationAccess } from './routes/device.js';
+import { registerDocumentRoutes } from './routes/documents.js';
+import { registerJobRoutes, type CollectionJobs } from './routes/jobs.js';
+import { networkGuard, type ConnectivityAccess } from './routes/network.js';
+import { registerScheduleRoutes, type ScheduleManagement } from './routes/schedule.js';
+import { registerSubscriptionRoutes, type SubscriptionCollection } from './routes/subscriptions.js';
+import { registerVaultSetupRoutes, type VaultSetup } from './routes/vault-setup.js';
+import { registerVaultTransferRoutes } from './routes/vault-transfer.js';
 
-/** The subscriptions of one source type, as the HTTP API manages them. */
-export interface SubscriptionCollection {
-  readonly type: string;
-  list(): Promise<SubscriptionRecord[]>;
-  listSubscriptions(): Promise<Subscription[]>;
-  preview(url: string): Promise<SubscriptionPreview>;
-  add(url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission>;
-  setEnabled(id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmission | null }>;
-  updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord>;
-  applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
-  remove(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
-  /** Subscription requests still resolving their address. */
-  pendingSubscriptions?(): Promise<PendingSubscription[]>;
-  /** Subscriptions removed and not added again. */
-  listRemovals?(): Promise<Array<{ id: string; title: string }>>;
-  /** The listed subscriptions a manual check covers; refuses a missing or paused one. */
-  checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
-  startRun(request: { trigger: 'manual'; subscriptionIds?: string[] }): Promise<JobSubmission[]>;
-  checkJobs(id: string): JobView[];
-}
-
-/** Accepts collection work and answers job queries for the active Vault. */
-export interface CollectionJobs {
-  submit(type: string, url: string): Promise<JobSubmission>;
-  submitItem(type: string, url: string): Promise<JobSubmission>;
-  get(id: string): JobView;
-  list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
-  summary(since: string): JobSummary;
-  retry(id: string): Promise<JobSubmission>;
-  /** The jobs page: running, queued and failed work. */
-  overview(): Promise<JobOverview>;
-  /** Removes a failed single item or subscription request from the failed section. */
-  dismiss(id: string): Promise<JobView>;
-}
-
-/** The device activity log, scoped to the active Vault; readable whatever state the Vault is in. */
-export interface ActivityAccess {
-  query(query: ActivityQuery): Promise<ActivityPage>;
-  summary?(query: ActivityQuery): Promise<ActivitySummaryPage>;
-  group?(groupId: string, limit?: number, cursor?: string, severity?: EventSeverity[]): Promise<ActivityGroupPage>;
-  health(): ActivityLogHealth;
-}
-
-export interface ScheduleManagement {
-  getSchedule(): Promise<CollectionSchedule>;
-  updateSchedule(input: { enabled: boolean }): Promise<CollectionSchedule>;
-  /** Checks every enabled subscription now. */
-  runNow(): Promise<JobSubmission[]>;
-}
-
-const SCHEDULE_FIELDS = new Set(['enabled']);
-
-/** The device's network as collection depends on it. */
-export interface ConnectivityAccess {
-  status(): ConnectivityStatus;
-  /** Confirms the network now. */
-  check(): Promise<ConnectivityState>;
-  /** Confirms the network after a request failed for lack of it. */
-  confirm(): Promise<ConnectivityState>;
-}
-
-const OFFLINE_MESSAGE = '目前沒有網路，恢復後再試。';
-
-/** Vault location operations that stay available before a Vault is active. */
-export interface VaultSetup {
-  status(): VaultSetupStatus;
-  inspect(path: string): Promise<VaultInspection>;
-  /** Checks the new Vault folder `name` in `location` before it is created. */
-  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck>;
-  /** Reads what an export file holds before a Vault is created from it. */
-  describePackage(file: unknown): Promise<PackageDescription>;
-  setup(request: VaultSetupRequest): Promise<VaultSetupResult>;
-}
-
-const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
-
-/** Reads the body of `POST /api/vault/setup`; see `VaultSetupRequest`. */
-function setupRequest(body: Record<string, unknown>): VaultSetupRequest {
-  const { action, location, name, path: vaultPath, packagePath } = body;
-  if (action === 'open') {
-    if (!text(vaultPath)) throw new CollectorError('invalid_request', '開啟知識庫時，請提供知識庫資料夾的完整路徑 path。');
-    return { action, path: vaultPath };
-  }
-  if (action !== 'create' && action !== 'import') throw new CollectorError('invalid_request', 'action 必須是 create、open 或 import。');
-  if (!text(location) || typeof name !== 'string') {
-    throw new CollectorError('invalid_request', '建立知識庫時，請提供位置 location（完整路徑）與名稱 name。');
-  }
-  if (action === 'create') return { action, location, name };
-  if (!text(packagePath)) throw new CollectorError('invalid_request', '從匯出檔建立知識庫時，請提供匯出檔的完整路徑 packagePath。');
-  return { action, location, name, packagePath };
-}
-
-export interface NotificationAccess {
-  read(): Promise<NotificationState>;
-  update(enabled: boolean): Promise<NotificationState>;
-}
+/** The services an app serves, each declared beside the routes that use it. */
+export type {
+  ActivityAccess, CollectionJobs, ConnectivityAccess, NotificationAccess, ScheduleManagement, SubscriptionCollection, VaultSetup,
+};
 
 export interface HttpAppOptions {
   /** The source types the service offers: addresses, documents, subscriptions, error statuses and pacing labels. */
@@ -199,120 +78,22 @@ export interface HttpAppOptions {
   allowedHosts?: string[];
 }
 
-/** The 4xx status Fastify gave an error about the request itself, or null for any other error. */
-function requestErrorStatus(error: unknown): number | null {
-  if (!error || typeof error !== 'object' || !('statusCode' in error) || typeof error.statusCode !== 'number') return null;
-  return error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : null;
-}
-
-function requestErrorMessage(status: number, error: unknown): string {
-  if (status === 413) return '請求內容過大。';
-  if (status === 415) return '請以 JSON 送出請求；檔案以本機的完整路徑指定。';
-  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-  if (code === 'FST_ERR_CTP_EMPTY_JSON_BODY') return '請求宣告為 JSON，但內容是空的。';
-  if (code === 'FST_ERR_CTP_INVALID_JSON_BODY') return '請求內容不是有效的 JSON。';
-  return '請求格式不正確。';
-}
-
 const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
 
 export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
   return appDrains.get(app)?.() ?? Promise.resolve();
 }
 
-const ERROR_STATUS: Record<CoreErrorCode, number> = {
-  too_many_streams: 503,
-  vault_busy: 409,
-  vault_not_ready: 503,
-  vault_invalid: 422,
-  vault_already_set: 409,
-  invalid_url: 400,
-  invalid_subscription: 400,
-  invalid_request: 400,
-  document_not_found: 404,
-  document_deleted: 404,
-  search_unavailable: 503,
-  subscription_not_found: 404,
-  subscription_paused: 409,
-  out_of_range: 422,
-  job_not_found: 404,
-  job_not_retryable: 409,
-  job_not_dismissable: 409,
-  unsupported_url: 400,
-  queue_full: 503,
-  file_exists: 409,
-  transfer_cancelled: 409,
-  vault_location_fixed: 409,
-  insufficient_space: 507,
-  login_startup_unavailable: 409,
-  login_startup_requires_approval: 409,
-  login_startup_failed: 500,
-  agent_connection_unavailable: 409,
-  update_busy: 409,
-  update_cancelled: 409,
-  update_source_failed: 502,
-  update_not_published: 404,
-  update_metadata_invalid: 502,
-  update_asset_missing: 409,
-  update_not_available: 409,
-  update_offer_changed: 409,
-  update_download_failed: 502,
-  update_integrity_failed: 422,
-  update_not_ready: 409,
-  update_install_unavailable: 409,
-  update_apply_failed: 500,
-  capture_failed: 502,
-  network_error: 503,
-  offline: 503,
-  rate_limited: 503,
-  activity_snapshot_expired: 410,
-  activity_group_expired: 410,
-};
-
-/** The HTTP status of an error code: the core's own, else the one a source type of `sources` declares, else 500. */
-export function errorStatus(sources: SourceRegistry, code: string): number {
-  const core = (ERROR_STATUS as Record<string, number>)[code];
-  if (core !== undefined) return core;
-  for (const definition of sources.definitions) {
-    const declared = definition.errorStatus?.[code];
-    if (declared !== undefined) return declared;
-  }
-  return 500;
-}
-
+/**
+ * Builds the HTTP app: the hook chain every request passes (Host check, Agent authorization, the
+ * not-ready gate, the change revision, the Vault operation lock, response headers and errors), then
+ * the routes of each area for the services `options` gives. Hooks and routes register in this order.
+ */
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
-  const connectivity = options.connectivity;
-  let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [], events: [] };
-  const notifications: NotificationAccess = options.notifications ?? {
-    read: async () => fallbackNotifications,
-    update: async (enabled) => (fallbackNotifications = { ...fallbackNotifications, enabled }),
-  };
-  const connectivityStatus = (): ConnectivityStatus => connectivity?.status() ?? { state: 'online', checkedAt: null };
-  /** Refuses work that would only fail without a network. */
-  const requireOnline = (): void => {
-    if (connectivityStatus().state === 'offline') throw new CollectorError('offline', OFFLINE_MESSAGE);
-  };
-  /** Checking subscriptions is how a person asks for the network to be confirmed again. */
-  const confirmOnline = async (): Promise<void> => {
-    if (connectivity && connectivityStatus().state === 'offline' && await connectivity.check() === 'offline') {
-      throw new CollectorError('offline', OFFLINE_MESSAGE);
-    }
-  };
-  /** A preview that found no network confirms it, and answers `offline` when the device has none. */
-  const confirmingNetwork = async <T>(work: () => Promise<T>): Promise<T> => {
-    try {
-      return await work();
-    } catch (error) {
-      if (connectivity && error instanceof CollectorError && error.code === 'network_error' && await connectivity.confirm() === 'offline') {
-        throw new CollectorError('offline', OFFLINE_MESSAGE, { cause: error });
-      }
-      throw error;
-    }
-  };
-  const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
+  const network = networkGuard(options.connectivity);
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -381,25 +162,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
   if (options.changes) registerChangeRoutes(app, options.changes);
 
-  if (options.vaultSetup) {
-    const vaultSetup = options.vaultSetup;
-    serve(app, API_ROUTES.vaultSetup, async () => ({ vault: vaultSetup.status() }));
-    serve(app, API_ROUTES.inspectVault, async (request: FastifyRequest<{ Body: { path?: unknown } }>) => {
-      if (typeof request.body?.path !== 'string' || request.body.path.trim() === '') {
-        throw new CollectorError('invalid_request', '請提供要檢查的目錄路徑。');
-      }
-      return { inspection: await vaultSetup.inspect(request.body.path) };
-    });
-    serve(app, API_ROUTES.checkNewVault, async (request: FastifyRequest<{ Body: { location?: unknown; name?: unknown } | undefined }>) => ({
-      check: await vaultSetup.checkNew(request.body?.location, request.body?.name),
-    }));
-    serve(app, API_ROUTES.describePackage, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => ({
-      package: await vaultSetup.describePackage(request.body?.path),
-    }));
-    serve(app, API_ROUTES.setupVault, async (request: FastifyRequest<{ Body: Record<string, unknown> | undefined }>) => {
-      return vaultSetup.setup(setupRequest(request.body ?? {}));
-    });
-  }
+  if (options.vaultSetup) registerVaultSetupRoutes(app, options.vaultSetup);
 
   if (options.transfer) {
     const transfer = options.transfer;
@@ -414,24 +177,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });
     app.addHook('onError', async (request) => { writes.get(request)?.(); });
-    serve(app, API_ROUTES.vaultStatus, async () => transfer.status());
-    // Export and import name local files by absolute path. JSON requests need a CORS preflight,
-    // which this server never grants, so only the app's own pages and authorized Agents can name files.
-    serve(app, API_ROUTES.exportSuggestion, async () => transfer.exportSuggestion());
-    serve(app, API_ROUTES.exportVault, async (request: FastifyRequest<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>) => {
-      return transfer.exportTo(request.body?.path, request.body?.overwrite === true);
-    });
-    serve(app, API_ROUTES.previewImport, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => transfer.previewImport(request.body?.path));
-    serve(app, API_ROUTES.applyImport, async (request: FastifyRequest<{ Body: { id?: unknown; mode?: unknown } | undefined }>) => {
-      return transfer.applyImport(String(request.body?.id ?? ''), request.body?.mode);
-    });
-    serve(app, API_ROUTES.cancelImport, async (request: FastifyRequest<{ Body: { id?: unknown } | undefined }>) => {
-      transfer.cancelImport(String(request.body?.id ?? ''));
-      return { cancelled: true as const };
-    });
-    serve(app, API_ROUTES.cancelVaultWait, async () => transfer.cancelWait());
-    serve(app, API_ROUTES.openVault, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => transfer.openOther(request.body?.path));
-    serve(app, API_ROUTES.createVault, async (request: FastifyRequest<{ Body: { location?: unknown; name?: unknown } | undefined }>) => transfer.createNew(request.body?.location, request.body?.name));
+    registerVaultTransferRoutes(app, transfer);
   }
 
   app.addHook('onSend', async (_request, reply, payload) => {
@@ -463,360 +209,31 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   });
 
-  serve(app, API_ROUTES.health, async () => {
-    const runtime = options.runtimeStatus?.();
-    return {
-      status: runtime && runtime.state !== 'ready' ? 'unavailable' as const : 'ok' as const,
-      ...(runtime ? { runtime } : {}),
-      connectivity: connectivityStatus(),
-      ...(options.activity ? { activityLog: options.activity.health() } : {}),
-    };
+  registerDeviceRoutes(app, {
+    sources: options.sources, buildInfo, network,
+    ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
+    ...(options.activity ? { activityHealth: () => options.activity!.health() } : {}),
+    ...(options.notifications ? { notifications: options.notifications } : {}),
+    ...(options.updates ? { updates: options.updates } : {}),
+    ...(options.loginStartup ? { loginStartup: options.loginStartup } : {}),
+    ...(options.pacing ? { pacing: options.pacing } : {}),
   });
-
-  const loginStartup = options.loginStartup ?? unavailableLoginStartup;
-  serve(app, API_ROUTES.buildInfo, async () => ({ buildInfo }));
-  {
-    serve(app, API_ROUTES.notifications, async () => ({ notifications: await notifications.read() }));
-    serve(app, API_ROUTES.setNotifications, async (request: FastifyRequest<{ Body: { enabled?: unknown } }>) => {
-      if (!request.body || typeof request.body.enabled !== 'boolean' || Object.keys(request.body).some((key) => key !== 'enabled')) {
-        throw new CollectorError('invalid_request', '系統通知設定必須提供 enabled。');
-      }
-      return { notifications: await notifications.update(request.body.enabled) };
-    });
-  }
-
-  {
-    const unavailableUpdate = (): import('../core/update-types.js').DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
-      target: buildInfo.target, installerAvailable: false, offer: null, ready: null, progress: null,
-      lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null });
-    const updates: UpdateAccess = options.updates ?? {
-      status: unavailableUpdate, check: async () => unavailableUpdate(), cancel: async () => unavailableUpdate(),
-      download: async () => { throw new CollectorError('update_install_unavailable', '此執行環境無法安裝更新。'); },
-      apply: async () => { throw new CollectorError('update_install_unavailable', '此執行環境無法安裝更新。'); },
-    };
-    const selection = (body: unknown): UpdateSelection => {
-      if (!body || typeof body !== 'object') throw new CollectorError('invalid_request', '請提供更新版本與雜湊。');
-      const value = body as Record<string, unknown>;
-      if (typeof value.version !== 'string' || typeof value.sha256 !== 'string'
-        || !/^[a-f0-9]{64}$/u.test(value.sha256) || Object.keys(value).some((key) => key !== 'version' && key !== 'sha256')) {
-        throw new CollectorError('invalid_request', '請只提供有效的 version 與 sha256。');
-      }
-      return { version: value.version, sha256: value.sha256 };
-    };
-    serve(app, API_ROUTES.update, async () => ({ update: updates.status() }));
-    serve(app, API_ROUTES.checkUpdate, async () => ({ update: await updates.check() }));
-    serve(app, API_ROUTES.downloadUpdate, async (request: FastifyRequest<{ Body: unknown }>) => ({ update: await updates.download(selection(request.body)) }));
-    serve(app, API_ROUTES.applyUpdate, async (request: FastifyRequest<{ Body: unknown }>) => ({ update: await updates.apply(selection(request.body)) }));
-    serve(app, API_ROUTES.cancelUpdate, async () => ({ update: await updates.cancel() }));
-  }
-
-  serve(app, API_ROUTES.loginStartup, async () => ({ loginStartup: await loginStartup.status() }));
-  serve(app, API_ROUTES.setLoginStartup, async (request: FastifyRequest<{ Body: { enabled?: unknown } }>) => {
-    const body = request.body ?? {};
-    if (typeof body.enabled !== 'boolean' || Object.keys(body).some((field) => field !== 'enabled')) {
-      throw new CollectorError('invalid_request', '請只提供 enabled，值必須是布林值。');
-    }
-    return { loginStartup: await loginStartup.update(body.enabled) };
+  if (options.agentConnection) registerAgentRoutes(app, options.agentConnection);
+  registerDocumentRoutes(app, {
+    sources: options.sources, subscriptions,
+    ...(options.collector ? { collector: options.collector } : {}),
+    ...(options.search ? { search: options.search } : {}),
   });
-
-  // Each pacing group is labelled with the name its source type declares for it.
-  serve(app, API_ROUTES.pacing, async () => ({
-    groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(options.sources, gate.group), ...gate.status() })),
-  }));
-
-  if (options.agentConnection) {
-    const agent = options.agentConnection;
-    serve(app, API_ROUTES.agent, async () => ({ agent: agent.status() }));
-    serve(app, API_ROUTES.agentConnection, async () => ({ connection: agent.connection() }));
-    serve(app, API_ROUTES.setAgentPort, async (request: FastifyRequest<{ Body: AgentPortSetting }>) => ({ agent: await agent.configure(request.body) }));
-    serve(app, API_ROUTES.resetAgentKey, async () => ({ connection: await agent.resetKey(), agent: agent.status() }));
-    serve(app, API_ROUTES.agentSkill, async (_request, reply) => reply.type('application/zip')
-      .header('Content-Disposition', 'attachment; filename="xr-collector-agent.zip"').send(await agent.download()));
-  }
-
-  serve(app, API_ROUTES.documents, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
-    const query = singleValues(request.query);
-    return options.collector!.listDocuments(documentFilter(options.sources, query), pagination(query));
+  if (options.jobs) registerJobRoutes(app, options.jobs, options.sources, network);
+  if (options.activity) registerActivityRoutes(app, options.activity);
+  if (options.schedule) registerScheduleRoutes(app, options.schedule, network);
+  registerSubscriptionRoutes(app, {
+    sources: options.sources, subscriptions, network,
+    sourceTypes: options.sourceTypes ?? sourceTypeDeclarations(options.sources),
+    ...(options.schedule ? { schedule: options.schedule } : {}),
+    ...(options.collector ? { collector: options.collector } : {}),
+    ...(options.activity ? { activity: options.activity } : {}),
   });
-
-  serve(app, API_ROUTES.documentSources, async () => {
-    const byType: Record<string, { subscriptions: SubscriptionRecord[]; removals: Array<{ id: string; title: string }> }> = {};
-    for (const collection of subscriptions) {
-      byType[collection.type] = { subscriptions: await collection.list(), removals: await collection.listRemovals?.() ?? [] };
-    }
-    return { sources: await options.collector!.sources(byType) };
-  });
-
-  serve(app, API_ROUTES.search, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
-    if (!options.search) {
-      throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
-    }
-    const parameters = singleValues(request.query);
-    const query = typeof parameters.q === 'string' ? trimSearchQueryWhitespace(parameters.q) : '';
-    const { publishedFrom, publishedTo } = parameters;
-    if (query.length > 500) {
-      throw new CollectorError('invalid_request', '搜尋條件過長。');
-    }
-    if (
-      (publishedFrom && !isCalendarDate(publishedFrom))
-      || (publishedTo && !isCalendarDate(publishedTo))
-      || (publishedFrom && publishedTo && publishedFrom > publishedTo)
-    ) {
-      throw new CollectorError('invalid_request', '發布日期篩選無效。');
-    }
-    const page = pagination(parameters);
-    if (page.offset % page.limit !== 0) {
-      throw new CollectorError('invalid_request', '搜尋的 offset 必須是 limit 的整數倍。');
-    }
-    return options.search.search({
-      query,
-      ...documentFilter(options.sources, parameters),
-      ...(publishedFrom ? { publishedFrom } : {}),
-      ...(publishedTo ? { publishedTo } : {}),
-      ...page,
-    });
-  });
-
-  const searchStatus = async (): Promise<SearchStatusReport> => ({
-    ...(options.search?.status() ?? {
-      state: 'error',
-      indexedDocuments: 0,
-      lastRebuiltAt: null,
-      message: '搜尋服務尚未啟用。',
-    }),
-    vaultDocuments: (await options.collector?.list())?.length ?? 0,
-  });
-
-  serve(app, API_ROUTES.searchStatus, async () => ({ status: await searchStatus() }));
-
-  serve(app, API_ROUTES.rebuildSearch, async () => {
-    if (!options.search) {
-      throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
-    }
-    await options.search.rebuild();
-    return { status: await searchStatus() };
-  });
-
-  serve(app, API_ROUTES.document, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
-    document: await options.collector!.read(request.params.id),
-  }));
-
-  serve(app, API_ROUTES.deleteDocument, async (request: FastifyRequest<{ Params: { id: string } }>) =>
-    options.collector!.delete(request.params.id));
-
-  if (options.jobs) {
-    const jobs = options.jobs;
-    serve(app, API_ROUTES.submitAddress, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
-      const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要加入的網址。'));
-      requireOnline();
-      return await jobs.submit(type, input);
-    });
-
-    serve(app, API_ROUTES.collectItem, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
-      const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要收集的網址。'));
-      requireOnline();
-      return await jobs.submitItem(type, input);
-    });
-
-    serve(app, API_ROUTES.jobs, async (request: FastifyRequest<{ Querystring: { state?: string; limit?: string; cursor?: string } }>) => {
-      const { state, cursor } = request.query;
-      if (state !== undefined && state !== 'active' && state !== 'all') {
-        throw new CollectorError('invalid_request', 'state 只能是 active 或 all。');
-      }
-      if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length === 0 || cursor.length > 100)) {
-        throw new CollectorError('invalid_request', '分頁位置無效。');
-      }
-      const { limit } = pagination({ limit: request.query.limit ?? '20' });
-      const page = jobs.list({ ...(state ? { state } : {}), limit, ...(cursor ? { cursor } : {}) });
-      return page;
-    });
-
-    serve(app, API_ROUTES.jobSummary, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
-      const { since } = singleValues(request.query);
-      if (since !== undefined && !isInstant(since)) throw new CollectorError('invalid_request', 'since 必須是 ISO 時間。');
-      return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
-    });
-
-    serve(app, API_ROUTES.jobOverview, async () => ({ overview: await jobs.overview() }));
-
-    serve(app, API_ROUTES.job, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
-      job: jobs.get(request.params.id),
-    }));
-
-    serve(app, API_ROUTES.retryJob, async (request: FastifyRequest<{ Params: { id: string } }>) => {
-      requireOnline();
-      return await jobs.retry(request.params.id);
-    });
-
-    serve(app, API_ROUTES.dismissJob, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
-      job: await jobs.dismiss(request.params.id),
-    }));
-  }
-
-  if (options.activity) {
-    const activity = options.activity;
-    serve(app, API_ROUTES.activity, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
-      const query = activityQuery(singleValues(request.query));
-      return query.view === 'summary' && !query.jobId && activity.summary
-        ? activity.summary(query) : activity.query({ ...query, view: 'raw' });
-    });
-    serve(app, API_ROUTES.activityGroup, async (request: FastifyRequest<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>) => {
-      const query = singleValues(request.query);
-      const unknown = Object.keys(query).find((key) => key !== 'limit' && key !== 'cursor' && key !== 'severity');
-      if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
-      const { limit } = pagination({ limit: query.limit ?? '50' });
-      const severity = query.severity?.split(',').map((item) => item.trim()).filter(Boolean);
-      if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
-        throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
-      }
-      if (!activity.group) throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
-      return activity.group(request.params.groupId, limit, query.cursor, severity as EventSeverity[] | undefined);
-    });
-  }
-
-  if (options.schedule) {
-    const schedule = options.schedule;
-    // One switch covers the subscriptions of every source type.
-    serve(app, API_ROUTES.schedule, async () => ({
-      schedule: scheduleView(await schedule.getSchedule()),
-    }));
-
-    serve(app, API_ROUTES.setSchedule, async (request: FastifyRequest<{ Body: Record<string, unknown> | null }>) => {
-      const body = request.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new CollectorError('invalid_request', '自動檢查設定必須是 JSON 物件。');
-      }
-      const keys = Object.keys(body);
-      const unknown = keys.find((key) => !SCHEDULE_FIELDS.has(key));
-      if (unknown) throw new CollectorError('invalid_request', `不支援的設定欄位：${unknown}`);
-      if (typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
-      return { schedule: scheduleView(await schedule.updateSchedule({ enabled: body.enabled })) };
-    });
-  }
-
-  /** The subscriptions of a type, or `subscription_not_found` for a type without subscriptions. */
-  const collectionOf = (type: string): { collection: SubscriptionCollection; subscription: SubscriptionDeclaration; targetNoun: string } => {
-    const collection = subscriptions.find((candidate) => candidate.type === type);
-    const subscription = options.sources.get(type)?.subscription;
-    if (!collection || !subscription) throw new CollectorError('subscription_not_found', '找不到這個訂閱。');
-    return { collection, subscription, targetNoun: subscription.targetNoun };
-  };
-
-  /** The type of a subscription address; an address of a type without subscriptions is not one. */
-  const subscriptionAddress = (url: unknown): { type: string; input: string } & ReturnType<typeof collectionOf> => {
-    const { type, input } = ownedAddress(options.sources, requiredUrl(url, '請貼上要訂閱的網址。'));
-    if (!subscriptions.some((candidate) => candidate.type === type)) {
-      throw new CollectorError('invalid_subscription', '這個網址不能訂閱。');
-    }
-    return { type, input, ...collectionOf(type) };
-  };
-
-  if (subscriptions.length > 0) {
-    serve(app, API_ROUTES.previewSubscription, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
-      const { collection, input } = subscriptionAddress(request.body?.url);
-      requireOnline();
-      return { preview: await confirmingNetwork(() => collection.preview(input)) };
-    });
-
-    serve(app, API_ROUTES.subscribe, async (request: FastifyRequest<{ Body: { url?: unknown; settings?: unknown } }>) => {
-      const { collection, subscription, input } = subscriptionAddress(request.body?.url);
-      const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
-      requireOnline();
-      return await collection.add(input, settings);
-    });
-
-    // Settings change first, so the check a resume in the same request starts uses the new range.
-    serve(app, API_ROUTES.updateSubscription, async (request: FastifyRequest<{
-      Params: { type: string; id: string };
-      Body: { enabled?: unknown; settings?: unknown } | null;
-    }>) => {
-      const { collection, subscription, targetNoun } = collectionOf(request.params.type);
-      const body = request.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', `${targetNoun}設定必須是 JSON 物件。`);
-      const unknown = Object.keys(body).find((key) => key !== 'enabled' && key !== 'settings');
-      if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
-      if (body.enabled === undefined && body.settings === undefined) throw new CollectorError('invalid_request', '請提供 enabled 或 settings。');
-      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', `${targetNoun}啟用設定無效。`);
-      if (typeof body.enabled !== 'boolean') {
-        return { subscription: await collection.updateSettings(request.params.id, subscription.parseSettingsPatch(body.settings)), submission: null };
-      }
-      if (body.settings !== undefined) await collection.updateSettings(request.params.id, subscription.parseSettingsPatch(body.settings));
-      const { subscription: record, submission } = await collection.setEnabled(request.params.id, body.enabled);
-      return { subscription: record, submission };
-    });
-
-    serve(app, API_ROUTES.applySubscriptionSettings, async (request: FastifyRequest<{ Params: { type: string; id: string } }>) =>
-      collectionOf(request.params.type).collection.applySettingsToAll(request.params.id));
-
-    // `documents=keep` (the default) leaves the subscription's documents; `documents=delete` deletes them.
-    serve(app, API_ROUTES.removeSubscription, async (request: FastifyRequest<{ Params: { type: string; id: string }; Querystring: Record<string, unknown> }>) => {
-      const { collection } = collectionOf(request.params.type);
-      const { documents = 'keep' } = singleValues(request.query);
-      if (documents !== 'keep' && documents !== 'delete') throw new CollectorError('invalid_request', 'documents 只接受 keep 或 delete。');
-      const { documentsKept, documentsDeleted, documentsFailed } = await collection.remove(request.params.id, { documents });
-      return { removed: true, documentsKept, documentsDeleted, documentsFailed };
-    });
-
-    serve(app, API_ROUTES.checkSubscriptions, async (request: FastifyRequest<{ Body?: { subscriptions?: unknown } | null }>) => {
-      const body = request.body ?? {};
-      if (typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', '檢查範圍必須是 JSON 物件。');
-      const unknown = Object.keys(body).find((key) => key !== 'subscriptions');
-      if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
-      const listed = body.subscriptions;
-      if (listed !== undefined && (!Array.isArray(listed) || listed.length === 0 || !listed.every(isSubscriptionKey))) {
-        throw new CollectorError('invalid_request', 'subscriptions 必須是非空的 {type, id} 清單。');
-      }
-      await confirmOnline();
-      if (listed === undefined) {
-        // Checking every subscription goes through the scheduler, which refuses while a Vault operation runs.
-        if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
-        const submissions = await options.schedule.runNow();
-        return { submissions };
-      }
-      const submissions = await startChecks(options.sources, (type) => collectionOf(type).collection, listed);
-      return { submissions };
-    });
-  }
-
-  const sourceTypes = options.sourceTypes ?? sourceTypeDeclarations(options.sources);
-  serve(app, API_ROUTES.sourceTypes, async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
-
-  if (subscriptions.length > 0) {
-    const catalog = new SourceCatalog(options.sources, sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
-      options.activity?.summary ? async (type, id) => {
-        const summaries: ActivityCheckSummary[] = [];
-        let cursor: string | undefined;
-        do {
-          const page = await options.activity!.summary!({ view: 'summary', sourceType: type, subscriptionId: id, limit: 100, ...(cursor ? { cursor } : {}) });
-          summaries.push(...page.entries.filter((entry) => entry.kind === 'check'));
-          cursor = page.nextCursor ?? undefined;
-        } while (cursor && summaries.length < 30);
-        return summaries.slice(0, 30);
-      } : undefined);
-    const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => confirmingNetwork(() => collectionOf(type).collection.preview(url));
-
-    // Every address answers 200 with a status; only a missing address is a malformed request.
-    serve(app, API_ROUTES.recognizeUrl, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
-      if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
-        throw new CollectorError('invalid_request', '請貼上要加入的網址。');
-      }
-      requireOnline();
-      return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewSubscription }) };
-    });
-
-    serve(app, API_ROUTES.subscriptions, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
-      const query = singleValues(request.query);
-      const unknown = Object.keys(query).find((key) => key !== 'type');
-      if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
-      if (query.type !== undefined && !subscriptions.some((collection) => collection.type === query.type)) {
-        throw new CollectorError('invalid_request', '不支援的 type。');
-      }
-      return catalog.list(query.type);
-    });
-
-    serve(app, API_ROUTES.subscription, async (request: FastifyRequest<{ Params: { type: string; id: string } }>) =>
-      catalog.detail(request.params.type, request.params.id));
-  }
 
   const webRoot = options.webRoot && existsSync(options.webRoot) ? options.webRoot : null;
   if (webRoot) {
@@ -837,135 +254,4 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   return app;
-}
-
-function requiredUrl(value: unknown, prompt: string): string {
-  if (typeof value !== 'string' || value.trim() === '') throw new CollectorError('invalid_request', prompt);
-  return value;
-}
-
-/**
- * The source type of `sources` that owns an address, with the address as that type reads it. An
- * address no type owns is `unsupported_url`, or `invalid_url` when it is not an address at all.
- */
-function ownedAddress(sources: SourceRegistry, value: string): { type: string; input: string } {
-  const { input, url, owner } = addressOwner(value, sources.list);
-  if (!owner) {
-    throw url
-      ? new CollectorError('unsupported_url', '目前還不支援這個網站的網址。')
-      : new CollectorError('invalid_url', '請貼上完整網址，例如 https:// 開頭的網址。');
-  }
-  return { type: owner.id, input };
-}
-
-function isSubscriptionKey(value: unknown): value is { type: string; id: string } {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const { type, id } = value as Record<string, unknown>;
-  return Object.keys(value).every((key) => key === 'type' || key === 'id')
-    && typeof type === 'string' && type.length > 0 && typeof id === 'string' && id.length > 0;
-}
-
-/** The label a source type gives its pacing group; the group ID when no type of `sources` declares it. */
-function pacingLabel(sources: SourceRegistry, group: string): string {
-  return sources.definitions.find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
-}
-
-const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['debug', 'info', 'warning', 'error']);
-const ACTIVITY_PARAMETERS = new Set(['view', 'severity', 'eventType', 'jobId', 'subscriptionId', 'sourceType', 'since', 'until', 'limit', 'cursor']);
-
-function activityQuery(query: Record<string, string | undefined>): ActivityQuery {
-  const unknown = Object.keys(query).find((key) => !ACTIVITY_PARAMETERS.has(key));
-  if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
-  if (query.view !== undefined && query.view !== 'raw' && query.view !== 'summary') {
-    throw new CollectorError('invalid_request', 'view 只能是 raw 或 summary。');
-  }
-  const list = (value: string | undefined) => value?.split(',').map((item) => item.trim()).filter(Boolean);
-  const severity = list(query.severity);
-  if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
-    throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
-  }
-  const eventType = list(query.eventType);
-  if (eventType && (eventType.length === 0 || !eventType.every((value) => /^[a-z_.]{1,60}$/u.test(value)))) {
-    throw new CollectorError('invalid_request', 'eventType 格式無效。');
-  }
-  for (const key of ['jobId', 'subscriptionId', 'sourceType'] as const) {
-    const value = query[key];
-    if (value !== undefined && (value === '' || value.length > 200)) throw new CollectorError('invalid_request', `${key} 長度須在 1 到 200 之間。`);
-  }
-  for (const key of ['since', 'until'] as const) {
-    const value = query[key];
-    if (value !== undefined && !isInstant(value)) throw new CollectorError('invalid_request', `${key} 必須是 ISO 時間。`);
-  }
-  if (query.cursor !== undefined && (query.cursor === '' || query.cursor.length > 500)) {
-    throw new CollectorError('invalid_request', '分頁位置無效。');
-  }
-  const { limit } = pagination({ limit: query.limit ?? '50' });
-  return {
-    ...(query.view ? { view: query.view as 'raw' | 'summary' } : {}),
-    ...(severity ? { severity: severity as EventSeverity[] } : {}),
-    ...(eventType ? { eventType } : {}),
-    ...(query.jobId ? { jobId: query.jobId } : {}),
-    ...(query.subscriptionId ? { subscriptionId: query.subscriptionId } : {}),
-    ...(query.sourceType ? { sourceType: query.sourceType } : {}),
-    ...(query.since ? { since: query.since } : {}),
-    ...(query.until ? { until: query.until } : {}),
-    ...(query.cursor ? { cursor: query.cursor } : {}),
-    limit,
-  };
-}
-
-/** An ISO date-time with an explicit offset or Z, so the instant does not depend on the server's time zone. */
-function isInstant(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) && !Number.isNaN(Date.parse(value));
-}
-
-function isCalendarDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
-}
-
-/** Rejects repeated query parameters so each filter has exactly one value. */
-function singleValues(query: Record<string, unknown>): Record<string, string | undefined> {
-  const values: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(query)) {
-    if (typeof value !== 'string') {
-      throw new CollectorError('invalid_request', '每個查詢參數只能提供一個值。');
-    }
-    values[key] = value;
-  }
-  return values;
-}
-
-/** Source filters use stable IDs; publisher names are display text and never filter. */
-function documentFilter(sources: SourceRegistry, query: Record<string, string | undefined>): DocumentFilter {
-  if (query.channel !== undefined) {
-    throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');
-  }
-  const { sourceType, publisherId } = query;
-  if (sourceType !== undefined && !sources.get(sourceType)) {
-    throw new CollectorError('invalid_request', '不支援的 sourceType。');
-  }
-  if (publisherId !== undefined && (sourceType === undefined || publisherId === '' || publisherId.length > 200)) {
-    throw new CollectorError('invalid_request', 'publisherId 需要搭配 sourceType，且長度須在 1 到 200 之間。');
-  }
-  return {
-    ...(sourceType ? { sourceType } : {}),
-    ...(publisherId ? { publisherId } : {}),
-  };
-}
-
-function pagination(query: { offset?: string | undefined; limit?: string | undefined }): { offset: number; limit: number } {
-  const parse = (value: string | undefined, fallback: number, min: number, max: number): number => {
-    if (value === undefined) return fallback;
-    if (typeof value !== 'string' || !/^\d+$/u.test(value)) {
-      throw new CollectorError('invalid_request', '分頁參數必須是整數。');
-    }
-    const number = Number(value);
-    if (!Number.isSafeInteger(number) || number < min || number > max) {
-      throw new CollectorError('invalid_request', 'offset 必須介於 0 到 1000000，limit 必須介於 1 到 100。');
-    }
-    return number;
-  };
-  return { offset: parse(query.offset, 0, 0, 1_000_000), limit: parse(query.limit, 50, 1, 100) };
 }
