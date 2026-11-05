@@ -8,7 +8,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 | 模組 | 現行責任 |
 | --- | --- |
-| `src/electron` | 主視窗、profile 與程式生命週期；以 `src/server/collector-server.ts` 啟動本程序的 runtime 與 HTTP listener |
+| `src/electron` | 桌面殼層：`main.ts` 把 Electron 接上各模組，並以 `src/server/collector-server.ts` 啟動本程序的 runtime 與 HTTP listener；啟動與 single-instance（`desktop-launch.ts`）、主視窗（`main-window.ts`）、頁面與對話框 IPC（`page-channels.ts`、`desktop-dialogs.ts`）、由環境與封裝內容決定的設定（`desktop-environment.ts`）、驗證專用的控制通道（`validation-control.ts`）、系統匣、通知、登入自啟與更新協調各在自己的檔案，接收注入的 Electron 介面 |
 | `src/runtime` | 組裝：`CollectorRuntime` 持有程序內唯一的 Vault workspace、Agent 連線金鑰與設定（`agent-connection.ts`）及啟動／關閉順序，listener 由傳輸層交給它啟動；`vault-workspace.ts` 為每個開啟的 Vault 組出收集、訂閱、工作、排程與搜尋服務，並負責開啟其他知識庫與建立新的知識庫；隨附資源（runtime 程式、搜尋詞庫、Agent Skill、系統匣圖示）的路徑只由 `bundled-resources.ts` 依開發版或打包版與平台算出，Electron、開發 server 與 verify skill 都向它要 |
 | `src/server` | UI／Agent HTTP listener。`collector-server.ts` 以 runtime 啟動兩個 listener：先在 Agent 連線的埠開 Agent listener，再開 UI listener。`app.ts` 依序掛上每個請求都會經過的 hook 鏈（Host 檢查、Bearer 授權、Vault 未就緒的 503、知識庫操作鎖、回應標頭與錯誤狀態，錯誤碼對應的 HTTP 狀態在 `error-status.ts`），再依傳入的服務註冊各區塊的 route；每個區塊的 route 在 `routes/` 下自己的檔案（Vault 設定、資料交換、裝置、Agent 連線、文件與搜尋、收集工作、活動記錄、排程、訂閱與來源類型、變動串流），查詢參數的解析與驗證在 `routes/query-params.ts` |
 | `src/core` | 共用型別、共用的值、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引（`collector.ts`，刪除紀錄經它的 `DeletionRecords` 介面讀寫，實作在 `src/vault`）。型別依區塊分檔為 `*-types.ts`（文件、搜尋、訂閱、來源資訊、工作、活動記錄、Vault、更新、裝置），這些檔只有型別、只 import 型別，所以 server、Electron 與 Web 引用它們不會帶進任何程式；共用的值各在自己的模組，例如 `CollectorError`（`collector-error.ts`）與訂閱的失敗上限（`subscription-limits.ts`） |
