@@ -1,5 +1,6 @@
 import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
+import { checkPlan } from './candidates.js';
 import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
 import type { SourceDeclarations, SourceRegistry } from '../core/source-registry.js';
@@ -446,8 +447,9 @@ export class SubscriptionService {
 
   /**
    * Port entry: the plan of a check whose discovery starts at `at`. The range comes from the
-   * subscription's settings now. An item stays out while it is out of range for a range that starts
-   * no earlier than the one that left it out, and while it is skipped after failing.
+   * subscription's settings now, and the candidates follow `checkPlan`. An item stays out while it is
+   * out of range for a range that starts no earlier than the one that left it out, and while it is
+   * skipped after failing.
    */
   async planCheck(id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
     const record = (await this.store.list()).find((candidate) => candidate.id === id);
@@ -456,7 +458,7 @@ export class SubscriptionService {
     const since = range.since.toISOString();
     const excluded = new Set((record.outOfRange ?? []).filter((entry) => entry.before <= since).map((entry) => entry[this.keyField]!));
     for (const entry of record.failures ?? []) if (entry.skipped) excluded.add(entry[this.keyField] as string);
-    return { target: record, range, excluded };
+    return checkPlan(record, range, excluded);
   }
 
   /**

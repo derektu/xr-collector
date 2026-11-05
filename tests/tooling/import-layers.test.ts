@@ -48,8 +48,6 @@ const EXCEPTIONS = [
   // core -> vault: core and vault import each other.
   'src/core/collector.ts -> src/vault/deleted-documents.ts',
   'src/core/collector.ts -> src/vault/document-paths.ts',
-  // jobs -> subscriptions: the candidate rules run in the job manager (#263).
-  'src/jobs/job-manager.ts -> src/subscriptions/candidates.ts',
   // updates -> runtime: the build identity.
   'src/updates/release-index.ts -> src/runtime/build-info.ts',
   // runtime -> server: runtime and server import each other (#265).

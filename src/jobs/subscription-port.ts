@@ -1,16 +1,28 @@
-import type { FailureClass, CheckRange, SubscriptionTarget } from '../core/source-contract.js';
+import type { FailureClass, ListedItem, SubscriptionTarget } from '../core/source-contract.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../core/types.js';
 
-/** What a check of one subscription discovers with, read when its discovery starts. */
+/** The items one check collects, picked from its subscription's listing. */
+export interface CandidateSelection {
+  /** Keys of every candidate, collected or not, newest first. */
+  candidates: string[];
+  /** Items to collect, newest first. */
+  items: ListedItem[];
+  /** The start of the range; a capture skips an item whose exact publish time is earlier. */
+  publishedNotBefore: string;
+}
+
+/**
+ * What a check of one subscription discovers with, read when its discovery starts. The
+ * subscriptions own the candidate rules; the job manager lists the source and hands the listing over.
+ */
 export interface CheckPlan {
   /** The subscription as its source lists it. */
   target: SubscriptionTarget;
-  range: CheckRange;
   /**
-   * Keys of items that stay candidates without being collected: out of range for a range that
-   * starts no earlier, or skipped after failing.
+   * Picks the candidates and the items to collect from the listing, read newest first and only as
+   * far as the check needs. `hasDocument` says whether an item is collected or deleted in the Vault.
    */
-  excluded: ReadonlySet<string>;
+  select(listing: AsyncIterable<ListedItem>, hasDocument: (key: string) => Promise<boolean>): Promise<CandidateSelection>;
 }
 
 /** What a check found, reported once the item jobs it queued are recorded. */

@@ -5,7 +5,10 @@
 | 部分 | 程式 |
 | --- | --- |
 | 排程 | `src/subscriptions/scheduler.ts` |
-| 佇列、重啟接續 | `src/jobs/job-manager.ts` |
+| 工作的執行與回報 | `src/jobs/job-manager.ts`；回報給訂閱的內容在 `src/jobs/subscription-reports.ts` |
+| 佇列與 lane 的順序 | `src/jobs/job-queue.ts` |
+| 重啟接續 | `src/jobs/job-recovery.ts` |
+| 檢查收集哪些項目（候選規則） | `src/subscriptions/candidates.ts` |
 | 等待條件與其計時器 | `src/jobs/job-waits.ts` |
 | 請求通道與冷卻 | `src/pacing/pacing-gate.ts` |
 | 斷網與睡眠 | `src/core/connectivity.ts`、`src/core/collection-pause.ts` |

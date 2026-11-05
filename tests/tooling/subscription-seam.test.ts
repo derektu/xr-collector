@@ -3,8 +3,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // Jobs and subscriptions meet at one seam, the subscription port: the job manager never reaches
-// the subscription files, and the subscription services compose a status from the work facts the
-// job manager reports, without running any of its code. Types from src/jobs are part of the seam.
+// the subscription files or runs the subscriptions' rules itself, such as which listed items a check
+// collects, and the subscription services compose a status from the work facts the job manager
+// reports, without running any of its code. Types from src/jobs are part of the seam.
 
 function filesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -24,6 +25,11 @@ describe('the seam between jobs and subscriptions', () => {
   it('keeps the subscription store out of src/jobs', () => {
     expect(filesUnder('src/jobs')).toContain('src/jobs/job-manager.ts');
     expect(matching('src/jobs', /SubscriptionStore|subscription-store/u)).toEqual([]);
+  });
+
+  it('keeps the candidate rules and every other subscription module out of src/jobs', () => {
+    expect(filesUnder('src/subscriptions')).toContain('src/subscriptions/candidates.ts');
+    expect(matching('src/jobs', /from '\.\.\/subscriptions\/|selectCandidates|checkPlan\(/u)).toEqual([]);
   });
 
   it('keeps the jobs page rules out of src/subscriptions', () => {

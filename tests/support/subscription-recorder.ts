@@ -2,6 +2,7 @@ import type { SourceRegistry } from '../../src/core/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
 import type { ItemFailureEntry, JobError, JobSubmission, SkipReason, SubscriptionSettings } from '../../src/core/types.js';
 import type { JobManager } from '../../src/jobs/job-manager.js';
+import { checkPlan } from '../../src/subscriptions/candidates.js';
 import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
 import type { FailureClass, SubscriptionTarget } from '../../src/core/source-contract.js';
 
@@ -26,8 +27,9 @@ export type PortReport =
 
 /**
  * An in-memory subscription port for job manager tests: it holds subscriptions the test adds,
- * plans checks from the source type's range rule and the test's exclusions, records every report,
- * and dispatches a new subscription's first check through the job manager it is attached to.
+ * plans checks with the subscriptions' candidate rules over the source type's range and the test's
+ * exclusions, records every report, and dispatches a new subscription's first check through the job
+ * manager it is attached to.
  */
 export class SubscriptionRecorder implements SubscriptionPort {
   readonly subscriptions = new Map<string, RecordedSubscription>();
@@ -75,11 +77,11 @@ export class SubscriptionRecorder implements SubscriptionPort {
   async planCheck(type: string, id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
     const subscription = this.get(type, id);
     if (!subscription?.enabled) return { stopped: subscription ? 'subscription_paused' : 'subscription_removed' };
-    return {
-      target: { id: subscription.id, title: subscription.title, url: subscription.url },
-      range: this.sources.require(type).subscription!.checkRange(subscription.settings, at),
-      excluded: new Set(subscription.excluded),
-    };
+    return checkPlan(
+      { id: subscription.id, title: subscription.title, url: subscription.url },
+      this.sources.require(type).subscription!.checkRange(subscription.settings, at),
+      new Set(subscription.excluded),
+    );
   }
 
   async checked(type: string, id: string, report: CheckReport): Promise<SkipReason | null> {
