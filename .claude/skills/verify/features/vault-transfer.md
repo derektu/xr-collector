@@ -52,7 +52,7 @@ Preconditions:
 
 - `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的操作順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫與起始位置。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。視窗隱藏即可執行。
 
-- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀。Web 模式，合成 YouTube；不涵蓋原生對話框。
+- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀。兩邊都訂閱沒有影片的頻道 E：另一邊的 E 自動暫停後改了收集設定，合併取得設定且這邊的 E 仍啟用；這邊之後再改 E 的設定並匯出；切換到另一邊的 Vault 後匯入它，那邊的 E 取用較新的設定、維持自動暫停。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `onboarding`：斷言 `vault-create`；設定頁以改過的名稱與位置建立並切換，預設值與目前的知識庫同名時停用「建立」，原知識庫資料夾內容不變，再以開啟既有知識庫切回。Web 模式。
 - `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，不離開設定，知識庫的文件與訂閱數與 API 相同。
 

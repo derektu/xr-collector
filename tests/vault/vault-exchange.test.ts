@@ -326,17 +326,53 @@ describe('subscriptions (X77-A08)', () => {
     expect((await channels(a.vault)).find((row) => row.id === 'UC123')).toMatchObject({ lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
     expect(await scheduleOn(a.vault)).toBe(true);
   });
+});
 
-  it('keeps an automatic pause only with the local failures that caused it', async () => {
+describe('a subscription that paused itself on one machine (#291)', () => {
+  const checkFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
+  /** Pauses UC123 by itself at `when`, as the fifth failing check in a day does. */
+  const autoPause = (root: string, when: string) => store(root, when).update('UC123', { enabled: false, nextCheckAt: null, autoPausedAt: when, checkFailures });
+  const uc123 = async (root: string) => (await channels(root)).find((row) => row.id === 'UC123')!;
+
+  it('leaves the local subscription enabled, whether merging or replacing', async () => {
     const { a, b } = await pair();
-    const checkFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
-    await store(b.vault).update('UC123', { enabled: false, autoPausedAt: '2026-10-17T00:00:00.000Z', checkFailures });
+    await autoPause(b.vault, at(1));
+    await add(b.vault, D5);
     const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
-    const row = (await channels(a.vault)).find((candidate) => candidate.id === 'UC123')!;
-    expect(row.enabled).toBe(false);
-    expect(row.autoPausedAt).toBeUndefined();
-    expect(row.checkFailures).toBeUndefined();
+    const replacing = await copyOf(a, 'A2');
+    await using(a, async (workspace) => {
+      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ added: 1 }), localNewer: 0 });
+    });
+    await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
+    for (const root of [a.vault, replacing.vault]) {
+      const row = await uc123(root);
+      expect(row.enabled).toBe(true);
+      expect(row).not.toHaveProperty('autoPausedAt');
+      expect(row).not.toHaveProperty('checkFailures');
+    }
+  });
+
+  it('still takes a pause or a resume by the person from the side whose change is newer', async () => {
+    const { a, b } = await pair();
+    await store(b.vault, at(1)).update('UC123', { enabled: false });
+    const paused = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => { await importFile(workspace, paused); });
+    expect(await uc123(a.vault)).toMatchObject({ enabled: false, updatedAt: at(1) });
+    // A resumes it later; B's older pause no longer wins.
+    await store(a.vault, at(2)).update('UC123', { enabled: true });
+    await using(a, async (workspace) => {
+      expect((await workspace.previewImport(paused))).toMatchObject({ merge: counts({}), localNewer: 1 });
+    });
+    expect(await uc123(a.vault)).toMatchObject({ enabled: true, updatedAt: at(2) });
+  });
+
+  it('keeps the local automatic pause when the file brings a newer change by the person', async () => {
+    const { a, b } = await pair();
+    await autoPause(a.vault, at(1));
+    await store(b.vault, at(2)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => { await importFile(workspace, file); });
+    expect(await uc123(a.vault)).toMatchObject({ enabled: false, autoPausedAt: at(1), checkFailures, settings: { intervalMinutes: 360 }, updatedAt: at(2) });
   });
 });
 
