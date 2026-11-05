@@ -339,6 +339,65 @@ describe('subscriptions (X77-A08)', () => {
   });
 });
 
+describe('a subscription both machines changed (#256 S2, S3, S4)', () => {
+  const progress = {
+    lastCheckedAt: '2026-10-18T00:00:00.000Z',
+    checkFailures: { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } },
+    outOfRange: [{ videoId: D3, before: '2026-10-01T00:00:00.000Z' }],
+    failures: [{ videoId: D4, title: '影片', attempts: 1, errorCode: 'network_error', failedAt: '2026-10-18T00:00:00.000Z', skipped: false }],
+  };
+  const rowOf = async (root: string) => (JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8')) as {
+    channels: Array<Record<string, unknown>>;
+  }).channels.find((row) => row.id === 'UC123')!;
+
+  it('takes the newer settings from the file and keeps the local progress (S2, S4)', async () => {
+    const { a, b } = await pair();
+    const newSettings = { ...settings, intervalMinutes: 360 };
+    await store(b.vault, at(2)).update('UC123', { title: 'B 改的名稱', settings: newSettings, enabled: false });
+    // B's own progress, which A never takes over.
+    await store(b.vault).update('UC123', { lastCheckedAt: at(3), outOfRange: [{ videoId: D5, before: at(3) }] });
+    await store(a.vault).update('UC123', progress);
+    const before = await rowOf(a.vault);
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => {
+      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({}, { updated: 1 }), localNewer: 0 });
+    });
+    expect(await rowOf(a.vault)).toEqual({
+      id: 'UC123', addedAt: before.addedAt, title: 'B 改的名稱', url: before.url, enabled: false, settings: newSettings, updatedAt: at(2),
+      ...progress, nextCheckAt: null, lastDispatchedAt: null,
+    });
+  });
+
+  it('keeps the local settings and progress when the local change is newer (S3)', async () => {
+    const { a, b } = await pair();
+    await store(b.vault, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
+    await store(b.vault).update('UC123', { lastCheckedAt: at(3) });
+    await store(a.vault, at(2)).update('UC123', { title: 'A 改的名稱', ...progress });
+    const before = await rowOf(a.vault);
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => {
+      const preview = await workspace.previewImport(file);
+      expect(preview).toMatchObject({ merge: counts({}), replace: counts({}, { updated: 1 }), localNewer: 1 });
+      expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
+      workspace.cancelImport(preview.id);
+    });
+    expect(await rowOf(a.vault)).toEqual(before);
+  });
+
+  it('keeps no lastCheckedAt from the file when the local subscription has none (S4)', async () => {
+    const { a, b } = await pair();
+    await store(b.vault, at(1)).update('UC123', { title: 'B 改的名稱', lastCheckedAt: at(1) });
+    const local = await rowOf(a.vault);
+    const { lastCheckedAt: _lastCheckedAt, ...withoutCheck } = local;
+    await writeFile(path.join(a.vault, 'settings/youtube-channels.json'), `${JSON.stringify({ version: 3, channels: [withoutCheck] }, null, 2)}\n`);
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => { await importFile(workspace, file); });
+    const row = await rowOf(a.vault);
+    expect(row.title).toBe('B 改的名稱');
+    expect(row).not.toHaveProperty('lastCheckedAt');
+  });
+});
+
 describe('deletion records of documents the Vault never had (X77-A09)', () => {
   it('come along with a merge without being counted, so collection passes over the video', async () => {
     const { a, b } = await pair();

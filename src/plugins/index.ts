@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { registerScheduleFile, registerSourceDefinitions } from '../core/source-registry.js';
+import { registerSubscriptionExchange } from '../core/subscription-exchange.js';
 import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../pacing/pacing-gate.js';
 import type { SourceDefinition, SourceEntry, SourcePlugin } from './types.js';
+import { subscriptionFileExchange } from '../subscriptions/subscription-file-exchange.js';
 import { createRssPlugin, rssDefinition } from './rss/server.js';
 import { createYouTubePlugin, youtubeDefinition } from './youtube/server.js';
 
@@ -21,10 +23,14 @@ export const SOURCE_DEFINITIONS: readonly SourceDefinition[] = SOURCES.map((entr
 export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 const SCHEDULE_DESCRIPTION = 'YouTube channel schedule';
 
-/** Registers the product's source types; the composition roots call it before opening a Vault. */
+/**
+ * Registers the product's source types, and the subscription files through which the Vault reads
+ * their subscriptions; the composition roots call it before opening a Vault.
+ */
 export function registerSources(): void {
   registerSourceDefinitions(SOURCE_DEFINITIONS);
   registerScheduleFile(SCHEDULE_FILE, SCHEDULE_DESCRIPTION);
+  registerSubscriptionExchange(subscriptionFileExchange);
 }
 
 /**

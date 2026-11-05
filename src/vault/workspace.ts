@@ -13,7 +13,7 @@ import { forwardingPort } from '../jobs/subscription-port.js';
 import { CollectionScheduler } from '../subscriptions/scheduler.js';
 import { JsonSubscriptionStore, type SubscriptionStore } from '../subscriptions/subscription-store.js';
 import { JsonScheduleStore } from '../subscriptions/schedule-store.js';
-import { canonicalJson } from '../subscriptions/subscription-files.js';
+import { canonicalJson } from '../core/canonical-json.js';
 import { RecentTargets } from '../subscriptions/recent-targets.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manager.js';
 import type { Pacing } from '../pacing/pacing-gate.js';

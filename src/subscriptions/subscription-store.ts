@@ -5,12 +5,12 @@ import { requireDefinition } from '../core/source-registry.js';
 import type { SubscriptionRecord } from '../core/types.js';
 import {
   removalsFromJson,
-  subscriptionContent,
   subscriptionsFromJson,
   subscriptionsToJson,
   type SubscriptionFileSpec,
   type SubscriptionRemoval,
 } from './subscription-files.js';
+import { subscriptionContent } from './subscription-fields.js';
 import { ensureVaultFormat } from '../vault/vault-directory.js';
 
 export type SubscriptionPatch = Partial<Omit<SubscriptionRecord, 'id' | 'addedAt'>>;

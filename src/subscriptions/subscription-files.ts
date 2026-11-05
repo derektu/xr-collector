@@ -128,21 +128,3 @@ function isFailure(value: unknown, keyField: string): boolean {
 function isOptionalTime(value: unknown): boolean {
   return value === undefined || value === null || typeof value === 'string';
 }
-
-/** JSON with object keys in sorted order, so equal values always give the same text. */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-/**
- * What a person sets on a subscription: its title, URL, paused state and settings. Collection
- * progress, check times and fields the program does not use are left out, so they never count as a
- * change of the subscription.
- */
-export function subscriptionContent({ title, url, enabled, settings }: SubscriptionRecord): string {
-  return canonicalJson({ title, url, enabled, settings });
-}
