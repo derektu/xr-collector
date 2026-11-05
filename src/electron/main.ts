@@ -155,7 +155,7 @@ app.whenReady().then(async () => {
   // Platform adapters replace this unavailable boundary only when the installed package has a
   // verified native handoff path. Discovery remains useful in development without pretending it can install.
   const nativeInstaller: NativeInstaller = process.platform === 'darwin'
-    ? new MacNativeInstaller({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, executablePath: process.execPath, current: buildInfo })
+    ? new MacNativeInstaller({ packaged: app.isPackaged, helper: resources.macUpdateHelper, executablePath: process.execPath, current: buildInfo })
     : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
   const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: EventType; message: string; code?: string }> = [];
   updateService = await UpdateService.open({
@@ -263,7 +263,7 @@ app.whenReady().then(async () => {
     })
     : false;
   if (safelyStopped && shutdownAcknowledged && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
-    && await prepareMacUpdateRollback(process.resourcesPath, startupBuildInfo).catch((rollbackError) => {
+    && await prepareMacUpdateRollback(resources.macUpdateHelper, startupBuildInfo).catch((rollbackError) => {
       console.error('Unable to prepare macOS startup rollback', rollbackError); return null;
     })) {
     isQuitting = true;

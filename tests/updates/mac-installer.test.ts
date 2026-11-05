@@ -103,7 +103,7 @@ fs.rmSync(path.dirname(process.argv[3]),{recursive:true,force:true});
   const request = { runId: 'run-id', previousVersion: '0.1.1', previousBuildId: 'build-a',
     expectedVersion: '0.1.2', expectedBuildId: 'build-b' };
   await writeFile(path.join(workDir, 'request.json'), JSON.stringify(request));
-  const rolledBack = nativeRecoveryReceipt(workDir, request, { schemaVersion: 1, runId: 'run-id', phase: 'rolled_back', reason: 'startup_failed' }, resources)!;
+  const rolledBack = nativeRecoveryReceipt(workDir, request, { schemaVersion: 1, runId: 'run-id', phase: 'rolled_back', reason: 'startup_failed' }, helper)!;
   expect(rolledBack).toMatchObject({ token: 'run-id', phase: 'rolled_back', reason: 'startup_failed' });
   await expect(stat(workDir)).resolves.toBeDefined();
   await rolledBack.finalize();
@@ -111,7 +111,7 @@ fs.rmSync(path.dirname(process.argv[3]),{recursive:true,force:true});
 
   const retained = path.join(root, '.xr-update-retained'); await mkdir(retained);
   await writeFile(path.join(retained, 'request.json'), JSON.stringify(request));
-  const recoveryRequired = nativeRecoveryReceipt(retained, request, { schemaVersion: 1, runId: 'run-id', phase: 'recovery_required' }, resources)!;
+  const recoveryRequired = nativeRecoveryReceipt(retained, request, { schemaVersion: 1, runId: 'run-id', phase: 'recovery_required' }, helper)!;
   await expect(recoveryRequired.finalize()).rejects.toThrow('不可自動清除');
   await expect(stat(retained)).resolves.toBeDefined();
   await rm(root, { recursive: true, force: true });
@@ -130,7 +130,7 @@ it('lets a valid acknowledgement that arrived after the deadline commit recovery
   });
   const current = { schemaVersion: 1, kind: 'packaged', version: '0.1.2', buildId: 'build-b', builtAt: new Date().toISOString(),
     commit: 'a'.repeat(40), target: 'darwin-arm64', sourceDirty: false } as const;
-  const recovered = await recoverMacUpdateResults('/Applications/XR Collector.app/Contents/Resources', current, {
+  const recovered = await recoverMacUpdateResults('/Applications/XR Collector.app/Contents/Resources/bin/xr-mac-update-helper', current, {
     platform: 'darwin', contexts: async () => [{ workDir, request }], runHelper,
   });
   expect(runHelper).toHaveBeenCalledTimes(1);

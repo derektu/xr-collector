@@ -17,12 +17,18 @@ const launchKeys = ['XR_COLLECTOR_PROFILE', 'XR_COLLECTOR_VAULT', 'XR_COLLECTOR_
 /** Unprivileged two-phase macOS App replacement. The Swift helper owns swap, launch verification and rollback. */
 export class MacNativeInstaller implements NativeInstaller {
   readonly available: boolean;
-  constructor(private readonly options: { packaged: boolean; resourcesPath: string; executablePath: string; current: BuildInfo }) {
+  constructor(private readonly options: {
+    packaged: boolean;
+    /** The update helper (`bundledResources().macUpdateHelper`). */
+    helper: string;
+    executablePath: string;
+    current: BuildInfo;
+  }) {
     this.available = process.platform === 'darwin' && options.packaged;
   }
   async validate(offer: UpdateOffer, packageFile: string): Promise<void> {
     if (!this.available || offer.target !== 'darwin-arm64' || !packageFile.endsWith('.zip')) throw new CollectorError('update_install_unavailable', '這份更新不能由目前的 macOS App 安裝。');
-    await stat(this.helper()).catch((error) => { throw new CollectorError('update_install_unavailable', 'macOS 更新 helper 不存在。', { cause: error }); });
+    await stat(this.options.helper).catch((error) => { throw new CollectorError('update_install_unavailable', 'macOS 更新 helper 不存在。', { cause: error }); });
   }
   async prepare(offer: UpdateOffer, packageFile: string, signal: AbortSignal): Promise<PreparedInstall> {
     await this.validate(offer, packageFile);
@@ -47,7 +53,7 @@ export class MacNativeInstaller implements NativeInstaller {
         expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, expectedTarget: offer.target,
         launchEnvironment, timeoutMs: 120_000 };
       const requestFile = path.join(workDir, 'request.json'); await writeOwnedJson(requestFile, request);
-      child = spawn(this.helper(), ['--request', requestFile], { detached: false, stdio: 'ignore' });
+      child = spawn(this.options.helper, ['--request', requestFile], { detached: false, stdio: 'ignore' });
       const ownedChild = child;
       const abort = () => { void writeOwnedJson(path.join(workDir, 'abort.json'), { schemaVersion: 1, runId, nonce }).catch(() => undefined); };
       signal.addEventListener('abort', abort, { once: true });
@@ -65,8 +71,7 @@ export class MacNativeInstaller implements NativeInstaller {
       throw error;
     }
   }
-  recover(): Promise<NativeRecoveryResult> { return recoverMacUpdateResults(this.options.resourcesPath, this.options.current); }
-  private helper(): string { return path.join(this.options.resourcesPath, 'bin', 'xr-mac-update-helper'); }
+  recover(): Promise<NativeRecoveryResult> { return recoverMacUpdateResults(this.options.helper, this.options.current); }
 }
 
 /** @internal Exported so the cross-process protocol can be tested without constructing an App bundle. */
@@ -140,9 +145,9 @@ export async function acknowledgeMacUpdateShutdown(current: BuildInfo): Promise<
   return true;
 }
 
-/** Finishes an interrupted helper and returns receipts without deleting them. */
+/** Finishes an interrupted helper and returns receipts without deleting them. `helper` is the update helper. */
 export async function recoverMacUpdateResults(
-  resourcesPath: string,
+  helper: string,
   current: BuildInfo,
   dependencies: {
     platform?: NodeJS.Platform;
@@ -165,16 +170,16 @@ export async function recoverMacUpdateResults(
         if (phase !== 'recovery_required' || !contextIsCurrent
           || request.expectedVersion !== current.version || request.expectedBuildId !== current.buildId
           || !await hasLateAcknowledgement(workDir, request)) break;
-        await (dependencies.runHelper ?? runRecoveryHelper)(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), requestFile);
+        await (dependencies.runHelper ?? runRecoveryHelper)(helper, requestFile);
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 2_000));
       const afterWait = await readFile(resultFile, 'utf8').then((text) => (JSON.parse(text) as { phase?: string }).phase).catch(() => undefined);
       if (isTerminalRecoveryPhase(afterWait)) continue;
-      await (dependencies.runHelper ?? runRecoveryHelper)(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), requestFile);
+      await (dependencies.runHelper ?? runRecoveryHelper)(helper, requestFile);
     }
     const raw = await readFile(resultFile, 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>).catch(() => null);
-    const recovery = raw && nativeRecoveryReceipt(workDir, request, raw, resourcesPath);
+    const recovery = raw && nativeRecoveryReceipt(workDir, request, raw, helper);
     if (!recovery) continue;
     results.push(recovery);
     if (selectedContext && recoveryMatchesCurrent(recovery, current)) {
@@ -201,14 +206,15 @@ async function runRecoveryHelper(helper: string, requestFile: string): Promise<v
  * Prepares rollback when replacement B reached this process but startup failed before it could
  * acknowledge readiness. The helper validates and locks the owned journal, then waits for this
  * exact B process to exit before exchanging bundles; callers must exit only after `true`.
+ * `helper` is the update helper.
  */
-export async function prepareMacUpdateRollback(resourcesPath: string, current: BuildInfo): Promise<{ workDir: string } | null> {
+export async function prepareMacUpdateRollback(helper: string, current: BuildInfo): Promise<{ workDir: string } | null> {
   if (process.platform !== 'darwin') return null;
   const context = (await trustedUpdateContexts()).find(({ request }) => request.expectedVersion === current.version
     && request.expectedBuildId === current.buildId);
   if (!context) return null;
   const requestFile = path.join(context.workDir, 'request.json');
-  const child = spawn(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), ['--rollback', requestFile], { detached: false, stdio: 'ignore' });
+  const child = spawn(helper, ['--rollback', requestFile], { detached: false, stdio: 'ignore' });
   try {
     await waitForSpawn(child);
     await waitForPhase(path.join(context.workDir, 'result.json'), 'rollback_prepared', child, new AbortController().signal, 30_000);
@@ -246,12 +252,12 @@ function isTerminalRecoveryPhase(value: unknown): value is NativeInstallRecovery
   return ['succeeded', 'rolled_back', 'failed', 'recovery_required'].includes(String(value));
 }
 
-/** @internal Builds a receipt without consuming or deleting its journal. */
+/** @internal Builds a receipt without consuming or deleting its journal. `helper` is the update helper. */
 export function nativeRecoveryReceipt(
   workDir: string,
   request: Record<string, unknown>,
   result: Record<string, unknown>,
-  resourcesPath: string,
+  helper: string,
 ): NativeInstallRecovery | null {
   const phase = result.phase;
   if (result.schemaVersion !== 1 || !isTerminalRecoveryPhase(phase) || result.runId !== request.runId || typeof request.runId !== 'string'
@@ -269,7 +275,7 @@ export function nativeRecoveryReceipt(
       // A replacement helper may have written the terminal receipt just before releasing its lock.
       // Retry only the exact cleanup command briefly; every failed attempt leaves the journal intact.
       for (let attempt = 0; attempt < 10; attempt += 1) {
-        const child = spawn(path.join(resourcesPath, 'bin', 'xr-mac-update-helper'), ['--cleanup', requestFile], { stdio: 'ignore' });
+        const child = spawn(helper, ['--cleanup', requestFile], { stdio: 'ignore' });
         await waitForSpawn(child); lastExit = await waitForChildExit(child);
         const remains = await stat(workDir).then(() => true, (error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return false; throw error;
