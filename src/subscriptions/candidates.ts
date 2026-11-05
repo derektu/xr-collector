@@ -1,13 +1,17 @@
 import { publishedSince } from '../core/published.js';
-import type { CheckRange, ListedItem } from '../core/source-contract.js';
+import type { CheckRange, ListedItem, SubscriptionTarget } from '../core/source-contract.js';
+import type { CandidateSelection, CheckPlan } from '../jobs/subscription-port.js';
 
-export interface CandidateSelection {
-  /** Keys of every candidate, collected or not, newest first. */
-  candidates: string[];
-  /** Items to collect, newest first. */
-  items: ListedItem[];
-  /** The start of the range; a capture skips an item whose exact publish time is earlier. */
-  publishedNotBefore: string;
+/**
+ * The plan of one check of `target` over `range`. Items in `excluded` (out of range for a range
+ * that starts no earlier, or skipped after failing) and items with a document stay candidates that
+ * are not collected, so they still fill the item limit.
+ */
+export function checkPlan(target: SubscriptionTarget, range: CheckRange, excluded: ReadonlySet<string>): CheckPlan {
+  return {
+    target,
+    select: (listing, hasDocument) => selectCandidates(listing, range, async (key) => excluded.has(key) || hasDocument(key)),
+  };
 }
 
 /**

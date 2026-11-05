@@ -14,7 +14,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/core` | 共用型別、來源類型的宣告值 `SourceDeclarations` 與 server 用的 `SourceRegistry`（`source-registry.ts`）、文件保存與索引 |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
-| `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、自動重試、請求通道冷卻時的等待、重啟接續與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報，並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、新增中的請求） |
+| `src/jobs` | 收集工作的接受、去重、有界佇列與公平派工（順序在 `job-queue.ts`）、自動重試、請求通道冷卻時的等待、重啟接續（`job-recovery.ts`）與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報（`subscription-reports.ts`），並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、新增中的請求） |
 | `src/activity` | 裝置活動記錄。`activity-log.ts` 只負責事件的儲存、遮蔽、保留與事件 ID：ID 開頭的序號由記錄發出，開啟時從保留中的事件的最大序號接續；`activity-views.ts` 依事件寫入時就帶著的欄位與事件目錄，提供原始分頁與檢查摘要。事件種類與摘要的顯示規則（是否列出、是否列為檢查底下的子列、預設嚴重度）列在 `src/core/event-catalog.ts`，目錄沒有的種類 typecheck 失敗。收集工作的紀錄只把事件交給活動記錄，不持有它；兩者在 `src/runtime/job-records.ts` 組合：記錄補上工作後來得知的標題，掉了事件的工作標記為紀錄不完整 |
 | `src/subscriptions` | 訂閱資料唯一的寫入者：建立訂閱、派工與派工時間、收集進度（上次檢查時間、範圍外項目、失敗項目與跨檢查的失敗次數、連續失敗的檢查次數與自動暫停），以及每次檢查的收集規則（範圍內最新 N 則）；整份清單驗證通過才開始的手動檢查、依各訂閱頻率的週期檢查，並把工作事實與訂閱本身的狀態組合成訂閱狀態。訂閱檔的格式、紀錄欄位的分類（`subscription-fields.ts`）與兩份訂閱檔的合併也屬於這裡；Vault 的開啟、匯出與匯入經 `core/subscription-exchange.ts` 的契約使用它們，實作由 `subscriptionFileExchange(registry)` 建立、存在 `SourceRegistry.exchange` |
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
@@ -26,7 +26,7 @@ UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋�
 
 收集以工作執行。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
 
-`JobManager` 與訂閱之間只有訂閱 port 這一條 seam；正式環境由 `SubscriptionServices` 實作。只有開始探索的新檢查算一次派工，由 `SubscriptionService` 送出並更新派工時間：定時檢查、立即檢查與新增訂閱後的首次檢查。新增訂閱的工作解析完網址後，把結果與接受時的收集設定交給 `SubscriptionService` 建立訂閱並派工首次檢查。重試失敗項目與重啟後接續中斷的檢查不是派工，不更新派工時間。檢查結束時（項目全部結束，或檢查本身失敗）`JobManager` 回報結束時間與失敗原因，`SubscriptionService` 據此寫入上次檢查時間、累計或清除連續失敗，並在達到門檻時自動暫停；因暫停、移除或較新工作取代而略過的檢查，以及只重試失敗項目的工作，不回報結束；暫停或移除時已在擷取的項目完成後，檢查只記錄時間，不改連續失敗。檢查開始探索前向 port 取得計畫（收集範圍、要排除的項目，或訂閱已暫停／移除）；項目工作寫入持久紀錄後才回報這次的候選，收集進度因此一定在項目工作之後寫入。工作內暫時性錯誤的自動重試次數屬於 `JobManager`，同一項目跨檢查的失敗次數屬於 `SubscriptionService`，兩者分開計算。
+`JobManager` 與訂閱之間只有訂閱 port 這一條 seam；正式環境由 `SubscriptionServices` 實作。只有開始探索的新檢查算一次派工，由 `SubscriptionService` 送出並更新派工時間：定時檢查、立即檢查與新增訂閱後的首次檢查。新增訂閱的工作解析完網址後，把結果與接受時的收集設定交給 `SubscriptionService` 建立訂閱並派工首次檢查。重試失敗項目與重啟後接續中斷的檢查不是派工，不更新派工時間。檢查結束時（項目全部結束，或檢查本身失敗）`JobManager` 回報結束時間與失敗原因，`SubscriptionService` 據此寫入上次檢查時間、累計或清除連續失敗，並在達到門檻時自動暫停；因暫停、移除或較新工作取代而略過的檢查，以及只重試失敗項目的工作，不回報結束；暫停或移除時已在擷取的項目完成後，檢查只記錄時間，不改連續失敗。檢查開始探索前向 port 取得計畫，或得知訂閱已暫停／移除；計畫帶著訂閱的候選規則（`src/subscriptions/candidates.ts`：收集範圍、項目上限、要排除的項目），`JobManager` 只列出來源、把清單交給計畫，依它挑出的項目排入工作；項目工作寫入持久紀錄後才回報這次的候選，收集進度因此一定在項目工作之後寫入。工作內暫時性錯誤的自動重試次數屬於 `JobManager`，同一項目跨檢查的失敗次數屬於 `SubscriptionService`，兩者分開計算。
 
 檢查中收集失敗的項目記在訂閱的 `failures`，不讓檢查失敗；之後的檢查重試它，失敗滿 3 次或屬 plugin 分類為不重試的錯誤時略過。檢查只有列出訂閱失敗時才算失敗。單一項目與新增訂閱的失敗留在工作頁的失敗區，可重試或移除。
 
