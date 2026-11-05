@@ -11,7 +11,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/electron` | 主視窗、profile、內附 runtime 路徑與程式生命週期 |
 | `src/runtime` | 單一 VaultWorkspace、UI／Agent listeners 與啟動／關閉順序 |
 | `src/server` | UI／Agent HTTP routes、Bearer 授權與 listener |
-| `src/core` | 共用型別、來源類型登錄（`source-registry.ts`）、文件保存與索引 |
+| `src/core` | 共用型別、來源類型登錄與宣告值 `SourceDeclarations`（`source-registry.ts`）、文件保存與索引 |
 | `src/plugins` | 來源 plugin 介面（`types.ts`）、server 端組裝清單（`index.ts`）與各來源類型的 plugin；`src/plugins/youtube` 含網址辨識、字幕處理、收集設定與 yt-dlp 實作 |
 | `src/sources` | 網址辨識的分派與來源列表 |
 | `src/jobs` | 收集工作的接受、去重、有界佇列、公平派工、自動重試、請求通道冷卻時的等待、重啟接續與裝置端持久紀錄，以及工作頁的進行中、排隊中與失敗清單；訂閱的檢查計畫與結果經訂閱 port（`subscription-port.ts`）取得與回報，並提供每個訂閱一筆工作事實（進行中檢查是排隊中或更新中與進度、是否有項目在擷取、新增中的請求） |
@@ -19,7 +19,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 | `src/pacing` | 依請求群組排隊、間隔與冷卻的請求通道 |
 | `src/vault` | Markdown 保存、active Vault、知識庫操作鎖、匯出檔、以較新為準的匯入合併、開啟其他知識庫與中斷恢復 |
 | `src/search` | Meilisearch 子程序、索引狀態、查詢與重建 |
-| `src/web` | React 操作畫面與 HTTP client；來源類型的文字、設定句與文件細節取自 `src/web/plugins.tsx` 登錄的宣告（`src/plugins/declarations.ts`） |
+| `src/web` | React 操作畫面與 HTTP client；來源類型的文字、設定句與文件細節取自元件經 React context 拿到的宣告（`src/plugins/declarations.ts`） |
 
 UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及 profile 持久保存的 Bearer token，可操作所有現有業務 routes；人或 Agent 從設定頁下載 Skill 與目前 active 連線資料，不掃描裝置入口。
 
@@ -29,7 +29,7 @@ UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋�
 
 檢查中收集失敗的項目記在訂閱的 `failures`，不讓檢查失敗；之後的檢查重試它，失敗滿 3 次或屬 plugin 分類為不重試的錯誤時略過。檢查只有列出訂閱失敗時才算失敗。單一項目與新增訂閱的失敗留在工作頁的失敗區，可重試或移除。
 
-核心（工作、訂閱、排程、Vault、搜尋、活動紀錄、資料交換、HTTP 與共用畫面）不認得任何來源類型，只經由 `src/core/source-contract.ts` 的介面與來源類型登錄操作來源；登錄在讀取前就要完成，未登錄時讀取會丟錯。每個 plugin 宣告它接受的網址、項目擷取、訂閱列出項目的方式、失敗的重試分類、請求節奏、訂閱設定、文件的來源專屬 frontmatter、畫面用字、需要的 Vault 與匯出檔格式版本，以及核心之外的錯誤碼與其 HTTP 狀態；工作種類在線上寫為 `<類型>.<名稱>`，去重以來源類型區分。HTTP 的收集與訂閱路由不分類型：`POST /api/submissions`、`POST /api/items` 與 `POST /api/subscriptions` 由網址找到所屬的來源類型，訂閱以 `/api/subscriptions/:type/:id` 識別，排程（`/api/schedule`）涵蓋所有類型，請求通道狀態（`/api/pacing`）每個請求群組一筆；回應以訂閱為名詞（`subscription`、`subscriptions`、`subscriptionId`），新增來源類型不需要新路由。產品提供的來源類型與順序只列在 `src/plugins/declarations.ts` 一處，這份宣告清單不含 Node 專用的程式，server 與 Web 共用。Server 程序與 Electron 由 `src/plugins/index.ts` 依這份清單組裝 plugin：每個類型對應一個定義與 plugin factory，宣告與 server 項目任一邊缺少時載入就失敗；factory 從組裝端取得外部程式路徑與所屬請求群組的通道。`CollectorRuntime.start` 確認傳入的 plugin 正是已登錄的類型、順序相同，否則不啟動。Web 畫面由 `src/web/plugins.tsx` 登錄同一份宣告，並為每個類型提供圖示，徽章顏色在 `src/web/plugins.css`。新增訂閱選單中尚未支援的類型（X、Facebook、RSS）是 `src/web/add-menu.ts` 的資料，以相同 ID 登錄的 plugin 會取代它的位置。登錄外的來源類型留下的文件、工作與訂閱照原樣保存，核心不對它們動作。
+核心（工作、訂閱、排程、Vault、搜尋、活動紀錄、資料交換、HTTP 與共用畫面）不認得任何來源類型，只經由 `src/core/source-contract.ts` 的介面與來源類型登錄操作來源；登錄在讀取前就要完成，未登錄時讀取會丟錯。每個 plugin 宣告它接受的網址、項目擷取、訂閱列出項目的方式、失敗的重試分類、請求節奏、訂閱設定、文件的來源專屬 frontmatter、畫面用字、需要的 Vault 與匯出檔格式版本，以及核心之外的錯誤碼與其 HTTP 狀態；工作種類在線上寫為 `<類型>.<名稱>`，去重以來源類型區分。HTTP 的收集與訂閱路由不分類型：`POST /api/submissions`、`POST /api/items` 與 `POST /api/subscriptions` 由網址找到所屬的來源類型，訂閱以 `/api/subscriptions/:type/:id` 識別，排程（`/api/schedule`）涵蓋所有類型，請求通道狀態（`/api/pacing`）每個請求群組一筆；回應以訂閱為名詞（`subscription`、`subscriptions`、`subscriptionId`），新增來源類型不需要新路由。產品提供的來源類型與順序只列在 `src/plugins/declarations.ts` 一處，這份宣告清單不含 Node 專用的程式，server 與 Web 共用。Server 程序與 Electron 由 `src/plugins/index.ts` 依這份清單組裝 plugin：每個類型對應一個定義與 plugin factory，宣告與 server 項目任一邊缺少時載入就失敗；factory 從組裝端取得外部程式路徑與所屬請求群組的通道。`CollectorRuntime.start` 確認傳入的 plugin 正是已登錄的類型、順序相同，否則不啟動。Web 畫面由 `src/web/plugins.tsx` 以同一份宣告建立不可變的 `SourceDeclarations`，`src/web/main.tsx` 經 React context（`src/web/source-declarations.tsx`）提供給元件，元件以 `useSourceDeclarations()` 取得，再當參數傳給 presentation 函式與 `src/core/job-role.ts`；`plugins.tsx` 也為每個類型提供圖示，徽章顏色在 `src/web/plugins.css`。RSS 宣告的 `owns` 要讀其他已登錄的類型，所以 `plugins.tsx` 另把同一份宣告登錄進來源類型登錄。新增訂閱選單中尚未支援的類型（X、Facebook、RSS）是 `src/web/add-menu.ts` 的資料，以相同 ID 宣告的類型會取代它的位置。登錄外的來源類型留下的文件、工作與訂閱照原樣保存，核心不對它們動作。
 
 每個程序對每個請求群組有一條請求通道（`PacingGate`），群組內的請求都經過它：同一時間只有一個請求，相鄰請求間依 plugin 宣告隨機等待，讓取用節奏接近一般使用者、不形成固定規律；被限制連線時通道冷卻（5 分鐘起、連續限制加倍、上限 60 分鐘），冷卻狀態存於 profile 的 `<群組>-pacing.json`，冷卻期間工作留在佇列並標示等待，不消耗重試次數，其他群組不受影響。YouTube plugin 的群組是 `youtube`，所有 yt-dlp 請求都經過它，相鄰請求間等待 4–12 秒。字幕選擇只採原文軌道：自動字幕以 yt-dlp 實際下載的格式判斷是否為翻譯，同一語言優先 `-orig` 軌道。
 

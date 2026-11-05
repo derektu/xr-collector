@@ -1,4 +1,4 @@
-import { sourceDeclaration } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { JobError, JobOverviewEntry } from '../core/types.js';
 import { displayUrl, failureLabel, retryCause, retryCauseText } from './source-presentation.js';
 import type { RetryCauseView } from './source-presentation.js';
@@ -40,14 +40,14 @@ export interface JobEntryView {
   failure: JobError | null;
 }
 
-export function jobEntry(entry: JobOverviewEntry): JobEntryView {
+export function jobEntry(declarations: SourceDeclarations, entry: JobOverviewEntry): JobEntryView {
   return {
-    icon: sourceDeclaration(entry.type)?.icon ?? 'file',
+    icon: declarations.get(entry.type)?.icon ?? 'file',
     title: entry.title ?? displayUrl(entry.url),
     named: Boolean(entry.title),
-    work: entry.role === 'item' ? { role: 'item', publisher: entry.publisher } : { role: entry.role, target: targetNoun(entry.type) || null },
+    work: entry.role === 'item' ? { role: 'item', publisher: entry.publisher } : { role: entry.role, target: targetNoun(declarations, entry.type) || null },
     status: statusOf(entry),
-    retry: entry.status?.state === 'retrying' ? retryCause(entry.type, entry.status.cause) : null,
+    retry: entry.status?.state === 'retrying' ? retryCause(declarations, entry.type, entry.status.cause) : null,
     failure: entry.error,
   };
 }
@@ -61,16 +61,16 @@ function statusOf(entry: JobOverviewEntry): JobEntryStatus | null {
   }
 }
 
-export function jobEntryLabel(entry: JobOverviewEntry): JobEntryLabel {
-  const view = jobEntry(entry);
+export function jobEntryLabel(declarations: SourceDeclarations, entry: JobOverviewEntry): JobEntryLabel {
+  const view = jobEntry(declarations, entry);
   return {
     icon: view.icon,
     title: view.title,
     named: view.named,
     subtitle: subtitleText(view.work),
     status: view.status ? { text: statusText(view.status), tone: view.status.state === 'retrying' ? 'retrying' : 'collecting' } : null,
-    retryReason: view.retry ? retryCauseText(entry.type, view.retry) : null,
-    reason: view.failure ? failureLabel(entry.type, view.failure) : null,
+    retryReason: view.retry ? retryCauseText(declarations, entry.type, view.retry) : null,
+    reason: view.failure ? failureLabel(declarations, entry.type, view.failure) : null,
   };
 }
 

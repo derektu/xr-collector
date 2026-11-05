@@ -1,3 +1,4 @@
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { ActivityLogHealth, ActivityQuery, JobError, JobPhase, JobState, JobView, JobEvent } from '../core/types.js';
 import { COLLECTION_COMPLETED } from '../core/job-completion.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
@@ -188,8 +189,8 @@ export function logWarning(health: ActivityLogHealth | null): string | null {
 }
 
 /** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
-export function jobBadge(job: JobView): string {
-  return jobKind(job).kind === 'item' ? '單篇' : jobKindLabel(job);
+export function jobBadge(declarations: SourceDeclarations, job: JobView): string {
+  return jobKind(declarations, job).kind === 'item' ? '單篇' : jobKindLabel(declarations, job);
 }
 
 /** A job's diagnostics as data: its record, what is known of failures, retries and restarts, and its events oldest first. */
@@ -237,12 +238,12 @@ export function diagnostics(job: JobView, events: JobEvent[]): Diagnostics {
 }
 
 /** Plain-text diagnostics of a job for a bug report; event text is already masked by the service. */
-export function diagnosticsText(job: JobView, events: JobEvent[]): string {
+export function diagnosticsText(declarations: SourceDeclarations, job: JobView, events: JobEvent[]): string {
   const data = diagnostics(job, events);
   const lines = [
     'XR Collector 工作診斷資訊',
     `工作：${data.id}`,
-    `類型：${jobBadge(job)}（${data.kind}）`,
+    `類型：${jobBadge(declarations, job)}（${data.kind}）`,
     `對象：${jobTitle(job)}`,
     `網址：${data.url}`,
     `狀態：${data.state}${data.phase ? `／${data.phase}` : ''}`,

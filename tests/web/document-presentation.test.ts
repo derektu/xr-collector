@@ -17,6 +17,7 @@ import {
   sourceMenu,
   sourceTag,
 } from '../../src/web/document-presentation.js';
+import { PRODUCT_DECLARATIONS } from '../support/product-sources.js';
 
 describe('document presentation', () => {
   it('round-trips the list position through the URL', () => {
@@ -64,7 +65,7 @@ describe('document presentation', () => {
     expect(publishedDate(null)).toBeNull();
     expect(publishedDate('2026-09-01')).toBe('2026-09-01');
     expect(publishedDate('not a date')).toBeNull();
-    expect(sourceTag({ sourceType: 'youtube', publisher: { id: 'UC-a', name: 'Channel A' } } as DocumentMetadata)).toBe('YouTube · Channel A');
+    expect(sourceTag(PRODUCT_DECLARATIONS, { sourceType: 'youtube', publisher: { id: 'UC-a', name: 'Channel A' } } as DocumentMetadata)).toBe('YouTube · Channel A');
     expect(snippetParts('…before <mark>forest</mark> and <mark>survey</mark>…')).toEqual([
       { text: '…before ', match: false }, { text: 'forest', match: true }, { text: ' and ', match: false },
       { text: 'survey', match: true }, { text: '…', match: false },
@@ -96,7 +97,7 @@ describe('document deletion presentation (A8)', () => {
     expect(pageWithRows(3, 4, 44)).toBe(3);
     expect(pageWithRows(1, 0, 0)).toBe(1);
     expect(pageWithRows(2, 0, 0)).toBe(1);
-    expect(sourceUrlOfDocumentId('youtube:dQw4w9WgXcQ')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-    expect(sourceUrlOfDocumentId('youtube:bad')).toBeNull();
+    expect(sourceUrlOfDocumentId(PRODUCT_DECLARATIONS, 'youtube:dQw4w9WgXcQ')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(sourceUrlOfDocumentId(PRODUCT_DECLARATIONS, 'youtube:bad')).toBeNull();
   });
 });

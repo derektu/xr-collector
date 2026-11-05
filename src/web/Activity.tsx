@@ -18,7 +18,7 @@ import {
   type ActivityViewState,
 } from './activity-presentation.js';
 import { api, ApiError } from './api-client.js';
-import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import { Icon } from './icons.js';
 import { useChanges } from './use-changes.js';
 import { ActivityGroupPages, type GroupPagesState } from './activity-group-pages.js';
@@ -26,6 +26,7 @@ import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
 import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 const LOG_PAGE = 50;
 
@@ -48,6 +49,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
   onOpenSource: (type: string, id: string) => void;
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
 }) {
+  const declarations = useSourceDeclarations();
   const state = parseActivityState(search);
   const effectiveMode = state.job ? 'raw' : state.mode;
   const filter = activityStateSearch({ ...state, mode: effectiveMode });
@@ -171,7 +173,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
   async function copyDiagnostics(job: JobView): Promise<void> {
     try {
       const page = await api.activity({ jobId: job.id, limit: 100 });
-      await navigator.clipboard.writeText(diagnosticsText(job, page.events));
+      await navigator.clipboard.writeText(diagnosticsText(declarations, job, page.events));
       onChanged('已複製診斷資訊。');
     } catch {
       onChanged('無法複製診斷資訊。', 'error');
@@ -239,7 +241,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
         </label>
       </div>
       {state.job ? <div className="log-job-filter" data-testid="log-job-filter">
-        <span className="chip active">工作：{filteredJob ? `${jobBadge(filteredJob)}・${jobTitle(filteredJob)}` : '…'}
+        <span className="chip active">工作：{filteredJob ? `${jobBadge(declarations, filteredJob)}・${jobTitle(filteredJob)}` : '…'}
           <button type="button" className="chip-clear" aria-label="清除工作篩選" onClick={() => change({ job: null })}>×</button></span>
         {filteredJob ? <button type="button" className="button small" onClick={() => void copyDiagnostics(filteredJob)} data-testid="copy-diagnostics">複製診斷資訊</button> : null}
       </div> : null}
@@ -252,7 +254,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
             : <li key={entry.groupId} className={`summary-row level-${eventLevel(entry)}`} data-testid="summary-check"
               data-group={entry.groupId} data-result={entry.result} data-count={entry.count} data-severity={entry.severity}>
               <Icon name={entry.severity === 'error' ? 'error' : 'jobs'} size={16} />
-              <span><strong>{summaryCheckTitle(entry)}</strong><small>{summaryRange(entry.firstFinishedAt, entry.lastFinishedAt)}{entry.sourceTitle ? ` · ${entry.sourceTitle}` : ''}</small></span>
+              <span><strong>{summaryCheckTitle(declarations, entry)}</strong><small>{summaryRange(entry.firstFinishedAt, entry.lastFinishedAt)}{entry.sourceTitle ? ` · ${entry.sourceTitle}` : ''}</small></span>
               <button type="button" className="inline-link" onClick={() => change({ group: entry.groupId, returnTo: '/activity' })}>查看細節</button>
             </li>)}</ol>
           : <ol className="log-rows">{log.events.map((event) => {
@@ -261,8 +263,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
             const documentId = event.documentId;
             const subscriptionId = event.subscriptionId;
             // An entry written before events named their source type belongs to the first type with subscriptions.
-            const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id ?? '';
-            const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
+            const subscriptionType = event.sourceType ?? declarations.list.find((declaration) => declaration.subscription)?.id ?? '';
+            const type = event.sourceType ? declarations.get(event.sourceType) : undefined;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
               data-event-type={event.eventType} data-severity={event.severity}>
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
@@ -285,29 +287,31 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
 }
 
 function SummaryEvent({ event }: { event: JobEvent }) {
-  const subscriptionType = event.sourceType ?? sourceDeclarations().find((declaration) => declaration.subscription)?.id;
+  const declarations = useSourceDeclarations();
+  const subscriptionType = event.sourceType ?? declarations.list.find((declaration) => declaration.subscription)?.id;
   return <li className="summary-row" data-testid="summary-event" data-event-type={event.eventType} data-severity={event.severity}><Icon name="activity" size={16} />
     <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(event)}</a>
       : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(event)}</a>
         : eventText(event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
 }
 
-function summaryCheckTitle(entry: Extract<ActivitySummaryEntry, { kind: 'check' }>): string {
-  const base = entry.result === 'empty' ? `完成檢查：沒有新${itemNoun(entry.sourceType)}`
+function summaryCheckTitle(declarations: SourceDeclarations, entry: Extract<ActivitySummaryEntry, { kind: 'check' }>): string {
+  const base = entry.result === 'empty' ? `完成檢查：沒有新${itemNoun(declarations, entry.sourceType)}`
     : entry.result === 'network_error' ? '發生錯誤：網路錯誤'
-      : entry.severity === 'error' ? `發生錯誤：${entry.errorCode ? failureLabel(entry.sourceType, { code: entry.errorCode, message: entry.message }) : entry.message}`
+      : entry.severity === 'error' ? `發生錯誤：${entry.errorCode ? failureLabel(declarations, entry.sourceType, { code: entry.errorCode, message: entry.message }) : entry.message}`
         : entry.created || entry.existing || entry.failed || entry.skipped
           ? `完成收集：${[
-            ...(entry.created ? [`新增 ${itemCount(entry.sourceType, entry.created)}`] : []),
-            ...(entry.existing ? [`已存在 ${itemCount(entry.sourceType, entry.existing)}`] : []),
-            ...(entry.failed ? [`失敗 ${itemCount(entry.sourceType, entry.failed)}`] : []),
-            ...(entry.skipped ? [`略過 ${itemCount(entry.sourceType, entry.skipped)}`] : []),
+            ...(entry.created ? [`新增 ${itemCount(declarations, entry.sourceType, entry.created)}`] : []),
+            ...(entry.existing ? [`已存在 ${itemCount(declarations, entry.sourceType, entry.existing)}`] : []),
+            ...(entry.failed ? [`失敗 ${itemCount(declarations, entry.sourceType, entry.failed)}`] : []),
+            ...(entry.skipped ? [`略過 ${itemCount(declarations, entry.sourceType, entry.skipped)}`] : []),
           ].join('・')}`
           : '完成收集';
   return `${base}${entry.count > 1 ? `・${entry.count} 次` : ''}`;
 }
 
 function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string; returnTo: string | null; state: ActivityViewState; onState: (next: ActivityViewState) => void }) {
+  const declarations = useSourceDeclarations();
   const severity = activityQuery(state, new Date()).severity;
   const { page, error, loading, older } = useActivityGroupPages(groupId, severity);
   const back = () => {
@@ -320,7 +324,7 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
     {error ? <p className="load-error" role="alert">{error}</p> : null}
     {!page ? (error ? null : <p className="loading">正在讀取…</p>) : <>
       <section className="activity-context" data-testid="activity-group-context"
-        data-group={page.group.groupId} data-count={page.group.count} data-loaded={page.checks.length}><strong>{summaryCheckTitle(page.group)}</strong>
+        data-group={page.group.groupId} data-count={page.group.count} data-loaded={page.checks.length}><strong>{summaryCheckTitle(declarations, page.group)}</strong>
         <span>{page.group.sourceTitle ? `${page.group.sourceTitle} · ` : ''}{summaryRange(page.group.firstFinishedAt, page.group.lastFinishedAt)} · 完整事件</span></section>
       <section className="activity-card"><div className="log-toolbar"><h2>每次收集</h2><span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">最低等級</span><select value={state.minLevel}
@@ -333,10 +337,10 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
           ? `共 ${page.group.count} 次收集` : `已顯示 ${page.checks.length} 次，共 ${page.group.count} 次收集`}</span></div>
         {page.checks.map((check, index) => <details key={check.jobId} open={index === 0} className="check-detail" data-testid="activity-group-check"
           data-job={check.jobId} data-result={check.result} data-events={check.events.length}>
-          <summary>{logTime(check.finishedAt)}　{checkResultTitle(check, page.group.sourceType)}</summary>
+          <summary>{logTime(check.finishedAt)}　{checkResultTitle(declarations, check, page.group.sourceType)}</summary>
           {check.events.length === 0 ? <p className="job-empty activity-detail-empty">這次收集沒有符合等級的事件。</p> : <ol className="log-rows">{[...check.events].reverse().map((event) => {
             const level = eventLevel(event);
-            const type = event.sourceType ? sourceDeclaration(event.sourceType) : undefined;
+            const type = event.sourceType ? declarations.get(event.sourceType) : undefined;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
               data-event-type={event.eventType} data-severity={event.severity}><time>{logTime(event.timestamp)}</time>
               <span className="log-level">{level}</span><span className={type ? `log-type type-${type.icon}` : 'log-type'}>
@@ -349,15 +353,15 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
   </>;
 }
 
-function checkResultTitle(check: ActivityGroupPage['checks'][number], sourceType: string): string {
+function checkResultTitle(declarations: SourceDeclarations, check: ActivityGroupPage['checks'][number], sourceType: string): string {
   if (check.result === 'network_error') return '發生錯誤：網路錯誤';
-  if (check.result === 'empty') return `完成檢查：沒有新${itemNoun(sourceType)}`;
-  if (check.errorCode) return `發生錯誤：${failureLabel(sourceType, { code: check.errorCode, message: check.message })}`;
+  if (check.result === 'empty') return `完成檢查：沒有新${itemNoun(declarations, sourceType)}`;
+  if (check.errorCode) return `發生錯誤：${failureLabel(declarations, sourceType, { code: check.errorCode, message: check.message })}`;
   const parts = [
-    ...(check.created ? [`新增 ${itemCount(sourceType, check.created)}`] : []),
-    ...(check.existing ? [`已存在 ${itemCount(sourceType, check.existing)}`] : []),
-    ...(check.failed ? [`失敗 ${itemCount(sourceType, check.failed)}`] : []),
-    ...(check.skipped ? [`略過 ${itemCount(sourceType, check.skipped)}`] : []),
+    ...(check.created ? [`新增 ${itemCount(declarations, sourceType, check.created)}`] : []),
+    ...(check.existing ? [`已存在 ${itemCount(declarations, sourceType, check.existing)}`] : []),
+    ...(check.failed ? [`失敗 ${itemCount(declarations, sourceType, check.failed)}`] : []),
+    ...(check.skipped ? [`略過 ${itemCount(declarations, sourceType, check.skipped)}`] : []),
   ];
   return parts.length ? `完成收集：${parts.join('・')}` : '完成收集';
 }

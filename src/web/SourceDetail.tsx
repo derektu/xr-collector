@@ -18,6 +18,7 @@ import {
 } from './source-presentation.js';
 import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 import { useDay } from './use-day.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
@@ -41,6 +42,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
   onChanged: (message: string, tone?: 'ok' | 'error') => void;
   onRemoved: (message: string) => void;
 }) {
+  const declarations = useSourceDeclarations();
   // Day-relative labels ("今天", "明天") draw again at midnight.
   useDay();
   const [state, setState] = useState<State>({ kind: 'loading' });
@@ -190,7 +192,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
         : `最近一次檢查失敗（連續 ${source.checkFailures.count} 次）：`}{source.checkFailures.error.message}</p>
       : null}
     {source.checkStatus.state === 'retrying'
-      ? <p className="detail-retry" data-testid="detail-retry-reason" data-cause={source.checkStatus.cause.reason}>{retryCauseLabel(source.type, source.checkStatus.cause)}</p> : null}
+      ? <p className="detail-retry" data-testid="detail-retry-reason" data-cause={source.checkStatus.cause.reason}>{retryCauseLabel(declarations, source.type, source.checkStatus.cause)}</p> : null}
 
     <dl className="stats">
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
@@ -220,7 +222,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       <div className="panel-heading"><h2>收集紀錄</h2></div>
       {collection.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
         : <ul className="collection-rows">{collection.map((entry) => {
-          const label = collectionEntryLabel(entry, source.type);
+          const label = collectionEntryLabel(declarations, entry, source.type);
           const when = <span className="collection-when">{shortTimeLabel(entry.at)}</span>;
           if (entry.kind === 'collected') {
             return <li key={`document:${entry.documentId}`} className="collection-row collected" data-testid="collection-collected">

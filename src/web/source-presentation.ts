@@ -1,5 +1,5 @@
 import type { CollectionSchedule, JobError, JobView, PendingSubscription, RecognitionAction, RetryCause, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
-import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 
@@ -150,10 +150,10 @@ export function initials(title: string): string {
  * The source type of a subscription request, told by which type owns its address, with the label of
  * that type's subscription kind; undefined when no registered type owns it.
  */
-export function pendingOwner(entry: Pick<PendingSubscription, 'url'>): { declaration: SourcePluginDeclaration; kindLabel: string } | undefined {
+export function pendingOwner(declarations: SourceDeclarations, entry: Pick<PendingSubscription, 'url'>): { declaration: SourcePluginDeclaration; kindLabel: string } | undefined {
   let url: URL | null = null;
   try { url = new URL(entry.url); } catch { url = null; }
-  const declaration = sourceDeclarations().find((candidate) => candidate.subscription && candidate.owns(entry.url, url));
+  const declaration = declarations.list.find((candidate) => candidate.subscription && candidate.owns(entry.url, url));
   if (!declaration) return undefined;
   const kind = declaration.kinds.find((candidate) => candidate.capability === 'subscription');
   return { declaration, kindLabel: kind?.label ?? declaration.label };
@@ -165,8 +165,8 @@ export function displayUrl(url: string): string {
 }
 
 /** A failure in the source type's own short words, or its message when the type has none for its code. */
-export function failureLabel(type: string, error: { code: string; message: string }): string {
-  return sourceDeclaration(type)?.failureLabels?.[error.code] ?? error.message;
+export function failureLabel(declarations: SourceDeclarations, type: string, error: { code: string; message: string }): string {
+  return declarations.get(type)?.failureLabels?.[error.code] ?? error.message;
 }
 
 /** Why work waits for a retry: the source limits requests, or a failure with the attempt that comes next. */
@@ -174,19 +174,19 @@ export type RetryCauseView =
   | { reason: 'rate_limited'; source: string }
   | { reason: 'failed'; error: JobError; attempt: number; maxAttempts: number };
 
-export function retryCause(type: string, cause: RetryCause): RetryCauseView {
-  if (cause.reason === 'rate_limited') return { reason: 'rate_limited', source: sourceDeclaration(type)?.label ?? type };
+export function retryCause(declarations: SourceDeclarations, type: string, cause: RetryCause): RetryCauseView {
+  if (cause.reason === 'rate_limited') return { reason: 'rate_limited', source: declarations.get(type)?.label ?? type };
   return { reason: 'failed', error: cause.error, attempt: cause.attempt, maxAttempts: cause.maxAttempts };
 }
 
 /** "網路錯誤（第 2／3 次）", or "<source> 限制連線". */
-export function retryCauseLabel(type: string, cause: RetryCause): string {
-  return retryCauseText(type, retryCause(type, cause));
+export function retryCauseLabel(declarations: SourceDeclarations, type: string, cause: RetryCause): string {
+  return retryCauseText(declarations, type, retryCause(declarations, type, cause));
 }
 
-export function retryCauseText(type: string, view: RetryCauseView): string {
+export function retryCauseText(declarations: SourceDeclarations, type: string, view: RetryCauseView): string {
   if (view.reason === 'rate_limited') return `${view.source} 限制連線`;
-  return `${failureLabel(type, view.error)}（第 ${view.attempt}／${view.maxAttempts} 次）`;
+  return `${failureLabel(declarations, type, view.error)}（第 ${view.attempt}／${view.maxAttempts} 次）`;
 }
 
 /**
@@ -235,20 +235,20 @@ export function collectionRow(entry: SubscriptionCollectionEntry, now: Date = ne
  * One row of a subscription's collection record: an item with its state ("沒有字幕・已試 2/3 次",
  * "已略過・影片不存在") or a check's summary ("完成收集：新增 2 支影片", "完成檢查：沒有新影片").
  */
-export function collectionEntryLabel(entry: SubscriptionCollectionEntry, type: string): { title: string; detail: string } {
+export function collectionEntryLabel(declarations: SourceDeclarations, entry: SubscriptionCollectionEntry, type: string): { title: string; detail: string } {
   const row = collectionRow(entry);
   switch (row.kind) {
     case 'collected': return { title: row.title, detail: '' };
     case 'failed': return { title: row.title, detail: `${row.reason}・已試 ${row.attempts}/${row.maxAttempts} 次` };
     case 'skipped': return { title: row.title, detail: row.skippedBy === 'failure' ? `已略過・${row.reason}` : `已略過・已試 ${row.attempts} 次` };
     case 'check': {
-      if (row.outcome === 'error') return { title: `發生錯誤：${failureLabel(type, row.error)}`, detail: '' };
-      if (row.outcome === 'empty') return { title: `完成檢查：沒有新${itemNoun(type)}`, detail: '' };
-      const parts = row.parts.map((part) => `${part.result === 'created' ? '新增' : '失敗'} ${itemCount(type, part.count)}`);
+      if (row.outcome === 'error') return { title: `發生錯誤：${failureLabel(declarations, type, row.error)}`, detail: '' };
+      if (row.outcome === 'empty') return { title: `完成檢查：沒有新${itemNoun(declarations, type)}`, detail: '' };
+      const parts = row.parts.map((part) => `${part.result === 'created' ? '新增' : '失敗'} ${itemCount(declarations, type, part.count)}`);
       return { title: `完成收集：${parts.join('・')}`, detail: '' };
     }
     case 'check-group': {
-      const result = row.result === 'empty' ? `完成檢查：沒有新${itemNoun(type)}`
+      const result = row.result === 'empty' ? `完成檢查：沒有新${itemNoun(declarations, type)}`
         : row.result === 'network_error' ? '發生錯誤：網路錯誤' : `完成收集：${row.message}`;
       return {
         title: `${result}${row.count > 1 ? `・${row.count} 次` : ''}`,

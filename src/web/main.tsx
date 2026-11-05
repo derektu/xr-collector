@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import './plugins.js';
+import { PRODUCT_SOURCES } from './plugins.js';
+import { SourceDeclarationsProvider } from './source-declarations.js';
 import App from './App.js';
 import './styles.css';
 
@@ -9,6 +10,8 @@ if (!root) throw new Error('Missing #root element');
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <SourceDeclarationsProvider value={PRODUCT_SOURCES}>
+      <App />
+    </SourceDeclarationsProvider>
   </StrictMode>,
 );

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SavedDocument } from '../core/types.js';
-import { sourceDeclaration } from '../core/source-registry.js';
 import { ApiError, api } from './api-client.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } from './document-presentation.js';
@@ -8,6 +7,7 @@ import { Icon } from './icons.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { sourcePath } from './source-presentation.js';
 import { readUntil, useChanges } from './use-changes.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 type ReaderState =
   | { kind: 'loading' }
@@ -29,6 +29,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   /** Called after the document is deleted; the Reader has nothing left to show. */
   onDeleted: (message: string) => void;
 }) {
+  const declarations = useSourceDeclarations();
   const [state, setState] = useState<ReaderState>({ kind: 'loading' });
   const [subscribed, setSubscribed] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -63,9 +64,9 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     if (recollect.kind !== 'running') return undefined;
     let active = true;
     const following = new AbortController();
-    const url = sourceUrlOfDocumentId(id);
+    const url = sourceUrlOfDocumentId(declarations, id);
     const type = id.slice(0, Math.max(0, id.indexOf(':')));
-    const item = sourceDeclaration(type)?.item;
+    const item = declarations.get(type)?.item;
     const finish = (next: Recollect) => { if (active) setRecollect(next); };
     // The collected document's own change reads it again; this only reports how the job ended.
     const follow = (jobId: string) => readUntil(() => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
@@ -84,7 +85,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       <button type="button" className="button" onClick={onBack}><Icon name="back" size={15} />{backLabel}</button>
       <span className="spacer" />
       {state.kind === 'ready' ? <a className="button" href={state.document.sourceUrl} target="_blank" rel="noopener noreferrer" data-testid="reader-source-link">
-        <Icon name="external" size={15} />{sourceDeclaration(state.document.sourceType)?.item.openOriginalLabel ?? '開啟原始內容'}
+        <Icon name="external" size={15} />{declarations.get(state.document.sourceType)?.item.openOriginalLabel ?? '開啟原始內容'}
       </a> : null}
       <button type="button" className="button icon" aria-label="刪除文件" title="刪除文件" disabled={state.kind !== 'ready'}
         onClick={() => setDeleting(true)} data-testid="reader-delete"><Icon name="trash" size={15} /></button>
@@ -98,7 +99,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       {state.kind === 'deleted' ? <section className="reader-missing" data-testid="reader-deleted">
         <h1 className="reader-title">這份文件已刪除</h1>
         {recollect.kind === 'failed' ? <p className="add-problem" role="alert">{recollect.message}</p> : null}
-        {sourceUrlOfDocumentId(id) ? <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
+        {sourceUrlOfDocumentId(declarations, id) ? <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
           data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button> : null}
       </section> : null}
       {state.kind === 'error' ? <p className="documents-error" role="alert">{state.message}</p> : null}
@@ -110,7 +111,8 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
 }
 
 function ReaderDocument({ document, subscribed, onOpenSource }: { document: SavedDocument; subscribed: boolean; onOpenSource: (type: string, id: string) => void }) {
-  const subtitle = subtitleLabel(document);
+  const declarations = useSourceDeclarations();
+  const subtitle = subtitleLabel(declarations, document);
   const publisherId = document.publisher.id;
   return <>
     <header className="reader-header">

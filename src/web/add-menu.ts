@@ -1,4 +1,4 @@
-import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
+import type { SourceDeclarations } from '../core/source-registry.js';
 import type { SourceKindInfo, UrlRecognition } from '../core/types.js';
 import type { SourcePluginDeclaration } from '../core/source-contract.js';
 
@@ -15,16 +15,16 @@ interface SubscriptionKind {
   mode: AddMode;
 }
 
-/** Every registered subscription kind, in registration order. */
-function subscriptionKinds(): SubscriptionKind[] {
-  return sourceDeclarations().flatMap((declaration) => declaration.kinds
+/** Every subscription kind of `declarations`, in their order. */
+function subscriptionKinds(declarations: SourceDeclarations): SubscriptionKind[] {
+  return declarations.list.flatMap((declaration) => declaration.kinds
     .filter((kind) => kind.capability === 'subscription')
     .map((kind) => ({ declaration, kind, mode: `${declaration.id}-${kind.id}` })));
 }
 
 /** The subscription kind an add dialog subscribes with; undefined for the URL dialog. */
-export function subscriptionKindOf(mode: AddMode): SubscriptionKind | undefined {
-  return subscriptionKinds().find((candidate) => candidate.mode === mode);
+export function subscriptionKindOf(declarations: SourceDeclarations, mode: AddMode): SubscriptionKind | undefined {
+  return subscriptionKinds(declarations).find((candidate) => candidate.mode === mode);
 }
 
 /** One entry of an add menu. */
@@ -63,8 +63,8 @@ function kindItem({ kind, mode }: SubscriptionKind): AddMenuItem {
  * items. Registered kinds come first, except those of a planned type, which stand where the planned
  * type does; a planned type no plugin registers opens the dialog saying it is not supported yet.
  */
-export function subscriptionAddItems(): AddMenuItem[] {
-  const kinds = subscriptionKinds();
+export function subscriptionAddItems(declarations: SourceDeclarations): AddMenuItem[] {
+  const kinds = subscriptionKinds(declarations);
   const planned = new Set(PLANNED_SUBSCRIPTION_TYPES.map((entry) => entry.type));
   return [
     ...kinds.filter(({ declaration }) => !planned.has(declaration.id)).map(kindItem),
@@ -76,18 +76,18 @@ export function subscriptionAddItems(): AddMenuItem[] {
 }
 
 /** The title of each add dialog. */
-export function addDialogTitles(): Record<AddMode, string> {
-  return { url: '加入網址', ...Object.fromEntries(subscriptionKinds().map(({ kind, mode }) => [mode, `訂閱 ${kind.label}`])) };
+export function addDialogTitles(declarations: SourceDeclarations): Record<AddMode, string> {
+  return { url: '加入網址', ...Object.fromEntries(subscriptionKinds(declarations).map(({ kind, mode }) => [mode, `訂閱 ${kind.label}`])) };
 }
 
 /**
  * The hint an add dialog's address field shows: for a subscription, its kind's own; for the URL
  * dialog, that of the one type that adds single items, or a general one when several do.
  */
-export function addPlaceholder(mode: AddMode): string {
-  const subscription = subscriptionKindOf(mode);
+export function addPlaceholder(declarations: SourceDeclarations, mode: AddMode): string {
+  const subscription = subscriptionKindOf(declarations, mode);
   if (subscription) return subscription.declaration.prompts.subscriptionPlaceholder;
-  const single = sourceDeclarations().filter((declaration) => declaration.kinds.some((kind) => kind.capability === 'single'));
+  const single = declarations.list.filter((declaration) => declaration.kinds.some((kind) => kind.capability === 'single'));
   return single.length === 1 ? single[0]!.prompts.itemPlaceholder : '貼上網址';
 }
 
@@ -109,11 +109,11 @@ export interface AddMismatch {
  * subscription address whose preview is unavailable, such as during a source's cooldown, still
  * offers the switch; an address its type found is no target of that kind offers none.
  */
-export function addMismatch(mode: AddMode, recognition: Pick<UrlRecognition, 'kind'> & Partial<Pick<UrlRecognition, 'sourceType' | 'status'>>): AddMismatch | null {
+export function addMismatch(declarations: SourceDeclarations, mode: AddMode, recognition: Pick<UrlRecognition, 'kind'> & Partial<Pick<UrlRecognition, 'sourceType' | 'status'>>): AddMismatch | null {
   if (!recognition.kind || recognition.status === 'unsupported') return null;
-  const owner = recognition.sourceType ? sourceDeclaration(recognition.sourceType) : undefined;
-  const declarations = owner ? [owner] : sourceDeclarations();
-  const found = declarations.flatMap((declaration) => declaration.kinds
+  const owner = recognition.sourceType ? declarations.get(recognition.sourceType) : undefined;
+  const candidates = owner ? [owner] : declarations.list;
+  const found = candidates.flatMap((declaration) => declaration.kinds
     .filter((kind) => kind.id === recognition.kind).map((kind) => ({ declaration, kind })))[0];
   if (!found) return null;
   const { declaration, kind } = found;

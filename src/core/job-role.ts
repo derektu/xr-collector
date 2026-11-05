@@ -1,4 +1,4 @@
-import { sourceDeclaration } from './source-registry.js';
+import type { SourceDeclarations } from './source-registry.js';
 import type { ChannelJobTrigger, CollectionJob, JobEvent, JobProgress, JobRole } from './types.js';
 
 /**
@@ -23,25 +23,25 @@ export type RoleView =
   | { role: 'add'; type: string; address: string; subscriptionId: string | null; title: string | null };
 
 /** The source type and role of a job kind; null for a kind of an unregistered type or an unknown name. */
-function jobRole(kind: string): { type: string; role: JobRole } | null {
+function jobRole(sources: SourceDeclarations, kind: string): { type: string; role: JobRole } | null {
   const separator = kind.indexOf('.');
   if (separator < 0) return null;
   const type = kind.slice(0, separator);
   const name = kind.slice(separator + 1);
-  const names = sourceDeclaration(type)?.jobKindNames;
+  const names = sources.get(type)?.jobKindNames;
   if (!names) return null;
   const role = (['item', 'check', 'add'] as const).find((candidate) => names[candidate] === name);
   return role ? { type, role } : null;
 }
 
 /** The role of a job kind; null for a kind of an unregistered type. */
-export function roleOf(job: Pick<CollectionJob, 'kind'>): JobRole | null {
-  return jobRole(job.kind)?.role ?? null;
+export function roleOf(sources: SourceDeclarations, job: Pick<CollectionJob, 'kind'>): JobRole | null {
+  return jobRole(sources, job.kind)?.role ?? null;
 }
 
 /** The job as its role sees it; null for a job of an unregistered type, which the core keeps but does not run. */
-export function roleView(job: RoleJob): RoleView | null {
-  const role = roleOf(job);
+export function roleView(sources: SourceDeclarations, job: RoleJob): RoleView | null {
+  const role = roleOf(sources, job);
   if (role === null) return null;
   const type = job.source.type;
   switch (role) {
@@ -72,8 +72,8 @@ export function workKey(type: string, role: JobRole, target: string): string {
 }
 
 /** The work key of a job; a job of an unregistered type is keyed by its kind and target. */
-export function jobKey(job: RoleJob): string {
-  const view = roleView(job);
+export function jobKey(sources: SourceDeclarations, job: RoleJob): string {
+  const view = roleView(sources, job);
   if (view === null) return `${job.kind}:${job.source.id ?? job.source.url}`;
   switch (view.role) {
     case 'item': return workKey(view.type, 'item', view.key ?? '');
@@ -88,8 +88,8 @@ export function jobKey(job: RoleJob): string {
  * subscribed to, or for an item, the subscription of the check that queued it. `parentOf` finds the
  * check job.
  */
-export function subscriptionOf(job: RoleJob, parentOf: (id: string) => RoleJob | undefined): string | null {
-  const view = roleView(job);
+export function subscriptionOf(sources: SourceDeclarations, job: RoleJob, parentOf: (id: string) => RoleJob | undefined): string | null {
+  const view = roleView(sources, job);
   if (view === null) return null;
   switch (view.role) {
     case 'check':
@@ -97,7 +97,7 @@ export function subscriptionOf(job: RoleJob, parentOf: (id: string) => RoleJob |
       return view.subscriptionId;
     case 'item': {
       const parent = view.parentId ? parentOf(view.parentId) : undefined;
-      const owner = parent ? roleView(parent) : null;
+      const owner = parent ? roleView(sources, parent) : null;
       return owner?.role === 'check' ? owner.subscriptionId : null;
     }
     default:
@@ -110,9 +110,9 @@ export function subscriptionOf(job: RoleJob, parentOf: (id: string) => RoleJob |
  * subscription's items or resolving a subscription address. A check past discovery only waits for
  * its items. A job of an unregistered type counts as doing its own work in any phase.
  */
-export function inOwnStep(job: RoleJob & Pick<CollectionJob, 'state' | 'phase'>): boolean {
+export function inOwnStep(sources: SourceDeclarations, job: RoleJob & Pick<CollectionJob, 'state' | 'phase'>): boolean {
   if (job.state !== 'running') return false;
-  const role = roleOf(job);
+  const role = roleOf(sources, job);
   switch (role) {
     case 'item': return job.phase === 'capture' || job.phase === 'save' || job.phase === 'index';
     case 'check': return job.phase === 'discover';
@@ -126,9 +126,9 @@ export function inOwnStep(job: RoleJob & Pick<CollectionJob, 'state' | 'phase'>)
  * A top-level job the user can retry: a failed one, or a check job that completed with some of its
  * items failing.
  */
-export function isRetryable(job: Pick<CollectionJob, 'state' | 'kind' | 'parentId' | 'result'>): boolean {
+export function isRetryable(sources: SourceDeclarations, job: Pick<CollectionJob, 'state' | 'kind' | 'parentId' | 'result'>): boolean {
   if (job.parentId !== null) return false;
-  return job.state === 'failed' || (roleOf(job) === 'check' && job.state === 'completed' && job.result?.outcome === 'partial');
+  return job.state === 'failed' || (roleOf(sources, job) === 'check' && job.state === 'completed' && job.result?.outcome === 'partial');
 }
 
 /** The fields every event of a job carries. */
@@ -141,10 +141,10 @@ export type JobEventSubject = Pick<JobEvent,
  * groups them by these fields alone.
  */
 export function jobEventSubject(
-  job: RoleJob & Pick<CollectionJob, 'id' | 'vaultPath' | 'vaultId'>, parentOf: (id: string) => RoleJob | undefined,
+  sources: SourceDeclarations, job: RoleJob & Pick<CollectionJob, 'id' | 'vaultPath' | 'vaultId'>, parentOf: (id: string) => RoleJob | undefined,
 ): JobEventSubject {
-  const role = roleOf(job);
-  const subscriptionId = subscriptionOf(job, parentOf);
+  const role = roleOf(sources, job);
+  const subscriptionId = subscriptionOf(sources, job, parentOf);
   return {
     vaultPath: job.vaultPath, ...(job.vaultId ? { vaultId: job.vaultId } : {}), jobId: job.id,
     ...(role ? { jobRole: role } : {}),

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { settingsErrors } from '../core/collection-settings.js';
-import { sourceDeclaration } from '../core/source-registry.js';
 import type { RecognitionAction, SourceSettingField, SourceTypeInfo, SubscriptionSettings, UrlRecognition } from '../core/types.js';
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
@@ -8,6 +7,7 @@ import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { currentRecognition, initials } from './source-presentation.js';
 import { resumeSummary, subscribeSummary, targetNoun } from './subscription-presentation.js';
+import { useSourceDeclarations } from './source-declarations.js';
 
 const RECOGNIZE_DELAY_MS = 500;
 
@@ -31,6 +31,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   onDone: (response: unknown) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
+  const declarations = useSourceDeclarations();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState(initialMode);
@@ -91,7 +92,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
 
   const answer = currentRecognition(recognition.state === 'done' ? recognition : null, url);
   const found = answer?.recognition ?? null;
-  const mismatch = found ? addMismatch(mode, found) : null;
+  const mismatch = found ? addMismatch(declarations, mode, found) : null;
   const unsupported = found !== null && !mismatch && isUnsupportedUrl(found);
   const primary = !mismatch && !unsupported ? answer?.primary ?? null : null;
   const fields = sourceTypes.find((type) => type.id === found?.sourceType)?.settings ?? [];
@@ -110,12 +111,12 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
     <form className="add-body" onSubmit={submit}>
       <div className="dialog-titlebar">
-        <h2 id="add-dialog-title" data-testid="add-dialog-title">{addDialogTitles()[mode]}</h2>
+        <h2 id="add-dialog-title" data-testid="add-dialog-title">{addDialogTitles(declarations)[mode]}</h2>
         <button type="button" className="icon-only close-button" aria-label="關閉" onClick={onClose}><Icon name="close" /></button>
       </div>
       <label className="field-label" htmlFor="add-url">網址</label>
       <input ref={input} id="add-url" className="url-input" type="text" inputMode="url" value={url} autoComplete="off" spellCheck={false}
-        placeholder={addPlaceholder(mode)} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
+        placeholder={addPlaceholder(declarations, mode)} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
 
       {recognition.state === 'recognizing' ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
       {recognition.state === 'error' ? <p className="add-problem" role="alert">{recognition.message}</p> : null}
@@ -145,6 +146,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   onSettings: (patch: Partial<SubscriptionSettings>) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
+  const declarations = useSourceDeclarations();
   if (recognition.status === 'unsupported' || recognition.status === 'unavailable') {
     return <div className="recognition-card problem" role="alert" data-testid="recognition-card">
       <p className="card-kind">{recognition.status === 'unsupported' ? '無法加入這個網址' : `無法讀取${recognition.kindLabel ?? '這個網址'}`}</p>
@@ -159,7 +161,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   }
   const target = recognition.target;
   if (!target) return null;
-  const declaration = recognition.sourceType ? sourceDeclaration(recognition.sourceType) : undefined;
+  const declaration = recognition.sourceType ? declarations.get(recognition.sourceType) : undefined;
   const kind = declaration?.kinds.find((candidate) => candidate.id === recognition.kind);
   if (kind?.capability === 'single') {
     return <div className="recognition-card" data-testid="recognition-card">
@@ -179,14 +181,14 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
       <p className="card-title">{target.title}{subscription ? <span className={`status-chip ${subscription.enabled ? 'tracking' : 'paused'}`}>{subscription.enabled ? '已訂閱' : '已暫停'}</span> : null}</p>
       {!subscription && settings ? <>
         {settingsErrors(fields, settings).length === 0
-          ? <p data-testid="subscribe-summary">{subscribeSummary(settings, recognition.autoCollection !== false, recognition.sourceType)}</p> : null}
+          ? <p data-testid="subscribe-summary">{subscribeSummary(declarations, settings, recognition.autoCollection !== false, recognition.sourceType)}</p> : null}
         <div className="card-settings">
           <CollectionSettingsFields idPrefix="add-settings" type={recognition.sourceType} fields={fields} value={settings} onChange={onSettings}
             disabled={disabled} />
         </div>
       </> : null}
-      {subscription?.enabled ? <p>已訂閱這個{targetNoun(recognition.sourceType)}。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看訂閱</button></p> : null}
-      {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(subscription.settings, recognition.sourceType)}</p> : null}
+      {subscription?.enabled ? <p>已訂閱這個{targetNoun(declarations, recognition.sourceType)}。<button type="button" className="inline-link" onClick={() => onOpenSource(recognition.sourceType!, subscription.id)}>查看訂閱</button></p> : null}
+      {subscription && !subscription.enabled ? <p data-testid="resume-summary">{resumeSummary(declarations, subscription.settings, recognition.sourceType)}</p> : null}
     </div>
   </div>;
 }
