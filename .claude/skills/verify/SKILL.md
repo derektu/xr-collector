@@ -268,6 +268,21 @@ npm run package:win
 node .claude\skills\verify\scripts\startup.mjs --app "release\win-unpacked\XR Collector.exe" --evidence <dir>
 ```
 
+**打包未 commit 的改動**：`package:mac`／`package:win` 要求乾淨的 Git checkout，包內 build 資訊記錄當時的 commit。驗證還沒 commit 的改動時，在暫存區開一份 clone，把改動（含新檔與刪除）套進去，做一個不推、不建分支的暫時 commit 再打包。`node_modules` 從原 checkout 複製；yt-dlp、Deno 與 Meilisearch 由打包從每個使用者共用的 runtime 快取安裝，不重新下載。`startup.mjs --app` 從同一份 clone 執行：STARTUP-04 比對包內 build 資訊的 commit 與執行 skill 的 checkout，從原 checkout 執行時 commit 不同，STARTUP-04 失敗，這不是產品問題。證據用 `--evidence` 寫回原 checkout，驗完刪除 clone；它的 commit 是暫時 commit，`check` 不把它計入原 checkout 的結果，只作為 commit 前的打包確認。整段在原 checkout 的同一個 shell 依序執行，`$CLONE` 空了時指令中止，不會動到原 checkout（Mac）：
+
+```sh
+SRC="$PWD"; CLONE="$(mktemp -d "${TMPDIR:-/tmp}/xr-package-XXXXXX")"
+git clone -q --no-checkout "$SRC" "$CLONE" && git -C "$CLONE" checkout -q --detach "$(git rev-parse HEAD)"
+git diff --binary HEAD | git -C "${CLONE:?}" apply --index --allow-empty
+git ls-files -z --others --exclude-standard | rsync -a --from0 --files-from=- "$SRC/" "${CLONE:?}/"
+git -C "${CLONE:?}" add -A && git -C "${CLONE:?}" -c user.name=verify -c user.email=verify@localhost commit -qm "verify: uncommitted changes"
+cp -cR "$SRC/node_modules" "${CLONE:?}/node_modules"
+(cd "${CLONE:?}" && npm run package:mac && node .claude/skills/verify/scripts/startup.mjs --app "release/mac-arm64/XR Collector.app" --evidence "$SRC/.local/ticket-artifacts/<N>/packaged-<label>")
+rm -rf "${CLONE:?}"
+```
+
+打包回報 runtime 快取缺檔時，先在原 checkout 執行 `npm run prepare:runtime -- mac` 填快取。Windows 的打包版驗證已 commit 的版本（見開發驗證流程），不套未 commit 的改動。
+
 啟動前在隔離的 Vault 預放一份合成文件，之後依序檢查：
 
 | Scenario | 檢查 | 產品壞掉時 |
