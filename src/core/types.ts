@@ -1,4 +1,5 @@
 import type { PauseReason } from './collection-pause.js';
+import type { EventType } from './event-catalog.js';
 
 /** ID of a source type whose documents the Vault can hold: the ID of a registered source plugin. */
 export type DocumentSourceType = string;
@@ -704,7 +705,8 @@ export interface JobEvent {
   eventId: string;
   timestamp: string;
   severity: EventSeverity;
-  eventType: string;
+  /** The kind of event; `core/event-catalog.ts` lists every kind and how the activity log shows it. */
+  eventType: EventType;
   message: string;
   /** Null for events that belong to no Vault. */
   vaultPath: string | null;
@@ -758,6 +760,17 @@ export interface JobEvent {
     failed: number;
     skipped: number;
   };
+}
+
+/**
+ * An event as its emitter gives it. The activity log assigns `eventId` and `timestamp`; a missing
+ * `severity` is the catalog's default for the kind.
+ */
+export type NewJobEvent = Omit<JobEvent, 'eventId' | 'timestamp' | 'severity'> & { severity?: EventSeverity };
+
+/** Where emitters send events: the device activity log. */
+export interface EventRecorder {
+  event(entry: NewJobEvent): void;
 }
 
 /** Filters of an activity query; every filter given must match. */

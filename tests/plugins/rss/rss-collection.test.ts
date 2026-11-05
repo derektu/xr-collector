@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { fetchText } from '../../../src/plugins/rss/http.js';
-import { JobStore } from '../../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../../src/runtime/job-records.js';
 import { PacingGate, type PacingEvent } from '../../../src/pacing/pacing-gate.js';
 import { createRssPlugin, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
 import type { PluginRuntime } from '../../../src/core/source-contract.js';
@@ -155,7 +155,8 @@ describe('a site that limits requests', () => {
     const events: PacingEvent[] = [];
     gate.subscribe((event) => events.push(event));
     const rss = createRssPlugin({ gate: () => gate } as unknown as PluginRuntime) as unknown as SourcePlugin;
-    const jobStore = JobStore.memory(PRODUCT_SOURCES);
+    const records = memoryJobRecords(PRODUCT_SOURCES);
+    const jobStore = records.jobs;
     const a = await machine('A', await temp());
     await seed(a.vault);
     const workspace = await open(a, { plugins: [...youtubePlugins(), rss], pacing: [gate], jobStore });
@@ -179,7 +180,7 @@ describe('a site that limits requests', () => {
     expect(events).toEqual([]);
     expect(gate.status()).toMatchObject({ cooldownUntil: null, level: 0 });
     await jobStore.flush();
-    const types = (await jobStore.activity.query({ limit: 200 }, workspace.activityScope())).events.map((event) => event.eventType);
+    const types = (await records.views.query({ limit: 200 }, workspace.activityScope())).events.map((event) => event.eventType);
     expect(types).not.toContain('rss.rate_limited');
     expect(types).not.toContain('job.deferred');
 

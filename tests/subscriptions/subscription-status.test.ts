@@ -14,7 +14,7 @@ import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob, type PacingStatus } from '../../src/core/types.js';
 import { workStatus } from '../../src/jobs/job-board.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
@@ -60,7 +60,7 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   let autoCheck = true;
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector,
+    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector,
     subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },

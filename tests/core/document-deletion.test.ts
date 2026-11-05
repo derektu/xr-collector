@@ -13,7 +13,8 @@ import {
   type SubscriptionRecord,
 } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import type { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords } from '../../src/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
@@ -29,6 +30,7 @@ import { HeldCaptures } from '../support/held-captures.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { eventSpec } from '../../src/core/event-catalog.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
@@ -118,14 +120,15 @@ async function world(options: { holdAdds?: boolean } = {}) {
     },
   };
   const events: Parameters<NonNullable<CollectorOptions['recordEvent']>>[0][] = [];
-  const collector = new Collector(vault, search, { recordEvent: (entry) => events.push(entry) });
+  // The severity each event is recorded with: the emitter's, or the catalog default for its kind.
+  const collector = new Collector(vault, search, { recordEvent: (entry) => events.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }) });
   const subs = new SubscriptionRecorder();
   const subscription = subs.add('youtube', SUBSCRIPTION, { settings: SUBSCRIPTION.settings });
   const source = new Source();
   let sequence = 0;
 
   async function boot(): Promise<{ store: JobStore; manager: JobManager }> {
-    const store = await JobStore.open(jobsDirectory, PRODUCT_SOURCES, () => clock.now);
+    const store = (await openJobRecords(jobsDirectory, PRODUCT_SOURCES, { now: () => clock.now })).jobs;
     stores.push(store);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,

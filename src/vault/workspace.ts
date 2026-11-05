@@ -1,4 +1,5 @@
 import type { NoteChange } from '../core/change-feed.js';
+import type { EventType } from '../core/event-catalog.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,6 +21,7 @@ import type { Pacing } from '../pacing/pacing-gate.js';
 import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
 import type { SourcePlugin } from '../core/source-contract.js';
+import { ActivityLog } from '../activity/activity-log.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { prepareOwnedSearchProjection, searchDatabasePath } from '../search/search-projection.js';
@@ -83,7 +85,7 @@ export interface WorkspaceOptions {
   searchPort?: number;
   /** Replaces the search engine; `statusChanged` is called on each change of its status. */
   createSearch?: (root: string, statusChanged: () => void) => Promise<SearchRuntime>;
-  /** Device record of collection jobs; defaults to an in-memory store. */
+  /** Device record of collection jobs, which records events into the device activity log; defaults to an in-memory store with an in-memory log. */
   jobStore?: JobStore;
   jobLimits?: Partial<JobLimits>;
   /** The device's request channels, one per pacing group, that the plugins above share. */
@@ -172,7 +174,7 @@ export class VaultWorkspace {
   private readonly holdTimeoutMs: number | undefined;
 
   private constructor(private readonly options: WorkspaceOptions) {
-    this.jobStore = options.jobStore ?? JobStore.memory(options.sources);
+    this.jobStore = options.jobStore ?? JobStore.memory(options.sources, ActivityLog.memory());
     this.holdTimeoutMs = options.holdTimeoutMs;
     this.machine = options.machineName ?? machineName();
     this.operationLock = new VaultOperationLock({
@@ -647,7 +649,7 @@ export class VaultWorkspace {
   }
 
   /** Records a Vault operation in the device activity log, under the active Vault unless `vaultPath` says otherwise. */
-  private record(severity: 'info' | 'warning' | 'error', eventType: string, message: string, vaultPath?: string | null, errorCode?: string): void {
+  private record(severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, vaultPath?: string | null, errorCode?: string): void {
     const own = vaultPath === undefined;
     this.jobStore.event({
       severity, eventType, message, vaultPath: own ? this.current.root : vaultPath, jobId: null,
@@ -730,20 +732,20 @@ export class VaultWorkspace {
       })));
     for (const record of recovery.completed) {
       jobs.recordEvent({
-        severity: 'info', eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
+        eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }
     for (const record of recovery.unresolved) {
       jobs.recordEvent({
-        severity: 'warning', eventType: 'document.delete_unresolved',
+        eventType: 'document.delete_unresolved',
         message: `「${record.title}」有刪除紀錄，但文件檔缺少可讀的收集時間；文件維持隱藏，檔案與刪除紀錄都保留。`,
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }
     for (const record of recovery.cleared) {
       jobs.recordEvent({
-        severity: 'info', eventType: 'document.recollected', message: `已重新收集「${record.title}」，解除刪除紀錄。`,
+        eventType: 'document.recollected', message: `已重新收集「${record.title}」，解除刪除紀錄。`,
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
       });
     }

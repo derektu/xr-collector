@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLog, RETENTION_DAYS } from '../../src/activity/activity-log.js';
+import { ActivityViews } from '../../src/activity/activity-views.js';
 import { limitText, protectSecret, redact } from '../../src/core/redact.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
 import { localDayStart } from '../../src/web/activity-presentation.js';
@@ -68,18 +69,13 @@ describe('activity log files (A-T1)', () => {
     const old = [event('2026-10-14T01:00:00.000Z', { jobId: 'job-video', eventType: 'job.accepted' }), event('2026-10-14T02:00:00.000Z')];
     await mkdir(path.join(directory, 'events'), { recursive: true });
     await writeFile(path.join(directory, 'events', '2026-10-14.jsonl'), `${lines(old)}not json\n{"eventId":"x"}\n{"eventId":"half","timest`);
-    const log = await ActivityLog.open(directory, {
-      now: () => clock.now,
-      lookupJob: (id): CollectionJob | undefined => (id === 'job-video'
-        ? { id, kind: 'youtube.video', parentId: 'job-channel', source: { type: 'youtube', id: 'v1', url: 'u', title: '影片標題' } } as CollectionJob
-        : id === 'job-channel'
-          ? { id, kind: 'youtube.channel', parentId: null, source: { type: 'youtube', id: 'UC1', url: 'u', title: '頻道' } } as CollectionJob
-          : undefined),
-    });
+    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const titles: Record<string, string> = { 'job-video': '影片標題', 'job-channel': '頻道' };
+    const views = new ActivityViews(log, { sourceTitle: (id) => titles[id] });
     log.record(event('2026-10-15T05:00:00.000Z', { eventType: 'job.completed' }));
     await log.flush();
 
-    const page = await log.query({}, { vaultPath: VAULT });
+    const page = await views.query({}, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.eventType)).toEqual(['job.completed', 'job.started', 'job.accepted']);
     // The job learned its title after the event was written; parent and subscription are the event's own.
     expect(page.events[2]).toMatchObject({ sourceTitle: '影片標題' });
@@ -102,7 +98,7 @@ describe('activity log files (A-T1)', () => {
     for (let index = 0; index < 5; index += 1) log.record(event('2026-10-15T05:00:00.000Z', { message: `第 ${index} 筆` }));
     expect(appends).toBe(0);
     expect(timers.waiting.filter((entry) => entry.ms === 1_000)).toHaveLength(1);
-    expect((await log.query({}, { vaultPath: VAULT })).events).toHaveLength(5);
+    expect((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events).toHaveLength(5);
 
     timers.fire(1_000);
     await log.flush();
@@ -130,8 +126,8 @@ describe('activity log files (A-T1)', () => {
     log.record(event('2026-10-15T05:01:00.000Z', { severity: 'info', eventType: 'job.started' }));
     await log.close();
     log = await ActivityLog.open(directory, { now: () => clock.now });
-    expect((await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info', 'debug']);
-    expect((await log.query({ severity: ['info', 'warning', 'error'] }, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info']);
+    expect((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info', 'debug']);
+    expect((await new ActivityViews(log).query({ severity: ['info', 'warning', 'error'] }, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info']);
     expect(JSON.stringify(await readEventFiles(directory))).toContain('"severity":"debug"');
     await log.close();
   });
@@ -152,7 +148,7 @@ describe('retention (A-T2)', () => {
 
     const log = await ActivityLog.open(directory, { now: () => clock.now, setTimer: timers.set });
     expect((await readdir(segments)).sort()).toEqual([`${daysAgo(30).slice(0, 10)}.jsonl`, `${daysAgo(29).slice(0, 10)}.jsonl`]);
-    let messages = (await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
+    let messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['29 天前', '邊界後']);
 
     // A day later the boundary day has fully expired and the hourly purge removes its file.
@@ -161,7 +157,7 @@ describe('retention (A-T2)', () => {
     // The next hourly purge is set once this one has finished.
     await eventually(() => expect(timers.waiting.some((entry) => entry.ms === 3_600_000)).toBe(true));
     expect(await readdir(segments)).toEqual([`${daysAgo(29).slice(0, 10)}.jsonl`]);
-    messages = (await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
+    messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['29 天前']);
     await log.close();
   });
@@ -178,7 +174,7 @@ describe('retention (A-T2)', () => {
     expect((await readdir(path.join(directory, 'events'))).sort()).toEqual(['2026-10-14.jsonl', '2026-10-15.jsonl']);
 
     const since = '2026-10-15T00:00:00+08:00';
-    const page = await log.query({ since }, { vaultPath: VAULT });
+    const page = await new ActivityViews(log).query({ since }, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.message)).toEqual(['本機今天 09:00', '本機今天 00:01']);
     // The page computes the same bound from the viewer's clock.
     const viewerNow = new Date('2026-10-14T16:30:00.000Z');
@@ -200,13 +196,13 @@ describe('cursor pages (A-T4)', () => {
       log.record(event(at));
     }
     await log.flush();
-    const all = (await log.query({ limit: 100 }, { vaultPath: VAULT }));
+    const all = (await new ActivityViews(log).query({ limit: 100 }, { vaultPath: VAULT }));
     const first = all.events;
     expect(first).toHaveLength(100);
     log.record(event('2026-10-15T05:59:00.000Z', { message: '翻頁中新增' }));
     await log.flush();
-    const second = await log.query({ limit: 100, cursor: all.nextCursor! }, { vaultPath: VAULT });
-    const third = await log.query({ limit: 100, cursor: second.nextCursor! }, { vaultPath: VAULT });
+    const second = await new ActivityViews(log).query({ limit: 100, cursor: all.nextCursor! }, { vaultPath: VAULT });
+    const third = await new ActivityViews(log).query({ limit: 100, cursor: second.nextCursor! }, { vaultPath: VAULT });
     const seen = [...first, ...second.events, ...third.events];
     expect(seen).toHaveLength(250);
     expect(new Set(seen.map((entry) => entry.eventId)).size).toBe(250);
@@ -217,9 +213,9 @@ describe('cursor pages (A-T4)', () => {
       expect(a.timestamp > b.timestamp || (a.timestamp === b.timestamp && a.eventId > b.eventId)).toBe(true);
     }
 
-    await expect(log.query({ limit: 100, cursor: all.nextCursor!, severity: ['error'] }, { vaultPath: VAULT }))
+    await expect(new ActivityViews(log).query({ limit: 100, cursor: all.nextCursor!, severity: ['error'] }, { vaultPath: VAULT }))
       .rejects.toMatchObject({ code: 'invalid_request' });
-    await expect(log.query({ cursor: 'garbage' }, { vaultPath: VAULT })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(new ActivityViews(log).query({ cursor: 'garbage' }, { vaultPath: VAULT })).rejects.toMatchObject({ code: 'invalid_request' });
     await log.close();
   });
 
@@ -231,10 +227,10 @@ describe('cursor pages (A-T4)', () => {
     // Older events on September 15 expire when the clock moves.
     for (let hour = 0; hour < 3; hour += 1) log.record(event(new Date(Date.UTC(2026, 8, 15, hour)).toISOString()));
     await log.flush();
-    const page = await log.query({ limit: 4 }, { vaultPath: VAULT });
+    const page = await new ActivityViews(log).query({ limit: 4 }, { vaultPath: VAULT });
     clock.advance(DAY);
     await log.purge();
-    const rest = await log.query({ limit: 10, cursor: page.nextCursor! }, { vaultPath: VAULT });
+    const rest = await new ActivityViews(log).query({ limit: 10, cursor: page.nextCursor! }, { vaultPath: VAULT });
     expect(rest.events.map((entry) => entry.timestamp)).toEqual(['2026-10-10T01:00:00.000Z', '2026-10-10T00:00:00.000Z']);
     await log.close();
   });
@@ -247,7 +243,8 @@ describe('filters (A-T5)', () => {
       channel: { id: 'channel', kind: 'youtube.channel', parentId: null, source: { type: 'youtube', id: 'UC1', url: 'u', title: '頻道一' } } as CollectionJob,
       child: { id: 'child', kind: 'youtube.video', parentId: 'channel', source: { type: 'youtube', id: 'v1', url: 'u', title: '影片一' } } as CollectionJob,
     };
-    const log = ActivityLog.memory({ now: () => clock.now, lookupJob: (id) => jobs[id] });
+    const log = ActivityLog.memory({ now: () => clock.now });
+    const views = new ActivityViews(log, { sourceTitle: (id) => jobs[id]?.source.title });
     log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', severity: 'debug', eventType: 'job.accepted', subscriptionId: 'UC1' }));
     log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', eventType: 'document.saved', documentId: 'youtube:v1' }));
     log.record(event('2026-10-15T01:02:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', severity: 'warning', eventType: 'job.retry_scheduled' }));
@@ -256,8 +253,8 @@ describe('filters (A-T5)', () => {
     log.record(event('2026-10-15T01:05:00.000Z', { eventType: 'subscription.paused', sourceId: 'UC1', subscriptionId: 'UC1' }));
     log.record(event('2026-10-15T01:06:00.000Z', { vaultPath: '/vaults/b', eventType: 'job.started' }));
     log.record(event('2026-10-15T01:07:00.000Z', { vaultPath: null, eventType: 'vault.imported' }));
-    const types = async (query: Parameters<ActivityLog['query']>[0], vaultPath: string | null = VAULT) =>
-      (await log.query(query, { vaultPath })).events.map((entry) => entry.eventType).reverse();
+    const types = async (query: Parameters<ActivityViews['query']>[0], vaultPath: string | null = VAULT) =>
+      (await views.query(query, { vaultPath })).events.map((entry) => entry.eventType).reverse();
 
     expect(await types({})).toEqual(['job.accepted', 'document.saved', 'job.retry_scheduled', 'job.failed', 'job.retry_requested', 'subscription.paused', 'vault.imported']);
     expect(await types({}, null)).toHaveLength(8);
@@ -290,13 +287,13 @@ describe('masking (A-T6)', () => {
     await log.flush();
 
     const disk = JSON.stringify((await readEventFiles(directory)).filter((entry) => !entry.message.startsWith('stored')));
-    const answer = JSON.stringify((await log.query({}, { vaultPath: VAULT })).events);
+    const answer = JSON.stringify((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events);
     for (const text of [disk, answer]) {
       for (const secret of ['sk-live-123', 'SID=abc', 't0p', 's1g', token, 'SECRET', 'Zm9vOmJhcg==']) expect(text).not.toContain(secret);
       expect(text).toContain('[已遮蔽]');
     }
     expect(answer).toContain('stored agent [已遮蔽]');
-    const [long, masked] = (await log.query({}, { vaultPath: VAULT })).events;
+    const [long, masked] = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events;
     expect([...long!.message].length).toBe(500);
     expect([...masked!.detail!].length).toBe(2000);
     expect(masked!.detail!.endsWith('[已遮蔽]')).toBe(true);
@@ -332,7 +329,7 @@ describe('write failures (A-T7)', () => {
     expect(log.health()).toMatchObject({ state: 'failing', pending: 2, dropped: 0, lastError: 'EACCES: permission denied' });
     expect(log.health().lastFailureAt).toBe(clock.now.toISOString());
     // Waiting events still show in answers.
-    expect((await log.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
+    expect((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
 
     failing = false;
     timers.fire(30_000);
@@ -406,7 +403,7 @@ describe('write failures (A-T7)', () => {
     const lines = (await readFile(path.join(directory, 'events', '2026-10-15.jsonl'), 'utf8')).split('\n').filter(Boolean);
     expect(lines).toHaveLength(3);
     const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined });
-    expect((await reopened.query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
+    expect((await new ActivityViews(reopened).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
     expect(reopened.health().skippedLines).toBe(1);
     await reopened.close();
   });
@@ -440,6 +437,53 @@ describe('write failures (A-T7)', () => {
     await log.flush();
     expect(log.health()).toMatchObject({ state: 'ok', pending: 0 });
     expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['暫時無法寫入']);
+    await log.close();
+  });
+});
+
+describe('event IDs and kinds (#262)', () => {
+  const recorded = { message: '事件', vaultPath: VAULT, jobId: null } as const;
+  const sequenceOf = (entry: JobEvent) => Number(entry.eventId.slice(0, 12));
+
+  it('continues the sequence after a restart without repeating or skipping a number, even after the clock went back', async () => {
+    const directory = await tempDirectory();
+    const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
+    let log = await ActivityLog.open(directory, { now: () => clock.now });
+    for (let index = 0; index < 3; index += 1) { log.event({ ...recorded, eventType: 'job.started' }); clock.advance(1_000); }
+    // The newest event by time is no longer the one with the highest sequence.
+    clock.advance(-60 * 60_000);
+    log.event({ ...recorded, eventType: 'job.completed' });
+    await log.close();
+
+    log = await ActivityLog.open(directory, { now: () => clock.now });
+    log.event({ ...recorded, eventType: 'job.started' });
+    log.event({ ...recorded, eventType: 'job.completed' });
+    await log.close();
+
+    const sequences = (await readEventFiles(directory)).map(sequenceOf).sort((a, b) => a - b);
+    expect(sequences).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('records an event without a severity at its kind\'s default, and keeps a severity the emitter gives', async () => {
+    const log = ActivityLog.memory({ now: () => new Date('2026-10-15T06:00:00.000Z') });
+    log.event({ ...recorded, eventType: 'schedule.dispatched' });
+    log.event({ ...recorded, eventType: 'fake.rate_limited' });
+    log.event({ ...recorded, eventType: 'job.started', severity: 'debug' });
+    const events = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events;
+    expect(events.map((entry) => [entry.eventType, entry.severity])).toEqual([
+      ['job.started', 'debug'], ['fake.rate_limited', 'warning'], ['schedule.dispatched', 'debug'],
+    ]);
+  });
+
+  it('skips a stored line whose kind the catalog does not list', async () => {
+    const directory = await tempDirectory();
+    await mkdir(path.join(directory, 'events'), { recursive: true });
+    const stored = [event('2026-10-15T01:00:00.000Z'), event('2026-10-15T02:00:00.000Z', { eventType: 'job.archived' as JobEvent['eventType'] })];
+    await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines(stored));
+    const log = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z') });
+    const page = await new ActivityViews(log).query({}, { vaultPath: VAULT });
+    expect(page.events.map((entry) => entry.eventType)).toEqual(['job.started']);
+    expect(page.log.skippedLines).toBe(1);
     await log.close();
   });
 });

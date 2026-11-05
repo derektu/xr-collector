@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { EventType } from '../core/event-catalog.js';
 import { createReadStream } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,7 +25,7 @@ export interface UpdateServiceOptions {
   directory: string;
   request?: typeof fetch;
   now?: () => Date;
-  event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
+  event?: (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void;
   apply?: (request: UpdateApplyRequest) => void;
   downloadIdleTimeoutMs?: number;
   /** Filesystem seam for deterministic locked-file coverage; production uses fs.rm. */
@@ -357,7 +358,7 @@ export class UpdateService implements UpdateAccess {
     return true;
   }
 
-  private emitCheckTransition(key: string, severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string): void {
+  private emitCheckTransition(key: string, severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string): void {
     if (this.lastCheckEvent === key) return;
     this.lastCheckEvent = key; this.options.event?.(severity, type, message, code);
   }

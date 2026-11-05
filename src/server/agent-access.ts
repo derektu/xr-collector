@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import type { EventType } from '../core/event-catalog.js';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -31,7 +32,7 @@ class AgentConnectionService implements AgentConnectionAccess {
   opened = false;
 
   constructor(private readonly settingsFile: string, private readonly skillPath: string, private readonly autoStartPort: number,
-    private readonly event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void) {}
+    private readonly event?: (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void) {}
 
   async open(): Promise<void> {
     let saved: SavedAgentSettings | null = null;
@@ -114,7 +115,7 @@ class AgentConnectionService implements AgentConnectionAccess {
 
 interface AgentSettingsOptions {
   preferredPort: number; settingsFile: string; skillPath: string;
-  event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
+  event?: (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void;
 }
 
 /**

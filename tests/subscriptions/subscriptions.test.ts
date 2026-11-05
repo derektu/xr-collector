@@ -13,7 +13,7 @@ import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-stor
 import { Collector } from '../../src/core/collector.js';
 import { CollectorError, type CollectionJob } from '../../src/core/types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords, openJobRecords } from '../../src/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube, syntheticChannelId } from './synthetic-youtube.js';
 import { readEventFiles } from '../activity/event-files.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
@@ -46,7 +46,8 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   const policy: CollectionPolicy = { ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
-  const store = options.jobsDirectory ? await JobStore.open(options.jobsDirectory, PRODUCT_SOURCES, now) : JobStore.memory(PRODUCT_SOURCES, now);
+  const records = options.jobsDirectory ? await openJobRecords(options.jobsDirectory, PRODUCT_SOURCES, { now }) : memoryJobRecords(PRODUCT_SOURCES, { now });
+  const store = records.jobs;
   const build = () => {
     const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     const collector = new Collector(documents);
@@ -65,7 +66,7 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   };
   let services = build();
   return {
-    root, clock, policy, source, documents, store,
+    root, clock, policy, source, documents, store, records,
     get jobs() { return services.jobs; },
     get channels() { return services.channels; },
     get channelStore() { return services.channelStore; },
@@ -128,7 +129,7 @@ describe('first subscription (S-T3)', () => {
     expect(first.progress).toMatchObject({ created: 1, skipped: 1, failed: 0 });
     expect(collectedIds(w)).toEqual([inside]);
     const skippedJobId = first.items!.find((item) => item.sourceId === borderline)!.jobId!;
-    expect((await w.store.activity.query({ jobId: skippedJobId, eventType: ['job.completed'] }, { vaultPath: w.root })).events[0])
+    expect((await w.records.views.query({ jobId: skippedJobId, eventType: ['job.completed'] }, { vaultPath: w.root })).events[0])
       .toMatchObject({ severity: 'debug', outcome: 'skipped' });
 
     // The next check keeps it as a candidate without asking YouTube again.
@@ -217,7 +218,7 @@ describe('checks after the first (R-07, R-09)', () => {
       w.advance(30 * 60_000);
       await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     }
-    expect((await w.store.activity.query({ eventType: ['subscription.item_skipped'] }, { vaultPath: w.root })).events[0])
+    expect((await w.records.views.query({ eventType: ['subscription.item_skipped'] }, { vaultPath: w.root })).events[0])
       .toMatchObject({ severity: 'warning', errorCode: 'no_subtitles', outcome: 'skipped', attempt: 3 });
   });
 });
@@ -565,7 +566,7 @@ describe('subscription events (S-T12)', () => {
     const resumed = await w.channels.setEnabled(id, true);
     await w.jobs.whenSettled(resumed.submission!.job.id);
     await w.channels.remove(id);
-    await w.store.activity.flush();
+    await w.records.activity.flush();
     const events = await readEventFiles(directory);
     expect(events.filter((event) => event.eventType.startsWith('subscription.'))).toEqual([
       expect.objectContaining({ eventType: 'subscription.added', sourceId: syntheticChannelId('events'), jobId: null, severity: 'info' }),

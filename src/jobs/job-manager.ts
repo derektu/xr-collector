@@ -23,6 +23,7 @@ import {
   type JobSubmission,
   type JobView,
   type JobSummary,
+  type NewJobEvent,
   type ItemFailureEntry,
   MAX_CHECK_ATTEMPTS,
   type SkipReason,
@@ -33,7 +34,7 @@ import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../core/source-contract.js';
 import { limitText, redact } from '../core/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
-import type { JobStore, NewJobEvent } from './job-store.js';
+import type { JobStore } from './job-store.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
 import { JobWaits, type WaitCondition } from './job-waits.js';
 
@@ -609,7 +610,7 @@ export class JobManager {
     this.updateStored(job, { retriedBy: submission.job.id, updatedAt: this.now().toISOString() });
     const retried = this.jobs.get(submission.job.id) ?? this.options.store.get(submission.job.id)!;
     this.event(retried, {
-      severity: 'info', eventType: 'job.retry_requested', retryOf: job.id,
+      eventType: 'job.retry_requested', retryOf: job.id,
       message: submission.deduplicated ? '已手動重試，併入進行中的工作。' : '已手動重試，重新排入收集。',
     });
     await this.options.store.flush();
@@ -644,7 +645,7 @@ export class JobManager {
     }
     const timestamp = this.now().toISOString();
     this.updateStored(job, { dismissedAt: timestamp, updatedAt: timestamp });
-    this.event(job, { severity: 'info', eventType: 'job.dismissed', message: '已從失敗清單移除。' });
+    this.event(job, { eventType: 'job.dismissed', message: '已從失敗清單移除。' });
     await this.options.store.flush();
     return jobView(this.options.store.get(id)!);
   }
@@ -1038,7 +1039,7 @@ export class JobManager {
     this.requeue(job);
     this.markWaiting(job);
     this.options.store.put(job);
-    this.event(job, { severity: 'debug', eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
+    this.event(job, { eventType: 'job.accepted', message: '已接受收集工作。', ...(job.retryOf ? { retryOf: job.retryOf } : {}) });
     return { job: jobView(structuredClone(job)), deduplicated: false };
   }
 
@@ -1106,7 +1107,7 @@ export class JobManager {
     if (group) this.enterCooldown(group, until);
     this.update(job, { state: 'queued', wait: { reason: 'rate_limited', until } });
     this.event(job, {
-      severity: 'debug', eventType: 'job.deferred',
+      eventType: 'job.deferred',
       message: `${group ? this.pacingLabel(group) : this.plugin(job.source.type)?.label ?? job.source.type} 暫時限制連線，約 ${clockTime(until)} 自動繼續。`,
       until, ...(job.phase ? { phase: job.phase } : {}),
     });
@@ -1237,7 +1238,7 @@ export class JobManager {
         outcome = 'created';
         this.update(job, { checkpoint: { ...job.checkpoint, savedDocumentId: document.id } });
         this.event(job, {
-          severity: 'info', eventType: 'document.saved', message: '文件已保存。', phase: 'save', documentId: document.id,
+          eventType: 'document.saved', message: '文件已保存。', phase: 'save', documentId: document.id,
         });
       }
       this.update(job, { phase: 'index', source: { ...job.source, title: document.title } });
@@ -1248,7 +1249,7 @@ export class JobManager {
       }
       if (!index.indexed) {
         this.event(job, {
-          severity: 'warning', eventType: 'document.index_failed', message: '文件已保存，搜尋更新失敗。',
+          eventType: 'document.index_failed', message: '文件已保存，搜尋更新失敗。',
           phase: 'index', documentId: document.id,
         });
       }
@@ -1314,7 +1315,7 @@ export class JobManager {
     const nextAttemptAt = new Date(this.now().getTime() + delay).toISOString();
     this.update(job, { state: 'queued', retry: { attempts, maxAttempts, nextAttemptAt, lastError: error } });
     this.event(job, {
-      severity: 'warning', eventType: 'job.retry_scheduled',
+      eventType: 'job.retry_scheduled',
       message: `第 ${attempts} 次嘗試失敗，稍後自動重試：${error.message}`,
       errorCode: error.code, attempt: attempts, nextAttemptAt, ...(job.phase ? { phase: job.phase } : {}),
       ...(detail ? { detail } : {}),
@@ -1415,7 +1416,7 @@ export class JobManager {
       return;
     }
     this.event(job, {
-      severity: 'debug', eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
+      eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
     });
     const items: JobItem[] = discovery.items.map((found) => {
       const title = found.title ?? '';
@@ -1507,11 +1508,11 @@ export class JobManager {
     const named = item.source.title ? { namesSource: true as const } : {};
     this.event(item, recorded.skipped
       ? {
-        severity: 'warning', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
+        eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
         message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`, ...named,
       }
       : {
-        severity: 'warning', eventType: 'subscription.item_failed', errorCode: error.code, attempt: recorded.attempts,
+        eventType: 'subscription.item_failed', errorCode: error.code, attempt: recorded.attempts,
         message: `${name}${label}・已試 ${recorded.attempts}/${MAX_CHECK_ATTEMPTS} 次`, ...named,
       });
   }
@@ -1616,7 +1617,7 @@ export class JobManager {
         ...(role === 'item' && result.indexed === false ? { indexed: false as const } : {}),
       }
       : {
-        severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
+        eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
         ...(check ? { check } : {}),
         ...(error ? { errorCode: error.code } : {}), ...(detail ? { detail } : {}),
       });

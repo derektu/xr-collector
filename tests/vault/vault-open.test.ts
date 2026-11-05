@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SavedDocument, TranscriptSearch } from '../../src/core/types.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { openJobRecords, type JobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createVaultDirectory, inspectVaultDirectory, readVaultId, VAULT_MARKER } from '../../src/vault/vault-directory.js';
@@ -25,7 +25,7 @@ import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
-const stores: JobStore[] = [];
+const stores: JobRecords[] = [];
 afterEach(async () => {
   await Promise.all(workspaces.splice(0).map((workspace) => workspace.close().catch(() => undefined)));
   await Promise.all(stores.splice(0).map((store) => store.close().catch(() => undefined)));
@@ -111,8 +111,9 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
 
 /** Opens the Vault the device selection names (the source when none), as the runtime does at startup. */
 async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
-  const jobStore = overrides.jobStore ?? await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
-  if (track && !overrides.jobStore) stores.push(jobStore);
+  const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
+  const jobStore = overrides.jobStore ?? records!.jobs;
+  if (track && records) stores.push(records);
   const workspace = await VaultWorkspace.open(withYouTube({
     sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
@@ -132,8 +133,9 @@ describe('Vault identity (A-08)', () => {
     const { root, source } = context;
     // Vault A stops with a queued job.
     const gated = gatedCapture(new Set([IDS[0]!]));
-    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
-    stores.push(jobStore);
+    const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
+    const jobStore = records.jobs;
+    stores.push(records);
     const a = await open(context, { jobStore, capture: gated.capture }, false);
     await a.jobs.submitItem('youtube', urlOf(IDS[0]!));
     const left = await a.jobs.submitItem('youtube', urlOf(IDS[1]!));
@@ -185,8 +187,9 @@ describe('opening another Vault (A-13)', () => {
     const { root, source: a } = context;
     const b = path.join(root, 'B');
     await seed(b);
-    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES);
-    stores.push(jobStore);
+    const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
+    const jobStore = records.jobs;
+    stores.push(records);
     // B stops with a queued job.
     const bGate = gatedCapture(new Set([IDS[2]!]));
     const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore, capture: bGate.capture }, false);

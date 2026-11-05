@@ -16,12 +16,13 @@ import { JobManager } from '../../src/jobs/job-manager.js';
 import { CollectionPause } from '../../src/core/collection-pause.js';
 import { Connectivity } from '../../src/core/connectivity.js';
 import { CollectorError, type JobSubmission } from '../../src/core/types.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import type { CollectionPolicy } from '../../src/plugins/youtube/settings.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
+import { eventSpec } from '../../src/core/event-catalog.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const MINUTE = 60_000;
@@ -56,7 +57,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const collector = new Collector(documents);
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: JobStore.memory(PRODUCT_SOURCES, now), plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}), ...(connectivity ? { connectivity } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
@@ -68,7 +69,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
     autoCollection: () => scheduler.isEnabled(), resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   scheduler = new CollectionScheduler([channels], scheduleStore, {
-    now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => { events.push(entry.eventType); eventRecords.push(entry); }, ...(pause ? { pause } : {}),
+    now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => { events.push(entry.eventType); eventRecords.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }); }, ...(pause ? { pause } : {}),
   });
   const runs = vi.spyOn(channels, 'startRun');
   const jobEvents = vi.spyOn(jobs, 'recordEvent');

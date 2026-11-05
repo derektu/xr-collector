@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { CollectorError } from '../../src/core/types.js';
 import { Collector } from '../../src/core/collector.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
-import { JobStore } from '../../src/jobs/job-store.js';
+import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { PacingGate } from '../../src/pacing/pacing-gate.js';
 import { YOUTUBE_PACING, youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { DEFAULT_POLICY } from '../../src/plugins/youtube/settings.js';
@@ -71,7 +71,7 @@ async function world(connectivity?: ConnectivityAccess) {
   const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now) };
   const jobs: JobManager = new JobManager({
     sources: SOURCES,
-    vaultPath: root, store: JobStore.memory(SOURCES, now), plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
+    vaultPath: root, store: memoryJobRecords(SOURCES, { now }).jobs, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },
   });
   let scheduler!: CollectionScheduler;
