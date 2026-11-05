@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import type { EventType } from '../core/event-catalog.js';
-import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../core/collection-pause.js';
@@ -11,15 +10,12 @@ import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
 import { loadBuildInfo } from '../updates/build-info.js';
 import { bundledResources } from '../runtime/bundled-resources.js';
 import { startCollectorServer, type CollectorServer } from '../server/collector-server.js';
-import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
+import { backupFolder, exportFolder } from '../vault/transfer-files.js';
 import { CloseHintRecord } from './close-hint.js';
-import { FileThemePreference, isStoredTheme } from './theme-preference.js';
+import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
-import type { TrayAction } from './tray-menu.js';
-import { DesktopLoginStartup, isLoginStartupLaunch, shouldShowForActivation, type LoginItemAdapter } from './login-startup.js';
-import { WindowCreationGate } from './window-creation.js';
+import { DesktopLoginStartup, type LoginItemAdapter } from './login-startup.js';
 import { UpdateService } from '../updates/update-service.js';
-import { GenericIndexSource, GitHubReleasesSource } from '../updates/sources.js';
 import { UnavailableInstaller } from '../updates/installer.js';
 import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInstaller, prepareMacUpdateRollback } from '../updates/mac-installer.js';
 import { WindowsNativeInstaller } from '../updates/windows-installer.js';
@@ -27,13 +23,15 @@ import type { NativeInstaller, UpdateApplyRequest } from '../updates/types.js';
 import { runUpdateCoordinator } from './update-coordinator.js';
 import { recoverNativeInstallations } from './update-recovery.js';
 import { startUpdateCheckScheduler } from './update-check-scheduler.js';
-import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../updates/config.js';
 import { ElectronSystemNotifications } from './system-notifications.js';
-import { notificationNavigation } from './notification-navigation.js';
+import { claimLaunch } from './desktop-launch.js';
+import { registerDesktopDialogs } from './desktop-dialogs.js';
+import { updateSourceFor, windowsAppId, windowSize } from './desktop-environment.js';
+import { MainWindow } from './main-window.js';
+import { registerPageChannels } from './page-channels.js';
+import { exposeValidationControl } from './validation-control.js';
 
-let mainWindow: BrowserWindow | null = null;
 let runtime: CollectorServer | null = null;
-let themePreference: FileThemePreference | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
 let updateService: UpdateService | null = null;
@@ -43,14 +41,6 @@ let startupBuildInfo: BuildInfo | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
 let networkWatch: ReturnType<typeof setInterval> | null = null;
-let pendingManualShow = false;
-type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
-  | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
-let pendingNavigation: DesktopTarget | undefined;
-let pendingNotificationId: string | undefined;
-let rendererReady = false;
-const windowCreation = new WindowCreationGate();
-let startupWindowState: { startedAtLogin: boolean; finished: boolean } | null = null;
 /** How often the system's own view of the network is read; reading it sends nothing. */
 const NETWORK_WATCH_MS = 5_000;
 
@@ -64,142 +54,36 @@ const packageMetadata = JSON.parse(readFileSync(path.join(app.getAppPath(), 'pac
 // never appears during launch.
 const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
 if (validationHidden) app.dock?.hide();
-// Validation control channel, for native acceptance runs only: Playwright reads and drives the tray
-// and the window through globalThis.__xrCollectorValidation in this process.
+// Validation control channel, for native acceptance runs only (see validation-control.ts).
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
 const validationNotifications: { id?: string; title: string; content: string }[] = [];
-// Whether the app last showed or hid its window, which a hidden validation run never does on
-// screen; the validation channel reports it so a hidden run still sees when the app shows it.
-let windowShown = false;
 
 // Windows shows the app's notifications only for an app identity that matches the installer's Start
 // menu shortcut (electron-builder's appId).
-if (process.platform === 'win32') {
-  const validationAppId = process.env.XR_COLLECTOR_VALIDATION_APP_ID;
-  app.setAppUserModelId(validationAppId && /^com\.xrcollector\.verify[\w.-]+$/u.test(validationAppId)
-    ? validationAppId : appIdFromPackageMetadata(packageMetadata));
-}
+if (process.platform === 'win32') app.setAppUserModelId(windowsAppId(process.env, packageMetadata));
 
 /** The files the App ships beside its code, from the package's resources or the checkout. */
 const resources = bundledResources(app.isPackaged
   ? { packaged: true, resourcesPath: process.resourcesPath }
   : { packaged: false, checkout: app.getAppPath() });
 
-/**
- * Returns the closest existing directory at or above the given path. The
- * Windows folder dialog asks to create a missing default path as soon as it
- * opens, so the dialog starts in a folder that already exists.
- */
-async function existingDirectory(start: string): Promise<string> {
-  let current = start;
-  for (;;) {
-    try {
-      if ((await stat(current)).isDirectory()) return current;
-    } catch { /* keep walking up */ }
-    const parent = path.dirname(current);
-    if (parent === current) return app.getPath('documents');
-    current = parent;
-  }
-}
-
-function createWindow(showInitially = true): Promise<void> {
-  return windowCreation.run(() => createWindowOnce(showInitially));
-}
-
-async function createWindowOnce(showInitially: boolean): Promise<void> {
-  if (!runtime) throw new Error('Runtime must start before the window');
-  const serverUrl = runtime.listeners.ui.url;
-  const validationSize = /^([0-9]+)x([0-9]+)$/.exec(process.env.XR_COLLECTOR_VALIDATION_WINDOW_SIZE ?? '');
-  const width = validationSize ? Number(validationSize[1]!) : 1240;
-  const height = validationSize ? Number(validationSize[2]!) : 820;
-  const window = new BrowserWindow({
-    width,
-    height,
-    minWidth: 880,
-    minHeight: 620,
-    show: false,
-    title: 'XR Collector',
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.cjs'),
-      // A hidden window keeps painting and running timers, so screenshots show the live page.
-      backgroundThrottling: !validationHidden,
-    },
-  });
-  rendererReady = false;
-  // Publish the window before loading so an early second-instance request cannot create another.
-  mainWindow = window;
-  // The app has no menu commands of its own; macOS keeps the default menu for
-  // standard Edit and Quit shortcuts.
-  if (process.platform !== 'darwin') window.removeMenu();
-  windowShown = showInitially;
-  if (!validationHidden && showInitially) window.once('ready-to-show', () => window.show());
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  window.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(serverUrl)) event.preventDefault();
-  });
-  // Closing the window hides it and collection goes on; quitting is the tray menu's (or ⌘Q on macOS).
-  window.on('close', (event) => {
-    if (isQuitting) return;
-    event.preventDefault();
-    windowShown = false;
-    window.hide();
-    void hintStillRunning();
-  });
-  // Windows ending the session (shut down, sign out) closes the window without a quit request.
-  window.on('session-end', () => { isQuitting = true; });
-  window.on('closed', () => {
-    mainWindow = null;
-    rendererReady = false;
-  });
-  try {
-    await window.loadURL(serverUrl);
-  } catch (error) {
-    if (mainWindow === window) mainWindow = null;
-    window.destroy();
-    throw error;
-  }
-}
-
-/** Shows the window, on a page of the app when given; a hidden validation run only navigates. */
-function showWindow(page?: DesktopTarget | { notificationId: string }): void {
-  pendingManualShow = true;
-  if (typeof page === 'object' && 'notificationId' in page) {
-    if (!runtime) { pendingNotificationId = page.notificationId; return; }
-    const notificationId = page.notificationId;
-    void runtime.resolveNotification(notificationId).then((event) => {
-      pendingNavigation = notificationNavigation(event, runtime?.workspace?.activeVaultId() ?? null);
-      showWindow();
-    }).catch((error: unknown) => console.warn('Unable to resolve notification target', error));
-    return;
-  } else if (page) pendingNavigation = page;
-  if (windowCreation.current) {
-    // The caller that began creation performs the one pending show after loading completes.
-    return;
-  }
-  if (!mainWindow) {
-    if (runtime && !isQuitting) void createWindow(false).then(() => showWindow()).catch((error) => console.error(error));
-    return;
-  }
-  deliverPendingNavigation();
-  windowShown = true;
-  if (validationHidden) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  if (process.platform === 'darwin') app.focus({ steal: true });
-  mainWindow.focus();
-}
-
-function deliverPendingNavigation(): void {
-  if (!pendingNavigation || !rendererReady || !mainWindow) return;
-  mainWindow.webContents.send('xrCollector:navigate', pendingNavigation);
-  pendingNavigation = undefined;
-}
+const mainWindow = new MainWindow({
+  platform: process.platform,
+  hidden: validationHidden,
+  size: windowSize(process.env),
+  preload: path.join(app.getAppPath(), 'dist', 'node', 'electron', 'preload.cjs'),
+  createWindow: (options) => new BrowserWindow(options),
+  focusApp: () => app.focus({ steal: true }),
+  openExternal: (url) => { void shell.openExternal(url); },
+  runtime: () => runtime && {
+    url: runtime.listeners.ui.url,
+    resolveNotification: (id) => runtime ? runtime.resolveNotification(id) : Promise.resolve(null),
+    activeVaultId: () => runtime?.workspace?.activeVaultId() ?? null,
+  },
+  quitting: () => isQuitting,
+  sessionEnded: () => { isQuitting = true; },
+  closedByPerson: () => { void hintStillRunning(); },
+});
 
 /**
  * The first time the window closes on Windows, says the app keeps running in the notification area;
@@ -214,30 +98,18 @@ async function hintStillRunning(): Promise<void> {
   await closeHint.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
 }
 
-app.on('activate', () => {
-  const state = startupWindowState;
-  if (state && shouldShowForActivation(state.startedAtLogin, state.finished) && !isQuitting) showWindow();
-});
-
 app.whenReady().then(async () => {
-  // Electron only publishes macOS wasOpenedAtLogin while finishing launch, immediately before
-  // ready. Each process then sends its own reason through the single-instance lock; a losing
-  // process exits here and never creates a runtime.
-  const startedAtLogin = isLoginStartupLaunch(process.platform, process.argv,
-    process.platform === 'darwin' ? app.getLoginItemSettings({ type: 'mainAppService' }).wasOpenedAtLogin : false);
-  const gotSingleInstanceLock = app.requestSingleInstanceLock({ xrCollectorStartedAtLogin: startedAtLogin });
-  if (!gotSingleInstanceLock) {
-    app.quit();
-    return;
-  }
-  app.on('second-instance', (_event, commandLine, _workingDirectory, additionalData) => {
-    const launchData = additionalData as { xrCollectorStartedAtLogin?: unknown };
-    const secondStartedAtLogin = typeof launchData.xrCollectorStartedAtLogin === 'boolean'
-      ? launchData.xrCollectorStartedAtLogin
-      : isLoginStartupLaunch(process.platform, commandLine);
-    if (!secondStartedAtLogin) showWindow();
-  });
-  startupWindowState = { startedAtLogin, finished: false };
+  const launch = claimLaunch({
+    platform: process.platform,
+    argv: process.argv,
+    openedAtLogin: () => app.getLoginItemSettings({ type: 'mainAppService' }).wasOpenedAtLogin,
+    requestSingleInstanceLock: (data) => app.requestSingleInstanceLock(data),
+    onSecondInstance: (listener) => app.on('second-instance', (_event, commandLine, _workingDirectory, data) => listener(commandLine, data)),
+    onActivate: (listener) => app.on('activate', listener),
+    quit: () => app.quit(),
+  }, () => mainWindow.show(), () => isQuitting);
+  if (!launch) return;
+  const { startedAtLogin } = launch;
   const loginItemAdapter: LoginItemAdapter = {
     platform: process.platform,
     isPackaged: app.isPackaged,
@@ -246,83 +118,21 @@ app.whenReady().then(async () => {
     set: (options) => app.setLoginItemSettings(options),
   };
   const loginStartup = new DesktopLoginStartup(loginItemAdapter, path.join(app.getPath('userData'), 'login-startup.json'));
-  themePreference = new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'));
-  ipcMain.handle('xrCollector:theme:read', () => themePreference!.read());
-  ipcMain.on('xrCollector:renderer:ready', (event) => {
-    if (mainWindow?.webContents !== event.sender) return;
-    rendererReady = true;
-    deliverPendingNavigation();
+  registerPageChannels({
+    ipc: ipcMain,
+    theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json')),
+    pageReady: (sender) => mainWindow.pageReady(sender),
   });
-  ipcMain.handle('xrCollector:theme:write', (_event, theme: unknown) => {
-    if (!isStoredTheme(theme)) throw new Error('Unsupported theme preference');
-    return themePreference!.write(theme).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
-  });
-  /**
-   * A folder picker for one purpose, starting at the existing folder nearest `start`. macOS shows
-   * `message` above the panel, because its open panel shows no title.
-   */
-  const chooseFolder = async (event: Electron.IpcMainInvokeEvent, start: unknown, text: { title: string; buttonLabel: string; message: string },
-    properties: NonNullable<Electron.OpenDialogOptions['properties']>): Promise<string | null> => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options: Electron.OpenDialogOptions = {
-      ...text,
-      defaultPath: await existingDirectory(typeof start === 'string' && path.isAbsolute(start) ? start : app.getPath('documents')),
-      properties,
-    };
-    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
-    return result.canceled ? null : result.filePaths[0] ?? null;
-  };
-  ipcMain.handle('xrCollector:desktop:chooseVaultLocation', (event, start: unknown) => chooseFolder(event, start, {
-    title: '選擇位置', buttonLabel: '選擇位置', message: '選擇新的知識庫要建立在哪個資料夾裡。',
-  }, ['openDirectory', 'createDirectory']));
-  ipcMain.handle('xrCollector:desktop:chooseVault', (event, start: unknown) => chooseFolder(event, start, {
-    title: '選擇知識庫資料夾', buttonLabel: '開啟', message: '選擇 XR Collector 知識庫資料夾。',
-  }, ['openDirectory']));
   // Exports go to this folder unless the person picks another place; the import dialog opens here too.
   const exports = exportFolder(app.getPath('documents'));
-  const exportFilters: Electron.FileFilter[] = [{ name: 'XR Collector 匯出檔', extensions: ['zip'] }];
-  ipcMain.handle('xrCollector:desktop:chooseExportFile', async (event) => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    await mkdir(exports, { recursive: true });
-    const options: Electron.SaveDialogOptions = {
-      title: '匯出知識庫',
-      buttonLabel: '匯出',
-      defaultPath: path.join(exports, exportFileName(new Date())),
-      filters: exportFilters,
-      properties: ['createDirectory', 'showOverwriteConfirmation'],
-    };
-    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
-    if (result.canceled || !result.filePath) return null;
-    // The dialog confirmed replacing the file it showed. A name given the extension here was not
-    // confirmed, so the export dialog asks before replacing a file of that name.
-    return /\.zip$/iu.test(result.filePath)
-      ? { path: result.filePath, overwrite: true }
-      : { path: `${result.filePath}.zip`, overwrite: false };
-  });
-  ipcMain.handle('xrCollector:desktop:chooseImportFile', async (event) => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    await mkdir(exports, { recursive: true });
-    const options: Electron.OpenDialogOptions = {
-      title: '選擇匯出檔',
-      buttonLabel: '選擇',
-      message: '選擇 XR Collector 匯出的 .zip 檔。',
-      defaultPath: exports,
-      filters: exportFilters,
-      properties: ['openFile'],
-    };
-    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
-    return result.canceled ? null : result.filePaths[0] ?? null;
-  });
-  // The folder comes from the runtime, never from the page, so the page can only reveal the active Vault.
-  ipcMain.handle('xrCollector:desktop:revealVault', () => {
-    const vaultPath = runtime?.workspace?.status().vaultPath;
-    if (vaultPath) shell.showItemInFolder(vaultPath);
-  });
-  // Likewise the export file is the one the last finished export wrote, as the runtime reports it.
-  ipcMain.handle('xrCollector:desktop:revealExport', () => {
-    const status = runtime?.workspace?.status();
-    const exportPath = status?.operation === 'export' && status.state === 'completed' ? status.result?.exportPath : undefined;
-    if (exportPath) shell.showItemInFolder(exportPath);
+  registerDesktopDialogs({
+    ipc: ipcMain,
+    dialog,
+    windowOf: (sender) => BrowserWindow.fromWebContents(sender),
+    showItemInFolder: (file) => shell.showItemInFolder(file),
+    documents: app.getPath('documents'),
+    exports,
+    vaultStatus: () => runtime?.workspace?.status(),
   });
   // Collection pauses from suspend to resume. macOS sends neither event during the dark wakes of a
   // sleeping Mac (Power Nap, maintenance), so nothing is checked until the person wakes it. The
@@ -341,10 +151,7 @@ app.whenReady().then(async () => {
   const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
   startupBuildInfo = buildInfo;
   const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
-  const updateRepository = updateRepositoryFromPackageMetadata(packageMetadata);
-  const updateSource = process.env.XR_COLLECTOR_UPDATE_BASE_URL
-    ? new GenericIndexSource(process.env.XR_COLLECTOR_UPDATE_BASE_URL, updateRequest)
-    : new GitHubReleasesSource(updateRepository, updateRequest);
+  const updateSource = updateSourceFor(process.env, packageMetadata, updateRequest);
   // Platform adapters replace this unavailable boundary only when the installed package has a
   // verified native handoff path. Discovery remains useful in development without pretending it can install.
   const nativeInstaller: NativeInstaller = process.platform === 'darwin'
@@ -387,15 +194,11 @@ app.whenReady().then(async () => {
     loginStartup,
     startedAtLogin,
     updates: updateService,
-    systemNotifications: new ElectronSystemNotifications((id) => showWindow({ notificationId: id }),
+    systemNotifications: new ElectronSystemNotifications((id) => mainWindow.show({ notificationId: id }),
       validationControl ? (notification) => validationNotifications.push(notification) : undefined),
   });
   for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
-  if (pendingNotificationId) {
-    const id = pendingNotificationId;
-    pendingNotificationId = undefined;
-    showWindow({ notificationId: id });
-  }
+  mainWindow.runtimeStarted();
   if (!startedAtLogin) {
     try {
       const repair = await loginStartup.repairMovedRegistration();
@@ -406,22 +209,23 @@ app.whenReady().then(async () => {
     }
   }
   watchNetwork();
-  const showInitially = !startedAtLogin || pendingManualShow;
-  await createWindow(showInitially);
-  // A tray request can arrive while the window is loading. Replay its latest page as
-  // well as the show request after load; otherwise a device-level update click can land on the
-  // default page (especially before a Vault exists).
-  if (pendingNavigation || startedAtLogin && pendingManualShow && !showInitially) showWindow();
+  await mainWindow.open(startedAtLogin);
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
     serverUrl: runtime.listeners.ui.url,
     changes: runtime.changes,
     iconFolder: resources.trayIcons,
-    show: showWindow,
+    show: (page) => mainWindow.show(page),
     quit: () => app.quit(),
   });
-  if (validationControl) exposeValidationControl(tray);
-  startupWindowState.finished = true;
+  if (validationControl) {
+    exposeValidationControl({
+      tray, window: mainWindow,
+      notifications: () => validationNotifications,
+      update: () => updateService?.status() ?? null,
+    });
+  }
+  launch.finish();
   const lastAttempt = updateService.status().lastAttempt;
   const currentNeedsConfirmation = Boolean(lastAttempt && ['pending', 'unknown'].includes(lastAttempt.outcome)
     && lastAttempt.version === buildInfo.version && lastAttempt.buildId === buildInfo.buildId);
@@ -503,8 +307,9 @@ async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeIn
         detail: `Collector 無法安全完成本次停止，將結束程式。請重新開啟 XR Collector 後再試。\n\n${error.message}`,
         buttons: ['結束 XR Collector'], defaultId: 0, noLink: true,
       };
-      await (mainWindow ? dialog.showMessageBox(mainWindow, notice) : dialog.showMessageBox(notice)).catch(() => undefined);
-      mainWindow?.destroy(); mainWindow = null;
+      const window = mainWindow.current;
+      await (window ? dialog.showMessageBox(window, notice) : dialog.showMessageBox(notice)).catch(() => undefined);
+      mainWindow.destroy();
       app.exit(1);
     },
   });
@@ -542,8 +347,7 @@ app.on('before-quit', (event) => {
   networkWatch = null;
   tray?.destroy();
   tray = null;
-  mainWindow?.destroy();
-  mainWindow = null;
+  mainWindow.destroy();
   const activeRuntime = runtime;
   runtime = null;
   void (async () => {
@@ -562,22 +366,3 @@ app.on('before-quit', (event) => {
     }
   })();
 });
-
-function exposeValidationControl(appTray: AppTray): void {
-  (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
-    tray: async () => { await appTray.refresh(); return appTray.current(); },
-    trayShown: () => ({ menu: appTray.current(), reads: appTray.reads, reading: appTray.reading }),
-    click: (action: TrayAction) => appTray.run(action),
-    notifications: () => [...validationNotifications],
-    activateNotification: (id: string) => showWindow({ notificationId: id }),
-    window: () => ({
-      exists: Boolean(mainWindow),
-      shown: Boolean(mainWindow) && windowShown,
-      visible: mainWindow?.isVisible() ?? false,
-      focused: mainWindow?.isFocused() ?? false,
-      url: mainWindow?.webContents.getURL() ?? null,
-    }),
-    closeWindow: () => mainWindow?.close(),
-    update: () => updateService?.status() ?? null,
-  };
-}
