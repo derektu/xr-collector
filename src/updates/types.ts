@@ -1,4 +1,4 @@
-import type { BuildInfo, DeviceUpdateStatus, UpdateOffer } from '../core/types.js';
+import type { BuildInfo, DeviceUpdateStatus, UpdateOffer, UpdateSelection } from '../core/types.js';
 
 export interface UpdateIdentity { version: string; target: string }
 export interface UpdateSource {
@@ -47,5 +47,4 @@ export interface UpdateAccess {
   /** Calls `listener` after each change of the status; returns the function that stops it. */
   subscribe?(listener: () => void): () => void;
 }
-export interface UpdateSelection { version: string; sha256: string }
 export interface PackagedIdentity extends UpdateIdentity { buildInfo: BuildInfo }

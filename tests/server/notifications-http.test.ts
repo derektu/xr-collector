@@ -3,7 +3,7 @@
 // body is refused with 400.
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../src/server/app.js';
-import type { NotificationState } from '../../src/notifications/types.js';
+import type { NotificationState } from '../../src/core/types.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 
 const state = (enabled: boolean): NotificationState => ({

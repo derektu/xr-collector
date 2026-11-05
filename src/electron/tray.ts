@@ -2,8 +2,7 @@ import path from 'node:path';
 import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
 import type { ChangeBatch } from '../core/changes.js';
-import type { CollectionScheduleView, DeviceUpdateStatus, JobOverview } from '../core/types.js';
-import type { NotificationState } from '../notifications/types.js';
+import { API_ROUTES, type ApiRoute, type BodyOf, type ResponseOf } from '../core/api-routes.js';
 import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
 
@@ -99,13 +98,13 @@ export class AppTray {
       case 'activity': this.options.show('activity'); return;
       case 'check_app_update':
         if (this.state?.update && ['idle', 'up_to_date', 'error'].includes(this.state.update.phase)) {
-          await this.send('POST', '/api/device/updates/check', undefined);
+          await this.send(API_ROUTES.checkUpdate, undefined);
         }
         this.options.show('update');
         break;
       case 'quit': this.options.quit(); return;
-      case 'check_now': await this.send('POST', '/api/subscription-checks', {}); break;
-      case 'toggle_auto_check': await this.send('PUT', '/api/schedule', { enabled: !this.state?.schedule?.enabled }); break;
+      case 'check_now': await this.send(API_ROUTES.checkSubscriptions, undefined); break;
+      case 'toggle_auto_check': await this.send(API_ROUTES.setSchedule, { enabled: !this.state?.schedule?.enabled }); break;
     }
     await this.refresh();
   }
@@ -157,13 +156,13 @@ export class AppTray {
     this.reads += 1;
     try {
       const [update, notifications] = await Promise.all([
-        this.get<{ update: DeviceUpdateStatus }>('/api/device/updates'),
-        this.get<{ notifications: NotificationState }>('/api/device/notifications'),
+        this.get(API_ROUTES.update),
+        this.get(API_ROUTES.notifications),
       ]);
       try {
         const [overview, schedule] = await Promise.all([
-          this.get<{ overview: JobOverview }>('/api/jobs/overview'),
-          this.get<{ schedule: CollectionScheduleView }>('/api/schedule'),
+          this.get(API_ROUTES.jobOverview),
+          this.get(API_ROUTES.schedule),
         ]);
         return { overview: overview.overview, schedule: schedule.schedule, update: update.update,
           actionable: notifications.notifications.active };
@@ -173,17 +172,17 @@ export class AppTray {
     }
   }
 
-  private async get<T>(route: string): Promise<T> {
-    const response = await fetch(new URL(route, this.options.serverUrl));
-    if (!response.ok) throw new Error(`${route} answered ${response.status}`);
-    return await response.json() as T;
+  private async get<Route extends ApiRoute<unknown, unknown, unknown>>(route: Route): Promise<ResponseOf<Route>> {
+    const response = await fetch(new URL(route.path, this.options.serverUrl));
+    if (!response.ok) throw new Error(`${route.path} answered ${response.status}`);
+    return await response.json() as ResponseOf<Route>;
   }
 
-  private async send(method: 'POST' | 'PUT', route: string, body: unknown): Promise<void> {
-    const response = await fetch(new URL(route, this.options.serverUrl), {
-      method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  private async send<Route extends ApiRoute<unknown, unknown, unknown>>(route: Route, body: BodyOf<Route>): Promise<void> {
+    const response = await fetch(new URL(route.path, this.options.serverUrl), {
+      method: route.method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw new Error(`${method} ${route} answered ${response.status}: ${await response.text()}`);
+    if (!response.ok) throw new Error(`${route.method} ${route.path} answered ${response.status}: ${await response.text()}`);
   }
 
   /** macOS takes black template images it tints for the menu bar; Windows takes colored ones. */

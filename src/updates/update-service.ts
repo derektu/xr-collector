@@ -5,7 +5,8 @@ import path from 'node:path';
 import { CollectorError, type DeviceUpdateStatus, type UpdateInstallAttempt, type UpdateOffer } from '../core/types.js';
 import { readJsonFile, writeJsonFile } from '../core/json-file.js';
 import { compareVersions } from './release-index.js';
-import type { NativeInstaller, NativeInstallRecovery, UpdateAccess, UpdateApplyRequest, UpdateIdentity, UpdateSelection, UpdateSource } from './types.js';
+import type { NativeInstaller, NativeInstallRecovery, UpdateAccess, UpdateApplyRequest, UpdateIdentity, UpdateSource } from './types.js';
+import type { UpdateSelection } from '../core/types.js';
 
 interface SavedUpdateState {
   schemaVersion: 1;
