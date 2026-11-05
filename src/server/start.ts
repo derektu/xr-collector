@@ -1,6 +1,6 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
-import type { VaultWorkspace } from '../vault/workspace.js';
+import type { VaultWorkspace } from '../runtime/vault-workspace.js';
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
@@ -11,7 +11,7 @@ import type { BuildInfo } from '../core/update-types.js';
 import type { TranscriptSearch } from '../core/search-types.js';
 import type { CollectorRuntimeStatus } from '../core/device-types.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
-import type { AgentConnectionAccess } from './agent-access.js';
+import type { AgentConnectionAccess } from '../runtime/agent-connection.js';
 import type { UpdateAccess } from '../updates/types.js';
 
 export interface StartServerOptions {

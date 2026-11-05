@@ -8,9 +8,9 @@ import { internetProbe } from '../core/connectivity.js';
 import type { BuildInfo } from '../core/update-types.js';
 import { createSourcePlugins } from '../plugins/index.js';
 import { DESKTOP_AGENT_PORT } from '../runtime/agent-connection-defaults.js';
-import { loadBuildInfo } from '../runtime/build-info.js';
+import { loadBuildInfo } from '../updates/build-info.js';
 import { bundledResources } from '../runtime/bundled-resources.js';
-import { CollectorRuntime } from '../runtime/collector-runtime.js';
+import { startCollectorServer, type CollectorServer } from '../server/collector-server.js';
 import { backupFolder, exportFileName, exportFolder } from '../vault/transfer-files.js';
 import { CloseHintRecord } from './close-hint.js';
 import { FileThemePreference, isStoredTheme } from './theme-preference.js';
@@ -32,7 +32,7 @@ import { ElectronSystemNotifications } from './system-notifications.js';
 import { notificationNavigation } from './notification-navigation.js';
 
 let mainWindow: BrowserWindow | null = null;
-let runtime: CollectorRuntime | null = null;
+let runtime: CollectorServer | null = null;
 let themePreference: FileThemePreference | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
@@ -108,7 +108,7 @@ function createWindow(showInitially = true): Promise<void> {
 
 async function createWindowOnce(showInitially: boolean): Promise<void> {
   if (!runtime) throw new Error('Runtime must start before the window');
-  const serverUrl = runtime.server.url;
+  const serverUrl = runtime.listeners.ui.url;
   const validationSize = /^([0-9]+)x([0-9]+)$/.exec(process.env.XR_COLLECTOR_VALIDATION_WINDOW_SIZE ?? '');
   const width = validationSize ? Number(validationSize[1]!) : 1240;
   const height = validationSize ? Number(validationSize[2]!) : 820;
@@ -361,7 +361,7 @@ app.whenReady().then(async () => {
     },
     apply: (request) => { void coordinateUpdate(request, nativeInstaller); },
   });
-  runtime = await CollectorRuntime.start({
+  runtime = await startCollectorServer({
     buildInfo,
     profilePath: app.getPath('userData'),
     sources: sources.registry,
@@ -414,7 +414,7 @@ app.whenReady().then(async () => {
   if (pendingNavigation || startedAtLogin && pendingManualShow && !showInitially) showWindow();
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
-    serverUrl: runtime.server.url,
+    serverUrl: runtime.listeners.ui.url,
     changes: runtime.changes,
     iconFolder: resources.trayIcons,
     show: showWindow,

@@ -55,3 +55,9 @@ export interface AgentConnectionStatus {
   state: 'available' | 'unavailable'; activeUrl: string | null; activePort: number | null;
   configured: AgentPortSetting; restartRequired: boolean; message: string;
 }
+
+/** The device's system notification setting and the notifications it keeps. */
+export interface NotificationAccess {
+  read(): Promise<NotificationState>;
+  update(enabled: boolean): Promise<NotificationState>;
+}

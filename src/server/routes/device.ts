@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../core/api-routes.js';
 import { CollectorError } from '../../core/collector-error.js';
 import type { ActivityLogHealth } from '../../core/activity-types.js';
-import type { CollectorRuntimeStatus, NotificationState } from '../../core/device-types.js';
+import type { CollectorRuntimeStatus, NotificationAccess, NotificationState } from '../../core/device-types.js';
 import { unavailableLoginStartup, type LoginStartupAccess } from '../../core/login-startup.js';
 import type { SourceRegistry } from '../../core/source-registry.js';
 import type { BuildInfo, DeviceUpdateStatus, UpdateSelection } from '../../core/update-types.js';
@@ -10,11 +10,6 @@ import type { Pacing } from '../../pacing/pacing-gate.js';
 import type { UpdateAccess } from '../../updates/types.js';
 import { serve } from '../api-route.js';
 import type { NetworkGuard } from './network.js';
-
-export interface NotificationAccess {
-  read(): Promise<NotificationState>;
-  update(enabled: boolean): Promise<NotificationState>;
-}
 
 export interface DeviceRouteOptions {
   sources: SourceRegistry;

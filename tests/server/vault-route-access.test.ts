@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../src/server/app.js';
 import { VaultOperationLock, type VaultAccess } from '../../src/vault/operation-lock.js';
-import type { VaultWorkspace } from '../../src/vault/workspace.js';
+import type { VaultWorkspace } from '../../src/runtime/vault-workspace.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
 import { anyService, apiRoutes, appWithEveryRoute, type ApiRoute } from '../support/api-routes.js';
 

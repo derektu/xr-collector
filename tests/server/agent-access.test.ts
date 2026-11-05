@@ -18,7 +18,7 @@ import { MeilisearchBackend } from '../../src/search/meilisearch-backend.js';
 import { loadSearchLexicon } from '../../src/search/search-lexicon.js';
 import { startMeilisearchProcess } from '../../src/search/meilisearch-process.js';
 import { createHttpApp } from '../../src/server/app.js';
-import { startAgentAccess } from '../../src/server/agent-access.js';
+import { startAgentAccess } from '../support/agent-access.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';

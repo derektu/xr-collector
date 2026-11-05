@@ -9,7 +9,7 @@ import type { TranscriptSearch } from '../../src/core/search-types.js';
 import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
-import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
+import { VaultWorkspace, type WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
 import { ensureMarker } from './package-fixtures.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';

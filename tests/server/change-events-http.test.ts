@@ -11,7 +11,7 @@ import { parseCursor, type Change, type ChangeBatch } from '../../src/core/chang
 import type { SearchResponse, SearchStatus, TranscriptSearch } from '../../src/core/search-types.js';
 import type { Pacing, PacingEvent } from '../../src/pacing/pacing-gate.js';
 import type { DiscoveredYouTubeVideo } from '../../src/plugins/youtube/adapter.js';
-import { CollectorRuntime, type CollectorRuntimeOptions } from '../../src/runtime/collector-runtime.js';
+import { startCollectorServer, type CollectorServerOptions } from '../../src/server/collector-server.js';
 import type { DeviceUpdateStatus, UpdateAccess } from '../../src/updates/types.js';
 import { withYouTube } from '../support/youtube-sources.js';
 import { eventually } from '../support/wait.js';
@@ -112,7 +112,7 @@ async function start(options: { vault?: boolean } = {}) {
   const pacing = new FakePacing();
   const updates = new FakeUpdates();
   const listed: DiscoveredYouTubeVideo[] = [video('chgvideo001')];
-  const runtime = await CollectorRuntime.start({
+  const runtime = await startCollectorServer({
     sources: PRODUCT_SOURCES,
     profilePath: root,
     ...(options.vault === false ? {} : { explicitVaultPath: path.join(root, 'vault') }),
@@ -130,9 +130,9 @@ async function start(options: { vault?: boolean } = {}) {
     agentSettingsFile: path.join(root, 'agent-settings.json'),
     skillPath: path.resolve('skills/xr-collector-agent'),
     uiPort: 0,
-  } satisfies CollectorRuntimeOptions);
+  } satisfies CollectorServerOptions);
   cleanups.push(() => runtime.close());
-  const ui = runtime.server.url;
+  const ui = runtime.listeners.ui.url;
   const send = (method: string, route: string, body?: unknown) => fetch(`${ui}${route}`, {
     method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
@@ -283,7 +283,7 @@ describe('change events', () => {
     await agent.next((event) => event.event === 'hello', 'agent hello');
 
     const rebound = await new Promise<{ status: number; revision: unknown }>((resolve, reject) => {
-      const request = httpRequest(`${ui}/api/events`, { headers: { host: `rebound.example:${runtime.server.port}` } }, (response) => {
+      const request = httpRequest(`${ui}/api/events`, { headers: { host: `rebound.example:${runtime.listeners.ui.port}` } }, (response) => {
         resolve({ status: response.statusCode ?? 0, revision: response.headers['xr-revision'] ?? null });
         response.resume();
       });

@@ -9,7 +9,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { manifestOf, packageBytes, packageFiles, packageOf, unpackBytes } from '../support/package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { VAULT_MARKER } from '../../src/vault/vault-directory.js';
-import { subscriptionCollections, VaultWorkspace } from '../../src/vault/workspace.js';
+import { subscriptionCollections, VaultWorkspace } from '../../src/runtime/vault-workspace.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import { createHttpApp } from '../../src/server/app.js';
 import { Collector } from '../../src/core/collector.js';

@@ -15,7 +15,7 @@ import { createVaultDirectory, inspectVaultDirectory, readVaultId, VAULT_MARKER 
 import { packageBytes, packageFiles } from '../support/package-fixtures.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import { importNewVault } from '../../src/vault/vault-import.js';
-import { VaultWorkspace, type WorkspaceOptions } from '../../src/vault/workspace.js';
+import { VaultWorkspace, type WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';

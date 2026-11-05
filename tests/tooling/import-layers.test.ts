@@ -4,12 +4,8 @@ import { importsOf, productFiles } from '../support/source-imports.js';
 // Guards the developer, not the user: a module that imports a module above it ties the two together, so a change in
 // the upper one can break the lower one, and the two can no longer be read, tested or replaced alone.
 // Every product file belongs to a module, and every module to a layer. A file imports its own module,
-// any module of a lower layer, and the modules of its own layer that `SAME_LAYER` lists. Type-only
-// imports count: they tie the two modules' shapes together just the same.
-//
-// `EXCEPTIONS` lists the imports that break the rule today, one `file -> file` edge per line. The list
-// only gets shorter: an import that breaks the rule and is not listed fails, and so does a listed
-// line whose import no longer breaks it, so the ticket that removes an edge deletes its line.
+// any module of a lower layer except those `NOT_BELOW` lists, and the modules of its own layer that
+// `SAME_LAYER` lists. Type-only imports count: they tie the two modules' shapes together just the same.
 
 /** The layers, from the bottom up. */
 const LAYERS: ReadonlyArray<{ name: string; modules: readonly string[] }> = [
@@ -23,8 +19,10 @@ const LAYERS: ReadonlyArray<{ name: string; modules: readonly string[] }> = [
       'plugins/<type>',
     ],
   },
-  { name: 'assembly', modules: ['plugins/index', 'runtime', 'vault/workspace'] },
-  { name: 'transport', modules: ['electron', 'server', 'web'] },
+  { name: 'assembly', modules: ['plugins/index', 'runtime'] },
+  { name: 'transport', modules: ['server', 'web'] },
+  // The desktop shell starts the HTTP server of its process.
+  { name: 'desktop shell', modules: ['electron'] },
 ];
 
 /** The modules of its own layer that a module may import. */
@@ -33,7 +31,13 @@ const SAME_LAYER: Readonly<Record<string, readonly string[]>> = {
   // Only types: the subscription port and the work facts (tests/tooling/subscription-seam.test.ts).
   subscriptions: ['jobs'],
   'plugins/<type>': ['pacing'],
-  runtime: ['vault/workspace'],
+};
+
+/** The modules of a lower layer that a module still may not import. */
+const NOT_BELOW: Readonly<Record<string, readonly string[]>> = {
+  // The desktop shell starts the HTTP server and loads the web page from it; it reaches the page only
+  // through IPC and HTTP and never runs the page's code.
+  electron: ['web'],
 };
 
 /** Files whose module is not their directory. */
@@ -41,17 +45,7 @@ const FILE_MODULES: Readonly<Record<string, string>> = {
   // The product's source list: its declarations, which the web build shares, and its server entries.
   'src/plugins/declarations.ts': 'plugins/index',
   'src/plugins/index.ts': 'plugins/index',
-  'src/vault/workspace.ts': 'vault/workspace',
 };
-
-const EXCEPTIONS = [
-  // updates -> runtime: the build identity.
-  'src/updates/release-index.ts -> src/runtime/build-info.ts',
-  // runtime -> server: runtime and server import each other (#265).
-  'src/runtime/collector-runtime.ts -> src/server/agent-access.ts',
-  'src/runtime/collector-runtime.ts -> src/server/app.ts',
-  'src/runtime/collector-runtime.ts -> src/server/start.ts',
-];
 
 const LAYER_OF = new Map(LAYERS.flatMap((layer, rank) => layer.modules.map((module) => [module, rank] as const)));
 
@@ -73,7 +67,8 @@ function allowed(from: string, to: string): boolean {
   if (from === to) return true;
   const fromLayer = LAYER_OF.get(tableEntry(from))!;
   const toLayer = LAYER_OF.get(tableEntry(to))!;
-  return toLayer < fromLayer || (toLayer === fromLayer && (SAME_LAYER[tableEntry(from)] ?? []).includes(tableEntry(to)));
+  if (toLayer < fromLayer) return !(NOT_BELOW[tableEntry(from)] ?? []).includes(tableEntry(to));
+  return toLayer === fromLayer && (SAME_LAYER[tableEntry(from)] ?? []).includes(tableEntry(to));
 }
 
 const files = productFiles();
@@ -91,7 +86,8 @@ describe('imports that follow the layers', () => {
     expect(edges).toEqual(expect.arrayContaining([
       'src/jobs/job-manager.ts -> src/core/job-types.ts',
       'src/web/App.tsx -> src/core/job-role.ts',
-      'src/electron/main.ts -> src/runtime/collector-runtime.ts',
+      'src/electron/main.ts -> src/server/collector-server.ts',
+      'src/server/collector-server.ts -> src/runtime/collector-runtime.ts',
     ]));
   });
 
@@ -102,10 +98,11 @@ describe('imports that follow the layers', () => {
   });
 
   it('imports only its own module, lower layers and the listed modules of its own layer', () => {
-    expect(violations.filter((edge) => !EXCEPTIONS.includes(edge))).toEqual([]);
+    expect(violations).toEqual([]);
   });
 
-  it('lists only imports that still break the layers', () => {
-    expect(EXCEPTIONS.filter((edge) => !violations.includes(edge))).toEqual([]);
+  it('lets the desktop shell import the server but not the web page', () => {
+    expect(allowed('electron', 'server')).toBe(true);
+    expect(allowed('electron', 'web')).toBe(false);
   });
 });

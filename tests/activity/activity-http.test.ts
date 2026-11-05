@@ -8,7 +8,7 @@ import type { CollectionJob } from '../../src/core/job-types.js';
 import type { SavedDocument } from '../../src/core/document-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
-import { CollectorRuntime } from '../../src/runtime/collector-runtime.js';
+import { startCollectorServer } from '../../src/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { createHttpApp, type ActivityAccess, type HttpAppOptions } from '../../src/server/app.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
@@ -185,7 +185,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
   it('serves every device event from a runtime with no Vault yet, masking the Agent token', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-runtime-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
-    const runtime = await CollectorRuntime.start({
+    const runtime = await startCollectorServer({
       sources: PRODUCT_SOURCES,
       profilePath: root,
       workspace: withYouTube({
@@ -198,7 +198,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     cleanups.push(() => runtime.close());
-    const { connection: { token, url } } = await (await fetch(`${runtime.server.url}/api/device/agent/connection`)).json() as { connection: { token: string; url: string } };
+    const { connection: { token, url } } = await (await fetch(`${runtime.listeners.ui.url}/api/device/agent/connection`)).json() as { connection: { token: string; url: string } };
     const today = new Date().toISOString();
     await mkdir(path.join(root, 'jobs', 'events'), { recursive: true });
     await writeFile(path.join(root, 'jobs', 'events', `${today.slice(0, 10)}.jsonl`), `${JSON.stringify({
@@ -206,7 +206,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
       message: `合併失敗 token ${token}`, vaultPath: '/vaults/elsewhere', jobId: null,
     })}\n`);
 
-    const ui = await fetch(`${runtime.server.url}/api/activity`);
+    const ui = await fetch(`${runtime.listeners.ui.url}/api/activity`);
     expect(ui.status).toBe(200);
     const body = await ui.json() as { events: Array<{ eventId: string; message: string }> };
     expect(body.events.map((event) => event.eventId)).toEqual(['old-vault']);

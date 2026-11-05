@@ -1,26 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../core/api-routes.js';
 import { CollectorError } from '../../core/collector-error.js';
-import type {
-  NewVaultCheck,
-  PackageDescription,
-  VaultInspection,
-  VaultSetupRequest,
-  VaultSetupResult,
-  VaultSetupStatus,
-} from '../../core/vault-types.js';
+import type { VaultSetup, VaultSetupRequest } from '../../core/vault-types.js';
 import { serve } from '../api-route.js';
-
-/** Vault location operations that stay available before a Vault is active. */
-export interface VaultSetup {
-  status(): VaultSetupStatus;
-  inspect(path: string): Promise<VaultInspection>;
-  /** Checks the new Vault folder `name` in `location` before it is created. */
-  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck>;
-  /** Reads what an export file holds before a Vault is created from it. */
-  describePackage(file: unknown): Promise<PackageDescription>;
-  setup(request: VaultSetupRequest): Promise<VaultSetupResult>;
-}
 
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
 

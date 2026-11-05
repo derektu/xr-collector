@@ -21,7 +21,7 @@ import { importNewVault, type ImportFault } from '../../src/vault/vault-import.j
 import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
-import type { VaultWorkspace, WorkspaceOptions } from '../../src/vault/workspace.js';
+import type { VaultWorkspace, WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine } from '../support/exchange-fixtures.js';
 import type { YouTubeTestSources } from '../support/youtube-sources.js';

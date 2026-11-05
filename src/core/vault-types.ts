@@ -133,3 +133,14 @@ export interface ImportPreview {
    */
   mergeRecords: boolean;
 }
+
+/** Vault location operations that stay available before a Vault is active. */
+export interface VaultSetup {
+  status(): VaultSetupStatus;
+  inspect(path: string): Promise<VaultInspection>;
+  /** Checks the new Vault folder `name` in `location` before it is created. */
+  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck>;
+  /** Reads what an export file holds before a Vault is created from it. */
+  describePackage(file: unknown): Promise<PackageDescription>;
+  setup(request: VaultSetupRequest): Promise<VaultSetupResult>;
+}
