@@ -57,10 +57,6 @@ const EXCEPTIONS = [
   'src/jobs/job-manager.ts -> src/subscriptions/candidates.ts',
   // subscriptions -> vault: the vault format mark (#257).
   'src/subscriptions/subscription-store.ts -> src/vault/vault-directory.ts',
-  // vault -> subscriptions: the exchange reads and writes the subscription files (#256).
-  'src/vault/vault-directory.ts -> src/subscriptions/subscription-files.ts',
-  'src/vault/vault-merge.ts -> src/subscriptions/subscription-files.ts',
-  'src/vault/vault-package.ts -> src/subscriptions/subscription-files.ts',
   // updates -> runtime: the build identity.
   'src/updates/release-index.ts -> src/runtime/build-info.ts',
   // runtime -> server: runtime and server import each other (#265).

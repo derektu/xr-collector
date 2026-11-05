@@ -1,11 +1,9 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
-import {
-  canonicalJson, removalsFromJson, subscriptionContent, subscriptionsFromJson, subscriptionsToJson, type SubscriptionRemoval,
-} from '../subscriptions/subscription-files.js';
-import { subscriptionDefinitions } from '../core/source-registry.js';
-import { CollectorError, type ChangeCounts, type ImportMode, type SubscriptionRecord } from '../core/types.js';
-import type { SourceDefinition } from '../plugins/types.js';
+import { canonicalJson } from '../core/canonical-json.js';
+import { requireDefinition } from '../core/source-registry.js';
+import { subscriptionExchange, type ExchangedSubscriptions, type SubscriptionFileExchange } from '../core/subscription-exchange.js';
+import { CollectorError, type ChangeCounts, type ImportMode } from '../core/types.js';
 import { DELETIONS_FILE, deletionId, deletionsFromJson, deletionsToJson, type DeletionRecord } from './deleted-documents.js';
 import { documentIdFromPath, documentPathFromId } from './document-paths.js';
 
@@ -87,12 +85,10 @@ async function json(files: FileSource, file: string): Promise<unknown> {
 }
 
 /** The subscriptions file of one source type on one side. */
-interface TypeSubscriptions {
-  definition: SourceDefinition;
-  rows: Map<string, SubscriptionRecord>;
-  removals: Map<string, SubscriptionRemoval>;
-  /** The top-level fields of the file, which a rewrite keeps. */
-  top: Record<string, unknown>;
+interface TypeSubscriptions extends ExchangedSubscriptions {
+  exchange: SubscriptionFileExchange;
+  /** The parsed file, or undefined when the side has none. */
+  value: unknown;
 }
 
 interface Settings {
@@ -107,16 +103,15 @@ const top = (value: unknown) => (value && typeof value === 'object' && !Array.is
 
 async function settingsOf(files: FileSource): Promise<Settings> {
   const subscriptions = new Map<string, TypeSubscriptions>();
-  for (const definition of subscriptionDefinitions()) {
-    const file = await json(files, definition.storage!.subscriptionsFile);
-    const rows = new Map<string, SubscriptionRecord>();
-    for (const row of subscriptionsFromJson(definition, file)) {
-      if (rows.has(row.id)) throw new CollectorError('invalid_request', `${definition.subscription!.targetNoun} ID 重複：${row.id}`);
-      rows.set(row.id, row);
+  for (const exchange of subscriptionExchange().files()) {
+    const value = await json(files, exchange.file);
+    const read = exchange.read(value);
+    const ids = new Set<string>();
+    for (const { id } of read.subscriptions) {
+      if (ids.has(id)) throw new CollectorError('invalid_request', `${requireDefinition(exchange.type).subscription!.targetNoun} ID 重複：${id}`);
+      ids.add(id);
     }
-    subscriptions.set(definition.id, {
-      definition, rows, removals: new Map(removalsFromJson(definition, file).map((record) => [record.id, record])), top: top(file),
-    });
+    subscriptions.set(exchange.type, { ...read, exchange, value });
   }
   const deletions = await json(files, DELETIONS_FILE);
   return {
@@ -143,13 +138,13 @@ export async function itemStates(files: FileSource): Promise<ItemStates> {
     const key = `document:${id}`;
     if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.deletedAt });
   }
-  for (const [type, { rows, removals }] of settings.subscriptions) {
-    for (const [id, row] of rows) {
-      states.set(subscriptionKey(type, id), { state: 'present', digest: digest(subscriptionContent(row)), at: row.updatedAt ?? row.addedAt });
+  for (const [type, { subscriptions, removals }] of settings.subscriptions) {
+    for (const { id, content, at } of subscriptions) {
+      states.set(subscriptionKey(type, id), { state: 'present', digest: digest(content), at });
     }
-    for (const [id, record] of removals) {
+    for (const { id, at } of removals) {
       const key = subscriptionKey(type, id);
-      if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at: record.removedAt });
+      if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at });
     }
   }
   // Source IDs that differ in letter case alone cannot sit side by side on a case-insensitive disk.
@@ -261,9 +256,8 @@ export interface ImportPlan {
 /**
  * The file changes that take `keys` from the file. A document taken from the file arrives with its
  * file and loses its local deletion record, or leaves as the file's deletion record with its file
- * removed, or leaves with both removed when the file has neither. A subscription taken from the file
- * keeps the local collection progress when the Vault has it and is checked first one of its intervals
- * after the import; a removal taken from the file replaces the subscription with that record.
+ * removed, or leaves with both removed when the file has neither. Subscriptions and their removal
+ * records are taken as the subscriptions block merges two copies of its file (`SubscriptionFileExchange.take`).
  * Settings files keep their other top-level fields; the automatic collection switch is never touched.
  */
 export async function planChanges(local: FileSource, incoming: FileSource, keys: readonly string[], localStates: ItemStates): Promise<ImportPlan> {
@@ -272,7 +266,8 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
   const mine = await settingsOf(local);
   const theirs = await settingsOf(incoming);
   let recordsChanged = false;
-  const subscriptionsChanged = new Set<string>();
+  /** The subscription IDs taken from the file, by source type. */
+  const subscriptionsTaken = new Map<string, string[]>();
   for (const key of keys) {
     if (key.startsWith('document:')) {
       const id = key.slice('document:'.length);
@@ -289,51 +284,18 @@ export async function planChanges(local: FileSource, incoming: FileSource, keys:
     } else {
       const rest = key.slice('subscription:'.length);
       const type = rest.slice(0, rest.indexOf(':'));
-      const id = rest.slice(type.length + 1);
-      const ours = mine.subscriptions.get(type);
-      const other = theirs.subscriptions.get(type);
-      if (!ours || !other) throw new Error(`Not a subscription key: ${key}`);
-      const row = other.rows.get(id);
-      const before = ours.rows.get(id);
-      if (row) {
-        const merged: SubscriptionRecord = {
-          ...(before ? withoutProgress(row) : row), ...(before ? collectionProgress(before) : {}), nextCheckAt: null, lastDispatchedAt: null,
-        };
-        // A subscription paused itself only while it is paused and has the failures that paused it.
-        if (merged.enabled || !merged.checkFailures) delete merged.autoPausedAt;
-        ours.rows.set(id, merged);
-      } else ours.rows.delete(id);
-      const removal = other.removals.get(id);
-      if (removal) ours.removals.set(id, removal);
-      else ours.removals.delete(id);
-      subscriptionsChanged.add(type);
+      if (!mine.subscriptions.has(type)) throw new Error(`Not a subscription key: ${key}`);
+      subscriptionsTaken.set(type, [...subscriptionsTaken.get(type) ?? [], rest.slice(type.length + 1)]);
     }
   }
   const rewrite = async (file: string, value: Record<string, unknown>) => {
     const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
     if (!local.has(file) || !(await local.read(file)).equals(bytes)) changes.set(file, { bytes });
   };
-  for (const type of subscriptionsChanged) {
-    const { definition, rows, removals, top: fileTop } = mine.subscriptions.get(type)!;
-    // The records go last, after the subscription list.
-    const { removed: _removed, ...kept } = fileTop;
-    await rewrite(definition.storage!.subscriptionsFile, subscriptionsToJson(definition, kept, [...rows.values()], [...removals.values()]));
+  for (const [type, ids] of subscriptionsTaken) {
+    const { exchange, value } = mine.subscriptions.get(type)!;
+    await rewrite(exchange.file, exchange.take(value, theirs.subscriptions.get(type)!.value, ids));
   }
   if (recordsChanged) await rewrite(DELETIONS_FILE, { ...mine.deletionsTop, ...deletionsToJson([...mine.records.values()]) });
   return { changes, displaced };
-}
-
-/** A subscription without the collection progress an import never takes over for a subscription this Vault has. */
-function withoutProgress(row: SubscriptionRecord): SubscriptionRecord {
-  const { outOfRange: _outOfRange, failures: _failures, checkFailures: _checkFailures, ...rest } = row;
-  return rest;
-}
-
-/** The collection progress of a subscription, which an import never replaces. */
-function collectionProgress(row: SubscriptionRecord): Partial<SubscriptionRecord> {
-  const { addedAt, lastCheckedAt, outOfRange, failures, checkFailures } = row;
-  return {
-    addedAt, ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}), ...(outOfRange !== undefined ? { outOfRange } : {}),
-    ...(failures !== undefined ? { failures } : {}), ...(checkFailures !== undefined ? { checkFailures } : {}),
-  };
 }

@@ -7,8 +7,8 @@ import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { removalsFromJson, scheduleEnabledFromJson, subscriptionsFromJson } from '../subscriptions/subscription-files.js';
 import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
+import { subscriptionExchange } from '../core/subscription-exchange.js';
 import { CollectorError } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-documents.js';
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
@@ -143,7 +143,7 @@ export async function registeredFiles(root: string): Promise<RegisteredFiles> {
     if (absolute) files.push({ path: file, absolute });
   }
   let subscriptions: number | null = null;
-  const subscriptionFiles = new Map(subscriptionDefinitions().map((definition) => [definition.storage!.subscriptionsFile, definition]));
+  const subscriptionFiles = new Map(subscriptionExchange().files().map((exchange) => [exchange.file, exchange]));
   for (const file of settingsFiles()) {
     const absolute = await regularFile(root, file);
     if (!absolute) continue;
@@ -152,8 +152,8 @@ export async function registeredFiles(root: string): Promise<RegisteredFiles> {
       files.push(stored.length === portable.records.length ? { path: file, absolute }
         : { path: file, bytes: Buffer.from(`${JSON.stringify(deletionsToJson(portable.records), null, 2)}\n`) });
     } else {
-      const definition = subscriptionFiles.get(file);
-      if (definition) subscriptions = (subscriptions ?? 0) + subscriptionsFromJson(definition, JSON.parse(await readFile(absolute, 'utf8'))).length;
+      const exchange = subscriptionFiles.get(file);
+      if (exchange) subscriptions = (subscriptions ?? 0) + exchange.read(JSON.parse(await readFile(absolute, 'utf8'))).subscriptions.length;
       files.push({ path: file, absolute });
     }
   }
@@ -435,13 +435,11 @@ export async function checkPackageContent(reader: PackageReader): Promise<void> 
     invalid('匯出檔中的刪除紀錄格式無效。');
   }
   if (records.some((record) => reader.has(documentPath(record)))) invalid('匯出檔中同一份文件同時有內容與刪除紀錄。');
+  const exchange = subscriptionExchange();
   const types = [];
   try {
-    for (const definition of subscriptionDefinitions()) {
-      const file = await json(definition.storage!.subscriptionsFile);
-      types.push({ subscriptions: subscriptionsFromJson(definition, file), removals: removalsFromJson(definition, file) });
-    }
-    scheduleEnabledFromJson(await json(scheduleFile()));
+    for (const { file, read } of exchange.files()) types.push(read(await json(file)));
+    exchange.checkSchedule(await json(scheduleFile()));
   } catch (error) {
     if (error instanceof CollectorError) throw error;
     invalid('匯出檔中的訂閱或排程設定格式無效。');

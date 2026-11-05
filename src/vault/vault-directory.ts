@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { removalsFromJson, scheduleEnabledFromJson } from '../subscriptions/subscription-files.js';
-import { scheduleFile, sourceDefinitions, subscriptionDefinitions } from '../core/source-registry.js';
+import { scheduleFile, sourceDefinitions } from '../core/source-registry.js';
+import { subscriptionExchange } from '../core/subscription-exchange.js';
 import { CollectorError, type VaultInspection } from '../core/types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 import { replaceFile } from '../core/json-file.js';
@@ -36,11 +36,10 @@ const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'deskto
  * misread, so any of them failing makes the directory no Vault this program opens.
  */
 function settingsFiles(): Array<{ file: string; check: (value: unknown) => unknown }> {
+  const exchange = subscriptionExchange();
   return [
-    ...subscriptionDefinitions().map((definition) => ({
-      file: definition.storage!.subscriptionsFile, check: (value: unknown) => removalsFromJson(definition, value),
-    })),
-    { file: scheduleFile(), check: scheduleEnabledFromJson },
+    ...exchange.files().map(({ file, read }) => ({ file, check: read })),
+    { file: scheduleFile(), check: exchange.checkSchedule },
     { file: DELETIONS_FILE, check: deletionsFromJson },
   ];
 }
