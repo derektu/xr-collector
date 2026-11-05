@@ -314,10 +314,6 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     }
   };
   const scheduleView = (schedule: CollectionSchedule): CollectionScheduleView => ({ ...schedule, connectivity: connectivityStatus() });
-  // The Vault access of a route outside the API table; `RouteVaultAccess` in src/core/api-routes.ts
-  // says what each access means. Fastify normalizes route options in place, so every route receives
-  // a fresh object.
-  const deviceData = () => ({ config: { vaultAccess: 'device-data' as const } });
   let activeRequests = 0;
   const idleWaiters = new Set<() => void>();
   appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
@@ -539,12 +535,12 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       .header('Content-Disposition', 'attachment; filename="xr-collector-agent.zip"').send(await agent.download()));
   }
 
-  app.get<{ Querystring: Record<string, unknown> }>('/api/documents', async (request) => {
+  serve(app, API_ROUTES.documents, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
     const query = singleValues(request.query);
     return options.collector!.listDocuments(documentFilter(options.sources, query), pagination(query));
   });
 
-  app.get('/api/documents/sources', async () => {
+  serve(app, API_ROUTES.documentSources, async () => {
     const byType: Record<string, { subscriptions: SubscriptionRecord[]; removals: Array<{ id: string; title: string }> }> = {};
     for (const collection of subscriptions) {
       byType[collection.type] = { subscriptions: await collection.list(), removals: await collection.listRemovals?.() ?? [] };
@@ -552,7 +548,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return { sources: await options.collector!.sources(byType) };
   });
 
-  app.get<{ Querystring: Record<string, unknown> }>('/api/search', async (request) => {
+  serve(app, API_ROUTES.search, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
     if (!options.search) {
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
@@ -592,9 +588,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     vaultDocuments: (await options.collector?.list())?.length ?? 0,
   });
 
-  app.get('/api/search/status', async () => ({ status: await searchStatus() }));
+  serve(app, API_ROUTES.searchStatus, async () => ({ status: await searchStatus() }));
 
-  app.post('/api/search/rebuild', async () => {
+  serve(app, API_ROUTES.rebuildSearch, async () => {
     if (!options.search) {
       throw new CollectorError('search_unavailable', '搜尋服務尚未啟用。');
     }
@@ -602,28 +598,28 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return { status: await searchStatus() };
   });
 
-  app.get<{ Params: { id: string } }>('/api/documents/:id', async (request) => ({
+  serve(app, API_ROUTES.document, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
     document: await options.collector!.read(request.params.id),
   }));
 
-  app.delete<{ Params: { id: string } }>('/api/documents/:id', async (request) =>
+  serve(app, API_ROUTES.deleteDocument, async (request: FastifyRequest<{ Params: { id: string } }>) =>
     options.collector!.delete(request.params.id));
 
   if (options.jobs) {
     const jobs = options.jobs;
-    app.post<{ Body: { url?: unknown } }>('/api/submissions', async (request, reply) => {
+    serve(app, API_ROUTES.submitAddress, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要加入的網址。'));
       requireOnline();
-      return reply.code(202).send(await jobs.submit(type, input));
+      return await jobs.submit(type, input);
     });
 
-    app.post<{ Body: { url?: unknown } }>('/api/items', async (request, reply) => {
+    serve(app, API_ROUTES.collectItem, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       const { type, input } = ownedAddress(options.sources, requiredUrl(request.body?.url, '請貼上要收集的網址。'));
       requireOnline();
-      return reply.code(202).send(await jobs.submitItem(type, input));
+      return await jobs.submitItem(type, input);
     });
 
-    app.get<{ Querystring: { state?: string; limit?: string; cursor?: string } }>('/api/jobs', deviceData(), async (request) => {
+    serve(app, API_ROUTES.jobs, async (request: FastifyRequest<{ Querystring: { state?: string; limit?: string; cursor?: string } }>) => {
       const { state, cursor } = request.query;
       if (state !== undefined && state !== 'active' && state !== 'all') {
         throw new CollectorError('invalid_request', 'state 只能是 active 或 all。');
@@ -636,7 +632,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return page;
     });
 
-    app.get<{ Querystring: Record<string, unknown> }>('/api/jobs/summary', deviceData(), async (request) => {
+    serve(app, API_ROUTES.jobSummary, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
       const { since } = singleValues(request.query);
       if (since !== undefined && !isInstant(since)) throw new CollectorError('invalid_request', 'since 必須是 ISO 時間。');
       return { summary: jobs.summary(since ?? new Date(Date.now() - 86_400_000).toISOString()) };
@@ -644,28 +640,28 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
 
     serve(app, API_ROUTES.jobOverview, async () => ({ overview: await jobs.overview() }));
 
-    app.get<{ Params: { id: string } }>('/api/jobs/:id', deviceData(), async (request) => ({
+    serve(app, API_ROUTES.job, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
       job: jobs.get(request.params.id),
     }));
 
-    app.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) => {
+    serve(app, API_ROUTES.retryJob, async (request: FastifyRequest<{ Params: { id: string } }>) => {
       requireOnline();
-      return reply.code(202).send(await jobs.retry(request.params.id));
+      return await jobs.retry(request.params.id);
     });
 
-    app.post<{ Params: { id: string } }>('/api/jobs/:id/dismiss', async (request) => ({
+    serve(app, API_ROUTES.dismissJob, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
       job: await jobs.dismiss(request.params.id),
     }));
   }
 
   if (options.activity) {
     const activity = options.activity;
-    app.get<{ Querystring: Record<string, unknown> }>('/api/activity', deviceData(), async (request) => {
+    serve(app, API_ROUTES.activity, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
       const query = activityQuery(singleValues(request.query));
       return query.view === 'summary' && !query.jobId && activity.summary
         ? activity.summary(query) : activity.query({ ...query, view: 'raw' });
     });
-    app.get<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>('/api/activity/groups/:groupId', deviceData(), async (request) => {
+    serve(app, API_ROUTES.activityGroup, async (request: FastifyRequest<{ Params: { groupId: string }; Querystring: Record<string, unknown> }>) => {
       const query = singleValues(request.query);
       const unknown = Object.keys(query).find((key) => key !== 'limit' && key !== 'cursor' && key !== 'severity');
       if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
@@ -717,24 +713,24 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   };
 
   if (subscriptions.length > 0) {
-    app.post<{ Body: { url?: unknown } }>('/api/subscription-previews', async (request) => {
+    serve(app, API_ROUTES.previewSubscription, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       const { collection, input } = subscriptionAddress(request.body?.url);
       requireOnline();
       return { preview: await confirmingNetwork(() => collection.preview(input)) };
     });
 
-    app.post<{ Body: { url?: unknown; settings?: unknown } }>('/api/subscriptions', async (request, reply) => {
+    serve(app, API_ROUTES.subscribe, async (request: FastifyRequest<{ Body: { url?: unknown; settings?: unknown } }>) => {
       const { collection, subscription, input } = subscriptionAddress(request.body?.url);
       const settings = request.body.settings === undefined ? {} : subscription.parseSettingsPatch(request.body.settings, { allowEmpty: true });
       requireOnline();
-      return reply.code(202).send(await collection.add(input, settings));
+      return await collection.add(input, settings);
     });
 
     // Settings change first, so the check a resume in the same request starts uses the new range.
-    app.patch<{
+    serve(app, API_ROUTES.updateSubscription, async (request: FastifyRequest<{
       Params: { type: string; id: string };
       Body: { enabled?: unknown; settings?: unknown } | null;
-    }>('/api/subscriptions/:type/:id', async (request) => {
+    }>) => {
       const { collection, subscription, targetNoun } = collectionOf(request.params.type);
       const body = request.body;
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new CollectorError('invalid_request', `${targetNoun}設定必須是 JSON 物件。`);
@@ -742,18 +738,19 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (unknown) throw new CollectorError('invalid_request', `不支援的欄位：${unknown}`);
       if (body.enabled === undefined && body.settings === undefined) throw new CollectorError('invalid_request', '請提供 enabled 或 settings。');
       if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new CollectorError('invalid_request', `${targetNoun}啟用設定無效。`);
-      const settings = body.settings === undefined ? null : subscription.parseSettingsPatch(body.settings);
-      let record = settings ? await collection.updateSettings(request.params.id, settings) : null;
-      let submission: JobSubmission | null = null;
-      if (typeof body.enabled === 'boolean') ({ subscription: record, submission } = await collection.setEnabled(request.params.id, body.enabled));
+      if (typeof body.enabled !== 'boolean') {
+        return { subscription: await collection.updateSettings(request.params.id, subscription.parseSettingsPatch(body.settings)), submission: null };
+      }
+      if (body.settings !== undefined) await collection.updateSettings(request.params.id, subscription.parseSettingsPatch(body.settings));
+      const { subscription: record, submission } = await collection.setEnabled(request.params.id, body.enabled);
       return { subscription: record, submission };
     });
 
-    app.post<{ Params: { type: string; id: string } }>('/api/subscriptions/:type/:id/apply-settings', async (request) =>
+    serve(app, API_ROUTES.applySubscriptionSettings, async (request: FastifyRequest<{ Params: { type: string; id: string } }>) =>
       collectionOf(request.params.type).collection.applySettingsToAll(request.params.id));
 
     // `documents=keep` (the default) leaves the subscription's documents; `documents=delete` deletes them.
-    app.delete<{ Params: { type: string; id: string }; Querystring: Record<string, unknown> }>('/api/subscriptions/:type/:id', async (request) => {
+    serve(app, API_ROUTES.removeSubscription, async (request: FastifyRequest<{ Params: { type: string; id: string }; Querystring: Record<string, unknown> }>) => {
       const { collection } = collectionOf(request.params.type);
       const { documents = 'keep' } = singleValues(request.query);
       if (documents !== 'keep' && documents !== 'delete') throw new CollectorError('invalid_request', 'documents 只接受 keep 或 delete。');
@@ -783,7 +780,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   }
 
   const sourceTypes = options.sourceTypes ?? sourceTypeDeclarations(options.sources);
-  app.get('/api/source-types', async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
+  serve(app, API_ROUTES.sourceTypes, async () => ({ sourceTypes: sourceTypes.map(sourceTypeInfo) }));
 
   if (subscriptions.length > 0) {
     const catalog = new SourceCatalog(options.sources, sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
@@ -800,7 +797,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> => confirmingNetwork(() => collectionOf(type).collection.preview(url));
 
     // Every address answers 200 with a status; only a missing address is a malformed request.
-    app.post<{ Body: { url?: unknown } }>('/api/url-recognitions', async (request) => {
+    serve(app, API_ROUTES.recognizeUrl, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請貼上要加入的網址。');
       }
@@ -808,7 +805,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return { recognition: await recognizeUrl(request.body.url, sourceTypes, { previewSubscription }) };
     });
 
-    app.get<{ Querystring: Record<string, unknown> }>('/api/subscriptions', async (request) => {
+    serve(app, API_ROUTES.subscriptions, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
       const query = singleValues(request.query);
       const unknown = Object.keys(query).find((key) => key !== 'type');
       if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
@@ -818,7 +815,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       return catalog.list(query.type);
     });
 
-    app.get<{ Params: { type: string; id: string } }>('/api/subscriptions/:type/:id', async (request) =>
+    serve(app, API_ROUTES.subscription, async (request: FastifyRequest<{ Params: { type: string; id: string } }>) =>
       catalog.detail(request.params.type, request.params.id));
   }
 

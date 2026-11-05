@@ -2,13 +2,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, RouteGenericInterfa
 import type { ApiRoute, ResponseOf } from '../core/api-routes.js';
 
 /**
- * What a handler of `Route` returns: the route's response type for a JSON route; for an event
- * stream or a file, the reply it sent, or nothing once it took the connection over.
+ * The handler of `Route`. A JSON route's handler answers the route's response type and sees only the
+ * connection of its reply, so it cannot send a reply of its own in place of that type. An event
+ * stream or a file route's handler sends the reply itself, or takes the connection over.
  */
-type Answer<Route> = [ResponseOf<Route>] extends [never] ? FastifyReply | void : ResponseOf<Route>;
-
-export type RouteHandler<Route, Generic extends RouteGenericInterface> =
-  (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<Answer<Route>>;
+export type RouteHandler<Route, Generic extends RouteGenericInterface> = [ResponseOf<Route>] extends [never]
+  ? (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<FastifyReply | void>
+  : (request: FastifyRequest<Generic>, reply: Pick<FastifyReply, 'raw'>) => Promise<ResponseOf<Route>>;
 
 /**
  * Registers `handler` for a route of the API table, with the route's Vault access and success
@@ -25,7 +25,7 @@ export function serve<Route extends ApiRoute<unknown, unknown, unknown>, Generic
     ...(route.access ? { config: { vaultAccess: route.access } } : {}),
     handler: async (request, reply) => {
       if (status !== undefined) void reply.code(status);
-      return handler(request as FastifyRequest<Generic>, reply);
+      return (handler as (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<unknown>)(request as FastifyRequest<Generic>, reply);
     },
   });
 }

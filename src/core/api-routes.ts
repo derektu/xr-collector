@@ -8,6 +8,9 @@ import type {
   CollectorRuntimeStatus, ConnectivityStatus, DeviceUpdateStatus, ExportSuggestion, ImportMode, ImportPreview, JobOverview,
   JobSubmission, LoginStartupStatus, NewVaultCheck, NotificationState, PackageDescription, PacingStatus, TransferStatus,
   UpdateSelection, VaultInspection, VaultSetupRequest, VaultSetupResult, VaultSetupStatus,
+  ActivityGroupPage, ActivityPage, ActivitySummaryPage, DocumentDeletion, DocumentPage, DocumentSources, JobPage, JobSummary,
+  JobView, SavedDocument, SearchResponse, SearchStatusReport, SourceTypeInfo, SubscriptionDetail, SubscriptionList,
+  SubscriptionPreview, SubscriptionRecord, SubscriptionSettings, UrlRecognition,
 } from './types.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -45,18 +48,20 @@ export type PathParams<Path extends string> =
   Path extends `${string}:${infer Name}/${infer Rest}` ? Name | PathParams<`/${Rest}`>
     : Path extends `${string}:${infer Name}` ? Name : never;
 
-interface RouteFields<Path extends string> {
-  method: HttpMethod; path: Path; access?: RouteVaultAccess; status?: number;
+interface RouteFields<Method extends HttpMethod, Path extends string> {
+  method: Method; path: Path; access?: RouteVaultAccess; status?: number;
 }
 
 /** A JSON route answering `Response`, taking a JSON `Body` and a `Query` when given. */
 function json<Response, Body = undefined, Query = undefined>() {
-  return <const Path extends string>(fields: RouteFields<Path>): ApiRoute<Response, Body, Query> & { readonly path: Path } =>
+  return <const Method extends HttpMethod, const Path extends string>(fields: RouteFields<Method, Path>)
+    : ApiRoute<Response, Body, Query> & { readonly method: Method; readonly path: Path } =>
     Object.freeze({ ...fields });
 }
 
 /** A route answering an event stream or a file instead of JSON. */
-function unformatted<const Path extends string>(fields: RouteFields<Path>): ApiRoute<never> & { readonly path: Path } {
+function unformatted<const Method extends HttpMethod, const Path extends string>(fields: RouteFields<Method, Path>)
+  : ApiRoute<never> & { readonly method: Method; readonly path: Path } {
   return Object.freeze({ ...fields });
 }
 
@@ -73,6 +78,18 @@ export interface EnabledSetting { enabled: boolean }
 export interface PathRequest { path: string }
 export interface NewVaultRequest { location: string; name: string }
 export interface SubscriptionKey { type: string; id: string }
+export interface UrlRequest { url: string }
+export interface DocumentQuery { sourceType?: string; publisherId?: string; offset?: number; limit?: number }
+export interface SearchParameters extends DocumentQuery { q: string; publishedFrom?: string; publishedTo?: string }
+export interface JobListQuery { state?: 'active' | 'all'; limit?: number; cursor?: string }
+/** Severities and event types are comma separated. */
+export interface ActivityParameters {
+  view?: 'raw' | 'summary'; severity?: string; eventType?: string; jobId?: string; subscriptionId?: string;
+  sourceType?: string; since?: string; until?: string; cursor?: string; limit?: number;
+}
+export interface ActivityGroupQuery { limit?: number; cursor?: string; severity?: string }
+export interface SubscriptionChange { enabled?: boolean; settings?: Partial<SubscriptionSettings> }
+export interface SubscriptionRemoval { removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }
 
 /**
  * Every route the table declares. The server registers each one with its access and status; the web
@@ -119,6 +136,35 @@ export const API_ROUTES = {
   schedule: json<{ schedule: CollectionScheduleView }>()({ method: 'GET', path: '/api/schedule' }),
   setSchedule: json<{ schedule: CollectionScheduleView }, EnabledSetting>()({ method: 'PUT', path: '/api/schedule' }),
   checkSubscriptions: json<{ submissions: JobSubmission[] }, { subscriptions: SubscriptionKey[] } | undefined>()({ method: 'POST', path: '/api/subscription-checks', status: 202 }),
+
+  documents: json<DocumentPage, undefined, DocumentQuery>()({ method: 'GET', path: '/api/documents' }),
+  documentSources: json<{ sources: DocumentSources }>()({ method: 'GET', path: '/api/documents/sources' }),
+  document: json<{ document: SavedDocument }>()({ method: 'GET', path: '/api/documents/:id' }),
+  deleteDocument: json<DocumentDeletion>()({ method: 'DELETE', path: '/api/documents/:id' }),
+  search: json<SearchResponse, undefined, SearchParameters>()({ method: 'GET', path: '/api/search' }),
+  searchStatus: json<{ status: SearchStatusReport }>()({ method: 'GET', path: '/api/search/status' }),
+  rebuildSearch: json<{ status: SearchStatusReport }>()({ method: 'POST', path: '/api/search/rebuild' }),
+
+  submitAddress: json<JobSubmission, UrlRequest>()({ method: 'POST', path: '/api/submissions', status: 202 }),
+  collectItem: json<JobSubmission, UrlRequest>()({ method: 'POST', path: '/api/items', status: 202 }),
+  jobs: json<JobPage, undefined, JobListQuery>()({ method: 'GET', path: '/api/jobs', access: 'device-data' }),
+  jobSummary: json<{ summary: JobSummary }, undefined, { since?: string }>()({ method: 'GET', path: '/api/jobs/summary', access: 'device-data' }),
+  job: json<{ job: JobView }>()({ method: 'GET', path: '/api/jobs/:id', access: 'device-data' }),
+  retryJob: json<JobSubmission>()({ method: 'POST', path: '/api/jobs/:id/retry', status: 202 }),
+  dismissJob: json<{ job: JobView }>()({ method: 'POST', path: '/api/jobs/:id/dismiss' }),
+  /** A `summary` view answers an `ActivitySummaryPage` unless it names a job; any other view an `ActivityPage`. */
+  activity: json<ActivityPage | ActivitySummaryPage, undefined, ActivityParameters>()({ method: 'GET', path: '/api/activity', access: 'device-data' }),
+  activityGroup: json<ActivityGroupPage, undefined, ActivityGroupQuery>()({ method: 'GET', path: '/api/activity/groups/:groupId', access: 'device-data' }),
+
+  sourceTypes: json<{ sourceTypes: SourceTypeInfo[] }>()({ method: 'GET', path: '/api/source-types' }),
+  recognizeUrl: json<{ recognition: UrlRecognition }, UrlRequest>()({ method: 'POST', path: '/api/url-recognitions' }),
+  previewSubscription: json<{ preview: SubscriptionPreview }, UrlRequest>()({ method: 'POST', path: '/api/subscription-previews' }),
+  subscribe: json<JobSubmission, UrlRequest & { settings?: Partial<SubscriptionSettings> }>()({ method: 'POST', path: '/api/subscriptions', status: 202 }),
+  subscriptions: json<SubscriptionList, undefined, { type?: string }>()({ method: 'GET', path: '/api/subscriptions' }),
+  subscription: json<SubscriptionDetail>()({ method: 'GET', path: '/api/subscriptions/:type/:id' }),
+  updateSubscription: json<{ subscription: SubscriptionRecord; submission: JobSubmission | null }, SubscriptionChange>()({ method: 'PATCH', path: '/api/subscriptions/:type/:id' }),
+  applySubscriptionSettings: json<{ updated: number; paused: number }>()({ method: 'POST', path: '/api/subscriptions/:type/:id/apply-settings' }),
+  removeSubscription: json<SubscriptionRemoval, undefined, { documents?: 'keep' | 'delete' }>()({ method: 'DELETE', path: '/api/subscriptions/:type/:id' }),
 } as const;
 
 export type ApiRouteName = keyof typeof API_ROUTES;

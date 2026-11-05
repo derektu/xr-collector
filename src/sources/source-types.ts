@@ -1,4 +1,5 @@
 import type { SourceDeclarations } from '../core/source-registry.js';
+import { API_ROUTES, routePath } from '../core/api-routes.js';
 import {
   CollectorError,
   type SourceTypeInfo,
@@ -54,7 +55,7 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
           target: { id: ref.key, title: null, url: ref.url },
           actions: [{
             id: 'collect', label: `收集${declaration.item.noun}`, primary: true,
-            request: { method: 'POST', path: '/api/items', body: { url: ref.url } },
+            request: { method: API_ROUTES.collectItem.method, path: API_ROUTES.collectItem.path, body: { url: ref.url } },
           }],
         };
       }
@@ -73,9 +74,9 @@ export function recognizingSourceType(declaration: SourcePluginDeclaration): Sou
       const { target, subscription } = preview;
       const targetNoun = declaration.subscription?.targetNoun ?? '';
       const actions: UrlRecognition['actions'] = !subscription
-        ? [{ id: 'subscribe', label: `訂閱${targetNoun}`, primary: true, request: { method: 'POST', path: '/api/subscriptions', body: { url: target.url } } }]
+        ? [{ id: 'subscribe', label: `訂閱${targetNoun}`, primary: true, request: { method: API_ROUTES.subscribe.method, path: API_ROUTES.subscribe.path, body: { url: target.url } } }]
         : !subscription.enabled
-          ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: 'PATCH', path: `/api/subscriptions/${encodeURIComponent(type)}/${encodeURIComponent(target.id)}`, body: { enabled: true } } }]
+          ? [{ id: 'resume', label: '恢復訂閱', primary: true, request: { method: API_ROUTES.updateSubscription.method, path: routePath(API_ROUTES.updateSubscription, { type, id: target.id }), body: { enabled: true } } }]
           : [];
       return {
         ...base('ready', target.url),

@@ -41,19 +41,13 @@ import type {
   AgentConnectionStatus,
   AgentPortSetting,
 } from '../core/types.js';
-import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey } from '../core/api-routes.js';
+import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey, type ActivityParameters } from '../core/api-routes.js';
 
 interface ErrorResponse {
   error?: {
     code?: string;
     message?: string;
   };
-}
-
-
-/** The route of one subscription, named by its source type and its ID within the type. */
-function subscriptionPath(type: string, id: string): string {
-  return `/api/subscriptions/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
 }
 
 export class ApiError extends Error {
@@ -66,7 +60,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request(path: string, init?: RequestInit): Promise<unknown> {
   // A JSON content type without a body is rejected by the server, so only label requests that carry one.
   const response = await fetch(path, {
     ...init,
@@ -82,14 +76,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body.error?.code ?? 'unknown_error',
     );
   }
-  return response.json() as Promise<T>;
+  return response.json() as Promise<unknown>;
 }
 
 /** What calling `Route` takes: its path parameters, its JSON body and its query, each when the route has one. */
 type CallInput<Route extends { path: string }> = { signal?: AbortSignal }
   & ([PathParams<Route['path']>] extends [never] ? unknown : { params: Record<PathParams<Route['path']>, string> })
   & (undefined extends BodyOf<Route> ? { body?: BodyOf<Route> } : { body: BodyOf<Route> })
-  & (undefined extends QueryOf<Route> ? { query?: QueryOf<Route> } : { query: QueryOf<Route> });
+  & (undefined extends QueryOf<Route> ? { query?: QueryOf<Route> } : Record<string, never> extends QueryOf<Route> ? { query?: QueryOf<Route> } : { query: QueryOf<Route> });
 
 /** Calls a JSON route of the API table and answers its response type. */
 function call<Route extends ApiRoute<unknown, unknown, unknown> & { path: string }>(
@@ -99,11 +93,11 @@ function call<Route extends ApiRoute<unknown, unknown, unknown> & { path: string
   const parameters = new URLSearchParams();
   for (const [key, value] of Object.entries(given.query ?? {})) if (value !== undefined) parameters.set(key, String(value));
   const path = given.params ? routePath(route, given.params as never) : route.path;
-  return request<ResponseOf<Route>>(parameters.size > 0 ? `${path}?${parameters.toString()}` : path, {
+  return request(parameters.size > 0 ? `${path}?${parameters.toString()}` : path, {
     method: route.method,
     ...(given.body !== undefined ? { body: JSON.stringify(given.body) } : {}),
     ...(given.signal ? { signal: given.signal } : {}),
-  });
+  }) as Promise<ResponseOf<Route>>;
 }
 
 export const api = {
@@ -186,30 +180,21 @@ export const api = {
 
   /** Saves some of one subscription's settings; fields left out keep their value. */
   async updateSubscriptionSettings(type: string, id: string, settings: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
-    const result = await request<{ subscription: SubscriptionRecord }>(subscriptionPath(type, id), {
-      method: 'PATCH',
-      body: JSON.stringify({ settings }),
-    });
-    return result.subscription;
+    return (await call(API_ROUTES.updateSubscription, { params: { type, id }, body: { settings } })).subscription;
   },
 
   /** Gives every other subscription of the same type this subscription's settings. */
   applySubscriptionSettings(type: string, id: string): Promise<{ updated: number; paused: number }> {
-    return request<{ updated: number; paused: number }>(`${subscriptionPath(type, id)}/apply-settings`, { method: 'POST' });
+    return call(API_ROUTES.applySubscriptionSettings, { params: { type, id } });
   },
 
   async setSubscriptionEnabled(type: string, id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmission | null }> {
-    return request<{ subscription: SubscriptionRecord; submission: JobSubmission | null }>(subscriptionPath(type, id), {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled }),
-    });
+    return call(API_ROUTES.updateSubscription, { params: { type, id }, body: { enabled } });
   },
 
   /** Removes a subscription, keeping or deleting its documents. */
   async removeSubscription(type: string, id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
-    return request<{ removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }>(`${subscriptionPath(type, id)}?documents=${documents}`, {
-      method: 'DELETE',
-    });
+    return call(API_ROUTES.removeSubscription, { params: { type, id }, query: { documents } });
   },
 
   /** Checks every enabled subscription of every type now. */
@@ -223,24 +208,19 @@ export const api = {
   },
 
   listJobs(query: { state?: 'active' | 'all'; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<JobPage> {
-    const parameters = new URLSearchParams();
-    if (query.state) parameters.set('state', query.state);
-    if (query.limit) parameters.set('limit', String(query.limit));
-    if (query.cursor) parameters.set('cursor', query.cursor);
-    const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
-    return request<JobPage>(`/api/jobs${suffix}`, signal ? { signal } : undefined);
+    return call(API_ROUTES.jobs, { query: { state: query.state || undefined, limit: query.limit || undefined, cursor: query.cursor || undefined }, signal });
   },
 
   async getJob(id: string, signal?: AbortSignal): Promise<JobView> {
-    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`, signal ? { signal } : undefined)).job;
+    return (await call(API_ROUTES.job, { params: { id }, signal })).job;
   },
 
   async jobSummary(since: string, signal?: AbortSignal): Promise<JobSummary> {
-    return (await request<{ summary: JobSummary }>(`/api/jobs/summary?${new URLSearchParams({ since }).toString()}`, signal ? { signal } : undefined)).summary;
+    return (await call(API_ROUTES.jobSummary, { query: { since }, signal })).summary;
   },
 
   retryJob(id: string): Promise<JobSubmission> {
-    return request<JobSubmission>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+    return call(API_ROUTES.retryJob, { params: { id } });
   },
 
   async jobOverview(signal?: AbortSignal): Promise<JobOverview> {
@@ -248,96 +228,62 @@ export const api = {
   },
 
   async dismissJob(id: string): Promise<JobView> {
-    return (await request<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}/dismiss`, { method: 'POST' })).job;
+    return (await call(API_ROUTES.dismissJob, { params: { id } })).job;
   },
 
-  activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {
-    const parameters = new URLSearchParams();
-    if (query.severity) parameters.set('severity', query.severity.join(','));
-    if (query.eventType) parameters.set('eventType', query.eventType.join(','));
-    if (query.view) parameters.set('view', query.view);
-    for (const key of ['jobId', 'subscriptionId', 'sourceType', 'since', 'until', 'cursor'] as const) {
-      const value = query[key];
-      if (value) parameters.set(key, value);
-    }
-    if (query.limit) parameters.set('limit', String(query.limit));
-    const suffix = parameters.size > 0 ? `?${parameters.toString()}` : '';
-    return request<ActivityPage>(`/api/activity${suffix}`, signal ? { signal } : undefined);
+  async activity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage> {
+    const page = await call(API_ROUTES.activity, { query: { ...activityParameters(query), jobId: query.jobId || undefined, view: query.view || undefined }, signal });
+    if (!('events' in page)) throw new Error('The activity log answered a summary page to a raw query.');
+    return page;
   },
 
-  activitySummary(query: ActivityQuery, signal?: AbortSignal): Promise<ActivitySummaryPage> {
-    const parameters = new URLSearchParams({ view: 'summary' });
-    if (query.severity) parameters.set('severity', query.severity.join(','));
-    if (query.eventType) parameters.set('eventType', query.eventType.join(','));
-    for (const key of ['subscriptionId', 'sourceType', 'since', 'until', 'cursor'] as const) {
-      const value = query[key];
-      if (value) parameters.set(key, value);
-    }
-    if (query.limit) parameters.set('limit', String(query.limit));
-    return request<ActivitySummaryPage>(`/api/activity?${parameters.toString()}`, signal ? { signal } : undefined);
+  async activitySummary(query: ActivityQuery, signal?: AbortSignal): Promise<ActivitySummaryPage> {
+    const page = await call(API_ROUTES.activity, { query: { ...activityParameters(query), view: 'summary' }, signal });
+    if (!('entries' in page)) throw new Error('The activity log answered a raw page to a summary query.');
+    return page;
   },
 
   activityGroup(groupId: string, query: { limit?: number; cursor?: string; severity?: ActivityQuery['severity'] } = {}): Promise<ActivityGroupPage> {
-    const parameters = new URLSearchParams();
-    if (query.limit) parameters.set('limit', String(query.limit));
-    if (query.cursor) parameters.set('cursor', query.cursor);
-    if (query.severity) parameters.set('severity', query.severity.join(','));
-    const suffix = parameters.size ? `?${parameters.toString()}` : '';
-    return request<ActivityGroupPage>(`/api/activity/groups/${encodeURIComponent(groupId)}${suffix}`);
+    return call(API_ROUTES.activityGroup, { params: { groupId }, query: {
+      limit: query.limit || undefined, cursor: query.cursor || undefined, severity: query.severity?.join(','),
+    } });
   },
 
   listDocuments(query: DocumentFilter & { offset: number; limit: number }, signal?: AbortSignal): Promise<DocumentPage> {
-    const parameters = filterParameters(query);
-    parameters.set('offset', String(query.offset));
-    parameters.set('limit', String(query.limit));
-    return request<DocumentPage>(`/api/documents?${parameters.toString()}`, signal ? { signal } : undefined);
+    return call(API_ROUTES.documents, { query: { ...filterParameters(query), offset: query.offset, limit: query.limit }, signal });
   },
 
   async documentSources(signal?: AbortSignal): Promise<DocumentSources> {
-    return (await request<{ sources: DocumentSources }>('/api/documents/sources', signal ? { signal } : undefined)).sources;
+    return (await call(API_ROUTES.documentSources, { signal })).sources;
   },
 
   async readDocument(id: string, signal?: AbortSignal): Promise<SavedDocument> {
-    const result = await request<{ document: SavedDocument }>(
-      `/api/documents/${encodeURIComponent(id)}`,
-      signal ? { signal } : undefined,
-    );
-    return result.document;
+    return (await call(API_ROUTES.document, { params: { id }, signal })).document;
   },
 
   /** Deletes a document; automatic and subscription collection skip it until the user collects it again by its address. */
   deleteDocument(id: string): Promise<DocumentDeletion> {
-    return request<DocumentDeletion>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return call(API_ROUTES.deleteDocument, { params: { id } });
   },
 
   /** Collects one item by its address; the service finds the source type the address belongs to. */
   collect(url: string): Promise<JobSubmission> {
-    return request<JobSubmission>('/api/items', {
-      method: 'POST',
-      body: JSON.stringify({ url }),
-    });
+    return call(API_ROUTES.collectItem, { body: { url } });
   },
 
   searchDocuments(query: SearchQuery, signal?: AbortSignal): Promise<SearchResponse> {
-    const parameters = filterParameters(query);
-    parameters.set('q', query.query);
-    if (query.publishedFrom) parameters.set('publishedFrom', query.publishedFrom);
-    if (query.publishedTo) parameters.set('publishedTo', query.publishedTo);
-    if (query.offset !== undefined) parameters.set('offset', String(query.offset));
-    if (query.limit !== undefined) parameters.set('limit', String(query.limit));
-    return request<SearchResponse>(`/api/search?${parameters.toString()}`, signal ? { signal } : undefined);
+    return call(API_ROUTES.search, { query: {
+      ...filterParameters(query), q: query.query, publishedFrom: query.publishedFrom || undefined, publishedTo: query.publishedTo || undefined,
+      offset: query.offset, limit: query.limit,
+    }, signal });
   },
 
   async sourceTypes(): Promise<SourceTypeInfo[]> {
-    return (await request<{ sourceTypes: SourceTypeInfo[] }>('/api/source-types')).sourceTypes;
+    return (await call(API_ROUTES.sourceTypes)).sourceTypes;
   },
 
   async recognizeUrl(url: string, signal?: AbortSignal): Promise<UrlRecognition> {
-    return (await request<{ recognition: UrlRecognition }>('/api/url-recognitions', {
-      method: 'POST',
-      body: JSON.stringify({ url }),
-      ...(signal ? { signal } : {}),
-    })).recognition;
+    return (await call(API_ROUTES.recognizeUrl, { body: { url }, signal })).recognition;
   },
 
   /** Sends the request a recognized address offers, exactly as the service described it. */
@@ -347,23 +293,19 @@ export const api = {
 
   /** Every subscription across source types, with pending subscription requests and unsubscribed documents. */
   listSubscriptions(signal?: AbortSignal): Promise<SubscriptionList> {
-    return request<SubscriptionList>('/api/subscriptions', signal ? { signal } : undefined);
+    return call(API_ROUTES.subscriptions, { signal });
   },
 
   subscriptionDetail(type: string, id: string, signal?: AbortSignal): Promise<SubscriptionDetail> {
-    return request<SubscriptionDetail>(subscriptionPath(type, id), signal ? { signal } : undefined);
+    return call(API_ROUTES.subscription, { params: { type, id }, signal });
   },
 
   async getSearchStatus(signal?: AbortSignal): Promise<SearchStatusReport> {
-    const result = await request<{ status: SearchStatusReport }>('/api/search/status', signal ? { signal } : undefined);
-    return result.status;
+    return (await call(API_ROUTES.searchStatus, { signal })).status;
   },
 
   async rebuildSearch(): Promise<SearchStatusReport> {
-    const result = await request<{ status: SearchStatusReport }>('/api/search/rebuild', {
-      method: 'POST',
-    });
-    return result.status;
+    return (await call(API_ROUTES.rebuildSearch)).status;
   },
 
   vaultTransferStatus(signal?: AbortSignal): Promise<TransferStatus> {
@@ -409,9 +351,15 @@ export const api = {
   },
 };
 
-function filterParameters(filter: DocumentFilter): URLSearchParams {
-  const parameters = new URLSearchParams();
-  if (filter.sourceType) parameters.set('sourceType', filter.sourceType);
-  if (filter.publisherId) parameters.set('publisherId', filter.publisherId);
-  return parameters;
+function filterParameters(filter: DocumentFilter): { sourceType: string | undefined; publisherId: string | undefined } {
+  return { sourceType: filter.sourceType || undefined, publisherId: filter.publisherId || undefined };
+}
+
+/** The filters both activity views take. */
+function activityParameters(query: ActivityQuery): ActivityParameters {
+  return {
+    severity: query.severity?.join(','), eventType: query.eventType?.join(','),
+    subscriptionId: query.subscriptionId || undefined, sourceType: query.sourceType || undefined, since: query.since || undefined,
+    until: query.until || undefined, cursor: query.cursor || undefined, limit: query.limit || undefined,
+  };
 }
