@@ -2,7 +2,7 @@
 // write leaves the switch on although the OS kept it off, a change made in the OS settings stays
 // hidden until the page reloads, and a slow read started before a write puts the old value back.
 import { describe, expect, it } from 'vitest';
-import { LoginStartupControl, type LoginStartupPort } from '../../src/web/login-startup-control.js';
+import { LoginStartupControl, loginStartupNote, type LoginStartupPort } from '../../src/web/login-startup-control.js';
 import type { LoginStartupStatus } from '../../src/core/types.js';
 import { eventually } from '../support/wait.js';
 
@@ -91,5 +91,23 @@ describe('login startup control', () => {
     calls[1]!.answer(status(false));
     await again;
     expect(control.current().status?.enabled).toBe(false);
+  });
+
+  // The note follows the state the OS reports; the server's message only ever shows, so rewording it
+  // never brings the routine states back below the switch.
+  it('shows guidance for states other than on and off, whatever the message says', () => {
+    const reported = (state: LoginStartupStatus['state'], message: string): LoginStartupStatus => ({
+      supported: state !== 'unavailable', enabled: state === 'enabled', state, message,
+    });
+    const shown = (status: LoginStartupStatus | null, more: { pending?: boolean; error?: string } = {}) =>
+      loginStartupNote({ status, pending: more.pending ?? false, error: more.error ?? null });
+    expect(shown(reported('enabled', 'reworded on'))).toBeNull();
+    expect(shown(reported('disabled', 'reworded off'))).toBeNull();
+    expect(shown(reported('requires_approval', 'approve it'))).toEqual({ kind: 'status', message: 'approve it' });
+    expect(shown(reported('relocated', 'moved'))).toEqual({ kind: 'status', message: 'moved' });
+    expect(shown(reported('unavailable', 'any'))).toEqual({ kind: 'unavailable' });
+    expect(shown(null)).toEqual({ kind: 'loading' });
+    expect(shown(reported('enabled', 'on'), { error: 'refused' })).toEqual({ kind: 'error', message: 'refused' });
+    expect(shown(reported('enabled', 'on'), { pending: true, error: 'refused' })).toEqual({ kind: 'pending' });
   });
 });

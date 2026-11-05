@@ -124,6 +124,7 @@ describe('desktop login startup', () => {
     await new DesktopLoginStartup(old, record).update(true);
     const moved = new WindowsAdapter('D:\\New App\\XR Collector.exe');
     moved.items.set(LOGIN_STARTUP_NAME, old.items.get(LOGIN_STARTUP_NAME)!);
+    await expect(new DesktopLoginStartup(moved, record).status()).resolves.toMatchObject({ supported: true, enabled: false, state: 'relocated' });
     await expect(new DesktopLoginStartup(moved, record).update(false)).resolves.toMatchObject({
       enabled: false, state: 'disabled', message: '登入自啟已關閉。',
     });

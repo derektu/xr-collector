@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { COLLECTION_COMPLETED } from '../../src/core/job-completion.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
 import {
   activityQuery,
@@ -47,18 +46,40 @@ describe('activity presentation', () => {
     expect(eventLine({ ...base, eventType: 'document.saved', sourceTitle: source })).toEqual({ line: 'document_saved', source });
     expect(eventLine({ ...base, eventType: 'subscription.added', sourceTitle: source })).toEqual({ line: 'subscription_added', source });
     expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source })).toEqual({ line: 'failed', source, message: base.message });
-    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'item' })).toEqual({ line: 'completed', source, message: base.message });
-    const detail = ': 2 new';
-    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'check', message: `${COLLECTION_COMPLETED}${detail}` }))
-      .toEqual({ line: 'collected', source, detail });
-    expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: null, jobRole: 'item', message: COLLECTION_COMPLETED }))
-      .toEqual({ line: 'collected', source: null, detail: '' });
-    expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source, message: COLLECTION_COMPLETED })).toMatchObject({ line: 'failed' });
     expect(eventLine({ ...base, eventType: 'job.completed', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'subscribed', source });
     expect(eventLine({ ...base, eventType: 'schedule.updated' })).toEqual({ line: 'message', source: null, message: base.message });
+  });
+
+  // The message only ever shows: rewording what the server says changes neither which completions
+  // read as collected nor whose title leads a line. Every message here is arbitrary text.
+  it('tells a collected completion and its result from the event fields, whatever the message says', () => {
+    const source = '3Blue1Brown';
+    const completed = { ...base, eventType: 'job.completed', sourceTitle: source, message: 'any wording' } as const;
+    const counts = { trigger: 'manual', result: 'other', created: 2, existing: 1, failed: 1, skipped: 3 } as const;
+    expect(eventLine({ ...completed, jobRole: 'item', outcome: 'created' }))
+      .toEqual({ line: 'collected', source, collected: { result: 'stored', indexed: true } });
+    expect(eventLine({ ...completed, jobRole: 'item', outcome: 'created', indexed: false }))
+      .toEqual({ line: 'collected', source, collected: { result: 'stored', indexed: false } });
+    expect(eventLine({ ...completed, jobRole: 'check', outcome: 'partial', check: counts }))
+      .toEqual({ line: 'collected', source, collected: { result: 'counts', created: 2, existing: 1, skipped: 3, failed: 1 } });
+    expect(eventLine({ ...completed, jobRole: 'check', outcome: 'empty', check: { ...counts, result: 'empty', created: 0, existing: 0, failed: 0, skipped: 0 } }))
+      .toEqual({ line: 'collected', source, collected: { result: 'nothing_new' } });
+    // An item already stored, a skipped job, and a check recorded without its counts keep their message.
+    for (const event of [
+      { ...completed, jobRole: 'item', outcome: 'existing' },
+      { ...completed, jobRole: 'item', outcome: 'skipped' },
+      { ...completed, jobRole: 'check', outcome: 'skipped', check: counts },
+      { ...completed, jobRole: 'check', outcome: 'created' },
+    ] as const) expect(eventLine(event)).toEqual({ line: 'completed', source, message: completed.message });
+    expect(eventLine({ ...completed, eventType: 'job.failed', jobRole: 'item', outcome: 'failed' })).toMatchObject({ line: 'failed' });
+  });
+
+  it('leads a plain message with its source unless the event says the message names it', () => {
+    const source = '3Blue1Brown';
     const naming = `paused ${source}`;
-    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source, message: naming })).toEqual({ line: 'message', source: null, message: naming });
-    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source })).toEqual({ line: 'message', source, message: base.message });
+    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source, message: naming, namesSource: true })).toEqual({ line: 'message', source: null, message: naming });
+    expect(eventLine({ ...base, eventType: 'subscription.paused', sourceTitle: source, message: 'paused', namesSource: true })).toEqual({ line: 'message', source: null, message: 'paused' });
+    expect(eventLine({ ...base, eventType: 'job.retry_scheduled', sourceTitle: source, message: naming })).toEqual({ line: 'message', source, message: naming });
   });
 
   it('keeps filters in the address and turns them into a query with local day bounds', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api-client.js';
-import { LoginStartupControl, type LoginStartupState } from './login-startup-control.js';
+import { LoginStartupControl, loginStartupNote, type LoginStartupState } from './login-startup-control.js';
 
 export function LoginStartup({ onChanged }: { onChanged: (message: string) => void }) {
   const [{ status, pending, error }, setState] = useState<LoginStartupState>({ status: null, pending: false, error: null });
@@ -23,9 +23,9 @@ export function LoginStartup({ onChanged }: { onChanged: (message: string) => vo
   const update = (enabled: boolean) => control.write(enabled);
 
   const unavailable = status?.supported === false;
-  const routineStatus = status?.message === '已在登入電腦時自動啟動。' || status?.message === '登入自啟已關閉。';
-  const message = pending ? '正在更新…' : error ?? (unavailable ? '僅限安裝版 App。'
-    : !status ? '正在讀取…' : routineStatus ? null : status.message);
+  const note = loginStartupNote({ status, pending, error });
+  const message = !note ? null : 'message' in note ? note.message
+    : note.kind === 'pending' ? '正在更新…' : note.kind === 'loading' ? '正在讀取…' : '僅限安裝版 App。';
   return <section className="settings-section" data-testid="settings-login-startup"
     data-state={status ? status.state : 'loading'} data-supported={status ? String(status.supported) : undefined} data-error={error ? 'true' : undefined}>
     <h2>啟動與背景執行</h2>

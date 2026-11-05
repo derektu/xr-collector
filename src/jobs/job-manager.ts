@@ -3,7 +3,6 @@ import { selectCandidates } from '../subscriptions/candidates.js';
 import type { Collector } from '../core/collector.js';
 import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
-import { COLLECTION_COMPLETED } from '../core/job-completion.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, subscriptionOf, workKey, type RoleJob } from '../core/job-role.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
 import {
@@ -1505,14 +1504,15 @@ export class JobManager {
     if (!recorded) return;
     const label = this.plugin(item.source.type)?.failureLabels?.[error.code] ?? '收集失敗';
     const name = item.source.title ? `「${item.source.title}」` : item.source.url;
+    const named = item.source.title ? { namesSource: true as const } : {};
     this.event(item, recorded.skipped
       ? {
         severity: 'warning', eventType: 'subscription.item_skipped', outcome: 'skipped', errorCode: error.code, attempt: recorded.attempts,
-        message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`,
+        message: `${name}已略過・${failureClass === 'skip' ? label : `已試 ${recorded.attempts} 次`}`, ...named,
       }
       : {
         severity: 'warning', eventType: 'subscription.item_failed', errorCode: error.code, attempt: recorded.attempts,
-        message: `${name}${label}・已試 ${recorded.attempts}/${MAX_CHECK_ATTEMPTS} 次`,
+        message: `${name}${label}・已試 ${recorded.attempts}/${MAX_CHECK_ATTEMPTS} 次`, ...named,
       });
   }
 
@@ -1613,6 +1613,7 @@ export class JobManager {
         ...(check ? { check } : {}),
         ...(result.skipReason ? { skipReason: result.skipReason } : {}),
         ...(result.documentId ? { documentId: result.documentId } : {}),
+        ...(role === 'item' && result.indexed === false ? { indexed: false as const } : {}),
       }
       : {
         severity: 'error', eventType: 'job.failed', message: error?.message ?? '收集工作失敗。', outcome: result.outcome,
@@ -1681,22 +1682,22 @@ export class JobManager {
     const role = roleOf(this.options.sources, job);
     const plugin = this.plugin(job.source.type);
     if (role === 'item') {
-      const stored = result.outcome === 'created' ? COLLECTION_COMPLETED : '文件已存在';
+      const stored = result.outcome === 'created' ? '收集完成' : '文件已存在';
       return result.indexed === false ? `${stored}，搜尋更新失敗。` : `${stored}。`;
     }
     if (role === 'add') {
       return result.outcome === 'created' ? '已新增訂閱。' : `這個${plugin?.subscription?.targetNoun ?? '訂閱'}已在訂閱清單中。`;
     }
-    if (result.outcome === 'empty') return `${COLLECTION_COMPLETED}，沒有新${plugin?.item.noun ?? '項目'}。`;
+    if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
     const progress = job.progress;
-    if (!progress) return `${COLLECTION_COMPLETED}。`;
+    if (!progress) return '收集完成。';
     const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measure}${plugin.item.noun}` : ''}`;
     const parts = progress.created ? [`新增 ${count(progress.created)}`] : [];
     if (progress.existing) parts.push(`已存在 ${count(progress.existing)}`);
     if (progress.skipped) parts.push(`略過 ${count(progress.skipped)}`);
     if (progress.failed) parts.push(`失敗 ${count(progress.failed)}`);
-    if (parts.length === 0) return `${COLLECTION_COMPLETED}。`;
-    return `${COLLECTION_COMPLETED}：${parts.join('・')}。`;
+    if (parts.length === 0) return '收集完成。';
+    return `收集完成：${parts.join('・')}。`;
   }
 }
 
