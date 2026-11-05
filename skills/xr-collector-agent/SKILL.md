@@ -290,4 +290,4 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 | `POST /api/vault/import/apply` | `{"id":"...","mode":"merge"}` 或 `{"id":"...","mode":"replace"}`；202 後以 `kind=vault` 等待變動，再讀 Vault status |
 | `POST /api/vault/import/cancel` | `{"id":"<比對 id>"}`；放棄比對且不寫入 |
 
-AI 助理連線設定與金鑰管理使用 `/api/device/agent/*`；除非使用者明確要求，不由 Agent 自行修改或重設。Web 靜態檔只由 UI listener 提供。limit 為 1–100，offset 為 0–1000000；錯誤為 `{"error":{"code":"...","message":"..."}}`。錯誤的 `message`，以及工作、訂閱、通知與記錄裡的錯誤文字，其中的連線金鑰、cookie、Authorization 與帶密鑰的網址參數顯示為 `[已遮蔽]`。後續 ticket 新增或修改業務 API 時，同步更新本 Skill 的操作、狀態與錯誤契約。
+AI 助理連線設定與金鑰管理使用 `/api/device/agent/*`；除非使用者明確要求，不由 Agent 自行修改或重設。Web 靜態檔只由 UI listener 提供。limit 為 1–100，offset 為 0–1000000；錯誤為 `{"error":{"code":"...","message":"..."}}`。所有 JSON 回應與變動通知中的已知機密（連線金鑰、搜尋引擎金鑰）顯示為 `[已遮蔽]`；連線資料的回應例外，依設計交出連線金鑰。錯誤的 `message`，以及工作、訂閱、通知與記錄裡的錯誤文字，另把 cookie、Authorization 與帶密鑰的網址參數顯示為 `[已遮蔽]`；文件內容與網址照原樣回傳。後續 ticket 新增或修改業務 API 時，同步更新本 Skill 的操作、狀態與錯誤契約。

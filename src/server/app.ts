@@ -8,7 +8,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { ChangeFeed } from '../core/change-feed.js';
 import type { Collector } from '../core/collector.js';
-import { redact } from '../core/redact.js';
+import { maskSecrets, maskSecretsJson, redact } from '../core/redact.js';
 import type { LoginStartupAccess } from '../core/login-startup.js';
 import { loadBuildInfo } from '../updates/build-info.js';
 import type { AgentConnectionAccess } from '../runtime/agent-connection.js';
@@ -90,9 +90,21 @@ export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
  * Builds the HTTP app: the hook chain every request passes (Host check, Agent authorization, the
  * not-ready gate, the change revision, the Vault operation lock, response headers and errors), then
  * the routes of each area for the services `options` gives. Hooks and routes register in this order.
+ * Every answer the app serializes has the process's literal secrets masked, whichever
+ * route, hook or not-found answer sends it; files and the pages of the UI pass unchanged.
  */
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+  // Set on each reply in the first hook: an answer without a matching route (404, or refused by a
+  // hook) gets no app-level serializer from Fastify. A reply's own serializer leaves the content type
+  // to the serializer.
+  app.addHook('onRequest', async (_request, reply) => {
+    void reply.serializer((payload) => {
+      if (typeof payload === 'string') return maskSecrets(payload);
+      if (!reply.hasHeader('content-type')) void reply.type('application/json; charset=utf-8');
+      return maskSecretsJson(payload);
+    });
+  });
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
   const network = networkGuard(options.connectivity);

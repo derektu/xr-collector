@@ -12,12 +12,13 @@ export type RouteHandler<Route, Generic extends RouteGenericInterface> = [Respon
 
 /**
  * Registers `handler` for a route of the API table, with the route's Vault access and success
- * status. A handler names the request shape it reads by annotating its `request` parameter.
+ * status. A handler names the request shape it reads by annotating its `request` parameter. The
+ * successful answer of a route that reveals a secret is serialized without the app's masking.
  */
 export function serve<Route extends ApiRoute<unknown, unknown, unknown>, Generic extends RouteGenericInterface = RouteGenericInterface>(
   app: FastifyInstance, route: Route, handler: RouteHandler<Route, Generic>,
 ): void {
-  const status = route.status;
+  const { status, revealsSecret } = route;
   app.route({
     method: route.method,
     url: route.path,
@@ -25,7 +26,9 @@ export function serve<Route extends ApiRoute<unknown, unknown, unknown>, Generic
     ...(route.access ? { config: { vaultAccess: route.access } } : {}),
     handler: async (request, reply) => {
       if (status !== undefined) void reply.code(status);
-      return (handler as (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<unknown>)(request as FastifyRequest<Generic>, reply);
+      const answer = await (handler as (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<unknown>)(request as FastifyRequest<Generic>, reply);
+      if (revealsSecret) void reply.type('application/json; charset=utf-8').serializer(JSON.stringify);
+      return answer;
     },
   });
 }

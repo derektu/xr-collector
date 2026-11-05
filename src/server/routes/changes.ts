@@ -5,6 +5,7 @@ import {
   CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeFeed, type ChangeKind,
 } from '../../core/change-feed.js';
 import { CollectorError } from '../../core/collector-error.js';
+import { maskSecretsJson } from '../../core/redact.js';
 
 /** Event connections one listener serves at once. */
 export const MAX_STREAMS = 16;
@@ -53,7 +54,7 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
       'XR-Revision': changes.revision,
     });
     const send = (event: string, data: unknown, id?: string) => {
-      response.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      response.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${maskSecretsJson(data)}\n\n`);
     };
     response.write('retry: 1000\n\n');
     const catchup = after ? changes.since(after) : null;

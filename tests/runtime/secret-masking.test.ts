@@ -3,11 +3,17 @@
 // subscription's check failure in the Vault and the HTTP error answer that the UI and the Agent read
 // all show it masked, and no file the app writes outside the Agent settings holds it. Work that a
 // restart resumes and that fails at once is masked too: the token is protected before the Vault opens.
+// The known secrets (the Agent token, the search engine key) in status messages that carry text of
+// other programs (the update, Vault operation and search status) reach the UI and the Agent masked,
+// also when read after the change stream announces them.
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CollectorError } from '../../src/core/collector-error.js';
+import { protectSecret } from '../../src/core/redact.js';
+import type { DeviceUpdateStatus } from '../../src/core/update-types.js';
+import type { UpdateAccess } from '../../src/updates/types.js';
 import { startCollectorServer } from '../../src/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../src/search/managed-transcript-search.js';
 import { withYouTube } from '../support/youtube-sources.js';
@@ -214,5 +220,82 @@ describe('secrets in source errors', () => {
       expect.soft(files.get(file), file).toContain('agent [已遮蔽]');
       expect.soft(files.get(file)?.includes(token), `${file} holds the token`).toBe(false);
     }
+  });
+
+  it('are masked in the update, Vault operation and search status the UI and the Agent read', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-secret-masking-status-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const profilePath = path.join(root, 'profile');
+    await mkdir(profilePath);
+    const agentSettingsFile = path.join(root, 'agent-settings.json');
+    const token = 'feed'.repeat(12);
+    await writeFile(agentSettingsFile, `${JSON.stringify({ schemaVersion: 1, token, port: { mode: 'auto' } })}\n`, { mode: 0o600 });
+    // Stands for the search engine's key, which the engine protects when it starts.
+    const searchKey = 'search-engine-key-296';
+    protectSecret(searchKey);
+    const leak = `agent ${token} search ${searchKey}`;
+    const listeners = new Set<() => void>();
+    let update = { phase: 'idle', message: '' } as unknown as DeviceUpdateStatus;
+    const updates: UpdateAccess = {
+      status: () => update,
+      check: async () => {
+        update = { ...update, phase: 'error', message: `無法檢查更新：${leak}`, errorCode: 'update_check_failed' };
+        for (const listener of listeners) listener();
+        return update;
+      },
+      download: async () => update, apply: async () => update, cancel: async () => update,
+      subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const runtime = await startCollectorServer({
+      sources: PRODUCT_SOURCES,
+      profilePath,
+      explicitVaultPath: path.join(root, 'vault'),
+      workspace: withYouTube({
+        capture: { capture: async () => { throw new CollectorError('video_unavailable', 'unused'); } },
+        channelSource: { resolve: async () => channel, listVideos: async () => [] },
+        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
+        createSearch: async () => ({ search: new UnavailableTranscriptSearch(`無法啟動搜尋引擎：${leak}`), close: async () => undefined }),
+      }),
+      updates,
+      agentSettingsFile,
+      skillPath: path.resolve('skills/xr-collector-agent'),
+      uiPort: 0,
+    });
+    cleanups.push(() => runtime.close());
+    const ui = runtime.listeners.ui.url;
+    const agentUrl = runtime.listeners.agent!.url;
+    const read = async (base: string, route: string, init: RequestInit = {}) => {
+      const response = await fetch(`${base}${route}`, { ...init, headers: {
+        ...(base === agentUrl ? { authorization: `Bearer ${token}` } : {}), ...(init.body ? { 'content-type': 'application/json' } : {}),
+      } });
+      return response.text();
+    };
+    const expectMasked = (exit: string, text: string) => {
+      for (const secret of [token, searchKey]) expect.soft(text, exit).not.toContain(secret);
+      expect.soft(text, exit).toContain('[已遮蔽]');
+    };
+    /** Waits for a change of `kind` on the change stream after `revision`, and returns the stream's revision. */
+    const announced = async (kind: string, revision: string) => {
+      const answer = JSON.parse(await read(agentUrl, `/api/changes?after=${revision}&kind=${kind}&wait=10`)) as { batches: unknown[]; revision: string };
+      expect(answer.batches.length).toBeGreaterThan(0);
+      return answer.revision;
+    };
+    let revision = (JSON.parse(await read(agentUrl, '/api/changes')) as { revision: string }).revision;
+
+    // The update status, after a check that failed with the text of the update source.
+    await read(ui, '/api/device/updates/check', { method: 'POST' });
+    revision = await announced('update', revision);
+    for (const base of [ui, agentUrl]) expectMasked(`update status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/device/updates'));
+
+    // The Vault operation status, after an export to a folder whose name carries the secrets.
+    const folder = path.join(root, `exports ${leak}`);
+    await mkdir(folder, { recursive: true });
+    await read(agentUrl, '/api/vault/export', { method: 'POST', body: JSON.stringify({ path: path.join(folder, 'export.zip'), overwrite: false }) });
+    await eventually(async () => expect(JSON.parse(await read(ui, '/api/vault/status')).state).toBe('completed'));
+    revision = await announced('vault', revision);
+    for (const base of [ui, agentUrl]) expectMasked(`Vault operation status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/vault/status'));
+
+    // The search status, with the search engine's start failure.
+    for (const base of [ui, agentUrl]) expectMasked(`search status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/search/status'));
   });
 });
