@@ -1,7 +1,8 @@
-// Where the App looks for the files it ships beside its code: the runtime programs, the search lexicon,
-// the Agent Skill and the tray icons. A wrong path, or a package whose electron-builder.yml puts a file
-// somewhere the App does not look, leaves the App without search, collection or tray icons on that
-// platform while every other test passes.
+// Where the App looks for the files it ships beside its code: the runtime programs, the macOS update
+// helper, the search lexicon, the Agent Skill and the tray icons. A wrong path, or a package whose
+// electron-builder.yml puts a file somewhere the App does not look, leaves the App without search,
+// collection, tray icons or updates on that platform while every other test passes. A Mac package
+// that cannot update never receives the release that fixes it.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
@@ -16,7 +17,7 @@ const OVERRIDES = {
   XR_COLLECTOR_SEARCH_LEXICON: '/custom/lexicon.txt',
 };
 
-/** Every path the App asks for, by name. */
+/** Every path the App asks for on `platform`, by name. Only the Mac App asks for the update helper. */
 function answers(layout: ResourceLayout, platform: NodeJS.Platform, env: Record<string, string> = {}): Record<string, string> {
   const resources = bundledResources(layout, { platform, env });
   return {
@@ -26,6 +27,7 @@ function answers(layout: ResourceLayout, platform: NodeJS.Platform, env: Record<
     lexicon: resources.searchLexicon,
     skill: resources.skill,
     trayIcons: resources.trayIcons,
+    ...(platform === 'darwin' ? { macUpdateHelper: resources.macUpdateHelper } : {}),
   };
 }
 
@@ -38,6 +40,7 @@ describe('the paths of the bundled resources', () => {
       lexicon: '/work/xr-collector/resources/search/coct-main.txt',
       skill: '/work/xr-collector/skills/xr-collector-agent',
       trayIcons: '/work/xr-collector/resources/tray',
+      macUpdateHelper: '/work/xr-collector/resources/bin/mac/xr-mac-update-helper',
     });
   });
 
@@ -61,6 +64,7 @@ describe('the paths of the bundled resources', () => {
       lexicon: `${resources}/search/coct-main.txt`,
       skill: `${resources}/skills/xr-collector-agent`,
       trayIcons: `${resources}/tray`,
+      macUpdateHelper: `${resources}/bin/xr-mac-update-helper`,
     });
   });
 
@@ -90,7 +94,7 @@ describe('the paths of the bundled resources', () => {
   it('uses a Mac package\'s own programs and lexicon whatever the environment names', () => {
     expect(answers({ packaged: true, resourcesPath: '/R' }, 'darwin', OVERRIDES)).toMatchObject({
       meilisearch: '/R/bin/meilisearch', ytDlp: '/R/bin/yt-dlp/yt-dlp', deno: '/R/bin/deno',
-      lexicon: '/R/search/coct-main.txt',
+      lexicon: '/R/search/coct-main.txt', macUpdateHelper: '/R/bin/xr-mac-update-helper',
     });
   });
 

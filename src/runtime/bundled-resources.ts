@@ -2,9 +2,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * Where the files the App ships beside its code live: the runtime programs (Meilisearch and the
- * programs the source plugins run), the search lexicon, the Agent Skill and the tray icons. This module is the only place
- * that knows their layout; every entry point asks it for the paths.
+ * Where the files the App ships beside its code live: the runtime programs (Meilisearch, the
+ * programs the source plugins run and the macOS update helper), the search lexicon, the Agent Skill
+ * and the tray icons. This module is the only place that knows their layout; every entry point asks
+ * it for the paths.
  *
  * Development runs read them from the checkout: `resources/bin/<mac|win>`, `resources/search`,
  * `resources/tray` and `skills`. A package reads them from its resources folder, where
@@ -29,6 +30,11 @@ export interface BundledResources {
   readonly skill: string;
   /** The folder of the tray icons. */
   readonly trayIcons: string;
+  /**
+   * The helper that replaces the App during a macOS update. Only a Mac package ships it; a
+   * development run finds it in the checkout only after `scripts/build-mac-update-helper.mjs`.
+   */
+  readonly macUpdateHelper: string;
 }
 
 export interface ResourceEnvironment {
@@ -54,6 +60,7 @@ export function bundledResources(layout: ResourceLayout, environment: ResourceEn
     searchLexicon: paths.resolve(override('XR_COLLECTOR_SEARCH_LEXICON') ?? paths.join(root, 'search', 'coct-main.txt')),
     skill: paths.join(layout.packaged ? layout.resourcesPath : layout.checkout, 'skills', 'xr-collector-agent'),
     trayIcons: paths.join(root, 'tray'),
+    macUpdateHelper: paths.join(runtimeFolder, 'xr-mac-update-helper'),
   };
 }
 
