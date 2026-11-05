@@ -364,7 +364,7 @@ export class VaultWorkspace {
     await newVaultFolder(location, name, folders);
     this.exchange.dropPreview();
     void this.run('create', '建立知識庫', async (reporter) => {
-      const root = await createNewVault(location, name, this.options.createdBy, folders);
+      const root = await createNewVault(location, name, this.options.createdBy, this.options.sources, folders);
       try {
         return await this.openOnce(root, reporter, 'created');
       } catch (error) {

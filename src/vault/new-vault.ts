@@ -82,7 +82,7 @@ export async function newVaultFolder(location: unknown, name: unknown, folders?:
 }
 
 /** Creates the folder `name` in `location` as a new, empty Vault and returns its path; see `checkNewVault`. */
-export async function createNewVault(location: unknown, name: unknown, createdBy: string, folders?: AppFolders): Promise<string> {
+export async function createNewVault(location: unknown, name: unknown, createdBy: string, sources: SourceRegistry, folders?: AppFolders): Promise<string> {
   const target = await newVaultFolder(location, name, folders);
   try {
     await mkdir(target);
@@ -91,7 +91,7 @@ export async function createNewVault(location: unknown, name: unknown, createdBy
     throw new CollectorError('vault_invalid', `無法建立資料夾（${errorCode(error) ?? '未知錯誤'}）。`);
   }
   try {
-    await writeVaultMarker(target, createdBy);
+    await writeVaultMarker(target, createdBy, sources);
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);
     throw new CollectorError('vault_invalid', `無法建立知識庫（${errorCode(error) ?? '未知錯誤'}）。`, { cause: error });

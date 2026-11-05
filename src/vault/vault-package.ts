@@ -22,7 +22,7 @@ import type { FileSource } from './vault-merge.js';
  * Vault root, text compressed with deflate, plus `manifest.json`:
  *
  * ```json
- * { "format": "xr-collector-package", "formatVersion": 1,
+ * { "format": "xr-collector-package", "formatVersion": 2,
  *   "exportedAt": "<ISO time>", "createdBy": "<program>",
  *   "source": { "vaultId": "<UUID>", "machine": "<name>", "folderName": "<name>" },
  *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
@@ -42,7 +42,6 @@ import type { FileSource } from './vault-merge.js';
  * package has no limit on its total size.
  */
 export const PACKAGE_FORMAT = 'xr-collector-package';
-export const PACKAGE_FORMAT_VERSION = 1;
 export const MANIFEST = 'manifest.json';
 export const FILE_LIMIT = 64 * 1024 * 1024;
 export const MANIFEST_LIMIT = 64 * 1024 * 1024;
@@ -58,30 +57,13 @@ function settingsFiles(sources: SourceRegistry): string[] {
   return [...sources.subscriptionDefinitions.map((definition) => definition.storage!.subscriptionsFile), sources.schedule.file, DELETIONS_FILE];
 }
 
-/** The source types of `sources` whose documents or subscription files are among `paths`. */
-export function sourceTypesOf(sources: SourceRegistry, paths: Iterable<string>): Set<string> {
-  const subscriptionFiles = new Map(sources.subscriptionDefinitions.map((definition) => [definition.storage!.subscriptionsFile, definition.id]));
-  const types = new Set<string>();
-  for (const file of paths) {
-    const type = documentKeyFromPath(sources, file)?.sourceType ?? subscriptionFiles.get(file);
-    if (type) types.add(type);
-  }
-  return types;
-}
-
 /**
- * The format version a package of these files is written with: the highest `packageFormatVersion`
- * among the source types whose documents or subscription files it holds, and at least
- * `PACKAGE_FORMAT_VERSION`.
+ * The package format version of a program with the source types of `sources`: the highest
+ * `packageFormatVersion` they declare, and at least 1. The program writes every package at this
+ * version and reads none above it.
  */
-export function packageFormatVersion(sources: SourceRegistry, paths: readonly string[]): number {
-  const types = sourceTypesOf(sources, paths);
-  return Math.max(PACKAGE_FORMAT_VERSION, ...sources.definitions.filter((definition) => types.has(definition.id)).map((definition) => definition.packageFormatVersion));
-}
-
-/** The highest package format version this program reads: its own, or a higher one a source type of `sources` declares. */
-export function supportedPackageFormatVersion(sources: SourceRegistry): number {
-  return Math.max(PACKAGE_FORMAT_VERSION, ...sources.definitions.map((definition) => definition.packageFormatVersion));
+export function packageFormatVersion(sources: SourceRegistry): number {
+  return Math.max(1, ...sources.definitions.map((definition) => definition.packageFormatVersion));
 }
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
@@ -245,7 +227,7 @@ export async function writePackage(
   }
   zip.addReadStreamLazy(MANIFEST, { mtime }, (done) => {
     const manifest: PackageManifest = {
-      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(sources, rows.map((row) => row.path)),
+      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(sources),
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
       ...(info.source ? { source: info.source } : {}),
       summary: registered.summary, files: rows,
@@ -387,7 +369,7 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
   try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
   if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
   const formatVersion = value.formatVersion;
-  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > supportedPackageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
+  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > packageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
   if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
   const seen = new Set<string>();
   for (const row of value.files as unknown[]) {

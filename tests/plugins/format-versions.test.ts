@@ -4,28 +4,24 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
-import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
-import type { CapturedDocument } from '../../src/core/source-contract.js';
-import { transcriptDocument } from '../../src/plugins/youtube/server.js';
-import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
-import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
+import type { SourceDefinition } from '../../src/core/source-contract.js';
+import type { SourceRegistry } from '../../src/core/source-registry.js';
 import type { DeletionRecord } from '../../src/core/document-types.js';
-import { DELETIONS_FILE, deletionsToJson } from '../../src/vault/deleted-documents.js';
+import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { SOURCE_DEFINITIONS } from '../../src/plugins/index.js';
+import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
+import { DELETIONS_FILE } from '../../src/vault/deleted-documents.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { createVaultDirectory, inspectVaultDirectory, VAULT_MARKER } from '../../src/vault/vault-directory.js';
+import { createVaultDirectory, inspectVaultDirectory, VAULT_MARKER, vaultFormatVersion } from '../../src/vault/vault-directory.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
 import { applyInPlace, finishInPlaceImports, importNewVault } from '../../src/vault/vault-import.js';
 import { IMPORT_STAGING_PREFIX, openPackage, packageFormatVersion, writePackage, type PackageReader } from '../../src/vault/vault-package.js';
-import { FAKE, FAKE_DEFAULTS, fakeDefinition } from '../support/fake-source-plugin.js';
-import { productSourcesWith } from '../support/product-sources.js';
+import { fakeDefinition } from '../support/fake-source-plugin.js';
+import { PRODUCT_SOURCES, productSourcesWith } from '../support/product-sources.js';
 
-// A source type declares the Vault format and the package format its files need. `newer` needs
-// version 2 of both; YouTube and `fake` need version 1. A Vault whose marker is older than a file
-// in it is a Vault an older program opens and misreads, so every kind of Vault file raises the
-// marker before it is written, whichever way it is written.
-
-const NEWER = fakeDefinition('newer', 'newer-net', { vault: 2, package: 2 });
-const SOURCES = productSourcesWith(FAKE, NEWER);
+// The Vault and package format versions are the program's: the highest each registered source type
+// declares. The program writes every Vault and package at them, whatever the files hold, and opens
+// none above them; a Vault an older program opens never holds files that program misreads.
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -36,198 +32,186 @@ async function temp(): Promise<string> {
   return root;
 }
 
-async function vault(): Promise<string> {
-  return createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', SOURCES);
-}
-
 const marker = async (root: string) => JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8')) as Record<string, unknown>;
 
-const document = (type: string, key: string): CapturedDocument => ({
-  sourceType: type, key, sourceUrl: `https://${type}.example/item/${key}`, title: `${type} ${key}`, publisher: { id: null, name: '作者' },
-  publishedAt: null, bodyMarkdown: '內容。', details: { rating: 3, note: null },
+/** A Vault of `sources` whose marker an earlier program wrote, at format version 1. */
+async function versionOneVault(sources: SourceRegistry = PRODUCT_SOURCES): Promise<string> {
+  const root = await createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', sources);
+  await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify({ ...await marker(root), formatVersion: 1 }, null, 2)}\n`);
+  return root;
+}
+
+const transcript = (videoId: string) => transcriptDocument({
+  videoId, sourceUrl: `https://www.youtube.com/watch?v=${videoId}`, title: '影片', channelId: 'UC123',
+  channelTitle: '頻道', publishedAt: null, languageCode: 'zh-TW', languageName: null, subtitleKind: 'manual', bodyMarkdown: '字幕。',
 });
-const feed = (type: string, id: string): SubscriptionRecord => ({
-  id, title: `動態 ${id}`, url: `https://${type}.example/feed/${id}`, enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
-  settings: FAKE_DEFAULTS, nextCheckAt: null, lastDispatchedAt: null,
-});
-const deletion = (type: string, key: string): Omit<DeletionRecord, 'deletedAt'> => ({
-  sourceType: type, sourceId: key, sourceUrl: `https://${type}.example/item/${key}`, title: `${type} ${key}`,
-  publisherId: null, publisherName: '作者',
-});
-const deletionsBytes = (record: Omit<DeletionRecord, 'deletedAt'>) =>
-  Buffer.from(`${JSON.stringify(deletionsToJson([{ ...record, deletedAt: '2026-09-18T00:00:00.000Z' }]), null, 2)}\n`);
-/** The text of a document file, as a Vault of its own writes it. */
-async function documentText(type: string, key: string): Promise<string> {
-  const source = await vault();
-  await new MarkdownVault(new VaultFileWriter(source, SOURCES)).add(document(type, key));
-  return readFile(path.join(source, 'documents', type, `${key}.md`), 'utf8');
+const rssDeletion: Omit<DeletionRecord, 'deletedAt'> = {
+  sourceType: 'rss', sourceId: '0123456789abcdef', sourceUrl: 'https://blog.example/posts/1', title: '文章',
+  publisherId: null, publisherName: '部落格',
+};
+/** The text of a transcript document file, as a Vault of its own writes it. */
+async function transcriptText(videoId: string): Promise<string> {
+  const source = await createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', PRODUCT_SOURCES);
+  await new MarkdownVault(new VaultFileWriter(source, PRODUCT_SOURCES)).add(transcript(videoId));
+  return readFile(path.join(source, 'documents', 'youtube', `${videoId}.md`), 'utf8');
 }
 /** The export file of an in-place import whose changes all carry their own bytes. */
 const noReader = {} as PackageReader;
-const transcript = transcriptDocument({
-  videoId: 'dQw4w9WgXcQ', sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: '影片', channelId: 'UC123',
-  channelTitle: '頻道', publishedAt: null, languageCode: 'zh-TW', languageName: null, subtitleKind: 'manual', bodyMarkdown: '字幕。',
+
+/**
+ * Why the format versions of `definitions` let a type be added below an existing one: every type
+ * declares a Vault and a package version of its own, together 1 to the number of types, so the
+ * next type has to declare one above all of them.
+ */
+function formatVersionProblems(definitions: readonly SourceDefinition[]): string[] {
+  const expected = definitions.map((_, index) => index + 1);
+  return (['vaultFormatVersion', 'packageFormatVersion'] as const).flatMap((field) => {
+    const declared = definitions.map((definition) => definition[field]).sort((a, b) => a - b);
+    return declared.every((version, index) => version === expected[index])
+      ? []
+      : [`${field}: ${definitions.map((definition) => `${definition.id} ${definition[field]}`).join(', ')}`];
+  });
+}
+
+describe('the format versions of the product\'s source types', () => {
+  it('give every type a version above the types before it', () => {
+    expect(formatVersionProblems(SOURCE_DEFINITIONS)).toEqual([]);
+    expect(vaultFormatVersion(PRODUCT_SOURCES)).toBe(SOURCE_DEFINITIONS.length);
+    expect(packageFormatVersion(PRODUCT_SOURCES)).toBe(SOURCE_DEFINITIONS.length);
+  });
+
+  it('refuse a new type that declares a version no higher than an existing type', () => {
+    const added = (vault: number, pkg: number) => [...SOURCE_DEFINITIONS, fakeDefinition('later', 'later-net', { vault, package: pkg })];
+    expect(formatVersionProblems(added(3, 3))).toEqual([]);
+    expect(formatVersionProblems(added(2, 3))).toEqual([expect.stringMatching(/^vaultFormatVersion: .*later 2/u)]);
+    expect(formatVersionProblems(added(3, 1))).toEqual([expect.stringMatching(/^packageFormatVersion: .*later 1/u)]);
+  });
+
+  it('are the program\'s versions: the highest the registered types declare', () => {
+    const sources = productSourcesWith(fakeDefinition('later', 'later-net', { vault: 3, package: 4 }));
+    expect(vaultFormatVersion(sources)).toBe(3);
+    expect(packageFormatVersion(sources)).toBe(4);
+  });
 });
 
-describe('the Vault format a source type needs', () => {
-  it('leaves the marker as it is while only types of the base format write', async () => {
-    const root = await vault();
-    const before = await readFile(path.join(root, VAULT_MARKER));
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(transcript);
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(document('fake', 'one-1'));
-    await new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake').add(feed('fake', 'news'));
-    expect(await readFile(path.join(root, VAULT_MARKER))).toEqual(before);
+describe('the Vault format version', () => {
+  it('is the one a new Vault is created at', async () => {
+    const root = await createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', PRODUCT_SOURCES);
+    expect((await marker(root)).formatVersion).toBe(2);
   });
 
-  it('raises the marker on the first write of the type\'s documents, keeping the rest of the marker', async () => {
-    const root = await vault();
+  it('is the one an older Vault\'s marker is raised to on its first write, whatever the file, keeping the rest of the marker', async () => {
+    const root = await versionOneVault();
     const before = await marker(root);
-    expect(before.formatVersion).toBe(1);
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(document('newer', 'one-1'));
+    await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).add(transcript('dQw4w9WgXcQ'));
     expect(await marker(root)).toEqual({ ...before, formatVersion: 2 });
-    expect(await inspectVaultDirectory(root, SOURCES)).toMatchObject({ kind: 'existing', documentCount: 1 });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'existing', documentCount: 1 });
+
+    const scheduled = await versionOneVault();
+    await new JsonScheduleStore(new VaultFileWriter(scheduled, PRODUCT_SOURCES)).save({ enabled: false });
+    expect((await marker(scheduled)).formatVersion).toBe(2);
   });
 
-  it('raises the marker on the first write of the type\'s subscription file', async () => {
-    const root = await vault();
-    await new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'newer').add(feed('newer', 'news'));
-    expect((await marker(root)).formatVersion).toBe(2);
-  });
-
-  it('raises the marker when the deletion file first holds a record of the type', async () => {
-    const root = await vault();
-    const files = new VaultFileWriter(root, SOURCES);
-    // An item still capturing has no document, so its deletion record is the first file of its type.
-    await new Collector(new MarkdownVault(files)).recordDeletion(deletion('newer', 'one-1'));
-    expect((await marker(root)).formatVersion).toBe(2);
-  });
-
-  it('leaves the marker as it is for the schedule file and deletion records of base types', async () => {
-    const root = await vault();
+  it('leaves the marker of an older Vault as it is while the Vault is only read', async () => {
+    const root = await versionOneVault();
     const before = await readFile(path.join(root, VAULT_MARKER));
-    await new JsonScheduleStore(new VaultFileWriter(root, SOURCES)).save({ enabled: false });
-    await new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES))).recordDeletion(deletion('fake', 'one-1'));
-    expect(await readFile(path.join(root, SOURCES.schedule.file), 'utf8')).toContain('"enabled": false');
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'existing' });
+    expect(await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).list()).toEqual([]);
+    await writePackage(root, PRODUCT_SOURCES, path.join(await temp(), 'read.zip'));
     expect(await readFile(path.join(root, VAULT_MARKER))).toEqual(before);
   });
 
-  it('raises the marker before an in-place import puts the type\'s files in place', async () => {
-    const root = await vault();
+  it('is the one an in-place import raises an older marker to before its first file is put in place', async () => {
+    // A stop after the first rename leaves the rest to the next open, so the marker has to keep an
+    // older program out already.
+    const root = await versionOneVault();
     const changes = new Map([
-      ['documents/newer/one-1.md', { bytes: Buffer.from(await documentText('newer', 'one-1')) }],
-    ]);
-    await applyInPlace(root, SOURCES, noReader, changes, () => undefined);
-    expect((await marker(root)).formatVersion).toBe(2);
-    expect(await inspectVaultDirectory(root, SOURCES)).toMatchObject({ kind: 'existing', documentCount: 1 });
-  });
-
-  it('raises the marker before an in-place import puts a deletion file holding the type\'s records', async () => {
-    const root = await vault();
-    const changes = new Map([[DELETIONS_FILE, { bytes: deletionsBytes(deletion('newer', 'one-1')) }]]);
-    await applyInPlace(root, SOURCES, noReader, changes, () => undefined);
-    expect((await marker(root)).formatVersion).toBe(2);
-  });
-
-  it('raises the marker for every file of an in-place import before the first file is put in place', async () => {
-    // A stop after the first rename leaves the rest to the next open; a program that does not know the
-    // type would drop that journal as invalid, so the marker has to keep such a program out already.
-    const root = await vault();
-    const changes = new Map([
-      ['documents/fake/one-1.md', { bytes: Buffer.from(await documentText('fake', 'one-1')) }],
-      ['documents/newer/two-2.md', { bytes: Buffer.from(await documentText('newer', 'two-2')) }],
+      ['documents/youtube/dQw4w9WgXcQ.md', { bytes: Buffer.from(await transcriptText('dQw4w9WgXcQ')) }],
+      ['documents/youtube/aaaaaaaaaaa.md', { bytes: Buffer.from(await transcriptText('aaaaaaaaaaa')) }],
     ]);
     const stop = new Error('stopped');
-    await expect(applyInPlace(root, SOURCES, noReader, changes, () => undefined, (phase, count) => {
+    await expect(applyInPlace(root, PRODUCT_SOURCES, noReader, changes, () => undefined, (phase, count) => {
       if (phase === 'renaming' && count === 1) throw stop;
     })).rejects.toBe(stop);
     expect((await marker(root)).formatVersion).toBe(2);
-    expect(await finishInPlaceImports(root, SOURCES)).toBe(true);
-    expect(await inspectVaultDirectory(root, SOURCES)).toMatchObject({ kind: 'existing', documentCount: 2 });
+    expect(await finishInPlaceImports(root, PRODUCT_SOURCES)).toBe(true);
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'existing', documentCount: 2 });
   });
 
-  it('raises the marker before the next open puts any file of an interrupted import in place', async () => {
-    const root = await vault();
+  it('is the one the next open raises an older marker to before it puts any file of an interrupted import in place', async () => {
+    const root = await versionOneVault();
     const work = path.join(root, `${IMPORT_STAGING_PREFIX}${randomUUID()}`);
     await mkdir(path.join(work, 'files'), { recursive: true });
-    await writeFile(path.join(work, 'files', '0'), await documentText('fake', 'one-1'));
-    await writeFile(path.join(work, 'files', '1'), deletionsBytes(deletion('newer', 'two-2')));
+    await writeFile(path.join(work, 'files', '0'), await transcriptText('dQw4w9WgXcQ'));
     await writeFile(path.join(work, 'journal.json'), JSON.stringify({ version: 1, entries: [
-      { path: 'documents/fake/one-1.md', staged: 'files/0' }, { path: DELETIONS_FILE, staged: 'files/1' },
+      { path: 'documents/youtube/dQw4w9WgXcQ.md', staged: 'files/0' },
     ] }));
-    // The first file cannot be put in place, so whatever the marker holds was written before any rename.
-    await mkdir(path.join(root, 'documents', 'fake', 'one-1.md', 'in-the-way'), { recursive: true });
-    await expect(finishInPlaceImports(root, SOURCES)).rejects.toThrow();
+    // The file cannot be put in place, so whatever the marker holds was written before any rename.
+    await mkdir(path.join(root, 'documents', 'youtube', 'dQw4w9WgXcQ.md', 'in-the-way'), { recursive: true });
+    await expect(finishInPlaceImports(root, PRODUCT_SOURCES)).rejects.toThrow();
     expect((await marker(root)).formatVersion).toBe(2);
   });
 
-  it('raises the marker of a Vault created from an export file whose only file of the type is a deletion record', async () => {
-    const root = await vault();
+  it('is the one a Vault created from an export file is written at', async () => {
+    const root = await versionOneVault();
+    await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).add(transcript('dQw4w9WgXcQ'));
     const exports = await temp();
-    const files = new VaultFileWriter(root, SOURCES);
-    await new MarkdownVault(files).add(document('newer', 'one-1'));
-    await new Collector(new MarkdownVault(files)).delete('newer:one-1');
-    const file = path.join(exports, 'deleted.zip');
-    await writePackage(root, SOURCES, file);
-    const reader = await openPackage(file, SOURCES);
-    expect(reader.paths()).toEqual([DELETIONS_FILE]);
-    reader.close();
-
+    const file = path.join(exports, 'youtube.zip');
+    await writePackage(root, PRODUCT_SOURCES, file);
     const profile = path.join(exports, 'profile');
     await mkdir(profile);
-    const created = await importNewVault({ sources: SOURCES, packageFile: file, folder: path.join(exports, 'imported'), profilePath: profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: path.join(exports, 'imported'), profilePath: profile, createdBy: 'XR Collector test' });
     expect((await marker(created)).formatVersion).toBe(2);
   });
 
-  it('does not open a Vault of a version no registered type declares', async () => {
-    const root = await vault();
+  it('bounds the Vaults the program opens', async () => {
+    const root = await versionOneVault();
     await writeFile(path.join(root, VAULT_MARKER), JSON.stringify({ ...await marker(root), formatVersion: 3 }));
-    expect(await inspectVaultDirectory(root, SOURCES)).toMatchObject({ kind: 'invalid' });
+    expect(await inspectVaultDirectory(root, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('較新版本') });
+  });
+});
+
+describe('the package format version', () => {
+  async function exported(fill: (files: VaultFileWriter) => Promise<void>): Promise<string> {
+    const root = await createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', PRODUCT_SOURCES);
+    await fill(new VaultFileWriter(root, PRODUCT_SOURCES));
+    const file = path.join(await temp(), 'export.zip');
+    await writePackage(root, PRODUCT_SOURCES, file);
+    return file;
+  }
+
+  it('is the one every export is written at, whatever the files it holds', async () => {
+    const youtube = await exported(async (files) => { await new MarkdownVault(files).add(transcript('dQw4w9WgXcQ')); });
+    const deletionOnly = await exported(async (files) => { await new Collector(new MarkdownVault(files)).recordDeletion(rssDeletion); });
+    const empty = await exported(async () => undefined);
+    for (const [file, paths] of [[youtube, ['documents/youtube/dQw4w9WgXcQ.md']], [deletionOnly, [DELETIONS_FILE]], [empty, []]] as const) {
+      const reader = await openPackage(file, PRODUCT_SOURCES);
+      expect(reader.paths()).toEqual(paths);
+      expect(reader.manifest.formatVersion).toBe(2);
+      reader.close();
+    }
+  });
+
+  it('bounds the export files the program reads', async () => {
+    const sources = productSourcesWith(fakeDefinition('later', 'later-net', { vault: 3, package: 3 }));
+    const root = await createVaultDirectory(path.join(await temp(), 'vault'), 'XR Collector test', sources);
+    const newer = path.join(await temp(), 'newer.zip');
+    await writePackage(root, sources, newer);
+    (await openPackage(newer, sources)).close();
+    await expect(openPackage(newer, PRODUCT_SOURCES)).rejects.toThrow('不支援這個匯出檔的格式版本。');
   });
 });
 
 describe('the way into a Vault\'s files', () => {
   it('refuses a path that names no Vault file and writes nothing', async () => {
-    const root = await vault();
-    const files = new VaultFileWriter(root, SOURCES);
+    const root = await versionOneVault();
+    const before = await readFile(path.join(root, VAULT_MARKER));
+    const files = new VaultFileWriter(root, PRODUCT_SOURCES);
     await expect(files.writeJson('settings/tags.json', {})).rejects.toThrow('Not a Vault file: settings/tags.json');
     await expect(files.create('notes/one.md', 'text')).rejects.toThrow('Not a Vault file: notes/one.md');
     await expect(files.remove(VAULT_MARKER)).rejects.toThrow(`Not a Vault file: ${VAULT_MARKER}`);
     await expect(access(path.join(root, 'settings', 'tags.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(path.join(root, 'notes'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(access(path.join(root, VAULT_MARKER))).resolves.toBeUndefined();
-  });
-});
-
-describe('the package format a source type needs', () => {
-  it('writes a package with the highest version among the types whose files it holds', () => {
-    expect(packageFormatVersion(SOURCES, ['documents/youtube/dQw4w9WgXcQ.md', 'documents/fake/one-1.md', 'settings/fake-feeds.json'])).toBe(1);
-    expect(packageFormatVersion(SOURCES, ['documents/youtube/dQw4w9WgXcQ.md', 'documents/newer/one-1.md'])).toBe(2);
-    expect(packageFormatVersion(SOURCES, ['settings/newer-feeds.json'])).toBe(2);
-    expect(packageFormatVersion(SOURCES, [])).toBe(1);
-  });
-
-  it('exports at version 1 without the type\'s files and at version 2 with them, and imports either', async () => {
-    const root = await vault();
-    const exports = await temp();
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(transcript);
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(document('fake', 'one-1'));
-    const base = path.join(exports, 'base.zip');
-    await writePackage(root, SOURCES, base);
-    const baseReader = await openPackage(base, SOURCES);
-    expect(baseReader.manifest.formatVersion).toBe(1);
-    baseReader.close();
-
-    await new MarkdownVault(new VaultFileWriter(root, SOURCES)).add(document('newer', 'two-2'));
-    const raised = path.join(exports, 'raised.zip');
-    await writePackage(root, SOURCES, raised);
-    const raisedReader = await openPackage(raised, SOURCES);
-    expect(raisedReader.manifest.formatVersion).toBe(2);
-    raisedReader.close();
-
-    const profile = path.join(exports, 'profile');
-    await mkdir(profile);
-    const created = await importNewVault({ sources: SOURCES, packageFile: raised, folder: path.join(exports, 'imported'), profilePath: profile, createdBy: 'XR Collector test' });
-    expect((await marker(created)).formatVersion).toBe(2);
-    expect((await new MarkdownVault(new VaultFileWriter(created, SOURCES)).list()).map((entry) => entry.id).sort()).toEqual(['fake:one-1', 'newer:two-2', 'youtube:dQw4w9WgXcQ']);
+    expect(await readFile(path.join(root, VAULT_MARKER))).toEqual(before);
   });
 });

@@ -239,15 +239,12 @@ export interface SourceDefinition<S extends SubscriptionSettings = SubscriptionS
   storage: SubscriptionStorage | null;
   frontmatter: FrontmatterCodec;
   /**
-   * The lowest Vault format version that holds this type's documents and subscription file. The
-   * first write of either raises the Vault's marker to it; a Vault whose version is higher than
-   * every registered type declares is not opened.
+   * The Vault format version that introduced this type. A program writes every Vault at the highest
+   * version its types declare and opens none above it, so a type added to the product declares a
+   * version above every type before it.
    */
   vaultFormatVersion: number;
-  /**
-   * The export package format version a package holding this type's files needs. A package is
-   * written with the highest version among the types whose files it holds.
-   */
+  /** The export package format version that introduced this type; works as `vaultFormatVersion` does for packages. */
   packageFormatVersion: number;
   /**
    * The HTTP status of each error code this type raises beyond the core's own codes; the server

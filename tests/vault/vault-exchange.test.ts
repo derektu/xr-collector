@@ -785,7 +785,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     // A folder at the target that the import did not write is left alone.
     await stoppedAfterRename();
     await rm(path.join(target, VAULT_MARKER));
-    await writeVaultMarker(target, 'another program');
+    await writeVaultMarker(target, 'another program', PRODUCT_SOURCES);
     await using(c, async () => undefined);
     expect(await readdir(target)).toContain('documents');
 

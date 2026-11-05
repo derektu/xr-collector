@@ -11,7 +11,6 @@ import { replaceFile } from '../core/json-file.js';
 /** Root file that marks a directory as a self-contained XR Collector Vault. */
 export const VAULT_MARKER = 'xr-collector-vault.json';
 export const VAULT_FORMAT = 'xr-collector-vault';
-export const VAULT_FORMAT_VERSION = 1;
 
 export interface VaultMarker {
   format: typeof VAULT_FORMAT;
@@ -71,7 +70,7 @@ function markerProblem(value: unknown, sources: SourceRegistry): string | null {
   if (marker.format !== VAULT_FORMAT || !Number.isInteger(marker.formatVersion) || (marker.formatVersion ?? 0) < 1) {
     return '知識庫標記檔格式錯誤。';
   }
-  if ((marker.formatVersion ?? 0) > supportedVaultFormatVersion(sources)) {
+  if ((marker.formatVersion ?? 0) > vaultFormatVersion(sources)) {
     return `此知識庫由較新版本的 XR Collector 建立（格式版本 ${marker.formatVersion}），請更新程式後再開啟。`;
   }
   if (typeof marker.id !== 'string' || !VAULT_ID.test(marker.id)) {
@@ -168,29 +167,30 @@ export function notAVault(inspection: Exclude<VaultInspection, { kind: 'existing
   return inspection.kind === 'empty' ? notAVaultReason(inspection.path) : inspection.reason;
 }
 
-/** Writes the marker that turns an empty directory into a Vault, with a new Vault ID. */
-export async function writeVaultMarker(root: string, createdBy: string, now = new Date()): Promise<void> {
+/** Writes the marker that turns an empty directory into a Vault of the format of `sources`, with a new Vault ID. */
+export async function writeVaultMarker(root: string, createdBy: string, sources: SourceRegistry, now = new Date()): Promise<void> {
   const marker: VaultMarker = {
-    format: VAULT_FORMAT, formatVersion: VAULT_FORMAT_VERSION, createdAt: localTimestamp(now), createdBy, id: randomUUID(),
+    format: VAULT_FORMAT, formatVersion: vaultFormatVersion(sources), createdAt: localTimestamp(now), createdBy, id: randomUUID(),
   };
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
 }
 
-/** The highest Vault format version this program opens: its own, or a higher one a source type of `sources` declares. */
-export function supportedVaultFormatVersion(sources: SourceRegistry): number {
-  return Math.max(VAULT_FORMAT_VERSION, ...sources.definitions.map((definition) => definition.vaultFormatVersion));
+/**
+ * The Vault format version of a program with the source types of `sources`: the highest
+ * `vaultFormatVersion` they declare, and at least 1. The program writes every Vault at this version
+ * and opens none above it.
+ */
+export function vaultFormatVersion(sources: SourceRegistry): number {
+  return Math.max(1, ...sources.definitions.map((definition) => definition.vaultFormatVersion));
 }
 
 /**
- * Raises the marker of the Vault at `root` to the format version the given source types declare,
- * before files of those types are written. `VaultFileWriter` calls it for every Vault file it
- * writes, and nothing else does. A Vault already at that version or higher is left as it is, so a
- * Vault holding only types of the base format keeps its marker byte for byte. A directory without
- * a readable marker is not a Vault this hook changes.
+ * Raises the marker of the Vault at `root` to the format version of `sources` before a Vault file
+ * is written. `VaultFileWriter` calls it for every Vault file it writes, and nothing else does. A
+ * Vault already at that version is left as it is, and a Vault read without being written keeps its
+ * marker. A directory without a readable marker is not a Vault this hook changes.
  */
-export async function ensureVaultFormat(root: string, types: Iterable<string>, sources: SourceRegistry): Promise<void> {
-  const required = Math.max(0, ...[...types].map((type) => sources.definition(type)?.vaultFormatVersion ?? 0));
-  if (required <= VAULT_FORMAT_VERSION) return;
+export async function ensureVaultFormat(root: string, sources: SourceRegistry): Promise<void> {
   const file = path.join(root, VAULT_MARKER);
   let marker: VaultMarker;
   try {
@@ -198,9 +198,10 @@ export async function ensureVaultFormat(root: string, types: Iterable<string>, s
   } catch {
     return;
   }
-  if (markerProblem(marker, sources) || marker.formatVersion >= required) return;
+  const version = vaultFormatVersion(sources);
+  if (markerProblem(marker, sources) || marker.formatVersion >= version) return;
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: required }, null, 2)}\n`, { flag: 'wx' });
+  await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: version }, null, 2)}\n`, { flag: 'wx' });
   await replaceFile(temporary, file);
 }
 
@@ -211,7 +212,7 @@ export async function createVaultDirectory(input: string, createdBy: string, sou
   if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
   try {
     await mkdir(inspection.path, { recursive: true });
-    await writeVaultMarker(inspection.path, createdBy);
+    await writeVaultMarker(inspection.path, createdBy, sources);
   } catch (error) {
     if (errorCode(error) === 'EEXIST') throw new CollectorError('vault_invalid', '目錄內容在建立時有變更，請重新選擇。');
     const code = errorCode(error);

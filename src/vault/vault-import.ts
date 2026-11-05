@@ -37,7 +37,7 @@ export async function checkFreeSpace(folder: string, bytes: number, statfsOf: St
  * a working folder without a journal is dropped and the Vault stays as it was; with one, the
  * entries are carried out again on the next open until every one is done. Before the first entry,
  * and again before an open carries them out, `VaultFileWriter.admit` raises the marker to the
- * format every staged file needs. Each entry then goes through `VaultFileWriter`: putting a file in
+ * program's format version. Each entry then goes through `VaultFileWriter`: putting a file in
  * place is a rename within the Vault folder, so each path holds either its old or its new file, and
  * a repeated entry finds its staged file gone and moves on.
  */
@@ -75,18 +75,13 @@ export async function applyInPlace(
     throw error;
   }
   const files = new VaultFileWriter(root, sources);
-  await files.admit(placed(work, entries));
+  await files.admit(entries.map((entry) => entry.path));
   for (const [index, entry] of entries.entries()) {
     await placeEntry(files, work, entry);
     progress(index + 1, entries.length);
     await faults?.('renaming', index + 1);
   }
   await rm(work, { recursive: true, force: true });
-}
-
-/** The staged files of a journal with the Vault paths they go to. */
-function placed(work: string, entries: InPlaceJournal['entries']): Array<{ relative: string; at: string }> {
-  return entries.flatMap((entry) => entry.staged ? [{ relative: entry.path, at: path.join(work, entry.staged) }] : []);
 }
 
 async function placeEntry(files: VaultFileWriter, work: string, entry: InPlaceJournal['entries'][number]): Promise<void> {
@@ -112,7 +107,7 @@ export async function finishInPlaceImports(root: string, sources: SourceRegistry
       && (entry.staged === null || (typeof entry.staged === 'string' && STAGED.test(entry.staged))));
     if (journal && valid) {
       const files = new VaultFileWriter(root, sources);
-      await files.admit(placed(work, journal.entries));
+      await files.admit(journal.entries.map((entry) => entry.path));
       for (const entry of journal.entries) await placeEntry(files, work, entry);
       finished = true;
     }
@@ -141,9 +136,7 @@ export async function importNewVault(options: {
     await mkdir(journal.staging, { mode: 0o700 });
     await unpackPackage(reader, journal.staging, () => undefined);
     reader.close();
-    await writeVaultMarker(journal.staging, options.createdBy);
-    const staging = journal.staging;
-    await new VaultFileWriter(staging, options.sources).admit(reader.paths().map((relative) => ({ relative, at: path.join(staging, ...relative.split('/')) })));
+    await writeVaultMarker(journal.staging, options.createdBy, options.sources);
     await checkImportFolder(target);
     journal = { ...journal, placed: true, marker: await markerDigest(journal.staging) };
     await writeImportJournal(options.profilePath, journal);
