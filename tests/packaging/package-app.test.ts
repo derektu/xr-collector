@@ -494,13 +494,23 @@ it('rejects a concurrent whole-checkout package run', async () => {
   await expect(withPackageCheckoutLock(lock, async () => 'ok', owners)).resolves.toBe('ok');
 });
 
-it('reclaims only a dead packaging owner and removes its lock on terminal signals', async () => {
+it('reports a dead packaging owner\'s lock without removing it, removes its own lock on terminal signals, and reports a live owner busy', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-package-stale-lock-'));
   roots.push(root);
   const lock = path.join(root, 'package.lock');
   const uid = process.getuid?.() ?? 501;
   await mkdir(lock, { mode: 0o700 });
-  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 41, uid, startedAt: 'old', token: 'a1' }), { mode: 0o600 });
+  const deadOwner = JSON.stringify({ pid: 41, uid, startedAt: 'old', token: 'a1' });
+  await writeFile(path.join(lock, 'owner-a1.json'), deadOwner, { mode: 0o600 });
+  await expect(withPackageCheckoutLock(lock, async () => 'packaged', {
+    processIdentity: async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' },
+  })).rejects.toThrow(`Owned lock ${lock} was left by process 41 (started old)`);
+  await expect(withPackageCheckoutLock(lock, async () => 'packaged', {
+    processIdentity: async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' },
+  })).rejects.toThrow(/Confirm that no packaging run in this checkout is running, then delete it with: /u);
+  expect(await readFile(path.join(lock, 'owner-a1.json'), 'utf8')).toBe(deadOwner);
+  await rm(lock, { recursive: true });
+
   const signalTarget = new EventEmitter();
   const terminated: string[] = [];
   const identities = async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' };

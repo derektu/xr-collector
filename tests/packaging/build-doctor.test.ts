@@ -2,14 +2,14 @@
 // name each missing build prerequisite (host, Node, npm, Git, swiftc, dependencies) with its fix,
 // and packaging stops before any work while one is missing. The runtime cache and Developer ID
 // state are reported without failing the check.
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 // @ts-expect-error The build doctor is intentionally executable JavaScript.
 import { assertBuildEnvironment, checkBuildEnvironment, formatResults, hostBuildTarget } from '../../scripts/build-doctor.mjs';
 // @ts-expect-error The script is executable JavaScript without type declarations.
-import { DEVELOPER_ID_INTERMEDIATE_FIX, selectDeveloperIdIdentity } from '../../scripts/mac-signing.mjs';
+import { checkDeveloperIdIdentity, DEVELOPER_ID_INTERMEDIATE_FIX, selectDeveloperIdIdentity } from '../../scripts/mac-signing.mjs';
 
 type Responses = Record<string, string | Error>;
 
@@ -159,6 +159,35 @@ it('reports the runtime cache and Mac signing state without failing on either', 
   expect(statuses(windows)).toEqual({
     Host: 'ok', Node: 'ok', npm: 'ok', Git: 'ok', 'npm dependencies': 'ok', 'Runtime cache': 'ok',
   });
+});
+
+it.skipIf(process.platform === 'win32')('prints the path, holder and delete command of a keychain search-list lock left behind', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-doctor-left-lock-'));
+  const lock = path.join(root, 'search-list.lock');
+  const uid = process.getuid?.() ?? 501;
+  await mkdir(lock, { mode: 0o700 });
+  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
+  const security = async (_command: string, args: string[]) => ({
+    stdout: args[0] === 'find-identity' ? `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"` : '', stderr: '',
+  });
+  const results = await check('darwin-arm64', {
+    report: true,
+    overrides: {
+      prepareRuntimeDependencies: async () => undefined,
+      prepareMeilisearch: async () => undefined,
+      access: async () => undefined,
+      loadMacSigningConfiguration: async () => ({ teamId: 'ABCDE12345' }),
+      checkDeveloperIdIdentity: (configuration: object) => checkDeveloperIdIdentity(configuration, {
+        run: security, randomPassword: () => 'temporary-password', tempRoot: root, keychainSearchLock: lock,
+        processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
+      }),
+    },
+  });
+  expect(formatResults([byLabel(results, 'Mac Developer ID')])).toBe([
+    `  missing Mac Developer ID signing: Owned lock ${lock} was left by process 424242 (started stale), which has ended, as have the child processes it recorded. The lock is not removed automatically.`,
+    `          fix: Confirm that no Developer ID signing or identity check on this Mac is running, then delete it with: rm -r '${lock}'`,
+  ].join('\n'));
+  await rm(root, { recursive: true, force: true });
 });
 
 it('prints each item with its fix', () => {
