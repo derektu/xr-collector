@@ -19,7 +19,7 @@ import { JobManager, type JobLimits, type RetryPolicy } from '../jobs/job-manage
 import type { Pacing } from '../pacing/pacing-gate.js';
 import type { CollectionPause } from '../core/collection-pause.js';
 import type { Connectivity } from '../core/connectivity.js';
-import type { SourcePlugin } from '../plugins/types.js';
+import type { SourcePlugin } from '../core/source-contract.js';
 import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { prepareOwnedSearchProjection, searchDatabasePath } from '../search/search-projection.js';

@@ -1,4 +1,4 @@
-import type { SubscriptionDeclaration } from '../plugins/types.js';
+import type { SubscriptionDeclaration } from './source-contract.js';
 import { intervalLabel } from './check-interval.js';
 import { CollectorError, type SourceSettingField, type SubscriptionSettings } from './types.js';
 

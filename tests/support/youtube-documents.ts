@@ -1,4 +1,4 @@
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument } from '../../src/core/source-contract.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import type { YouTubeDocumentMetadata } from '../../src/plugins/youtube/shared.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';

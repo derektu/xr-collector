@@ -6,7 +6,7 @@ import { findFeedLinks } from '../../../src/plugins/rss/discovery.js';
 import { decode, fetchText } from '../../../src/plugins/rss/http.js';
 import { articleKey, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
 import { rssDeclaration } from '../../../src/plugins/rss/shared.js';
-import type { ListedItem, SourcePlugin, SubscriptionTarget } from '../../../src/plugins/types.js';
+import type { ListedItem, SourcePlugin, SubscriptionTarget } from '../../../src/core/source-contract.js';
 import { atom, page, rss2, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 
 let feeds: SyntheticFeeds;

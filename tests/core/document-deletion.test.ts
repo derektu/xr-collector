@@ -22,7 +22,7 @@ import type {
   YouTubeVideoRef,
 } from '../../src/plugins/youtube/url.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { CapturedDocument, SubscriptionTarget } from '../../src/plugins/types.js';
+import type { CapturedDocument, SubscriptionTarget } from '../../src/core/source-contract.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { HeldCaptures } from '../support/held-captures.js';

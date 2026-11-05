@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Collector } from '../../src/core/collector.js';
 import { registerSourceDefinitions, scheduleFile } from '../../src/core/source-registry.js';
 import type { SubscriptionRecord } from '../../src/core/types.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument } from '../../src/core/source-contract.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';

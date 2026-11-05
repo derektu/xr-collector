@@ -1,5 +1,5 @@
 import { publishedSince } from '../core/published.js';
-import type { CheckRange, ListedItem } from '../plugins/types.js';
+import type { CheckRange, ListedItem } from '../core/source-contract.js';
 
 export interface CandidateSelection {
   /** Keys of every candidate, collected or not, newest first. */

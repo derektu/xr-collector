@@ -1,5 +1,5 @@
 import type { DocumentVault } from '../../src/core/collector.js';
-import type { CapturedDocument } from '../../src/plugins/types.js';
+import type { CapturedDocument } from '../../src/core/source-contract.js';
 import type { DocumentKey } from '../../src/vault/document-paths.js';
 import {
   CollectorError,

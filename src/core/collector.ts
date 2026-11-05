@@ -13,7 +13,7 @@ import type {
 import { CollectorError } from './types.js';
 import { documentExcerpt } from './document-text.js';
 import { sourceDeclaration } from './source-registry.js';
-import type { CapturedDocument } from '../plugins/types.js';
+import type { CapturedDocument } from './source-contract.js';
 import { collectedBeforeDeletion, deletionId, type DeletionLedger, type DeletionRecord } from '../vault/deleted-documents.js';
 import { documentId, type DocumentKey } from '../vault/document-paths.js';
 import type { NewJobEvent } from '../jobs/job-store.js';

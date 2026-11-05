@@ -2,20 +2,39 @@ import path from 'node:path';
 import { registerScheduleFile, registerSourceDefinitions } from '../core/source-registry.js';
 import { registerSubscriptionExchange } from '../core/subscription-exchange.js';
 import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../pacing/pacing-gate.js';
-import type { SourceDefinition, SourceEntry, SourcePlugin } from './types.js';
+import type { SourceDefinition, SourceEntry, SourcePlugin, SourcePluginDeclaration } from '../core/source-contract.js';
+import { SOURCE_DECLARATIONS } from './declarations.js';
 import { subscriptionFileExchange } from '../subscriptions/subscription-file-exchange.js';
 import { createRssPlugin, rssDefinition } from './rss/server.js';
 import { createYouTubePlugin, youtubeDefinition } from './youtube/server.js';
 
+/** The server entry of each source type, by type ID. */
+const SERVER_ENTRIES: Readonly<Record<string, SourceEntry>> = {
+  youtube: { definition: youtubeDefinition, create: createYouTubePlugin },
+  rss: { definition: rssDefinition as SourceDefinition, create: createRssPlugin },
+};
+
 /**
- * The source types this product offers, in display order. Adding a type means adding its entry
- * here. An address belongs to the first type that owns it, so RSS, which owns every web address,
- * comes last.
+ * The server entries of `declarations`, in their order. Throws when a declared type has no entry, an
+ * entry's definition names another type, or an entry has no declared type.
  */
-export const SOURCES: readonly SourceEntry[] = [
-  { definition: youtubeDefinition, create: createYouTubePlugin },
-  { definition: rssDefinition as SourceDefinition, create: createRssPlugin },
-];
+export function serverSources(
+  declarations: readonly SourcePluginDeclaration[],
+  entries: Readonly<Record<string, SourceEntry>>,
+): SourceEntry[] {
+  const sources = declarations.map(({ id }) => {
+    const entry = entries[id];
+    if (!entry) throw new Error(`Source type ${id} is declared but has no server entry`);
+    if (entry.definition.id !== id) throw new Error(`The server entry of source type ${id} defines ${entry.definition.id}`);
+    return entry;
+  });
+  const undeclared = Object.keys(entries).filter((id) => !declarations.some((declaration) => declaration.id === id));
+  if (undeclared.length > 0) throw new Error(`Source types ${undeclared.join(', ')} have server entries but no declaration`);
+  return sources;
+}
+
+/** The source types this product offers, in the order of `SOURCE_DECLARATIONS`. */
+export const SOURCES: readonly SourceEntry[] = serverSources(SOURCE_DECLARATIONS, SERVER_ENTRIES);
 
 export const SOURCE_DEFINITIONS: readonly SourceDefinition[] = SOURCES.map((entry) => entry.definition);
 

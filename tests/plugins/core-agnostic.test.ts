@@ -21,7 +21,7 @@ import { itemStates } from '../../src/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../src/vault/vault-package.js';
 import { VaultSelection } from '../../src/vault/vault-selection.js';
 import type { VaultWorkspace } from '../../src/vault/workspace.js';
-import type { CapturedDocument, SourcePlugin } from '../../src/plugins/types.js';
+import type { CapturedDocument, SourcePlugin } from '../../src/core/source-contract.js';
 import { createFakePlugin, FAKE, FAKE2, FAKE_DEFAULTS, FakeSource, type FakeSettings } from '../support/fake-source-plugin.js';
 import { youtubePlugins } from '../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../support/exchange-fixtures.js';

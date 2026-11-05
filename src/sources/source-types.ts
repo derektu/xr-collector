@@ -5,7 +5,7 @@ import {
   type SubscriptionPreview,
   type UrlRecognition,
 } from '../core/types.js';
-import type { SourcePluginDeclaration } from '../plugins/types.js';
+import type { SourcePluginDeclaration } from '../core/source-contract.js';
 
 /** Services a source type may call while recognizing an address. */
 export interface RecognitionContext {

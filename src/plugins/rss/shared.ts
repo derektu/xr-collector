@@ -1,6 +1,6 @@
 import { sourceDeclarations } from '../../core/source-registry.js';
 import { CollectorError } from '../../core/types.js';
-import type { SourcePluginDeclaration } from '../types.js';
+import type { SourcePluginDeclaration } from '../../core/source-contract.js';
 import { RSS_SETTINGS, type RssSettings } from './settings.js';
 
 /** An article key: 16 hexadecimal digits of a hash of the subscription and the article's identity. */

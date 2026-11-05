@@ -31,7 +31,7 @@ import {
   type WorkStatus,
 } from '../core/types.js';
 import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
-import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../plugins/types.js';
+import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../core/source-contract.js';
 import { limitText, redact } from '../core/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore, NewJobEvent } from './job-store.js';

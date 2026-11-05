@@ -1,4 +1,4 @@
-import type { SourcePluginDeclaration } from '../types.js';
+import type { SourcePluginDeclaration } from '../../core/source-contract.js';
 import type { SubtitleKind } from './adapter.js';
 import { type CollectionPolicy, YOUTUBE_SETTINGS } from './settings.js';
 import { classifyYouTubeInput, ownsYouTubeInput, parseYouTubeVideoUrl, VIDEO_ID_PATTERN, videoUrl } from './url.js';

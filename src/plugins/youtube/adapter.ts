@@ -1,4 +1,4 @@
-import type { SubscriptionTarget } from '../types.js';
+import type { SubscriptionTarget } from '../../core/source-contract.js';
 import type { YouTubeVideoRef } from './url.js';
 
 export type SubtitleKind = 'manual' | 'automatic';

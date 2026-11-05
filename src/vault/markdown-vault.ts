@@ -6,7 +6,7 @@ import { sourceDefinition, sourceDefinitions } from '../core/source-registry.js'
 import type { ContentExtent, DocumentMetadata, SavedDocument } from '../core/types.js';
 import { CollectorError } from '../core/types.js';
 import type { VaultFiles } from '../core/vault-files.js';
-import type { CapturedDocument } from '../plugins/types.js';
+import type { CapturedDocument } from '../core/source-contract.js';
 import { collectedAtReadable, collectedBeforeDeletion, DeletionLedger, deletionId, type DeletionRecord } from './deleted-documents.js';
 import { documentId, documentKeyFromId, documentKeyFromPath, documentPath, type DocumentKey } from './document-paths.js';
 

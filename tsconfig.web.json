@@ -18,7 +18,7 @@
   "include": ["src/web/**/*.ts", "src/web/**/*.tsx", "src/core/types.ts",
     "src/core/source-registry.ts",
     "src/core/check-interval.ts",
-    "src/plugins/types.ts",
+    "src/core/source-contract.ts",
     "src/plugins/*/shared.ts"
   ]
 }

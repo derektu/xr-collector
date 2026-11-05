@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchText } from '../../../src/plugins/rss/http.js';
 import { rssPlugin, subscriptionId } from '../../../src/plugins/rss/server.js';
-import type { SourcePlugin } from '../../../src/plugins/types.js';
+import type { SourcePlugin } from '../../../src/core/source-contract.js';
 import { createHttpApp } from '../../../src/server/app.js';
 import { page, rss2, SyntheticFeeds } from '../../support/synthetic-feeds.js';
 import { youtubePlugins } from '../../support/youtube-sources.js';

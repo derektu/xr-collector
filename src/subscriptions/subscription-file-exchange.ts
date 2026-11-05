@@ -1,6 +1,6 @@
 import { subscriptionDefinitions } from '../core/source-registry.js';
 import type { SubscriptionExchange, SubscriptionFileExchange } from '../core/subscription-exchange.js';
-import type { SourceDefinition } from '../plugins/types.js';
+import type { SourceDefinition } from '../core/source-contract.js';
 import { importedSubscription, subscriptionContent } from './subscription-fields.js';
 import { removalsFromJson, scheduleEnabledFromJson, subscriptionsFromJson, subscriptionsToJson } from './subscription-files.js';
 

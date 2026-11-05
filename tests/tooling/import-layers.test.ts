@@ -13,8 +13,9 @@ import { importsOf, productFiles } from '../support/source-imports.js';
 
 /** The layers, from the bottom up. */
 const LAYERS: ReadonlyArray<{ name: string; modules: readonly string[] }> = [
-  { name: 'shared types and pure functions', modules: ['core'] },
-  { name: 'plugin contract', modules: ['plugins/types'] },
+  // The plugin contract (`core/source-contract.ts`) is part of the core: the core reads the source types'
+  // declarations through it, and it holds only types and pure functions.
+  { name: 'shared types, pure functions and the plugin contract', modules: ['core'] },
   {
     name: 'domain services',
     modules: [
@@ -37,16 +38,13 @@ const SAME_LAYER: Readonly<Record<string, readonly string[]>> = {
 
 /** Files whose module is not their directory. */
 const FILE_MODULES: Readonly<Record<string, string>> = {
-  'src/plugins/types.ts': 'plugins/types',
+  // The product's source list: its declarations, which the web build shares, and its server entries.
+  'src/plugins/declarations.ts': 'plugins/index',
   'src/plugins/index.ts': 'plugins/index',
   'src/vault/workspace.ts': 'vault/workspace',
 };
 
 const EXCEPTIONS = [
-  // core -> plugin contract: core modules that read the source types' declarations.
-  'src/core/collection-settings.ts -> src/plugins/types.ts',
-  'src/core/collector.ts -> src/plugins/types.ts',
-  'src/core/source-registry.ts -> src/plugins/types.ts',
   // core -> jobs, vault: core and vault import each other.
   'src/core/collector.ts -> src/jobs/job-store.ts',
   'src/core/collector.ts -> src/vault/deleted-documents.ts',

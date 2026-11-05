@@ -1,6 +1,6 @@
 import type { CollectionSchedule, JobError, JobView, PendingSubscription, RecognitionAction, RetryCause, SubscriptionEntry, SubscriptionCollectionEntry, Subscription, UrlRecognition } from '../core/types.js';
 import { sourceDeclaration, sourceDeclarations } from '../core/source-registry.js';
-import type { SourcePluginDeclaration } from '../plugins/types.js';
+import type { SourcePluginDeclaration } from '../core/source-contract.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 
 export type ShortTime =

@@ -1,4 +1,4 @@
-import type { SubscriptionTarget } from '../../src/plugins/types.js';
+import type { SubscriptionTarget } from '../../src/core/source-contract.js';
 import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../../src/plugins/youtube/adapter.js';
 import { channelItems } from '../../src/plugins/youtube/server.js';
 import { selectCandidates } from '../../src/subscriptions/candidates.js';
