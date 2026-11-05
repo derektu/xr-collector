@@ -115,7 +115,7 @@ describe('update coordinator terminal boundary', () => {
   it('hands off only after runtime close and then completes', async () => {
     const events: string[] = [];
     await runUpdateCoordinator(request(events), installer(events), runtime(events), {
-      shutdownOwned: () => events.push('owned'), completed: () => events.push('completed'), terminalFailure: () => events.push('terminal'),
+      shutdownOwned: () => events.push('owned'), completed: () => events.push('completed'), terminalFailure: () => { events.push('terminal'); },
     }, 1_000);
     expect(events).toEqual(['attempt', 'transfer', 'owned', 'installing', 'close', 'handoff', 'completed']);
   });

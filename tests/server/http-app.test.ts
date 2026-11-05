@@ -8,6 +8,7 @@ import { Collector, type DocumentVault } from '../../src/core/collector.js';
 import { CollectorError } from '../../src/core/collector-error.js';
 import type { CollectionJob } from '../../src/core/job-types.js';
 import type { SavedDocument } from '../../src/core/document-types.js';
+import type { Subscription } from '../../src/core/subscription-types.js';
 import { JobManager } from '../../src/jobs/job-manager.js';
 import { memoryJobRecords } from '../../src/runtime/job-records.js';
 import { createHttpApp } from '../../src/server/app.js';
@@ -15,6 +16,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { subscriptionCollection } from '../support/subscription-collection.js';
 
 const captured: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -74,7 +76,6 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
       },
     })],
     documents: collector,
-    subscriptions: { youtube: { list: async () => [], add: async (channel) => channel, remove: async () => false, setEnabled: async () => null } },
   });
   return { collector, jobs };
 }
@@ -154,9 +155,11 @@ describe('HTTP app', () => {
       progress: null, items: null, result: null, error: null,
     });
     const calls: unknown[] = [];
-    const subscription = { ...savedChannel, status: 'tracking' as const, activeJob: null, documentCount: 3, lastCollectedAt: null };
-    const channels = {
-      type: 'youtube',
+    const subscription: Subscription = {
+      ...savedChannel, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-09-17T01:00:00.000Z' }, capturing: false,
+      lastError: null, checkFailures: null, autoPausedAt: null, activeJob: null, documentCount: 3, lastCollectedAt: null,
+    };
+    const channels = subscriptionCollection('youtube', {
       list: async () => [savedChannel],
       checkable: async () => [savedChannel],
       listSubscriptions: async () => [subscription],
@@ -181,13 +184,13 @@ describe('HTTP app', () => {
       },
       remove: async (id: string) => {
         calls.push(['remove', id]);
-        return { documentsKept: 3 };
+        return { documentsKept: 3, documentsDeleted: 0, documentsFailed: 0 };
       },
       startRun: async (request: { trigger: string; subscriptionIds?: string[] }) => {
         calls.push(['run', request]);
         return [{ job: job('run-1'), deduplicated: false }];
       },
-    };
+    });
     const schedule = {
       getSchedule: async () => { throw new Error('unused'); },
       updateSchedule: async () => { throw new Error('unused'); },
@@ -243,7 +246,7 @@ describe('HTTP app', () => {
     expect(disabled.json()).toMatchObject({ subscription: { id: savedChannel.id, enabled: false }, submission: null });
     expect(started.statusCode).toBe(202);
     expect(started.json()).toMatchObject({ submissions: [{ deduplicated: false, job: { id: 'run-1', state: 'queued' } }] });
-    expect(removed.json()).toEqual({ removed: true, documentsKept: 3 });
+    expect(removed.json()).toEqual({ removed: true, documentsKept: 3, documentsDeleted: 0, documentsFailed: 0 });
     expect(calls).toEqual([
       ['preview', '@channel-one'],
       ['preview', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
@@ -274,6 +277,7 @@ describe('HTTP app', () => {
     const search = {
       status: () => ({ state: 'ready' as const, indexedDocuments: 2, lastRebuiltAt: null }),
       index: async () => undefined,
+      remove: async () => undefined,
       search: async (request: { offset?: number; limit?: number }) => {
         searchRequests.push(request);
         return { hits: [hit], total: 21, offset: request.offset ?? 0, limit: request.limit ?? 50 };
@@ -328,6 +332,7 @@ describe('HTTP app', () => {
         return { hits: [], total: 0, offset: 0, limit: 50 };
       },
       index: async () => undefined,
+      remove: async () => undefined,
       rebuild: async () => undefined,
     };
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), search });

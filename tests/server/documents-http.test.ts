@@ -16,6 +16,7 @@ import { createHttpApp } from '../../src/server/app.js';
 import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { subscriptionCollection } from '../support/subscription-collection.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -67,18 +68,14 @@ async function vaultRoot(): Promise<string> {
 }
 
 function channel(id: string, title: string): SubscriptionRecord {
-  return { id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z' };
+  return {
+    id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
+    settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 },
+  };
 }
 
 function channels(list: SubscriptionRecord[]) {
-  return {
-    type: 'youtube',
-    list: async () => list,
-    add: async () => { throw new Error('unused'); },
-    setEnabled: async () => { throw new Error('unused'); },
-    remove: async () => undefined,
-    startRun: async () => [],
-  };
+  return subscriptionCollection('youtube', { list: async () => list, startRun: async () => [] });
 }
 
 describe('documents HTTP contract', () => {
@@ -188,7 +185,7 @@ describe('documents HTTP contract', () => {
     const backend: SearchBackend = {
       initialize: async () => { throw new Error('engine stopped'); },
       count: async () => 0, isCurrent: async () => false, replaceAll: async () => undefined,
-      upsert: async () => undefined, search: async () => { throw new Error('unused'); },
+      upsert: async () => undefined, remove: async () => undefined, search: async () => { throw new Error('unused'); },
     };
     const search = new ManagedTranscriptSearch(backend, async () => []);
     await search.start().catch(() => undefined);
@@ -217,6 +214,7 @@ describe('documents HTTP contract', () => {
       isCurrent: async (documents) => documents.length === indexed.size,
       replaceAll: async (documents) => { indexed.clear(); for (const document of documents) indexed.set(document.id, document); },
       upsert: async (document) => { indexed.set(document.id, document); },
+      remove: async (ids) => { for (const id of ids) indexed.delete(id); },
       search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
     };
     const load = async () => Promise.all((await vault.list()).map(async ({ id }) => (await vault.read(id))!));

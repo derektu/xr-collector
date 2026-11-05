@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { assertPackagedProductMetadata, capture as captureCommandOutput, packageApplication, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, readPackagingProcessIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../scripts/package-app.mjs';
 
 const exec = promisify(execFile);
@@ -385,17 +386,24 @@ it('opens both final Mac containers and checks that their only App is the staple
   })).rejects.toThrow(/does not have a ticket stapled/u);
 });
 
+/** An electron-builder option that takes one value or a list of them, as a list. */
+function listOf<T>(value: T | T[] | null | undefined): T[] {
+  if (value === null || value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
 it('resolves each Windows package resource once with an exact app-local CRT filter', async () => {
   for (const configFile of ['electron-builder.yml']) {
     const config = await getConfig(process.cwd(), path.resolve(configFile), null);
     expect(config.mac, configFile).toMatchObject({ identity: '-', hardenedRuntime: false });
     expect(config.mac?.signIgnore, configFile).toEqual(['/Contents/Resources/bin(?:/|$)']);
-    const signIgnore = (config.mac?.signIgnore ?? []).map((pattern) => new RegExp(pattern));
+    const signIgnore = listOf(config.mac?.signIgnore).map((pattern) => new RegExp(pattern));
     // signIgnore is matched against the Mac App's POSIX paths on the Mac build host.
     const macApp = '/private/tmp/XR Collector.app';
-    for (const resource of config.mac?.extraResources ?? []) {
+    for (const resource of listOf(config.mac?.extraResources)) {
       if (typeof resource === 'string' || !resource.to?.startsWith('bin/')) continue;
-      expect(signIgnore.some((pattern) => pattern.test(path.posix.join(macApp, 'Contents/Resources', resource.to))), `${configFile}: ${resource.to}`).toBe(true);
+      const to = resource.to;
+      expect(signIgnore.some((pattern) => pattern.test(path.posix.join(macApp, 'Contents/Resources', to))), `${configFile}: ${to}`).toBe(true);
     }
     for (const runtimeCode of [
       'Contents/Resources/bin/meilisearch',
@@ -408,7 +416,7 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
       path.posix.join(macApp, 'Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework'),
       path.posix.join(macApp, 'Contents/Resources/bin-adjacent/tool'),
     ]) expect(signIgnore.some((pattern) => pattern.test(signedCode)), `${configFile}: ${signedCode}`).toBe(false);
-    const resources = config.win?.extraResources ?? [];
+    const resources = listOf(config.win?.extraResources);
     const keys = resources.map((entry) => typeof entry === 'string' ? entry : `${entry.from}:${entry.to}`);
     expect(new Set(keys).size, configFile).toBe(keys.length);
     const runtime = resources.find((entry) => typeof entry !== 'string' && entry.from === 'resources/bin/win');
@@ -498,7 +506,7 @@ it('reclaims only a dead packaging owner and removes its lock on terminal signal
   const identities = async (pid: number) => pid === 41 ? null : { pid, uid, startedAt: 'current' };
   let announceStarted!: () => void;
   const started = new Promise<void>((resolve) => { announceStarted = resolve; });
-  const running = withPackageCheckoutLock(lock, async ({ signal }) => new Promise<void>((_resolve, reject) => {
+  const running = withPackageCheckoutLock(lock, async ({ signal }: { signal: AbortSignal }) => new Promise<void>((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
     announceStarted();
   }), { processIdentity: identities, signalTarget, terminateAfterSignal: (signal: string) => terminated.push(signal) });
@@ -597,7 +605,7 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
   };
   await writeFile(path.join(resources, 'search/coct-main.json'), JSON.stringify(lexiconManifest));
 
-  const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2', verifyMacBundle = async () => undefined) => verifyPackagedApplication(
+  const verify = (trustedManifest: object = meiliManifest, versionOutput = 'meilisearch 1.53.2', verifyMacBundle: (app: string) => Promise<void> = async () => undefined) => verifyPackagedApplication(
     { outputDir, commit, version: '0.1.0', target: 'darwin-arm64' },
     { trustedManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill, runBinary: async () => ({ stdout: versionOutput }), verifyMacBundle },
   );

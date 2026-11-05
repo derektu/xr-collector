@@ -86,9 +86,9 @@ export function fakeDefinition(type: string, group: string, formats: { vault?: n
     ],
     requiresLogin: false,
     settings: [
-      { key: 'intervalMinutes', label: '檢查頻率', default: FAKE_DEFAULTS.intervalMinutes, options: [{ value: 15, label: '15 分鐘' }, { value: 60, label: '1 小時' }] },
-      { key: 'windowDays', label: '天數', default: FAKE_DEFAULTS.windowDays, options: [{ value: 7, label: '7 天' }, { value: 30, label: '30 天' }] },
-      { key: 'maxItems', label: '數量', default: FAKE_DEFAULTS.maxItems, options: [{ value: 3, label: '3 篇' }, { value: 5, label: '5 篇' }] },
+      { input: 'choice', key: 'intervalMinutes', label: '檢查頻率', default: FAKE_DEFAULTS.intervalMinutes, options: [{ value: 15, label: '15 分鐘' }, { value: 60, label: '1 小時' }] },
+      { input: 'choice', key: 'windowDays', label: '天數', default: FAKE_DEFAULTS.windowDays, options: [{ value: 7, label: '7 天' }, { value: 30, label: '30 天' }] },
+      { input: 'choice', key: 'maxItems', label: '數量', default: FAKE_DEFAULTS.maxItems, options: [{ value: 3, label: '3 篇' }, { value: 5, label: '5 篇' }] },
     ],
     item: {
       noun: '文章', measure: '篇', keyPattern: /^[a-z0-9-]{3,40}$/u, documentType: 'Article',

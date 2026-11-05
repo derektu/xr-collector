@@ -12,7 +12,7 @@ const status = (enabled: boolean): LoginStartupStatus => ({
 
 /** An OS whose reads and writes wait until the test answers them. */
 function heldOs() {
-  const calls: Array<{ kind: 'read' | 'write'; enabled?: boolean; signal: AbortSignal; answer: (value: LoginStartupStatus) => void; fail: (error: Error) => void }> = [];
+  const calls: Array<{ kind: 'read' | 'write'; enabled: boolean | undefined; signal: AbortSignal; answer: (value: LoginStartupStatus) => void; fail: (error: Error) => void }> = [];
   const call = (kind: 'read' | 'write', signal: AbortSignal, enabled?: boolean) => new Promise<LoginStartupStatus>((resolve, reject) => {
     calls.push({ kind, enabled, signal, answer: resolve, fail: reject });
   });

@@ -67,7 +67,7 @@ export async function seed(root: string): Promise<void> {
 export function fakeSearch(root: string, sources: SourceRegistry = PRODUCT_SOURCES): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
-    status: () => ({ state: 'ready', indexedDocuments: docs.length }),
+    status: () => ({ state: 'ready', indexedDocuments: docs.length, lastRebuiltAt: null }),
     async index(doc) { docs = [...docs.filter((existing) => existing.id !== doc.id), doc]; },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
@@ -91,22 +91,31 @@ export async function machine(name: string, root?: string): Promise<Machine> {
   return { name, root: base, vault: path.join(folder, 'Vault'), profile: path.join(folder, 'profile'), exports: path.join(folder, 'exports'), backups: path.join(folder, 'backups') };
 }
 
+/** Workspace options a test opens a Vault with; `createSearch: undefined` starts the real search engine. */
+export type OpenOverrides = Omit<Partial<WorkspaceOptions>, 'createSearch'> & YouTubeTestSources & {
+  createSearch?: WorkspaceOptions['createSearch'] | undefined;
+};
+
 /**
  * Opens the Vault the machine's selection names (its own Vault when none), as the runtime does at
  * startup, with the product's source types unless `overrides` name others.
  */
-export async function open(at: Machine, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
+export async function open(at: Machine, overrides: OpenOverrides = {}, track = true): Promise<VaultWorkspace> {
   const sources = overrides.sources ?? PRODUCT_SOURCES;
   const selection = new VaultSelection(path.join(at.profile, 'vault-selection.json'));
   const selected = await selection.read();
   if (!selected) await ensureMarker(at.vault);
-  const workspace = await VaultWorkspace.open(withYouTube({
+  const { createSearch, ...rest }: OpenOverrides = {
+    createSearch: async (destination) => ({ search: fakeSearch(destination, sources), close: async () => undefined }),
+    ...overrides,
+  };
+  const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
     sources, root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: path.join(at.profile, 'search'),
-    createSearch: async (destination) => ({ search: fakeSearch(destination, sources), close: async () => undefined }),
-    ...overrides,
+    searchBinary: '', searchLexicon: '', searchData: path.join(at.profile, 'search'),
+    ...rest,
+    ...(createSearch ? { createSearch } : {}),
   }));
   if (track) workspaces.push(workspace);
   return workspace;

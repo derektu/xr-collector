@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, rmdir, stat, utimes, writeFile } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { withOwnedDirectoryLock } from '../../scripts/owned-directory-lock.mjs';
 
 /**
@@ -119,7 +120,7 @@ it('lets one of two stale-owner reapers acquire and reports the other busy when 
   second.catch(() => {}).finally(secondReaped.open);
   // Which contender wins depends on whether the file system reuses the freed inode number for a new
   // directory; either way exactly one acquires and the other reports busy.
-  const loser = await Promise.race([first.then(() => null, (error) => error), second.then(() => null, (error) => error)]);
+  const loser = await Promise.race([first.then(() => null, (error: unknown) => error), second.then(() => null, (error: unknown) => error)]);
   expect(String(loser)).toBe('Error: busy');
   workGate.open();
   const results = await Promise.allSettled([first, second]);

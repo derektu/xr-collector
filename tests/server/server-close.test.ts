@@ -32,7 +32,7 @@ function heldSearch() {
   const running = new Promise<void>((resolve) => { started = resolve; });
   let finished = false;
   const search: TranscriptSearch = {
-    status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null, message: null }),
+    status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }),
     index: async () => undefined,
     remove: async () => undefined,
     search: async () => ({ results: [], total: 0 }) as never,

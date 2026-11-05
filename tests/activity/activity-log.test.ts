@@ -245,7 +245,7 @@ describe('filters (A-T5)', () => {
       child: { id: 'child', kind: 'youtube.video', parentId: 'channel', source: { type: 'youtube', id: 'v1', url: 'u', title: '影片一' } } as CollectionJob,
     };
     const log = ActivityLog.memory({ now: () => clock.now });
-    const views = new ActivityViews(log, { sourceTitle: (id) => jobs[id]?.source.title });
+    const views = new ActivityViews(log, { sourceTitle: (id) => jobs[id]?.source.title ?? undefined });
     log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', severity: 'debug', eventType: 'job.accepted', subscriptionId: 'UC1' }));
     log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', eventType: 'document.saved', documentId: 'youtube:v1' }));
     log.record(event('2026-10-15T01:02:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', severity: 'warning', eventType: 'job.retry_scheduled' }));

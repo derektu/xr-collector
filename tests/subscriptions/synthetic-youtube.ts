@@ -124,7 +124,7 @@ export class MemoryDocuments implements DocumentVault {
   readonly sources = PRODUCT_SOURCES;
   readonly documents = new Map<string, SavedDocument>();
 
-  constructor(private readonly now: () => Date) {}
+  constructor(readonly now: () => Date) {}
 
   async getByKey(key: DocumentKey): Promise<SavedDocument | null> {
     return this.documents.get(key.sourceId) ?? null;

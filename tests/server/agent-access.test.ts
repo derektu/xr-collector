@@ -27,6 +27,7 @@ import { zipEntries } from '../support/package-fixtures.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../support/real-engine.js';
 import { VaultFileWriter } from '../../src/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../support/product-sources.js';
+import { subscriptionCollection } from '../support/subscription-collection.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -63,17 +64,18 @@ describe('Agent authenticated HTTP access', () => {
       status: () => ({ state: 'ready' as const, indexedDocuments: 3, lastRebuiltAt: null, message: '' }),
       search: vi.fn(async () => ({ hits: [], total: 0, offset: 0, limit: 50 })),
       index: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
       rebuild: vi.fn(async () => undefined),
     };
     const rebuild = search.rebuild;
     const schedule = {
-      getSchedule: vi.fn(async () => ({ enabled: false, intervalMinutes: 60 })),
+      getSchedule: vi.fn(async () => ({ enabled: false, status: 'paused' as const, lastCheck: null, nextCheck: null })),
       updateSchedule: vi.fn(async (value) => value),
+      runNow: vi.fn(),
     };
-    const channels = {
-      type: 'youtube', list: vi.fn(async () => []), add: vi.fn(), setEnabled: vi.fn(),
-      remove: vi.fn(), startRun: vi.fn(),
-    };
+    const channels = subscriptionCollection('youtube', {
+      list: vi.fn(async () => []), add: vi.fn(), setEnabled: vi.fn(), remove: vi.fn(), startRun: vi.fn(),
+    });
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, search, schedule, subscriptions: [channels], agentToken: 'test-secret' });
     cleanup.push(() => app.close());
     for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/api/jobs', '/']) {
@@ -151,7 +153,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('reports incomplete indexing while browse/read remain available', async () => {
     const { collector } = await fixture();
-    const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), search: vi.fn() };
+    const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), remove: vi.fn(), search: vi.fn() };
     const search = new ManagedTranscriptSearch(backend, async () => []);
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search, agentToken: 'secret' });
     cleanup.push(() => app.close());

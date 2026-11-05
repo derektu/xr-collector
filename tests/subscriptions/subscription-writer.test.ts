@@ -265,7 +265,7 @@ describe('dispatch times', () => {
     w.sources.fake.held.add(held!);
     const added = await w.jobs.whenSettled((await w.services.of('fake')!.add('https://fake.example/feed/f')).job.id);
     const check = added.result!.followUpJobId!;
-    await w.sources.fake.holds.reach([held]);
+    await w.sources.fake.holds.reach([held!]);
     // Listed, with an item still collecting: the first check has not ended.
     const before = dispatchTimes(await w.record('fake', 'f'));
     expect(before.lastCheckedAt).toBeNull();
@@ -290,7 +290,7 @@ describe('dispatch times', () => {
     w.sources.fake.held.add(held!);
     w.advance(10 * MINUTE);
     const accepted = await w.services.of('fake')!.checkNow('f');
-    await w.sources.fake.holds.reach([held]);
+    await w.sources.fake.holds.reach([held!]);
     expect((await w.record('fake', 'f')).lastCheckedAt).toBe(first.finishedAt);
     w.advance(5 * MINUTE);
     w.sources.fake.release(held!);

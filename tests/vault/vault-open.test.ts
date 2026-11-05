@@ -63,7 +63,7 @@ async function seed(root: string): Promise<void> {
 function fakeSearch(root: string, failRebuild = false): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
-    status: () => ({ state: 'ready', indexedDocuments: docs.length }),
+    status: () => ({ state: 'ready', indexedDocuments: docs.length, lastRebuiltAt: null }),
     async index(doc) { docs.push(doc); },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
@@ -115,11 +115,11 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTu
   const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
   const jobStore = overrides.jobStore ?? records!.jobs;
   if (track && records) stores.push(records);
-  const workspace = await VaultWorkspace.open(withYouTube({
+  const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
     sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
-    searchBinary: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
+    searchBinary: '', searchLexicon: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
     createSearch: async (destination) => ({ search: fakeSearch(destination), close: async () => undefined }),
     jobStore, jobLimits: { capture: 1 },
     ...overrides,

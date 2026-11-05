@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import {
   appendBuilderTimingEvents, createStageTimer, formatTimingTable, noStageTimer, orderedStages, recordBuilderTimings, runWithTimingReport, timerEvents,
+  // @ts-expect-error The script is executable JavaScript without type declarations.
 } from '../../scripts/stage-timings.mjs';
 
 const roots: string[] = [];
@@ -146,7 +147,7 @@ it('turns electron-builder hook events into pack, afterPack, App codesign and ar
   await timer.group('electron-builder --mac', async (child: any) => { builderClock.advance(300_000); await recordBuilderTimings(child, file); });
   await recordBuilderTimings(timer, path.join(root, 'missing.jsonl'));
 
-  expect(orderedStages(timer).map(({ name, ms, depth, count, bytes }) => ({ name, ms, depth, count, bytes }))).toEqual([
+  expect(orderedStages(timer).map(({ name, ms, depth, count, bytes }: { name: string; ms: number; depth: number; count?: number; bytes?: number }) => ({ name, ms, depth, count, bytes }))).toEqual([
     { name: 'electron-builder --mac', ms: 300_000, depth: 0, count: undefined, bytes: undefined },
     { name: 'electron-builder --mac / pack App (beforePack to afterPack)', ms: 9_000, depth: 1, count: undefined, bytes: undefined },
     { name: 'electron-builder --mac / afterPack hook', ms: 200_000, depth: 1, count: undefined, bytes: undefined },

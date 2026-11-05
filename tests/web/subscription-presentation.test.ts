@@ -12,7 +12,7 @@ const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: 'UC1', title: 'Channel', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
-    settings, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, capturing: false, lastError: null, activeJob: null, documentCount: 12, lastCollectedAt: null, ...overrides,
+    settings, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-10-15T10:52:00.000Z' }, capturing: false, lastError: null, checkFailures: null, autoPausedAt: null, activeJob: null, documentCount: 12, lastCollectedAt: null, ...overrides,
   };
 }
 

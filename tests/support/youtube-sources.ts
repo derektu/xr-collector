@@ -1,8 +1,8 @@
 import type { SourcePlugin } from '../../src/core/source-contract.js';
 import { type YouTubeCapture, type YouTubeChannelSource, youtubeSource } from '../../src/plugins/youtube/adapter.js';
+import type { VaultServiceOptions } from '../../src/runtime/collector-runtime.js';
 import { rssPlugin } from '../../src/plugins/rss/server.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
-import type { VaultServiceOptions } from '../../src/runtime/collector-runtime.js';
 
 /** A test's YouTube capture and channel source, from which the YouTube plugin of a workspace is built. */
 export interface YouTubeTestSources {
@@ -35,9 +35,11 @@ export type WithYouTube<O extends { plugins: readonly SourcePlugin[] }> = Omit<O
 
 /**
  * Workspace or runtime options whose `capture` and `channelSource` become the YouTube plugin of the
- * product's plugins; options that already name their plugins keep them.
+ * product's plugins; options that already name their plugins keep them. `O` is the runtime's
+ * workspace options unless the caller names `WorkspaceOptions`.
  */
-export function withYouTube<T extends WithYouTube<VaultServiceOptions>>(options: T): Omit<T, keyof YouTubeTestSources | 'plugins'> & { plugins: readonly SourcePlugin[] } {
+export function withYouTube<O extends { plugins: readonly SourcePlugin[] } = VaultServiceOptions>(options: WithYouTube<O>): O {
   const { capture, channelSource, plugins, ...rest } = options;
-  return { ...rest, plugins: plugins ?? productPlugins(capture, channelSource) };
+  // `rest` is `O` without `plugins`; TypeScript cannot prove that adding them back makes `O`.
+  return { ...rest, plugins: plugins ?? productPlugins(capture, channelSource) } as unknown as O;
 }

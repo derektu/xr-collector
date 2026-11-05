@@ -9,7 +9,7 @@ const offer = {
   version: '0.1.2', commit: 'a'.repeat(40), target: 'win32-x64', releaseNotes: '',
   source: { id: 'test', indexUrl: 'https://example.test/latest.json' },
   payload: { name: 'XR-Collector.exe', url: 'https://example.test/XR-Collector.exe', bytes: 12, sha256: 'b'.repeat(64) },
-  buildInfo: { version: '0.1.2', buildId: 'build-b', commit: 'a'.repeat(40), builtAt: new Date().toISOString(),
+  buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.2', buildId: 'build-b', commit: 'a'.repeat(40), builtAt: new Date().toISOString(),
     target: 'win32-x64', sourceDirty: false },
 } satisfies UpdateOffer;
 

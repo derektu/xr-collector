@@ -174,7 +174,7 @@ describe('Vault operation lock', () => {
       operation: 'import', failed: failure,
       body: async (reporter) => {
         reporter.blockReads();
-        reporter.stop(new CollectorError('vault_busy', '請重新啟動程式'));
+        return reporter.stop(new CollectorError('vault_busy', '請重新啟動程式'));
       },
     })).rejects.toMatchObject({ code: 'vault_busy' });
     expect(held.value.status()).toMatchObject({ state: 'error', errorCode: 'vault_busy', message: '請重新啟動程式' });

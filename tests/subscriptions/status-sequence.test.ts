@@ -3,7 +3,9 @@
 // order the status model allows, the Jobs page sections a job passes through, and which collection
 // check belongs to a failed job. A wrong judgment here passes or fails the flow for the wrong reason.
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { checkRecordForJob } from '../../.claude/skills/verify/flows/subscription-failures.mjs';
+// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../.claude/skills/verify/flows/lib/status-sequence.mjs';
 
 type Check = { id: string; ok: boolean; actual: unknown };
@@ -42,7 +44,7 @@ describe('subscription status sequence', () => {
   it('fails a phase outside a check and lists it', () => {
     const checks = sequence('queued', 'retrying', 'downloading 2/5', 'scheduled');
     expect(failed(checks)).toEqual(['A.status.known']);
-    expect(checks[0].actual).toEqual(['retrying']);
+    expect(checks[0]?.actual).toEqual(['retrying']);
   });
 
   it('fails progress that goes back, a wrong total, no downloading and an end other than scheduled', () => {
@@ -66,12 +68,12 @@ describe('job sections', () => {
     expect(failed(jobSectionChecks('A', ['queued', 'running']) as Check[])).toEqual([]);
     const checks = jobSectionChecks('B', ['queued', 'running', 'queued', 'running']) as Check[];
     expect(failed(checks)).toEqual(['B.jobs.no-requeue']);
-    expect(checks[0].actual).toEqual(['running → queued']);
+    expect(checks[0]?.actual).toEqual(['running → queued']);
   });
 
   it('fails a job never seen on the Jobs page', () => {
     const checks = jobSectionChecks('A', []) as Check[];
     expect(failed(checks)).toEqual(['A.jobs.no-requeue']);
-    expect(checks[0].actual).toEqual([]);
+    expect(checks[0]?.actual).toEqual([]);
   });
 });

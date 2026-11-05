@@ -56,7 +56,7 @@ describe('secrets in source errors', () => {
           },
           listVideos: async () => { throw new CollectorError('channel_not_found', `無法列出影片：${leak()}`); },
         },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
+        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       }),
       agentSettingsFile,
@@ -165,7 +165,7 @@ describe('secrets in source errors', () => {
             return [];
           },
         },
-        searchBinary: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
+        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
         createSearch: async () => ({ search: new UnavailableTranscriptSearch('test'), close: async () => undefined }),
       }),
       agentSettingsFile,

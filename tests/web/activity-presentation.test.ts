@@ -43,7 +43,7 @@ describe('activity presentation', () => {
     expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'accepted', source, adding: false });
     expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'started', source, adding: false });
     expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'accepted', source, adding: true });
-    expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: null, jobRole: 'add' })).toEqual({ line: 'started', source: null, adding: true });
+    expect(eventLine({ ...base, eventType: 'job.started', jobRole: 'add' })).toEqual({ line: 'started', source: null, adding: true });
     expect(eventLine({ ...base, eventType: 'document.saved', sourceTitle: source })).toEqual({ line: 'document_saved', source });
     expect(eventLine({ ...base, eventType: 'subscription.added', sourceTitle: source })).toEqual({ line: 'subscription_added', source });
     expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source })).toEqual({ line: 'failed', source, message: base.message });
@@ -127,12 +127,12 @@ describe('activity presentation', () => {
       { timestamp: '2026-10-15T05:00:00.000Z', level: 'INFO', eventType: 'job.accepted', errorCode: null, message: 'accepted', detail: [] },
       { timestamp: '2026-10-15T05:00:09.000Z', level: 'ERROR', eventType: 'job.failed', errorCode: 'network_error', message: 'unreachable', detail: ['ERROR: timed out', 'Cookie: [masked]'] },
     ]);
-    const resumed = { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: null, lastResumedAt: null };
+    const resumed = { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: '2026-10-15T04:00:00.000Z', lastResumedAt: null };
     expect(diagnostics(job({ recovery: resumed, retryOf: 'job-0', retriedBy: 'job-2' }), [])).toMatchObject({ resumedCount: 0, retryOf: 'job-0', retriedBy: 'job-2' });
   });
 
   it('adds a fresh first page above loaded entries without repeating any', () => {
-    const entry = (id: string) => ({ ...base, eventId: id, severity: 'info' as const, eventType: 'job.started' });
+    const entry = (id: string) => ({ ...base, eventId: id, severity: 'info' as const, eventType: 'job.started' as const });
     expect(mergeNewest([entry('b'), entry('a')], [entry('c'), entry('b')]).map((item) => item.eventId)).toEqual(['c', 'b', 'a']);
   });
 });

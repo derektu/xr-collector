@@ -14,7 +14,9 @@ import {
   DEVELOPER_ID_INTERMEDIATE_FIX, RUNTIME_SIGNING_CONCURRENCY, checkDeveloperIdIdentity, describeArtifact, loadMacSigningConfiguration, mapConcurrent, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList,
   selectDeveloperIdIdentity, signStagedMacRuntimes, signedBuilderEnvironment, validateNotarizedApplication,
   verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory, withTemporarySigningKeychain,
+  // @ts-expect-error The script is executable JavaScript without type declarations.
 } from '../../scripts/mac-signing.mjs';
+// @ts-expect-error The script is executable JavaScript without type declarations.
 import { UnsafeProcessTreeError } from '../../scripts/owned-process.mjs';
 import { eventually } from '../support/wait.js';
 
@@ -64,7 +66,7 @@ it.skipIf(process.platform === 'win32')('appends its keychain without reordering
       : { stdout: '', stderr: '' };
   });
   const configuration = { certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' };
-  await expect(withTemporarySigningKeychain(configuration, async ({ keychain, identity }) => {
+  await expect(withTemporarySigningKeychain(configuration, async ({ keychain, identity }: SigningKeychain) => {
     expect(keychain).toMatch(/signing\.keychain-db$/u);
     expect(identity).toMatchObject({ sha1: 'A'.repeat(40), teamId: 'ABCDE12345' });
     keychains.push(path.resolve('fixture/concurrent-session.keychain-db'));
@@ -92,6 +94,8 @@ const matchingListing = (matching: string[], valid: string[]) => [
   '  Valid identities only', ...valid, `     ${valid.length} valid identities found`, '',
 ].join('\n');
 
+/** What `withTemporarySigningKeychain` passes its work. */
+type SigningKeychain = { keychain: string; identity: unknown; signal: AbortSignal };
 type Identities = { valid: string[]; matching?: string[]; importError?: string };
 
 function fakeSecurity(identities: Identities, keychains: string[]) {
@@ -116,7 +120,7 @@ async function identityCheck(identities: Identities) {
   const userKeychains = [path.resolve('fixture/login.keychain-db')];
   const keychains = [...userKeychains];
   const { run, calls } = fakeSecurity(identities, keychains);
-  const result = await checkDeveloperIdIdentity(
+  const result: { identity?: any; error?: any } = await checkDeveloperIdIdentity(
     { certificatePath: '/protected/certificate.p12', certificatePassword: 'p12-secret', teamId: 'ABCDE12345' },
     { run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock') },
   ).then((identity: any) => ({ identity }), (error: any) => ({ error }));
@@ -260,7 +264,7 @@ it.skipIf(process.platform === 'win32')('deletes its temporary keychain when the
     return { stdout: '', stderr: '' };
   };
   let owned = '';
-  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain, signal }) => {
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain, signal }: SigningKeychain) => {
     owned = keychain;
     signalTarget.emit('SIGTERM');
     signal.throwIfAborted();
@@ -365,7 +369,7 @@ it.skipIf(process.platform === 'win32')('uses one canonical owned keychain path 
     if (args[0] === 'delete-keychain') { keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
   };
-  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain }) => {
+  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async ({ keychain }: SigningKeychain) => {
     expect(keychain).toBe(`${canonicalDirectory}/signing.keychain-db`);
   }, {
     run, mkdtemp: async () => requestedDirectory, realpath: async (value: string) => value.replace(/^\/var\//u, '/private/var/'),
@@ -394,7 +398,7 @@ it.skipIf(process.platform === 'win32')('preserves concurrent keychains and aggr
   const configuration = { certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' };
   let failure: unknown;
   try {
-    await withTemporarySigningKeychain(configuration, async ({ keychain }) => {
+    await withTemporarySigningKeychain(configuration, async ({ keychain }: SigningKeychain) => {
       owned = keychain;
       keychains.push(concurrent);
       throw new Error('simulated signing failure');
