@@ -1,6 +1,6 @@
 import { Notification } from 'electron';
 import type { AutoPauseNotification, NotificationAvailability, SystemNotificationAdapter } from '../notifications/notification-center.js';
-import { limitText, redact } from '../activity/redact.js';
+import { limitText, redact } from '../core/redact.js';
 
 export class ElectronSystemNotifications implements SystemNotificationAdapter {
   private state: { state: NotificationAvailability; message: string | null };
@@ -24,8 +24,8 @@ export class ElectronSystemNotifications implements SystemNotificationAdapter {
   async show(event: AutoPauseNotification): Promise<void> {
     if (this.state.state === 'unavailable') throw new Error(this.state.message ?? '系統通知不可用。');
     try {
-      const title = `訂閱已自動暫停：${event.title}`;
-      const body = `連續 ${event.failureCount} 次檢查失敗。最後原因：${event.error.message}`;
+      const title = redact(`訂閱已自動暫停：${event.title}`);
+      const body = redact(`連續 ${event.failureCount} 次檢查失敗。最後原因：${event.error.message}`);
       const notification = new Notification({
         id: event.id,
         groupId: 'subscription-auto-paused',

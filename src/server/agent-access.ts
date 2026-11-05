@@ -7,6 +7,7 @@ import { CollectorError } from '../core/types.js';
 import { AGENT_PORT_RANGE } from '../runtime/agent-connection-defaults.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 import { replaceFile } from '../core/json-file.js';
+import { protectSecret } from '../core/redact.js';
 
 export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
 export interface AgentConnection { url: string; token: string }
@@ -32,9 +33,10 @@ class AgentConnectionService implements AgentConnectionAccess {
   private server: RunningServer | null = null;
   private unavailableMessage = 'AI 助理連線尚未啟動。';
   private writes: Promise<void> = Promise.resolve();
+  /** Whether the saved settings were read, or new ones saved; only then can the listener start. */
+  opened = false;
 
   constructor(private readonly settingsFile: string, private readonly skillPath: string, private readonly autoStartPort: number,
-    private readonly protectSecret?: (secret: string) => void,
     private readonly event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void) {}
 
   async open(): Promise<void> {
@@ -49,9 +51,10 @@ class AgentConnectionService implements AgentConnectionAccess {
     this.configured = saved?.port ?? { mode: 'auto' };
     this.activeConfigured = clonePort(this.configured);
     this.token = saved?.token ?? randomBytes(32).toString('hex');
-    this.protectSecret?.(this.token);
+    protectSecret(this.token);
     if (!saved) await this.save({ schemaVersion: 1, token: this.token, port: this.configured });
     else await chmod(this.settingsFile, 0o600);
+    this.opened = true;
   }
 
   async start(options: Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection'>): Promise<void> {
@@ -95,7 +98,7 @@ class AgentConnectionService implements AgentConnectionAccess {
     if (!this.server) throw new CollectorError('agent_connection_unavailable', this.unavailableMessage);
     const next = randomBytes(32).toString('hex');
     await this.save({ schemaVersion: 1, token: next, port: this.configured });
-    this.token = next; this.protectSecret?.(next);
+    this.token = next; protectSecret(next);
     this.event?.('warning', 'device.agent_connection_key_reset', 'AI 助理連線金鑰已重設，既有連線資料已失效。');
     return this.connection();
   }); }
@@ -115,23 +118,40 @@ class AgentConnectionService implements AgentConnectionAccess {
   }
 }
 
-export async function startAgentAccess(options: {
-  buildInfo?: StartServerOptions['buildInfo']; collector?: StartServerOptions['collector']; jobs?: StartServerOptions['jobs']; activity?: StartServerOptions['activity']; protectSecret?: (secret: string) => void;
-  transfer?: StartServerOptions['transfer']; subscriptions?: StartServerOptions['subscriptions']; schedule?: StartServerOptions['schedule']; search?: StartServerOptions['search'];
-  pacing?: StartServerOptions['pacing']; connectivity?: StartServerOptions['connectivity']; preferredPort: number; settingsFile: string; skillPath: string;
-  runtimeStatus?: StartServerOptions['runtimeStatus']; notReady?: StartServerOptions['notReady']; vaultSetup?: StartServerOptions['vaultSetup'];
-  loginStartup?: StartServerOptions['loginStartup']; event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
-  updates?: StartServerOptions['updates']; changes?: StartServerOptions['changes'];
-}): Promise<AgentConnectionService> {
-  const service = new AgentConnectionService(options.settingsFile, options.skillPath, options.preferredPort, options.protectSecret, options.event);
+interface AgentSettingsOptions {
+  preferredPort: number; settingsFile: string; skillPath: string;
+  event?: (severity: 'info' | 'warning' | 'error', type: string, message: string, code?: string) => void;
+}
+
+/**
+ * Loads the Agent credential and protects it in every text the app writes or shows, without
+ * listening yet. The runtime opens it before the Vault, so work that resumes and fails at startup
+ * already has the token masked.
+ */
+export async function openAgentAccess(options: AgentSettingsOptions): Promise<AgentConnectionService> {
+  const service = new AgentConnectionService(options.settingsFile, options.skillPath, options.preferredPort, options.event);
   try { await service.open(); }
   catch {
     const message = 'AI 助理連線設定無法讀取或保存。XR Collector 其他功能仍可使用。';
     service.fail(message);
     options.event?.('error', 'device.agent_connection_unavailable', message, 'agent_settings_failed');
-    return service;
   }
-  const { settingsFile: _a, skillPath: _b, preferredPort: _c, protectSecret: _d, event: _e, ...server } = options;
+  return service;
+}
+
+/** Starts the Agent listener of `access`, or of a service opened here when none is given. */
+export async function startAgentAccess(options: AgentSettingsOptions & {
+  access?: AgentConnectionService;
+  buildInfo?: StartServerOptions['buildInfo']; collector?: StartServerOptions['collector']; jobs?: StartServerOptions['jobs']; activity?: StartServerOptions['activity'];
+  transfer?: StartServerOptions['transfer']; subscriptions?: StartServerOptions['subscriptions']; schedule?: StartServerOptions['schedule']; search?: StartServerOptions['search'];
+  pacing?: StartServerOptions['pacing']; connectivity?: StartServerOptions['connectivity'];
+  runtimeStatus?: StartServerOptions['runtimeStatus']; notReady?: StartServerOptions['notReady']; vaultSetup?: StartServerOptions['vaultSetup'];
+  loginStartup?: StartServerOptions['loginStartup'];
+  updates?: StartServerOptions['updates']; changes?: StartServerOptions['changes'];
+}): Promise<AgentConnectionService> {
+  const service = options.access ?? await openAgentAccess(options);
+  if (!service.opened) return service;
+  const { settingsFile: _a, skillPath: _b, preferredPort: _c, event: _e, access: _f, ...server } = options;
   await service.start(server as Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection'>); return service;
 }
 function parseSettings(text: string): SavedAgentSettings {

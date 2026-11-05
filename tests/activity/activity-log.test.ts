@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLog, RETENTION_DAYS } from '../../src/activity/activity-log.js';
-import { limitText, redact } from '../../src/activity/redact.js';
+import { limitText, protectSecret, redact } from '../../src/core/redact.js';
 import type { CollectionJob, JobEvent } from '../../src/core/types.js';
 import { localDayStart } from '../../src/web/activity-presentation.js';
 import { readEventFiles } from './event-files.js';
@@ -282,7 +282,7 @@ describe('masking (A-T6)', () => {
     await mkdir(path.join(directory, 'events'), { recursive: true });
     await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines([event('2026-10-15T01:00:00.000Z', { message: `stored agent ${token}` })]));
     const log = await ActivityLog.open(directory, { now: () => clock.now });
-    log.protectSecret(token);
+    protectSecret(token);
     log.record(event('2026-10-15T02:00:00.000Z', { severity: 'error', message: secretMessage, detail: `${'x'.repeat(10_000)}\nERROR: cookie=SECRET; Authorization: Basic Zm9vOmJhcg== ${token}` }));
     log.record(event('2026-10-15T03:00:00.000Z', { message: '長'.repeat(2000) }));
     await log.flush();

@@ -14,6 +14,7 @@ import { validateMeilisearchRuntime, type SearchIndexProfile } from './meilisear
 import { loadSearchLexicon } from './search-lexicon.js';
 import type { PreparedSearchProjection } from './search-projection.js';
 import { replaceFile } from '../core/json-file.js';
+import { limitText, redact } from '../core/redact.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
@@ -79,7 +80,7 @@ export async function startSearchRuntime(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {
-      search: new UnavailableTranscriptSearch(`無法啟動搜尋引擎：${detail}`),
+      search: new UnavailableTranscriptSearch(`無法啟動搜尋引擎：${limitText(redact(detail), 500, 'head')}`),
       close: async () => undefined,
     };
   }

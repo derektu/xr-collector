@@ -19,7 +19,7 @@ import type { LoginStartupAccess } from '../core/login-startup.js';
 import { Connectivity, type ConnectivityOptions } from '../core/connectivity.js';
 import { JobStore } from '../jobs/job-store.js';
 import type { ActivityAccess, VaultSetup } from '../server/app.js';
-import { startAgentAccess, type AgentAccess } from '../server/agent-access.js';
+import { openAgentAccess, startAgentAccess, type AgentAccess } from '../server/agent-access.js';
 import type { UpdateAccess } from '../updates/types.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
 import { startServer, type RunningServer } from '../server/start.js';
@@ -230,19 +230,22 @@ export class CollectorRuntime {
       setup: (request) => runtime!.setup(request),
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
+    const agentSettings = {
+      preferredPort: options.agentPort ?? DEVELOPMENT_AGENT_PORT, settingsFile: options.agentSettingsFile, skillPath: options.skillPath, event: deviceEvent,
+    };
     try {
+      // The Agent token is protected before the Vault opens, where resumed and due work can fail at once.
+      agentAccess = await openAgentAccess(agentSettings);
       if (workspaceServices) {
         // An import from Onboarding a stop interrupted is taken back unless the selection already names its Vault.
         await recoverImport(options.profilePath, [await selection.read().catch(() => null)]);
         initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
       }
-      agentAccess = await startAgentAccess({
+      await startAgentAccess({
         ...shared,
-        ...(activity && jobStore ? { activity, protectSecret: (secret: string) => jobStore.activity.protectSecret(secret) } : {}),
-        preferredPort: options.agentPort ?? DEVELOPMENT_AGENT_PORT,
-        settingsFile: options.agentSettingsFile,
-        skillPath: options.skillPath,
-        runtimeStatus, notReady, vaultSetup, event: deviceEvent,
+        ...(activity ? { activity } : {}),
+        ...agentSettings, access: agentAccess,
+        runtimeStatus, notReady, vaultSetup,
       });
       const server = await startServer({
         ...shared,
