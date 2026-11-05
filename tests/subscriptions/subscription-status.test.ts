@@ -18,6 +18,7 @@ import { JobStore } from '../../src/jobs/job-store.js';
 import { MemoryDocuments, SyntheticYouTube } from './synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -53,7 +54,7 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const collector = new Collector(documents);
-  const channelStore = new JsonSubscriptionStore(root, 'youtube');
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
   const pacing = new ScriptedPacing();
   let autoCheck = true;
   const jobs: JobManager = new JobManager({

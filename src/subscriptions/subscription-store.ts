@@ -1,8 +1,9 @@
 import path from 'node:path';
 import type { NoteChange } from '../core/change-feed.js';
-import { readJsonFile, writeJsonFile } from '../core/json-file.js';
+import { readJsonFile } from '../core/json-file.js';
 import { requireDefinition } from '../core/source-registry.js';
 import type { SubscriptionRecord } from '../core/types.js';
+import type { VaultFiles } from '../core/vault-files.js';
 import {
   removalsFromJson,
   subscriptionsFromJson,
@@ -11,7 +12,6 @@ import {
   type SubscriptionRemoval,
 } from './subscription-files.js';
 import { subscriptionContent } from './subscription-fields.js';
-import { ensureVaultFormat } from '../vault/vault-directory.js';
 
 export type SubscriptionPatch = Partial<Omit<SubscriptionRecord, 'id' | 'addedAt'>>;
 
@@ -39,24 +39,24 @@ export interface SubscriptionStore {
 /**
  * The subscriptions of one source type in its Vault file, named by the type's storage declaration.
  * Each change reads and writes the whole file in one serialized step, so a subscription and its
- * removal record change together.
+ * removal record change together. Writes go through the Vault's `VaultFiles`.
  */
 export class JsonSubscriptionStore implements SubscriptionStore {
   private mutation: Promise<void> = Promise.resolve();
   private readonly spec: SubscriptionFileSpec;
+  private readonly file: string;
   private readonly filePath: string;
-  /** Whether this store has written the file once, with the Vault format its type needs in place. */
-  private formatEnsured = false;
 
   /**
    * `type` names a registered source type with subscriptions; `now` stamps `updatedAt` and
    * `removedAt`; `noteChange` hears each subscription a write changed, once the file holds it.
    */
-  constructor(private readonly root: string, readonly type: string, private readonly now: () => Date = () => new Date(),
+  constructor(private readonly files: VaultFiles, readonly type: string, private readonly now: () => Date = () => new Date(),
     private readonly noteChange: NoteChange = () => undefined) {
     this.spec = requireDefinition(type);
     if (!this.spec.storage) throw new Error(`Source type ${type} has no subscriptions`);
-    this.filePath = path.join(root, this.spec.storage.subscriptionsFile);
+    this.file = this.spec.storage.subscriptionsFile;
+    this.filePath = path.join(files.root, ...this.file.split('/'));
   }
 
   async list(): Promise<SubscriptionRecord[]> {
@@ -153,11 +153,7 @@ export class JsonSubscriptionStore implements SubscriptionStore {
    * of the file, so a file written by a newer program keeps what this one does not define.
    */
   private async write(changed: readonly string[], subscriptions: SubscriptionRecord[], removed?: SubscriptionRemoval[]): Promise<void> {
-    if (!this.formatEnsured) {
-      await ensureVaultFormat(this.root, [this.type]);
-      this.formatEnsured = true;
-    }
-    await writeJsonFile(this.filePath, subscriptionsToJson(this.spec, await this.readFile(), subscriptions, removed));
+    await this.files.writeJson(this.file, subscriptionsToJson(this.spec, await this.readFile(), subscriptions, removed));
     for (const id of changed) this.noteChange({ kind: 'subscription', type: this.type, id });
   }
 

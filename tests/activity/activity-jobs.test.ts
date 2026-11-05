@@ -28,6 +28,7 @@ import { SubscriptionRecorder } from '../support/subscription-recorder.js';
 import { transcriptOf } from '../support/youtube-documents.js';
 import { HeldCaptures } from '../support/held-captures.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
 
@@ -131,7 +132,7 @@ function setup(store: JobStore = JobStore.memory(clock), limits: { capture?: num
 async function setupWithService() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-subscriptions-'));
   directories.push(root);
-  const channelStore = new JsonSubscriptionStore(root, 'youtube', clock);
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', clock);
   let service: SubscriptionService | null = null;
   const world = build(forwardingPort(() => new SubscriptionServices([service!])), JobStore.memory(clock));
   service = new SubscriptionService('youtube', channelStore, world.manager, {

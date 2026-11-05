@@ -24,6 +24,7 @@ import { JobStore } from '../jobs/job-store.js';
 import { startSearchRuntime, type SearchRuntime } from '../search/runtime.js';
 import { prepareOwnedSearchProjection, searchDatabasePath } from '../search/search-projection.js';
 import { MarkdownVault } from './markdown-vault.js';
+import { VaultFileWriter } from './vault-files.js';
 import { deletionId } from './deleted-documents.js';
 import { changeTotal, chosenKeys, compareItems, itemStates, planChanges, type Comparison, type ImportPlan, type ItemStates } from './vault-merge.js';
 import { applyInPlace, checkFreeSpace, finishInPlaceImports, type ImportFault } from './vault-import.js';
@@ -44,6 +45,8 @@ import {
 
 interface Bundle {
   root: string;
+  /** The way every write of this bundle reaches the Vault's files. */
+  files: VaultFileWriter;
   /** ID from the Vault's marker. */
   vaultId: string;
   collector: Collector;
@@ -614,7 +617,7 @@ export class VaultWorkspace {
 
   /** Brings the search index up to date with the documents an import wrote or removed. */
   private async indexChanged(changes: ReadonlyMap<string, unknown>): Promise<void> {
-    const vault = new MarkdownVault(this.current.root);
+    const vault = new MarkdownVault(this.current.files);
     for (const relative of changes.keys()) {
       const id = documentIdFromPath(relative);
       if (!id) continue;
@@ -658,7 +661,8 @@ export class VaultWorkspace {
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
     const vaultId = await readVaultId(root);
     if (!vaultId) throw new CollectorError('vault_invalid', '知識庫標記檔沒有識別碼，不是目前支援的知識庫格式，無法開啟。');
-    const vault = new MarkdownVault(root);
+    const files = new VaultFileWriter(root);
+    const vault = new MarkdownVault(files);
     // Deletions a stop left unfinished are settled before the search index is compared with the Vault.
     const recovery = await vault.recoverDeletions();
     const databasePath = this.searchPath(root);
@@ -679,7 +683,7 @@ export class VaultWorkspace {
     const plugins = this.options.plugins;
     const recentTargets = new RecentTargets();
     const stores: Record<string, SubscriptionStore> = {};
-    for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(root, plugin.id, undefined, this.noteChange);
+    for (const plugin of plugins) if (plugin.subscription && plugin.storage) stores[plugin.id] = new JsonSubscriptionStore(files, plugin.id, undefined, this.noteChange);
     // The scheduler is replaced after a merge, so switch reads go through the bundle.
     const autoCollection = () => bundle.schedule.isEnabled();
     // Jobs hold this bundle's own Vault objects, so they never write through to a Vault switched in later.
@@ -738,7 +742,7 @@ export class VaultWorkspace {
         documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title,
       });
     }
-    const partial = { root, vaultId, runtime, collector, subscriptions, jobs };
+    const partial = { root, files, vaultId, runtime, collector, subscriptions, jobs };
     const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options.pause, this.noteChange) };
     return bundle;
   }
@@ -771,8 +775,8 @@ function changeSummary(counts: ChangeCounts): string {
   return [part('文件', counts.documents), part('訂閱', counts.subscriptions)].filter(Boolean).join('；') || '沒有變更';
 }
 
-function makeScheduler(bundle: Pick<Bundle, 'root' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined, noteChange: NoteChange): CollectionScheduler {
-  return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.root, noteChange), {
+function makeScheduler(bundle: Pick<Bundle, 'files' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined, noteChange: NoteChange): CollectionScheduler {
+  return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.files, noteChange), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
     ...(pause ? { pause } : {}),
   });

@@ -20,6 +20,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -45,8 +46,8 @@ const IDS = ['open0000001', 'open0000002', 'open0000003', 'open0000004'];
 
 async function seed(root: string): Promise<void> {
   await createVaultDirectory(root, 'XR Collector test');
-  await new MarkdownVault(root).add(transcriptDocument(video('seed0000001')));
-  await new JsonSubscriptionStore(root, 'youtube').add({
+  await new MarkdownVault(new VaultFileWriter(root)).add(transcriptDocument(video('seed0000001')));
+  await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').add({
     id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
     settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
@@ -65,7 +66,7 @@ function fakeSearch(root: string, failRebuild = false): TranscriptSearch {
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
       if (failRebuild) throw new Error('index unavailable');
-      const vault = new MarkdownVault(root);
+      const vault = new MarkdownVault(new VaultFileWriter(root));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search({ query }) {
@@ -212,7 +213,7 @@ describe('opening another Vault (A-13)', () => {
     expect(jobStore.get(aRunning.job.id)!.state).toBe('completed');
     expect((await workspace.jobs.whenSettled(bLeft.job.id)).state).toBe('completed');
     expect(jobStore.get(aLeft.job.id)).toMatchObject({ state: 'interrupted', vaultPath: a });
-    expect(await new MarkdownVault(b).read(`youtube:${IDS[1]}`)).toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(b)).read(`youtube:${IDS[1]}`)).toBeNull();
     expect(await context.selection.read()).toBe(b);
     // A copy of A does not continue A's job; A itself does.
     const copy = path.join(root, 'A copy');
@@ -224,8 +225,8 @@ describe('opening another Vault (A-13)', () => {
     await workspace.operationFinished();
     expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
-    expect(await new MarkdownVault(a).read(`youtube:${IDS[1]}`)).not.toBeNull();
-    expect(await new MarkdownVault(copy).read(`youtube:${IDS[1]}`)).toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(a)).read(`youtube:${IDS[1]}`)).not.toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(copy)).read(`youtube:${IDS[1]}`)).toBeNull();
   });
 
   it('refuses to open another Vault when the location was fixed at startup', async () => {
@@ -259,7 +260,7 @@ describe('creating a new Vault while one is active', () => {
     expect(await readVaultId(created)).not.toBe(await readVaultId(context.source));
     expect(await context.selection.read()).toBe(created);
     expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(before);
-    expect(await new MarkdownVault(context.source).read('youtube:seed0000001')).not.toBeNull();
+    expect(await new MarkdownVault(new VaultFileWriter(context.source)).read('youtube:seed0000001')).not.toBeNull();
 
     await workspace.openOther(context.source);
     await workspace.operationFinished();

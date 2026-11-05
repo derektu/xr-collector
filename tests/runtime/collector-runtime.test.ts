@@ -22,6 +22,7 @@ import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../support/youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -183,12 +184,12 @@ describe('CollectorRuntime', () => {
     } });
     cleanups.push(() => runtime.close());
     const source = path.join(value.profilePath, 'incoming-vault');
-    await new MarkdownVault(source).add(transcriptDocument({
+    await new MarkdownVault(new VaultFileWriter(source)).add(transcriptDocument({
       videoId: 'updatehold1', sourceUrl: 'https://www.youtube.com/watch?v=updatehold1', title: 'Import hold',
       channelId: 'UC-runtime', channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
       subtitleKind: 'manual', bodyMarkdown: 'Imported while update waits.',
     }));
-    await new JsonScheduleStore(source).save({ enabled: true });
+    await new JsonScheduleStore(new VaultFileWriter(source)).save({ enabled: true });
     const packageFile = path.join(value.profilePath, 'incoming.zip'); await writeFile(packageFile, await packageBytes(source));
     const preview = await runtime.workspace!.previewImport(packageFile);
     runtime.workspace!.applyImport(preview.id, 'merge'); await importing;
@@ -659,7 +660,7 @@ describe('CollectorRuntime Vault setup', () => {
     const base = await options({ capture: vi.fn() }, search);
     const { explicitVaultPath: _explicit, ...value } = base.value;
     const setup = { ...base, value };
-    await new MarkdownVault(setup.vaultPath).add(transcriptDocument({
+    await new MarkdownVault(new VaultFileWriter(setup.vaultPath)).add(transcriptDocument({
       videoId: 'loginstart1', sourceUrl: 'https://www.youtube.com/watch?v=loginstart1', title: 'Device setting boundary',
       channelId: 'UC-runtime', channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
       subtitleKind: 'manual', bodyMarkdown: 'Body.',
@@ -846,11 +847,11 @@ describe('CollectorRuntime Vault setup', () => {
   it('creates a Vault from an export file while Not Ready, with the export\'s collection switch, and refuses an invalid file leaving the folder as it was (X77-A15)', async () => {
     const setup = await selected();
     const source = path.join(setup.root, 'source');
-    await new MarkdownVault(source).add(transcriptDocument({
+    await new MarkdownVault(new VaultFileWriter(source)).add(transcriptDocument({
       videoId: 'runtime0001', sourceUrl: 'https://www.youtube.com/watch?v=runtime0001', title: 'Runtime', channelId: 'UC-runtime', channelTitle: 'Runtime',
       publishedAt: null, languageCode: 'en', languageName: 'English', subtitleKind: 'manual', bodyMarkdown: 'Body.',
     }));
-    await new JsonScheduleStore(source).save({ enabled: true });
+    await new JsonScheduleStore(new VaultFileWriter(source)).save({ enabled: true });
     const file = path.join(setup.root, 'export.zip');
     await writeFile(file, await packageBytes(source));
     const runtime = await CollectorRuntime.start(setup.value);

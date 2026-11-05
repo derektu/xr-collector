@@ -29,6 +29,7 @@ import { manifestOf, packageOf, tampered } from '../support/package-fixtures.js'
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 afterEach(cleanUp);
 
@@ -44,12 +45,12 @@ async function items(root: string): Promise<Map<string, string>> {
   const states = await itemStates(registeredSource(await registeredFiles(root)));
   return new Map([...states].map(([key, state]) => [key, state.state === 'present' ? `present:${state.digest}` : `deleted:${state.at}`]));
 }
-const documents = async (root: string) => (await new MarkdownVault(root).list()).map((document) => document.sourceId).sort();
+const documents = async (root: string) => (await new MarkdownVault(new VaultFileWriter(root)).list()).map((document) => document.sourceId).sort();
 const deletions = async (root: string) => JSON.parse(await readFile(path.join(root, DELETIONS_FILE), 'utf8')).deleted
   .map((record: { sourceId: string }) => record.sourceId).sort() as string[];
 
 async function add(root: string, id: string) {
-  await new MarkdownVault(root).add(transcriptDocument(video(id)));
+  await new MarkdownVault(new VaultFileWriter(root)).add(transcriptDocument(video(id)));
 }
 /** Changes a document as the app records a change: new text and `updated_at` set to `when`. */
 async function modify(root: string, id: string, text: string, when: string) {
@@ -60,11 +61,11 @@ async function modify(root: string, id: string, text: string, when: string) {
   await writeFile(file, `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body!.trim()}\n${text}\n`);
 }
 async function remove(root: string, id: string, when: string) {
-  await new Collector(new MarkdownVault(root, { now: () => new Date(when) })).delete(`youtube:${id}`);
+  await new Collector(new MarkdownVault(new VaultFileWriter(root), { now: () => new Date(when) })).delete(`youtube:${id}`);
 }
-const store = (root: string, when?: string) => new JsonSubscriptionStore(root, 'youtube', when ? () => new Date(when) : undefined);
+const store = (root: string, when?: string) => new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', when ? () => new Date(when) : undefined);
 const channels = async (root: string) => store(root).list();
-const scheduleOn = async (root: string) => (await new JsonScheduleStore(root).load()).enabled;
+const scheduleOn = async (root: string) => (await new JsonScheduleStore(new VaultFileWriter(root)).load()).enabled;
 const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', number>>, subscriptions: Partial<Record<'added' | 'updated' | 'removed', number>> = {}) => ({
   documents: { added: 0, updated: 0, removed: 0, ...documents }, subscriptions: { added: 0, updated: 0, removed: 0, ...subscriptions },
 });
@@ -250,8 +251,8 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
 describe('the same video on both machines (X77-A06)', () => {
   it('is no change when only the collection time differs', async () => {
     const { a, b } = await pair();
-    await new MarkdownVault(a.vault, { now: () => new Date('2026-10-01T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
-    await new MarkdownVault(b.vault, { now: () => new Date('2026-10-05T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
+    await new MarkdownVault(new VaultFileWriter(a.vault), { now: () => new Date('2026-10-01T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
+    await new MarkdownVault(new VaultFileWriter(b.vault), { now: () => new Date('2026-10-05T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
     expect(await readFile(docPath(a.vault, 'samevideo01'))).not.toEqual(await readFile(docPath(b.vault, 'samevideo01')));
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
@@ -287,7 +288,7 @@ describe('subscriptions (X77-A08)', () => {
     await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
     await store(a.vault, at(1)).add(channel('UCAAA', { addedAt: at(1) }));
     // B pauses automatic collection; the switch belongs to each Vault and never travels with an import.
-    await new JsonScheduleStore(b.vault).save({ enabled: false });
+    await new JsonScheduleStore(new VaultFileWriter(b.vault)).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
       const { preview } = await importFile(workspace, file);
@@ -318,7 +319,7 @@ describe('subscriptions (X77-A08)', () => {
     await changeB(b);
     const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
     await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
-    await new JsonScheduleStore(b.vault).save({ enabled: false });
+    await new JsonScheduleStore(new VaultFileWriter(b.vault)).save({ enabled: false });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
     expect(await items(a.vault)).toEqual(await items(b.vault));
@@ -408,7 +409,7 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
       expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ removed: 1 }), localNewer: 0 });
     });
     expect(await deletions(a.vault)).toEqual([D2, 'bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(a.vault)).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
+    expect(await new Collector(new MarkdownVault(new VaultFileWriter(a.vault))).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
   });
 
   it('are written by a merge even when they are all the file brings', async () => {
@@ -422,7 +423,7 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
       expect(workspace.status().state).toBe('completed');
     });
     expect(await deletions(a.vault)).toEqual(['bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(a.vault)).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
+    expect(await new Collector(new MarkdownVault(new VaultFileWriter(a.vault))).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
     expect(await items(a.vault)).toEqual(await items(b.vault));
     await using(a, async (workspace) => {
       expect(await workspace.previewImport(file)).toMatchObject({ merge: counts({}), mergeRecords: false });
@@ -735,7 +736,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     expect(existsSync(path.join(b.profile, IMPORT_JOURNAL))).toBe(true);
 
     // A paused Vault's export creates a paused Vault.
-    await new JsonScheduleStore(a.vault).save({ enabled: false });
+    await new JsonScheduleStore(new VaultFileWriter(a.vault)).save({ enabled: false });
     const c = await machine('C', path.dirname(path.dirname(a.vault)));
     await importAsNew(c, await exportFrom(a, 'a-paused'));
     expect(await scheduleOn(c.vault)).toBe(false);

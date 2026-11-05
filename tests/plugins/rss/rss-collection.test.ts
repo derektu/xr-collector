@@ -19,6 +19,7 @@ import { atom, page, rss2, type SyntheticArticle, SyntheticFeeds } from '../../s
 import { youtubePlugins } from '../../support/youtube-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../support/exchange-fixtures.js';
 import { eventually } from '../../support/wait.js';
+import { VaultFileWriter } from '../../../src/vault/vault-files.js';
 
 // RSS through the product's core: a workspace with the YouTube and RSS plugins over synthetic feeds
 // on a local server. Subscribing, checking, removing and exchanging use the same services the
@@ -270,7 +271,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     expect(reader.manifest.formatVersion).toBe(2);
     expect(reader.manifest.files.map((entry: { path: string }) => entry.path)).toEqual(expect.arrayContaining(['settings/rss-subscriptions.json', 'settings/youtube-channels.json']));
     reader.close();
-    const ids = async (vault: string) => (await new MarkdownVault(vault).list()).map((document) => document.id).sort();
+    const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault)).list()).map((document) => document.id).sort();
 
     const created = await importNewVault({ packageFile: file, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);

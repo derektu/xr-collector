@@ -15,6 +15,7 @@ import { MarkdownVault } from '../../src/vault/markdown-vault.js';
 import { createFakePlugin, FAKE, FAKE2, FakeSource } from '../support/fake-source-plugin.js';
 import { readEventFiles } from '../activity/event-files.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 // The subscription rules hold through SubscriptionService, the only writer of subscriptions, with a
 // real job manager running checks of fake source types: failure counts, out-of-range items,
@@ -55,8 +56,8 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
   const scheduleStore = new MemoryScheduleStore();
   const build = async () => {
     const store = await JobStore.open(jobsDirectory, now);
-    const collector = new Collector(new MarkdownVault(root, { now }));
-    const stores = { fake: new JsonSubscriptionStore(root, 'fake', now), fake2: new JsonSubscriptionStore(root, 'fake2', now) };
+    const collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }));
+    const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root), 'fake2', now) };
     let services!: SubscriptionServices;
     const jobs: JobManager = new JobManager({
       vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,

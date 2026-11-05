@@ -3,9 +3,10 @@ import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs
 import path from 'node:path';
 import { CollectorError } from '../core/types.js';
 import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
-import { ensureVaultFormat, writeVaultMarker } from './vault-directory.js';
+import { writeVaultMarker } from './vault-directory.js';
+import { VaultFileWriter } from './vault-files.js';
 import { formatBytes, nearestExisting, spaceMargin, type StatFs } from './disk-space.js';
-import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, sourceTypesOf, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
+import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
 import type { FileChanges } from './vault-merge.js';
 
 /**
@@ -33,9 +34,11 @@ export async function checkFreeSpace(folder: string, bytes: number, statfsOf: St
  *
  * The journal is written once every staged file is complete, and that write is the commit point:
  * a working folder without a journal is dropped and the Vault stays as it was; with one, the
- * entries are carried out again on the next open until every one is done. Putting a file in place
- * is a rename within the Vault folder, so each path holds either its old or its new file, and a
- * repeated entry finds its staged file gone and moves on.
+ * entries are carried out again on the next open until every one is done. Before the first entry,
+ * and again before an open carries them out, `VaultFileWriter.admit` raises the marker to the
+ * format every staged file needs. Each entry then goes through `VaultFileWriter`: putting a file in
+ * place is a rename within the Vault folder, so each path holds either its old or its new file, and
+ * a repeated entry finds its staged file gone and moves on.
  */
 interface InPlaceJournal { version: 1; entries: { path: string; staged: string | null }[] }
 
@@ -70,30 +73,24 @@ export async function applyInPlace(
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  await ensureVaultFormat(root, placedTypes(entries));
+  const files = new VaultFileWriter(root);
+  await files.admit(placed(work, entries));
   for (const [index, entry] of entries.entries()) {
-    await placeEntry(root, work, entry);
+    await placeEntry(files, work, entry);
     progress(index + 1, entries.length);
     await faults?.('renaming', index + 1);
   }
   await rm(work, { recursive: true, force: true });
 }
 
-/** The source types whose files a journal puts in place; the Vault format they need goes in first. */
-function placedTypes(entries: InPlaceJournal['entries']): Set<string> {
-  return sourceTypesOf(entries.filter((entry) => entry.staged !== null).map((entry) => entry.path));
+/** The staged files of a journal with the Vault paths they go to. */
+function placed(work: string, entries: InPlaceJournal['entries']): Array<{ relative: string; at: string }> {
+  return entries.flatMap((entry) => entry.staged ? [{ relative: entry.path, at: path.join(work, entry.staged) }] : []);
 }
 
-async function placeEntry(root: string, work: string, entry: InPlaceJournal['entries'][number]): Promise<void> {
-  const target = path.join(root, entry.path);
-  if (!entry.staged) { await rm(target, { force: true }); return; }
-  await mkdir(path.dirname(target), { recursive: true });
-  try {
-    await rename(path.join(work, entry.staged), target);
-  } catch (error) {
-    // A staged file already put in place by an earlier attempt.
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+async function placeEntry(files: VaultFileWriter, work: string, entry: InPlaceJournal['entries'][number]): Promise<void> {
+  if (!entry.staged) await files.remove(entry.path);
+  else await files.place(entry.path, path.join(work, entry.staged));
 }
 
 /**
@@ -113,8 +110,9 @@ export async function finishInPlaceImports(root: string): Promise<boolean> {
       typeof entry?.path === 'string' && packagePath(entry.path)
       && (entry.staged === null || (typeof entry.staged === 'string' && STAGED.test(entry.staged))));
     if (journal && valid) {
-      await ensureVaultFormat(root, placedTypes(journal.entries));
-      for (const entry of journal.entries) await placeEntry(root, work, entry);
+      const files = new VaultFileWriter(root);
+      await files.admit(placed(work, journal.entries));
+      for (const entry of journal.entries) await placeEntry(files, work, entry);
       finished = true;
     }
     await rm(work, { recursive: true, force: true });
@@ -143,7 +141,8 @@ export async function importNewVault(options: {
     await unpackPackage(reader, journal.staging, () => undefined);
     reader.close();
     await writeVaultMarker(journal.staging, options.createdBy);
-    await ensureVaultFormat(journal.staging, sourceTypesOf(reader.manifest.files.map((row) => row.path)));
+    const staging = journal.staging;
+    await new VaultFileWriter(staging).admit(reader.paths().map((relative) => ({ relative, at: path.join(staging, ...relative.split('/')) })));
     await checkImportFolder(target);
     journal = { ...journal, placed: true, marker: await markerDigest(journal.staging) };
     await writeImportJournal(options.profilePath, journal);

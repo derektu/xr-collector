@@ -14,6 +14,7 @@ import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-do
 import { documentId, documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
 import { MarkdownVault, parseDocument } from './markdown-vault.js';
 import { VAULT_MARKER } from './vault-directory.js';
+import { VaultFileWriter } from './vault-files.js';
 import type { FileSource } from './vault-merge.js';
 
 /**
@@ -133,7 +134,7 @@ export interface RegisteredFiles {
  * hides it, even while a deletion is unfinished.
  */
 export async function registeredFiles(root: string): Promise<RegisteredFiles> {
-  const vault = new MarkdownVault(root);
+  const vault = new MarkdownVault(new VaultFileWriter(root));
   const documents = await vault.list();
   const portable = await vault.portableDeletions();
   const files: RegisteredFile[] = [];

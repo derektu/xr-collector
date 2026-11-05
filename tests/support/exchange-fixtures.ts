@@ -11,6 +11,7 @@ import { ensureMarker } from './package-fixtures.js';
 import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 /** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */
 
@@ -51,9 +52,9 @@ export function channel(id: string, overrides: Partial<SubscriptionRecord> = {})
 
 /** A Vault with one document, one subscription and automatic collection on. */
 export async function seed(root: string): Promise<void> {
-  await new MarkdownVault(root).add(transcriptDocument(capture));
-  await new JsonSubscriptionStore(root, 'youtube').add(channel('UC123', { title: '測試頻道' }));
-  await new JsonScheduleStore(root).save({ enabled: true });
+  await new MarkdownVault(new VaultFileWriter(root)).add(transcriptDocument(capture));
+  await new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube').add(channel('UC123', { title: '測試頻道' }));
+  await new JsonScheduleStore(new VaultFileWriter(root)).save({ enabled: true });
 }
 
 export function fakeSearch(root: string): TranscriptSearch {
@@ -63,7 +64,7 @@ export function fakeSearch(root: string): TranscriptSearch {
     async index(doc) { docs = [...docs.filter((existing) => existing.id !== doc.id), doc]; },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
-      const vault = new MarkdownVault(root);
+      const vault = new MarkdownVault(new VaultFileWriter(root));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
     async search({ query }) {

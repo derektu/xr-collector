@@ -19,6 +19,7 @@ import { readEventFiles } from '../activity/event-files.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { transcriptDocument } from '../../src/plugins/youtube/server.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const DAY = 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
@@ -46,7 +47,7 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   const documents = new MemoryDocuments(now);
   const store = options.jobsDirectory ? await JobStore.open(options.jobsDirectory, now) : JobStore.memory(now);
   const build = () => {
-    const channelStore = new JsonSubscriptionStore(root, 'youtube');
+    const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube');
     const collector = new Collector(documents);
     const jobs: JobManager = new JobManager({
       vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,

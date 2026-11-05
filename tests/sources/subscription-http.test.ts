@@ -18,6 +18,7 @@ import { SyntheticYouTube } from '../subscriptions/synthetic-youtube.js';
 import { youtubePlugin } from '../../src/plugins/youtube/server.js';
 import { youtubeKey } from '../support/youtube-documents.js';
 import { eventually } from '../support/wait.js';
+import { VaultFileWriter } from '../../src/vault/vault-files.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -35,8 +36,8 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const store = JobStore.memory(now);
   const removedFromSearch: string[] = [];
   const search = { index: async () => undefined, remove: async (id: string) => { removedFromSearch.push(id); } };
-  const collector: Collector = new Collector(new MarkdownVault(root, { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
-  const channelStore = new JsonSubscriptionStore(root, 'youtube', now);
+  const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
+  const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root), 'youtube', now);
   const jobs: JobManager = new JobManager({
     vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices([channels])), now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
