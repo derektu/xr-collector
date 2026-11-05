@@ -414,13 +414,10 @@ it.skipIf(process.platform === 'win32')('preserves concurrent keychains and aggr
   expect(run.mock.calls.filter(([, args]) => args[0] === 'list-keychains' && args[3] === '-s')).toHaveLength(2);
 });
 
-it.skipIf(process.platform === 'win32')('reclaims only a shared keychain-list lock whose recorded owner process is gone', async () => {
+it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock left by an ended owner or never recorded, and leaves it in place', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-stale-keychain-lock-'));
   roots.push(root);
-  const lock = path.join(root, 'lock');
   const uid = process.getuid?.() ?? 501;
-  await mkdir(lock, { mode: 0o700 });
-  await writeFile(path.join(lock, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
   let keychains: string[] = [];
   const run = async (_command: string, args: string[]) => {
     if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
@@ -429,36 +426,48 @@ it.skipIf(process.platform === 'win32')('reclaims only a shared keychain-list lo
     if (args[0] === 'delete-keychain') { keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
   };
-  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, tempRoot: root,
+  const sign = (lock: string) => withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
     processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
-  })).resolves.toBe('done');
-  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
-});
+  });
 
-it.skipIf(process.platform === 'win32')('reclaims an ownerless shared lock after its creation grace but fails closed on malformed ownership', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'xr-ownerless-keychain-lock-'));
-  roots.push(root);
-  const lock = path.join(root, 'lock');
-  await mkdir(lock, { mode: 0o700 });
-  let keychains: string[] = [];
-  const run = async (_command: string, args: string[]) => {
-    if (args[0] === 'list-keychains' && args[3] === '-s') { keychains = args.slice(4); return { stdout: '', stderr: '' }; }
-    if (args[0] === 'list-keychains') return { stdout: keychains.map((entry) => JSON.stringify(entry)).join('\n'), stderr: '' };
-    if (args[0] === 'find-identity') return { stdout: `1) ${'A'.repeat(40)} "Developer ID Application: Example (ABCDE12345)"`, stderr: '' };
-    if (args[0] === 'delete-keychain') { keychains = keychains.filter((entry) => entry !== args[1]); return { stdout: '', stderr: '' }; }
-    return { stdout: '', stderr: '' };
-  };
-  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
-  })).resolves.toBe('done');
-  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
-  await mkdir(lock, { mode: 0o700 });
-  await writeFile(path.join(lock, 'owner-a1.json'), '{truncated', { mode: 0o600 });
-  await expect(withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => 'done', {
-    run, randomPassword: () => 'temporary-password', keychainSearchLock: lock, keychainOwnerGraceMs: 0, tempRoot: root,
-  })).rejects.toBeInstanceOf(AggregateError);
-  await expect(stat(lock)).resolves.toBeDefined();
+  const ended = path.join(root, 'ended.lock');
+  await mkdir(ended, { mode: 0o700 });
+  await writeFile(path.join(ended, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
+  // `package:mac` prints the message of the error signing rejects with.
+  const endedFailure = await sign(ended).catch((error: any) => error);
+  expect(endedFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ended });
+  expect(endedFailure.message).toBe(`Owned lock ${ended} was left by process 424242 (started stale), which has ended, as have the child processes it recorded. `
+    + `The lock is not removed automatically. Confirm that no Developer ID signing or identity check on this Mac is running, then delete it with: rm -r '${ended}'`);
+  expect(await readdir(ended)).toEqual(['owner-a1.json']);
+
+  const ownerless = path.join(root, 'ownerless.lock');
+  await mkdir(ownerless, { mode: 0o700 });
+  const ownerlessFailure = await sign(ownerless).catch((error: any) => error);
+  expect(ownerlessFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ownerless });
+  expect(ownerlessFailure.message).toContain(`then delete it with: rm -r '${ownerless}'`);
+  expect(await readdir(ownerless)).toEqual([]);
+
+  const malformed = path.join(root, 'malformed.lock');
+  await mkdir(malformed, { mode: 0o700 });
+  await writeFile(path.join(malformed, 'owner-a1.json'), '{truncated', { mode: 0o600 });
+  await expect(sign(malformed)).rejects.toBeInstanceOf(AggregateError);
+  expect(await readdir(malformed)).toEqual(['owner-a1.json']);
+  expect(keychains).toEqual([]);
+
+  // A lock another signing run leaves behind while this one works stops this run's cleanup too.
+  const later = path.join(root, 'later.lock');
+  const laterFailure = await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => {
+    await mkdir(later, { mode: 0o700 });
+    await writeFile(path.join(later, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
+    throw new Error('simulated signing failure');
+  }, {
+    run, randomPassword: () => 'temporary-password', keychainSearchLock: later, tempRoot: root,
+    processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
+  }).catch((error: any) => error);
+  expect(laterFailure.message).toBe(`Signing failed and its temporary keychain cleanup also failed. Owned lock ${later} was left by process 424242 (started stale), `
+    + `which has ended, as have the child processes it recorded. The lock is not removed automatically. Confirm that no Developer ID signing or identity check on this Mac is running, then delete it with: rm -r '${later}'`);
+  expect(laterFailure.errors.map(String)).toEqual(['Error: simulated signing failure', expect.stringContaining('Owned lock')]);
 });
 
 const notaryCredentials = { apiKeyPath: '/protected/AuthKey.p8', keyId: 'ABCDEFGHIJ', issuer: '12345678-1234-1234-1234-123456789abc', teamId: 'ABCDE12345' };

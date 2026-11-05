@@ -558,6 +558,7 @@ export async function withPackageCheckoutLock(lock, work, dependencies = {}) {
     ownerGraceMs: dependencies.lockOwnerGraceMs,
     waitForBusy: false,
     busyMessage: `Another whole-checkout packaging run owns ${lock}.`,
+    holderDescription: 'packaging run in this checkout',
     randomToken: dependencies.randomLockToken,
   });
 }

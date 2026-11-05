@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import plist from 'plist';
 import { prepareRuntimeDependencies, verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
-import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
+import { OWNED_LOCK_LEFT_BEHIND as LOCK_LEFT_BEHIND, withOwnedDirectoryLock } from './owned-directory-lock.mjs';
 import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import { noStageTimer } from './stage-timings.mjs';
 
@@ -132,7 +132,8 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
     } catch (cleanupError) {
       if (cleanupError?.preserveOwnedResources) throw cleanupError;
       cleanupErrors.push(cleanupError);
-      try {
+      // The fallback needs the same search-list lock, which a lock left behind keeps refusing.
+      if (cleanupError?.code !== LOCK_LEFT_BEHIND) try {
         await withKeychainSearchLock(async (lockTracker) => {
           const trackedRun = (command, args) => run(command, args, {
             processTrackers: [dependencies.processTracker, sessionProcessTracker, lockTracker].filter(Boolean),
@@ -212,7 +213,12 @@ export async function withTemporarySigningKeychain(configuration, work, dependen
       try { await cleanup(); }
       catch (cleanupFailure) {
         if (primaryError) {
-          const failure = new AggregateError([primaryError, cleanupFailure], 'Signing failed and its temporary keychain cleanup also failed.');
+          // A search-list lock left behind refuses signing and cleanup alike; it is reported once, as
+          // the error itself, so its path and delete command reach the person running the build.
+          if (primaryError.code === LOCK_LEFT_BEHIND && cleanupFailure?.code === LOCK_LEFT_BEHIND) throw primaryError;
+          const failure = new AggregateError([primaryError, cleanupFailure], cleanupFailure?.code === LOCK_LEFT_BEHIND
+            ? `Signing failed and its temporary keychain cleanup also failed. ${cleanupFailure.message}`
+            : 'Signing failed and its temporary keychain cleanup also failed.');
           if (cleanupFailure?.preserveOwnedResources) {
             failure.preserveOwnedResources = true;
             failure.processTree = cleanupFailure.processTree;
@@ -759,6 +765,7 @@ async function withKeychainSearchLock(work, dependencies = {}) {
     maxBusyAttempts: 300,
     retryDelayMs: 100,
     busyMessage: 'Timed out waiting for the shared macOS keychain search-list lock.',
+    holderDescription: 'Developer ID signing or identity check on this Mac',
     randomToken: dependencies.randomLockToken,
   });
 }
