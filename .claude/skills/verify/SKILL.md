@@ -5,7 +5,7 @@ description: 以使用者的方式操作 XR Collector（local-first 的 YouTube 
 
 # verify：操作 XR Collector 並留證據
 
-驗證層級與證據規則以 [開發驗證流程](../../../docs/development-validation.md#驗證層級) 為準。本 skill 提供兩件事：
+驗證層級與證據規則以 [開發驗證流程](../../../docs/development-validation.md) 與 [專案驗證設定](../../../docs/project-validation.md#驗證層級) 為準。本 skill 提供兩件事：
 
 - **CLI** `scripts/verify.mjs`：`launch`、`seed`、`snapshot`、`state`、`stop` 負責 instance 的生命週期；`flows` 執行已收錄的回歸流程；`check` 比對證據與目前的程式。
 - **函式庫** `scripts/lib/index.mjs`：啟動／接手 instance、`waitFor`、合成資料、經 API 建立前置狀態、headless 頁面、scenario 紀錄與截圖、資料狀態讀取、Electron 啟動與對話框替換。每張票的流程腳本 import 它，只寫該票特有的步驟。
@@ -160,7 +160,7 @@ node $V flows run --desktop --visible --issue 91 --label visible     # 有 visib
 
 **收錄規則**：
 
-1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑，且符合 [自動測試的判準](../../../docs/development-validation.md#自動測試的判準) 時，同一張票把它收進 `flows/`，隨 PR 一起 commit：斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能，從 `Backlog` 移除已補上的項目。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
+1. 票的驗收流程涵蓋功能地圖上的子功能、以合成資料就能重跑，且符合 [自動測試的判準](../../../docs/development-validation.md#3-回歸流程) 時，同一張票把它收進 `flows/`，隨 PR 一起 commit：斷言寫成帶 `id` 的形式，並在功能地圖的 `Regression flows` 標明涵蓋的功能，從 `Backlog` 移除已補上的項目。票的 worktree 在 merge 後刪除，之後的票從 repo 才拿得到流程，所以流程在寫出它的那張票收錄。
 2. 只對本票有意義的步驟，例如重現特定 bug 的資料、一次性的資料檢查，留在票的 worktree 的 `.local/ticket-artifacts/<issue>/scripts/`。
 3. 票改變了已收錄流程所檢查的行為時，同一張票更新該流程與功能地圖；改過的斷言在基準上失敗、在本票版本通過。
 4. 已收錄流程涵蓋的功能，票不另寫重複的 `.local` 流程；需要多檢查的項目加進已收錄流程。

@@ -15,7 +15,7 @@ App 以 Mac（Apple Silicon）與 Windows x64 的桌面程式發布，常駐在�
 | 程式如何組成 | [架構](docs/architecture.md) |
 | 收集工作的排程、佇列、等待與錯誤處理 | [收集流程](docs/collection-flow.md) |
 | 文件格式、Vault 與搜尋資料 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
-| 驗收計畫、驗證層級與 PR 證據 | [開發驗證流程](docs/development-validation.md)、[測試說明](tests/README.md) |
+| 驗收計畫、驗證層級與 PR 證據 | [開發驗證流程](docs/development-validation.md)、[專案驗證設定](docs/project-validation.md)、[實作一張票的流程](docs/worker-workflow.md)、[測試說明](tests/README.md) |
 | 發布正式版 | [Release 發布手冊](docs/release-runbook.md)、[更新來源](docs/update-source.md) |
 | 畫面設計 | [UI Design Spec](docs/ui-design/README.md) |
 | App Shell 的路由、新增選單與類型擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |

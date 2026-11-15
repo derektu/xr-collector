@@ -168,7 +168,7 @@ Skill 說明所有已交付的 API、參數、工作生命週期及錯誤處理�
 | `src/vault/vault-package.ts`、`src/vault/vault-merge.ts`、`src/vault/workspace.ts:291` | package 有完整性及路徑檢查，但文件／設定驗證與 merge 後取文含 YouTube 假設 | 來源擴充必須涵蓋備份／還原／合併，不能只換 collector interface；新增刪除紀錄也需要語意驗證 |
 | `src/web/App.tsx`、`src/web/api-client.ts` | 一個 App 管理多組狀態、輪詢、操作及閱讀；列表一次取完；Reader 用空行分段 | 按頁面與功能分離，集中工作追蹤與快取失效；加入分頁、過期回應防護及真正的 Markdown 呈現 |
 
-交付基礎：#25 已提供 GitHub Actions CI、可攜原生驗證工作區，以及 Mac arm64／Windows x64 打包入口。#34 從使用者的 Apple Silicon Mac 與 Parallels Windows ARM VM 產生兩平台正式候選包；Windows 使用 x64 Node／toolchain 模擬執行並如實記錄 host 與 process 架構。Release 與更新鏈由 #35–#36 驗收，CI 產物只作補充檢查，不是正式 Release binary 的來源。命令與能力邊界見 [開發驗證流程](development-validation.md)。
+交付基礎：#25 已提供 GitHub Actions CI、可攜原生驗證工作區，以及 Mac arm64／Windows x64 打包入口。#34 從使用者的 Apple Silicon Mac 與 Parallels Windows ARM VM 產生兩平台正式候選包；Windows 使用 x64 Node／toolchain 模擬執行並如實記錄 host 與 process 架構。Release 與更新鏈由 #35–#36 驗收，CI 產物只作補充檢查，不是正式 Release binary 的來源。命令與能力邊界見 [專案驗證設定](project-validation.md)。
 
 現有值得保留的基礎：Electron 載入標準 HTTP 畫面、UI／Agent 共用業務能力、Vault 是正式資料、索引可重建、擷取工具可替換、合併前備份與中斷恢復、可注入相依與既有行為測試。第二輪無須更換 React／Fastify／Electron／Meilisearch。
 
@@ -274,7 +274,7 @@ Agent 的私有金鑰與 port 模式保存在裝置 profile，獨立於 Vault；
 
 ### 5.6 CI、Release 與自動檢查更新
 
-本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在 Mac 建置機（Apple Silicon）建置；Windows x64 正式候選包在 Windows 建置機以 x64 Node 建置，x64 硬體或 ARM64 硬體上的 x64 模擬都可以。兩台建置機都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及該平台的 release index。建置與發布見 [建置、測試與發布](building.md)，打包的檢查見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
+本輪包含從程式驗證到版本交付的完整流程。交付平台為 Windows x64 與 macOS Apple Silicon（arm64）。Mac arm64 正式候選包在 Mac 建置機（Apple Silicon）建置；Windows x64 正式候選包在 Windows 建置機以 x64 Node 建置，x64 硬體或 ARM64 硬體上的 x64 模擬都可以。兩台建置機都從相同乾淨 commit 與版本產生安裝包、內附 runtime 及該平台的 release index。建置與發布見 [建置、測試與發布](building.md)，打包的檢查見 [專案驗證設定的打包與簽章](project-validation.md#打包與簽章)。
 
 | 項目 | 開發範圍 | 完成驗證 |
 |---|---|---|
@@ -373,7 +373,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 **範圍**：
 
 - 建立 GitHub Actions workflow：可重現安裝、typecheck、必要測試與 build，記錄 commit 及產物。
-- 一般 CI 使用 GitHub-hosted Linux Runner；#25 提供跨 session 共用的原生 PR 驗證入口、隔離資料與證據規範。依 PR 功能影響決定驗證平台；共用功能可在 Mac 或 Windows 任一平台完成，平台專屬功能須由對應平台完成，兩平台皆受影響時兩者皆需；本機缺少的平台由其他機器補驗。判斷與步驟見 [開發驗證流程](development-validation.md)。平台打包／簽署由 #34 負責。
+- 一般 CI 使用 GitHub-hosted Linux Runner；#25 提供跨 session 共用的原生 PR 驗證入口、隔離資料與證據規範。依 PR 功能影響決定驗證平台；共用功能可在 Mac 或 Windows 任一平台完成，平台專屬功能須由對應平台完成，兩平台皆受影響時兩者皆需；本機缺少的平台由其他機器補驗。判斷與步驟見 [專案驗證設定](project-validation.md#平台)。平台打包／簽署由 #34 負責。
 - 測試／建置失敗回報明確，供後續 Release gate 使用；外部依賴固定版本及校驗。
 
 **驗收介面**：GitHub Actions workflow／job 結果及同 commit 的本機驗證命令；屬交付工具介面，可視結果留下 GitHub 截圖。
@@ -727,7 +727,7 @@ Round 2 總覽：[#24](https://github.com/derektu/xr-collector/issues/24)。共 
 
 **責任分工**：不等所有功能才首次打包；後續票沿用 pipeline。#35 提供 Mac publisher 與發布來源契約，#36 實作客戶端更新；#36 完成後從同一個首版 commit 重建並驗收四包，再由 #35 的工具發布，最終整合由 #10。
 
-**開工時收斂**：本機工具前置、target 格式、版本與建置日期來源、更新包相容要求及可重跑的封裝 manifest。建置與打包的檢查見 [建置、測試與發布](building.md) 與 [開發驗證流程的平台打包](development-validation.md#6-平台打包)，驗收計畫依 6.1 記錄在 issue。
+**開工時收斂**：本機工具前置、target 格式、版本與建置日期來源、更新包相容要求及可重跑的封裝 manifest。建置與打包的檢查見 [建置、測試與發布](building.md) 與 [專案驗證設定的打包與簽章](project-validation.md#打包與簽章)，驗收計畫依 6.1 記錄在 issue。
 
 #### [#35](https://github.com/derektu/xr-collector/issues/35) 版本 Release 與免登入下載來源
 
