@@ -55,9 +55,9 @@ dev subagent 實作，review subagent 依 [開發驗證流程第 5 節](developm
 
 使用者 review diff、操作過 build 並說 commit 之後，規劃 session 一次做完：
 
-1. rebase 到最新的 main，跑 `npm run verify`（只改 Markdown 時依專案驗證設定不跑）
+1. rebase 到最新的 main，跑 `npm run verify` 與全部回歸流程（[專案驗證設定的 merge 門檻](project-validation.md#門檻)；只改 Markdown 時不跑）
 2. commit、push、開 PR，等 CI 通過後 rebase merge
 3. 關掉這張票的 App，把 worktree 的 `.local/ticket-artifacts/<issue>/` 複製到主 checkout 的同一路徑（不覆寫已有的檔案）
 4. 刪除本機與遠端的 ticket branch，issue 寫上驗收結果，看板移到 Done
 
-只有 CI 失敗或 rebase 衝突解不掉時才停下來回報。merge 之後 worker 清掉 context、worktree 回到 `origin/main`，下一張票從這份文件重新開始。
+只有 CI 或回歸流程失敗、rebase 衝突解不掉時才停下來回報。merge 之後 worker 清掉 context、worktree 回到 `origin/main`，下一張票從這份文件重新開始。

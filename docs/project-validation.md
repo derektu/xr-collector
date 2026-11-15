@@ -68,7 +68,16 @@ SSH 登入的 Windows session 0 可以完成開發版與打包版的背景模式
 
 ## 門檻
 
-**merge 門檻**：Mac CI 一個 job，`npm ci`、安裝釘住版本的 runtime、`npm run verify`，改到 verify skill 的 `scripts/` 或 `tests/` 時加跑 `npm run test:verify-skill`。回歸流程不在 CI 執行，做票驗收時在本機依功能地圖跑相關的幾支。
+**merge 門檻**分兩部分，都通過才 merge：
+
+- **CI**：Mac 一個 job，`npm ci`、安裝釘住版本的 runtime、`npm run verify`，改到 verify skill 的 `scripts/` 或 `tests/` 時加跑 `npm run test:verify-skill`。
+- **本機全部回歸流程**：rebase 到最新 main 之後、merge 之前，在受驗的 checkout 跑全部已收錄流程（Web 與 Desktop，Desktop 為背景模式，不跳視窗）。在 Mac 上約 2.5 分鐘。跨功能的版面互動（改 A 的版面蓋到 B 的按鈕）按功能挑流程時最容易漏，所以 merge 前不挑、全跑。
+
+```sh
+node .claude/skills/verify/scripts/verify.mjs flows run --jobs 3 --issue <issue> --label merge
+```
+
+開發中的快速回合仍依功能地圖挑相關的流程跑。只改 Markdown 的修改不跑這兩部分。
 
 **nightly 與發布前**：`.github/workflows/nightly.yml` 每天台北時間 02:00 在 main 執行，main 前 26 小時沒有新 commit 時跳過；也可以在任何分支手動觸發，勾選 `report` 時才把結果寫進 issue。發布前在發布候選的 commit 手動觸發同一個 workflow。
 
