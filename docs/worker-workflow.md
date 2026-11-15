@@ -14,9 +14,27 @@
 
 ## 工作目錄與 branch
 
-每個 worker session 有自己固定的 git worktree。派工說明指定 branch，branch 已經從 `origin/main` 開好；規格如果這張票有改，改動也已經在上面，動手前先看。
+每個 worker 有一個固定的工作目錄，名字就是它自己：`.claude/worktrees/xr-work-01`（02、03 同理）。每張票都在同一個目錄裡做，`node_modules`、下載的 runtime 與 verify 的證據跨票留著，不必每張票重建一次。
+
+待命狀態是 detached 在 `origin/main`：手上沒有票，也沒有自己的 branch。
+
+ticket branch 由規劃 session 從 `origin/main` 開好並推上 origin，不論這張票有沒有規格改動——沒有改動時它就是一支空的 branch。detached HEAD 上的改動在 diff 窗格看不到，所以一律在 branch 上做。派工說明給 branch 名，開工第一件事是：
+
+```sh
+git fetch origin && git checkout <branch>
+```
+
+branch 上如果有 commit，那是這張票的規格或設計改動，動手前先看。
+
+同一支 branch 只能 checkout 在一個 worktree。規劃 session 推完之後 detach 回 `origin/main` 把 branch 讓出來，worker 才 checkout 得到。
 
 主 checkout 追蹤 main、不放未提交的修改，worker 不在主 checkout 改東西。
+
+## 派工
+
+派工說明給 branch 名、設計稿網址（有改畫面時）與這張票的界線。
+
+訊息送到不等於開工：worker 可能在別的對話裡讀到它、回完就結束那一輪。派工之後確認他真的動了，必要時把話講白。
 
 ## 驗收計畫
 
@@ -45,8 +63,9 @@ dev subagent 實作，review subagent 依 [開發驗證流程第 5 節](developm
 做完回報規劃 session，內容包含：
 
 - 做了什麼，哪些判斷是自己下的
-- [開發驗證流程第 5 節](development-validation.md#5-審查與交付) 的交付內容
+- 自己跑過哪些驗證與結果，以及 [開發驗證流程第 5 節](development-validation.md#5-審查與交付) 的交付內容
 - 哪些行為沒有自動化涵蓋
+- 還有哪些開放問題
 - 給使用者操作的 build：在 worktree 打包並開啟這張票的 App，以 `ps` 確認只有一個 XR Collector 在跑，回報執行路徑、PID 與 build 時間
 
 證據放在 worktree 的 `.local/ticket-artifacts/<issue>/`。
@@ -60,4 +79,4 @@ dev subagent 實作，review subagent 依 [開發驗證流程第 5 節](developm
 3. 關掉這張票的 App，把 worktree 的 `.local/ticket-artifacts/<issue>/` 複製到主 checkout 的同一路徑（不覆寫已有的檔案）
 4. 刪除本機與遠端的 ticket branch，issue 寫上驗收結果，看板移到 Done
 
-只有 CI 或回歸流程失敗、rebase 衝突解不掉時才停下來回報。merge 之後 worker 清掉 context、worktree 回到 `origin/main`，下一張票從這份文件重新開始。
+只有 CI 或回歸流程失敗、rebase 衝突解不掉時才停下來回報。merge 之後，規劃 session 請 worker 刪掉 ticket branch、detach 回 `origin/main` 待命。下一張票從這份文件重新開始。
