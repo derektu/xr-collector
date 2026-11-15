@@ -59,4 +59,4 @@ Collector 服務可獨立於 UI 運作，UI、Agent 與排程使用一致的工�
 
 `AgentConnectionService` 在 profile 內保存私有金鑰與連線埠模式；金鑰跨重啟維持，只有使用者重設後才更新。自動模式由平台起始埠往後找十個候選，再交由作業系統配置可用埠；固定模式只嘗試指定埠，失敗只讓 Agent listener 顯示無法連線，不阻止 UI、Vault 與已接受工作啟動。設定修改先持久化，於下次啟動套用，現有 listener 不熱換。App 只透過設定頁輸出目前 active URL 與金鑰；下載包包含通用 Skill 與同層 `connection.json`，產品不發布作業系統固定 discovery file，也不以安裝目錄、Vault 或 instance ID 配對。
 
-改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／匯入（修改時間與刪除紀錄的比較）及索引影響。原生驗證、CI 與建置方式見 [開發驗證流程](development-validation.md)。
+改動正式資料格式或來源契約時，同一張 ticket 須涵蓋既有 Vault 可讀性、匯出／匯入（修改時間與刪除紀錄的比較）及索引影響。原生驗證、CI 與建置方式見 [專案驗證設定](project-validation.md)。

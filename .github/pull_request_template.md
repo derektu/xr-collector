@@ -4,7 +4,7 @@
 
 ## 驗證
 
-<!-- 依 docs/development-validation.md 第 4 節填寫；證據只放本機，不上傳。 -->
+<!-- 依 docs/development-validation.md 第 5 節填寫；證據只放本機，不上傳。 -->
 
 - HEAD：
 - CI／自動化結果（含 skipped）：

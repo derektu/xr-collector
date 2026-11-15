@@ -12,7 +12,7 @@
 ## 發布步驟
 
 1. **定版**：在 main 上把 `package.json` 的 `version` 改成要發布的版本，以 PR merge。merge 後的 commit 就是這一版的 commit，記下它的完整 SHA。
-2. **驗收候選**：兩個平台以這個 commit 的 ad-hoc／未簽署包完成安裝與更新驗收（[開發驗證流程](development-validation.md#6-平台打包)）。驗收中需要修改程式時回到第 1 步，以新的 commit 重來。
+2. **驗收候選**：兩個平台以這個 commit 的 ad-hoc／未簽署包完成安裝與更新驗收（[專案驗證設定](project-validation.md#打包與簽章)）。驗收中需要修改程式時回到第 1 步，以新的 commit 重來。
 3. **各平台打包並上傳**：兩位建置者各自 checkout 這個 commit，打包正式版並執行 `npm run release:upload -- v<版本>`。先上傳的人會建立 tag 與 draft，後上傳的人加入同一個 draft。Mac 正式版以 Developer ID 簽章與公證。
 4. **確認 draft**：`gh release view v<版本> --repo <repository> --json isDraft,assets` 列出兩份 release index（`release-darwin-arm64.json`、`release-win32-x64.json`）與兩個平台的安裝檔。
 5. **公開**：寫好版本說明，以 `gh release edit v<版本> --repo <repository> --draft=false --latest --notes-file <版本說明.md>` 公開。

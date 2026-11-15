@@ -4,7 +4,7 @@
 
 ## 按功能分類
 
-下表是每個目錄的範圍。每個測試檔開頭寫出它防什麼，也就是壞掉時使用者（或開發者）會遇到什麼，判準見 [開發驗證流程](../docs/development-validation.md#自動測試的判準)。
+下表是每個目錄的範圍。每個測試檔開頭寫出它防什麼，也就是壞掉時使用者（或開發者）會遇到什麼，判準見 [開發驗證流程](../docs/development-validation.md#3-回歸流程)。
 
 | 目錄 | 責任 |
 | --- | --- |
@@ -30,9 +30,9 @@
 
 ## 等待
 
-等待與證明「沒有發生」的規則見 [開發驗證流程的自動測試判準](../docs/development-validation.md#自動測試的判準)。可直接等的 promise 例如 `JobManager.whenSettled` 與假來源的 `holds.started()`；其餘用 `tests/support/wait.ts` 的 `eventually`。證明沒有發生的寫法，例如等 gate 裡後排的請求跑完，再確認逾時的預覽沒有送出；或等 server 的 listener 關閉，再確認 close 仍在等 handler。測試替身用固定時間模擬工作耗時，只限 `tests/tooling/test-waits.test.ts` 列出的檔案。
+等待與證明「沒有發生」的規則見 [專案驗證設定的測試等待](../docs/project-validation.md#自動檢查)。可直接等的 promise 例如 `JobManager.whenSettled` 與假來源的 `holds.started()`；其餘用 `tests/support/wait.ts` 的 `eventually`。證明沒有發生的寫法，例如等 gate 裡後排的請求跑完，再確認逾時的預覽沒有送出；或等 server 的 listener 關閉，再確認 close 仍在等 handler。測試替身用固定時間模擬工作耗時，只限 `tests/tooling/test-waits.test.ts` 列出的檔案。
 
-分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [開發驗證流程](../docs/development-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
+分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [專案驗證設定](../docs/project-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 
 ## 真實搜尋與平台邊界
 
@@ -42,7 +42,7 @@
 
 交付平台增加時一起調整 binary 選擇與 skip 規則；不以 fixture 冒充另一平台通過。
 
-依賴 POSIX 行為的案例（檔案權限位元、`/bin/ps`、POSIX signal、以 shebang 啟動的程式）以 `it.skipIf(process.platform === 'win32')` 在 Windows 略過，在 Mac 照常執行；Windows 沒有這些行為，不以 mock 冒充通過。反過來，`core/json-file.test.ts` 以 PowerShell 開著目標檔、不允許刪除，重現 Windows 拒絕取代的 rename，只在 Windows 執行。Agent 金鑰檔的保護在 Mac 檢查權限位元、在 Windows 以 PowerShell 讀檔案的存取規則並與同資料夾的一般檔案比對，同一個案例兩個平台都執行；`search/meilisearch-leftover.test.ts` 的「被結束的 App 留下 Meilisearch」案例只在 Mac 執行：Windows 上 libuv 把沒有 `detached` 的子程序放進 job object，父程序結束時一起結束，不會留下引擎。`search/meilisearch-process.test.ts` 的程序辨識在兩個平台都執行，路徑大小寫不同仍辨識為同一引擎的案例只在 Windows 執行。Windows 的一般帳號不能建 symlink，symlink 防護的案例在 Windows 改建 junction（lstat 也把它讀成 symlink），在 Mac 與 Linux 照常建 symlink。比對 Git 回報的路徑時，暫存目錄先經 `realpathSync.native`，展開 macOS 的 `/var` symlink 與 Windows 的 8.3 短檔名。PR 門檻只在 Mac 執行，Windows 的部分由 nightly 與 Windows 上的完整 verify 涵蓋。這些邊界要在另一個平台跑完整 `npm run verify` 才看得到，時機見 [開發驗證流程](../docs/development-validation.md#另一個平台的完整驗證)。
+依賴 POSIX 行為的案例（檔案權限位元、`/bin/ps`、POSIX signal、以 shebang 啟動的程式）以 `it.skipIf(process.platform === 'win32')` 在 Windows 略過，在 Mac 照常執行；Windows 沒有這些行為，不以 mock 冒充通過。反過來，`core/json-file.test.ts` 以 PowerShell 開著目標檔、不允許刪除，重現 Windows 拒絕取代的 rename，只在 Windows 執行。Agent 金鑰檔的保護在 Mac 檢查權限位元、在 Windows 以 PowerShell 讀檔案的存取規則並與同資料夾的一般檔案比對，同一個案例兩個平台都執行；`search/meilisearch-leftover.test.ts` 的「被結束的 App 留下 Meilisearch」案例只在 Mac 執行：Windows 上 libuv 把沒有 `detached` 的子程序放進 job object，父程序結束時一起結束，不會留下引擎。`search/meilisearch-process.test.ts` 的程序辨識在兩個平台都執行，路徑大小寫不同仍辨識為同一引擎的案例只在 Windows 執行。Windows 的一般帳號不能建 symlink，symlink 防護的案例在 Windows 改建 junction（lstat 也把它讀成 symlink），在 Mac 與 Linux 照常建 symlink。比對 Git 回報的路徑時，暫存目錄先經 `realpathSync.native`，展開 macOS 的 `/var` symlink 與 Windows 的 8.3 短檔名。PR 門檻只在 Mac 執行，Windows 的部分由 nightly 與 Windows 上的完整 verify 涵蓋。這些邊界要在另一個平台跑完整 `npm run verify` 才看得到，時機見 [專案驗證設定](../docs/project-validation.md#另一個平台的完整驗證)。
 
 verify skill 函式庫自己的測試在 `.claude/skills/verify/tests/`，以 `npm run test:verify-skill` 執行，不在 `npm run verify` 中；PR CI 只在改動碰到 `.claude/skills/verify/scripts/` 或 `.claude/skills/verify/tests/` 時跑。startup 檢查（`.claude/skills/verify/scripts/startup.mjs`）啟動開發版 Electron 或 `--app` 指定的打包版，在 Mac 或 Windows 執行。內容見 [verify skill](../.claude/skills/verify/SKILL.md#自我測試)。
 

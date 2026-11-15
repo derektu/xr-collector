@@ -102,7 +102,7 @@ GitHub Actions（`.github/workflows/`）的工作：
 | Nightly | 每天 02:00（台北）在 main，前 26 小時沒有新 commit 時跳過；也可在任何分支手動觸發 | macOS 15 與 Windows Server 2022 | 兩平台的 `npm run verify`（含真實 Meilisearch）與 verify skill 自測、開發版 startup 與 Desktop 流程、未簽章測試包與打包版 startup；Mac 的全部 Web 流程；保存每支流程的 `results.json` 與失敗證據；失敗時開 nightly issue 並加入看板 |
 | Meilisearch native runtimes | 改到 Meilisearch 準備或 pin 的 pull request 與 main push | Mac arm64、Windows x64 | 下載釘住的 release 並跑 API smoke |
 
-CI 不建置正式安裝包。各層驗證在哪裡執行見 [開發驗證流程](development-validation.md#做票驗收pr-門檻與-nightly)。
+CI 不建置正式安裝包。各層驗證在哪裡執行見 [專案驗證設定](project-validation.md#門檻)。
 
 ## 建置安裝包
 
@@ -125,7 +125,7 @@ Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dl
 - **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任；打包的檢查以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources。從瀏覽器下載的 ad-hoc 包帶有隔離屬性，macOS 會拒絕開啟；測試時以 `xattr -dr com.apple.quarantine "/Applications/<App 名稱>.app"` 移除，或在「系統設定 → 隱私權與安全性」選「強制打開」。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key（檔案與設定方式見 [簽署設定](../config/README.md)），步驟見下一節。
 - **Windows**：未簽章。預期的簽署設定格式見 [簽署設定](../config/README.md#windows)。
 
-開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選，使用時機見 [開發驗證流程的平台打包](development-validation.md#6-平台打包)。
+開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選，使用時機見 [專案驗證設定的打包與簽章](project-validation.md#打包與簽章)。
 
 ### Mac 的 Developer ID 建置
 
