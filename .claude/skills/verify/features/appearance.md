@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `appearance-theme`：設定頁 `settings-appearance` 的「主題」單選群組：「跟隨系統」「深色」「淺色」三個 `role="radio"` 按鈕，選中的 `aria-checked="true"`；方向鍵、Home、End 在三者間切換並移動焦點，Tab 只停在選中的那一個。
+- `appearance-theme`：設定頁 `settings-appearance` 的「主題」單選群組：「跟隨系統」「深色」「淺色」三個 `role="radio"` 按鈕，選中的 `aria-checked="true"`；方向鍵（上下左右）、Home、End 在三者間切換並移動焦點，Tab 只停在選中的那一個。
 - `appearance-persist`：選擇保存：Web 存在瀏覽器的 `localStorage`（`xr-collector.theme`），Desktop 經 preload bridge 存在裝置的 `userData/appearance.json`；重新整理或重啟後沿用，跟隨系統時隨作業系統外觀改變。
 
 ## How to get to it (user POV)
@@ -25,6 +25,7 @@ Preconditions:
 ## Gotchas
 
 - Web 與 Desktop 的保存位置不同：Web 的結果不代表 Desktop 的偏好檔已寫入，Desktop 持久性要用 Electron 背景模式驗。
+- 跟隨系統時，改變瀏覽器外觀後 `data-theme` 在下一次重繪才更新；用 `waitFor` 等它，不要立即讀。
 - 截圖的深淺色由主題決定；`themed()` 切的是瀏覽器外觀，只在「跟隨系統」時影響 App。
 
 ## Regression flows

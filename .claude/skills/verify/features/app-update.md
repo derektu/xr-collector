@@ -17,7 +17,7 @@
 
 - 已進入主畫面：側欄版本狀態或「設定」→「關於 XR Collector」→ App 更新。
 - 尚未建立 Vault：直接開啟 App 設定頁的「App 更新」。
-- macOS 選單列／Windows 系統匣：「檢查 App 更新」或目前更新階段；點擊只開啟同一個設定位置。
+- macOS 選單列／Windows 系統匣：「檢查 App 更新」或目前更新階段；點擊時若階段是閒置、已是最新或錯誤，先送出一次檢查，再開啟同一個設定位置。
 - 授權 Agent：`GET /api/device/updates`，再依使用者明確要求使用 check、download、apply 或 cancel。
 
 ## Driving it with verify

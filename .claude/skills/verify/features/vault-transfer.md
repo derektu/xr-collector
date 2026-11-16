@@ -7,7 +7,7 @@
 - `vault-info`：`settings-vault` 的 `vault-path` 與 `vault-counts`。
 - `vault-actions`：一般寬度單排；左側「建立新的知識庫…」「開啟既有知識庫…」及桌面版 Finder／檔案總管入口，右側「匯入…」「匯出…」。窄視窗可換行，鍵盤順序與畫面一致。
 - `vault-native-dialogs`：Desktop 的「開啟既有知識庫…」直接開原生資料夾選擇器（從目前知識庫的上一層開始），匯入開啟檔案、匯出儲存檔案。
-- `vault-export`：匯出 zip，檔案已存在時選擇取代或保留。
+- `vault-export`：匯出 zip，檔案已存在時選擇「覆蓋」（`export-replace`）或「取消」（`export-keep`）。
 - `vault-import-merge`：預覽差異後以較新為準合併。
 - `vault-import-replace`：完全取代，含二次確認。
 - `vault-import-nothing`：沒有需要匯入的內容。
@@ -34,9 +34,9 @@ Preconditions:
 - **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
 - **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`。
 - **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 只在可以建立時可按。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
-- **開啟其他。** Web：`vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-confirm` 直接切換，`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
+- **開啟其他。** Web：`vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-confirm` 先檢查該資料夾是知識庫再切換（不是知識庫時顯示 `open-vault-failure`），`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
 - **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「建立新的知識庫…」「開啟既有知識庫…」disabled。
-- **等待與取消。** 以慢速收集製造進行中的工作，再開始匯入比對。等待時 `transfer-cancel` 可取消並立即釋放鎖，回到可重新比對的輸入階段；工作頁、原始活動與摘要 API 仍可讀。再比對並完成後，確認收集繼續。
+- **等待與取消。** 以慢速收集製造進行中的工作，再開始匯入比對。等待時 `transfer-cancel` 可取消並立即釋放鎖：比對階段取消回到可重新比對的輸入階段，套用階段取消回到比對結果，比對仍有效；工作頁、原始活動與摘要 API 仍可讀。再比對並完成後，確認收集繼續。
 - **Desktop 對話框。** Electron 中 `stubDialogs(instance.app, { save: <zip 路徑>, open: <zip 或資料夾> })` 後按同樣的按鈕；`globalThis.__dialogCalls` 記錄對話框參數，流程直接進入執行階段。
 
 ## Gotchas
