@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { protectSecret } from '../core/redact.js';
+import { windowsPowerShellEnvironment } from '../core/windows-powershell.js';
 
 const run = promisify(execFile);
 
@@ -159,7 +160,8 @@ async function processCommandLine(pid: number): Promise<string | null> {
   try {
     const { stdout } = process.platform === 'win32'
       ? await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { windowsHide: true })
+        `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+        { windowsHide: true, env: windowsPowerShellEnvironment() })
       : await run('ps', ['-ww', '-o', 'command=', '-p', String(pid)]);
     const line = stdout.trim();
     return line || null;

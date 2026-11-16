@@ -1,12 +1,14 @@
 // The build host's real CPU architecture behind an emulated Node process on Windows and macOS, and a
 // stop when it cannot be told, so the packaging checks that rely on it never take an emulated host
 // for a native one and ship a runtime for the wrong architecture.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 // @ts-expect-error The production host probe is intentionally executable JavaScript.
 import { parseWindowsProcessorArchitectures, probePhysicalHost } from '../../scripts/physical-host.mjs';
 
 describe('physical build host detection', () => {
   it('uses Windows CIM instead of an emulated x64 Node process', async () => {
+    vi.stubEnv('PSModulePath', 'C:\\Program Files\\PowerShell\\7\\Modules');
+    onTestFinished(() => { vi.unstubAllEnvs(); });
     const run = vi.fn(async () => ({ stdout: '12\r\n', stderr: '' }));
     await expect(probePhysicalHost({ platform: 'win32', processArch: 'x64', machine: 'x86_64', run })).resolves.toEqual({
       platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true,
@@ -14,7 +16,7 @@ describe('physical build host detection', () => {
     expect(run).toHaveBeenCalledWith('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command',
       '@(Get-CimInstance -ClassName Win32_Processor | ForEach-Object { [int]$_.Architecture }) -join ","',
-    ]);
+    ], { env: expect.not.objectContaining({ PSModulePath: expect.anything() }) });
   });
 
   it('fails closed when Windows CIM cannot establish one supported physical architecture', async () => {

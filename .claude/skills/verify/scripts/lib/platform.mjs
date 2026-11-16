@@ -5,6 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { windowsPowerShellEnvironment } from '../../../../../scripts/windows-powershell.mjs';
 
 export const WINDOWS = process.platform === 'win32';
 
@@ -28,7 +29,7 @@ const BUFFER = 64 * 1024 * 1024;
 /** Runs a PowerShell script and returns its standard output as UTF-8. */
 function powershell(script) {
   return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${script}`],
-    { encoding: 'utf8', maxBuffer: BUFFER, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    { encoding: 'utf8', maxBuffer: BUFFER, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: windowsPowerShellEnvironment() });
 }
 
 // One CIM query lists every process with its parent, executable and command line.

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { arch, machine, platform } from 'node:os';
 import { promisify } from 'node:util';
+import { windowsPowerShellEnvironment } from './windows-powershell.mjs';
 
 const exec = promisify(execFile);
 const WINDOWS_PROCESSOR_ARCHITECTURES = new Map([
@@ -24,7 +25,7 @@ export async function probePhysicalHost(options = {}) {
         '-NonInteractive',
         '-Command',
         '@(Get-CimInstance -ClassName Win32_Processor | ForEach-Object { [int]$_.Architecture }) -join ","',
-      ])).stdout;
+      ], { env: windowsPowerShellEnvironment() })).stdout;
     } catch (error) {
       throw new Error('Cannot determine the physical Windows processor architecture with CIM.', { cause: error });
     }
@@ -71,7 +72,7 @@ export function normalizeArch(value) {
   return normalized;
 }
 
-async function runCommand(command, args) {
-  const result = await exec(command, args, { windowsHide: true, maxBuffer: 1024 * 1024 });
+async function runCommand(command, args, options = {}) {
+  const result = await exec(command, args, { ...options, windowsHide: true, maxBuffer: 1024 * 1024 });
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
 // @ts-expect-error The script is executable JavaScript without type declarations.
@@ -535,6 +535,8 @@ it('reports a dead packaging owner\'s lock without removing it, removes its own 
 });
 
 it('queries Windows packaging owners through PowerShell and fails closed when the query is unavailable', async () => {
+  vi.stubEnv('PSModulePath', 'C:\\Program Files\\PowerShell\\7\\Modules');
+  onTestFinished(() => { vi.unstubAllEnvs(); });
   const calls: any[] = [];
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async (...args: any[]) => {
     calls.push(args);
@@ -548,7 +550,7 @@ it('queries Windows packaging owners through PowerShell and fails closed when th
   expect(script).toContain('Get-CimInstance');
   expect(script).toContain('GetOwnerSid');
   expect(script).not.toContain('[Environment]::UserName');
-  expect(calls[0][2].environment).toBe(process.env);
+  expect(calls[0][2].environment).not.toHaveProperty('PSModulePath');
 
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 44'); } })).resolves.toBeNull();
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 1'); } })).rejects.toThrow(/Unable to inspect packaging process/u);
