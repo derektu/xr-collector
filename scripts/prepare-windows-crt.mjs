@@ -6,6 +6,7 @@ import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { windowsPowerShellEnvironment } from './windows-powershell.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,11 +55,7 @@ async function inspectSignature(filePath) {
   if (process.platform !== 'win32') throw new Error('Checking the Microsoft signature of vcruntime140.dll requires Windows.');
   const quoted = filePath.replaceAll("'", "''");
   const script = `$p='${quoted}';$s=Get-AuthenticodeSignature -LiteralPath $p;[pscustomobject]@{status=$s.Status.ToString();subject=$s.SignerCertificate.Subject;thumbprint=$s.SignerCertificate.Thumbprint;fileVersion=(Get-Item -LiteralPath $p).VersionInfo.FileVersion}|ConvertTo-Json -Compress`;
-  // A PSModulePath inherited from PowerShell 7 points Windows PowerShell at modules it cannot load,
-  // so Get-AuthenticodeSignature goes missing; without it Windows PowerShell uses its own defaults.
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env });
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: windowsPowerShellEnvironment() });
   return JSON.parse(stdout);
 }
 

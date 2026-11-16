@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readJsonFile, writeJsonFile } from '../../src/core/json-file.js';
+import { windowsPowerShellEnvironment } from '../../src/core/windows-powershell.js';
 
 const holders: ChildProcess[] = [];
 const directories: string[] = [];
@@ -29,7 +30,7 @@ afterEach(async () => {
  */
 async function holdWithoutDeleteSharing(file: string, holdMs: number): Promise<ChildProcess> {
   const script = `$f = [System.IO.File]::Open('${file}', 'Open', 'Read', 'ReadWrite'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds ${holdMs}; $f.Close()`;
-  const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: ['ignore', 'pipe', 'inherit'], env: windowsPowerShellEnvironment() });
   holders.push(holder);
   const [chunk] = (await once(holder.stdout!, 'data')) as [Buffer];
   expect(chunk.toString()).toContain('held');

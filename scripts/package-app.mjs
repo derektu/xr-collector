@@ -12,6 +12,7 @@ import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateExecutable } from './prepare-meilisearch.mjs';
 import { verifyRuntimeDependencyInstallation } from './runtime-dependencies.mjs';
 import { withOwnedDirectoryLock } from './owned-directory-lock.mjs';
+import { windowsPowerShellEnvironment } from './windows-powershell.mjs';
 import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import { BUILDER_TIMINGS_ENV, createStageTimer, noStageTimer, recordBuilderTimings, runWithTimingReport } from './stage-timings.mjs';
 import {
@@ -569,7 +570,7 @@ export async function readPackagingProcessIdentity(pid, dependencies = {}) {
   try {
     if (platform === 'win32') {
       const script = `$p=Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; if($null -eq $p){exit 44}; $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'Unable to resolve process owner SID'}; [Console]::Write(('{0}|{1}|{2}' -f $p.ProcessId,$p.CreationDate.ToUniversalTime().Ticks,$owner.Sid))`;
-      const output = await query('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { environment: process.env });
+      const output = await query('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { environment: windowsPowerShellEnvironment() });
       const fields = output.split('|');
       const [recordedPid, startedAt, uid] = fields;
       if (fields.length !== 3 || Number(recordedPid) !== pid || !/^\d+$/u.test(startedAt ?? '') || !uid) {

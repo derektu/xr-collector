@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { runtimeCacheMiss, runtimeCacheRoot } from './runtime-cache.mjs';
+import { windowsPowerShellEnvironment } from './windows-powershell.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pinsPath = path.join(projectRoot, 'scripts', 'runtime-dependency-pins.json');
@@ -207,14 +208,14 @@ function extractZip(zipPath, destination) {
   if (process.platform === 'win32') {
     const quote = (value) => `'${value.replaceAll("'", "''")}'`;
     const command = `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destination)} -Force`;
-    return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')]);
+    return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], windowsPowerShellEnvironment());
   }
   return run('unzip', ['-q', '-o', zipPath, '-d', destination]);
 }
 
-function run(command, args) {
+function run(command, args, env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: 'inherit' });
+    const child = spawn(command, args, { stdio: 'inherit', env });
     child.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with status ${code}`)));
   });
