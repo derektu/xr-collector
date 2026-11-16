@@ -52,7 +52,7 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
         sourceId: input.videoId,
         publisher: { id: input.channelId, name: input.channelTitle },
         publishedAt: input.publishedAt,
-        collectedAt: '2026-09-17T00:00:00.000Z',
+        collectedAt: '2026-09-17T00:00:00.000Z', status: 'published',
         youtube: { languageCode: input.languageCode, languageName: input.languageName, subtitleKind: input.subtitleKind },
         bodyMarkdown: input.bodyMarkdown,
       };
@@ -271,6 +271,7 @@ describe('HTTP app', () => {
       publisher: { id: 'UC-test', name: '測試頻道' },
       publishedAt: '2026-09-12T00:00:00.000Z',
       collectedAt: '2026-09-17T00:00:00.000Z',
+      status: 'published' as const,
       youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' as const },
       snippet: '…符合<mark>條件</mark>的字幕內容…',
     };
@@ -280,7 +281,7 @@ describe('HTTP app', () => {
       remove: async () => undefined,
       search: async (request: { offset?: number; limit?: number }) => {
         searchRequests.push(request);
-        return { hits: [hit], total: 21, offset: request.offset ?? 0, limit: request.limit ?? 50 };
+        return { hits: [hit], total: 21, statusCounts: { draft: 0, published: 0 }, offset: request.offset ?? 0, limit: request.limit ?? 50 };
       },
       rebuild: async () => undefined,
     };
@@ -303,7 +304,7 @@ describe('HTTP app', () => {
         limit: 20,
       },
     ]);
-    expect(response.json()).toEqual({ hits: [hit], total: 21, offset: 20, limit: 20 });
+    expect(response.json()).toEqual({ hits: [hit], total: 21, statusCounts: { draft: 0, published: 0 }, offset: 20, limit: 20 });
 
     const whitespace = await app.inject({ method: 'GET', url: `/api/search?q=${encodeURIComponent('\u0085\u00a0　')}` });
     expect(whitespace.statusCode).toBe(200);
@@ -329,7 +330,7 @@ describe('HTTP app', () => {
       status: () => ({ state: 'ready' as const, indexedDocuments: 0, lastRebuiltAt: null }),
       search: async () => {
         searchCount += 1;
-        return { hits: [], total: 0, offset: 0, limit: 50 };
+        return { hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 };
       },
       index: async () => undefined,
       remove: async () => undefined,

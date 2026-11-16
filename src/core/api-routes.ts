@@ -35,7 +35,7 @@ import type {
   VaultSetupStatus,
 } from './vault-types.js';
 import type { JobOverview, JobSubmission, PacingStatus, JobPage, JobSummary, JobView } from './job-types.js';
-import type { DocumentDeletion, DocumentPage, DocumentSources, SavedDocument } from './document-types.js';
+import type { DocumentDeletion, DocumentPage, DocumentSources, DocumentStatus, SavedDocument } from './document-types.js';
 import type { SearchResponse, SearchStatusReport } from './search-types.js';
 import type { SourceTypeInfo, UrlRecognition } from './source-info-types.js';
 
@@ -109,8 +109,9 @@ export interface EnabledSetting { enabled: boolean }
 export interface PathRequest { path: string }
 export interface NewVaultRequest { location: string; name: string }
 export interface SubscriptionKey { type: string; id: string }
+export interface DocumentStatusChange { status: DocumentStatus }
 export interface UrlRequest { url: string }
-export interface DocumentQuery { sourceType?: string; publisherId?: string; offset?: number; limit?: number }
+export interface DocumentQuery { sourceType?: string; publisherId?: string; status?: DocumentStatus; offset?: number; limit?: number }
 export interface SearchParameters extends DocumentQuery { q: string; publishedFrom?: string; publishedTo?: string }
 export interface JobListQuery { state?: 'active' | 'all'; limit?: number; cursor?: string }
 /** Severities and event types are comma separated. */
@@ -172,6 +173,7 @@ export const API_ROUTES = {
   documentSources: json<{ sources: DocumentSources }>()({ method: 'GET', path: '/api/documents/sources' }),
   document: json<{ document: SavedDocument }>()({ method: 'GET', path: '/api/documents/:id' }),
   deleteDocument: json<DocumentDeletion>()({ method: 'DELETE', path: '/api/documents/:id' }),
+  setDocumentStatus: json<{ document: SavedDocument }, DocumentStatusChange>()({ method: 'PUT', path: '/api/documents/:id/status' }),
   search: json<SearchResponse, undefined, SearchParameters>()({ method: 'GET', path: '/api/search' }),
   searchStatus: json<{ status: SearchStatusReport }>()({ method: 'GET', path: '/api/search/status' }),
   rebuildSearch: json<{ status: SearchStatusReport }>()({ method: 'POST', path: '/api/search/rebuild' }),

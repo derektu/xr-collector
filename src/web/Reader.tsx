@@ -19,6 +19,9 @@ type ReaderState =
 /** How collecting a deleted document again is going. */
 type Recollect = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string };
 
+/** How changing the document's status is going. */
+type StatusChange = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string };
+
 /** Full-width reading view for one document; the shell collapses its sidebar while this is open. */
 /** `backLabel` names the page the Back control returns to. */
 export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
@@ -34,6 +37,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   const [subscribed, setSubscribed] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [recollect, setRecollect] = useState<Recollect>({ kind: 'idle' });
+  const [statusChange, setStatusChange] = useState<StatusChange>({ kind: 'idle' });
   const subscriptionChanges = useChanges(['documents'], (change) => change.kind === 'subscription');
   const documentChanges = useChanges(['documents'], (change) => change.kind === 'document' && change.id === id);
   const shownId = useRef<string | null>(null);
@@ -48,7 +52,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   // A change to the document reads it again in place; another document starts from the loading state.
   useEffect(() => {
     const controller = new AbortController();
-    if (shownId.current !== id) setState({ kind: 'loading' });
+    if (shownId.current !== id) { setState({ kind: 'loading' }); setStatusChange({ kind: 'idle' }); }
     shownId.current = id;
     documentChanges.track(api.readDocument(id, controller.signal).then((document) => setState({ kind: 'ready', document })).catch((error: unknown) => {
       if (controller.signal.aborted) return;
@@ -80,10 +84,23 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     return () => { active = false; following.abort(); };
   }, [recollect.kind, id]);
 
+  function changeStatus(document: SavedDocument): void {
+    setStatusChange({ kind: 'running' });
+    api.setDocumentStatus(document.id, document.status === 'draft' ? 'published' : 'draft').then((changed) => {
+      if (shownId.current !== changed.id) return;
+      setState({ kind: 'ready', document: changed });
+      setStatusChange({ kind: 'idle' });
+    }, (error: unknown) => {
+      setStatusChange({ kind: 'failed', message: error instanceof Error ? error.message : '無法變更文件狀態。' });
+    });
+  }
+
   return <div className="reader" data-testid="reader">
     <div className="reader-bar">
       <button type="button" className="button" onClick={onBack}><Icon name="back" size={15} />{backLabel}</button>
       <span className="spacer" />
+      {state.kind === 'ready' ? <button type="button" className={state.document.status === 'draft' ? 'button primary' : 'button'} disabled={statusChange.kind === 'running'}
+        onClick={() => changeStatus(state.document)} data-testid="reader-status">{state.document.status === 'draft' ? '發布' : '改回草稿'}</button> : null}
       {state.kind === 'ready' ? <a className="button" href={state.document.sourceUrl} target="_blank" rel="noopener noreferrer" data-testid="reader-source-link">
         <Icon name="external" size={15} />{declarations.get(state.document.sourceType)?.item.openOriginalLabel ?? '開啟原始內容'}
       </a> : null}
@@ -103,6 +120,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
           data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button> : null}
       </section> : null}
       {state.kind === 'error' ? <p className="documents-error" role="alert">{state.message}</p> : null}
+      {state.kind === 'ready' && statusChange.kind === 'failed' ? <p className="add-problem" role="alert" data-testid="reader-status-problem">{statusChange.message}</p> : null}
       {state.kind === 'ready' ? <ReaderDocument document={state.document} subscribed={subscribed.has(`${state.document.sourceType}:${state.document.publisher.id}`)} onOpenSource={onOpenSource} /> : null}
     </article>
     {deleting && state.kind === 'ready' ? <ConfirmDeleteDocument document={state.document} onCancel={() => setDeleting(false)}
@@ -125,6 +143,7 @@ function ReaderDocument({ document, subscribed, onOpenSource }: { document: Save
         : <span className="reader-publisher" data-testid="reader-publisher"><Icon name={document.sourceType} size={14} />{document.publisher.name}</span>}
       <h1 className="reader-title" tabIndex={-1}>{document.title}</h1>
       <p className="reader-meta">
+        {document.status === 'draft' ? <span className="draft-chip" data-testid="reader-draft-chip">草稿</span> : null}
         <span className={document.publishedAt ? undefined : 'unknown'}>{publishedLabel(document.publishedAt)}</span>
         <span>{collectedLabel(document.collectedAt)}</span>
         {subtitle ? <span>{subtitle}</span> : null}

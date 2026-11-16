@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { DocumentMetadata, SavedDocument } from '../core/document-types.js';
+import type { DocumentMetadata, DocumentStatus, DocumentStatusCounts, SavedDocument } from '../core/document-types.js';
 import type { SearchHit, SearchQuery, SearchResponse } from '../core/search-types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
@@ -10,7 +10,7 @@ import { normalizeSearchText, normalizeSearchTextWithMap } from './search-normal
 import type { SearchLexicon } from './search-lexicon.js';
 
 /** The index UID carries the schema version; a schema change gets a new index and a full rebuild. */
-const INDEX_UID = 'documents_v3';
+const INDEX_UID = 'documents_v4';
 /** Indexes written by earlier schema versions, removed once the current index is in place. */
 const RETIRED_INDEX_UIDS = ['transcripts'];
 const MAX_TOTAL_HITS = 10_000;
@@ -19,7 +19,7 @@ const MAX_TOTAL_HITS = 10_000;
 function retrievedAttributes(sources: SourceDeclarations): string[] {
   return [
     'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
-    'publishedAt', 'collectedAt', ...sources.list.map((declaration) => declaration.id), 'bodyMarkdown',
+    'publishedAt', 'collectedAt', 'status', ...sources.list.map((declaration) => declaration.id), 'bodyMarkdown',
   ];
 }
 
@@ -44,8 +44,7 @@ interface TaskResult {
 
 /**
  * One indexed document. Besides the core fields it carries one details block named after its source
- * type, between `collectedAt` and `bodyMarkdown`; that block is null when the
- * document has no details.
+ * type, between `status` and `bodyMarkdown`; that block is null when the document has no details.
  */
 interface IndexedDocument {
   [sourceType: string]: unknown;
@@ -61,6 +60,7 @@ interface IndexedDocument {
   publishedAt: string | null;
   publishedAtEpoch: number | null;
   collectedAt: string;
+  status: DocumentStatus;
   bodyMarkdown: string;
   searchTitle: string;
   searchPublisherName: string;
@@ -76,6 +76,7 @@ interface SearchHitDocument extends IndexedDocument {
 interface MeilisearchSearchResponse {
   hits: SearchHitDocument[];
   totalHits?: number;
+  facetDistribution?: { status?: Partial<Record<DocumentStatus, number>> };
   page?: number;
   hitsPerPage?: number;
 }
@@ -120,7 +121,7 @@ export class MeilisearchBackend implements SearchBackend {
         method: 'PATCH',
         body: JSON.stringify({
           searchableAttributes: ['searchTitle', 'searchPublisherName', 'searchBodyMarkdown'],
-          filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
+          filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch', 'status'],
           pagination: { maxTotalHits: MAX_TOTAL_HITS },
         }),
       },
@@ -218,41 +219,65 @@ export class MeilisearchBackend implements SearchBackend {
     this.fragments.remove(ids);
   }
 
+  /**
+   * One page of hits matching the query and every filter, with the counts by status of the hits
+   * matching every filter but the status.
+   */
   async search(query: SearchQuery, excludeIds: string[] = []): Promise<SearchResponse> {
-    const filter = this.filters(query, excludeIds);
+    const { status, ...unfiltered } = query;
+    const anyStatus = this.filters(unfiltered, excludeIds);
     const plan = this.options.lexicon
       ? planFragmentQuery(query.query, this.options.lexicon)
       : { normalized: normalizeSearchText(query.query), groups: [], latinQuery: '', hasHan: false };
-    if (plan.hasHan) return this.searchWithFragments(query, excludeIds, filter, plan);
+    if (plan.hasHan) return this.searchWithFragments(query, excludeIds, anyStatus, plan);
 
+    const filter = status ? [...anyStatus, statusFilter(status)] : anyStatus;
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
     // Page-based search returns an exact total, which numbered pagination needs.
-    const result = await this.request<MeilisearchSearchResponse>(
-      `/indexes/${INDEX_UID}/search`,
-      {
+    const [result, counted] = await Promise.all([
+      this.request<MeilisearchSearchResponse>(
+        `/indexes/${INDEX_UID}/search`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            q: plan.normalized,
+            hitsPerPage: limit,
+            page: Math.floor(offset / limit) + 1,
+            attributesToRetrieve: retrievedAttributes(this.options.sources),
+            showMatchesPosition: true,
+            matchingStrategy: 'all',
+            ...(filter.length > 0 ? { filter } : {}),
+            ...(status ? {} : { facets: ['status'] }),
+          }),
+        },
+      ),
+      // With a status filter the page's own facets count one status only; a second query counts both.
+      status ? this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
         method: 'POST',
         body: JSON.stringify({
           q: plan.normalized,
-          hitsPerPage: limit,
-          page: Math.floor(offset / limit) + 1,
-          attributesToRetrieve: retrievedAttributes(this.options.sources),
-          showMatchesPosition: true,
+          hitsPerPage: 0,
+          page: 1,
           matchingStrategy: 'all',
-          ...(filter.length > 0 ? { filter } : {}),
+          facets: ['status'],
+          ...(anyStatus.length > 0 ? { filter: anyStatus } : {}),
         }),
-      },
-    );
+      }) : null,
+    ]);
+    const distribution = (counted ?? result).facetDistribution?.status ?? {};
 
     return {
       hits: result.hits.map((hit) => toSearchHit(hit)),
       total: result.totalHits ?? result.hits.length,
+      statusCounts: { draft: distribution.draft ?? 0, published: distribution.published ?? 0 },
       offset,
       limit,
     };
   }
 
-  private filters(query: SearchQuery, excludeIds: string[]): string[] {
+  /** The engine filter of every condition of `query` but its status. */
+  private filters(query: Omit<SearchQuery, 'status'>, excludeIds: string[]): string[] {
     const filter: string[] = [];
     if (excludeIds.length > 0) {
       filter.push(`id NOT IN [${excludeIds.map((id) => JSON.stringify(id)).join(', ')}]`);
@@ -274,25 +299,38 @@ export class MeilisearchBackend implements SearchBackend {
     return filter;
   }
 
+  /**
+   * Chinese fragment search: the hits are the IDs the fragment index and the engine agree on, ranked
+   * with the engine's matches first. `anyStatus` is the engine filter without the status, so the
+   * matched IDs give the status counts before the status filter narrows them.
+   */
   private async searchWithFragments(
     query: SearchQuery,
     excludeIds: string[],
-    filter: string[],
+    anyStatus: string[],
     plan: ReturnType<typeof planFragmentQuery>,
   ): Promise<SearchResponse> {
+    const { status, ...unfiltered } = query;
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    const eligible = this.fragments.eligibleIds(plan.groups, query, new Set(excludeIds));
+    const eligible = this.fragments.eligibleIds(plan.groups, unfiltered, new Set(excludeIds));
     const eligibleSet = new Set(eligible);
-    const primary = await this.searchAll(plan.normalized, filter);
+    const primary = await this.searchAll(plan.normalized, anyStatus);
     const retainedPrimary = primary.hits.filter(({ id }) => eligibleSet.has(id));
     const primaryIds = new Set(retainedPrimary.map(({ id }) => id));
-    const latin = plan.latinQuery ? await this.searchAll(plan.latinQuery, filter) : null;
+    const latin = plan.latinQuery ? await this.searchAll(plan.latinQuery, anyStatus) : null;
     const fallback = (latin ? latin.hits.map(({ id }) => id) : eligible)
       .filter((id) => eligibleSet.has(id) && !primaryIds.has(id));
-    const ordered = [...retainedPrimary.map(({ id }) => id), ...fallback].slice(0, MAX_TOTAL_HITS);
+    const matched = [...retainedPrimary.map(({ id }) => id), ...fallback].slice(0, MAX_TOTAL_HITS);
+    const statusCounts: DocumentStatusCounts = { draft: 0, published: 0 };
+    const ordered: string[] = [];
+    for (const id of matched) {
+      const documentStatus = this.fragments.status(id) ?? 'published';
+      statusCounts[documentStatus] += 1;
+      if (!status || documentStatus === status) ordered.push(id);
+    }
     const pageIds = ordered.slice(offset, offset + limit);
-    const details = await this.fetchDetails(pageIds, filter, plan.latinQuery);
+    const details = await this.fetchDetails(pageIds, anyStatus, plan.latinQuery);
     const byId = new Map(details.map((hit) => [hit.id, hit]));
 
     return {
@@ -306,6 +344,7 @@ export class MeilisearchBackend implements SearchBackend {
         return [toSearchHit(hit, positions)];
       }),
       total: ordered.length,
+      statusCounts,
       offset,
       limit,
     };
@@ -400,6 +439,7 @@ function toIndexedDocument(document: SavedDocument): IndexedDocument {
     publishedAt: document.publishedAt,
     publishedAtEpoch: document.publishedAt ? Date.parse(document.publishedAt) : null,
     collectedAt: document.collectedAt,
+    status: document.status,
     [document.sourceType]: documentDetails(document) ?? null,
     bodyMarkdown: document.bodyMarkdown,
     searchTitle: normalizeSearchText(document.title),
@@ -420,6 +460,7 @@ function toSearchHit(hit: SearchHitDocument, bodyMatches?: NormalizedMatchPositi
     publisher: { id: hit.publisherId, name: hit.publisherName },
     publishedAt: hit.publishedAt,
     collectedAt: hit.collectedAt,
+    status: hit.status,
     ...(hit[hit.sourceType] ? { [hit.sourceType]: hit[hit.sourceType] } : {}),
   };
   return { ...metadata, snippet: originalSnippet(hit.bodyMarkdown, bodyMatches ?? hit._matchesPosition?.searchBodyMarkdown ?? []) };
@@ -480,6 +521,10 @@ function graphemeBoundary(value: string, index: number, direction: -1 | 1): numb
 /** The details block a document carries under the field named after its source type. */
 function documentDetails(document: SavedDocument): unknown {
   return (document as unknown as Record<string, unknown>)[document.sourceType];
+}
+
+function statusFilter(status: DocumentStatus): string {
+  return `status = ${JSON.stringify(status)}`;
 }
 
 function dateBoundary(value: string, boundary: 'start' | 'end'): number {

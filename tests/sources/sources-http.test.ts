@@ -81,7 +81,7 @@ describe('source list (T-06, T-08)', () => {
     const legacy: SavedDocument = {
       id: 'youtube:legacy00001', type: 'Transcript', title: '舊文件', sourceUrl: 'https://www.youtube.com/watch?v=legacy00001',
       sourceType: 'youtube', sourceId: 'legacy00001', publisher: { id: null, name: '未知頻道' },
-      publishedAt: null, collectedAt: '2026-01-01T00:00:00.000Z', bodyMarkdown: '舊字幕',
+      publishedAt: null, collectedAt: '2026-01-01T00:00:00.000Z', status: 'published', bodyMarkdown: '舊字幕',
     };
     w.documents.documents.set('legacy00001', legacy);
 

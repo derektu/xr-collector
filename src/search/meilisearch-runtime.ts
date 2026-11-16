@@ -13,10 +13,10 @@ const run = promisify(execFile);
 const SIGNING_MANIFEST = 'runtime-signing.json';
 
 export const SEARCH_INDEX_PROFILE = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   engine: { version: runtimePins.version },
   tokenizationFeatures: ['all-tokenizations'],
-  indexSchema: 'documents_v3',
+  indexSchema: 'documents_v4',
   normalization: { revision: SEARCH_NORMALIZATION_REVISION, openccDataVersion: OPENCC_DATA_VERSION },
   queryStrategy: { revision: SEARCH_QUERY_STRATEGY_REVISION, chineseFragments: 'contiguous-field-substring' },
 } as const;

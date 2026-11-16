@@ -40,7 +40,7 @@ function transcript(sourceId: string, body: string, publisherId: string | null =
     title: `影片 ${sourceId}`,
     publisher: { id: publisherId, name: publisherId ? '測試頻道' : '舊頻道' },
     publishedAt: '2026-09-12T00:00:00.000Z',
-    collectedAt: '2026-09-17T00:00:00.000Z',
+    collectedAt: '2026-09-17T00:00:00.000Z', status: 'published',
     youtube: { languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual' },
     bodyMarkdown: body,
   };

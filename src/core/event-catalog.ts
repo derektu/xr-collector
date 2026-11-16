@@ -42,6 +42,7 @@ const NAMED_EVENTS = {
   'document.delete_resumed': itemResult('info'),
   'document.delete_unresolved': itemResult('warning'),
   'document.recollected': itemResult('info'),
+  'document.status_changed': itemResult('info'),
   'subscription.added': shown('info'),
   'subscription.settings_updated': shown('info'),
   'subscription.settings_applied': shown('info'),

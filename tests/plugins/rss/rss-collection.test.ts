@@ -84,7 +84,7 @@ describe('subscribing to a feed through the core (R11-T5)', () => {
     expect([...byTitle.keys()].sort()).toEqual(['【合成】全文文章', '【合成】只有摘要', '【合成】缺 guid']);
     expect(byTitle.get('【合成】全文文章')).toEqual({
       front: {
-        type: 'Article', title: '【合成】全文文章', resource: feeds.url('/posts/3'), tags: [],
+        type: 'Article', title: '【合成】全文文章', resource: feeds.url('/posts/3'), tags: [], status: 'published',
         collector: {
           id: expect.stringMatching(/^rss:[0-9a-f]{16}$/u), source: 'rss', source_id: expect.stringMatching(/^[0-9a-f]{16}$/u),
           publisher: '【合成】部落格', publisher_id: id, published_at: ago(1).toISOString(), collected_at: expect.any(String),

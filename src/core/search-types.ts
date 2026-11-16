@@ -1,4 +1,4 @@
-import type { DocumentFilter, DocumentMetadata, SavedDocument } from './document-types.js';
+import type { DocumentFilter, DocumentMetadata, DocumentStatusCounts, SavedDocument } from './document-types.js';
 
 export interface SearchQuery extends DocumentFilter {
   query: string;
@@ -17,6 +17,8 @@ export interface SearchResponse {
   hits: SearchHit[];
   /** Exact number of matching documents. */
   total: number;
+  /** Documents matching every filter but the status, by status. */
+  statusCounts: DocumentStatusCounts;
   offset: number;
   limit: number;
 }

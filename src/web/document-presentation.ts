@@ -1,7 +1,8 @@
 import { markdownToPlainText } from '../core/document-text.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import type { SourceDeclarations } from '../core/source-registry.js';
-import type { DocumentFilter, DocumentMetadata, DocumentSources } from '../core/document-types.js';
+import type { DocumentFilter, DocumentMetadata, DocumentSources, DocumentStatus, DocumentStatusCounts } from '../core/document-types.js';
+import { parseDocumentStatus } from '../core/document-status.js';
 
 export const DOCUMENTS_PAGE_SIZE = 20;
 export const SEARCH_DEBOUNCE_MS = 300;
@@ -11,6 +12,8 @@ export interface DocumentListState {
   query: string;
   /** '' for all sources, `<sourceType>` for one type, `<sourceType>:<publisherId>` for one publisher. */
   source: string;
+  /** null for every status. */
+  status: DocumentStatus | null;
   page: number;
 }
 
@@ -20,6 +23,7 @@ export function parseListState(search: string): DocumentListState {
   return {
     query: parameters.get('q') ?? '',
     source: parameters.get('source') ?? '',
+    status: parseDocumentStatus(parameters.get('status')),
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
   };
 }
@@ -28,6 +32,7 @@ export function listStateSearch(state: DocumentListState): string {
   const parameters = new URLSearchParams();
   if (state.query) parameters.set('q', state.query);
   if (state.source) parameters.set('source', state.source);
+  if (state.status) parameters.set('status', state.status);
   if (state.page > 1) parameters.set('page', String(state.page));
   const text = parameters.toString();
   return text ? `?${text}` : '';
@@ -47,6 +52,18 @@ export function sourceFilter(source: string): DocumentFilter {
   const separator = source.indexOf(':');
   if (separator < 0) return { sourceType: source as NonNullable<DocumentFilter['sourceType']> };
   return { sourceType: source.slice(0, separator) as NonNullable<DocumentFilter['sourceType']>, publisherId: source.slice(separator + 1) };
+}
+
+/** The status filters of the Documents list, in order; `status` null stands for every status. */
+export const STATUS_FILTERS: ReadonlyArray<{ status: DocumentStatus | null; label: string }> = [
+  { status: null, label: '全部' },
+  { status: 'draft', label: '草稿' },
+  { status: 'published', label: '正式' },
+];
+
+/** How many documents a status filter shows, from the counts by status. */
+export function statusFilterCount(counts: DocumentStatusCounts, status: DocumentStatus | null): number {
+  return status ? counts[status] : counts.draft + counts.published;
 }
 
 export interface SourceOption {

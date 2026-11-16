@@ -61,7 +61,7 @@ class MemoryVault implements DocumentVault {
     const document: SavedDocument = {
       id: `youtube:${capture.videoId}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
       sourceType: 'youtube', sourceId: capture.videoId, publisher: { id: capture.channelId, name: capture.channelTitle },
-      publishedAt: null, collectedAt: T0.toISOString(),
+      publishedAt: null, collectedAt: T0.toISOString(), status: 'published',
       youtube: { languageCode: capture.languageCode, languageName: null, subtitleKind: 'manual' }, bodyMarkdown: capture.bodyMarkdown,
     };
     this.documents.set(capture.videoId, document);

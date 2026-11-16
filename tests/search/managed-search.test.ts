@@ -25,7 +25,7 @@ const documents: SavedDocument[] = [
     title: '第一支影片',
     publisher: { id: 'channel-1', name: '測試頻道' },
     publishedAt: '2026-09-01T00:00:00.000Z',
-    collectedAt: '2026-09-17T00:00:00.000Z',
+    collectedAt: '2026-09-17T00:00:00.000Z', status: 'published',
     youtube: { languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual' },
     bodyMarkdown: '第一份字幕',
   },
@@ -38,7 +38,7 @@ const documents: SavedDocument[] = [
     title: '第二支影片',
     publisher: { id: 'channel-2', name: '另一個頻道' },
     publishedAt: '2026-09-02T00:00:00.000Z',
-    collectedAt: '2026-09-17T00:01:00.000Z',
+    collectedAt: '2026-09-17T00:01:00.000Z', status: 'published',
     youtube: { languageCode: 'en', languageName: 'English', subtitleKind: 'automatic' },
     bodyMarkdown: 'Second transcript',
   },
@@ -54,7 +54,7 @@ function fakeBackend(current: boolean, rebuilt: SavedDocument[][]): SearchBacken
     },
     upsert: async () => undefined,
     remove: async () => undefined,
-    search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
+    search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 }),
   };
 }
 
@@ -159,28 +159,28 @@ describe('ManagedTranscriptSearch', () => {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
       requests.push({ url, method, body });
 
-      if (url.endsWith('/indexes/documents_v3') && method === 'GET') {
-        return Response.json({ uid: 'documents_v3', primaryKey: 'key' });
+      if (url.endsWith('/indexes/documents_v4') && method === 'GET') {
+        return Response.json({ uid: 'documents_v4', primaryKey: 'key' });
       }
       if (url.endsWith('/indexes/transcripts') && method === 'GET') {
         return Response.json({ message: 'not found' }, { status: 404 });
       }
-      if (url.endsWith('/indexes/documents_v3/settings') && method === 'PATCH') {
+      if (url.endsWith('/indexes/documents_v4/settings') && method === 'PATCH') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
       if (url.endsWith('/tasks/1')) {
         return Response.json({ uid: 1, status: 'succeeded', error: null });
       }
-      if (url.includes('/indexes/documents_v3/documents?fields=key,contentHash')) {
+      if (url.includes('/indexes/documents_v4/documents?fields=key,contentHash')) {
         return Response.json({ results: [], total: 0 });
       }
-      if (url.endsWith('/indexes/documents_v3/documents') && method === 'DELETE') {
+      if (url.endsWith('/indexes/documents_v4/documents') && method === 'DELETE') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v3/documents') && method === 'PUT') {
+      if (url.endsWith('/indexes/documents_v4/documents') && method === 'PUT') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v3/search') && method === 'POST') {
+      if (url.endsWith('/indexes/documents_v4/search') && method === 'POST') {
         return Response.json({
           hits: [{
             id: documents[0]!.id,
@@ -193,11 +193,13 @@ describe('ManagedTranscriptSearch', () => {
             publisherName: '測試頻道',
             publishedAt: documents[0]!.publishedAt,
             collectedAt: documents[0]!.collectedAt,
+            status: 'published',
             youtube: documents[0]!.youtube,
             bodyMarkdown: '關鍵字出現在這裡',
             _matchesPosition: { searchBodyMarkdown: [{ start: 0, length: 9 }] },
           }],
           totalHits: 41,
+          facetDistribution: { status: { published: 41 } },
           page: 3,
           hitsPerPage: 20,
         });
@@ -216,7 +218,7 @@ describe('ManagedTranscriptSearch', () => {
     const settings = requests.find(({ url, method }) => url.endsWith('/settings') && method === 'PATCH')?.body as Record<string, unknown>;
     expect(settings).toEqual({
       searchableAttributes: ['searchTitle', 'searchPublisherName', 'searchBodyMarkdown'],
-      filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
+      filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch', 'status'],
       pagination: { maxTotalHits: 10_000 },
     });
     expect(settings).not.toHaveProperty('localizedAttributes');
@@ -251,10 +253,12 @@ describe('ManagedTranscriptSearch', () => {
         publisher: { id: 'channel-1', name: '測試頻道' },
         publishedAt: '2026-09-01T00:00:00.000Z',
         collectedAt: '2026-09-17T00:00:00.000Z',
+        status: 'published',
         youtube: { languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual' },
         snippet: '<mark>關鍵字</mark>出現在這裡',
       }],
       total: 41,
+      statusCounts: { draft: 0, published: 41 },
       offset: 40,
       limit: 20,
     });
@@ -272,6 +276,7 @@ describe('ManagedTranscriptSearch', () => {
         'publishedAtEpoch <= 1790812799999',
       ],
       showMatchesPosition: true,
+      facets: ['status'],
     });
 
     await search.search({ query: '關鍵字', sourceType: 'youtube', publisherId: 'none' });
@@ -343,7 +348,7 @@ function recordingBackend(initial: SavedDocument[]) {
     search: async (_query, excludeIds) => {
       calls.excludes.push(excludeIds);
       const hits = [...held.values()].filter((document) => !excludeIds.includes(document.id)).map((document) => ({ ...document, snippet: document.bodyMarkdown }));
-      return { hits, total: hits.length, offset: 0, limit: 50 };
+      return { hits, total: hits.length, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 };
     },
   };
   return { backend, held, calls, setRemoveFails(value: boolean) { removeFails = value; } };

@@ -76,7 +76,7 @@ export function fakeSearch(root: string, sources: SourceRegistry = PRODUCT_SOURC
     },
     async search({ query }) {
       const hits = docs.filter((doc) => doc.bodyMarkdown.includes(query) || doc.title.includes(query)).map((doc) => ({ ...doc, snippet: doc.bodyMarkdown }));
-      return { hits, total: hits.length, offset: 0, limit: 50 };
+      return { hits, total: hits.length, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 };
     },
   };
 }

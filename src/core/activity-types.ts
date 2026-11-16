@@ -26,7 +26,10 @@ export interface JobEvent {
   outcome?: JobOutcome;
   skipReason?: SkipReason;
   errorCode?: string;
-  /** Masked diagnostic output, such as the end of an external tool's stderr. */
+  /**
+   * Masked diagnostic output, such as the end of an external tool's stderr, or the value an event
+   * sets, such as the new status of `document.status_changed`.
+   */
   detail?: string;
   /** The failed attempt a retry event follows. */
   attempt?: number;

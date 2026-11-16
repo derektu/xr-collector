@@ -1,5 +1,6 @@
 import { CollectorError } from '../../core/collector-error.js';
-import type { DocumentFilter } from '../../core/document-types.js';
+import type { DocumentFilter, DocumentStatus } from '../../core/document-types.js';
+import { parseDocumentStatus } from '../../core/document-status.js';
 import type { SourceRegistry } from '../../core/source-registry.js';
 
 /** Rejects repeated query parameters so each filter has exactly one value. */
@@ -40,12 +41,19 @@ export function isCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
 }
 
+/** A document status a request names; any other value is an `invalid_request`. */
+export function requestedStatus(value: unknown): DocumentStatus {
+  const status = parseDocumentStatus(value);
+  if (!status) throw new CollectorError('invalid_request', 'status 只接受 draft 或 published。');
+  return status;
+}
+
 /** Source filters use stable IDs; publisher names are display text and never filter. */
 export function documentFilter(sources: SourceRegistry, query: Record<string, string | undefined>): DocumentFilter {
   if (query.channel !== undefined) {
     throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');
   }
-  const { sourceType, publisherId } = query;
+  const { sourceType, publisherId, status } = query;
   if (sourceType !== undefined && !sources.get(sourceType)) {
     throw new CollectorError('invalid_request', '不支援的 sourceType。');
   }
@@ -55,5 +63,6 @@ export function documentFilter(sources: SourceRegistry, query: Record<string, st
   return {
     ...(sourceType ? { sourceType } : {}),
     ...(publisherId ? { publisherId } : {}),
+    ...(status !== undefined ? { status: requestedStatus(status) } : {}),
   };
 }

@@ -13,7 +13,7 @@ function document(id: string, title: string, publisher: string, body: string): S
   return {
     id: `youtube:${id}`, type: 'Transcript', sourceType: 'youtube', sourceId: id,
     sourceUrl: `https://example.com/${id}`, title, publisher: { id: 'publisher', name: publisher },
-    publishedAt: '2026-10-01T00:00:00.000Z', collectedAt: '2026-10-02T00:00:00.000Z',
+    publishedAt: '2026-10-01T00:00:00.000Z', collectedAt: '2026-10-02T00:00:00.000Z', status: 'published',
     youtube: { languageCode: 'zh-Hant', languageName: '繁體中文', subtitleKind: 'manual' }, bodyMarkdown: body,
   };
 }

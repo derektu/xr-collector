@@ -21,10 +21,11 @@ import { PRODUCT_DECLARATIONS } from '../support/product-sources.js';
 
 describe('document presentation', () => {
   it('round-trips the list position through the URL', () => {
-    const state = { query: '森林 觀測', source: 'youtube:UC-a', page: 3 };
+    const state = { query: '森林 觀測', source: 'youtube:UC-a', status: 'draft' as const, page: 3 };
     expect(parseListState(listStateSearch(state))).toEqual(state);
-    expect(listStateSearch({ query: '', source: '', page: 1 })).toBe('');
-    expect(parseListState('?page=-2')).toEqual({ query: '', source: '', page: 1 });
+    expect(listStateSearch({ query: '', source: '', status: null, page: 1 })).toBe('');
+    expect(parseListState('?page=-2')).toEqual({ query: '', source: '', status: null, page: 1 });
+    expect(parseListState('?status=trash').status).toBeNull();
   });
 
   it('keeps a trailing space typed before the debounced query lands', () => {

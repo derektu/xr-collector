@@ -60,6 +60,11 @@ async function modify(root: string, id: string, text: string, when: string) {
   metadata.collector.updated_at = when;
   await writeFile(file, `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body!.trim()}\n${text}\n`);
 }
+/** Sets a document's status as the app does, with the Vault clock at `when`. */
+async function setStatus(root: string, id: string, status: 'draft' | 'published', when: string) {
+  await new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => new Date(when) })).setStatus(`youtube:${id}`, status);
+}
+const statusOf = async (root: string, id: string) => (await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).read(`youtube:${id}`))!.status;
 async function remove(root: string, id: string, when: string) {
   await new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => new Date(when) })).delete(`youtube:${id}`);
 }
@@ -245,6 +250,34 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }, { updated: 1 }), localNewer: 3 });
       expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
     });
+  });
+});
+
+describe('a status changed on one machine (#217)', () => {
+  it('takes the status and content of the side with the newer change, in both directions', async () => {
+    const { a, b } = await pair();
+    // D1: A's draft is newer than B's published edit. D3: B's published edit is newer than A's draft.
+    // D4: B's draft is newer than A's published edit.
+    await setStatus(a.vault, D1, 'draft', at(2)); await modify(b.vault, D1, 'B 較舊的段落', at(1));
+    await setStatus(a.vault, D3, 'draft', at(1)); await modify(b.vault, D3, 'B 較新的段落', at(2));
+    await modify(a.vault, D4, 'A 較舊的段落', at(1)); await setStatus(b.vault, D4, 'draft', at(2));
+    const file = await exportFrom(b, 'b-1');
+    await using(a, async (workspace) => {
+      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ updated: 2 }), localNewer: 1 });
+    });
+    expect([await statusOf(a.vault, D1), await statusOf(a.vault, D3), await statusOf(a.vault, D4)]).toEqual(['draft', 'published', 'draft']);
+    expect(await readFile(docPath(a.vault, D1), 'utf8')).not.toContain('B 較舊的段落');
+    expect(await readFile(docPath(a.vault, D3), 'utf8')).toContain('B 較新的段落');
+    expect(await readFile(docPath(a.vault, D4), 'utf8')).not.toContain('A 較舊的段落');
+
+    // Back on B, A's newer draft of D1 comes over; D3 and D4 are already the same.
+    const back = await exportFrom(a, 'a-2');
+    await using(b, async (workspace) => {
+      expect((await importFile(workspace, back)).preview).toMatchObject({ merge: counts({ updated: 1 }), localNewer: 0 });
+    });
+    expect(await statusOf(b.vault, D1)).toBe('draft');
+    expect(await readFile(docPath(b.vault, D1), 'utf8')).not.toContain('B 較舊的段落');
+    expect(await items(b.vault)).toEqual(await items(a.vault));
   });
 });
 

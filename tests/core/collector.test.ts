@@ -41,7 +41,7 @@ class MemoryVault implements DocumentVault {
       sourceId: capture.videoId,
       publisher: { id: capture.channelId, name: capture.channelTitle },
       publishedAt: capture.publishedAt,
-      collectedAt: '2026-09-17T00:00:00.000Z',
+      collectedAt: '2026-09-17T00:00:00.000Z', status: 'published',
       youtube: { languageCode: capture.languageCode, languageName: capture.languageName, subtitleKind: capture.subtitleKind },
       bodyMarkdown: capture.bodyMarkdown,
     };

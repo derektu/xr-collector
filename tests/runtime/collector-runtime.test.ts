@@ -585,7 +585,7 @@ describe('CollectorRuntime', () => {
     const rebuild = vi.fn(async () => held);
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null, message: '' }),
-      search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
+      search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 }),
       index: async () => undefined,
       remove: async () => undefined,
       rebuild,
@@ -674,7 +674,7 @@ describe('CollectorRuntime Vault setup', () => {
   it('keeps device-only login and Agent settings outside Vault export, switch and import (L33-A2)', async () => {
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }), index: async () => undefined, remove: async () => undefined,
-      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
+      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 20 }),
     };
     const base = await options({ capture: vi.fn() }, search);
     const { explicitVaultPath: _explicit, ...value } = base.value;
@@ -1012,7 +1012,7 @@ describe('CollectorRuntime Vault setup', () => {
   it('lets an Agent open another Vault, reopens it after restart and keeps the Agent entry (A-11)', async () => {
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }), index: async () => undefined, remove: async () => undefined,
-      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, offset: 0, limit: 20 }),
+      rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 20 }),
     };
     const base = await options({ capture: vi.fn() }, search);
     const { explicitVaultPath: _explicit, ...value } = base.value;

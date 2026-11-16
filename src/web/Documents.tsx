@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
-import type { DocumentMetadata, DocumentSources } from '../core/document-types.js';
+import type { DocumentMetadata, DocumentSources, DocumentStatus, DocumentStatusCounts } from '../core/document-types.js';
 import { trimSearchQueryWhitespace } from '../core/search-query.js';
 import { ApiError, api } from './api-client.js';
-import { OFFLINE_UNAVAILABLE } from './app-shell.js';
+import { OFFLINE_UNAVAILABLE, radioIndexForKey } from './app-shell.js';
 import {
   DOCUMENTS_PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
+  STATUS_FILTERS,
   collectedShortLabel,
   draftForQuery,
   pageWithRows,
@@ -19,6 +20,7 @@ import {
   sourceFilter,
   sourceOptions,
   sourceTag,
+  statusFilterCount,
   totalPages,
   type DocumentListState,
 } from './document-presentation.js';
@@ -38,6 +40,7 @@ interface Results {
   mode: 'browse' | 'search';
   rows: Row[];
   total: number;
+  statusCounts: DocumentStatusCounts;
 }
 
 /** History state the list entry keeps so returning from the Reader can restore the scroll position. */
@@ -66,8 +69,8 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   const [searchProblem, setSearchProblem] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  /** Bumped after a deletion, so the sources and the current page load again. */
-  const [deletions, setDeletions] = useState(0);
+  /** Bumped after a row action, so the sources and the current page load again. */
+  const [edits, setEdits] = useState(0);
   const requests = useMemo(createLatestRequest, []);
   const sourceChanges = useChanges(['documents']);
   const listChanges = useChanges(['documents', 'search']);
@@ -82,29 +85,33 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       throw error;
     }));
     return () => controller.abort();
-  }, [sourceChanges.tick, deletions]);
+  }, [sourceChanges.tick, edits]);
 
   // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
     const query = trimSearchQueryWhitespace(draft);
     if (query === state.query) return undefined;
-    const timer = setTimeout(() => onState({ query, source: state.source, page: 1 }), SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => onState({ query, source: state.source, status: state.status, page: 1 }), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft, state.query, state.source, onState]);
+  }, [draft, state.query, state.source, state.status, onState]);
 
   useEffect(() => {
     let active = true;
-    const filter = sourceFilter(state.source);
+    const filter = { ...sourceFilter(state.source), ...(state.status ? { status: state.status } : {}) };
     const offset = (state.page - 1) * DOCUMENTS_PAGE_SIZE;
     const browse = (signal: AbortSignal) => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
-      .then((page): Results => ({ mode: 'browse', rows: page.documents.map((document) => ({ document, excerpt: document.excerpt })), total: page.total }));
+      .then((page): Results => ({
+        mode: 'browse', rows: page.documents.map((document) => ({ document, excerpt: document.excerpt })), total: page.total, statusCounts: page.statusCounts,
+      }));
     setLoading(true);
     listChanges.track(requests.run(async (signal) => {
       if (!state.query) return { results: await browse(signal), problem: null };
       try {
         const found = await api.searchDocuments({ query: state.query, ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal);
         return {
-          results: { mode: 'search', rows: found.hits.map((hit) => ({ document: hit, snippet: hit.snippet })), total: found.total } satisfies Results,
+          results: {
+            mode: 'search', rows: found.hits.map((hit) => ({ document: hit, snippet: hit.snippet })), total: found.total, statusCounts: found.statusCounts,
+          } satisfies Results,
           problem: null,
         };
       } catch (error) {
@@ -130,7 +137,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       throw error;
     }));
     return () => { active = false; };
-  }, [state.query, state.source, state.page, requests, listChanges.tick, deletions]);
+  }, [state.query, state.source, state.status, state.page, requests, listChanges.tick, edits]);
 
   useEffect(() => () => requests.cancel(), [requests]);
 
@@ -152,7 +159,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
 
   function deleted(message: string): void {
     onChanged(message);
-    setDeletions((value) => value + 1);
+    setEdits((value) => value + 1);
   }
 
   const options = sourceOptions(sources);
@@ -210,12 +217,15 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       <button type="button" onClick={() => onNavigate('settings')}>前往設定</button>
     </div> : null}
 
-    <div className="documents-summary" aria-live="polite" data-testid="documents-summary"
-      data-mode={results?.mode} data-total={results?.total} data-loading={loading || !results ? 'true' : 'false'}>
-      {loadError ? <span className="documents-error">{loadError}</span>
-        : results ? results.mode === 'search' ? `找到 ${results.total} 份` : `共 ${results.total} 份文件`
-          : '正在載入…'}
-      {loading && results ? <span className="documents-loading">更新中…</span> : null}
+    <div className="status-row">
+      {results ? <StatusFilter status={state.status} counts={results.statusCounts} onChange={(status) => onState({ ...state, status, page: 1 })} /> : null}
+      <div className="documents-summary" aria-live="polite" data-testid="documents-summary"
+        data-mode={results?.mode} data-total={results?.total} data-loading={loading || !results ? 'true' : 'false'}>
+        {loadError ? <span className="documents-error">{loadError}</span>
+          : results ? results.mode === 'search' ? `找到 ${results.total} 份` : `共 ${results.total} 份文件`
+            : '正在載入…'}
+        {loading && results ? <span className="documents-loading">更新中…</span> : null}
+      </div>
     </div>
 
     {results && results.rows.length === 0 ? <section className="documents-none" data-testid="documents-no-results">
@@ -228,7 +238,9 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       {results.rows.map(({ document, excerpt, snippet }) => <li key={document.id} className="document-item">
         <a className="document-row" href={readerPath(document.id)} onClick={(event) => open(event, document.id)}>
           <span className="document-main">
-            <span className="document-title">{document.title}</span>
+            <span className="document-title">
+              {document.status === 'draft' ? <span className="draft-chip" data-testid="document-draft-chip">草稿</span> : null}{document.title}
+            </span>
             <span className="document-excerpt">{snippet !== undefined
               ? snippetParts(snippet).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : <span key={index}>{part.text}</span>)
               : excerpt}</span>
@@ -239,7 +251,8 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
             <span className="document-collected">{collectedShortLabel(document.collectedAt)}</span>
           </span>
         </a>
-        <DocumentActions document={document} onDeleted={deleted} />
+        <DocumentActions document={document} onDeleted={deleted}
+          onStatusChanged={() => setEdits((value) => value + 1)} onFailed={(message) => onChanged(message, 'error')} />
       </li>)}
     </ol> : null}
 
@@ -253,14 +266,48 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   </>;
 }
 
+/** The status filter of the list: every document, drafts or published ones, each with its count. */
+function StatusFilter({ status, counts, onChange }: {
+  status: DocumentStatus | null;
+  counts: DocumentStatusCounts;
+  onChange: (status: DocumentStatus | null) => void;
+}) {
+  const options = useRef<Array<HTMLButtonElement | null>>([]);
+  const current = STATUS_FILTERS.findIndex((filter) => filter.status === status);
+  // A radio group: one Tab stop on the chosen option, arrow keys and Home/End choose another.
+  return <div className="segmented" role="radiogroup" aria-label="文件狀態" data-testid="documents-status" onKeyDown={(event) => {
+    const next = radioIndexForKey(event.key, current, STATUS_FILTERS.length);
+    if (next === null) return;
+    event.preventDefault();
+    onChange(STATUS_FILTERS[next]!.status);
+    options.current[next]?.focus();
+  }}>
+    {STATUS_FILTERS.map((filter, index) => <button key={filter.label} ref={(element) => { options.current[index] = element; }} type="button" role="radio"
+      aria-checked={filter.status === status} tabIndex={filter.status === status ? 0 : -1} className={filter.status === status ? 'active' : undefined}
+      onClick={() => onChange(filter.status)} data-testid={`documents-status-${filter.status ?? 'all'}`}>
+      {filter.label}<span className="count">{statusFilterCount(counts, filter.status)}</span>
+    </button>)}
+  </div>;
+}
+
 /** The more-actions menu of one list row. */
-function DocumentActions({ document: item, onDeleted }: { document: DocumentMetadata; onDeleted: (message: string) => void }) {
+function DocumentActions({ document: item, onDeleted, onStatusChanged, onFailed }: {
+  document: DocumentMetadata;
+  onDeleted: (message: string) => void;
+  onStatusChanged: () => void;
+  onFailed: (message: string) => void;
+}) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const menuList = useRef<HTMLDivElement>(null);
   useFloatingMenu(menuOpen, moreButton, menuList);
+
+  function changeStatus(): void {
+    api.setDocumentStatus(item.id, item.status === 'draft' ? 'published' : 'draft')
+      .then(onStatusChanged, (error: unknown) => onFailed(error instanceof Error ? error.message : '無法變更文件狀態。'));
+  }
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -276,6 +323,9 @@ function DocumentActions({ document: item, onDeleted }: { document: DocumentMeta
       <button ref={moreButton} type="button" className="icon-only" aria-label={`${item.title} 的更多動作`} aria-haspopup="menu" aria-expanded={menuOpen}
         onClick={() => setMenuOpen((open) => !open)} data-testid="document-more"><Icon name="more" size={15} /></button>
       {menuOpen ? <div ref={menuList} className="menu" role="menu">
+        <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeStatus(); }} data-testid="document-status-action">
+          {item.status === 'draft' ? '發布' : '改回草稿'}
+        </button>
         <button type="button" role="menuitem" className="danger" onClick={() => { setMenuOpen(false); setDeleting(true); }}>刪除</button>
       </div> : null}
     </div>

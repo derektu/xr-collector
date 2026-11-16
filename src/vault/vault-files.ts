@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { writeJsonFile } from '../core/json-file.js';
+import { replaceFile, writeJsonFile } from '../core/json-file.js';
 import type { SourceRegistry } from '../core/source-registry.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import { DELETIONS_FILE } from './deleted-documents.js';
@@ -28,6 +28,19 @@ export class VaultFileWriter implements VaultFiles {
   async writeJson(relative: string, value: unknown): Promise<void> {
     await this.admitFile(relative);
     await writeJsonFile(this.absolute(relative), value);
+  }
+
+  async writeText(relative: string, text: string): Promise<void> {
+    await this.admitFile(relative);
+    const target = this.absolute(relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temporary, text, { encoding: 'utf8', flag: 'wx' });
+    try {
+      await replaceFile(temporary, target);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 
   async create(relative: string, text: string): Promise<boolean> {

@@ -1,8 +1,10 @@
 // The edges of browsing and deleting synthetic documents at 22 documents: two pages, the page kept
 // in the URL across reading a document, a search starting from the first page and clearing it
-// returning to browsing, the Documents page a deletion returns to with its search kept, a deleted ID
-// opened directly, and recollecting it, checked in the Vault, the API and the index. Without it a
-// user loses their place after deleting, or a deleted document cannot be brought back. Filtering,
+// returning to browsing, taking a document back to draft from its row menu and publishing it from
+// the Reader with the status filter and its counts following, the Documents page a deletion returns
+// to with its search kept, a deleted ID opened directly, and recollecting it, checked in the Vault,
+// the API and the index. Without it a user loses their place after deleting, a deleted document
+// cannot be brought back, or a status change leaves the list showing the old status. Filtering,
 // searching, reading and the delete confirmation with its data checks are asserted by core-journey;
 // search after a rebuild and a restart by search-normalization. Collection only establishes the
 // precondition; every behavior this flow proves is driven through the Documents and Reader screens.
@@ -11,8 +13,8 @@ import { collect, idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds as listedIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
 
 export const name = 'documents-reader-search';
-export const title = '文件分頁、刪除後導向、已刪除狀態與重新收集';
-export const covers = ['docs-list', 'docs-search', 'reader-delete', 'reader-recollect'];
+export const title = '文件分頁、草稿與正式、刪除後導向、已刪除狀態與重新收集';
+export const covers = ['docs-list', 'docs-search', 'docs-status', 'reader-delete', 'reader-recollect'];
 
 const rowHrefs = (page) => page.locator('.document-row').evaluateAll((rows) => rows.map((row) => row.getAttribute('href')));
 /** The Documents page summary once it shows `total` loaded results in `mode`. */
@@ -95,6 +97,90 @@ export async function run({ instance, page, record, waitFor }) {
     await waitFor(() => summaryShows(page, 'browse', 22), 'browse restored').catch(() => undefined);
     const cleared = { mode: await page.getByTestId('documents-summary').getAttribute('data-mode'), query: await page.getByTestId('documents-search').inputValue() };
     expect(cleared.mode === 'browse' && cleared.query === '', '清除搜尋回到瀏覽', { id: 'list.search.clear', expected: { mode: 'browse', query: '' }, actual: cleared });
+  });
+
+  await record.scenario('DOCS-5', '改回草稿、狀態篩選與從閱讀頁發布', async ({ expect, shot }) => {
+    await waitFor(() => summaryShows(page, 'browse', 22), 'browse list before the status change');
+    // Collection order decides the newest-first list, so the target is a YouTube document on the
+    // first page; the RSS counts below then stay all published.
+    const firstPage = await rowHrefs(page);
+    const draftHref = firstPage.find((href) => decodeURIComponent(href.slice('/documents/'.length)).startsWith('youtube:'));
+    if (!draftHref) throw new Error(`documents-reader-search needs a YouTube document on the first page; got ${JSON.stringify(firstPage)}`);
+    const draftId = decodeURIComponent(draftHref.slice('/documents/'.length));
+    const draftTitle = (await instance.api(`/api/documents/${encodeURIComponent(draftId)}`)).document.title;
+    const row = page.locator('.document-item', { has: page.locator(`a[href="/documents/${encodeURIComponent(draftId)}"]`) });
+    const counts = async () => Object.fromEntries(await Promise.all(['all', 'draft', 'published'].map(async (key) =>
+      [key, Number(await page.getByTestId(`documents-status-${key}`).locator('.count').innerText())])));
+    const countsAre = async (expected) => JSON.stringify(await counts()) === JSON.stringify(expected);
+    const stored = async () => {
+      const state = await instance.state();
+      const file = (state.vault.documents ?? []).find((document) => document.frontmatter?.collector?.id === draftId);
+      return { status: file?.frontmatter?.status ?? null, updatedAt: file?.frontmatter?.collector?.updated_at ?? null, contentHash: file?.contentHash ?? null };
+    };
+
+    const initial = await counts();
+    expect(JSON.stringify(initial) === JSON.stringify({ all: 22, draft: 0, published: 22 }), '收集的文件都是正式',
+      { id: 'status.initial.counts', expected: { all: 22, draft: 0, published: 22 }, actual: initial });
+    const before = await stored();
+
+    await row.getByTestId('document-more').click();
+    const action = page.getByTestId('document-status-action');
+    const menuText = await action.innerText();
+    await shot('row-menu');
+    await action.click();
+    await waitFor(async () => await row.getByTestId('document-draft-chip').count() === 1
+      && await countsAre({ all: 22, draft: 1, published: 21 }), 'row shows the draft chip and the counts follow');
+    const drafted = { api: (await instance.api(`/api/documents/${encodeURIComponent(draftId)}`)).document.status, vault: await stored() };
+    expect(menuText.trim() === '改回草稿' && drafted.api === 'draft' && drafted.vault.status === 'draft',
+      '正式文件的選單「改回草稿」把文件改成草稿', { id: 'status.row.draft', expected: { menu: '改回草稿', api: 'draft', vault: 'draft' }, actual: { menu: menuText.trim(), api: drafted.api, vault: drafted.vault.status } });
+    expect(drafted.vault.contentHash === before.contentHash && drafted.vault.updatedAt !== null && before.updatedAt === null,
+      '改狀態只更新狀態與修改時間，正文不變', { id: 'status.row.file', expected: { contentHash: before.contentHash, updatedAt: 'set' }, actual: drafted.vault });
+    await shot('row-drafted');
+
+    await page.getByTestId('documents-status-draft').click();
+    await waitFor(() => summaryShows(page, 'browse', 1), 'draft filter lists one document');
+    const draftRows = await rowHrefs(page);
+    expect(draftRows.length === 1 && draftRows[0] === `/documents/${encodeURIComponent(draftId)}` && new URL(page.url()).searchParams.get('status') === 'draft',
+      '「草稿」只列草稿，狀態記在網址', { id: 'status.filter.draft', expected: { rows: [draftId], url: 'draft' }, actual: { rows: draftRows, url: new URL(page.url()).searchParams.get('status') } });
+    await page.getByTestId('documents-source').selectOption('rss');
+    await page.getByTestId('documents-no-results').waitFor();
+    const rssCounts = await counts();
+    expect(rssCounts.draft === 0 && rssCounts.published === 16, '來源篩選與狀態篩選一起作用，篇數跟著來源',
+      { id: 'status.filter.source', expected: { draft: 0, published: 16 }, actual: rssCounts });
+    await page.getByTestId('documents-source').selectOption('');
+    await page.getByTestId('documents-search').fill(draftTitle);
+    await page.getByTestId('documents-search').press('Enter');
+    await waitFor(() => summaryShows(page, 'search', 1), 'draft search finds the draft');
+    const searched = { rows: await rowHrefs(page), counts: await counts() };
+    expect(searched.rows[0] === `/documents/${encodeURIComponent(draftId)}` && searched.counts.draft === 1,
+      '搜尋與狀態篩選一起作用', { id: 'status.filter.search', expected: { rows: [draftId], draft: 1 }, actual: searched });
+    await shot('draft-filter-search');
+    await page.getByRole('button', { name: '清除搜尋', exact: true }).click();
+    await waitFor(() => summaryShows(page, 'browse', 1), 'draft filter after clearing the search');
+
+    await row.locator('.document-row').click();
+    await page.getByTestId('reader-body').waitFor();
+    const statusButton = page.getByTestId('reader-status');
+    const draftReader = { chip: await page.getByTestId('reader-draft-chip').count(), text: (await statusButton.innerText()).trim(), primary: (await statusButton.getAttribute('class')).includes('primary') };
+    expect(draftReader.chip === 1 && draftReader.text === '發布' && draftReader.primary, '閱讀草稿：草稿標記與主要按鈕「發布」',
+      { id: 'status.reader.draft', expected: { chip: 1, text: '發布', primary: true }, actual: draftReader });
+    await shot('reader-draft');
+    await statusButton.click();
+    await waitFor(async () => (await statusButton.innerText()).trim() === '改回草稿' && await page.getByTestId('reader-draft-chip').count() === 0, 'reader shows the published state');
+    const publishedReader = { primary: (await statusButton.getAttribute('class')).includes('primary'), api: (await instance.api(`/api/documents/${encodeURIComponent(draftId)}`)).document.status, vault: (await stored()).status };
+    expect(!publishedReader.primary && publishedReader.api === 'published' && publishedReader.vault === 'published', '發布後標記消失，按鈕換成一般按鈕「改回草稿」',
+      { id: 'status.reader.published', expected: { primary: false, api: 'published', vault: 'published' }, actual: publishedReader });
+    await shot('reader-published');
+
+    await page.locator('.reader-bar').getByRole('button', { name: '文件', exact: true }).click();
+    await page.getByTestId('documents-no-results').waitFor();
+    await waitFor(() => countsAre({ all: 22, draft: 0, published: 22 }), 'list counts after publishing in the reader');
+    const returned = await counts();
+    expect(JSON.stringify(returned) === JSON.stringify({ all: 22, draft: 0, published: 22 }), '回到列表時篇數已更新',
+      { id: 'status.list.after-reader', expected: { all: 22, draft: 0, published: 22 }, actual: returned });
+    await shot('list-after-publish');
+    await page.getByTestId('documents-status-all').click();
+    await waitFor(() => summaryShows(page, 'browse', 22), 'every status listed again');
   });
 
   await record.scenario('DOCS-3', '從搜尋結果刪除後導向、直接開啟已刪文件', async ({ expect, shot }) => {

@@ -11,13 +11,14 @@
 | `type` | `Transcript` |
 | `title`、`resource` | 影片標題與來源 URL |
 | `tags` | 初始為空陣列 |
+| `status` | 文件狀態：`draft`（草稿）或 `published`（正式）；收集時寫 `published`。沒有這個欄位或值不是這兩者的文件是正式 |
 | `collector.id` | `youtube:<video-id>` |
 | `collector.source`、`collector.source_id` | `youtube` 與 video ID |
 | `collector.publisher` | 頻道名稱 |
 | `collector.publisher_id` | 有取得頻道 ID 時保存 |
 | `collector.published_at` | 有取得發布時間時保存，未知不以收集時間代替 |
 | `collector.collected_at` | 收集時間，ISO 8601 |
-| `collector.updated_at` | 程式修改文件內容的時間，ISO 8601；收集時不寫入，沒有這個欄位表示文件自收集後沒有被程式修改 |
+| `collector.updated_at` | 程式修改文件的時間，例如變更 `status`，ISO 8601；收集時不寫入，沒有這個欄位表示文件自收集後沒有被程式修改 |
 | `collector.content_extent` | `full`，表示所保存的字幕內容；不表示影片有任何字幕以外的內容被收集 |
 | `collector.subtitle.language_code` | 字幕語言 |
 | `collector.subtitle.language_name` | 有取得時保存 |
@@ -28,7 +29,9 @@
 
 ## 讀取與相容性
 
-現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的文件是固定欄位投影：來源無關的 `id`、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`、`publishedAt`、`collectedAt`，以及 YouTube 專屬的 `youtube`（字幕語言與人工／自動）。未知 frontmatter 不透過 API 呈現；讀取不改寫檔案，未知欄位保留在 Vault。沒有 `publisher_id` 的文件以 `publisher.id: null` 呈現。
+現行 reader 接受 `Transcript`／`youtube` 格式；它不是完整 schema 驗證器。資料包還原有額外語意驗證，不能因檔案可解析 YAML 就宣稱可安全還原。對外的文件是固定欄位投影：來源無關的 `id`、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`、`publishedAt`、`collectedAt`、`status`，以及 YouTube 專屬的 `youtube`（字幕語言與人工／自動）。未知 frontmatter 不透過 API 呈現；讀取不改寫檔案，未知欄位保留在 Vault。沒有 `publisher_id` 的文件以 `publisher.id: null` 呈現。
+
+變更狀態只改寫 `status` 與 `collector.updated_at` 兩個值，frontmatter 其他欄位、註解、格式與正文逐位元組保留；欄位不存在時，`status` 加在 `collector` 前一行，`updated_at` 加在 `collected_at` 下一行。其他工具把 frontmatter 寫成 flow 樣式（`{...}`）時，整段 frontmatter 重新序列化，欄位值不變。狀態已相同時不寫檔。
 
 文件的修改時間是 `collector.updated_at`，沒有時是 `collector.collected_at`；匯入合併以它和另一台的修改時間或刪除時間比較，較新的為準。比較內容時忽略這兩個時間與序列化差異，所以兩台各自收集的同一支影片內容相同。在程式以外修改文件不更新這個時間。
 
