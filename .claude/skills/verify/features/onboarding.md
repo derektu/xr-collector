@@ -30,7 +30,7 @@ Preconditions: `launchWeb({ vault: 'none' })`。新知識庫的預設位置是 r
 ## Gotchas
 
 - 名稱規則同時套用 macOS 與 Windows 兩邊（不能有 `\ / : * ? " < > |`、Windows 保留名稱等），所以在 Mac 上也不接受 `a:b`。
-- 位置下已有同名的空資料夾也算衝突；新知識庫一律是新建立的資料夾。
+- 位置下已有同名的任何項目（檔案或資料夾，空的也算）都是衝突；新知識庫一律是新建立的資料夾。
 - 新知識庫不能建在目前的知識庫或程式資料目錄（profile）裡。
 
 ## Regression flows

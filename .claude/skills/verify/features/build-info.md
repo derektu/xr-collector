@@ -1,6 +1,6 @@
 # 建置資訊
 
-設定頁與 Onboarding 底部只顯示客戶需要的版本與安裝／開發版本類型。完整建置時間、commit、建置編號、平台與原始碼狀態保留在裝置 API，供已授權 Agent 與診斷使用，不顯示在一般畫面。
+設定頁「關於 XR Collector」與 Onboarding 底部顯示客戶需要的版本與安裝／開發版本類型；設定頁的卡片另含 App 更新區塊（見 [app-update.md](app-update.md)）。完整建置時間、commit、建置編號、平台與原始碼狀態保留在裝置 API，供已授權 Agent 與診斷使用，不顯示在一般畫面。
 
 ## Sub-features
 
@@ -27,7 +27,8 @@ Preconditions: Web 合成 instance；Onboarding 另用 `launchWeb({ vault: 'none
 
 - `sourceDirty: null` 是未知，不是乾淨版本。這些資訊仍供 API 診斷，但不顯示給一般使用者。
 - development 由執行中的來源建立身分；packaged 必須帶固定的合法資訊，缺檔或 target 不符不能假裝成開發版。
-- 此功能不提供更新檢查、下載或安裝操作。
+- 建置資訊本身不提供更新操作；設定頁卡片裡的更新檢查、下載與安裝屬於 App 更新功能，Onboarding 的精簡卡片沒有更新區塊。
+- 讀取中顯示「正在讀取建置資訊…」，讀取失敗顯示「無法讀取建置資訊。」與「重試」。
 
 ## Regression flows
 

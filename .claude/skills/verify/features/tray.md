@@ -4,7 +4,7 @@ macOS 選單列與 Windows 系統匣的 XR Collector 圖示，以及主視窗的
 
 ## Sub-features
 
-- `tray-menu`：選單的狀態行（正在檢查或收集／等待重試／排隊中／沒有進行中的工作／下次檢查／自動檢查已關閉；離線時改為「目前沒有網路」加上「N 項工作等待中，恢復後自動接續」、「恢復後自動檢查」或「自動檢查已關閉」）、需處理訂閱子選單、項目順序、「工作」的失敗數、自動檢查的勾選，以及圖示狀態（需處理 `!` 優先於離線 ×，再優先於版本更新提示，再優先於閒置／收集中／自動檢查關閉；離線圖示不疊版本更新角標，tooltip 是「XR Collector・沒有網路」）。未選 Vault 時只有開啟與結束。
+- `tray-menu`：選單的狀態行（正在檢查或收集／等待重試／排隊中／沒有進行中的工作／下次檢查／自動檢查已關閉；離線時改為「目前沒有網路」加上「N 項工作等待中，恢復後自動接續」、「恢復後自動檢查」或「自動檢查已關閉」）、需處理訂閱子選單、項目順序、「工作」的失敗數、自動檢查的勾選，以及圖示狀態（需處理 `!` 優先於離線 ×，再優先於版本更新提示，再優先於閒置／收集中／自動檢查關閉；離線圖示不疊版本更新角標，tooltip 是「XR Collector・沒有網路」）。未開啟 Vault 時沒有工作與檢查項目，只有開啟、需處理訂閱子選單、版本行、「檢查 App 更新」與結束；完全讀不到狀態時只有開啟與結束。
 - `tray-hide`：關閉視窗只隱藏，程序、收集與 Agent API 照常，runtime 不重啟。
 - `tray-actions`：從選單立即檢查所有訂閱、切換自動檢查。
 - `tray-open`：從選單開啟主視窗、工作頁與記錄頁；Windows 左鍵點圖示開啟視窗；頁面不重新載入。
@@ -28,7 +28,7 @@ Preconditions:
 - **讀選單。** `trayMenu(app)` 回傳 `{ icon, updateBadge?, tooltip, items }`；`items` 包含狀態、動作、分隔線，以及 `{ kind: 'submenu', label, items: [{ action, label }] }`。它先重新讀一次 API 再回傳。
 - **讀畫出的選單。** `trayShown(app)` 不重讀，回傳 `{ menu, reads, reading }`：`menu` 是目前畫出的選單，`reads` 是選單建立以來讀狀態的次數，`reading` 是有沒有讀取正在進行或等著開始。觀察閒置前先等 `reading` 為 false。
 - **點選單。** `clickTray(app, action)` 支援既有 action、版本更新動作，以及需處理列的 `subscription:<notification-id>`。
-- **視窗。** `closeWindow(app)` 等於按關閉鈕；`windowState(app)` 回傳 `{ exists, visible, focused, url }`。
+- **視窗。** `closeWindow(app)` 等於按關閉鈕；`windowState(app)` 回傳 `{ exists, shown, visible, focused, url }`。
 - **提示。** `notifications(app)` 回傳這次啟動發出的提示 `[{ id?, title, content }]`；`activateNotification(app, id)` 走與 OS 點擊相同的導頁。版本更新不發送 OS notification。
 
 - **第二次啟動。** `instance.launchAgain()` 以同一 profile 模擬手動再次開啟，回傳第二個程序的 exit code；視窗顯示且前後 `/api/health` 的 runtime instanceId 相同。此 helper 不模擬 OS 登入啟動。
