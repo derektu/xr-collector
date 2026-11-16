@@ -7,7 +7,7 @@ import type { SearchStatusReport, TranscriptSearch } from '../../core/search-typ
 import type { SourceRegistry } from '../../core/source-registry.js';
 import type { SubscriptionRecord } from '../../core/subscription-types.js';
 import { serve } from '../api-route.js';
-import { documentFilter, isCalendarDate, pagination, singleValues } from './query-params.js';
+import { documentFilter, isCalendarDate, pagination, requestedStatus, singleValues } from './query-params.js';
 import type { SubscriptionCollection } from './subscriptions.js';
 
 export interface DocumentRouteOptions {
@@ -18,7 +18,7 @@ export interface DocumentRouteOptions {
   subscriptions: readonly SubscriptionCollection[];
 }
 
-/** The documents of the active Vault: listing, their sources, search and the index, reading and deleting. */
+/** The documents of the active Vault: listing, their sources, search and the index, reading, status and deleting. */
 export function registerDocumentRoutes(app: FastifyInstance, options: DocumentRouteOptions): void {
   const { sources, subscriptions } = options;
   serve(app, API_ROUTES.documents, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
@@ -86,6 +86,10 @@ export function registerDocumentRoutes(app: FastifyInstance, options: DocumentRo
 
   serve(app, API_ROUTES.document, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
     document: await options.collector!.read(request.params.id),
+  }));
+
+  serve(app, API_ROUTES.setDocumentStatus, async (request: FastifyRequest<{ Params: { id: string }; Body: unknown }>) => ({
+    document: await options.collector!.setStatus(request.params.id, requestedStatus((request.body as { status?: unknown } | null)?.status)),
   }));
 
   serve(app, API_ROUTES.deleteDocument, async (request: FastifyRequest<{ Params: { id: string } }>) =>

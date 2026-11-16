@@ -105,7 +105,7 @@ export async function run({ instance, page, record, waitFor }) {
     await screenAt(page, instance);
     const counts = by('search-index-counts');
     const shownSearch = { indexed: Number(await counts.getAttribute('data-indexed')), vault: Number(await counts.getAttribute('data-vault')) };
-    const index = (await instance.state()).index.indexes.find((candidate) => ['documents_v3', 'documents_v2'].includes(candidate.uid));
+    const index = (await instance.state()).index.indexes.find((candidate) => ['documents_v4', 'documents_v2'].includes(candidate.uid));
     const expectedSearch = { indexed: vault.documents, vault: vault.documents, engine: vault.documents };
     const actualSearch = { ...shownSearch, engine: index?.numberOfDocuments ?? null, api: { indexed: search.indexedDocuments, vault: search.vaultDocuments } };
     expect(shownSearch.indexed === vault.documents && shownSearch.vault === vault.documents && search.vaultDocuments === vault.documents

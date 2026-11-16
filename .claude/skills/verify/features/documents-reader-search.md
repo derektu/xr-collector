@@ -1,6 +1,6 @@
 # 文件、閱讀與搜尋
 
-文件頁列出 Vault 內的所有文件（YouTube 字幕與 RSS 文章），可依來源篩選、全文搜尋、分頁。點文件進閱讀頁看全文、開原始來源、刪除或重新收集；已刪除的文件開啟時顯示已刪除狀態。
+文件頁列出 Vault 內的所有文件（YouTube 字幕與 RSS 文章），可依來源與狀態（草稿／正式）篩選、全文搜尋、分頁。點文件進閱讀頁看全文、開原始來源、發布或改回草稿、刪除或重新收集；已刪除的文件開啟時顯示已刪除狀態。
 
 ## Sub-features
 
@@ -10,6 +10,7 @@
 - `docs-search-normalization`：query 與 title、publisher、body 共用完整 NFKC、ASCII 小寫、簡轉繁／繁體字形與 Unicode 空白正規化；地區用詞不互換。列表、摘要與閱讀頁顯示 Vault 原文，正文命中標記映回原始字元。
 - `docs-search-fragments`：COCT 分詞後的每個中文詞或查詢片段，各自在單一欄位連續出現；多個群組採 AND，可分處不同位置或欄位。詞內任意連續片段可召回；引號要求整段正規化文字連同空白、標點連續出現。
 - `docs-search-unavailable`：搜尋引擎不可用時的提示。
+- `docs-status`：搜尋列下方的「全部／草稿／正式」切換 `documents-status`（各附篇數，跟著來源篩選與搜尋詞），草稿列標題前的「草稿」標記，每列 `document-more` 選單的「發布」／「改回草稿」，閱讀頁日期前的「草稿」標記與 `reader-status` 按鈕（草稿為主要按鈕「發布」，正式為一般按鈕「改回草稿」）。
 - `reader-view`：閱讀頁內文、發布者、原始來源連結。
 - `reader-delete`：閱讀頁或列表更多動作的刪除確認；確認後回原列表，重新開啟已刪除 ID 才顯示刪除狀態。
 - `reader-recollect`：能由 ID 還原來源網址的已刪除文件可重新收集，目前是 YouTube；RSS 不提供此按鈕。
@@ -33,6 +34,7 @@ Preconditions:
 - **文字等價與原文。** 執行 `search-normalization`：查台積電／台积电／臺積電、ＡＩ／AI、CoWoS／cowos、００５０／0050，命中同組 ID；50 不等於 0050，服务器不替換為伺服器。純 Unicode 空白回到瀏覽。檢查簡體正文的原文 mark、ﬃ→ffi 的長度映射，並開 Reader 比對簡體、連字與 emoji。
 - **詞界與連續片段。** 半導／導體找到半導體，股找到個股，金找到現金流量；觀光不能從直觀與賣光、觀 光、觀、光或分散於不同欄位的觀與光拼成。無空白的「離岸風電」依 COCT 得到多詞 AND，可命中「離岸設備帶動風電」；`"離岸風電"` 則要求字面連續。顯式「半 導」是兩個 AND 群組，與單一片段「半導」不同。`"半導體、個股"` 與 `"半導體 個股"` 的分隔字元須分別符合原文。
 - **召回與條件。** 用 21 份同來源「晶片」文件查片段「晶」，UI 依來源篩選後兩頁為 20＋1，ID 不重複、total 為 21；另以 API 單獨驗日期排除。逐題從 run-private UI 取得 Agent 連線資料，對照授權 Agent 的完整回應，重啟後重新取得連線資料。
+- **草稿與正式。** 收集的文件都是正式：`documents-status-all`／`-draft`／`-published` 的 `.count` 為 22／0／22。D 的影片列 `document-more` →「改回草稿」（`document-status-action`），該列標題前出現 `document-draft-chip`，篇數變 22／1／21，Vault frontmatter 的 `status` 為 `draft`、`collector.updated_at` 寫入、正文雜湊不變。按「草稿」只剩這一列，網址帶 `status=draft`；來源選 RSS 時沒有結果，RSS 的篇數 0／16；搜尋 D 的標題仍找到它。開啟它：`reader-draft-chip` 在日期前，`reader-status` 是主要按鈕「發布」；按下後標記消失、按鈕變一般按鈕「改回草稿」，API 與 Vault 為 `published`。返回列表不必重新整理，篇數回到 22／0／22。
 - **閱讀。** 點 A 第 1 集。`reader-body` 含「【合成字幕】」，`reader-publisher` 顯示頻道，`reader-source-link` 指向影片網址。
 - **刪除。** `reader-delete` → `confirm-delete-document`，先取消確認仍可閱讀，再按「刪除」。畫面返回原入口，文件從列表與搜尋消失，`vault/settings/deleted-documents.json` 多一筆。重新開啟同一 ID 才顯示 `reader-deleted`。列表每列的 `document-more` →「刪除」也有相同確認。
 - **重新收集。** 重新開啟已刪除的 YouTube ID，點 `reader-recollect`，完成後 `reader-body` 再次出現。已刪除 RSS ID 不提供此按鈕。
@@ -55,7 +57,7 @@ Preconditions:
 
 - `core-journey`：斷言 `docs-list`、`docs-filter`、`docs-search`、`reader-view`、`reader-delete`。6 份文件的列表、頻道 A 篩選、搜尋無結果與命中（畫面、API、標示），從結果閱讀（內文、發布者連結、原始來源），閱讀頁刪除先取消再確認，API、Vault、索引只少這一份且刪除紀錄有它。
 - `subscription-remove`：斷言 `docs-filter`、`reader-view`。移除訂閱並保留文件後，來源選單列出這個已移除的訂閱且 API 標示已移除與份數，篩選列出全部文件，閱讀頁可讀且發布者不再是連結。選項文字「<標題>・已移除（n）」在 tests/web/document-presentation.test.ts。
-- `documents-reader-search`：斷言 `docs-list`、`docs-search`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁，頁碼記在網址、閱讀後返回同一頁、搜尋從第一頁開始；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集。
+- `documents-reader-search`：斷言 `docs-list`、`docs-search`、`docs-status`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁，頁碼記在網址、閱讀後返回同一頁、搜尋從第一頁開始；從列選單改回草稿（標記、篇數、Vault 只改狀態與修改時間），草稿篩選與來源、搜尋一起作用，閱讀頁兩種狀態的標記與按鈕，發布後回列表篇數已更新；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集。
 - `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。已刪除 RSS 不提供重新收集、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支。
 - `search-normalization`：斷言 `docs-search-fragments`、`docs-filter`、`docs-search`。片段查詢套用來源、日期與 20＋1 分頁，UI API、授權 Agent 與畫面第二頁相同；從設定頁重建索引與重啟後，片段結果、原文與 Vault 不變。文字規則（簡繁與異體、NFKC、地區詞、連續片段、詞界、引號、原文標示）在 tests/search/meilisearch-integration.test.ts 與旁邊的單元測試。均為 Mac Web 合成資料；不代表兩平台封裝資源、換詞庫或壞資源啟動驗收。
 - `live-updates`：斷言 `docs-list`、`docs-search`、`reader-view`。文件頁開著時 Agent 刪除文件，總數與 API 相同；閱讀頁開著時 Agent 刪除同一份，顯示已刪除；設定頁開著時 Agent 刪除文件，搜尋卡的已索引與知識庫數、搜尋狀態 API 與引擎實際索引數都等於文件數。

@@ -25,6 +25,18 @@ export interface DocumentDetails {}
  */
 export type ContentExtent = 'full' | 'summary';
 
+/**
+ * Whether a document is a `draft` still to be reviewed or `published`, ready to use. Stored as the
+ * top-level frontmatter `status`; a file without one is published.
+ */
+export type DocumentStatus = 'draft' | 'published';
+
+/** How many documents have each status. */
+export interface DocumentStatusCounts {
+  draft: number;
+  published: number;
+}
+
 /** Source-independent document fields shared by browse, search and read. */
 export interface DocumentMetadata extends DocumentDetails {
   id: string;
@@ -37,6 +49,7 @@ export interface DocumentMetadata extends DocumentDetails {
   publisher: DocumentPublisher;
   publishedAt: string | null;
   collectedAt: string;
+  status: DocumentStatus;
   /** Set on a document read from the Vault; browse and search results leave it out. */
   contentExtent?: ContentExtent;
 }
@@ -55,11 +68,15 @@ export interface DocumentFilter {
   sourceType?: DocumentSourceType;
   /** A publisher ID, or `none` for documents without one; requires `sourceType`. */
   publisherId?: string;
+  status?: DocumentStatus;
 }
 
 export interface DocumentPage {
   documents: DocumentSummary[];
+  /** Documents matching the whole filter. */
   total: number;
+  /** Documents matching every filter but the status, by status. */
+  statusCounts: DocumentStatusCounts;
   offset: number;
   limit: number;
   nextOffset: number | null;

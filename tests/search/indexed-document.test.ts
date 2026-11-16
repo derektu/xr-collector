@@ -42,7 +42,7 @@ describe('the indexed form of a YouTube document', () => {
     expect(await indexed(vault)).toMatchObject([{
       id: 'youtube:aaaaaaaaaa1',
       youtube: { languageCode: 'zh-TW', languageName: '中文（台灣）', subtitleKind: 'manual' },
-      contentHash: '681c159c500b4cb52377b9c6c0e0e9b72de6b4861e89b52dd99a73b362aada98',
+      contentHash: '1f243620e19ed673338d4d60cbb869ca120a5415765e7addad30906f7dea203c',
     }]);
   });
 });

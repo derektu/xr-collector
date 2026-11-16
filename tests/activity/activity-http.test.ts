@@ -36,7 +36,7 @@ function services(failures: CollectorError[] = []) {
       const input = transcriptOf(document);
       const added: SavedDocument = {
         id: `youtube:${input.videoId}`, type: 'Transcript', sourceType: 'youtube', title: input.title, sourceUrl: input.sourceUrl,
-        sourceId: input.videoId, publisher: { id: null, name: 'HTTP 頻道' }, publishedAt: null, collectedAt: '2026-10-15T00:00:00.000Z',
+        sourceId: input.videoId, publisher: { id: null, name: 'HTTP 頻道' }, publishedAt: null, collectedAt: '2026-10-15T00:00:00.000Z', status: 'published',
         youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' }, bodyMarkdown: input.bodyMarkdown,
       };
       saved = added;

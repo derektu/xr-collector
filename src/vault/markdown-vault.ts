@@ -3,7 +3,8 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { DocumentVault } from '../core/collector.js';
 import type { SourceRegistry } from '../core/source-registry.js';
-import type { ContentExtent, DeletionRecord, DocumentKey, DocumentMetadata, SavedDocument } from '../core/document-types.js';
+import type { ContentExtent, DeletionRecord, DocumentKey, DocumentMetadata, DocumentStatus, SavedDocument } from '../core/document-types.js';
+import { storedDocumentStatus } from '../core/document-status.js';
 import { CollectorError } from '../core/collector-error.js';
 import type { VaultFiles } from '../core/vault-files.js';
 import type { CapturedDocument } from '../core/source-contract.js';
@@ -11,6 +12,7 @@ import { collectedAtReadable, collectedBeforeDeletion } from '../core/deletion-r
 import { documentId } from '../core/document-id.js';
 import { DeletionLedger, deletionId } from './deleted-documents.js';
 import { documentKeyFromId, documentKeyFromPath, documentPath } from './document-paths.js';
+import { withDocumentStatus } from './document-status-edit.js';
 
 /**
  * A document file's frontmatter. The core owns these keys; the `collector` block also carries the
@@ -21,6 +23,8 @@ interface StoredMetadata {
   title: string;
   resource: string;
   tags: string[];
+  /** Absent in a file another tool wrote; such a document is published. */
+  status?: DocumentStatus;
   collector: {
     id: string;
     source: string;
@@ -29,14 +33,19 @@ interface StoredMetadata {
     publisher_id?: string;
     published_at?: string;
     collected_at: string;
+    /** When the app last changed the document, such as its status; absent until the first change. */
+    updated_at?: string;
     content_extent: ContentExtent;
     source_tags: [];
     [field: string]: unknown;
   };
 }
 
+/** A document file: the frontmatter between the `---` lines, starting at index 4, then the body. */
+const DOCUMENT_FILE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+
 function parseFrontmatter(sources: SourceRegistry, content: string): { metadata: StoredMetadata; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  const match = content.match(DOCUMENT_FILE);
   if (!match?.[1]) throw new Error('Invalid document frontmatter');
   const metadata = parse(match[1]) as StoredMetadata;
   const definition = typeof metadata?.collector?.source === 'string' ? sources.definition(metadata.collector.source) : undefined;
@@ -86,6 +95,7 @@ function toSavedDocument(sources: SourceRegistry, metadata: StoredMetadata, body
     },
     publishedAt: metadata.collector.published_at ?? null,
     collectedAt: metadata.collector.collected_at,
+    status: storedDocumentStatus(metadata.status),
     contentExtent: metadata.collector.content_extent === 'summary' ? 'summary' : 'full',
     ...(details ? { [sourceType]: details } : {}),
     bodyMarkdown,
@@ -163,6 +173,7 @@ export class MarkdownVault implements DocumentVault {
       title: capture.title,
       resource: capture.sourceUrl,
       tags: [],
+      status: 'published',
       collector: {
         id,
         source: capture.sourceType,
@@ -243,6 +254,22 @@ export class MarkdownVault implements DocumentVault {
     if (!document) return null;
     const deletion = await this.deletions.get(id);
     return deletion && collectedBeforeDeletion(document.collectedAt, deletion.deletedAt) ? null : document;
+  }
+
+  /**
+   * Sets the status of a document file and stamps `collector.updated_at` with the Vault clock. The
+   * rest of the file keeps its bytes. The caller checks that the document is visible.
+   */
+  async writeStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
+    const key = documentKeyFromId(this.sources, id);
+    if (!key) throw new Error(`Not a document ID: ${id}`);
+    const content = await readFile(this.pathFor(key), 'utf8');
+    const frontmatter = content.match(DOCUMENT_FILE)?.[1];
+    if (frontmatter === undefined) throw new DocumentFileError(documentPath(key));
+    const text = `---\n${withDocumentStatus(frontmatter, status, this.now().toISOString())}${content.slice(4 + frontmatter.length)}`;
+    const document = parseDocument(this.sources, text);
+    await this.files.writeText(documentPath(key), text);
+    return document;
   }
 
   /** Removes a document file; a missing file is already removed. */

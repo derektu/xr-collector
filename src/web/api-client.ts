@@ -6,6 +6,7 @@ import type {
   DocumentDeletion,
   DocumentPage,
   DocumentSources,
+  DocumentStatus,
   SavedDocument,
 } from '../core/document-types.js';
 import type {
@@ -252,6 +253,11 @@ export const api = {
     return (await call(API_ROUTES.document, { params: { id }, signal })).document;
   },
 
+  /** Sets a document's status: `published` publishes a draft, `draft` takes a published document back to draft. */
+  async setDocumentStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
+    return (await call(API_ROUTES.setDocumentStatus, { params: { id }, body: { status } })).document;
+  },
+
   /** Deletes a document; automatic and subscription collection skip it until the user collects it again by its address. */
   deleteDocument(id: string): Promise<DocumentDeletion> {
     return call(API_ROUTES.deleteDocument, { params: { id } });
@@ -342,8 +348,8 @@ export const api = {
   },
 };
 
-function filterParameters(filter: DocumentFilter): { sourceType: string | undefined; publisherId: string | undefined } {
-  return { sourceType: filter.sourceType || undefined, publisherId: filter.publisherId || undefined };
+function filterParameters(filter: DocumentFilter): { sourceType: string | undefined; publisherId: string | undefined; status: DocumentStatus | undefined } {
+  return { sourceType: filter.sourceType || undefined, publisherId: filter.publisherId || undefined, status: filter.status || undefined };
 }
 
 /** The filters both activity views take. */

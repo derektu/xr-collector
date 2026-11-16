@@ -184,7 +184,7 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 收集先保存 Markdown，再更新索引。索引失敗不刪除已保存文件；列表與全文可從 Vault 讀取，搜尋依索引狀態回報結果或錯誤。合併匯入只對寫入或移除的文件更新索引；完全取代與中斷後完成的匯入從 Vault 全量重建。匯入的檔案都已到位後，更新索引或重新載入訂閱失敗時改為全量重建；重建也失敗時匯入仍算完成，狀態為 `completed`、`result.searchRebuildNeeded` 為 true，狀態訊息為「匯入已完成，搜尋索引需要重建」，完成畫面提示到設定按「重建索引」；重新啟動程式時搜尋服務也會發現索引與 Vault 不符而重建。從匯出檔建立的 Vault 開啟時建立自己的索引。
 
-索引名稱帶 schema 版本（`documents_v3`）；schema 改變時使用新名稱並從 Vault 全量重建。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。
+索引名稱帶 schema 版本（`documents_v4`）；schema 改變時使用新名稱並從 Vault 全量重建。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。狀態篩選使用索引文件的 `status`（`draft`／`published`）。搜尋同時回傳套用狀態以外所有條件時各狀態的篇數：Latin 查詢由引擎的 `status` facet 計算，中文片段查詢由篩選前的命中 ID 集合計算，兩者都與不篩狀態時的總數相同。變更文件狀態寫入 Vault 後立即更新該筆索引，回應時搜尋已反映新狀態。
 
 搜尋索引另存 title、publisher name 與 body 的正規化投影；Vault 與回傳的 metadata、Reader 內文、摘要文字都保留原文。文件與 query 共用固定順序：完整 Unicode NFKC、ASCII A–Z 小寫、OpenCC `s2t`、OpenCC `t2tw`、`臺` 轉 `台`，最後把 Unicode `White_Space` 連續區段收成一個 ASCII 空格並去掉頭尾空白。OpenCC 使用固定的純 JavaScript `opencc-js` 1.4.2 及其內嵌字典，不需要平台 binary 或執行時下載；不使用 `s2twp`，因此不做「服务器／伺服器」這類地區用詞替換。filter ID、日期、URL 與文件 ID 不經正規化。命中位置以正規化文字的 UTF-8 byte offset 映回原文後才產生 `<mark>` 摘要。
 

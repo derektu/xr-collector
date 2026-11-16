@@ -8,6 +8,8 @@ import type {
   DocumentPage,
   DocumentSourcePublisher,
   DocumentSources,
+  DocumentStatus,
+  DocumentStatusCounts,
   SavedDocument,
 } from './document-types.js';
 import type { SubscriptionRecord } from './subscription-types.js';
@@ -40,6 +42,8 @@ export interface DocumentVault {
   read(id: string): Promise<SavedDocument | null>;
   /** Removes a document file. Vaults without deletion records cannot delete. */
   remove?(id: string): Promise<void>;
+  /** Sets a visible document's status and stamps its change time. Vaults without it cannot change status. */
+  writeStatus?(id: string, status: DocumentStatus): Promise<SavedDocument>;
   deletions?: DeletionRecords;
   /** The clock behind collection and deletion times. */
   now?: () => Date;
@@ -222,6 +226,39 @@ export class Collector {
   }
 
   /**
+   * Sets a document's status, then indexes the document so search filters follow it. Setting the
+   * status a document already has changes nothing: no file write, change notice or event. A failed
+   * index update keeps the new status and is recorded as `document.index_failed`; the next search
+   * start finds the index stale and rebuilds it.
+   */
+  setStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
+    return this.exclusive(id, async () => {
+      const current = await this.read(id);
+      if (current.status === status) return current;
+      if (!this.vault.writeStatus) throw new CollectorError('invalid_request', '這個知識庫不支援變更文件狀態。');
+      const document = await this.vault.writeStatus(id, status);
+      const event = { documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true as const };
+      if (this.search) {
+        try {
+          await this.search.index(document);
+        } catch (error) {
+          console.error('Search index update failed', error);
+          this.options.recordEvent?.({
+            eventType: 'document.index_failed', ...event,
+            message: `「${document.title}」的狀態已變更，搜尋索引更新失敗，可稍後重建索引。`,
+          });
+        }
+      }
+      this.noted(id);
+      this.options.recordEvent?.({
+        eventType: 'document.status_changed', detail: status, ...event,
+        message: status === 'published' ? `已發布「${document.title}」。` : `已將「${document.title}」改回草稿。`,
+      });
+      return document;
+    });
+  }
+
+  /**
    * Records the deletion of an item that has no document yet, such as an item still capturing, so
    * a capture that finishes later is not saved (`document_deleted`) unless an explicit request
    * comes after the record. An item already in the Vault or already deleted is left alone.
@@ -257,7 +294,14 @@ export class Collector {
 
   /** One page of Vault documents; only the returned page is read for excerpts. */
   async listDocuments(filter: DocumentFilter, page: { offset: number; limit: number }): Promise<DocumentPage> {
-    const matching = (await this.vault.list()).filter((document) => matchesFilter(document, filter));
+    const { status, ...others } = filter;
+    const statusCounts: DocumentStatusCounts = { draft: 0, published: 0 };
+    const matching: DocumentMetadata[] = [];
+    for (const document of await this.vault.list()) {
+      if (!matchesFilter(document, others)) continue;
+      statusCounts[document.status] += 1;
+      if (status === undefined || document.status === status) matching.push(document);
+    }
     const slice = matching.slice(page.offset, page.offset + page.limit);
     const documents = await Promise.all(slice.map(async (metadata) => {
       const document = await this.vault.read(metadata.id);
@@ -266,6 +310,7 @@ export class Collector {
     return {
       documents,
       total: matching.length,
+      statusCounts,
       offset: page.offset,
       limit: page.limit,
       nextOffset: page.offset + page.limit < matching.length ? page.offset + page.limit : null,
@@ -327,7 +372,7 @@ function explicitAfter(intent: SaveIntent, deletedAt: string): boolean {
   return intent.explicitAt !== null && !collectedBeforeDeletion(intent.explicitAt, deletedAt);
 }
 
-function matchesFilter(document: DocumentMetadata, filter: DocumentFilter): boolean {
+function matchesFilter(document: DocumentMetadata, filter: Omit<DocumentFilter, 'status'>): boolean {
   if (filter.sourceType && document.sourceType !== filter.sourceType) return false;
   if (filter.publisherId === undefined) return true;
   return filter.publisherId === NO_PUBLISHER_ID ? document.publisher.id === null : document.publisher.id === filter.publisherId;

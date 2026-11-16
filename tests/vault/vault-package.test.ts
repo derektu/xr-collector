@@ -104,7 +104,7 @@ function fakeSearch(root: string): TranscriptSearch {
       const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
-    async search() { return { hits: [], total: 0, offset: 0, limit: 50 }; },
+    async search() { return { hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 }; },
   };
 }
 async function open(root: string, overrides: Partial<Parameters<typeof VaultWorkspace.open>[0]> & YouTubeTestSources = {}) {

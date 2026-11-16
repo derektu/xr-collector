@@ -15,6 +15,8 @@ export interface VaultFiles {
   readonly sources: SourceRegistry;
   /** Replaces the file with pretty-printed JSON, through a temporary file and a rename. */
   writeJson(relative: string, value: unknown): Promise<void>;
+  /** Replaces the file with `text`, through a temporary file and a rename. */
+  writeText(relative: string, text: string): Promise<void>;
   /** Creates the file with `text` unless it exists; returns whether this call created it. */
   create(relative: string, text: string): Promise<boolean>;
   /** Removes the file; a missing file is already removed. */

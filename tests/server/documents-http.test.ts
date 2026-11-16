@@ -100,6 +100,7 @@ describe('documents HTTP contract', () => {
       publisher: { id: 'UC-a', name: '測試頻道' },
       publishedAt: '2026-09-30T00:00:00.000Z',
       collectedAt: '2026-10-01T00:00:00.000Z',
+      status: 'published',
       youtube: { languageCode: 'zh-Hant', languageName: null, subtitleKind: 'manual' },
       excerpt: '段落標題 這是 current0001 的字幕正文。',
     });
@@ -215,7 +216,7 @@ describe('documents HTTP contract', () => {
       replaceAll: async (documents) => { indexed.clear(); for (const document of documents) indexed.set(document.id, document); },
       upsert: async (document) => { indexed.set(document.id, document); },
       remove: async (ids) => { for (const id of ids) indexed.delete(id); },
-      search: async () => ({ hits: [], total: 0, offset: 0, limit: 50 }),
+      search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 50 }),
     };
     const load = async () => Promise.all((await vault.list()).map(async ({ id }) => (await vault.read(id))!));
     const stateFile = path.join(root, 'search-state.json');

@@ -178,6 +178,10 @@ describe('change events', () => {
     expect(subscription.lastCheckedAt, 'the check end is recorded when its job reads as completed').toBe(finished.finishedAt);
     await events.change((change) => change.kind === 'document' && change.id === 'youtube:chgvideo001', 'check collected its video');
 
+    const singleDocument = (change: Change) => change.kind === 'document' && change.id === 'youtube:chgsingle01';
+    await another(async () => expect((await send('PUT', '/api/documents/youtube%3Achgsingle01/status', { status: 'draft' })).status).toBe(200),
+      singleDocument, 'document status changed');
+
     expect((await send('DELETE', '/api/documents/youtube:chgsingle01')).status).toBe(200);
     await eventually(() => expect(events.changes().filter((change) => change.kind === 'document' && change.id === 'youtube:chgsingle01').length).toBeGreaterThan(0));
     const deletedAt = events.batches().length;

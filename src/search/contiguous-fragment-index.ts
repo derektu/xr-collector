@@ -1,4 +1,4 @@
-import type { SavedDocument } from '../core/document-types.js';
+import type { DocumentStatus, SavedDocument } from '../core/document-types.js';
 import type { SearchQuery } from '../core/search-types.js';
 import { NO_PUBLISHER_ID } from '../core/collector.js';
 import { normalizeSearchText } from './search-normalization.js';
@@ -8,6 +8,7 @@ interface FragmentDocument {
   sourceType: string;
   publisherId: string | null;
   publishedAtEpoch: number | null;
+  status: DocumentStatus;
   order: number;
   fields: [string, string, string];
   characters: Set<string>;
@@ -68,6 +69,11 @@ export class ContiguousFragmentIndex {
     return result.sort((left, right) => left.order - right.order).map(({ id }) => id);
   }
 
+  /** The status of an indexed document; undefined when the index does not hold it. */
+  status(id: string): DocumentStatus | undefined {
+    return this.documents.get(id)?.status;
+  }
+
   bodyPositions(id: string, groups: string[]): NormalizedMatchPosition[] {
     const body = this.documents.get(id)?.fields[2];
     if (body === undefined) return [];
@@ -104,6 +110,7 @@ function projectDocument(document: SavedDocument, order: number): FragmentDocume
     sourceType: document.sourceType,
     publisherId: document.publisher.id,
     publishedAtEpoch: document.publishedAt ? Date.parse(document.publishedAt) : null,
+    status: document.status,
     order,
     fields,
     characters: new Set(fields.flatMap((field) => [...field].filter(isHan))),
@@ -112,6 +119,7 @@ function projectDocument(document: SavedDocument, order: number): FragmentDocume
 
 function matchesFilters(document: FragmentDocument, query: SearchQuery): boolean {
   if (query.sourceType && document.sourceType !== query.sourceType) return false;
+  if (query.status && document.status !== query.status) return false;
   if (query.publisherId === NO_PUBLISHER_ID && document.publisherId !== null) return false;
   if (query.publisherId && query.publisherId !== NO_PUBLISHER_ID && document.publisherId !== query.publisherId) return false;
   if (query.publishedFrom && (document.publishedAtEpoch === null

@@ -134,7 +134,7 @@ export class MemoryDocuments implements DocumentVault {
     const document: SavedDocument = {
       id: `youtube:${capture.key}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
       sourceType: 'youtube', sourceId: capture.key, publisher: capture.publisher,
-      publishedAt: capture.publishedAt, collectedAt: this.now().toISOString(),
+      publishedAt: capture.publishedAt, collectedAt: this.now().toISOString(), status: 'published',
       youtube: capture.details as unknown as NonNullable<SavedDocument['youtube']>,
       bodyMarkdown: capture.bodyMarkdown,
     };
