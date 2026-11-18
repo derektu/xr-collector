@@ -26,6 +26,12 @@ export interface ScheduledRunner {
 export interface SchedulerOptions {
   now?: () => Date;
   pollIntervalMs?: number;
+  /**
+   * Starts the timer that polls every `ms` and returns its cancel function; `setInterval` by
+   * default. The poll checks the due subscriptions, reports its own failure, and resolves when the
+   * check has finished.
+   */
+  setTimer?: (poll: () => Promise<void>, ms: number) => () => void;
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
   /**
    * No check is dispatched while collection is paused; the due subscriptions are checked once it
@@ -48,7 +54,7 @@ export class CollectionScheduler {
   private readonly now: () => Date;
   private readonly pollIntervalMs: number;
   private schedule: StoredSchedule | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private cancelTimer: (() => void) | null = null;
   private checking: Promise<void> | null = null;
   private suspended = false;
   private unsubscribePause: (() => void) | null = null;
@@ -71,17 +77,14 @@ export class CollectionScheduler {
       });
       if (!paused) void this.checkNow().catch(reportScheduleError);
     }) ?? null;
-    if (!this.timer) {
-      this.timer = setInterval(() => {
-        void this.checkNow().catch(reportScheduleError);
-      }, this.pollIntervalMs);
-    }
+    this.cancelTimer ??= (this.options.setTimer ?? intervalTimer)(
+      () => this.checkNow().catch(reportScheduleError), this.pollIntervalMs);
     void this.checkNow().catch(reportScheduleError);
   }
 
   async close(): Promise<void> {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.cancelTimer?.();
+    this.cancelTimer = null;
     this.unsubscribePause?.();
     this.unsubscribePause = null;
     await this.checking;
@@ -205,6 +208,11 @@ export class CollectionScheduler {
     this.schedule ??= await this.store.load();
     return this.schedule;
   }
+}
+
+function intervalTimer(poll: () => Promise<void>, ms: number): () => void {
+  const timer = setInterval(() => { void poll(); }, ms);
+  return () => clearInterval(timer);
 }
 
 function reportScheduleError(error: unknown): void {

@@ -18,6 +18,7 @@ import {
   JsonSubscriptionStore,
   JsonScheduleStore,
   RecentTargets,
+  type SchedulerOptions,
   type SubscriptionStore,
 } from '../../domain/subscriptions/index.js';
 import { forwardingPort, JobManager, JobStore, type JobLimits, type RetryPolicy, type Connectivity } from '../../domain/jobs/index.js';
@@ -76,6 +77,8 @@ export interface WorkspaceOptions {
   jobRetry?: Partial<RetryPolicy>;
   /** Starts a timer jobs wait on (a retry's next attempt, a cooldown's end) and returns its cancel function; `setTimeout` by default. */
   jobTimer?: (callback: () => void, ms: number) => () => void;
+  /** Starts the timer each Vault's scheduler polls for due subscriptions on; see `SchedulerOptions.setTimer`. */
+  scheduleTimer?: SchedulerOptions['setTimer'];
   /**
    * The Vault location was fixed when the app started (`XR_COLLECTOR_VAULT`). The next start opens
    * that location again, so no other Vault is created or opened.
@@ -253,7 +256,7 @@ export class VaultWorkspace {
   private async reloadSchedule(): Promise<void> {
     await this.current.schedule.close();
     for (const service of this.current.subscriptions.all()) await service.planChecks({ overdue: false });
-    this.current.schedule = makeScheduler(this.current, this.options.pause, this.noteChange);
+    this.current.schedule = makeScheduler(this.current, this.options, this.noteChange);
     this.current.schedule.setSuspended(true);
     await this.current.schedule.start();
   }
@@ -323,7 +326,7 @@ export class VaultWorkspace {
       })));
     for (const event of vault.recoveryEvents) jobs.recordEvent(event);
     const partial = { vault, runtime, collector, subscriptions, jobs };
-    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options.pause, this.noteChange) };
+    const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options, this.noteChange) };
     return bundle;
   }
 
@@ -345,9 +348,12 @@ async function step(label: string, work: () => Promise<unknown>): Promise<void> 
   try { await work(); } catch (error) { console.error(label, error); }
 }
 
-function makeScheduler(bundle: Pick<Bundle, 'vault' | 'subscriptions' | 'jobs'>, pause: CollectionPause | undefined, noteChange: NoteChange): CollectionScheduler {
+function makeScheduler(
+  bundle: Pick<Bundle, 'vault' | 'subscriptions' | 'jobs'>, { pause, scheduleTimer }: Pick<WorkspaceOptions, 'pause' | 'scheduleTimer'>, noteChange: NoteChange,
+): CollectionScheduler {
   return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.vault.files, noteChange), {
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
     ...(pause ? { pause } : {}),
+    ...(scheduleTimer ? { setTimer: scheduleTimer } : {}),
   });
 }

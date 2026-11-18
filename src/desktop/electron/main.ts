@@ -83,7 +83,7 @@ const mainWindow = new MainWindow({
   runtime: () => runtime && {
     url: runtime.listeners.ui.url,
     resolveNotification: (id) => runtime ? runtime.resolveNotification(id) : Promise.resolve(null),
-    activeVaultId: () => runtime?.workspace?.activeVaultId() ?? null,
+    activeVaultId: () => runtime?.activeVaultId() ?? null,
   },
   quitting: () => isQuitting,
   sessionEnded: () => { isQuitting = true; },
@@ -137,7 +137,7 @@ app.whenReady().then(async () => {
     showItemInFolder: (file) => shell.showItemInFolder(file),
     documents: app.getPath('documents'),
     exports,
-    vaultStatus: () => runtime?.workspace?.operations.status(),
+    vaultStatus: () => runtime?.transferStatus() ?? undefined,
   });
   // Collection pauses from suspend to resume. macOS sends neither event during the dark wakes of a
   // sleeping Mac (Power Nap, maintenance), so nothing is checked until the person wakes it. The

@@ -333,6 +333,8 @@ const syntheticConnectivity = {
     .then((response) => response.status === 204, () => false),
   offlineRecheckMs: 2_000,
 };
+/** The polls of the schedulers running now: the open Vault's, replaced when it reloads or switches. */
+const schedulerPolls = new Set<() => Promise<void>>();
 const runtime = await startCollectorServer({
   profilePath,
   sources: sources.registry,
@@ -353,6 +355,12 @@ const runtime = await startCollectorServer({
     // retry that comes due waits while the catalog's holdRetries is true.
     ...(data === 'synthetic' ? {
       jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] },
+      // Each started scheduler polls on its interval and also when a flow writes schedule-trigger.
+      scheduleTimer: (poll: () => Promise<void>, ms: number) => {
+        const timer = setInterval(() => { void poll(); }, ms);
+        schedulerPolls.add(poll);
+        return () => { clearInterval(timer); schedulerPolls.delete(poll); };
+      },
       jobTimer: (callback: () => void, ms: number) => {
         let cancelled = false;
         const timer = setTimeout(() => {
@@ -382,10 +390,9 @@ const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
   const value = readFileSync(scheduleTriggerPath, 'utf8');
   if (value === scheduleTrigger) return;
   scheduleTrigger = value;
-  const schedule = runtime.workspace?.schedule as unknown as { checkNow(): Promise<void> } | undefined;
   // `schedule-trigger.done` names the last trigger whose poll has finished, so a flow waits for
   // the poll itself instead of a fixed time.
-  void schedule?.checkNow()
+  void Promise.all([...schedulerPolls].map((poll) => poll()))
     .then(() => writeFileSync(`${scheduleTriggerPath}.done`, value))
     .catch((error) => console.error('verify schedule trigger failed', error));
 }, 50) : null;
