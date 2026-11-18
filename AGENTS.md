@@ -2,14 +2,14 @@
 
 開工前讀：
 
-- [實作一張票的流程](docs/worker-workflow.md)：規劃 session 與 worker 的分工、從派工到 merge 的步驟
+- [做一張票](docs/worker-workflow.md)：一個 session 從談設計到 merge 走完一張票的步驟
 - [開發驗證流程](docs/development-validation.md)：驗收計畫、回歸流程、門檻、審查與交付
 - [專案驗證設定](docs/project-validation.md)：本專案的指令、驗證層級、平台、真實資料、nightly 與打包簽章
 - [verify skill](.claude/skills/verify/SKILL.md)：實際操作 App 並留下證據
 
-新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為 [Round 2 計畫](docs/round-2-plan.md)、[產品範圍](docs/product-brief.md)、當前 issue 及其引用的規格。`docs/history/mvp-plan.md` 是第一輪歷史。
+新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為當前 issue，以及 issue 引用的 `docs/` 規格與 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
 
-issue 只寫本票特有的內容：問題、預期行為、本票的驗收計畫與相依關係。適用每張票的規則寫在本檔與上面三份流程文件，不複製進 issue 或派工說明；規則改變時只改這幾處。
+issue 只寫本票特有的內容：問題、預期行為、本票的驗收計畫與相依關係。適用每張票的規則寫在本檔與上面三份流程文件，不複製進 issue；規則改變時只改這幾處。
 
 建立 issue 的完成條件：每張新票（包含工作途中拆出的 bug／後續工作）都要加入本 repo 對應的 Project 看板、設定為 `Todo`，再重新讀取確認看板名稱與狀態。回報時提供票號、連結及已確認的看板狀態；任一步驟失敗時回報「issue 已建立，看板設定尚未完成」及原因。查補既有票時，已有的其他狀態保留。
 

@@ -1,6 +1,6 @@
 # Vault、資料交換與搜尋
 
-Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描述現行資料責任及恢復邊界；操作步驟見 [README](../README.md)，Round 2 的選址與資料交換目標見 [開發計畫](round-2-plan.md)。
+Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描述資料的保存位置、交換方式與恢復邊界；操作步驟見 [README](../README.md)，文件檔的格式見 [文件格式](document-format.md)。
 
 ## 保存責任
 
@@ -21,7 +21,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | 匯入前備份 | 備份目錄（`<文件>/XR Collector 備份`，可由 `XR_COLLECTOR_BACKUP_DIR` 指定）；不屬於任何 Vault |
 | 從匯出檔建立知識庫的 journal | profile 的 `vault-import-journal.json`（進行中匯入的暫存資料夾、目標、是否已改名與標記檔雜湊）；裝置資料 |
 
-現行資料使用 Markdown／JSON 與檔案系統，不以 Git 歷史或同步 server 協調 Vault 寫入。同一個 Vault 只由一個程式寫入，外部同步工具不提供多機並行寫入的一致性保證。
+資料使用 Markdown／JSON 與檔案系統，不以 Git 歷史或同步 server 協調 Vault 寫入。同一個 Vault 只由一個程式寫入，外部同步工具不提供多機並行寫入的一致性保證。
 
 ## Vault 目錄與選址
 
@@ -69,9 +69,9 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 
 ### 收集與重新收集
 
-頻道探索把有刪除紀錄的影片當作已收集：它仍是候選、佔數量上限的名額，但不會被收集，也不會由更早的影片遞補。排程、立即檢查、恢復後的檢查、頻道工作重試失敗影片，以及其他沒有明確使用者請求的收集，遇到刪除紀錄時都結束為 `skipped`，`skipReason` 為 `deleted`。影片工作在擷取字幕前就檢查刪除紀錄，被略過的影片不會向 YouTube 取字幕；保存時再檢查一次，涵蓋擷取期間發生的刪除。
+訂閱檢查把有刪除紀錄的項目當作已收集：它仍是候選、佔數量上限的名額，但不會被收集，也不會由更早的項目遞補。排程、立即檢查、恢復後的檢查、重試失敗項目，以及其他沒有明確使用者請求的收集，遇到刪除紀錄時都以略過結束（`outcome: 'skipped'`，`skipReason` 為 `deleted`）。項目工作在向來源擷取內容前就檢查刪除紀錄，被略過的項目不會送出請求；保存時再檢查一次，涵蓋擷取期間發生的刪除。
 
-只有使用者以單支網址明確提出、且晚於刪除時間的請求可以重新收集。請求時間取使用者最近一次單獨送出這支影片的時間：直接送出影片網址或重試單支影片的工作，以工作接受的時間為準；同一支影片的工作還在排隊或執行時再次單獨送出，或頻道已排入、使用者又單獨送出，以最後一次送出的時間為準。保存時文件的 `collected_at` 晚於 `deletedAt`，寫入檔案後才清除刪除紀錄；收集失敗時刪除紀錄保留。刪除之前接受的工作，即使在重啟後接續，也不會讓文件回來。
+只有使用者以單一網址明確提出、且晚於刪除時間的請求可以重新收集。請求時間取使用者最近一次單獨送出這個項目的時間：直接送出網址或重試單一項目的工作，以工作接受的時間為準；同一項目的工作還在排隊或執行時再次單獨送出，或檢查已排入、使用者又單獨送出，以最後一次送出的時間為準。保存時文件的 `collected_at` 晚於 `deletedAt`，寫入檔案後才清除刪除紀錄；收集失敗時刪除紀錄保留。刪除之前接受的工作，即使在重啟後接續，也不會讓文件回來。
 
 ## 匯出與匯入
 
@@ -82,12 +82,12 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 ```json
 { "format": "xr-collector-package", "formatVersion": 2,
   "exportedAt": "<ISO 時間>", "createdBy": "<程式與版本>",
-  "source": { "vaultId": "<UUID>", "machine": "<機器名稱>" },
+  "source": { "vaultId": "<UUID>", "machine": "<機器名稱>", "folderName": "<知識庫資料夾名稱>" },
   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
   "files": [{ "path": "documents/youtube/<來源 ID>.md", "size": 0, "sha256": "<hex>" }] }
 ```
 
-`formatVersion` 是程式的設定：已登錄來源類型宣告的最高 `packageFormatVersion`，至少為 1，每個匯出檔都用這個版本，與匯出檔帶了哪些文件、訂閱或刪除紀錄無關。讀取時接受 1 到這個版本，較新的版本拒絕匯入。`source` 是匯出的知識庫 ID 與機器名稱，供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
+`formatVersion` 是程式的設定：已登錄來源類型宣告的最高 `packageFormatVersion`，至少為 1，每個匯出檔都用這個版本，與匯出檔帶了哪些文件、訂閱或刪除紀錄無關。讀取時接受 1 到這個版本，較新的版本拒絕匯入。`source` 是匯出的知識庫 ID、機器名稱與資料夾名稱，資料夾名稱是從匯出檔建立知識庫時的預設名稱，其餘供查問題；匯入只比對檔案本身，文件、訂閱與紀錄各自帶有時間。機器名稱取 `XR_COLLECTOR_MACHINE_NAME`，未設定時取主機名稱（去掉 macOS 的 `.local`）。匯入畫面只顯示檔名與 `exportedAt`；機器名稱、`createdBy` 與 `summary` 留在匯出檔與 API 回應中供查問題，畫面不顯示；讀取時忽略 manifest 中不認得的欄位。實作在 `src/vault/vault-package.ts`，以 `yazl`／`yauzl` 讀寫。
 
 匯出檔只放 Vault 登記的檔案，內容由 Vault 的紀錄決定，不掃描資料夾：
 
@@ -115,9 +115,9 @@ Vault 資料夾中的其他檔案（使用者的筆記、`.obsidian/` 等）一�
 
 ### 從匯出檔建立知識庫
 
-Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` 以同樣的位置與名稱規則建立新的 Vault，名稱預設為匯出檔記錄的來源知識庫資料夾名稱（manifest 的 `source.folderName`）：先確認磁碟放得下匯出檔的檔案（加上原大小 5%、至少 16 MiB 的餘量，不足時回 `insufficient_space`），再解開到同層的 `<目標>.importing-<唯一值>` 暫存資料夾，寫入新的標記檔，profile 的 `vault-import-journal.json` 記下暫存資料夾與目標；改名為目標之前，journal 先記下「已改名」與新標記檔的 SHA-256。之後啟動知識庫、寫入選址，選址寫入後才刪除 journal；搜尋服務無法啟動、選址寫入失敗，或程式在兩者之間停止時，journal 仍在，當下或下次啟動會收回這個資料夾。新 Vault 有自己的知識庫 ID，內容與匯出檔相同；訂閱、收集進度、各訂閱的收集設定與自動檢查開關都照匯出檔帶入；匯出的那台開著自動檢查時，兩台會各自收集同樣的訂閱。完成後直接進入 App。
+Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` 以同樣的位置與名稱規則建立新的 Vault，名稱預設為匯出檔記錄的來源知識庫資料夾名稱（manifest 的 `source.folderName`）：先確認磁碟放得下匯出檔的檔案（加上原大小 5%、至少 16 MiB 的餘量，不足時回 `insufficient_space`），profile 的 `vault-import-journal.json` 記下暫存資料夾與目標，再解開到同層的 `<目標>.importing-<唯一值>` 暫存資料夾並寫入新的標記檔；改名為目標之前，journal 先記下「已改名」與新標記檔的 SHA-256。之後啟動知識庫、寫入選址，選址寫入後才刪除 journal；搜尋服務無法啟動、選址寫入失敗，或程式在兩者之間停止時，journal 仍在，當下或下次啟動會收回這個資料夾。新 Vault 有自己的知識庫 ID，內容與匯出檔相同；訂閱、收集進度、各訂閱的收集設定與自動檢查開關都照匯出檔帶入；匯出的那台開著自動檢查時，兩台會各自收集同樣的訂閱。完成後直接進入 App。
 
-失敗時目標回到原狀。中途停止時，下次啟動依 journal 收回：刪除名稱符合 `.importing-<唯一值>` 的暫存資料夾；已改名而選址與正在開啟的 Vault 都不是目標時，只有標記檔雜湊相同的目標資料夾會改回暫存名稱並刪除，原本是空資料夾的目標恢復為空資料夾。
+失敗時目標回到原狀。中途停止時，下次啟動依 journal 收回：刪除名稱符合 `.importing-<唯一值>` 的暫存資料夾；已改名而選址與正在開啟的 Vault 都不是目標時，只有標記檔雜湊相同的目標資料夾會改回暫存名稱並刪除。目標位置建立前必須不存在，所以收回後該位置回到沒有資料夾的狀態。
 
 ## 開啟其他知識庫
 
@@ -127,7 +127,7 @@ Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` �
 
 要把知識庫放到別的位置，可以匯出後在新位置建立知識庫並以「完全取代」匯入，或在 Finder／檔案總管搬動資料夾後開啟新位置。工作以 `(vaultId, vaultPath)` 綁定，路徑不同時原工作不會接續。
 
-建立與開啟的記錄：`vault.created`、`vault.opened`，以及工作的 `job.interrupted`（`info`）與 `job.resumed`。
+建立與開啟的記錄：`vault.created`、`vault.opened`，以及工作的 `job.interrupted`（因切換而中斷為 `debug`，只有當機為 `warning`）與 `job.resumed`。
 
 ## 匯入的比對與套用
 
@@ -149,7 +149,7 @@ Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` �
 
 套用有兩種方式：
 
-- 合併（`merge`）：依上表逐項處理。沒有變更時不能合併。
+- 合併（`merge`）：依上表逐項處理。沒有任何變更、也沒有要寫入的刪除紀錄時不能合併。
 - 完全取代（`replace`）：文件、訂閱、刪除紀錄與移除紀錄都與匯出檔一致，本機有、匯出檔沒有的文件與訂閱移除，不另外留下紀錄。用來回到某份匯出檔的內容，例如匯入前備份。與匯出檔完全相同時不能取代。
 
 文件採用匯出檔時寫入文件並解除本機的刪除紀錄，或改為匯出檔的刪除紀錄並移除文件，或兩者都移除；訂閱採用匯出檔時套用名稱、網址、暫停狀態與收集設定並解除本機的移除紀錄，或改為匯出檔的移除紀錄並移除訂閱。既有訂閱保留本機的加入時間與收集進度（上次檢查時間、連續失敗的檢查次數、`outOfRange`、`failures`），本機紀錄沒有其中某個欄位時，合併後也沒有；下一次檢查從匯入後起算。自動暫停是那台電腦檢查的結果，不是使用者的設定：比對時自動暫停中的訂閱算作啟用，另一台的自動暫停不會帶過來；本機的自動暫停在採用的使用者設定是啟用時保留，採用的是手動暫停時改為手動暫停。本機沒有的訂閱連同匯出檔的收集進度加入；它在另一台自動暫停時以啟用加入，不帶連續失敗。訂閱每個欄位屬於哪一類（識別、使用者設定、收集進度或排程）由 `src/subscriptions/subscription-fields.ts` 的分類表決定，比對內容、`updatedAt` 與合併都依這張表。自動檢查總開關屬於目前的 Vault，合併與取代都不改變。設定檔中不認得的頂層欄位保留。來源 ID 只差大小寫的文件無法在不分大小寫的磁碟上並存，出現時拒絕匯入。
@@ -170,15 +170,15 @@ Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` �
 
 ### 操作期間的收集
 
-匯出、匯入比對、匯入套用、建立新的知識庫與開啟其他知識庫期間，程式阻止衝突寫入：開始時先停止派出新的收集步驟，等待執行中的步驟與排程檢查完成。等待期間狀態為 `waiting`，可以取消：不寫入任何資料，狀態回到 `idle`。等待超過 2 分鐘時放棄該操作並回報 `vault_busy`，收集照常繼續；匯出與比對直接以 409 回應，匯入套用已先回 202，失敗記在狀態的 `errorCode`。排隊工作在操作期間不開始，結束後接續；匯入完成後重新載入訂閱，被匯入移除的訂閱，其排隊中的檢查不再執行。
+匯出、匯入比對、匯入套用、建立新的知識庫與開啟其他知識庫期間，程式阻止衝突寫入：開始時先停止派出新的收集步驟，等待執行中的步驟與排程檢查完成。等待期間狀態為 `waiting`，可以取消：不寫入任何資料，狀態回到 `idle`。等待執行中的收集步驟超過 2 分鐘時放棄該操作並回報 `vault_busy`，收集照常繼續；匯出與比對直接以 409 回應，匯入套用、建立新的知識庫與開啟其他知識庫已先回 202，失敗記在狀態的 `errorCode`。排隊工作在操作期間不開始，結束後接續；匯入完成後重新載入訂閱，被匯入移除的訂閱，其排隊中的檢查不再執行。
 
 ### 訂閱設定檔
 
-每個有訂閱的來源類型在 plugin 的 `storage` 宣告訂閱檔位置、版本與清單欄位名稱；檔案格式都是 `{ "version": <版本>, "<清單欄位>": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶 `settings`（該來源類型的收集設定）、`lastCheckedAt`、`outOfRange`（可省略，超出收集範圍的項目與當時的範圍起點）、`failures`（可省略，檢查中收集失敗的項目：鍵、標題、已試次數、錯誤碼、最後失敗時間與是否已略過；失敗滿 3 次或屬不重試的錯誤時略過，之後的檢查不再收集，成功收集或離開範圍後移除）、`nextCheckAt` 與 `lastDispatchedAt`。訂閱與檔案中不認得的欄位照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
+每個有訂閱的來源類型在 plugin 的 `storage` 宣告訂閱檔位置、版本與清單欄位名稱；檔案格式都是 `{ "version": <版本>, "<清單欄位>": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶識別與使用者設定（`id`、`title`、`url`、`enabled`、`addedAt`、`updatedAt`）、`settings`（該來源類型的收集設定）、`lastCheckedAt`、`checkFailures`（可省略，連續失敗的檢查次數、第一次失敗時間與錯誤）、`autoPausedAt`（可省略，自動暫停的時間）、`outOfRange`（可省略，超出收集範圍的項目與當時的範圍起點）、`failures`（可省略，檢查中收集失敗的項目：鍵、標題、已試次數、錯誤碼、最後失敗時間與是否已略過；失敗滿 3 次或屬不重試的錯誤時略過，之後的檢查不再收集，成功收集或離開範圍後移除）、`nextCheckAt` 與 `lastDispatchedAt`。訂閱與檔案中不認得的欄位照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
 
 YouTube 與 RSS 的 `settings` 都是 `intervalMinutes`（檢查頻率的分鐘數）、`backfillDays`（每次檢查往前涵蓋的天數，1–60 的整數）、`backfillMaxItems`（每次檢查的數量上限，1–100 的整數）；任一筆訂閱的設定不符合時，整個檔案不讀取。
 
-YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `channels`；`outOfRange` 的項目以 `videoId` 記錄，已不使用的 `cursor` 照原樣保存。RSS 的訂閱檔是 `rss-subscriptions.json`，版本 2，清單欄位是 `subscriptions`，`outOfRange` 與 `failures` 的項目以 `articleKey` 記錄。`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`，涵蓋所有來源類型的訂閱。
+YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `channels`；`outOfRange` 的項目以 `videoId` 記錄。RSS 的訂閱檔是 `rss-subscriptions.json`，版本 2，清單欄位是 `subscriptions`，`outOfRange` 與 `failures` 的項目以 `articleKey` 記錄。`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`，涵蓋所有來源類型的訂閱。
 
 ## 搜尋投影
 
@@ -186,7 +186,7 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 索引名稱帶 schema 版本（`documents_v4`）；schema 改變時使用新名稱並從 Vault 全量重建。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。狀態篩選使用索引文件的 `status`（`draft`／`published`）。搜尋同時回傳套用狀態以外所有條件時各狀態的篇數：Latin 查詢由引擎的 `status` facet 計算，中文片段查詢由篩選前的命中 ID 集合計算，兩者都與不篩狀態時的總數相同。變更文件狀態寫入 Vault 後立即更新該筆索引，回應時搜尋已反映新狀態。
 
-搜尋索引另存 title、publisher name 與 body 的正規化投影；Vault 與回傳的 metadata、Reader 內文、摘要文字都保留原文。文件與 query 共用固定順序：完整 Unicode NFKC、ASCII A–Z 小寫、OpenCC `s2t`、OpenCC `t2tw`、`臺` 轉 `台`，最後把 Unicode `White_Space` 連續區段收成一個 ASCII 空格並去掉頭尾空白。OpenCC 使用固定的純 JavaScript `opencc-js` 1.4.2 及其內嵌字典，不需要平台 binary 或執行時下載；不使用 `s2twp`，因此不做「服务器／伺服器」這類地區用詞替換。filter ID、日期、URL 與文件 ID 不經正規化。命中位置以正規化文字的 UTF-8 byte offset 映回原文後才產生 `<mark>` 摘要。
+搜尋索引另存 title、publisher name 與 body 的正規化投影；Vault 與回傳的 metadata、Reader 內文、摘要文字都保留原文。文件與 query 共用固定順序：Unicode NFKC、ASCII A–Z 小寫、OpenCC `s2t`、OpenCC `t2tw`、`臺` 轉 `台`，最後把 Unicode `White_Space` 連續區段收成一個 ASCII 空格並去掉頭尾空白。OpenCC 使用固定的純 JavaScript `opencc-js` 1.4.2 及其內嵌字典，不需要平台 binary 或執行時下載；不使用 `s2twp`，因此不做「服务器／伺服器」這類地區用詞替換。filter ID、日期、URL 與文件 ID 不經正規化。命中位置以正規化文字的 UTF-8 byte offset 映回原文後才產生 `<mark>` 摘要。
 
 中文引擎從 App 的獨立 COCT 主詞庫資源建立 Jieba 第一輪詞界，不把詞庫編入 Meilisearch binary，也不作搜尋用的二次拆詞。啟動先核對 provenance manifest、檔案 SHA-256、UTF-8 與正整數詞頻格式，再讓引擎實際初始化中文 tokenizer；資源不完整時搜尋維持不可用。詞庫身分與查詢策略都在搜尋 profile，換檔後從 Vault 重建投影，不需要重建相同的通用引擎 binary。
 

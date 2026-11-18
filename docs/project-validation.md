@@ -6,7 +6,7 @@ XR Collector 套用 [開發驗證流程](development-validation.md) 時的指令
 
 `npm run verify`：單元、HTTP 與檔案系統整合測試（含真實 Meilisearch 的案例）、typecheck、build。改到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。執行時不接 `| tee`，或先 `set -o pipefail`，保留 exit code。
 
-只改 Markdown 的修改不跑 `npm run verify`，CI 也不執行，改為確認連結有效與呈現正確。`skills/xr-collector-agent/SKILL.md` 例外：測試會讀它，改它時照常跑。同一次修改含有其他檔案時照常跑。
+只改 Markdown 的修改不跑 `npm run verify`，CI 也不執行，只確認連結有效與呈現正確。`skills/xr-collector-agent/SKILL.md` 例外：測試會讀它，改它時照常跑。同一次修改含有其他檔案時照常跑。
 
 **測試的等待**：可直接等的 promise 就等它，其餘經 `tests/support/wait.ts` 的共用 helper 輪詢，上限統一 10 秒。Vitest 的 `testTimeout` 與 `hookTimeout` 統一 30 秒。`tests/tooling/test-waits.test.ts` 擋下直接輪詢、睡眠與個別上限。證明「某件事沒有發生」時，等產品排在那件事之後的步驟，再斷言；要證明某個狀態在一段時間內不變時，觀察窗寫成具名的取樣並註明為什麼需要。
 
@@ -77,7 +77,7 @@ SSH 登入的 Windows session 0 可以完成開發版與打包版的背景模式
 node .claude/skills/verify/scripts/verify.mjs flows run --jobs 3 --issue <issue> --label merge
 ```
 
-開發中的快速回合仍依功能地圖挑相關的流程跑。只改 Markdown 的修改不跑這兩部分。
+開發中的快速回合依功能地圖挑相關的流程跑。只改 Markdown 的修改不跑這兩部分。
 
 **nightly 與發布前**：`.github/workflows/nightly.yml` 每天台北時間 02:00 在 main 執行，main 前 26 小時沒有新 commit 時跳過；也可以在任何分支手動觸發，勾選 `report` 時才把結果寫進 issue。發布前在發布候選的 commit 手動觸發同一個 workflow。
 

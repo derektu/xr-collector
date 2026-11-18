@@ -11,14 +11,12 @@ App 以 Mac（Apple Silicon）與 Windows x64 的桌面程式發布，常駐在�
 | 想了解什麼 | 文件 |
 | --- | --- |
 | 怎麼安裝開發環境、建置、測試與發布 | [建置、測試與發布](docs/building.md) |
-| 產品目標與範圍 | [產品範圍](docs/product-brief.md) |
 | 程式如何組成 | [架構](docs/architecture.md) |
 | 收集工作的排程、佇列、等待與錯誤處理 | [收集流程](docs/collection-flow.md) |
 | 文件格式、Vault 與搜尋資料 | [文件格式](docs/document-format.md)、[儲存與搜尋](docs/storage-and-search.md) |
-| 驗收計畫、驗證層級與 PR 證據 | [開發驗證流程](docs/development-validation.md)、[專案驗證設定](docs/project-validation.md)、[實作一張票的流程](docs/worker-workflow.md)、[測試說明](tests/README.md) |
+| 做一張票的步驟、驗收計畫、驗證層級與門檻 | [做一張票](docs/worker-workflow.md)、[開發驗證流程](docs/development-validation.md)、[專案驗證設定](docs/project-validation.md)、[測試說明](tests/README.md) |
 | 發布正式版 | [Release 發布手冊](docs/release-runbook.md)、[更新來源](docs/update-source.md) |
-| 畫面設計 | [UI Design Spec](docs/ui-design/README.md) |
-| App Shell 的路由、新增選單與類型擴充位置 | [App Shell extension points](docs/app-shell-extension.md) |
+| App Shell 的路由、新增選單與類型擴充位置 | [App Shell 擴充點](docs/app-shell-extension.md) |
 | Agent 的操作與 HTTP 契約 | [Agent Skill](skills/xr-collector-agent/SKILL.md) |
 
 ## 執行模式
@@ -124,7 +122,7 @@ RSS 支援 RSS 2.0、RDF 與 Atom，文章的 HTML 轉成 Markdown。
 工作的處理規則：
 
 - **不重複**：同一影片或同一來源已有排隊或執行中的工作時，新的提交回傳既有工作。
-- **有上限的佇列**：探索同時 1 個、擷取同時 2 個，排隊合計最多 500 個。擷取在不同工作之間輪替，大頻道不會占住所有名額。
+- **有上限的佇列**：探索與擷取各同時 1 個，排隊合計最多 500 個。擷取在不同工作之間輪替，大頻道不會讓其他工作一直等。
 - **自動重試**：網路錯誤與來源限制連線頻率時自動重試，每個工作最多嘗試 3 次，間隔 30 秒與 2 分鐘。無字幕、無法存取等不重試。
 - **中斷接續**：App 結束時等待執行中的步驟完成，其餘工作記為「已中斷」，下次開啟知識庫時自動接續，不重做已完成的步驟。同一工作異常結束 3 次後不再接續。
 - **離線**：沒有網路時，收集暫停等待，App 每 30 秒確認一次，恢復後自動接續；畫面顯示「目前沒有網路，恢復後自動檢查」。

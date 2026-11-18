@@ -31,7 +31,7 @@ draft 只對有 repository 寫入權限的人可見，App 與一般使用者看�
 | draft 已有同名但內容不同的檔案 | 另一次建置先上傳了。確認要保留哪一份；要換成這次的建置時，執行訊息中的 `gh release delete-asset`，再重跑上傳。兩個平台的 index 各自記錄自己的 commit，所以換檔時兩個平台都要來自同一個 commit。 |
 | 同一個 tag 有兩個 draft | 兩台機器同時建立了 draft。在 GitHub 刪掉沒有檔案或較少檔案的那個，再重跑上傳。 |
 | 上傳後下載核對不符 | 傳輸出錯。以 `gh release delete-asset` 移除那個檔案後重跑。 |
-| Release 已公開才發現問題 | 已公開的 Release 不再改檔案。修正後發布下一個版本；必要時以 `gh release edit --prerelease` 先讓 App 不再把這一版當成最新的穩定版。 |
+| Release 已公開才發現問題 | 已公開的 Release 不改檔案。修正後發布下一個版本；必要時以 `gh release edit --prerelease` 先讓 App 不再把這一版當成最新的穩定版。 |
 
 ## 預演
 
