@@ -1,35 +1,14 @@
-/** The vault module as other modules use it: opening, creating and moving a Vault, and the collector that writes its documents. */
-export { Collector } from './collector.js';
-export { deletionId } from './deleted-documents.js';
+/**
+ * The vault module as other modules use it: the Vaults of this device (`DeviceVaults`), a Vault's
+ * files opened for its services (`openVault`), the operations on the Vault in use
+ * (`VaultOperations`), the collector that writes its documents, and the default export folders.
+ */
+export type { Collector } from './collector.js';
+export { DeviceVaults } from './device-vaults.js';
 export type { StatFs } from './disk-space.js';
-export { MarkdownVault } from './markdown-vault.js';
-export {
-  checkNewVault,
-  createNewVault,
-  DEFAULT_VAULT_NAME,
-  describePackage,
-  newVaultFolder,
-  type AppFolders,
-} from './new-vault.js';
-export {
-  VaultOperationLock,
-  type OperationCompletion,
-  type OperationReporter,
-  type OperationTerminal,
-  type UpdateLease,
-  type VaultAccess,
-} from './operation-lock.js';
-export {
-  backupFolder,
-  clearImportJournal,
-  exportFileName,
-  exportFolder,
-  isWithin,
-  isWorkFolder,
-  recoverImport,
-} from './transfer-files.js';
-export { createVaultDirectory, inspectVaultDirectory, notAVault, readVaultId } from './vault-directory.js';
-export { VaultExchange } from './vault-exchange.js';
-export { VaultFileWriter } from './vault-files.js';
-export { finishInPlaceImports, importNewVault, type ImportFault } from './vault-import.js';
-export { VaultSelection } from './vault-selection.js';
+export { openVault, type OpenedVault } from './opened-vault.js';
+export type { UpdateLease, VaultAccess } from './operation-lock.js';
+export { backupFolder, exportFileName, exportFolder } from './transfer-files.js';
+export type { ImportFault } from './vault-import.js';
+export { VaultOperations } from './vault-operations.js';
+export type { VaultSelection } from './vault-selection.js';
