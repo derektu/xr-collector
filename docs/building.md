@@ -66,8 +66,17 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | `npm run dev` | Web 開發模式：API 在 `127.0.0.1:7175`，Vite 在 `http://127.0.0.1:7176/`，修改後自動重載 |
 | `npm run electron` | build 後以 Electron 開啟桌面版 |
 | `npm run build` 後 `npm start` | 單一 Web Server 在 `http://127.0.0.1:7175/` 同時提供 UI 與 API |
+| `node scripts/dev.mjs start` | 這個 worktree 的 dev instance：build 後在 dev slot 池的 port 背景啟動單一 Web Server，印出網址；`status` 看網址與是否在跑，`stop` 停掉 |
 
 第一次開啟時在開始使用畫面建立或開啟知識庫（Vault）。Web 開發模式的裝置資料放在 checkout 的 `.data/`；`XR_COLLECTOR_VAULT` 直接指定 Vault 並略過 Onboarding，`XR_COLLECTOR_PROFILE` 指定裝置資料目錄。
+
+`npm run dev` 與 `npm start` 用固定的 7175／7176，同一台機器同時只有一個 checkout 用得了。幾個 worktree 要同時開給人試用時用 `dev.mjs`（只支援 Mac）：
+
+- port registry 為它預留 6 個 slot（7311–7319、7330–7338，每個 slot 依序是 UI/API、Meilisearch、Agent API），slot lock 在 `~/.xr-collector/dev-slots/`，同一台機器的所有 worktree 共用。
+- 同一個 worktree 優先拿回上次的 slot，所以網址通常不變；6 個都被占用時 `start` 直接失敗，並指出要到哪個 worktree `stop`。
+- 這個 worktree 已經有 dev instance 在跑時，`start` 先停掉它，所以再 `start` 一次就是重新 build 並重啟；`--no-build` 略過 build。
+- Vault 預設是 `~/Downloads/XRData`（`--vault` 指定別的），profile 是 worktree 的 `.data/`。`.local/dev.json` 記錄網址與 PID，輸出在 `.local/dev-server.log`。
+- `stop` 只對 `dev.json` 記錄、命令列帶有這個 worktree 標記的程序群組送訊號，Meilisearch 跟著結束。
 
 ### 測試
 
@@ -90,7 +99,7 @@ node .claude/skills/verify/scripts/verify.mjs flows run --web --jobs 3 --issue 1
 node .claude/skills/verify/scripts/verify.mjs flows run --feature subscriptions --web --issue 123
 ```
 
-Web 模式的流程在 Mac 執行，Windows 執行 Electron 桌面流程。證據寫進 `.local/ticket-artifacts/<issue>/`。流程清單、功能地圖與操作方式見 [verify skill](../.claude/skills/verify/SKILL.md) 與 [功能地圖](../.claude/skills/verify/features/README.md)；驗證層級與交付規則見 [開發驗證流程](development-validation.md)。
+Web 模式的流程在 Mac 執行，Windows 執行 Electron 桌面流程。證據寫進 `.local/ticket-artifacts/<issue>/`。流程清單、功能地圖與操作方式見 [verify skill](../.claude/skills/verify/SKILL.md) 與 [功能地圖](../.claude/skills/verify/features/README.md)；驗證層級見 [專案驗證設定](project-validation.md#驗證層級)，交付規則見 [開發驗證流程](development-validation.md)。
 
 ### CI
 
@@ -99,7 +108,7 @@ GitHub Actions（`.github/workflows/`）的工作：
 | 工作 | 觸發 | 環境 | 內容 |
 | --- | --- | --- | --- |
 | Verify (Mac) | pull request 與 main push；只改 Markdown 時不執行 | macOS 15 | `npm ci`、安裝釘住版本的 runtime、`npm run verify`（含真實 Meilisearch 的案例） |
-| Nightly | 每天 02:00（台北）在 main，前 26 小時沒有新 commit 時跳過；也可在任何分支手動觸發 | macOS 15 與 Windows Server 2022 | 兩平台的 `npm run verify`（含真實 Meilisearch）與 verify skill 自測、開發版 startup 與 Desktop 流程、未簽章測試包與打包版 startup；Mac 的全部 Web 流程；保存每支流程的 `results.json` 與失敗證據；失敗時開 nightly issue 並加入看板 |
+| Nightly | 每天 02:00（台北）在 main，前 26 小時沒有新 commit 時跳過；也可在任何分支手動觸發 | macOS 15 與 Windows Server 2022 | 兩平台的完整驗證與打包，各 job 見 [專案驗證設定的門檻](project-validation.md#門檻) |
 | Meilisearch native runtimes | 改到 Meilisearch 準備或 pin 的 pull request 與 main push | Mac arm64、Windows x64 | 下載釘住的 release 並跑 API smoke |
 
 CI 不建置正式安裝包。各層驗證在哪裡執行見 [專案驗證設定](project-validation.md#門檻)。
@@ -125,7 +134,7 @@ Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dl
 - **Mac**：預設是 ad-hoc 簽章，可在本機與開發機安裝，但沒有 Gatekeeper 信任；打包的檢查以 `codesign --verify --deep --strict` 驗證 bundle 與 sealed resources。從瀏覽器下載的 ad-hoc 包帶有隔離屬性，macOS 會拒絕開啟；測試時以 `xattr -dr com.apple.quarantine "/Applications/<App 名稱>.app"` 移除，或在「系統設定 → 隱私權與安全性」選「強制打開」。Developer ID 簽章與公證需要 `keys/mac/` 下的憑證與 App Store Connect API key（檔案與設定方式見 [簽署設定](../config/README.md)），步驟見下一節。
 - **Windows**：未簽章。預期的簽署設定格式見 [簽署設定](../config/README.md#windows)。
 
-開發與反覆驗收一律使用 ad-hoc 與未簽章包；Developer ID 只用於使用者確認後的最終發布候選，使用時機見 [專案驗證設定的打包與簽章](project-validation.md#打包與簽章)。
+ad-hoc、未簽章包與 Developer ID 各自的使用時機見 [專案驗證設定的打包與簽章](project-validation.md#打包與簽章)。
 
 ### Mac 的 Developer ID 建置
 
@@ -147,8 +156,6 @@ env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY
 8. 唯讀掛載 DMG，其中唯一的 App bytes 必須等於 `stapled`，並對它跑 `stapler validate`、`syspolicy_check distribution` 與 `spctl --assess --type execute` 各一次。
 9. 以 `ditto` 解開 ZIP，其中唯一的 App 做與第 8 步相同的比對與檢查。
 10. 讀回 `release/mac-arm64` 的 App：bytes 必須等於 `stapled`，再核對 BuildInfo、runtime 與 resources；步驟 2、4 已驗過相同 bytes，不重跑 Developer ID gate。
-
-這些自動 gate 不取代 clean browser download、Finder 安裝及首次開啟的實機驗收。
 
 Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。
 
@@ -209,21 +216,18 @@ gh auth status
 
 ### 在 Parallels 的 Windows VM 建置與上傳
 
-Mac 開發者可以在 Parallels 的 Windows 11（ARM64）VM 建置 Windows 版：VM 裡安裝 x64 Node，建置跑在 x64 模擬下，產出的安裝包可以發布。VM 需要開啟 OpenSSH Server、裝好 Git、x64 Node 與 GitHub CLI，並以 SSH 帳號完成一次 `gh auth login`。
+Mac 開發者可以在 Parallels 的 Windows 11（ARM64）VM 建置 Windows 版：VM 裡安裝 x64 Node，建置跑在 x64 模擬下，產出的安裝包可以發布。VM 需要裝好 Git、x64 Node 與 GitHub CLI，並在建置用的桌面帳號完成一次 `gh auth login`。
 
-[crabbox](https://github.com/openclaw/crabbox)（`brew install openclaw/tap/crabbox`）把 Mac 上的 repository 同步到 VM 並執行指令。發布用的建置要從乾淨的 checkout 開始，所以先在 Mac commit 並 push，再以 `--full-resync` 讓 VM 重建整個 checkout（它也清掉 VM 裡的 `node_modules` 與建置產物，因此會重新安裝；runtime cache 在 checkout 外，不受影響）：
+發布用的建置在 VM 的 `C:\projects\xr-collector`，以 VM 桌面帳號的 cmd 執行。先在 Mac commit 並 push，再在 VM：
 
-```sh
-crabbox run --provider ssh --target windows --windows-mode normal \
-  --static-host <VM 的 IP> --static-user <SSH 帳號> --static-port 22 \
-  --static-work-root 'C:\projects\crabbox-work' \
-  --git-seed-source local --full-resync \
-  -- cmd /c "git status --porcelain && npm ci && npm run prepare:runtime -- win && npm run package:win && npm run release:upload -- v0.1.0"
+```bat
+cd C:\projects\xr-collector
+git fetch origin && git checkout --detach <要發布的 commit>
+git status --porcelain
+npm ci && npm run prepare:runtime -- win && npm run package:win && npm run release:upload -- v0.1.0
 ```
 
-- `--git-seed-source local` 從 Mac 帶過去 Git 歷史，VM 的 checkout 因此有真正的 HEAD，`package:win` 與 `release:upload` 才能核對 commit。
-- 指令以 `cmd /c` 執行，不經 PowerShell；`--script` 會在 checkout 留下 `.crabbox/scripts/`，使 checkout 不乾淨，所以用 inline 指令。
-- VM 的 IP 可用 `prlctl list -i "Windows 11"` 查詢。執行失敗時 crabbox 會在 Mac 的 repository 留下 `.crabbox/`，下一次執行前刪除。
+`git status --porcelain` 沒有輸出才往下跑：`package:win` 與 `release:upload` 都要求乾淨的 checkout，並核對 HEAD。VM 的 `C:\projects\crabbox-work` 是 crabbox 驗證用的目錄，不拿來建置發布版。
 
 ### 公開
 
@@ -249,7 +253,7 @@ Mac 正式版以 Developer ID 簽章並送 Apple 公證，建置機需要這三�
 | --- | --- |
 | `Developer ID Application` 憑證的 `.p12` | 簽章用的憑證與私鑰，匯出時設定的密碼 |
 | App Store Connect API key 的 `.p8` | 公證用的金鑰 |
-| `.env` | `CSC_LINK`（p12 相對 `keys/mac` 的路徑）、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`（p8 的相對路徑）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；由 [`config/mac-signing.env.example`](../config/mac-signing.env.example) 複製後填入 |
+| `.env` | 簽章與公證的設定，由 [`config/mac-signing.env.example`](../config/mac-signing.env.example) 複製後填入 |
 
 目錄結構、權限與各欄位的說明見 [簽署設定](../config/README.md)。
 

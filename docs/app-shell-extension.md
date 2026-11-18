@@ -1,34 +1,35 @@
-# App Shell extension points
+# App Shell 擴充點
 
-The App Shell owns the four top-level pages (訂閱, 文件, 記錄, and 設定 at the bottom of the sidebar), the sidebar status line, and the shared presentation surface. The sidebar has no add button: adding starts from the header of the 文件 and 訂閱 pages. The status line shows 「更新中」 while jobs run and nothing otherwise. The Shell does not own collection, document, Vault, job, search, or log behaviour. Those tickets attach a page component, an add menu item or a source type without changing navigation.
+App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設定獨立放在側欄底部）、側欄上的工作數量徽章與共用的畫面元件；收集、文件、Vault、工作、搜尋與記錄的行為不屬於 Shell。新增頁面、新增選單項目或來源類型時，接到下面的擴充點，不改導覽結構。
 
-## Add a source type
+## 來源類型
 
-A source type is declared on the server, so the UI and Agents read the same description and use the same URL recognition.
+來源類型的加入方式見 [架構](architecture.md#來源類型與-plugin)：宣告在 `src/plugins/declarations.ts`，server 項目在 `src/plugins/index.ts`，圖示在 `src/web/plugins.tsx` 的 `SOURCE_ICONS`，徽章顏色在 `src/web/plugins.css`。畫面上與類型有關的文字、類型標籤、辨識卡片標題與新增訂閱選單都由宣告產生，新類型不需要改 Shell。
 
-1. Add a `SourceTypeDeclaration` to `SOURCE_TYPES` in `src/sources/source-types.ts`. Its public part (`id`, `label`, `icon`, `kinds`, `requiresLogin`, `settings`) is served by `GET /api/source-types`; the UI builds the type chips, row icons, type labels and recognition card titles from it.
-2. Implement `owns(input, url)` and `recognize(input, context)`. `recognize` returns a `UrlRecognition` whose `actions` carry the HTTP `request` to perform. The add dialogs and Agents replay that request as given, so a new type needs no UI branch for its URL kinds.
-3. A type with `requiresLogin: true` is answered with `status: 'login_required'` before `recognize` runs.
-4. Put the actual collection behind the shared HTTP API. Collection and subscription routes are the same for every type: `POST /api/submissions` and `POST /api/items` find the type that owns an address, and a subscription is addressed as `/api/subscriptions/:type/:id`. `SourceCatalog` (`src/sources/source-catalog.ts`) serves `GET /api/subscriptions` and `GET /api/subscriptions/:type/:id` from the subscriptions of every type, so a new type needs no route of its own. The Shell is deliberately not an Electron IPC business boundary.
-5. Give the type an icon in `src/web/icons.tsx` under the declared `icon` key.
+網址辨識由 `src/sources/source-types.ts` 依 plugin 的 `owns` 與 `classify` 產生，回傳的 `UrlRecognition` 在 `actions` 中帶著要送出的 HTTP 請求；新增對話框與 Agent 照原樣送出這個請求，所以新類型的網址種類不需要畫面分支。宣告 `requiresLogin: true` 的類型在辨識前就回 `status: 'login_required'`。`GET /api/source-types` 對 UI 與 Agent 提供各類型的 `id`、`label`、`icon`、`kinds`、`requiresLogin` 與 `settings`。
 
-## Add an add-menu item
+## 新增選單
 
-`src/web/add-menu.ts` holds both menus: `DOCUMENT_ADD_ITEMS` (網址, 檔案, 寫筆記: each adds one document that is not updated later) and `SUBSCRIPTION_ADD_ITEMS` (YouTube 頻道, X 帳號, Facebook 粉專, RSS: each adds a subscription). An item has a `label`, the `dialogTitle` of the dialog it opens and a `mode`. While `mode` is null the menu marks the item 「尚未支援」 and choosing it opens a small dialog titled `dialogTitle` that says 「目前還不支援＿＿。」. Supporting an item gives it a mode, which `src/web/AddContent.tsx` renders as its own dialog (`url` is 加入網址, `youtube-channel` is 訂閱 YouTube 頻道); the dialog's title comes from `ADD_DIALOG_TITLES`.
+`src/web/add-menu.ts` 定義兩個選單：
 
-`src/web/AddMenu.tsx` renders the button and its menu (`role=menu`, right under the button, no groups). ArrowDown on the button opens the menu on its first item; arrow keys, Home and End move between items; Escape, Tab and a click outside close it; focus returns to the button when the menu or the unsupported dialog closes. Each page's empty-state button is another `AddMenu` with the same items. `addMismatch(mode, recognition)` decides from `recognition.kind` whether a pasted address belongs in the other dialog, so it also works when a YouTube cooldown leaves a channel preview `unavailable`; an `unsupported` recognition, where the type found the address is no target of that kind (a missing channel, a page without a feed), offers no switch.
+- 文件頁的 `DOCUMENT_ADD_ITEMS`（網址、檔案、寫筆記）：每一項加入一份之後不會更新的文件。
+- 訂閱頁的 `subscriptionAddItems(declarations)`：先列出已登錄類型的各訂閱種類（YouTube 頻道、RSS），再列出 `PLANNED_SUBSCRIPTION_TYPES`（X 帳號、Facebook 粉專）。登錄了相同 ID 的類型時，它的訂閱種類取代該項的位置。
 
-## Add a page
+每一項有 `label`、開啟的對話框標題 `dialogTitle` 與 `mode`。`mode` 是 `url` 或 `<類型>-<種類>`，由 `src/web/AddContent.tsx` 顯示成對應的對話框，標題取自 `addDialogTitles(declarations)`。`mode` 為 null 的項目標為「尚未支援」，點選後開啟只有「目前還不支援＿＿。」的小對話框。
 
-`src/web/app-shell.ts` maps each `ShellPage` to its path and lists the sidebar entries in `navigation` (with `settingsNavigation` apart at the bottom); `src/web/App.tsx` maps each page to its component. A new top-level page changes those together. Detail pages (`/sources/<type>/<id>`, `/documents/<id>`) belong to their list page in the navigation. Each page heading receives focus after route changes so keyboard navigation has a stable destination.
+`src/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape 與 Tab 關閉選單並把焦點還給按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
 
-## Theme persistence
+## 頁面
 
-The theme control is the 外觀 section of the Settings page: a radio group 主題 with 跟隨系統, 深色 and 淺色. The stored preference is `system`, `dark` or `light`; `system` follows the operating system's light or dark appearance through the `prefers-color-scheme` media query and switches as soon as the system appearance changes. Electron's `prefers-color-scheme` follows the system through `nativeTheme`, so Browser and Electron share one renderer path and Electron main does not set `nativeTheme.themeSource`. The shared `ThemeStore` interface in `src/web/app-shell.ts` keeps page rendering independent from its persistence location.
+`src/web/app-shell.ts` 定義每個 `ShellPage` 的路徑、側欄的 `navigation` 與獨立的 `settingsNavigation`；`src/web/App.tsx` 把每個頁面對應到元件。新增頂層頁面時兩處一起改。明細頁（`/sources/<類型>/<ID>`、`/documents/<ID>`）在導覽上屬於各自的列表頁。換頁後頁面標題取得焦點，讓鍵盤操作有固定的起點。
 
-- Browser mode uses `localStorage` key `xr-collector.theme` on the current origin.
-- Electron mode exposes only `read()` and `write('system' | 'dark' | 'light')` through its preload bridge. Electron main stores `{ "theme": "system" | "dark" | "light" }` in `appearance.json` under the Electron device profile and completes writes one at a time. It contains no Vault path, document data, Agent token or credential.
+## 主題
 
-The Electron bridge is desktop integration for appearance only. Business screens continue to call the local HTTP API. The UI waits for Electron's stored value before showing the app, so first render never writes the default over a saved value; a value is written only when the user picks one. A missing or invalid value follows the system. A failed write is logged; the chosen theme stays applied for the running session.
+主題設定在設定頁的「外觀」：單選群組「主題」，選項為跟隨系統、深色、淺色，儲存值為 `system`、`dark` 或 `light`。`system` 經 `prefers-color-scheme` 跟隨作業系統，系統外觀一變就切換；Electron 的 `prefers-color-scheme` 透過 `nativeTheme` 跟隨系統，所以 Browser 與 Electron 共用同一條 renderer 路徑，Electron main 不設定 `nativeTheme.themeSource`。畫面經 `src/web/app-shell.ts` 的 `ThemeStore` 介面讀寫偏好，不依賴儲存位置：
 
-The radio group follows the WAI-ARIA radio pattern: the chosen option is the group's only Tab stop, arrow keys move to the previous or next option with wrap-around, Home and End jump to the ends, and focus and selection move together. The options stay enabled while a write is in progress, so keyboard focus remains on the chosen option.
+- Browser 模式用目前 origin 的 `localStorage`，key 為 `xr-collector.theme`。
+- Electron 模式的 preload 以 `xrCollectorTheme` 只提供 `read()` 與 `write('system' | 'dark' | 'light')`。Electron main 把 `{ "theme": ... }` 存在裝置 profile 的 `appearance.json`，寫入一次一個；檔案不含 Vault 路徑、文件資料、Agent 金鑰或憑證。
+
+畫面等讀到 Electron 存的值才顯示 App，所以第一次繪製不會以預設值覆蓋已存的值；只有使用者選取時才寫入。值缺少或無效時跟隨系統。寫入失敗只記錄錯誤，所選主題在這次執行期間照樣套用。
+
+單選群組依 WAI-ARIA radio 模式：選中的選項是群組唯一的 Tab 停駐點，方向鍵移到前後選項並循環，Home、End 跳到頭尾，焦點與選取一起移動。寫入進行中選項保持可用，鍵盤焦點留在選中的選項上。
