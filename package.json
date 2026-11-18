@@ -10,7 +10,7 @@
     "dev:server": "tsx watch src/transport/server/main.ts",
     "dev:web": "vite --host 127.0.0.1 --port 7176 --strictPort",
     "build": "npm run typecheck && npm run build:node && npm run build:web",
-    "build:node": "tsc -p tsconfig.node.json && node scripts/write-build-info.mjs --kind development",
+    "build:node": "node -e \"require('node:fs').rmSync('dist/node', { recursive: true, force: true })\" && tsc -p tsconfig.node.json && node scripts/write-build-info.mjs --kind development",
     "build:web": "vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json",

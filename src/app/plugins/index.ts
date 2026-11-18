@@ -4,7 +4,7 @@ import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../../domain/
 import type { SourceDefinition, SourceEntry, SourcePlugin, SourcePluginDeclaration } from '../../shared/sources/source-contract.js';
 import { SOURCE_DECLARATIONS } from './declarations.js';
 import { subscriptionFileExchange } from '../../domain/subscriptions/index.js';
-import { createRssPlugin, rssDefinition, createYouTubePlugin, youtubeDefinition } from '../../domain/sources/index.js';
+import { createRssPlugin, rssDefinition, createYouTubePlugin, youtubeDefinition } from '../../domain/sources/server-entries.js';
 
 /** The server entry of each source type, by type ID. */
 const SERVER_ENTRIES: Readonly<Record<string, SourceEntry>> = {

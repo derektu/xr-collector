@@ -88,6 +88,8 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | `npm run typecheck:tests` | 測試（`tests/`）typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
 | `npm run verify` | Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
 
+`npm run build` 的輸出在 `dist/`：`build:node` 先清空 `dist/node` 再以 `tsc` 編譯，Vite 也先清空 `dist/web`。`tsc` 不會刪除對不到 src 檔的輸出，先清空讓 `dist/` 只有這次 build 的檔案，打包收進的 `dist/node/**` 因此不含舊檔。
+
 **Vitest 測試**在 `tests/`，路徑與受測的 `src/` 檔相同（`src/domain/jobs/job-queue.ts` 的測試是 `tests/domain/jobs/job-queue.test.ts`），不對應單一 src 檔的只在 `tooling`、`packaging` 與 `support`。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 
 **E2E 流程**由 verify skill（`.claude/skills/verify/`）執行：它在隔離的 profile、Vault 與 port 啟動 App，以 Playwright 依使用者的方式操作並留下截圖與 `results.json`。已收錄的回歸流程放在 `.claude/skills/verify/flows/`。

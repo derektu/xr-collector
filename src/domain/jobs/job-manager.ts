@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Collector } from '../vault/index.js';
+import type { DocumentCollector } from '../../shared/documents/document-collector.js';
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { Connectivity } from './connectivity.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, workKey } from '../../shared/jobs/job-role.js';
@@ -76,7 +76,8 @@ export interface JobManagerOptions {
   sources: SourceDeclarations;
   /** The assembled source plugins; a job of any other type is kept as it is and not run. */
   plugins: readonly SourcePlugin[];
-  documents: Collector;
+  /** Where the jobs save and index what they capture. */
+  documents: DocumentCollector;
   /** What subscription work reads from and reports to its subscriptions; required for subscription jobs. */
   subscriptions?: SubscriptionPort;
   limits?: Partial<JobLimits>;

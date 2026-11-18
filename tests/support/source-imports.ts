@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 
 /** One import or re-export in a product file, with its relative target resolved to a repo path. */
@@ -70,4 +71,36 @@ export function importsOf(file: string): SourceImport[] {
     found.push({ from: file, specifier, target: resolve(file, specifier), typeOnly: match[1] !== undefined });
   }
   return found;
+}
+
+const NODE_BUILTINS = new Set(builtinModules);
+
+/** Whether the specifier names a Node built-in module, such as `node:fs` or `fs/promises`. */
+export function isNodeBuiltin(specifier: string): boolean {
+  return specifier.startsWith('node:') || NODE_BUILTINS.has(specifier) || NODE_BUILTINS.has(specifier.split('/')[0]!);
+}
+
+/**
+ * Every product file `entry` reaches through imports that keep code, with the import chain that
+ * first reaches it. Type-only imports are erased from the compiled output and not walked.
+ */
+export function codeReachedFrom(entry: string): Map<string, string[]> {
+  const reached = new Map<string, string[]>([[entry, [entry]]]);
+  const pending = [entry];
+  while (pending.length > 0) {
+    const file = pending.shift()!;
+    for (const edge of importsOf(file)) {
+      if (edge.typeOnly || edge.target === null || !PRODUCT_SOURCE.test(edge.target) || reached.has(edge.target)) continue;
+      reached.set(edge.target, [...reached.get(file)!, edge.target]);
+      pending.push(edge.target);
+    }
+  }
+  return reached;
+}
+
+/** The imports of a Node built-in module in the files of `reached`, each as `<chain> imports <specifier>`. */
+export function nodeImportsIn(reached: ReadonlyMap<string, readonly string[]>): string[] {
+  return [...reached].flatMap(([file, chain]) => importsOf(file)
+    .filter((edge) => !edge.typeOnly && isNodeBuiltin(edge.specifier))
+    .map((edge) => `${chain.join(' -> ')} imports ${edge.specifier}`));
 }
