@@ -382,7 +382,7 @@ export async function validateMacUpdateArchive(file: string): Promise<void> {
         const target = (await readZipEntry(zip, entry)).toString('utf8');
         const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(name), target));
         if (!target || target.includes('\\') || target.includes('\0') || target.startsWith('/') || target.split('/').includes('..')
-          || resolved === '..' || resolved.startsWith('../../') || resolved.split('/')[0] !== root) {
+          || resolved === '..' || resolved.startsWith('../') || resolved.split('/')[0] !== root) {
           throw new CollectorError('update_integrity_failed', 'macOS 更新檔含有離開 App 的符號連結。');
         }
         symlinks.add(name);
