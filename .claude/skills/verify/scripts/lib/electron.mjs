@@ -35,7 +35,8 @@ import { _electron as electron } from 'playwright';
 import { checkoutRoot, claimEvidence, cleanEnv, commitOf, runMarker } from './paths.mjs';
 import { LOADED, watchErrors } from './drive.mjs';
 import { writeFailureResult } from './failure.mjs';
-import { abandonRun, createRun, releaseSlot, terminateRun, writeJsonAtomic } from './instance.mjs';
+import { abandonRun, createRun, terminateRun, writeJsonAtomic } from './instance.mjs';
+import { VERIFY_POOL } from './slots.mjs';
 import { endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { desktopTarget, requireTarget } from './target.mjs';
 import { raceWithTimeout, waitFor } from './wait.mjs';
@@ -312,7 +313,7 @@ export async function launchElectron({
       } catch (error) { if (error.quitFailure) failure = error; }
       await terminateRun(record);
       if (existsSync(log)) await copyFile(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
-      releaseSlot(ports.slot, runDir);
+      VERIFY_POOL.release(ports.slot, runDir);
       if (!keep) await rm(runDir, { recursive: true, force: true });
       if (failure) throw failure;
       return { leftovers };

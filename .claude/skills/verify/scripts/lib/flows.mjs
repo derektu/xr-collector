@@ -10,7 +10,8 @@ import { launchElectron } from './electron.mjs';
 import { writeFailureResult } from './failure.mjs';
 import { findFeature, readFeatures } from './features.mjs';
 import { launchWeb } from './instance.mjs';
-import { checkoutRoot, claimEvidence, commitOf, SLOTS } from './paths.mjs';
+import { checkoutRoot, claimEvidence, commitOf } from './paths.mjs';
+import { VERIFY_POOL } from './slots.mjs';
 import { apiState } from './state.mjs';
 import { sleep, waitFor } from './wait.mjs';
 
@@ -113,7 +114,7 @@ const currentFlow = new AsyncLocalStorage();
  */
 export async function runFlows({ names = [], issue, label = 'flows', checkout = checkoutRoot(), layer = 'all', feature, jobs = 1, visible = false } = {}) {
   if (!issue) throw new Error('flows run needs --issue for the evidence folder');
-  if (!Number.isInteger(jobs) || jobs < 1 || jobs > SLOTS.length) throw new Error(`--jobs is a whole number from 1 to ${SLOTS.length}, one verify slot per flow`);
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > VERIFY_POOL.slots.length) throw new Error(`--jobs is a whole number from 1 to ${VERIFY_POOL.slots.length}, one verify slot per flow`);
   const all = await listFlows();
   const selected = selectFlows(all, { names, layer, visible, feature: feature === undefined ? undefined : findFeature(readFeatures(), feature) });
   if (!selected.length) throw new Error(`No flows selected (layer ${layer}${feature ? `, feature ${feature}` : ''})`);

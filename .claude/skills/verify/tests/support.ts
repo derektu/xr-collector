@@ -34,8 +34,8 @@ export function repository() {
 
 /**
  * Points the home directory (HOME, and USERPROFILE, which Windows reads) at a new directory, so
- * `SLOT_LOCKS` (~/.xr-collector/verify-slots) of a library imported afterwards never names the
- * machine's real slot locks. Call before importing the library; the directory lives for the whole
+ * the slot locks (~/.xr-collector/*-slots) of a library imported afterwards never name the
+ * machine's real ones. Call before importing the library; the directory lives for the whole
  * test file, so remove it in afterAll.
  */
 export function isolateHome() {

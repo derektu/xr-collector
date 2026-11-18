@@ -1,29 +1,20 @@
 // Launching, attaching to and stopping one verification instance (Web mode): server.mts on a slot
-// of reserved ports, with its own profile, Vault and Web build under .local/verify-runs/<issue>-<time>-<pid>/.
+// of VERIFY_POOL (slots.mjs), with its own profile, Vault and Web build under .local/verify-runs/<issue>-<time>-<pid>/.
 // stop ends the PID run.json records, and only while its command line carries the run marker, so the
 // user's own App, terminals and other agents' runs are never touched. Web mode runs on macOS; slots
 // and stop also serve Desktop runs on Windows.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import path from 'node:path';
-import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, hasMarker, runMarker, runsRoot, SLOT_LOCKS, SLOTS, stamp } from './paths.mjs';
-import { commandOf, endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
+import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, hasMarker, runMarker, runsRoot, stamp } from './paths.mjs';
+import { VERIFY_POOL } from './slots.mjs';
+import { alive, commandOf, groupAlive, endWindowsTree, processTable, programName, WINDOWS } from './platform.mjs';
 import { readState } from './state.mjs';
 import { runtimeBin } from './target.mjs';
 import { defaultCatalog, syntheticAddresses } from './synthetic.mjs';
-import { sleep, waitFor } from './wait.mjs';
-
-/** Whether a process runs; EPERM is a process of another user. */
-export const alive = (pid) => {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
-};
-
-/** Whether any process of the group remains; EPERM is a member owned by another user. */
-const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+import { waitFor } from './wait.mjs';
 
 /** Writes JSON through a temporary file and a rename, so readers never see a partial file. */
 export function writeJsonAtomic(file, value) {
@@ -43,100 +34,6 @@ export function readRecord(runDir) {
   } catch {
     return { unreadable: true, runDir };
   }
-}
-
-export function portFree(port) {
-  return new Promise((resolve) => {
-    const probe = net.createServer().once('error', () => resolve(false))
-      .once('listening', () => probe.close(() => resolve(true)));
-    probe.listen(port, '127.0.0.1');
-  });
-}
-
-// ---- slot locks --------------------------------------------------------------------------------
-// A slot's lock file names the PID that keeps the slot (the run's server, or the flow process that
-// drives an Electron run) and the run folder. It is created whole and exclusively by a hard link, so
-// two launches never both take it; a lock whose PID no longer runs is stale and taken over.
-
-/** How long a launch waits for a slot while all of them are busy, such as with flows of other worktrees. */
-const SLOT_WAIT_MS = 10 * 60_000;
-
-const lockPath = (slot) => path.join(SLOT_LOCKS, `${slot}.json`);
-
-/** The lock in `file`; null when there is none, {} when it cannot be read. */
-function readLock(file) {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'));
-  } catch (error) {
-    return error.code === 'ENOENT' ? null : {};
-  }
-}
-
-/** Takes the slot's lock for `runDir` unless a running process holds it. */
-export function tryLock(slot, runDir) {
-  const temporary = `${lockPath(slot)}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify({ pid: process.pid, runDir }));
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        linkSync(temporary, lockPath(slot));
-        return true;
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const holder = readLock(lockPath(slot));
-        if (holder && alive(holder.pid)) return false;
-        // The dead holder's lock moves aside before the slot is taken. When another launch took the
-        // slot between the read and the move, the moved lock is that launch's and goes back.
-        const aside = `${lockPath(slot)}.${randomUUID()}.stale`;
-        try {
-          renameSync(lockPath(slot), aside);
-        } catch (moveError) {
-          if (moveError.code === 'ENOENT') continue;
-          throw moveError;
-        }
-        const moved = readLock(aside);
-        if (moved?.pid !== holder?.pid || moved?.runDir !== holder?.runDir) {
-          try { linkSync(aside, lockPath(slot)); } catch { /* a third launch holds the slot now */ }
-          rmSync(aside, { force: true });
-          return false;
-        }
-        rmSync(aside, { force: true });
-      }
-    }
-    return false;
-  } finally {
-    rmSync(temporary, { force: true });
-  }
-}
-
-/** Records `pid` as the holder of the slot the run holds. */
-export function holdSlot(slot, runDir, pid) {
-  writeJsonAtomic(lockPath(slot), { pid, runDir });
-}
-
-/**
- * Takes the first slot whose lock is free and whose four ports are free, held by this process for
- * `runDir`. While every slot is busy it waits for one, up to SLOT_WAIT_MS.
- */
-export async function claimSlot(runDir) {
-  mkdirSync(SLOT_LOCKS, { recursive: true });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (const ports of SLOTS) {
-      if (!tryLock(ports.slot, runDir)) continue;
-      if ((await Promise.all([ports.ui, ports.search, ports.agent, ports.feeds].map(portFree))).every(Boolean)) return ports;
-      releaseSlot(ports.slot, runDir);
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`All ${SLOTS.length} verify slots stayed busy for ${SLOT_WAIT_MS / 60_000} minutes. Each lock in ${SLOT_LOCKS} names its PID and run folder; end a leftover run with verify.mjs stop --run <runDir>`);
-    }
-    await sleep(1_000);
-  }
-}
-
-/** Releases the slot if its lock names `runDir`. */
-export function releaseSlot(slot, runDir) {
-  if (readLock(lockPath(slot))?.runDir === runDir) rmSync(lockPath(slot), { force: true });
 }
 
 // ---- runs --------------------------------------------------------------------------------------
@@ -161,7 +58,7 @@ export async function createRun(issue, { label, suffix = '' } = {}) {
     }
   }
   try {
-    return { runDir, ports: await claimSlot(runDir) };
+    return { runDir, ports: await VERIFY_POOL.claim(runDir) };
   } catch (error) {
     await rm(runDir, { recursive: true, force: true });
     throw error;
@@ -178,7 +75,7 @@ export function abandonRun({ runDir, ports, evidence }) {
     mkdirSync(evidence, { recursive: true });
     copyFileSync(log, path.join(evidence, `${path.basename(runDir)}-server.log`));
   }
-  releaseSlot(ports.slot, runDir);
+  VERIFY_POOL.release(ports.slot, runDir);
   rmSync(runDir, { recursive: true, force: true });
   dropUnusedEvidence({ evidence });
 }
@@ -254,7 +151,7 @@ function spawnServer(record) {
   });
   server.unref();
   closeSync(log);
-  holdSlot(ports.slot, runDir, server.pid);
+  VERIFY_POOL.hold(ports.slot, runDir, server.pid);
   return server.pid;
 }
 
@@ -318,15 +215,14 @@ function instance(record) {
      * lock names another run (taken after this run's server died) is refused.
      */
     async restart({ crash = false, page } = {}) {
-      const lock = readLock(lockPath(record.ports.slot));
-      if (lock?.runDir !== record.runDir) {
+      if (VERIFY_POOL.holder(record.ports.slot)?.owner !== record.runDir) {
         throw new Error(`Slot ${record.ports.slot} is no longer held by ${record.runDir}; launch a new run instead of restarting it`);
       }
       const route = page ? new URL(page.url()).pathname : null;
       if (page) await page.goto('about:blank');
       // Between the old server's exit and the new server's start the lock names this flow, so the
       // slot never looks stale to another launch.
-      holdSlot(record.ports.slot, record.runDir, process.pid);
+      VERIFY_POOL.hold(record.ports.slot, record.runDir, process.pid);
       await terminateRun(record, { kill: crash });
       appendFileSync(path.join(record.runDir, 'server.log'), `\n--- verify restart (${crash ? 'crash' : 'graceful'}) ${new Date().toISOString()} ---\n`);
       record.pid = spawnServer(record);
@@ -417,7 +313,7 @@ export async function stopRun(runDir, { keep = false } = {}) {
   if (existsSync(path.join(runDir, 'server.log'))) {
     await copyFile(path.join(runDir, 'server.log'), path.join(record.evidence, `${path.basename(runDir)}-server.log`));
   }
-  releaseSlot(record.ports.slot, runDir);
+  VERIFY_POOL.release(record.ports.slot, runDir);
   if (!keep) await rm(runDir, { recursive: true, force: true });
   return { runDir, removed: !keep, evidence: record.evidence };
 }
