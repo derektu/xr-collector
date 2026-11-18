@@ -4,7 +4,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 // Git's stderr is captured, so its line-ending warnings on Windows checkouts stay out of a command's
@@ -70,18 +69,6 @@ export function checkLabel(label) {
 export function runsRoot(from = process.cwd()) {
   return path.join(checkoutRoot(from), '.local', 'verify-runs');
 }
-
-/** Slot locks are per machine, so worktrees and main checkout never hand out the same ports. */
-export const SLOT_LOCKS = path.join(os.homedir(), '.xr-collector', 'verify-slots');
-
-/**
- * Ports reserved in the port registry for this skill (xr-collector — verify slot N), 7250–7289. Each
- * slot is four consecutive ports: UI/API, Meilisearch, Agent API, synthetic feeds. Ten slots let two
- * or three tickets each run flows with --jobs 3 and still leave one for a manual launch.
- */
-export const SLOTS = Array.from({ length: 10 }, (_, slot) => 7250 + slot * 4).map((base, slot) => ({
-  slot, ui: base, search: base + 1, agent: base + 2, feeds: base + 3,
-}));
 
 /**
  * The checkout's commit and its uncommitted state. `sourceHash` covers `git status`, the diff

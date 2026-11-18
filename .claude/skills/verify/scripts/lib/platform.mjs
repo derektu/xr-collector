@@ -9,6 +9,12 @@ import { windowsPowerShellEnvironment } from '../../../../../scripts/windows-pow
 
 export const WINDOWS = process.platform === 'win32';
 
+/** Whether a process runs; EPERM is a process of another user. */
+export const alive = (pid) => {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+};
+
 /** A program file name on this platform: `meilisearch` on macOS, `meilisearch.exe` on Windows. */
 export const exe = (name) => (WINDOWS ? `${name}.exe` : name);
 
@@ -16,6 +22,9 @@ export const exe = (name) => (WINDOWS ? `${name}.exe` : name);
 export const programName = (file) => path.basename(file ?? '').replace(/\.exe$/iu, '');
 
 /** Paths compare case-insensitively on Windows, as its file system does. */
+/** Whether any process of the group remains; EPERM is a member owned by another user. */
+export const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+
 const fold = (value) => (WINDOWS ? String(value).toLowerCase() : String(value));
 
 /** Whether two paths name the same file, by the platform's rules for case. */
