@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type {
-  VaultInspection,
   NewVaultCheck,
   VaultSetup,
   VaultSetupRequest,
@@ -23,23 +21,7 @@ import { Connectivity, type ConnectivityOptions, type JobManager } from '../../d
 import { openJobRecords, type JobRecords } from './job-records.js';
 import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
-import {
-  clearImportJournal,
-  recoverImport,
-  createVaultDirectory,
-  inspectVaultDirectory,
-  notAVault,
-  checkNewVault,
-  createNewVault,
-  DEFAULT_VAULT_NAME,
-  describePackage,
-  newVaultFolder,
-  importNewVault,
-  VaultSelection,
-  type AppFolders,
-  type Collector,
-  type UpdateLease,
-} from '../../domain/vault/index.js';
+import { DeviceVaults, type Collector, type UpdateLease } from '../../domain/vault/index.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionScheduler, SubscriptionService } from '../../domain/subscriptions/index.js';
@@ -152,7 +134,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   private constructor(
     private readonly options: CollectorRuntimeOptions,
     private readonly services: WorkspaceServices | null,
-    private readonly selection: VaultSelection,
+    private readonly vaults: DeviceVaults,
     instanceId: string,
     initial: Opening,
     agentConnection: AgentConnectionService,
@@ -202,7 +184,10 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     if (options.workspace) options.sources.checkPlugins(options.workspace.plugins);
     const sources = options.sources;
     const instanceId = randomUUID();
-    const selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
+    const vaults = new DeviceVaults({
+      profilePath: options.profilePath, sources, createdBy: options.createdBy ?? 'XR Collector',
+      ...(options.workspace?.statfs ? { statfs: options.workspace.statfs } : {}),
+    });
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
     let agentConnection: AgentConnectionService | null = null;
     let runtime: CollectorRuntime<L> | null = null;
@@ -281,9 +266,9 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
-      inspect: (vaultPath) => inspectVaultDirectory(vaultPath, sources),
+      inspect: (vaultPath) => vaults.inspect(vaultPath),
       checkNew: (location, name) => runtime!.checkNew(location, name),
-      describePackage: (file) => describePackage(file, sources),
+      describePackage: (file) => vaults.describePackage(file),
       setup: (request) => runtime!.setup(request),
     };
     const notReady = () => runtime ? (runtime.workspaceValue ? null : runtime.message) : initial.message;
@@ -293,17 +278,13 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     try {
       // The Agent token is protected before the Vault opens, where resumed and due work can fail at once.
       agentConnection = await openAgentConnection(agentSettings);
-      if (workspaceServices) {
-        // An import from Onboarding a stop interrupted is taken back unless the selection already names its Vault.
-        await recoverImport(options.profilePath, [await selection.read().catch(() => null)]);
-        initial = await CollectorRuntime.openInitial(options, workspaceServices, selection);
-      }
+      if (workspaceServices) initial = await CollectorRuntime.openInitial(options, workspaceServices, vaults);
       const listeners = await listen({
         ...shared,
         ...(activity ? { activity } : {}),
         runtimeStatus, notReady, vaultSetup, agentConnection,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, selection, instanceId, initial, agentConnection, listeners, records, pause, connectivity,
+      runtime = new CollectorRuntime(options, workspaceServices, vaults, instanceId, initial, agentConnection, listeners, records, pause, connectivity,
         notifications, changes, stopFollowing);
       return runtime;
     } catch (error) {
@@ -320,49 +301,27 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   private static async openInitial(
     options: CollectorRuntimeOptions,
     services: WorkspaceServices,
-    selection: VaultSelection,
+    vaults: DeviceVaults,
   ): Promise<Opening> {
-    const createdBy = options.createdBy ?? 'XR Collector';
-    const fixedLocation = Boolean(options.explicitVaultPath);
-    const open = async (root: string): Promise<Opening> => ({
+    const initial = await vaults.initial(options.explicitVaultPath);
+    if (initial.kind === 'unset') return { workspace: null, failure: null, message: NOT_SET_MESSAGE };
+    if (initial.kind === 'unusable') {
+      return {
+        workspace: null, failure: { path: initial.path, reason: initial.reason },
+        message: `目前選擇的 Vault 無法使用：${initial.reason}請在 UI Onboarding 重新選擇 Vault。`,
+      };
+    }
+    return {
       workspace: await VaultWorkspace.open({
-        ...services, root, selection, createdBy, profilePath: path.resolve(options.profilePath), fixedLocation,
+        ...services, root: initial.root, selection: vaults.selection, createdBy: options.createdBy ?? 'XR Collector',
+        profilePath: path.resolve(options.profilePath), fixedLocation: Boolean(options.explicitVaultPath),
       }), failure: null, message: '',
-    });
-    const unusable = (failurePath: string, reason: string): Opening => ({
-      workspace: null, failure: { path: failurePath, reason }, message: `目前選擇的 Vault 無法使用：${reason}請在 UI Onboarding 重新選擇 Vault。`,
-    });
-
-    if (options.explicitVaultPath) {
-      const inspection = await inspectVaultDirectory(path.resolve(options.explicitVaultPath), options.sources);
-      if (inspection.kind === 'empty') return open(await createVaultDirectory(inspection.path, createdBy, options.sources));
-      if (inspection.kind === 'existing') return open(inspection.path);
-      return unusable(inspection.path, inspection.reason);
-    }
-
-    let selected: string | null;
-    try {
-      selected = await selection.read();
-    } catch {
-      return unusable(selection.file, '這台電腦的知識庫位置設定已損壞。');
-    }
-    if (!selected) return { workspace: null, failure: null, message: NOT_SET_MESSAGE };
-    const inspection = await inspectVaultDirectory(selected, options.sources);
-    if (inspection.kind === 'existing') return open(inspection.path);
-    if (inspection.kind === 'empty') {
-      // A selected Vault that is now missing or empty must not be recreated silently.
-      return unusable(selected, inspection.exists ? '先前使用的知識庫目錄已經是空的。' : '找不到先前使用的知識庫目錄。');
-    }
-    return unusable(selected, inspection.reason);
+    };
   }
 
-  /** Checks a new Vault folder before it is created; see `checkNewVault`. */
+  /** Checks a new Vault folder before it is created; see `DeviceVaults.checkNew`. */
   checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
-    return checkNewVault(location, name, this.appFolders());
-  }
-
-  private appFolders(): AppFolders {
-    return { vaultRoot: this.workspaceValue?.status().vaultPath, profilePath: this.profilePath };
+    return this.vaults.checkNew(location, name, this.workspaceValue?.status().vaultPath);
   }
 
   vaultStatus(): VaultSetupStatus {
@@ -372,7 +331,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       newVault: {
         location: this.workspaceValue ? path.dirname(this.workspaceValue.status().vaultPath)
           : this.options.newVaultLocation ?? path.join(homedir(), 'Documents'),
-        name: DEFAULT_VAULT_NAME,
+        name: this.vaults.defaultName,
       },
       failure: this.workspaceValue ? null : this.failure,
     };
@@ -393,51 +352,12 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等待目前的操作完成。');
     if (this.preparingUpdate) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能變更知識庫。');
     this.settingUp = true;
-    const action = request.action;
     try {
-      const createdBy = this.options.createdBy ?? 'XR Collector';
-      let root: string;
-      let documentCount = 0;
-      if (request.action === 'create') {
-        root = await createNewVault(request.location, request.name, createdBy, this.options.sources, this.appFolders());
-      } else if (request.action === 'import') {
-        root = await importNewVault({
-          packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, this.appFolders()), profilePath: this.profilePath, createdBy, sources: this.options.sources,
-          ...(this.services.statfs ? { statfs: this.services.statfs } : {}),
-        });
-        documentCount = (await inspectVaultDirectory(root, this.options.sources).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
-      } else {
-        if (!path.isAbsolute(request.path)) throw new CollectorError('invalid_request', '請提供完整的絕對路徑。');
-        const inspection: VaultInspection = await inspectVaultDirectory(request.path, this.options.sources);
-        if (inspection.kind !== 'existing') throw new CollectorError('vault_invalid', notAVault(inspection));
-        root = inspection.path;
-        documentCount = inspection.documentCount;
-      }
-      // A Vault this request created is removed again when it cannot become the one in use.
-      const discard = async () => {
-        if (action === 'import') await recoverImport(this.profilePath, []).catch(() => undefined);
-        if (action === 'create') await rm(root, { recursive: true, force: true }).catch(() => undefined);
-      };
-      let workspace: VaultWorkspace;
-      try {
-        // An imported Vault keeps its import journal until the selection names it, so a failure or a
-        // stop before that takes the new folder back.
-        workspace = await VaultWorkspace.open({
-          ...this.services, root, selection: this.selection, createdBy, profilePath: this.profilePath, pendingImport: action === 'import',
-        });
-      } catch (error) {
-        console.error('Vault services failed to start', error);
-        await discard();
-        throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });
-      }
-      try {
-        await this.selection.write(root);
-      } catch (error) {
-        await workspace.close().catch(() => undefined);
-        await discard();
-        throw new CollectorError('vault_invalid', '無法保存知識庫位置，請確認程式資料目錄可寫入後重試。', { cause: error });
-      }
-      if (action === 'import') await clearImportJournal(this.profilePath);
+      const services = this.services;
+      const { workspace, documentCount } = await this.vaults.setUp(request, (root, pendingImport) => VaultWorkspace.open({
+        ...services, root, selection: this.vaults.selection, createdBy: this.options.createdBy ?? 'XR Collector',
+        profilePath: this.profilePath, pendingImport,
+      }));
       this.workspaceValue = workspace;
       this.failure = null;
       this.stateValue = 'ready';
