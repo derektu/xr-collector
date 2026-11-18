@@ -44,9 +44,9 @@ describe('workspace transfer through HTTP', () => {
     await rm(a.vault, { recursive: true }); // A is unavailable for the import, browse and search alike.
     const target = await importAsNew(b, file);
     const workspace = await open(b);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, search: workspace.search, subscriptions: subscriptionCollections(PRODUCT_SOURCES, () => workspace.subscriptions), schedule: workspace.schedule, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, search: workspace.search, subscriptions: subscriptionCollections(PRODUCT_SOURCES, () => workspace.subscriptions), schedule: workspace.schedule, transfer: workspace.operations });
     try {
-      expect(workspace.status().vaultPath).toBe(target);
+      expect(workspace.operations.status().vaultPath).toBe(target);
       expect((await app.inject('/api/documents')).json().documents.map((doc: SavedDocument) => doc.id)).toEqual([`youtube:${capture.videoId}`]);
       expect((await app.inject(`/api/documents/youtube:${capture.videoId}`)).json().document.bodyMarkdown).toBe(capture.bodyMarkdown);
       expect((await app.inject('/api/schedule')).json().schedule.enabled).toBe(true);
@@ -54,7 +54,7 @@ describe('workspace transfer through HTTP', () => {
     } finally { await app.close(); }
     await workspace.close();
     const restarted = await open(b);
-    expect(restarted.status().vaultPath).toBe(target);
+    expect(restarted.operations.status().vaultPath).toBe(target);
     expect(await restarted.collector.list()).toHaveLength(1);
     expect((await restarted.schedule.getSchedule()).enabled).toBe(true);
     const [submission] = await restarted.subscriptions.of('youtube')!.startRun({ trigger: 'manual' });
@@ -71,8 +71,8 @@ describe('workspace transfer through HTTP', () => {
       ['metadata.zip', await packageOf([{ path: `documents/youtube/${capture.videoId}.md`, data: 'bad metadata' }])],
       ['schedule.zip', await packageOf([{ path: 'settings/youtube-schedule.json', data: '{"version":1,"enabled":true}' }])],
     ] as const) {
-      await expect(workspace.previewImport(await fileOf(b.root, name, bytes)), name).rejects.toMatchObject({ code: 'invalid_request' });
-      expect(workspace.status()).toMatchObject({ state: 'error', operation: 'import', vaultPath: b.vault });
+      await expect(workspace.operations.previewImport(await fileOf(b.root, name, bytes)), name).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import', vaultPath: b.vault });
       expect(await filesOf(b.vault)).toEqual(files);
       expect((await readdir(b.vault)).filter((entry) => entry.startsWith('.xr-collector-import-'))).toEqual([]);
     }
@@ -92,19 +92,19 @@ describe('workspace transfer through HTTP', () => {
     const first = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
     const second = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=abcdefghijk');
     await eventually(() => expect(started.length).toBe(1));
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, jobs: workspace.jobs, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, jobs: workspace.jobs, transfer: workspace.operations });
     try {
       // The export takes the Vault at once and waits for the capture already running.
-      const pending = workspace.exportTo();
-      await eventually(() => expect(workspace.status()).toMatchObject({ state: 'waiting', operation: 'export' }));
+      const pending = workspace.operations.exportTo();
+      await eventually(() => expect(workspace.operations.status()).toMatchObject({ state: 'waiting', operation: 'export' }));
       expect((await app.inject({ method: 'POST', url: '/api/items', payload: { url: capture.sourceUrl } })).statusCode).toBe(409);
-      await expect(workspace.previewImport(await fileOf(b.root, 'empty.zip', await packageOf([])))).rejects.toMatchObject({ code: 'vault_busy' });
+      await expect(workspace.operations.previewImport(await fileOf(b.root, 'empty.zip', await packageOf([])))).rejects.toMatchObject({ code: 'vault_busy' });
       release();
       const exported = await pending;
       // The finished capture is in the export; the queued video did not start while the Vault was held.
       expect(started).toEqual([capture.videoId]);
       expect([...(await packageFiles(await readFile(exported.result!.exportPath!))).keys()]).toContain(`documents/youtube/${capture.videoId}.md`);
-      expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'export' });
+      expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'export' });
       await workspace.jobs.whenSettled(first.job.id);
       expect((await workspace.jobs.whenSettled(second.job.id)).state).toBe('completed');
       expect(started).toEqual([capture.videoId, 'abcdefghijk']);
@@ -118,13 +118,13 @@ describe('workspace transfer through HTTP', () => {
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const workspace = await open(b, { holdTimeoutMs: 50, capture: { capture: async () => { await waiting; return capture; } } });
     const job = await workspace.jobs.submitItem('youtube', capture.sourceUrl);
-    await expect(workspace.exportTo()).rejects.toMatchObject({ code: 'vault_busy', message: expect.stringContaining('收集步驟') });
-    expect(workspace.status()).toMatchObject({ state: 'error', operation: 'export' });
+    await expect(workspace.operations.exportTo()).rejects.toMatchObject({ code: 'vault_busy', message: expect.stringContaining('收集步驟') });
+    expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'export' });
     // The lock is gone: writes and another transfer are accepted again.
-    expect(() => workspace.enterWrite()()).not.toThrow();
+    expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
     release();
     expect((await workspace.jobs.whenSettled(job.job.id)).state).toBe('completed');
-    await expect(workspace.exportTo()).resolves.toMatchObject({ state: 'completed' });
+    await expect(workspace.operations.exportTo()).resolves.toMatchObject({ state: 'completed' });
   });
 });
 
@@ -157,8 +157,8 @@ it('waits for a running channel discovery before exporting', async () => {
     listVideos: async () => { await pending; return []; },
   } });
   await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual' });
-  const exported = workspace.exportTo();
-  await eventually(() => expect(workspace.status().state).toBe('waiting'));
+  const exported = workspace.operations.exportTo();
+  await eventually(() => expect(workspace.operations.status().state).toBe('waiting'));
   release();
   await expect(exported).resolves.toMatchObject({ state: 'completed' });
 });
@@ -195,7 +195,7 @@ describe('portable subscription settings (S-T10, A4)', () => {
     await writeFile(file, JSON.stringify(stored));
     const workspace = await open(a);
     expect(await workspace.subscriptions.of('youtube')!.list()).toEqual([expect.objectContaining({ id: 'UC123', backlog: false })]);
-    const { result } = await workspace.exportTo();
+    const { result } = await workspace.operations.exportTo();
     expect(JSON.parse((await packageFiles(await readFile(result!.exportPath!))).get('settings/youtube-channels.json')!.toString()).channels[0])
       .toMatchObject({ id: 'UC123', cursor: { videoId: 'cursor00001' }, backlog: false });
   });
@@ -207,9 +207,9 @@ describe('portable subscription settings (S-T10, A4)', () => {
       [{ path: 'settings/youtube-channels.json', data: shared }],
       [{ path: 'settings/youtube-schedule.json', data: JSON.stringify({ version: 1, enabled: true, intervalMinutes: 60 }) }],
     ]) {
-      await expect(workspace.previewImport(await fileOf(b.root, 'old.zip', await packageOf(files))))
+      await expect(workspace.operations.previewImport(await fileOf(b.root, 'old.zip', await packageOf(files))))
         .rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('訂閱或排程設定格式無效') });
-      expect(workspace.status()).toMatchObject({ state: 'error', vaultPath: b.vault });
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', vaultPath: b.vault });
     }
   });
 });
@@ -218,13 +218,13 @@ describe('the export folder', () => {
   it('is created for an export into it, as the suggestion the UI fills in, while another missing folder is refused', async () => {
     const a = await machine('A'); await seed(a.vault);
     const workspace = await open(a);
-    const suggested = workspace.exportSuggestion().path;
+    const suggested = workspace.operations.exportSuggestion().path;
     expect(existsSync(a.exports)).toBe(false);
-    await expect(workspace.exportTo(suggested)).resolves.toMatchObject({ state: 'completed', result: { exportPath: suggested } });
+    await expect(workspace.operations.exportTo(suggested)).resolves.toMatchObject({ state: 'completed', result: { exportPath: suggested } });
     expect(existsSync(suggested)).toBe(true);
 
     const mistyped = path.join(a.root, 'no-such-folder', 'export.zip');
-    await expect(workspace.exportTo(mistyped)).rejects.toMatchObject({ code: 'invalid_request', message: '匯出檔所在的資料夾不存在。' });
+    await expect(workspace.operations.exportTo(mistyped)).rejects.toMatchObject({ code: 'invalid_request', message: '匯出檔所在的資料夾不存在。' });
     expect(existsSync(path.dirname(mistyped))).toBe(false);
   });
 });
@@ -280,13 +280,13 @@ it('refuses a document deletion while an import holds the Vault (A7)', async () 
   const held = new Promise<void>((resolve) => { release = resolve; });
   // The import stops once its files are staged, so it keeps the Vault locked.
   const workspace = await open(b, { importFaults: async (phase) => { if (phase === 'staged') await held; } });
-  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
+  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations });
   try {
-    const preview = await workspace.previewImport(await fileOf(a.exports, 'a.zip', await packageBytes(a.vault)));
-    workspace.applyImport(preview.id, 'merge');
+    const preview = await workspace.operations.previewImport(await fileOf(a.exports, 'a.zip', await packageBytes(a.vault)));
+    workspace.operations.applyImport(preview.id, 'merge');
     const url = `/api/documents/${encodeURIComponent(`youtube:${capture.videoId}`)}`;
     await eventually(async () => expect(await (await app.inject({ method: 'DELETE', url })).statusCode).toBe(409));
-    release(); await workspace.operationFinished();
-    expect(workspace.status().state).toBe('completed');
+    release(); await workspace.operations.finished();
+    expect(workspace.operations.status().state).toBe('completed');
   } finally { await app.close(); }
 });

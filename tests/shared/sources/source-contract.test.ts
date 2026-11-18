@@ -441,7 +441,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
   }
   async function exportFrom(machineOf: Machine, name: string): Promise<string> {
     await mkdir(machineOf.exports, { recursive: true });
-    return using(machineOf, async (workspace) => (await workspace.exportTo(path.join(machineOf.exports, `${name}.zip`))).result!.exportPath!);
+    return using(machineOf, async (workspace) => (await workspace.operations.exportTo(path.join(machineOf.exports, `${name}.zip`))).result!.exportPath!);
   }
 
   it('exports, compares, merges and replaces documents and subscriptions of every type beside YouTube\'s', async () => {

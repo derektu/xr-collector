@@ -260,7 +260,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
 
     const youtubeOnly = await workspaceOf(c);
     await mkdir(c.exports, { recursive: true });
-    const plain = (await youtubeOnly.exportTo(path.join(c.exports, 'youtube.zip'))).result!.exportPath!;
+    const plain = (await youtubeOnly.operations.exportTo(path.join(c.exports, 'youtube.zip'))).result!.exportPath!;
     const plainReader = await openPackage(plain, PRODUCT_SOURCES);
     expect(plainReader.manifest.formatVersion).toBe(2);
     plainReader.close();
@@ -268,7 +268,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     const workspace = await workspaceOf(a);
     await subscribe(workspace, feeds.url('/feed.xml'));
     await mkdir(a.exports, { recursive: true });
-    const file = (await workspace.exportTo(path.join(a.exports, 'both.zip'))).result!.exportPath!;
+    const file = (await workspace.operations.exportTo(path.join(a.exports, 'both.zip'))).result!.exportPath!;
     const reader = await openPackage(file, PRODUCT_SOURCES);
     expect(reader.manifest.formatVersion).toBe(2);
     expect(reader.manifest.files.map((entry: { path: string }) => entry.path)).toEqual(expect.arrayContaining(['settings/rss-subscriptions.json', 'settings/youtube-channels.json']));

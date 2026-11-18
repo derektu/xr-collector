@@ -1,5 +1,5 @@
-import type { VaultWorkspace, ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
-import type { VaultAccess, Collector } from '../../domain/vault/index.js';
+import type { ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
+import type { VaultAccess, Collector, VaultOperations } from '../../domain/vault/index.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -44,7 +44,7 @@ export interface HttpAppOptions {
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
-  transfer?: VaultWorkspace;
+  transfer?: VaultOperations;
   /** The subscriptions of each source type with subscriptions. */
   subscriptions?: readonly SubscriptionCollection[];
   schedule?: ScheduleManagement;
@@ -182,7 +182,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       const declared = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
       if (declared === 'device-data') return;
       const inferred: VaultAccess = ['GET', 'HEAD', 'OPTIONS'].includes(request.method) ? 'vault-read' : 'vault-write';
-      writes.set(request, transfer.enterRequest(declared ?? inferred));
+      writes.set(request, transfer.enter(declared ?? inferred));
     });
     app.addHook('onResponse', async (request) => { writes.get(request)?.(); });
     app.addHook('onSend', async (request, _reply, payload) => { writes.get(request)?.(); return payload; });

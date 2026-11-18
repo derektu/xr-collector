@@ -84,7 +84,7 @@ async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise
 /** Exports the machine's Vault to `<exports>/<name>.zip`. */
 async function exportFrom(at: Machine, name: string): Promise<string> {
   await mkdir(at.exports, { recursive: true });
-  return using(at, async (workspace) => (await workspace.exportTo(path.join(at.exports, `${name}.zip`))).result!.exportPath!);
+  return using(at, async (workspace) => (await workspace.operations.exportTo(path.join(at.exports, `${name}.zip`))).result!.exportPath!);
 }
 
 /** Creates a machine's Vault from an export file as Onboarding does, and names it in its selection. */
@@ -166,9 +166,9 @@ describe('a deletion and an addition meet (X77-A02)', () => {
     const replacing = await copyOf(a, 'A-replace');
 
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({ removed: 1 }), replace: counts({ removed: 2 }), localNewer: 1 });
-      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
+      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
     });
     expect(await documents(a.vault)).toEqual([D1, D3, D4, D5, SEEDED].sort());
 
@@ -231,10 +231,10 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
       .map((record: { sourceId: string; deletedAt: string }) => [record.sourceId, record.deletedAt]));
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
-      expect(workspace.status().state).toBe('completed');
+      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
+      expect(workspace.operations.status().state).toBe('completed');
     });
     expect(await deletedAt(a.vault)).toEqual({ [D1]: at(2), [D3]: at(2) });
   });
@@ -246,9 +246,9 @@ describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
     await store(a.vault, at(1)).update('UC123', { title: 'A 的名稱' }); await store(b.vault, at(1)).update('UC123', { title: 'B 的名稱' });
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }, { updated: 1 }), localNewer: 3 });
-      expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
+      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
     });
   });
 });
@@ -289,9 +289,9 @@ describe('the same video on both machines (X77-A06)', () => {
     expect(await readFile(docPath(a.vault, 'samevideo01'))).not.toEqual(await readFile(docPath(b.vault, 'samevideo01')));
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({}), localNewer: 0 });
-      expect(() => workspace.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
+      expect(() => workspace.operations.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
     });
   });
 });
@@ -394,7 +394,7 @@ describe('a subscription that paused itself on one machine (#291)', () => {
     // A resumes it later; B's older pause no longer wins.
     await store(a.vault, at(2)).update('UC123', { enabled: true });
     await using(a, async (workspace) => {
-      expect((await workspace.previewImport(paused))).toMatchObject({ merge: counts({}), localNewer: 1 });
+      expect((await workspace.operations.previewImport(paused))).toMatchObject({ merge: counts({}), localNewer: 1 });
     });
     expect(await uc123(a.vault)).toMatchObject({ enabled: true, updatedAt: at(2) });
   });
@@ -446,10 +446,10 @@ describe('a subscription both machines changed (#256 S2, S3, S4)', () => {
     const before = await rowOf(a.vault);
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({}, { updated: 1 }), localNewer: 1 });
-      expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
-      workspace.cancelImport(preview.id);
+      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
+      workspace.operations.cancelImport(preview.id);
     });
     expect(await rowOf(a.vault)).toEqual(before);
   });
@@ -486,16 +486,16 @@ describe('deletion records of documents the Vault never had (X77-A09)', () => {
     await add(b.vault, 'bbbbbbbbbbX'); await remove(b.vault, 'bbbbbbbbbbX', at(1));
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
-      expect(workspace.status().state).toBe('completed');
+      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
+      expect(workspace.operations.status().state).toBe('completed');
     });
     expect(await deletions(a.vault)).toEqual(['bbbbbbbbbbX']);
     expect(await new Collector(new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES))).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
     expect(await items(a.vault)).toEqual(await items(b.vault));
     await using(a, async (workspace) => {
-      expect(await workspace.previewImport(file)).toMatchObject({ merge: counts({}), mergeRecords: false });
+      expect(await workspace.operations.previewImport(file)).toMatchObject({ merge: counts({}), mergeRecords: false });
     });
   });
 });
@@ -507,21 +507,21 @@ describe('nothing to import (X77-A10)', () => {
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => { await importFile(workspace, file); });
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({}), localNewer: 0, mergeRecords: false });
-      expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
-      expect(() => workspace.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
-      workspace.cancelImport(preview.id);
-      expect(workspace.status()).toMatchObject({ state: 'idle', message: '已取消匯入，資料未變更。' });
+      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
+      expect(() => workspace.operations.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
+      workspace.operations.cancelImport(preview.id);
+      expect(workspace.operations.status()).toMatchObject({ state: 'idle', message: '已取消匯入，資料未變更。' });
     });
     expect(await preImports(a)).toHaveLength(1);
 
     await add(a.vault, 'aaaaaaaaaaA'); await modify(a.vault, D3, 'A 之後的段落', at(5));
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }), localNewer: 2 });
-      workspace.applyImport(preview.id, 'replace'); await workspace.operationFinished();
-      expect(workspace.status().state).toBe('completed');
+      workspace.operations.applyImport(preview.id, 'replace'); await workspace.operations.finished();
+      expect(workspace.operations.status().state).toBe('completed');
     });
     expect(await items(a.vault)).toEqual(await items(b.vault));
   });
@@ -558,8 +558,8 @@ describe('the export before an import (X77-A11)', () => {
     const before = await items(a.vault);
     await using(a, async (workspace) => {
       await importFile(workspace, file);
-      expect(workspace.status()).toMatchObject({ state: 'error', operation: 'import' });
-      expect(() => workspace.enterWrite()()).not.toThrow();
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import' });
+      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
     }, { backupFolder: path.join(blocked, 'backups') });
     expect(await items(a.vault)).toEqual(before);
     expect(await workFolders(a.vault)).toEqual([]);
@@ -573,10 +573,10 @@ describe('the export before an import (X77-A11)', () => {
     const backup = await using(a, async (workspace) => (await importFile(workspace, file)).status.result!.backupPath!);
     expect((await manifestOf(await readFile(backup))).source).toMatchObject({ machine: 'A', vaultId: await readVaultId(a.vault) });
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(backup);
+      const preview = await workspace.operations.previewImport(backup);
       expect(preview).toMatchObject({ merge: counts({}), replace: changedCounts, localNewer: 6 });
-      workspace.applyImport(preview.id, 'replace'); await workspace.operationFinished();
-      expect(workspace.status().state).toBe('completed');
+      workspace.operations.applyImport(preview.id, 'replace'); await workspace.operations.finished();
+      expect(workspace.operations.status().state).toBe('completed');
     });
     expect(await items(a.vault)).toEqual(original);
   });
@@ -610,7 +610,7 @@ describe('an import stopped while it applies (X77-A12)', () => {
         // The index was rebuilt.
         expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
       }
-      expect((await workspace.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
+      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
     });
   });
 
@@ -622,14 +622,14 @@ describe('an import stopped while it applies (X77-A12)', () => {
     });
     const c = await machine('C', root);
     await using(c, async (workspace) => {
-      await workspace.openOther(stopped.vault); await workspace.operationFinished();
-      expect(workspace.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: stopped.vault });
+      await workspace.operations.openOther(stopped.vault); await workspace.operations.finished();
+      expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: stopped.vault });
       expect(await workFolders(stopped.vault)).toEqual([]);
       expect(await items(stopped.vault)).toEqual(expected === 'before' ? before : after);
       if (expected === 'after') {
         expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
       }
-      expect((await workspace.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
+      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
     });
   });
 
@@ -638,19 +638,19 @@ describe('an import stopped while it applies (X77-A12)', () => {
     await using(a, async (workspace) => {
       await importFile(workspace, file).catch(() => undefined);
       if (expected === 'before') {
-        expect(workspace.status()).toMatchObject({ state: 'error', operation: 'import' });
+        expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import' });
       } else {
         // Past the journal the import is carried out, so it is reported as done.
-        expect(workspace.status()).toMatchObject({
+        expect(workspace.operations.status()).toMatchObject({
           state: 'completed', operation: 'import', errorCode: null, result: { importMode: 'merge', imported: changedCounts },
         });
-        expect(workspace.status().message).toContain('匯入完成：文件：新增 1、更新 1、刪除 1；訂閱：新增 1、更新 1、刪除 1');
+        expect(workspace.operations.status().message).toContain('匯入完成：文件：新增 1、更新 1、刪除 1；訂閱：新增 1、更新 1、刪除 1');
         expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
       }
       expect(await workFolders(a.vault)).toEqual([]);
       expect(await items(a.vault)).toEqual(expected === 'before' ? before : after);
-      expect(() => workspace.enterWrite()()).not.toThrow();
-      expect((await workspace.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
+      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
+      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
     }, { importFaults: (phase, count) => { if (at(phase, count)) throw new Error('disk stopped'); } });
   });
 
@@ -689,7 +689,7 @@ describe('an import stopped while it applies (X77-A12)', () => {
         state: 'completed', errorCode: null, result: { importMode: 'merge', searchRebuildNeeded: true, imported: changedCounts },
       });
       expect(status.message).toContain('匯入已完成，搜尋索引需要重建');
-      expect(() => workspace.enterWrite()()).not.toThrow();
+      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
     }, { createSearch });
     expect(await items(copy.vault)).toEqual(after);
   });
@@ -700,16 +700,16 @@ describe('an import stopped while it applies (X77-A12)', () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     let reached = false;
     await using(a, async (workspace) => {
-      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
+      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations });
       try {
-        const preview = await workspace.previewImport(file);
-        workspace.applyImport(preview.id, 'merge');
+        const preview = await workspace.operations.previewImport(file);
+        workspace.operations.applyImport(preview.id, 'merge');
         await eventually(() => expect(reached).toBe(true));
         const read = await app.inject('/api/documents');
         expect(read.statusCode).toBe(409);
         expect(read.json()).toMatchObject({ error: { code: 'vault_busy' } });
         expect((await app.inject('/api/vault/status')).statusCode).toBe(200);
-        release(); await workspace.operationFinished();
+        release(); await workspace.operations.finished();
         expect((await app.inject('/api/documents')).statusCode).toBe(200);
       } finally { await app.close(); }
     }, { importFaults: async (phase, count) => { if (phase === 'renaming' && count === 1) { reached = true; await held; } } });
@@ -725,12 +725,12 @@ describe('collection during an import (X77-A12)', () => {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       const job = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=bbbbbbbbbb1');
       await eventually(() => expect(workspace.jobs.get(job.job.id)?.state).toBe('running'));
-      workspace.applyImport(preview.id, 'merge');
-      expect(workspace.status().state).toBe('waiting');
-      expect(workspace.cancelWait()).toMatchObject({ state: 'idle' });
+      workspace.operations.applyImport(preview.id, 'merge');
+      expect(workspace.operations.status().state).toBe('waiting');
+      expect(workspace.operations.cancelWait()).toMatchObject({ state: 'idle' });
       release();
       await workspace.jobs.whenSettled(job.job.id);
     }, { capture: { capture: async (target) => { await waiting; return video(target.videoId); } } });
@@ -748,14 +748,14 @@ describe('collection during an import (X77-A12)', () => {
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const listed: string[] = [];
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', subscriptionIds: ['UC123', 'UC456'] });
       await eventually(() => expect(listed).toEqual(['UC123']));
-      workspace.applyImport(preview.id, 'merge');
-      expect(workspace.status().state).toBe('waiting');
+      workspace.operations.applyImport(preview.id, 'merge');
+      expect(workspace.operations.status().state).toBe('waiting');
       release();
-      await workspace.operationFinished();
-      expect(workspace.status().state).toBe('completed');
+      await workspace.operations.finished();
+      expect(workspace.operations.status().state).toBe('completed');
       await Promise.all(runs.map((run) => workspace.jobs.whenSettled(run.job.id)));
       // The queued check of the subscription the import removed never ran.
       expect(listed).toEqual(['UC123']);
@@ -782,11 +782,11 @@ describe('a comparison the Vault outdated (X77-A13)', () => {
     const file = await exportFrom(b, 'b-1');
     const before = await items(a.vault);
     await using(a, async (workspace) => {
-      const preview = await workspace.previewImport(file);
+      const preview = await workspace.operations.previewImport(file);
       await modify(a.vault, D3, '比對後才改的段落', at(9));
-      workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
-      expect(workspace.status()).toMatchObject({ state: 'error', errorCode: 'invalid_request', message: expect.stringContaining('重新選擇') });
-      expect(() => workspace.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', errorCode: 'invalid_request', message: expect.stringContaining('重新選擇') });
+      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     });
     expect(await preImports(a)).toEqual([]);
     const now = await items(a.vault);
@@ -862,7 +862,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     await rm(target, { recursive: true });
     await stoppedAfterRename();
     await new VaultSelection(path.join(c.profile, 'vault-selection.json')).write(target);
-    await using(c, async (workspace) => { expect(workspace.status().vaultPath).toBe(target); });
+    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(target); });
     expect(await readdir(target)).toContain('documents');
     expect(existsSync(journalFile)).toBe(false);
   });
@@ -873,9 +873,9 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     const journalFile = path.join(c.profile, IMPORT_JOURNAL);
     await importNewVault({ sources: PRODUCT_SOURCES, packageFile: first, folder: target, profilePath: c.profile, createdBy: 'XR Collector test' });
     // Onboarding opens the new Vault, then the program stops before the selection is written.
-    await using(c, async (workspace) => { expect(workspace.status().vaultPath).toBe(target); }, { root: target, pendingImport: true });
+    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(target); }, { root: target, pendingImport: true });
     expect(existsSync(journalFile)).toBe(true);
-    await using(c, async (workspace) => { expect(workspace.status().vaultPath).toBe(c.vault); });
+    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(c.vault); });
     expect(existsSync(target)).toBe(false);
     expect(existsSync(journalFile)).toBe(false);
   });
@@ -888,7 +888,7 @@ describe('export and import over HTTP (X77-A14)', () => {
     const file = await exportFrom(b, 'b-1');
     await using(a, async (workspace) => {
       for (const agentToken of [undefined, 'test-token']) {
-        const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, ...(agentToken ? { agentToken } : {}) });
+        const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, ...(agentToken ? { agentToken } : {}) });
         const headers = agentToken ? { authorization: `Bearer ${agentToken}` } : {};
         try {
           const target = path.join(a.exports, `${agentToken ?? 'ui'}.zip`);
@@ -920,7 +920,7 @@ describe('export and import over HTTP (X77-A14)', () => {
           expect(mode.statusCode).toBe(400);
           const apply = await app.inject({ method: 'POST', url: '/api/vault/import/apply', headers, payload: { id, mode: 'merge' } });
           expect(apply.statusCode).toBe(202);
-          await workspace.operationFinished();
+          await workspace.operations.finished();
           expect((await app.inject({ method: 'GET', url: '/api/vault/status', headers })).json())
             .toMatchObject({ state: 'completed', operation: 'import', result: { importMode: 'merge', imported: changedCounts } });
         } finally { await app.close(); }
@@ -973,9 +973,9 @@ it('refuses an export file the manifest of which does not match its content, wit
   const empty = await fileOf(a.root, 'empty.zip', await packageOf([]));
   const before = await items(a.vault);
   await using(a, async (workspace) => {
-    await expect(workspace.previewImport(bad)).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(workspace.operations.previewImport(bad)).rejects.toMatchObject({ code: 'invalid_request' });
     // An export of an empty Vault shares nothing with A, so nothing is added and nothing removed.
-    expect(await workspace.previewImport(empty)).toMatchObject({ merge: counts({}), localNewer: 7 });
+    expect(await workspace.operations.previewImport(empty)).toMatchObject({ merge: counts({}), localNewer: 7 });
   });
   expect(await items(a.vault)).toEqual(before);
 });
@@ -991,7 +991,7 @@ it('updates real Meilisearch with what an import wrote and removed, and keeps it
     await eventually(() => expect(workspace.search.status().state).toBe('ready'));
     expect(await ids(workspace, `${D2}`)).toContain(`youtube:${D2}`);
     await importFile(workspace, file);
-    expect(workspace.status().state).toBe('completed');
+    expect(workspace.operations.status().state).toBe('completed');
     await eventually(async () => expect(await ids(workspace, '珊瑚觀察')).toEqual([`youtube:${D3}`]));
     await eventually(async () => expect(await ids(workspace, `${D5} 的字幕`)).toContain(`youtube:${D5}`));
     await eventually(async () => expect(await ids(workspace, `${D2} 的字幕`)).not.toContain(`youtube:${D2}`));

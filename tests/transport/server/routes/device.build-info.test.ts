@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { startCollectorServer } from '../../../../src/transport/server/collector-server.js';
 import { VaultOperationLock, type VaultAccess } from '../../../../src/domain/vault/operation-lock.js';
-import type { VaultWorkspace } from '../../../../src/app/runtime/vault-workspace.js';
+import type { VaultOperations } from '../../../../src/domain/vault/vault-operations.js';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BuildInfo } from '../../../../src/shared/api/update-types.js';
@@ -51,7 +51,7 @@ describe('build information HTTP contract', () => {
     await bodyEntered;
     try {
       const app = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: info,
-        transfer: { enterRequest: (access: VaultAccess) => lock.enter(access) } as VaultWorkspace,
+        transfer: { enter: (access: VaultAccess) => lock.enter(access) } as unknown as VaultOperations,
         collector: { listDocuments: async () => ({ documents: [], total: 0, nextOffset: null }) } as never,
       });
       apps.push(app);
