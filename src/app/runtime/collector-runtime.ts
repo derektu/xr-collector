@@ -10,6 +10,7 @@ import type {
   VaultSetupRequest,
   VaultSetupResult,
   VaultSetupStatus,
+  TransferStatus,
 } from '../../shared/vault/vault-types.js';
 import type { ActivityAccess } from '../../shared/activity/activity-types.js';
 import { loadBuildInfo, type UpdateAccess } from '../../domain/updates/index.js';
@@ -160,7 +161,11 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     this.message = initial.workspace ? '服務已就緒。' : initial.message;
   }
 
-  get workspace(): VaultWorkspace | null { return this.workspaceValue; }
+  /** The ID of the Vault in use; null while none is. */
+  activeVaultId(): string | null { return this.workspaceValue?.activeVaultId() ?? null; }
+
+  /** The export or import of the Vault in use, as `GET /api/vault/status` answers it; null while no Vault is in use. */
+  transferStatus(): TransferStatus | null { return this.workspaceValue?.operations.status() ?? null; }
 
   /** A persisted old notification or an actionable row synthesized from the current Vault. */
   async resolveNotification(id: string): Promise<AutoPauseNotification | null> {

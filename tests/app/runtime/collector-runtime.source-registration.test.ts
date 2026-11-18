@@ -68,8 +68,11 @@ describe('a runtime and its source types', () => {
 
     expect(await types(product)).toEqual(['youtube', 'rss']);
     expect(await types(fake)).toEqual(['fake']);
-    expect(product.workspace!.subscriptions.all().map((service) => service.type)).toEqual(['youtube', 'rss']);
-    expect(fake.workspace!.subscriptions.all().map((service) => service.type)).toEqual(['fake']);
+    // Listing subscriptions reaches the subscription service of each type in the runtime's own Vault.
+    const subscriptionTypes = async (runtime: CollectorServer) =>
+      ((await (await get(runtime, '/api/subscriptions')).json()) as { types: { type: string }[] }).types.map((entry) => entry.type);
+    expect(await subscriptionTypes(product)).toEqual(['youtube', 'rss']);
+    expect(await subscriptionTypes(fake)).toEqual(['fake']);
 
     // A fake item address is a fake item to one runtime and an RSS address, which names no item, to the other.
     const item = 'https://fake.example/item/one-1';

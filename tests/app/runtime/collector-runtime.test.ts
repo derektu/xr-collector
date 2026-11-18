@@ -181,10 +181,14 @@ describe('CollectorRuntime', () => {
     }));
     await new JsonScheduleStore(new VaultFileWriter(source, PRODUCT_SOURCES)).save({ enabled: true });
     const packageFile = path.join(value.profilePath, 'incoming.zip'); await writeFile(packageFile, await packageBytes(source));
-    const preview = await runtime.workspace!.operations.previewImport(packageFile);
-    runtime.workspace!.operations.applyImport(preview.id, 'merge'); await importing;
+    const post = (route: string, body: unknown) => fetch(`${runtime.listeners.ui.url}${route}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const preview = await (await post('/api/vault/import/preview', { path: packageFile })).json() as { id: string };
+    expect((await post('/api/vault/import/apply', { id: preview.id, mode: 'merge' })).status).toBe(202); await importing;
     await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
-    releaseImport(); await runtime.workspace!.operations.finished();
+    releaseImport();
+    await eventually(async () => expect((await (await fetch(`${runtime.listeners.ui.url}/api/vault/status`)).json()).state).toBe('completed'));
   });
 
   it('reports a missing selected Vault as Not Ready without falling back', async () => {

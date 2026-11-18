@@ -1,6 +1,8 @@
 // A collector process for the restart test: it saves one video, starts capturing a second one that
 // never finishes, prints both job IDs and "holding", and waits to be killed.
 // Arguments: <profile directory> <Vault directory>.
+import { watch } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { startCollectorServer } from '../../../../src/transport/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../../../src/domain/search/managed-transcript-search.js';
@@ -44,10 +46,36 @@ const runtime = await startCollectorServer({
   skillPath: path.resolve('skills/xr-collector-agent'),
   uiPort: 0,
 });
-const jobs = runtime.workspace!.jobs;
-const saved = await jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=killsaved01');
-await jobs.whenSettled(saved.job.id);
-const stuck = await jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=killheld001');
+const collect = async (videoId: string): Promise<string> => (await (await fetch(`${runtime.listeners.ui.url}/api/items`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}` }),
+})).json()).job.id;
+
+/** Resolves once the job record on disk shows job `id` as `matches` says; the record is what the next process reads. */
+async function recorded(id: string, matches: (job: { state: string; phase: string | null }) => boolean): Promise<void> {
+  const directory = path.join(profilePath, 'jobs');
+  await mkdir(directory, { recursive: true });
+  const found = async () => {
+    const stored = await readFile(path.join(directory, 'jobs.json'), 'utf8').then((text) => JSON.parse(text), () => null);
+    const job = stored?.jobs.find((candidate: { id: string }) => candidate.id === id);
+    return job !== undefined && matches(job);
+  };
+  await new Promise<void>((resolve, reject) => {
+    // The watch starts before the first read, so a write between the two is not missed.
+    let checks = Promise.resolve();
+    const check = () => {
+      checks = checks.then(async () => { if (await found()) { watcher.close(); resolve(); } }).catch(reject);
+    };
+    const watcher = watch(directory, check);
+    check();
+  });
+}
+
+const saved = await collect('killsaved01');
+await recorded(saved, (job) => job.state === 'completed');
+const stuck = await collect('killheld001');
 await held;
-console.log(`jobs ${JSON.stringify([saved.job.id, stuck.job.id])}`);
+// The kill must find the held job capturing in the record, as a crash during the capture leaves it.
+await recorded(stuck, (job) => job.state === 'running' && job.phase === 'capture');
+console.log(`jobs ${JSON.stringify([saved, stuck])}`);
 console.log('holding');

@@ -9,4 +9,3 @@ export {
   type RuntimeListeners,
   type RuntimeServices,
 } from './collector-runtime.js';
-export type { VaultWorkspace } from './vault-workspace.js';
