@@ -162,11 +162,11 @@ describe('registered files only (PKG-02)', () => {
     const workspace = await open(root);
     expect((await workspace.collector.list()).map((document) => document.sourceId).sort()).toEqual(['abcdefghijk', 'dQw4w9WgXcQ']);
     const file = path.join(at, 'export.zip');
-    const status = await workspace.exportTo(file);
+    const status = await workspace.operations.exportTo(file);
     expect(status).toMatchObject({ state: 'completed', result: { exportPath: file, unregisteredFiles: personal + 1 } });
     expect(status.message).toContain(`${personal + 1} 個不屬於知識庫的檔案`);
     expect([...(await packageFiles(await readFile(file))).keys()].sort()).toEqual(REGISTERED);
-    const again = await workspace.exportTo(path.join(at, 'again.zip'));
+    const again = await workspace.operations.exportTo(path.join(at, 'again.zip'));
     expect(again.result?.unregisteredFiles).toBe(personal + 1);
     expect([...(await packageFiles(await readFile(path.join(at, 'again.zip')))).keys()].sort()).toEqual(REGISTERED);
   });
@@ -276,7 +276,7 @@ describe('files that fail while an export reads them', () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     await documentFile(root, 'huge0000001', 'x'.repeat(65 * 1024 * 1024));
     const workspace = await open(root);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentToken: 'test-token' });
     try {
       const response = await app.inject({
         method: 'POST', url: '/api/vault/export', headers: { authorization: 'Bearer test-token' }, payload: { path: path.join(at, 'out.zip') },
@@ -284,7 +284,7 @@ describe('files that fail while an export reads them', () => {
       expect(response.statusCode).toBe(400);
       expect(response.json().error.message).toContain('documents/youtube/huge0000001.md');
       expect(await leftovers(at)).toEqual([]);
-      expect(workspace.status().state).toBe('error');
+      expect(workspace.operations.status().state).toBe('error');
     } finally { await app.close(); }
   });
 
@@ -297,7 +297,7 @@ describe('files that fail while an export reads them', () => {
     // Listed before the export starts, the file goes once the export has opened its zip and comes to read it.
     reads.before = (file) => { if (file === vanishing) rmSync(file); };
     const workspace = await open(root);
-    await expect(workspace.exportTo(path.join(at, 'out.zip'))).rejects.toThrow('documents/youtube/vanish00001.md');
+    await expect(workspace.operations.exportTo(path.join(at, 'out.zip'))).rejects.toThrow('documents/youtube/vanish00001.md');
     expect(existsSync(vanishing)).toBe(false);
     expect(await leftovers(at)).toEqual([]);
   });
@@ -308,7 +308,7 @@ describe('document files that cannot be read', () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     const workspace = await open(root);
     await writeFile(path.join(root, 'documents/youtube/broken00001.md'), 'not a document');
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations });
     try {
       for (const url of ['/api/documents', '/api/search/status']) {
         const response = await app.inject({ url });
@@ -323,7 +323,7 @@ describe('local paths only over HTTP (PKG-05)', () => {
   it('writes an export without a path into the export folder and takes no package bodies', async () => {
     const at = await temp(); const root = path.join(at, 'Vault'); await seed(root);
     const workspace = await open(root);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentToken: 'test-token' });
     const headers = { authorization: 'Bearer test-token' };
     try {
       const suggestion = (await app.inject({ url: '/api/vault/export/suggestion', headers })).json();
@@ -368,10 +368,10 @@ describe('Vaults of an earlier format (CMP-01)', () => {
     const workspace = await open(local);
     const file = path.join(at, 'incoming.zip');
     await writeFile(file, await packageBytes(incoming));
-    const preview = await workspace.previewImport(file);
+    const preview = await workspace.operations.previewImport(file);
     expect(preview.merge.documents.added).toBe(1);
-    workspace.applyImport(preview.id, 'merge'); await workspace.operationFinished();
-    const backup = workspace.status().result!.backupPath!;
+    workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
+    const backup = workspace.operations.status().result!.backupPath!;
     expect(path.dirname(backup)).toBe(`${local}.backups`);
     expect(path.basename(backup)).toMatch(/^匯入前備份 \d{4}-\d{2}-\d{2} \d{6}\.zip$/u);
     const manifest = await manifestOf(await readFile(backup));

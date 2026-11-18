@@ -1,10 +1,10 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
-import type { VaultWorkspace, ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
+import type { ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
-import type { Collector } from '../../domain/vault/index.js';
+import type { Collector, VaultOperations } from '../../domain/vault/index.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
@@ -19,7 +19,7 @@ export interface StartServerOptions {
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
-  transfer?: VaultWorkspace;
+  transfer?: VaultOperations;
   subscriptions?: readonly SubscriptionCollection[];
   schedule?: ScheduleManagement;
   search?: TranscriptSearch;

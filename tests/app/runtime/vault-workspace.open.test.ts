@@ -158,7 +158,7 @@ describe('Vault identity (A-08)', () => {
     await rm(source, { recursive: true });
     await importNewVault({ sources: PRODUCT_SOURCES, packageFile: exported, folder: source, profilePath: path.join(root, 'b-profile'), createdBy: 'XR Collector test' });
     const b = await open({ ...context, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore }, false);
-    expect(b.status().vaultPath).toBe(source);
+    expect(b.operations.status().vaultPath).toBe(source);
     expect(b.jobs.list({ state: 'all' }).jobs).toEqual([]);
     expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
     await b.close();
@@ -206,13 +206,13 @@ describe('opening another Vault (A-13)', () => {
     const aLeft = await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await eventually(() => expect(aGate.started.length).toBe(1));
     for (const [value, code] of [[a, 'invalid_request'], [path.join(a, 'attachments'), 'invalid_request'], [path.join(root, 'Nothing'), 'vault_invalid'], [path.join(root, 'profile'), 'invalid_request']] as const) {
-      await expect(workspace.openOther(value), value).rejects.toMatchObject({ code });
+      await expect(workspace.operations.openOther(value), value).rejects.toMatchObject({ code });
     }
-    expect(workspace.status().state).toBe('idle');
-    await workspace.openOther(b);
+    expect(workspace.operations.status().state).toBe('idle');
+    await workspace.operations.openOther(b);
     aGate.open();
-    await workspace.operationFinished();
-    expect(workspace.status()).toMatchObject({
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({
       state: 'completed', operation: 'open', vaultPath: b, result: { previousVaultPath: a, interruptedJobs: 1, resumedJobs: 1 },
     });
     expect(jobStore.get(aRunning.job.id)!.state).toBe('completed');
@@ -223,12 +223,12 @@ describe('opening another Vault (A-13)', () => {
     // A copy of A does not continue A's job; A itself does.
     const copy = path.join(root, 'A copy');
     await cp(a, copy, { recursive: true });
-    await workspace.openOther(copy);
-    await workspace.operationFinished();
-    expect(workspace.status()).toMatchObject({ vaultPath: copy, result: { resumedJobs: 0 } });
-    await workspace.openOther(a);
-    await workspace.operationFinished();
-    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
+    await workspace.operations.openOther(copy);
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ vaultPath: copy, result: { resumedJobs: 0 } });
+    await workspace.operations.openOther(a);
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
     expect(await new MarkdownVault(new VaultFileWriter(a, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).not.toBeNull();
     expect(await new MarkdownVault(new VaultFileWriter(copy, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
@@ -237,8 +237,8 @@ describe('opening another Vault (A-13)', () => {
   it('refuses to open another Vault when the location was fixed at startup', async () => {
     const context = await setup();
     const workspace = await open(context, { fixedLocation: true });
-    expect(workspace.status().relocationUnavailable).toMatchObject({ code: 'vault_location_fixed' });
-    await expect(workspace.openOther(context.root)).rejects.toMatchObject({ code: 'vault_location_fixed' });
+    expect(workspace.operations.status().relocationUnavailable).toMatchObject({ code: 'vault_location_fixed' });
+    await expect(workspace.operations.openOther(context.root)).rejects.toMatchObject({ code: 'vault_location_fixed' });
   });
 });
 
@@ -251,14 +251,14 @@ describe('creating a new Vault while one is active', () => {
       [context.root, 'Vault', 'vault_invalid'], [context.source, 'Inside', 'vault_invalid'], [context.profile, 'Profile', 'vault_invalid'],
       [context.root, 'a:b', 'vault_invalid'], [path.join(context.root, 'missing'), 'New', 'vault_invalid'],
     ] as const) {
-      await expect(workspace.createNew(location, name), `${location} ${name}`).rejects.toMatchObject({ code });
+      await expect(workspace.operations.createNew(location, name), `${location} ${name}`).rejects.toMatchObject({ code });
     }
-    expect(workspace.status()).toMatchObject({ state: 'idle', vaultPath: context.source });
+    expect(workspace.operations.status()).toMatchObject({ state: 'idle', vaultPath: context.source });
 
-    await workspace.createNew(context.root, 'Second');
-    await workspace.operationFinished();
+    await workspace.operations.createNew(context.root, 'Second');
+    await workspace.operations.finished();
     const created = path.join(context.root, 'Second');
-    expect(workspace.status()).toMatchObject({
+    expect(workspace.operations.status()).toMatchObject({
       state: 'completed', operation: 'create', vaultPath: created, result: { previousVaultPath: context.source, interruptedJobs: 0 },
     });
     expect(await inspectVaultDirectory(created, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: created, documentCount: 0 });
@@ -267,9 +267,9 @@ describe('creating a new Vault while one is active', () => {
     expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(before);
     expect(await new MarkdownVault(new VaultFileWriter(context.source, PRODUCT_SOURCES)).read('youtube:seed0000001')).not.toBeNull();
 
-    await workspace.openOther(context.source);
-    await workspace.operationFinished();
-    expect(workspace.status()).toMatchObject({ state: 'completed', vaultPath: context.source });
+    await workspace.operations.openOther(context.source);
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ state: 'completed', vaultPath: context.source });
   });
 
   it('removes the new folder and keeps the active Vault when the switch fails', async () => {
@@ -277,9 +277,9 @@ describe('creating a new Vault while one is active', () => {
     const workspace = await open(context, {
       createSearch: async (destination) => ({ search: fakeSearch(destination, destination !== context.source), close: async () => undefined }),
     });
-    await workspace.createNew(context.root, 'Broken');
-    await workspace.operationFinished();
-    expect(workspace.status()).toMatchObject({ state: 'error', operation: 'create', vaultPath: context.source });
+    await workspace.operations.createNew(context.root, 'Broken');
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'create', vaultPath: context.source });
     await expect(readFile(path.join(context.root, 'Broken', VAULT_MARKER))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await context.selection.read()).toBeNull();
   });
@@ -287,7 +287,7 @@ describe('creating a new Vault while one is active', () => {
   it('refuses when the location was fixed at startup', async () => {
     const context = await setup();
     const workspace = await open(context, { fixedLocation: true });
-    await expect(workspace.createNew(context.root, 'Other')).rejects.toMatchObject({ code: 'vault_location_fixed' });
+    await expect(workspace.operations.createNew(context.root, 'Other')).rejects.toMatchObject({ code: 'vault_location_fixed' });
     await expect(readFile(path.join(context.root, 'Other', VAULT_MARKER))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
@@ -298,7 +298,7 @@ describe('opening another Vault through HTTP (A-10)', () => {
     const b = path.join(context.root, 'B');
     await seed(b);
     const workspace = await open(context);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace, agentToken: 'test-token' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentToken: 'test-token' });
     const agent = { authorization: 'Bearer test-token' };
     try {
       expect((await app.inject({ method: 'POST', url: '/api/vault/open', payload: { path: b } })).statusCode).toBe(401);
@@ -313,12 +313,12 @@ describe('opening another Vault through HTTP (A-10)', () => {
       const created = await app.inject({ method: 'POST', url: '/api/vault/create', headers: agent, payload: { location: context.root, name: 'C' } });
       expect(created.statusCode).toBe(202);
       expect(created.json()).toMatchObject({ operation: 'create' });
-      await workspace.operationFinished();
+      await workspace.operations.finished();
       expect((await app.inject({ url: '/api/vault/status', headers: agent })).json()).toMatchObject({ state: 'completed', vaultPath: path.join(context.root, 'C') });
       const opened = await app.inject({ method: 'POST', url: '/api/vault/open', headers: agent, payload: { path: b } });
       expect(opened.statusCode).toBe(202);
       expect(opened.json()).toMatchObject({ operation: 'open' });
-      await workspace.operationFinished();
+      await workspace.operations.finished();
       const status = await app.inject({ url: '/api/vault/status', headers: agent });
       expect(status.json()).toMatchObject({ state: 'completed', vaultPath: b, relocationUnavailable: null });
     } finally { await app.close(); }
@@ -327,7 +327,7 @@ describe('opening another Vault through HTTP (A-10)', () => {
   it('answers 409 vault_location_fixed for a fixed location', async () => {
     const context = await setup();
     const fixed = await open(context, { fixedLocation: true });
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, transfer: fixed });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, transfer: fixed.operations });
     try {
       for (const [url, payload] of [['/api/vault/open', { path: path.join(context.root, 'Other') }], ['/api/vault/create', { location: context.root, name: 'Other' }]] as const) {
         const response = await app.inject({ method: 'POST', url, payload });

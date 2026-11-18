@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../../src/transport/server/app.js';
 import { VaultOperationLock, type VaultAccess } from '../../../src/domain/vault/operation-lock.js';
-import type { VaultWorkspace } from '../../../src/app/runtime/vault-workspace.js';
+import type { VaultOperations } from '../../../src/domain/vault/vault-operations.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { anyService, apiRoutes, appWithEveryRoute, type ApiRoute } from '../../support/api-routes.js';
 
@@ -24,9 +24,9 @@ describe('Vault access declared by routes', () => {
       suspend: () => undefined,
     });
     const transfer = {
-      enterRequest: (access: VaultAccess) => lock.enter(access),
+      enter: (access: VaultAccess) => lock.enter(access),
       status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
-    } as unknown as VaultWorkspace;
+    } as unknown as VaultOperations;
     const app = await createHttpApp({
       sources: PRODUCT_SOURCES,
       transfer,
@@ -106,7 +106,7 @@ describe('Vault access declared by routes', () => {
     const app = await appWithEveryRoute({
       notReady: () => notReady,
       transfer: anyService({
-        enterRequest: (access: VaultAccess) => lock.enter(access),
+        enter: (access: VaultAccess) => lock.enter(access),
         status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
       }),
     });

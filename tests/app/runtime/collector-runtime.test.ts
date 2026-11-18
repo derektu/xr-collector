@@ -181,10 +181,10 @@ describe('CollectorRuntime', () => {
     }));
     await new JsonScheduleStore(new VaultFileWriter(source, PRODUCT_SOURCES)).save({ enabled: true });
     const packageFile = path.join(value.profilePath, 'incoming.zip'); await writeFile(packageFile, await packageBytes(source));
-    const preview = await runtime.workspace!.previewImport(packageFile);
-    runtime.workspace!.applyImport(preview.id, 'merge'); await importing;
+    const preview = await runtime.workspace!.operations.previewImport(packageFile);
+    runtime.workspace!.operations.applyImport(preview.id, 'merge'); await importing;
     await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'vault_busy' });
-    releaseImport(); await runtime.workspace!.operationFinished();
+    releaseImport(); await runtime.workspace!.operations.finished();
   });
 
   it('reports a missing selected Vault as Not Ready without falling back', async () => {

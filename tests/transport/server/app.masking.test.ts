@@ -24,7 +24,7 @@ afterEach(async () => {
 async function start(changes = new ChangeFeed()): Promise<FastifyInstance> {
   const app = await appWithEveryRoute({
     changes,
-    transfer: anyService({ enterRequest: () => () => undefined }),
+    transfer: anyService({ enter: () => () => undefined }),
     agentConnection: anyService({
       status: () => ({ state: 'available', message: `金鑰 ${SECRET}` }),
       connection: () => ({ url: 'http://127.0.0.1:1', token: SECRET }),

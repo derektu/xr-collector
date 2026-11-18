@@ -137,7 +137,7 @@ app.whenReady().then(async () => {
     showItemInFolder: (file) => shell.showItemInFolder(file),
     documents: app.getPath('documents'),
     exports,
-    vaultStatus: () => runtime?.workspace?.status(),
+    vaultStatus: () => runtime?.workspace?.operations.status(),
   });
   // Collection pauses from suspend to resume. macOS sends neither event during the dark wakes of a
   // sleeping Mac (Power Nap, maintenance), so nothing is checked until the person wakes it. The

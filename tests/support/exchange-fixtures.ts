@@ -131,8 +131,8 @@ export async function fileOf(folder: string, name: string, bytes: Buffer): Promi
 
 /** Previews and applies an import, returning the preview and the final status. */
 export async function importFile(workspace: VaultWorkspace, file: string, mode: ImportMode = 'merge') {
-  const preview = await workspace.previewImport(file);
-  workspace.applyImport(preview.id, mode);
-  await workspace.operationFinished();
-  return { preview, status: workspace.status() };
+  const preview = await workspace.operations.previewImport(file);
+  workspace.operations.applyImport(preview.id, mode);
+  await workspace.operations.finished();
+  return { preview, status: workspace.operations.status() };
 }

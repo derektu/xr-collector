@@ -21,7 +21,7 @@ import { Connectivity, type ConnectivityOptions, type JobManager } from '../../d
 import { openJobRecords, type JobRecords } from './job-records.js';
 import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
-import { DeviceVaults, type Collector, type UpdateLease } from '../../domain/vault/index.js';
+import { DeviceVaults, type Collector, type UpdateLease, type VaultOperations } from '../../domain/vault/index.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionScheduler, SubscriptionService } from '../../domain/subscriptions/index.js';
@@ -80,7 +80,7 @@ export interface RuntimeServices {
   updates?: UpdateAccess;
   collector?: Collector;
   jobs?: JobManager;
-  transfer?: VaultWorkspace;
+  transfer?: VaultOperations;
   subscriptions?: SubscriptionService[];
   schedule?: CollectionScheduler;
   search?: TranscriptSearch;
@@ -198,7 +198,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     };
     const runtimeStatus = (): CollectorRuntimeStatus => runtime?.status() ?? {
       state: 'starting', instanceId, profilePath: path.resolve(options.profilePath),
-      vaultPath: initial.workspace?.status().vaultPath ?? null, message: '服務啟動中。',
+      vaultPath: initial.workspace?.operations.status().vaultPath ?? null, message: '服務啟動中。',
     };
     // Collection jobs are device data kept in the profile, across every Vault this device opens.
     const changes = new ChangeFeed();
@@ -236,7 +236,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     const services = options.workspace ? {
       collector: forwarding(() => current().collector),
       jobs: forwarding(() => current().jobs),
-      transfer: forwarding(() => current()),
+      transfer: forwarding(() => current().operations),
       subscriptions: subscriptionCollections(sources, () => current().subscriptions),
       schedule: forwarding(() => current().schedule),
       search: forwarding<TranscriptSearch>(() => current().search),
@@ -321,15 +321,15 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
 
   /** Checks a new Vault folder before it is created; see `DeviceVaults.checkNew`. */
   checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
-    return this.vaults.checkNew(location, name, this.workspaceValue?.status().vaultPath);
+    return this.vaults.checkNew(location, name, this.workspaceValue?.operations.status().vaultPath);
   }
 
   vaultStatus(): VaultSetupStatus {
     return {
       state: this.workspaceValue ? 'ready' : 'not_ready',
-      vaultPath: this.workspaceValue?.status().vaultPath ?? null,
+      vaultPath: this.workspaceValue?.operations.status().vaultPath ?? null,
       newVault: {
-        location: this.workspaceValue ? path.dirname(this.workspaceValue.status().vaultPath)
+        location: this.workspaceValue ? path.dirname(this.workspaceValue.operations.status().vaultPath)
           : this.options.newVaultLocation ?? path.join(homedir(), 'Documents'),
         name: this.vaults.defaultName,
       },
@@ -377,7 +377,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     this.preparingUpdate = true;
     let workspaceLease: UpdateLease | null = null;
     try {
-      workspaceLease = this.workspaceValue ? await this.workspaceValue.prepareUpdate(signal) : null;
+      workspaceLease = this.workspaceValue ? await this.workspaceValue.operations.prepareUpdate(signal) : null;
       if (signal.aborted || this.closing) throw signal.aborted ? signal.reason : new CollectorError('update_busy', '服務正在停止。');
     }
     catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
@@ -405,7 +405,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       state: this.stateValue,
       instanceId: this.instanceId,
       profilePath: this.profilePath,
-      vaultPath: this.workspaceValue?.status().vaultPath ?? null,
+      vaultPath: this.workspaceValue?.operations.status().vaultPath ?? null,
       message: this.message,
     };
   }

@@ -7,10 +7,7 @@ import {
   type OpenedVault,
   type StatFs,
   type VaultSelection,
-  type UpdateLease,
-  type VaultAccess,
 } from '../../domain/vault/index.js';
-import type { ExportSuggestion, ImportPreview, TransferStatus } from '../../shared/vault/vault-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
@@ -136,7 +133,11 @@ export function subscriptionCollections(sources: SourceRegistry, services: () =>
  */
 export class VaultWorkspace {
   private current!: Bundle;
-  private readonly operations: VaultOperations;
+  /**
+   * Every operation on the Vault in use (export, import, creating a new Vault, opening another) and
+   * the request leases and status that go with them; transport and the runtime reach them here.
+   */
+  readonly operations: VaultOperations;
   readonly collector = forwarding(() => this.current.collector);
   readonly subscriptions = forwarding(() => this.current.subscriptions);
   readonly jobs = forwarding(() => this.current.jobs);
@@ -162,6 +163,7 @@ export class VaultWorkspace {
       idle: () => this.current.schedule.idle(),
       suspend: (value) => this.current.schedule.setSuspended(value),
       event: (entry) => this.jobStore.event(entry),
+      flushJobs: () => this.jobStore.flush(),
       reloadSchedule: () => this.reloadSchedule(),
       prepare: (root) => this.prepare(root),
     });
@@ -197,54 +199,10 @@ export class VaultWorkspace {
     return workspace;
   }
 
-  status(): TransferStatus { return this.operations.status(); }
-
   /** Which activity belongs to the active Vault: its ID and its path. */
   activityScope(): { vaultPath: string; vaultId: string } {
     return { vaultPath: this.current.vault.root, vaultId: this.current.vault.vaultId };
   }
-
-  /** Acquired by HTTP requests before any handler can yield. */
-  enterRequest(access: VaultAccess): () => void { return this.operations.enter(access); }
-
-  /** Excludes transfers and new writes, then waits for current writes and collection to settle. */
-  prepareUpdate(signal: AbortSignal): Promise<UpdateLease> { return this.operations.prepareUpdate(signal); }
-
-  /** Direct callers use the same write lease as an undeclared non-GET HTTP route. */
-  enterWrite(): () => void { return this.enterRequest('vault-write'); }
-
-  /** Direct callers use the same read check as an undeclared GET HTTP route. */
-  assertReadable(): void { this.enterRequest('vault-read')(); }
-
-  /** Resolves once the current background Vault operation has published its final state. */
-  async operationFinished(): Promise<void> {
-    await this.operations.finished();
-    await this.jobStore.flush();
-  }
-
-  /** See `VaultOperations.cancelWait`. */
-  cancelWait(): TransferStatus { return this.operations.cancelWait(); }
-
-  /** See `VaultOperations.exportSuggestion`. */
-  exportSuggestion(): ExportSuggestion { return this.operations.exportSuggestion(); }
-
-  /** See `VaultOperations.exportTo`. */
-  exportTo(file?: unknown, overwrite = false): Promise<TransferStatus> { return this.operations.exportTo(file, overwrite); }
-
-  /** See `VaultOperations.previewImport`. */
-  previewImport(file: unknown): Promise<ImportPreview> { return this.operations.previewImport(file); }
-
-  /** See `VaultOperations.cancelImport`. */
-  cancelImport(id: string): void { this.operations.cancelImport(id); }
-
-  /** See `VaultOperations.applyImport`. */
-  applyImport(id: string, mode: unknown): TransferStatus { return this.operations.applyImport(id, mode); }
-
-  /** See `VaultOperations.openOther`. */
-  openOther(value: unknown): Promise<TransferStatus> { return this.operations.openOther(value); }
-
-  /** See `VaultOperations.createNew`. */
-  createNew(location: unknown, name: unknown): Promise<TransferStatus> { return this.operations.createNew(location, name); }
 
   /**
    * Builds the services of the Vault at `root` and indexes it for a switch; the Vault in use is not
@@ -370,7 +328,7 @@ export class VaultWorkspace {
   }
 
   async close(): Promise<void> {
-    await this.operationFinished();
+    await this.operations.finished();
     this.operations.dropPreview();
     const drained = await Promise.allSettled([
       this.current.schedule.close(),
