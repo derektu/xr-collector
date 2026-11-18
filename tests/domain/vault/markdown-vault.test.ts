@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 

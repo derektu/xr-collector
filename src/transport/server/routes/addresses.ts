@@ -1,6 +1,6 @@
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';
-import { addressOwner } from '../../../domain/sources/source-types.js';
+import { addressOwner } from '../../../domain/sources/index.js';
 
 export function requiredUrl(value: unknown, prompt: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new CollectorError('invalid_request', prompt);

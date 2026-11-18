@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
 import type { ActivityCheckSummary } from '../../../shared/activity/activity-types.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
-import type { Collector } from '../../../domain/vault/collector.js';
+import type { Collector } from '../../../domain/vault/index.js';
 import type { JobSubmission, JobView } from '../../../shared/jobs/job-types.js';
 import type { SubscriptionDeclaration } from '../../../shared/sources/source-contract.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';
@@ -13,9 +13,8 @@ import type {
   SubscriptionRecord,
   SubscriptionSettings,
 } from '../../../shared/subscriptions/subscription-types.js';
-import { SourceCatalog } from '../../../domain/sources/source-catalog.js';
-import { recognizeUrl, sourceTypeInfo, type SourceTypeDeclaration } from '../../../domain/sources/source-types.js';
-import { startChecks } from '../../../domain/subscriptions/subscription-service.js';
+import { SourceCatalog, recognizeUrl, sourceTypeInfo, type SourceTypeDeclaration } from '../../../domain/sources/index.js';
+import { startChecks } from '../../../domain/subscriptions/index.js';
 import { serve } from '../api-route.js';
 import type { ActivityAccess } from '../../../shared/activity/activity-types.js';
 import { ownedAddress, requiredUrl } from './addresses.js';

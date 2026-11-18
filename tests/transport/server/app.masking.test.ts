@@ -5,7 +5,8 @@
 // design, and files pass unchanged.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { ChangeFeed, formatCursor } from '../../../src/app/runtime/change-feed.js';
+import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
+import { formatCursor } from '../../../src/shared/api/changes.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import { protectSecret } from '../../../src/shared/lib/redact.js';
 import { createHttpApp } from '../../../src/transport/server/app.js';

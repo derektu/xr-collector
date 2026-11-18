@@ -2,7 +2,7 @@
 // tables, code and quotes, links and images resolved against the article address, and scripts,
 // forms and links that lead nowhere left out.
 import { describe, expect, it } from 'vitest';
-import { htmlToMarkdown, htmlToText } from '../../../../src/domain/plugins/rss/html.js';
+import { htmlToMarkdown, htmlToText } from '../../../../src/domain/sources/rss/html.js';
 
 const BASE = 'https://example.com/posts/1';
 

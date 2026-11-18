@@ -1,9 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
 import { serve } from '../api-route.js';
-import {
-  CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeFeed, type ChangeKind,
-} from '../../../app/runtime/change-feed.js';
+import type { ChangeFeed } from '../../../app/runtime/index.js';
+import { CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeKind } from '../../../shared/api/changes.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import { maskSecretsJson } from '../../../shared/lib/redact.js';
 

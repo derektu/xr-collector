@@ -4,7 +4,7 @@
 // the one action that fits.
 import { describe, expect, it, vi } from 'vitest';
 import { INTERVAL_OPTIONS } from '../../../../src/shared/sources/collection-settings.js';
-import { DEFAULT_POLICY } from '../../../../src/domain/plugins/youtube/settings.js';
+import { DEFAULT_POLICY } from '../../../../src/domain/sources/youtube/settings.js';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import type { SubscriptionPreview } from '../../../../src/shared/subscriptions/subscription-types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../../../src/transport/server/app.js';
@@ -66,7 +66,7 @@ describe('source type declarations (T-01)', () => {
 });
 
 describe('URL recognition (T-02 to T-05)', () => {
-  // Which address forms name a video or a channel is the plugin's rule, tested in tests/domain/plugins/youtube;
+  // Which address forms name a video or a channel is the plugin's rule, tested in tests/domain/sources/youtube;
   // an address typed without its scheme is the shared recognition's.
   it.each([
     'https://youtu.be/dQw4w9WgXcQ?t=12',

@@ -1,6 +1,10 @@
-import { appIdFromPackageMetadata, updateRepositoryFromPackageMetadata } from '../../domain/updates/config.js';
-import { GenericIndexSource, GitHubReleasesSource } from '../../domain/updates/sources.js';
-import type { UpdateSource } from '../../domain/updates/types.js';
+import {
+  appIdFromPackageMetadata,
+  updateRepositoryFromPackageMetadata,
+  GenericIndexSource,
+  GitHubReleasesSource,
+  type UpdateSource,
+} from '../../domain/updates/index.js';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 

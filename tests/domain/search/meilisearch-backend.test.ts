@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { MeilisearchBackend } from '../../../src/domain/search/meilisearch-backend.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';

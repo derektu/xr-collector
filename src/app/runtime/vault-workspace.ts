@@ -1,8 +1,32 @@
-import type { NoteChange } from './change-feed.js';
+import type { NoteChange } from '../../shared/api/changes.js';
 import type { EventType } from '../../shared/activity/event-catalog.js';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { Collector } from '../../domain/vault/collector.js';
+import {
+  Collector,
+  MarkdownVault,
+  VaultFileWriter,
+  deletionId,
+  finishInPlaceImports,
+  isWithin,
+  isWorkFolder,
+  recoverImport,
+  inspectVaultDirectory,
+  notAVault,
+  readVaultId,
+  createNewVault,
+  newVaultFolder,
+  VaultExchange,
+  VaultOperationLock,
+  type ImportFault,
+  type StatFs,
+  type VaultSelection,
+  type OperationCompletion,
+  type OperationReporter,
+  type OperationTerminal,
+  type UpdateLease,
+  type VaultAccess,
+} from '../../domain/vault/index.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type {
   ExportSuggestion,
@@ -14,34 +38,21 @@ import type {
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
-import { SubscriptionService, SubscriptionServices } from '../../domain/subscriptions/subscription-service.js';
-import { forwardingPort } from '../../domain/jobs/subscription-port.js';
-import { CollectionScheduler } from '../../domain/subscriptions/scheduler.js';
-import { JsonSubscriptionStore, type SubscriptionStore } from '../../domain/subscriptions/subscription-store.js';
-import { JsonScheduleStore } from '../../domain/subscriptions/schedule-store.js';
-import { RecentTargets } from '../../domain/subscriptions/recent-targets.js';
-import { JobManager, type JobLimits, type RetryPolicy } from '../../domain/jobs/job-manager.js';
-import type { Pacing } from '../../domain/pacing/pacing-gate.js';
-import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
-import type { Connectivity } from '../../domain/jobs/connectivity.js';
-import type { SourcePlugin } from '../../shared/sources/source-contract.js';
-import { ActivityLog } from '../../domain/activity/activity-log.js';
-import { JobStore } from '../../domain/jobs/job-store.js';
-import { startSearchRuntime, type SearchRuntime } from '../../domain/search/runtime.js';
-import { prepareOwnedSearchProjection, searchDatabasePath } from '../../domain/search/search-projection.js';
-import { MarkdownVault } from '../../domain/vault/markdown-vault.js';
-import { VaultFileWriter } from '../../domain/vault/vault-files.js';
-import { deletionId } from '../../domain/vault/deleted-documents.js';
-import { finishInPlaceImports, type ImportFault } from '../../domain/vault/vault-import.js';
-import { isWithin, isWorkFolder, recoverImport } from '../../domain/vault/transfer-files.js';
-import { inspectVaultDirectory, notAVault, readVaultId } from '../../domain/vault/vault-directory.js';
-import { createNewVault, newVaultFolder } from '../../domain/vault/new-vault.js';
-import type { StatFs } from '../../domain/vault/disk-space.js';
-import type { VaultSelection } from '../../domain/vault/vault-selection.js';
-import { VaultExchange } from '../../domain/vault/vault-exchange.js';
 import {
-  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type UpdateLease, type VaultAccess,
-} from '../../domain/vault/operation-lock.js';
+  SubscriptionService,
+  SubscriptionServices,
+  CollectionScheduler,
+  JsonSubscriptionStore,
+  JsonScheduleStore,
+  RecentTargets,
+  type SubscriptionStore,
+} from '../../domain/subscriptions/index.js';
+import { forwardingPort, JobManager, JobStore, type JobLimits, type RetryPolicy, type Connectivity } from '../../domain/jobs/index.js';
+import type { Pacing } from '../../domain/pacing/index.js';
+import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
+import type { SourcePlugin } from '../../shared/sources/source-contract.js';
+import { ActivityLog } from '../../domain/activity/index.js';
+import { startSearchRuntime, prepareOwnedSearchProjection, searchDatabasePath, type SearchRuntime } from '../../domain/search/index.js';
 
 interface Bundle {
   root: string;

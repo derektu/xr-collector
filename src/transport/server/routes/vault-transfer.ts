@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
-import type { VaultWorkspace } from '../../../app/runtime/vault-workspace.js';
+import type { VaultWorkspace } from '../../../app/runtime/index.js';
 import { serve } from '../api-route.js';
 
 /** The active Vault's operations: its status, export, import, and creating or opening another Vault. */

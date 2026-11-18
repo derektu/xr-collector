@@ -1,5 +1,5 @@
 import type { CollectionJob } from '../../shared/jobs/job-types.js';
-import type { Pacing } from '../pacing/pacing-gate.js';
+import type { Pacing } from '../pacing/index.js';
 
 /**
  * What a queued job waits for before its next step may start. `collection`: a hold or the

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Collector } from '../vault/collector.js';
+import type { Collector } from '../vault/index.js';
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { Connectivity } from './connectivity.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, workKey } from '../../shared/jobs/job-role.js';
@@ -24,7 +24,7 @@ import type {
 } from '../../shared/jobs/job-types.js';
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import type { SubscriptionSettings, WorkStatus } from '../../shared/subscriptions/subscription-types.js';
-import type { Pacing, PacingEvent } from '../pacing/pacing-gate.js';
+import type { Pacing, PacingEvent } from '../pacing/index.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';

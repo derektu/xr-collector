@@ -2,7 +2,7 @@
 // source type's icon, the status of started work, when and why it retries, and why it failed.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JobOverviewEntry } from '../../../src/shared/jobs/job-types.js';
-import { youtubeDeclaration } from '../../../src/domain/plugins/youtube/shared.js';
+import { youtubeDeclaration } from '../../../src/domain/sources/youtube/shared.js';
 import { jobEntry } from '../../../src/transport/web/jobs-presentation.js';
 import { PRODUCT_DECLARATIONS } from '../../support/product-sources.js';
 

@@ -13,12 +13,12 @@ import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import { JobManager, type JobLimits } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords, openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { readEventFiles } from '../../support/event-files.js';
 import type {
   YouTubeVideoRef,
-} from '../../../src/domain/plugins/youtube/url.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+} from '../../../src/domain/sources/youtube/url.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../../src/shared/sources/source-contract.js';
 import type { DocumentKey } from '../../../src/shared/documents/document-types.js';
 import { RecentTargets } from '../../../src/domain/subscriptions/recent-targets.js';

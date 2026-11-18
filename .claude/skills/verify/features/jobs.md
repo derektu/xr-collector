@@ -38,7 +38,7 @@ Preconditions:
 - 合成收集很快，不停住收集很難拍到進行中；停住（`holdCaptures`）而不是調慢，進行中就會持續到放行。
 - 工作頁不輪詢：收到工作的變更事件才重讀，兩次讀取至少相隔約 1 秒（`READ_GAP_MS`）。等待畫面符合預期，不以 API 剛完成就假定畫面已刷新。
 - 重試前沒把注入的失敗拿掉，重試會再次失敗；這是驗證步驟的錯誤，不是產品問題。
-- 失敗原因的用字由 plugin 宣告決定（`src/domain/plugins/youtube/shared.ts` 的 `failureLabels`），截圖只核對畫面呈現。
+- 失敗原因的用字由 plugin 宣告決定（`src/domain/sources/youtube/shared.ts` 的 `failureLabels`），截圖只核對畫面呈現。
 
 ## Regression flows
 

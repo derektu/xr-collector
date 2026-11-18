@@ -50,7 +50,7 @@ Preconditions:
 
 ## Backlog
 
-- `rss-failure`：503 恢復後同一工作完成、列回到「下次」；404／410／非 feed 各選一個代表畫面。分類與重試矩陣已有 `tests/app/plugins/rss/` 與 HTTP 案例。
+- `rss-failure`：503 恢復後同一工作完成、列回到「下次」；404／410／非 feed 各選一個代表畫面。分類與重試矩陣已有 `tests/domain/sources/rss/` 與 HTTP 案例。
 - `rss-add-page`：頁面宣告 canonical feed 的辨識，以及文件頁「新增」貼 feed 網址切換為訂閱。
-- `rss-atom`：RDF feed 的實際收集，用少量代表資料；格式解析已有 `tests/domain/plugins/rss/feed.test.ts`。
-- `rss-articles`：閱讀頁的 Markdown 小標與連結代表內容；完整 HTML 轉換矩陣留在 `tests/domain/plugins/rss/html.test.ts`。
+- `rss-atom`：RDF feed 的實際收集，用少量代表資料；格式解析已有 `tests/domain/sources/rss/feed.test.ts`。
+- `rss-articles`：閱讀頁的 Markdown 小標與連結代表內容；完整 HTML 轉換矩陣留在 `tests/domain/sources/rss/html.test.ts`。

@@ -3,23 +3,28 @@ import type { EventType } from '../../shared/activity/event-catalog.js';
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../../shared/jobs/collection-pause.js';
-import { internetProbe } from '../../domain/jobs/connectivity.js';
+import { internetProbe } from '../../domain/jobs/index.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import { createSourcePlugins } from '../../app/plugins/index.js';
-import { DESKTOP_AGENT_PORT } from '../../app/runtime/agent-connection-defaults.js';
-import { loadBuildInfo } from '../../domain/updates/build-info.js';
-import { bundledResources } from '../../app/runtime/bundled-resources.js';
-import { startCollectorServer, type CollectorServer } from '../../transport/server/collector-server.js';
-import { backupFolder, exportFolder } from '../../domain/vault/transfer-files.js';
+import { DESKTOP_AGENT_PORT, bundledResources } from '../../app/runtime/index.js';
+import {
+  loadBuildInfo,
+  UpdateService,
+  UnavailableInstaller,
+  acknowledgeMacUpdateLaunch,
+  acknowledgeMacUpdateShutdown,
+  MacNativeInstaller,
+  prepareMacUpdateRollback,
+  WindowsNativeInstaller,
+  type NativeInstaller,
+  type UpdateApplyRequest,
+} from '../../domain/updates/index.js';
+import { startCollectorServer, type CollectorServer } from '../../transport/server/index.js';
+import { backupFolder, exportFolder } from '../../domain/vault/index.js';
 import { CloseHintRecord } from './close-hint.js';
 import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
 import { DesktopLoginStartup, type LoginItemAdapter } from './login-startup.js';
-import { UpdateService } from '../../domain/updates/update-service.js';
-import { UnavailableInstaller } from '../../domain/updates/installer.js';
-import { acknowledgeMacUpdateLaunch, acknowledgeMacUpdateShutdown, MacNativeInstaller, prepareMacUpdateRollback } from '../../domain/updates/mac-installer.js';
-import { WindowsNativeInstaller } from '../../domain/updates/windows-installer.js';
-import type { NativeInstaller, UpdateApplyRequest } from '../../domain/updates/types.js';
 import { runUpdateCoordinator } from './update-coordinator.js';
 import { recoverNativeInstallations } from './update-recovery.js';
 import { startUpdateCheckScheduler } from './update-check-scheduler.js';

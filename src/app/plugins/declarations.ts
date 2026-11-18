@@ -1,6 +1,5 @@
 import type { SourcePluginDeclaration } from '../../shared/sources/source-contract.js';
-import { rssDeclaration } from '../../domain/plugins/rss/shared.js';
-import { youtubeDeclaration } from '../../domain/plugins/youtube/shared.js';
+import { rssDeclaration, youtubeDeclaration } from '../../domain/sources/declarations.js';
 
 /**
  * The source types this product offers, in display order. The server assembly (`src/app/plugins/index.ts`)

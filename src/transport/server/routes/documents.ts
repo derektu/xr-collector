@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
-import type { Collector } from '../../../domain/vault/collector.js';
+import type { Collector } from '../../../domain/vault/index.js';
 import { trimSearchQueryWhitespace } from '../../../shared/api/search-query.js';
 import type { SearchStatusReport, TranscriptSearch } from '../../../shared/api/search-types.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';

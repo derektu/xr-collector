@@ -50,9 +50,9 @@ describe('a web bundle without Node code', () => {
       'src/shared/lib/collector-error.ts',
       'src/shared/sources/source-registry.ts',
       'src/shared/sources/collection-settings.ts',
-      'src/domain/plugins/youtube/shared.ts',
-      'src/domain/plugins/youtube/settings.ts',
-      'src/domain/plugins/rss/settings.ts',
+      'src/domain/sources/youtube/shared.ts',
+      'src/domain/sources/youtube/settings.ts',
+      'src/domain/sources/rss/settings.ts',
     ]));
   });
 

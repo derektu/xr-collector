@@ -2,11 +2,10 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createSourcePlugins } from '../../app/plugins/index.js';
-import { DEVELOPMENT_AGENT_PORT } from '../../app/runtime/agent-connection-defaults.js';
-import { loadBuildInfo } from '../../domain/updates/build-info.js';
-import { bundledResources, checkoutRoot } from '../../app/runtime/bundled-resources.js';
+import { DEVELOPMENT_AGENT_PORT, bundledResources, checkoutRoot } from '../../app/runtime/index.js';
+import { loadBuildInfo } from '../../domain/updates/index.js';
 import { startCollectorServer } from './collector-server.js';
-import { backupFolder, exportFolder } from '../../domain/vault/transfer-files.js';
+import { backupFolder, exportFolder } from '../../domain/vault/index.js';
 
 const projectRoot = checkoutRoot();
 const resources = bundledResources({ packaged: false, checkout: projectRoot });

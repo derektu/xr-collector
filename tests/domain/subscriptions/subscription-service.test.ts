@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest';
 import { SubscriptionService, SubscriptionServices } from '../../../src/domain/subscriptions/subscription-service.js';
 import { forwardingPort } from '../../../src/domain/jobs/subscription-port.js';
 import type { SubscriptionPatch, SubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
-import { DEFAULT_POLICY } from '../../../src/domain/plugins/youtube/settings.js';
+import { DEFAULT_POLICY } from '../../../src/domain/sources/youtube/settings.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subscription-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
-import type { YouTubeSource } from '../../../src/domain/plugins/youtube/adapter.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+import type { YouTubeSource } from '../../../src/domain/sources/youtube/adapter.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 class MemoryChannelStore implements SubscriptionStore {

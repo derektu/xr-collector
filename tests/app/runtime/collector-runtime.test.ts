@@ -20,9 +20,9 @@ import { JsonScheduleStore } from '../../../src/domain/subscriptions/schedule-st
 import { manifestOf, packageBytes, zipEntries } from '../../support/package-fixtures.js';
 import { UnavailableTranscriptSearch } from '../../../src/domain/search/managed-transcript-search.js';
 import { readEventFiles } from '../../support/event-files.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';

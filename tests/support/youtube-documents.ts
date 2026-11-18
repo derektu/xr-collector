@@ -1,6 +1,6 @@
 import type { CapturedDocument } from '../../src/shared/sources/source-contract.js';
-import type { CapturedTranscript } from '../../src/domain/plugins/youtube/adapter.js';
-import type { YouTubeDocumentMetadata } from '../../src/domain/plugins/youtube/shared.js';
+import type { CapturedTranscript } from '../../src/domain/sources/youtube/adapter.js';
+import type { YouTubeDocumentMetadata } from '../../src/domain/sources/youtube/shared.js';
 import type { DocumentKey } from '../../src/shared/documents/document-types.js';
 
 /** The YouTube transcript a captured document carries, for in-memory Vaults that store transcripts. */

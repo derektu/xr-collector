@@ -5,8 +5,8 @@ import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import type { DocumentMetadata, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { CapturedDocument } from '../../../src/shared/sources/source-contract.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 

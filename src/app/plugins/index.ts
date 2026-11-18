@@ -1,11 +1,10 @@
 import path from 'node:path';
 import { SourceRegistry } from '../../shared/sources/source-registry.js';
-import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../../domain/pacing/pacing-gate.js';
+import { PacingGate, pacingOptionsFromEnv, pacingStateFile } from '../../domain/pacing/index.js';
 import type { SourceDefinition, SourceEntry, SourcePlugin, SourcePluginDeclaration } from '../../shared/sources/source-contract.js';
 import { SOURCE_DECLARATIONS } from './declarations.js';
-import { subscriptionFileExchange } from '../../domain/subscriptions/subscription-file-exchange.js';
-import { createRssPlugin, rssDefinition } from '../../domain/plugins/rss/server.js';
-import { createYouTubePlugin, youtubeDefinition } from '../../domain/plugins/youtube/server.js';
+import { subscriptionFileExchange } from '../../domain/subscriptions/index.js';
+import { createRssPlugin, rssDefinition, createYouTubePlugin, youtubeDefinition } from '../../domain/sources/index.js';
 
 /** The server entry of each source type, by type ID. */
 const SERVER_ENTRIES: Readonly<Record<string, SourceEntry>> = {

@@ -3,7 +3,7 @@
 // addresses and channels without a videos tab, and passing previews through the request gate.
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
-import { YtDlpChannelSource } from '../../../../src/domain/plugins/youtube/ytdlp-channel-source.js';
+import { YtDlpChannelSource } from '../../../../src/domain/sources/youtube/ytdlp-channel-source.js';
 
 describe('YtDlpChannelSource', () => {
   it('resolves channel identity and lists one dated page of video references', async () => {

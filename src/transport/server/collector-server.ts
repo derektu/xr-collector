@@ -1,6 +1,6 @@
 import {
   CollectorRuntime, type CollectorRuntimeOptions, type RuntimeListeners, type RuntimeServices,
-} from '../../app/runtime/collector-runtime.js';
+} from '../../app/runtime/index.js';
 import { startAgentListener } from './agent-access.js';
 import { startServer, type RunningServer } from './start.js';
 

@@ -1,6 +1,6 @@
 import type { SubscriptionTarget } from '../../src/shared/sources/source-contract.js';
-import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../../src/domain/plugins/youtube/adapter.js';
-import { channelItems } from '../../src/domain/plugins/youtube/server.js';
+import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../../src/domain/sources/youtube/adapter.js';
+import { channelItems } from '../../src/domain/sources/youtube/server.js';
 import { selectCandidates } from '../../src/domain/subscriptions/candidates.js';
 
 /** The range one check collects, in the terms of a YouTube channel. */

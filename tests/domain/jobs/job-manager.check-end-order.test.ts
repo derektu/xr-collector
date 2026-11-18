@@ -2,13 +2,14 @@
 // refreshes on the finished job never shows the subscription's previous check. While the end is
 // written, a manual check joins the running one and a pause frees the source for a resume check.
 import { describe, expect, it } from 'vitest';
-import { ChangeFeed, type ChangeBatch } from '../../../src/app/runtime/change-feed.js';
+import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
+import type { ChangeBatch } from '../../../src/shared/api/changes.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import type { CheckEnd } from '../../../src/domain/jobs/subscription-port.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 

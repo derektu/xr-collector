@@ -1,4 +1,4 @@
-import type { AgentConnectionService } from '../../app/runtime/agent-connection.js';
+import type { AgentConnectionService } from '../../app/runtime/index.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 
 /** What the Agent listener serves: every option of a server except the port and the authorization, which the connection decides. */

@@ -26,9 +26,9 @@ import { VaultWorkspace, type WorkspaceOptions } from '../../../src/app/runtime/
 import {
   ensureMarker, manifestOf, packageBytes, packageFiles, packageOf, sha, tampered, unpackBytes, withPackage, zipEntries, zipOf,
 } from '../../support/package-fixtures.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 

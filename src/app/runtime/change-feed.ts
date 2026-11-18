@@ -1,8 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { formatCursor, type Change, type ChangeBatch, type ChangeCursor, type NoteChange } from '../../shared/api/changes.js';
 
-export * from '../../shared/api/changes.js';
-
 /** What a reader at a cursor receives: the batches after it, or `reset` when they are no longer all kept. */
 export type Catchup = { kind: 'batches'; batches: ChangeBatch[] } | { kind: 'reset' };
 

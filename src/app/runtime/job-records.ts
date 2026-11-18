@@ -1,8 +1,7 @@
-import { ActivityLog, type ActivityLogOptions } from '../../domain/activity/activity-log.js';
-import { ActivityViews } from '../../domain/activity/activity-views.js';
-import type { NoteChange } from './change-feed.js';
+import { ActivityLog, ActivityViews, type ActivityLogOptions } from '../../domain/activity/index.js';
+import type { NoteChange } from '../../shared/api/changes.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
-import { JobStore } from '../../domain/jobs/job-store.js';
+import { JobStore } from '../../domain/jobs/index.js';
 
 /**
  * The device's job record and activity log, side by side in one profile directory. Each knows only

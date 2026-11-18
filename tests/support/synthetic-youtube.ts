@@ -11,12 +11,12 @@ import type {
   ResolvedYouTubeChannel,
   YouTubeSource,
   CapturedTranscript,
-} from '../../src/domain/plugins/youtube/adapter.js';
+} from '../../src/domain/sources/youtube/adapter.js';
 import { publishedSince } from '../../src/shared/documents/published.js';
 import { HeldCaptures } from './held-captures.js';
 import type {
   YouTubeVideoRef,
-} from '../../src/domain/plugins/youtube/url.js';
+} from '../../src/domain/sources/youtube/url.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
 
 const DAY_MS = 24 * 60 * 60_000;

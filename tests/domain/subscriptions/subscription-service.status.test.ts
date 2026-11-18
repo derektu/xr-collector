@@ -17,7 +17,7 @@ import { workStatus } from '../../../src/domain/jobs/job-board.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from '../../support/synthetic-youtube.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
