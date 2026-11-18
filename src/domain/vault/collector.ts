@@ -21,28 +21,13 @@ import { collectedBeforeDeletion } from '../../shared/documents/deletion-rule.js
 import { documentId } from '../../shared/documents/document-id.js';
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { NO_PUBLISHER_ID, type DocumentVault } from '../../shared/documents/document-vault.js';
+import type { DocumentCollector, IndexOutcome, SaveIntent } from '../../shared/documents/document-collector.js';
 
 /** The subscriptions of one source type, as the document source groups name publishers after them. */
 export interface TypeSubscriptions {
   subscriptions: SubscriptionRecord[];
   /** Removal records of subscriptions removed and not added again. */
   removals?: Array<{ id: string; title: string }>;
-}
-
-export interface IndexOutcome {
-  indexed: boolean;
-  message?: string;
-  /** The document was deleted before it could be indexed; nothing was indexed. */
-  deleted?: boolean;
-}
-
-/**
- * Why a document is being saved. `explicitAt` is when the user asked for this one item; it is null
- * for automatic and subscription collection. Only an explicit request made after a deletion collects a
- * deleted item again.
- */
-export interface SaveIntent {
-  explicitAt: string | null;
 }
 
 export interface SaveResult {
@@ -63,7 +48,7 @@ export interface CollectorOptions {
  * and deleting the same item run one at a time, so a deletion never interleaves with a save or an
  * index update of that item.
  */
-export class Collector {
+export class Collector implements DocumentCollector {
   private readonly locks = new Map<string, Promise<void>>();
 
   constructor(
