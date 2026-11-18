@@ -36,9 +36,9 @@ Preconditions:
 
 ## Regression flows
 
-- `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。五次定時檢查（無新內容兩次、網路錯誤兩次、恢復一次）後，摘要 API 的分組與訂閱詳情、記錄頁摘要以結果與次數比對；群組細節只列這組的檢查、返回保留等級、完整事件預設 INFO 以上與 DEBUG、重新整理保留全部篩選；以網址開啟一個工作的記錄、複製診斷資訊並清除工作篩選（Web 攔截 clipboard payload，不驗真 OS 剪貼簿）。分組規則在 tests/activity/activity-summary.test.ts 與 tests/activity/activity-jobs.test.ts，細節分頁的先後在 tests/web/activity-group-pages.test.ts。
+- `check-history-summary`：斷言 `activity-summary`、`activity-detail`、`activity-raw`。五次定時檢查（無新內容兩次、網路錯誤兩次、恢復一次）後，摘要 API 的分組與訂閱詳情、記錄頁摘要以結果與次數比對；群組細節只列這組的檢查、返回保留等級、完整事件預設 INFO 以上與 DEBUG、重新整理保留全部篩選；以網址開啟一個工作的記錄、複製診斷資訊並清除工作篩選（Web 攔截 clipboard payload，不驗真 OS 剪貼簿）。分組規則在 tests/domain/activity/activity-views.test.ts 與 tests/domain/jobs/job-manager.activity.test.ts，細節分頁的先後在 tests/transport/web/activity-group-pages.test.ts。
 
 ## Backlog
 
 - `activity-detail`：來源與時間條件有實際資料時的篩選、四個條件往返、逐次展開與收合。
-- `activity-summary`：摘要快照的刷新與固定、過期與重啟提示；UI fixture 與真正重啟／保存期限的證據分開記錄。分組與保存規則已有 `tests/activity/`。
+- `activity-summary`：摘要快照的刷新與固定、過期與重啟提示；UI fixture 與真正重啟／保存期限的證據分開記錄。分組與保存規則已有 `tests/domain/activity/`。

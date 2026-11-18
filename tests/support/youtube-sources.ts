@@ -1,8 +1,8 @@
-import type { SourcePlugin } from '../../src/core/source-contract.js';
-import { type YouTubeCapture, type YouTubeChannelSource, youtubeSource } from '../../src/plugins/youtube/adapter.js';
-import type { VaultServiceOptions } from '../../src/runtime/collector-runtime.js';
-import { rssPlugin } from '../../src/plugins/rss/server.js';
-import { youtubePlugin } from '../../src/plugins/youtube/server.js';
+import type { SourcePlugin } from '../../src/shared/sources/source-contract.js';
+import { type YouTubeCapture, type YouTubeChannelSource, youtubeSource } from '../../src/domain/plugins/youtube/adapter.js';
+import type { VaultServiceOptions } from '../../src/app/runtime/collector-runtime.js';
+import { rssPlugin } from '../../src/domain/plugins/rss/server.js';
+import { youtubePlugin } from '../../src/domain/plugins/youtube/server.js';
 
 /** A test's YouTube capture and channel source, from which the YouTube plugin of a workspace is built. */
 export interface YouTubeTestSources {

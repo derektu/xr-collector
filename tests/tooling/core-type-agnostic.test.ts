@@ -3,17 +3,15 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // The core knows source types only through the plugin contract and the registry (P-T3, R11-T8). Only the plugins
-// and the product's source list name a type: `src/plugins/declarations.ts` and `src/plugins/index.ts`, and
-// for the UI `src/web/plugins.tsx` (with its stylesheet). The contract itself names none.
+// and the product's source list name a type: `src/app/plugins/declarations.ts` and `src/app/plugins/index.ts`, and
+// for the UI `src/transport/web/plugins.tsx` (with its stylesheet). The contract itself names none.
 
 const CORE_DIRECTORIES = [
-  'src/core', 'src/jobs', 'src/subscriptions', 'src/pacing', 'src/vault', 'src/search', 'src/activity', 'src/server',
-  'src/sources', 'src/runtime', 'src/web',
+  'src/shared', 'src/domain/jobs', 'src/domain/subscriptions', 'src/domain/pacing', 'src/domain/vault', 'src/domain/search',
+  'src/domain/activity', 'src/transport/server', 'src/domain/sources', 'src/app/runtime', 'src/transport/web',
 ];
-const CONTRACT = 'src/core/source-contract.ts';
-/** The files under `src/plugins` a core file may import: the product's source list. */
-const PLUGIN_ENTRIES = new Set(['src/plugins/declarations.ts', 'src/plugins/index.ts']);
-const WEB_ASSEMBLY = new Set(['src/web/plugins.tsx', 'src/web/plugins.css']);
+const CONTRACT = 'src/shared/sources/source-contract.ts';
+const WEB_ASSEMBLY = new Set(['src/transport/web/plugins.tsx', 'src/transport/web/plugins.css']);
 const TYPE_NAME = /youtube|yt-?dlp|rss/iu;
 /** A subscription is a `subscriptionId` in the core; `channelId` is YouTube's word. */
 const CHANNEL_ID = /channelId/iu;
@@ -32,7 +30,7 @@ const coreFiles = CORE_DIRECTORIES.flatMap(filesUnder)
 describe('a core that names no source type (P-T3)', () => {
   it('reads the core files it checks', () => {
     expect(coreFiles.length).toBeGreaterThan(50);
-    expect(coreFiles).toEqual(expect.arrayContaining(['src/jobs/job-manager.ts', 'src/server/app.ts', 'src/web/App.tsx', CONTRACT]));
+    expect(coreFiles).toEqual(expect.arrayContaining(['src/domain/jobs/job-manager.ts', 'src/transport/server/app.ts', 'src/transport/web/App.tsx', CONTRACT]));
   });
 
   it('leaves YouTube, yt-dlp and RSS out of every core file', () => {
@@ -54,17 +52,17 @@ describe('a core that names no source type (P-T3)', () => {
       .map((match) => match[1]!)
       .filter((specifier) => specifier.startsWith('.'))
       .map((specifier) => path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)))
-      .filter((target) => target.startsWith(`src/plugins/${type}/`))
+      .filter((target) => target.startsWith(`src/domain/plugins/${type}/`))
       .map((target) => `${file} -> ${target}`));
     expect(imports).toEqual([]);
   });
 
-  it('imports nothing under src/plugins from the core but the product\'s source list', () => {
+  it('imports no source type\'s plugin from the core', () => {
     const imports = coreFiles.flatMap((file) => [...readFileSync(file, 'utf8').matchAll(IMPORT)]
       .map((match) => match[1]!)
       .filter((specifier) => specifier.startsWith('.'))
-      .map((specifier) => path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)).replace(/\.js$/u, '.ts'))
-      .filter((target) => target.startsWith('src/plugins/') && !PLUGIN_ENTRIES.has(target))
+      .map((specifier) => path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)))
+      .filter((target) => target.startsWith('src/domain/plugins/'))
       .map((target) => `${file} -> ${target}`));
     expect(imports).toEqual([]);
   });

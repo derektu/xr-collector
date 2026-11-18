@@ -154,7 +154,7 @@ export async function launchElectron({
   try {
     target = desktopTarget({ checkout, app: appPath });
     requireTarget(target);
-    if (vault === 'selected' && !existsSync(path.join(checkout, 'dist', 'node', 'vault', 'vault-selection.js'))) {
+    if (vault === 'selected' && !existsSync(path.join(checkout, 'dist', 'node', 'domain', 'vault', 'vault-selection.js'))) {
       throw new Error(`vault: 'selected' writes the Vault with ${checkout}/dist/node; run npm run build there, or use vault: 'none' and choose the Vault through Onboarding`);
     }
   } catch (error) {
@@ -228,9 +228,9 @@ export async function launchElectron({
   try {
     if (vault === 'selected') {
       const load = (relative) => import(pathToFileURL(path.join(checkout, 'dist', 'node', relative)).href);
-      const { createVaultDirectory } = await load('vault/vault-directory.js');
-      const { VaultSelection } = await load('vault/vault-selection.js');
-      const { sourceRegistry } = await load('plugins/index.js');
+      const { createVaultDirectory } = await load('domain/vault/vault-directory.js');
+      const { VaultSelection } = await load('domain/vault/vault-selection.js');
+      const { sourceRegistry } = await load('app/plugins/index.js');
       await createVaultDirectory(vaultPath, 'XR Collector (verify skill, Electron)', sourceRegistry());
       await new VaultSelection(path.join(profile, 'vault-selection.json')).write(vaultPath);
       if (prepareVault) await prepareVault({ vault: vaultPath, profile });

@@ -43,7 +43,7 @@ function ownsTimeLimit(file: string): boolean {
 
 describe('waits in tests', () => {
   it('waits for a state only through the shared helper', () => {
-    expect(sources).toContain('tests/jobs/job-manager.test.ts');
+    expect(sources).toContain('tests/domain/jobs/job-manager.test.ts');
     expect(using(/vi\.waitFor\(|expect\.poll\(/u)).toEqual([]);
   });
 

@@ -5,8 +5,8 @@ on:
   pull_request:
     paths:
       - scripts/prepare-meilisearch.mjs
-      - src/search/meilisearch-runtime-pins.json
-      - src/search/meilisearch-runtime.ts
+      - src/domain/search/meilisearch-runtime-pins.json
+      - src/domain/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
       - scripts/physical-host.mjs
       - scripts/runtime-dependencies.mjs
@@ -17,8 +17,8 @@ on:
     branches: [main]
     paths:
       - scripts/prepare-meilisearch.mjs
-      - src/search/meilisearch-runtime-pins.json
-      - src/search/meilisearch-runtime.ts
+      - src/domain/search/meilisearch-runtime-pins.json
+      - src/domain/search/meilisearch-runtime.ts
       - scripts/meilisearch-api-smoke.mjs
       - scripts/physical-host.mjs
       - scripts/runtime-dependencies.mjs

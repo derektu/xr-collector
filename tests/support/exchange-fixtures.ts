@@ -1,21 +1,21 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { JsonScheduleStore } from '../../src/subscriptions/schedule-store.js';
-import { JsonSubscriptionStore } from '../../src/subscriptions/subscription-store.js';
-import type { ImportMode } from '../../src/core/vault-types.js';
-import type { SavedDocument } from '../../src/core/document-types.js';
-import type { TranscriptSearch } from '../../src/core/search-types.js';
-import type { SubscriptionRecord } from '../../src/core/subscription-types.js';
-import { MarkdownVault } from '../../src/vault/markdown-vault.js';
-import { VaultSelection } from '../../src/vault/vault-selection.js';
-import { VaultWorkspace, type WorkspaceOptions } from '../../src/runtime/vault-workspace.js';
+import { JsonScheduleStore } from '../../src/domain/subscriptions/schedule-store.js';
+import { JsonSubscriptionStore } from '../../src/domain/subscriptions/subscription-store.js';
+import type { ImportMode } from '../../src/shared/vault/vault-types.js';
+import type { SavedDocument } from '../../src/shared/documents/document-types.js';
+import type { TranscriptSearch } from '../../src/shared/api/search-types.js';
+import type { SubscriptionRecord } from '../../src/shared/subscriptions/subscription-types.js';
+import { MarkdownVault } from '../../src/domain/vault/markdown-vault.js';
+import { VaultSelection } from '../../src/domain/vault/vault-selection.js';
+import { VaultWorkspace, type WorkspaceOptions } from '../../src/app/runtime/vault-workspace.js';
 import { ensureMarker } from './package-fixtures.js';
-import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
+import type { CapturedTranscript } from '../../src/domain/plugins/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';
-import { transcriptDocument } from '../../src/plugins/youtube/server.js';
-import { VaultFileWriter } from '../../src/vault/vault-files.js';
-import type { SourceRegistry } from '../../src/core/source-registry.js';
+import { transcriptDocument } from '../../src/domain/plugins/youtube/server.js';
+import { VaultFileWriter } from '../../src/domain/vault/vault-files.js';
+import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
 
 /** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */

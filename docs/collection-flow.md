@@ -4,16 +4,16 @@
 
 | 部分 | 程式 |
 | --- | --- |
-| 排程 | `src/subscriptions/scheduler.ts` |
-| 工作的執行與回報 | `src/jobs/job-manager.ts`；回報給訂閱的內容在 `src/jobs/subscription-reports.ts` |
-| 佇列與 lane 的順序 | `src/jobs/job-queue.ts` |
-| 重啟接續 | `src/jobs/job-recovery.ts` |
-| 檢查收集哪些項目（候選規則） | `src/subscriptions/candidates.ts` |
-| 等待條件與其計時器 | `src/jobs/job-waits.ts` |
-| 請求通道與冷卻 | `src/pacing/pacing-gate.ts` |
-| 斷網與睡眠 | `src/core/connectivity.ts`、`src/core/collection-pause.ts` |
-| 檢查結束、項目失敗與連續失敗的計入 | `src/subscriptions/subscription-service.ts` |
-| 狀態 | `src/jobs/job-board.ts`（`workStatus`）、`subscription-service.ts`（`checkStatus`） |
+| 排程 | `src/domain/subscriptions/scheduler.ts` |
+| 工作的執行與回報 | `src/domain/jobs/job-manager.ts`；回報給訂閱的內容在 `src/domain/jobs/subscription-reports.ts` |
+| 佇列與 lane 的順序 | `src/domain/jobs/job-queue.ts` |
+| 重啟接續 | `src/domain/jobs/job-recovery.ts` |
+| 檢查收集哪些項目（候選規則） | `src/domain/subscriptions/candidates.ts` |
+| 等待條件與其計時器 | `src/domain/jobs/job-waits.ts` |
+| 請求通道與冷卻 | `src/domain/pacing/pacing-gate.ts` |
+| 斷網與睡眠 | `src/domain/jobs/connectivity.ts`、`src/shared/jobs/collection-pause.ts` |
+| 檢查結束、項目失敗與連續失敗的計入 | `src/domain/subscriptions/subscription-service.ts` |
+| 狀態 | `src/domain/jobs/job-board.ts`（`workStatus`）、`subscription-service.ts`（`checkStatus`） |
 
 ## 工作
 
@@ -82,7 +82,7 @@ RSS 的每個 feed 是不同的網站，一個 feed 限流不代表其他 feed �
 
 ### 斷網與睡眠
 
-收集暫停是整台裝置一個開關（`CollectionPause`），原因有 `offline` 與 `sleep`；知識庫操作（匯出、匯入、建立新的知識庫、開啟其他知識庫）與準備套用 App 更新以 `hold`（`src/vault/operation-lock.ts`）對單一 Vault 產生相同效果。
+收集暫停是整台裝置一個開關（`CollectionPause`），原因有 `offline` 與 `sleep`；知識庫操作（匯出、匯入、建立新的知識庫、開啟其他知識庫）與準備套用 App 更新以 `hold`（`src/domain/vault/operation-lock.ts`）對單一 Vault 產生相同效果。
 
 - 斷網只在請求以 `network_error` 失敗時才確認，在線時不探測；斷網期間定時再確認，睡眠中不確認，喚醒時立即確認。間隔見 `connectivity.ts` 的常數。
 - 暫停期間不派檢查、不開始新步驟；等通道的步驟放棄等待，已送出的請求跑完，若因暫時性錯誤失敗也退回佇列，不算一次嘗試。
@@ -104,7 +104,7 @@ RSS 的每個 feed 是不同的網站，一個 feed 限流不代表其他 feed �
 
 ## 狀態
 
-`workStatus` 算出工作狀態，`checkStatus` 加上訂閱自己的狀態算出訂閱狀態；UI 與 Agent 讀同一份，畫面文字在 `src/web/*-presentation.ts`。
+`workStatus` 算出工作狀態，`checkStatus` 加上訂閱自己的狀態算出訂閱狀態；UI 與 Agent 讀同一份，畫面文字在 `src/transport/web/*-presentation.ts`。
 
 - `queued`：還沒開始，冷卻中也是。
 - `checking`：列出中，或新增訂閱辨識中。

@@ -3,11 +3,11 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  root: 'src/web',
+  root: 'src/transport/web',
   // Absolute asset paths keep nested routes such as /documents/:id loadable on reload.
   base: '/',
   build: {
-    outDir: '../../dist/web',
+    outDir: '../../../dist/web',
     emptyOutDir: true,
   },
   server: {

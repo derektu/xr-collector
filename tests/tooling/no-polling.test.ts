@@ -13,26 +13,26 @@ function filesUnder(directory: string): string[] {
   });
 }
 
-const sources = [...filesUnder('src/web').filter((file) => /\.tsx?$/u.test(file)), 'src/electron/tray.ts'];
+const sources = [...filesUnder('src/transport/web').filter((file) => /\.tsx?$/u.test(file)), 'src/desktop/electron/tray.ts'];
 const using = (pattern: RegExp) => sources.filter((file) => pattern.test(readFileSync(file, 'utf8'))).sort();
 
 describe('screens without polling', () => {
   it('uses no interval timers in the window or the tray', () => {
-    expect(sources).toContain('src/web/App.tsx');
+    expect(sources).toContain('src/transport/web/App.tsx');
     expect(using(/setInterval\(/u)).toEqual([]);
   });
 
   it('keeps timeouts to typing pauses, hover, notices, read spacing and midnight', () => {
     expect(using(/setTimeout\(/u)).toEqual([
-      'src/electron/tray.ts', // spaces reads after changes; draws again at midnight
-      'src/web/AddContent.tsx', // recognizes an address after a pause in typing
-      'src/web/AgentConnectionHelp.tsx', // closes the hover help after the pointer leaves
-      'src/web/App.tsx', // hides a notice
-      'src/web/Documents.tsx', // searches after a pause in typing
-      'src/web/NewVaultFields.tsx', // checks a typed name or location after a pause in typing
-      'src/web/SourceDetail.tsx', // saves a typed setting after a pause in typing
-      'src/web/use-changes.ts', // spaces reads after changes; opens the change stream again after the server refused it
-      'src/web/use-day.ts', // draws day-relative labels again at midnight
+      'src/desktop/electron/tray.ts', // spaces reads after changes; draws again at midnight
+      'src/transport/web/AddContent.tsx', // recognizes an address after a pause in typing
+      'src/transport/web/AgentConnectionHelp.tsx', // closes the hover help after the pointer leaves
+      'src/transport/web/App.tsx', // hides a notice
+      'src/transport/web/Documents.tsx', // searches after a pause in typing
+      'src/transport/web/NewVaultFields.tsx', // checks a typed name or location after a pause in typing
+      'src/transport/web/SourceDetail.tsx', // saves a typed setting after a pause in typing
+      'src/transport/web/use-changes.ts', // spaces reads after changes; opens the change stream again after the server refused it
+      'src/transport/web/use-day.ts', // draws day-relative labels again at midnight
     ]);
   });
 });

@@ -21,8 +21,8 @@ const MATCHERS = /\.(toBe|toEqual|toStrictEqual|toMatchObject|toContain|toContai
 const HAN = /\p{Script=Han}/u;
 
 function presentationTests(): string[] {
-  const web = readdirSync('tests/web').filter((name) => name.endsWith('-presentation.test.ts')).map((name) => path.posix.join('tests/web', name));
-  return [...web, 'tests/electron/tray-menu.test.ts', 'tests/electron/app-tray.test.ts'].sort();
+  const web = readdirSync('tests/transport/web').filter((name) => name.endsWith('-presentation.test.ts')).map((name) => path.posix.join('tests/transport/web', name));
+  return [...web, 'tests/desktop/electron/tray-menu.test.ts', 'tests/desktop/electron/tray.test.ts'].sort();
 }
 
 /** The source text inside the parentheses that open at `start`, without comments. */
@@ -58,7 +58,7 @@ function sentenceComparisons(file: string): string[] {
 describe('presentation tests', () => {
   it('assert rules as data, not whole Chinese sentences', () => {
     const files = presentationTests();
-    expect(files).toContain('tests/web/subscription-presentation.test.ts');
+    expect(files).toContain('tests/transport/web/subscription-presentation.test.ts');
     expect(files.filter((file) => !(file in ALLOWED)).flatMap(sentenceComparisons)).toEqual([]);
   });
 

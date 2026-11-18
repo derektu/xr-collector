@@ -113,7 +113,7 @@ export function desktopTarget({ checkout, app }) {
   if (!app) {
     const executable = path.join(checkout, 'node_modules', 'electron', 'dist', ...platform.electron);
     const src = path.join(checkout, 'src');
-    const main = path.join(checkout, 'dist', 'node', 'electron', 'main.js');
+    const main = path.join(checkout, 'dist', 'node', 'desktop', 'electron', 'main.js');
     const web = path.join(checkout, 'dist', 'web', 'index.html');
     return {
       kind: 'development', app: null, executable, args: ['.'], cwd: checkout, resources: null,
@@ -121,8 +121,8 @@ export function desktopTarget({ checkout, app }) {
         // npm may skip Electron's install script, which downloads the executable.
         need('electron', executable, 'node node_modules/electron/install.js'),
         need('electronBuild', main, 'npm run build'),
-        { check: 'electronBuildCurrent', ok: builtAfter(main, src, path.join(src, 'web')), path: main, fix: 'npm run build; the build is older than src/' },
-        { check: 'electronWebCurrent', ok: builtAfter(web, path.join(src, 'web')), path: web, fix: 'npm run build; the Web build is older than src/web, so Electron would show an older UI' },
+        { check: 'electronBuildCurrent', ok: builtAfter(main, src, path.join(src, 'transport', 'web')), path: main, fix: 'npm run build; the build is older than src/' },
+        { check: 'electronWebCurrent', ok: builtAfter(web, path.join(src, 'transport', 'web')), path: web, fix: 'npm run build; the Web build is older than src/transport/web, so Electron would show an older UI' },
         need('meilisearch', bin.meilisearch, platform.download),
         need('ytdlp', bin.ytdlp, platform.download),
         need('deno', bin.deno, platform.download),

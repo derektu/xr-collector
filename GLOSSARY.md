@@ -1,6 +1,6 @@
 # XR Collector
 
-XR Collector 把 YouTube 字幕、RSS 文章等內容收集成本機知識庫的 Markdown 文件。本文件定義程式、規格與討論共用的詞；畫面用字另受 `tests/web/terminology.test.ts` 限制。
+XR Collector 把 YouTube 字幕、RSS 文章等內容收集成本機知識庫的 Markdown 文件。本文件定義程式、規格與討論共用的詞；畫面用字另受 `tests/tooling/terminology.test.ts` 限制。
 
 畫面、錯誤訊息與 Agent Skill 都用本文件的詞。各平台的東西沿用平台原名：YouTube 頻道、X 帳號、Facebook 粉專、RSS。API 欄位名稱與路由不跟著畫面用字改。
 

@@ -1,10 +1,10 @@
 # 文件格式
 
-本文件描述 `src/vault/markdown-vault.ts` 寫出與讀取的文件檔。共用欄位由它寫入，來源專屬的欄位由各來源類型的 frontmatter codec（plugin 定義的 `frontmatter.write`／`read`）寫入與讀出。
+本文件描述 `src/domain/vault/markdown-vault.ts` 寫出與讀取的文件檔。共用欄位由它寫入，來源專屬的欄位由各來源類型的 frontmatter codec（plugin 定義的 `frontmatter.write`／`read`）寫入與讀出。
 
 ## 身分與保存
 
-每份文件是 UTF-8 Markdown，前方為 YAML frontmatter。檔案位於 `<vault>/documents/<來源類型>/<來源 ID>.md`，文件 ID 為 `<來源類型>:<來源 ID>`。來源 ID 必須符合該類型的格式（`src/vault/document-paths.ts`），不符的檔案不是文件：
+每份文件是 UTF-8 Markdown，前方為 YAML frontmatter。檔案位於 `<vault>/documents/<來源類型>/<來源 ID>.md`，文件 ID 為 `<來源類型>:<來源 ID>`。來源 ID 必須符合該類型的格式（`src/domain/vault/document-paths.ts`），不符的檔案不是文件：
 
 | 來源類型 | `type` | 來源 ID |
 | --- | --- | --- |

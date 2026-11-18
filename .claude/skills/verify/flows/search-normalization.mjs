@@ -3,7 +3,7 @@
 // from Settings and restarting keep the results and the Vault text. Without it the two readers of
 // the index disagree, or a rebuild changes what a user finds. The text rules (simplified and
 // variant characters, NFKC, regional words, contiguous fragments, word boundaries, quoting, raw
-// highlights) are in tests/search/meilisearch-integration.test.ts and the unit tests beside it.
+// highlights) are in tests/domain/search/managed-transcript-search.real-engine.test.ts and the unit tests beside it.
 import { idle, subscribe } from '../scripts/lib/index.mjs';
 
 export const name = 'search-normalization';

@@ -39,4 +39,4 @@ Preconditions:
 
 - `agent-connection-help`：Onboarding 三個按鈕的實際操作。
 - `agent-connection-summary`：listener 不可用時的顯示與停用。
-- `agent-connection-settings`：固定連線埠在下次啟動套用的畫面結果。連線埠的固定、避讓與 bind 失敗已有 `tests/server/agent-access.test.ts`，不重造連線埠矩陣。
+- `agent-connection-settings`：固定連線埠在下次啟動套用的畫面結果。連線埠的固定、避讓與 bind 失敗已有 `tests/transport/server/agent-access.test.ts`，不重造連線埠矩陣。

@@ -3,7 +3,7 @@
 // go on, checking and switching automatic checks from the menu, the menu following changes made
 // elsewhere without reading while idle, opening pages from it, the first-close hint once per device,
 // a second launch, and quitting from the menu in the middle of a check. The menu is read as the
-// tray draws it, by icon, action and check mark; its wording is in tests/electron/tray-menu.test.ts.
+// tray draws it, by icon, action and check mark; its wording is in tests/desktop/electron/tray-menu.test.ts.
 // With the window hidden, showing and hiding are judged by the app's own record; with --visible
 // the window on screen must agree. The flow serves its own RSS feed on the run's feeds port and
 // holds its answer to keep a check running for as long as a scenario needs.

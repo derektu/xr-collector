@@ -4,7 +4,7 @@
 // prove the API keeps documents when asked to; only the screen shows which choice the dialog
 // starts on, that cancelling sends nothing, and how the Documents page and the Reader present
 // documents whose subscription is gone. Removing and deleting, and removal while a check runs, are
-// covered by tests/sources/ and the HTTP tests.
+// covered by tests/transport/server/routes/subscriptions.lifecycle.test.ts and the other HTTP tests.
 import { idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
 import { recordRequests, screenAt } from './lib/revision.mjs';

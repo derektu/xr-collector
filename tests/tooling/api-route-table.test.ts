@@ -1,4 +1,4 @@
-// Guards the developer, not the user: the API table (`src/core/api-routes.ts`) is what keeps the
+// Guards the developer, not the user: the API table (`src/shared/api/api-routes.ts`) is what keeps the
 // server, the web client and the system tray agreeing on each route's response. A handler that
 // answers another key than its route declares fails the typecheck, and no product file names a
 // table route's path itself, where the table could not check it.
@@ -6,9 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { API_ROUTES } from '../../src/core/api-routes.js';
+import { API_ROUTES } from '../../src/shared/api/api-routes.js';
 
-const TABLE = 'src/core/api-routes.ts';
+const TABLE = 'src/shared/api/api-routes.ts';
 
 function filesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

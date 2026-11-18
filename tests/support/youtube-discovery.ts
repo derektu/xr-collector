@@ -1,7 +1,7 @@
-import type { SubscriptionTarget } from '../../src/core/source-contract.js';
-import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../../src/plugins/youtube/adapter.js';
-import { channelItems } from '../../src/plugins/youtube/server.js';
-import { selectCandidates } from '../../src/subscriptions/candidates.js';
+import type { SubscriptionTarget } from '../../src/shared/sources/source-contract.js';
+import type { DiscoveredYouTubeVideo, RequestOptions, YouTubeSource } from '../../src/domain/plugins/youtube/adapter.js';
+import { channelItems } from '../../src/domain/plugins/youtube/server.js';
+import { selectCandidates } from '../../src/domain/subscriptions/candidates.js';
 
 /** The range one check collects, in the terms of a YouTube channel. */
 export interface DiscoveryRange {

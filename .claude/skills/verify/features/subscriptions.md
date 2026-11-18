@@ -68,8 +68,8 @@ Preconditions:
 
 ## Backlog
 
-- `sub-auto`：Web 的自動檢查開關：未暫停的列為「自動檢查已關閉」、已暫停的維持「已暫停」，再開回「下次 HH:MM」。狀態計算已有 `tests/subscriptions/subscription-status.test.ts`，畫面串接待補；選單列的切換見 [tray.md](tray.md)。
-- `sub-check`：成功的「立即檢查」：一個啟用、一個暫停的訂閱，只派出啟用者並完成。派工規則已有 `tests/subscriptions/` 與 HTTP 案例，畫面待補一個代表。
+- `sub-auto`：Web 的自動檢查開關：未暫停的列為「自動檢查已關閉」、已暫停的維持「已暫停」，再開回「下次 HH:MM」。狀態計算已有 `tests/domain/subscriptions/subscription-service.status.test.ts`，畫面串接待補；選單列的切換見 [tray.md](tray.md)。
+- `sub-check`：成功的「立即檢查」：一個啟用、一個暫停的訂閱，只派出啟用者並完成。派工規則已有 `tests/domain/subscriptions/` 與 HTTP 案例，畫面待補一個代表。
 - `sub-status`：pending 列、完整名稱與類型組合，以及頁尾 `check-times` 的上次與下次檢查，可併入既有流程補斷言。
-- `sub-remove`：「一併刪除」的資料安全代表（文件從列表、搜尋與 Vault 消失，刪除紀錄與記錄各一筆），以及空訂閱的確認框形狀，歸訂閱專項。擷取中移除與部分刪除失敗沿用 `tests/sources/`。
+- `sub-remove`：「一併刪除」的資料安全代表（文件從列表、搜尋與 Vault 消失，刪除紀錄與記錄各一筆），以及空訂閱的確認框形狀，歸訂閱專項。擷取中移除與部分刪除失敗沿用 `tests/transport/server/routes/subscriptions.lifecycle.test.ts`。
 - `sub-detail`：設定的非法值、未儲存、`aria-invalid`、新增時禁止送出、「套用到所有」的確認與已暫停訂閱的結果，集中成設定專項；輸入驗證與套用規則已有下層測試，不列入核心。

@@ -1,7 +1,7 @@
 // An Agent listener on its own, without a runtime: opens the Agent connection of a settings file
 // (or takes one) and starts its listener with the given server options, as the product's server does.
-import { openAgentConnection, type AgentConnectionService, type AgentSettingsOptions } from '../../src/runtime/agent-connection.js';
-import { startAgentListener, type AgentServerOptions } from '../../src/server/agent-access.js';
+import { openAgentConnection, type AgentConnectionService, type AgentSettingsOptions } from '../../src/app/runtime/agent-connection.js';
+import { startAgentListener, type AgentServerOptions } from '../../src/transport/server/agent-access.js';
 
 /** Starts the Agent listener of `access`, or of a connection opened here when none is given. */
 export async function startAgentAccess(options: AgentSettingsOptions & AgentServerOptions & {

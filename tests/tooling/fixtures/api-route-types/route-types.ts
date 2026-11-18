@@ -2,11 +2,11 @@
 // mismatch between a handler or a client and the API table that the typecheck must refuse; when the
 // table stops refusing it, the directive is unused and the compile fails.
 import type { FastifyInstance } from 'fastify';
-import { API_ROUTES, type ResponseOf } from '../../../../src/core/api-routes.js';
-import type { AgentConnection } from '../../../../src/core/device-types.js';
-import type { DeviceUpdateStatus } from '../../../../src/core/update-types.js';
-import type { TransferStatus } from '../../../../src/core/vault-types.js';
-import { serve } from '../../../../src/server/api-route.js';
+import { API_ROUTES, type ResponseOf } from '../../../../src/shared/api/api-routes.js';
+import type { AgentConnection } from '../../../../src/shared/api/device-types.js';
+import type { DeviceUpdateStatus } from '../../../../src/shared/api/update-types.js';
+import type { TransferStatus } from '../../../../src/shared/vault/vault-types.js';
+import { serve } from '../../../../src/transport/server/api-route.js';
 
 declare const app: FastifyInstance;
 declare const update: DeviceUpdateStatus;

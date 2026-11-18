@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 // The HTTP API names subscriptions, not channels, and serves every source type on the same routes
 // (B-T4). The product code that builds requests and responses and the Agent Skill use only those
-// names. The YouTube plugin keeps its own vocabulary inside `src/plugins/youtube`, and stored names
+// names. The YouTube plugin keeps its own vocabulary inside `src/domain/plugins/youtube`, and stored names
 // (the subscription file, job kinds, event types and job records) are data, not API names.
 
 const ROOTS = ['src', 'skills'];
-const EXEMPT = ['src/plugins/youtube/'];
+const EXEMPT = ['src/domain/plugins/youtube/'];
 /** Type-specific routes, channel-named fields and error codes of the HTTP API. */
 const API_NAMES: Array<[string, RegExp]> = [
   ['type-prefixed route', /\/api\/(?:youtube|\$\{[^}]*\})\//u],
@@ -28,7 +28,7 @@ const API_NAMES: Array<[string, RegExp]> = [
  * catalog build the wire objects, so none of them writes a `channel`, `channels` or
  * `channelId` key; the stored job record keeps `channelId` and is mapped where it is read.
  */
-const WIRE_KEY_ROOTS = ['src/server/', 'src/web/', 'src/sources/'];
+const WIRE_KEY_ROOTS = ['src/transport/server/', 'src/transport/web/', 'src/domain/sources/'];
 const WIRE_KEY = /\bchannel(?:s|Id)?\s*:/u;
 
 function filesUnder(directory: string): string[] {
@@ -43,7 +43,7 @@ const files = ROOTS.flatMap(filesUnder)
 
 describe('API names in the code and the Skill (B-T4)', () => {
   it('reads the server, web client and Skill files', () => {
-    expect(files).toEqual(expect.arrayContaining(['src/server/app.ts', 'src/web/api-client.ts', 'src/sources/source-types.ts', 'skills/xr-collector-agent/SKILL.md']));
+    expect(files).toEqual(expect.arrayContaining(['src/transport/server/app.ts', 'src/transport/web/api-client.ts', 'src/domain/sources/source-types.ts', 'skills/xr-collector-agent/SKILL.md']));
   });
 
   it('names no type-specific route, channel field or channel error code', () => {

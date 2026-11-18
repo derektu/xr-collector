@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 // Guards the developer, not the user: the source registry and the subscription exchange are values
 // the assembly builds and hands to what reads them. A module-level variable they fill, or a function
 // that registers into one, would let a module read types nobody gave it, and two runtimes in one
-// process would see each other's types. tests/runtime/source-registration.test.ts runs two such
+// process would see each other's types. tests/app/runtime/collector-runtime.source-registration.test.ts runs two such
 // runtimes side by side.
 
-const MODULES = ['src/core/source-registry.ts', 'src/core/subscription-exchange.ts'];
+const MODULES = ['src/shared/sources/source-registry.ts', 'src/shared/subscriptions/subscription-exchange.ts'];
 
 /** Comments removed, so a declaration written in a comment is not read. */
 function withoutComments(text: string): string {

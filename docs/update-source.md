@@ -1,8 +1,8 @@
 # App 更新來源
 
-更新服務（`src/updates/`）讀取每個平台各自的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，由 `package:*` 與安裝檔一起產生、隨該平台上傳到 Release。服務只讀自己 `target` 的 index，版本高於目前版本時，以 index 記錄的檔名、大小與 SHA-256 下載更新檔並驗證。
+更新服務（`src/domain/updates/`）讀取每個平台各自的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，由 `package:*` 與安裝檔一起產生、隨該平台上傳到 Release。服務只讀自己 `target` 的 index，版本高於目前版本時，以 index 記錄的檔名、大小與 SHA-256 下載更新檔並驗證。
 
-檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/electron/update-check-scheduler.ts`，只在有原生安裝器的平台啟用），使用者也可以在設定頁手動檢查；下載與套用只由使用者觸發。套用前保存安裝嘗試，新版本的 runtime、畫面與原生啟動都確認完成後才記為成功；無法確認時記為 `unknown`，不以程序退出推測成功。
+檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/desktop/electron/update-check-scheduler.ts`，只在有原生安裝器的平台啟用），使用者也可以在設定頁手動檢查；下載與套用只由使用者觸發。套用前保存安裝嘗試，新版本的 runtime、畫面與原生啟動都確認完成後才記為成功；無法確認時記為 `unknown`，不以程序退出推測成功。
 
 ## Release index
 
@@ -26,10 +26,10 @@
 
 開發與鏡像環境可設定 `XR_COLLECTOR_UPDATE_BASE_URL`，指向一個以 `/` 結尾的目錄網址：服務讀取其下的 `release-<target>.json`、index 指定的更新檔，以及選用的 `release-notes.md`（不存在時沒有版本說明）。URL 必須是 HTTPS，不能帶帳密、query 或 fragment；只有 `127.0.0.1` 或 `localhost` 允許 HTTP，供隔離驗收使用。
 
-來源在 Electron 啟動入口組裝（`src/electron/desktop-environment.ts`），`XR_COLLECTOR_UPDATE_BASE_URL` 是啟動時的覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動時的環境變數，所以需要長期使用其他來源的發行版本，應在組裝入口改用該來源，而不是依賴環境變數。其他來源有兩種接法：
+來源在 Electron 啟動入口組裝（`src/desktop/electron/desktop-environment.ts`），`XR_COLLECTOR_UPDATE_BASE_URL` 是啟動時的覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動時的環境變數，所以需要長期使用其他來源的發行版本，應在組裝入口改用該來源，而不是依賴環境變數。其他來源有兩種接法：
 
 - 在 HTTPS 主機的一個目錄原樣提供各平台的 release index、更新檔與 `release-notes.md`，再把來源指向這個目錄。
-- 實作 `UpdateSource`（`src/updates/types.ts`），把對方 API 的結果轉成不可變的 `UpdateOffer`；下載、雜湊驗證、cache、UI／Agent API 與原生安裝器不受影響。
+- 實作 `UpdateSource`（`src/domain/updates/types.ts`），把對方 API 的結果轉成不可變的 `UpdateOffer`；下載、雜湊驗證、cache、UI／Agent API 與原生安裝器不受影響。
 
 App 要先能找到下一份 index，才能透過更新改用新來源。因此搬移來源時，舊位置至少要在一個發布週期內繼續提供 index，或先發布同時認得新來源的過渡版，再關閉舊來源。
 

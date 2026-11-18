@@ -216,7 +216,7 @@ node $V state --run <runDir>
 
 ### 原生 Desktop（Electron）
 
-只用於依賴 Electron 或平台能力的 scenario（原生對話框、preload bridge、視窗、`shell.openExternal`、同 profile 重啟），並在票的結尾執行；Windows 驗收也用這個模式。受測 checkout 先 `npm run build`（node 與 web 都要；Electron 讀 checkout 的 `dist/web`，只 build node 會看到舊畫面）與 `npm run download:runtime`（Windows 是 `npm run download:runtime:win`）；`node_modules/electron/dist` 不存在時跑 `node node_modules/electron/install.js`。`launchElectron` 在啟動前檢查這些前置條件：Electron 執行檔、`dist/node` 存在，且 `dist/node` 比 `src/` 新、`dist/web` 比 `src/web` 新（`electronBuildCurrent`、`electronWebCurrent`），build 比原始碼舊時拒絕啟動並寫出 `npm run build`，舊 build 的結果不會記成目前的程式。同一支流程腳本在 Mac 與 Windows 都能跑：路徑用 `path.join`，比對路徑時 Windows 不分大小寫。
+只用於依賴 Electron 或平台能力的 scenario（原生對話框、preload bridge、視窗、`shell.openExternal`、同 profile 重啟），並在票的結尾執行；Windows 驗收也用這個模式。受測 checkout 先 `npm run build`（node 與 web 都要；Electron 讀 checkout 的 `dist/web`，只 build node 會看到舊畫面）與 `npm run download:runtime`（Windows 是 `npm run download:runtime:win`）；`node_modules/electron/dist` 不存在時跑 `node node_modules/electron/install.js`。`launchElectron` 在啟動前檢查這些前置條件：Electron 執行檔、`dist/node` 存在，且 `dist/node` 比 `src/` 新、`dist/web` 比 `src/transport/web` 新（`electronBuildCurrent`、`electronWebCurrent`），build 比原始碼舊時拒絕啟動並寫出 `npm run build`，舊 build 的結果不會記成目前的程式。同一支流程腳本在 Mac 與 Windows 都能跑：路徑用 `path.join`，比對路徑時 Windows 不分大小寫。
 
 ```js
 import { launchElectron, stubDialogs } from '/<受測 checkout 的絕對路徑>/.claude/skills/verify/scripts/lib/index.mjs';
@@ -335,7 +335,7 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
 本 skill 的機制只留防止「說通過，其實沒驗」的部分，自測也只測這些：
 
 - **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯或頁面有未捕捉例外的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
-- **`tests/tooling/verify-flows.test.ts`**（在 `npm test` 裡）：動態找出每一支流程、功能地圖每個功能檔列出的流程與流程的 `covers` 一致。改流程或功能地圖都會影響 E2E 會跑哪些流程，所以每個 PR 都跑。流程判斷訂閱狀態序列與工作頁分區的邏輯在 `tests/subscriptions/status-sequence.test.ts`。
+- **`tests/tooling/verify-flows.test.ts`**（在 `npm test` 裡）：動態找出每一支流程、功能地圖每個功能檔列出的流程與流程的 `covers` 一致。改流程或功能地圖都會影響 E2E 會跑哪些流程，所以每個 PR 都跑。流程判斷訂閱狀態序列與工作頁分區的邏輯在 `tests/tooling/status-sequence.test.ts`。
 - **startup**（`scripts/startup.mjs`，見「打包版」）：改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或 `stop` 時，兩個平台的開發版與打包版各跑一次；nightly 每天在兩個平台跑。
 
 ## 平台

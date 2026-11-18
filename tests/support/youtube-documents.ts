@@ -1,7 +1,7 @@
-import type { CapturedDocument } from '../../src/core/source-contract.js';
-import type { CapturedTranscript } from '../../src/plugins/youtube/adapter.js';
-import type { YouTubeDocumentMetadata } from '../../src/plugins/youtube/shared.js';
-import type { DocumentKey } from '../../src/core/document-types.js';
+import type { CapturedDocument } from '../../src/shared/sources/source-contract.js';
+import type { CapturedTranscript } from '../../src/domain/plugins/youtube/adapter.js';
+import type { YouTubeDocumentMetadata } from '../../src/domain/plugins/youtube/shared.js';
+import type { DocumentKey } from '../../src/shared/documents/document-types.js';
 
 /** The YouTube transcript a captured document carries, for in-memory Vaults that store transcripts. */
 export function transcriptOf(document: CapturedDocument): CapturedTranscript {
