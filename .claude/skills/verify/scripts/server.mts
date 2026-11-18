@@ -391,10 +391,14 @@ const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
   if (value === scheduleTrigger) return;
   scheduleTrigger = value;
   // `schedule-trigger.done` names the last trigger whose poll has finished, so a flow waits for
-  // the poll itself instead of a fixed time.
-  void Promise.all([...schedulerPolls].map((poll) => poll()))
-    .then(() => writeFileSync(`${scheduleTriggerPath}.done`, value))
-    .catch((error) => console.error('verify schedule trigger failed', error));
+  // the poll itself instead of a fixed time. With no scheduler running nothing polls, so nothing
+  // is written and the waiting flow fails.
+  const polls = [...schedulerPolls];
+  if (polls.length === 0) {
+    console.error('verify schedule trigger found no running scheduler');
+    return;
+  }
+  void Promise.all(polls.map((poll) => poll())).then(() => writeFileSync(`${scheduleTriggerPath}.done`, value));
 }, 50) : null;
 console.log(`verify server ready at ${runtime.listeners.ui.url} (${data} data, Vault ${vaultMode})`);
 logFailedRequests(runtime.listeners.ui.app.server);
