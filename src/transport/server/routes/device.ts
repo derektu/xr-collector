@@ -6,8 +6,8 @@ import type { CollectorRuntimeStatus, NotificationAccess, NotificationState } fr
 import { unavailableLoginStartup, type LoginStartupAccess } from '../../../shared/api/login-startup.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';
 import type { BuildInfo, DeviceUpdateStatus, UpdateSelection } from '../../../shared/api/update-types.js';
-import type { Pacing } from '../../../domain/pacing/pacing-gate.js';
-import type { UpdateAccess } from '../../../domain/updates/types.js';
+import type { Pacing } from '../../../domain/pacing/index.js';
+import type { UpdateAccess } from '../../../domain/updates/index.js';
 import { serve } from '../api-route.js';
 import type { NetworkGuard } from './network.js';
 

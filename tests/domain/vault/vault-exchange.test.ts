@@ -25,7 +25,7 @@ import type { VaultWorkspace } from '../../../src/app/runtime/vault-workspace.js
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
 import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine, type OpenOverrides } from '../../support/exchange-fixtures.js';
 import { manifestOf, packageOf, tampered } from '../../support/package-fixtures.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { youtubeKey } from '../../support/youtube-documents.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';

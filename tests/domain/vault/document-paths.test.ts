@@ -10,7 +10,7 @@ import {
 } from '../../../src/domain/vault/document-paths.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { packagePath } from '../../../src/domain/vault/vault-package.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 

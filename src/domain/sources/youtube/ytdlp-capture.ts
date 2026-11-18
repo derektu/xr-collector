@@ -6,7 +6,7 @@ import { chooseSubtitleTrack, type SubtitleTrack } from './language.js';
 import { formatTranscriptSegments } from './transcript.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import { publishedSince } from '../../../shared/documents/published.js';
-import type { GatePriority } from '../../pacing/pacing-gate.js';
+import type { GatePriority } from '../../pacing/index.js';
 import type { CaptureOptions, CapturedTranscript, YouTubeCapture } from './adapter.js';
 import type { YouTubeVideoRef } from './url.js';
 

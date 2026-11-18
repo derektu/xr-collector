@@ -4,7 +4,7 @@
 // channels and look-alike hosts are refused as a video.
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
-import { classifyYouTubeInput, parseYouTubeVideoUrl } from '../../../../src/domain/plugins/youtube/url.js';
+import { classifyYouTubeInput, parseYouTubeVideoUrl } from '../../../../src/domain/sources/youtube/url.js';
 
 describe('classifyYouTubeInput', () => {
   it.each([

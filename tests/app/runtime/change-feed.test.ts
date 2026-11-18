@@ -2,7 +2,8 @@
 // after a reader's revision, or tells it to reset once they are no longer kept, so an open window
 // catches up on what changed instead of showing stale lists.
 import { describe, expect, it } from 'vitest';
-import { ChangeFeed, parseCursor, type ChangeBatch } from '../../../src/app/runtime/change-feed.js';
+import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
+import { parseCursor, type ChangeBatch } from '../../../src/shared/api/changes.js';
 
 function manual(options: { keepBatches?: number; keepMs?: number; now?: () => Date } = {}) {
   const deferred: Array<() => void> = [];

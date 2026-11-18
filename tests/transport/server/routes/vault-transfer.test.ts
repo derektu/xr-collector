@@ -17,7 +17,7 @@ import { DELETIONS_FILE } from '../../../../src/domain/vault/deleted-documents.j
 import { importNewVault } from '../../../../src/domain/vault/vault-import.js';
 import type { SavedDocument } from '../../../../src/shared/documents/document-types.js';
 import { capture, cleanUp, fileOf, machine, open, seed, temp, type Machine } from '../../../support/exchange-fixtures.js';
-import { transcriptDocument } from '../../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../../src/domain/sources/youtube/server.js';
 import { youtubeKey } from '../../../support/youtube-documents.js';
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../../support/real-engine.js';
 import { eventually } from '../../../support/wait.js';

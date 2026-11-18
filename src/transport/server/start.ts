@@ -1,18 +1,16 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
-import type { VaultWorkspace } from '../../app/runtime/vault-workspace.js';
-import type { Pacing } from '../../domain/pacing/pacing-gate.js';
+import type { VaultWorkspace, ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
+import type { Pacing } from '../../domain/pacing/index.js';
 import type { FastifyInstance } from 'fastify';
 import type { ActivityAccess, ConnectivityAccess, ScheduleManagement, SubscriptionCollection, CollectionJobs, VaultSetup, NotificationAccess } from './app.js';
-import type { ChangeFeed } from '../../app/runtime/change-feed.js';
-import type { Collector } from '../../domain/vault/collector.js';
+import type { Collector } from '../../domain/vault/index.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type { CollectorRuntimeStatus } from '../../shared/api/device-types.js';
 import { createHttpApp, waitForHttpAppIdle } from './app.js';
-import type { AgentConnectionAccess } from '../../app/runtime/agent-connection.js';
-import type { UpdateAccess } from '../../domain/updates/types.js';
+import type { UpdateAccess } from '../../domain/updates/index.js';
 
 export interface StartServerOptions {
   sources: SourceRegistry;

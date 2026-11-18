@@ -2,10 +2,10 @@
 // without one, decoding charsets, classifying failures for retries, and capturing an article from
 // the last read of its feed, so a subscribed site's articles land in the Vault with their body.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findFeedLinks } from '../../../../src/domain/plugins/rss/discovery.js';
-import { decode, fetchText } from '../../../../src/domain/plugins/rss/http.js';
-import { articleKey, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../../src/domain/plugins/rss/server.js';
-import { rssDeclaration } from '../../../../src/domain/plugins/rss/shared.js';
+import { findFeedLinks } from '../../../../src/domain/sources/rss/discovery.js';
+import { decode, fetchText } from '../../../../src/domain/sources/rss/http.js';
+import { articleKey, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionId } from '../../../../src/domain/sources/rss/server.js';
+import { rssDeclaration } from '../../../../src/domain/sources/rss/shared.js';
 import type { ListedItem, SourcePlugin, SourcePluginDeclaration, SubscriptionTarget } from '../../../../src/shared/sources/source-contract.js';
 import { SOURCE_DECLARATIONS } from '../../../../src/app/plugins/declarations.js';
 import { addressOwner } from '../../../../src/domain/sources/source-types.js';

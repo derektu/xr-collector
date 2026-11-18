@@ -7,7 +7,7 @@ import { Collector } from '../../../src/domain/vault/collector.js';
 import type { SourceDefinition } from '../../../src/shared/sources/source-contract.js';
 import type { SourceRegistry } from '../../../src/shared/sources/source-registry.js';
 import type { DeletionRecord } from '../../../src/shared/documents/document-types.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { SOURCE_DEFINITIONS } from '../../../src/app/plugins/index.js';
 import { JsonScheduleStore } from '../../../src/domain/subscriptions/schedule-store.js';
 import { DELETIONS_FILE } from '../../../src/domain/vault/deleted-documents.js';

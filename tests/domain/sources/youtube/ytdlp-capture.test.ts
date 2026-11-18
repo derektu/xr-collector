@@ -5,7 +5,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
-import { classifyYtDlpError, parseJson3Transcript, YtDlpCapture } from '../../../../src/domain/plugins/youtube/ytdlp-capture.js';
+import { classifyYtDlpError, parseJson3Transcript, YtDlpCapture } from '../../../../src/domain/sources/youtube/ytdlp-capture.js';
 
 describe('parseJson3Transcript', () => {
   it('extracts subtitle text and preserves legitimate repetitions', () => {

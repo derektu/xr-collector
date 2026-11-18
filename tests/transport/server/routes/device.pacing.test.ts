@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PacingGate } from '../../../../src/domain/pacing/pacing-gate.js';
-import { YOUTUBE_PACING } from '../../../../src/domain/plugins/youtube/server.js';
+import { YOUTUBE_PACING } from '../../../../src/domain/sources/youtube/server.js';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import type { SubscriptionPreview } from '../../../../src/shared/subscriptions/subscription-types.js';
 import { createHttpApp, type SubscriptionCollection } from '../../../../src/transport/server/app.js';

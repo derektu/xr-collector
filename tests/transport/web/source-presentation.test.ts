@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { ScheduledCheck, SubscriptionEntry } from '../../../src/shared/subscriptions/subscription-types.js';
 import type { UrlRecognition } from '../../../src/shared/sources/source-info-types.js';
-import { rssDeclaration } from '../../../src/domain/plugins/rss/shared.js';
-import { youtubeDeclaration } from '../../../src/domain/plugins/youtube/shared.js';
+import { rssDeclaration } from '../../../src/domain/sources/rss/shared.js';
+import { youtubeDeclaration } from '../../../src/domain/sources/youtube/shared.js';
 import {
   activeJobs,
   checkTimes,

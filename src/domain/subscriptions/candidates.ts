@@ -1,6 +1,6 @@
 import { publishedSince } from '../../shared/documents/published.js';
 import type { CheckRange, ListedItem, SubscriptionTarget } from '../../shared/sources/source-contract.js';
-import type { CandidateSelection, CheckPlan } from '../jobs/subscription-port.js';
+import type { CandidateSelection, CheckPlan } from '../jobs/index.js';
 
 /**
  * The plan of one check of `target` over `range`. Items in `excluded` (out of range for a range

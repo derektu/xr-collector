@@ -14,29 +14,36 @@ import type {
   VaultSetupStatus,
 } from '../../shared/vault/vault-types.js';
 import type { ActivityAccess } from '../../shared/activity/activity-types.js';
-import { loadBuildInfo } from '../../domain/updates/build-info.js';
+import { loadBuildInfo, type UpdateAccess } from '../../domain/updates/index.js';
 import { ChangeFeed } from './change-feed.js';
 import { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { LoginStartupAccess } from '../../shared/api/login-startup.js';
-import { Connectivity, type ConnectivityOptions } from '../../domain/jobs/connectivity.js';
+import { Connectivity, type ConnectivityOptions, type JobManager } from '../../domain/jobs/index.js';
 import { openJobRecords, type JobRecords } from './job-records.js';
 import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
-import type { UpdateAccess } from '../../domain/updates/types.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
-import { clearImportJournal, recoverImport } from '../../domain/vault/transfer-files.js';
-import { createVaultDirectory, inspectVaultDirectory, notAVault } from '../../domain/vault/vault-directory.js';
-import { checkNewVault, createNewVault, DEFAULT_VAULT_NAME, describePackage, newVaultFolder, type AppFolders } from '../../domain/vault/new-vault.js';
-import { importNewVault } from '../../domain/vault/vault-import.js';
-import { VaultSelection } from '../../domain/vault/vault-selection.js';
+import {
+  clearImportJournal,
+  recoverImport,
+  createVaultDirectory,
+  inspectVaultDirectory,
+  notAVault,
+  checkNewVault,
+  createNewVault,
+  DEFAULT_VAULT_NAME,
+  describePackage,
+  newVaultFolder,
+  importNewVault,
+  VaultSelection,
+  type AppFolders,
+  type Collector,
+  type UpdateLease,
+} from '../../domain/vault/index.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
-import type { Collector } from '../../domain/vault/collector.js';
-import type { JobManager } from '../../domain/jobs/job-manager.js';
-import type { Pacing } from '../../domain/pacing/pacing-gate.js';
-import type { CollectionScheduler } from '../../domain/subscriptions/scheduler.js';
-import type { SubscriptionService } from '../../domain/subscriptions/subscription-service.js';
-import type { UpdateLease } from '../../domain/vault/operation-lock.js';
-import { NotificationCenter, type SystemNotificationAdapter } from '../../domain/notifications/notification-center.js';
+import type { Pacing } from '../../domain/pacing/index.js';
+import type { CollectionScheduler, SubscriptionService } from '../../domain/subscriptions/index.js';
+import { NotificationCenter, type SystemNotificationAdapter } from '../../domain/notifications/index.js';
 import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
 

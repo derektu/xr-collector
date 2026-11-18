@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 // The HTTP API names subscriptions, not channels, and serves every source type on the same routes
 // (B-T4). The product code that builds requests and responses and the Agent Skill use only those
-// names. The YouTube plugin keeps its own vocabulary inside `src/domain/plugins/youtube`, and stored names
+// names. The YouTube plugin keeps its own vocabulary inside `src/domain/sources/youtube`, and stored names
 // (the subscription file, job kinds, event types and job records) are data, not API names.
 
 const ROOTS = ['src', 'skills'];
-const EXEMPT = ['src/domain/plugins/youtube/'];
+const EXEMPT = ['src/domain/sources/youtube/'];
 /** Type-specific routes, channel-named fields and error codes of the HTTP API. */
 const API_NAMES: Array<[string, RegExp]> = [
   ['type-prefixed route', /\/api\/(?:youtube|\$\{[^}]*\})\//u],

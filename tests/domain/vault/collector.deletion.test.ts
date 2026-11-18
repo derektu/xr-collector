@@ -13,16 +13,16 @@ import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subsc
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import type { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { openJobRecords } from '../../../src/app/runtime/job-records.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { DELETIONS_FILE } from '../../../src/domain/vault/deleted-documents.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { inspectVaultDirectory, writeVaultMarker } from '../../../src/domain/vault/vault-directory.js';
 import type {
   YouTubeVideoRef,
-} from '../../../src/domain/plugins/youtube/url.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+} from '../../../src/domain/sources/youtube/url.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../../src/shared/sources/source-contract.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';
 import { HeldCaptures } from '../../support/held-captures.js';
 import { youtubeKey } from '../../support/youtube-documents.js';

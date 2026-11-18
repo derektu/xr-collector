@@ -3,7 +3,7 @@
 // formatting, while excerpts still show the original words.
 import { describe, expect, it } from 'vitest';
 import { documentExcerpt } from '../../../../src/shared/documents/document-text.js';
-import { formatTranscriptSegments } from '../../../../src/domain/plugins/youtube/transcript.js';
+import { formatTranscriptSegments } from '../../../../src/domain/sources/youtube/transcript.js';
 
 describe('formatTranscriptSegments', () => {
   it('normalizes whitespace and preserves repeated text', () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fetchText } from '../../../../src/domain/plugins/rss/http.js';
-import { rssPlugin, subscriptionId } from '../../../../src/domain/plugins/rss/server.js';
+import { fetchText } from '../../../../src/domain/sources/rss/http.js';
+import { rssPlugin, subscriptionId } from '../../../../src/domain/sources/rss/server.js';
 import type { SourcePlugin } from '../../../../src/shared/sources/source-contract.js';
 import { createHttpApp } from '../../../../src/transport/server/app.js';
 import { page, rss2, SyntheticFeeds } from '../../../support/synthetic-feeds.js';

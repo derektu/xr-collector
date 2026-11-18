@@ -1,4 +1,4 @@
-import type { NativeInstaller, NativeInstallRecovery } from '../../domain/updates/types.js';
+import type { NativeInstaller, NativeInstallRecovery } from '../../domain/updates/index.js';
 
 /** Native journals remain until the matching result is durably recorded by the update service. */
 export async function recoverNativeInstallations(

@@ -2,9 +2,9 @@
 // summary content, and the key each article gets: an article keeps its key across reads of its
 // feed, so a later check does not collect it twice.
 import { describe, expect, it } from 'vitest';
-import { looksLikeFeed, parseFeed } from '../../../../src/domain/plugins/rss/feed.js';
-import { articleKey, subscriptionId } from '../../../../src/domain/plugins/rss/server.js';
-import { ARTICLE_KEY_PATTERN } from '../../../../src/domain/plugins/rss/shared.js';
+import { looksLikeFeed, parseFeed } from '../../../../src/domain/sources/rss/feed.js';
+import { articleKey, subscriptionId } from '../../../../src/domain/sources/rss/server.js';
+import { ARTICLE_KEY_PATTERN } from '../../../../src/domain/sources/rss/shared.js';
 import { atom, rss2 } from '../../../support/synthetic-feeds.js';
 
 const FEED = 'https://example.com/blog/feed.xml';

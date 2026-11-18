@@ -19,6 +19,6 @@
     "src/shared/sources/source-registry.ts",
     "src/shared/subscriptions/check-interval.ts",
     "src/shared/sources/source-contract.ts",
-    "src/domain/plugins/*/shared.ts"
+    "src/domain/sources/*/shared.ts"
   ]
 }

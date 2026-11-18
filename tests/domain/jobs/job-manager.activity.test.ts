@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SubscriptionService, SubscriptionServices } from '../../../src/domain/subscriptions/subscription-service.js';
-import { DEFAULT_POLICY } from '../../../src/domain/plugins/youtube/settings.js';
+import { DEFAULT_POLICY } from '../../../src/domain/sources/youtube/settings.js';
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
@@ -16,11 +16,11 @@ import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { eventLine, eventText } from '../../../src/transport/web/activity-presentation.js';
 import { forwardingPort, type SubscriptionPort } from '../../../src/domain/jobs/subscription-port.js';
 import { memoryJobRecords, openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
-import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
+import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import type {
   YouTubeVideoRef,
-} from '../../../src/domain/plugins/youtube/url.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+} from '../../../src/domain/sources/youtube/url.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../../src/shared/sources/source-contract.js';
 import type { DocumentKey } from '../../../src/shared/documents/document-types.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';

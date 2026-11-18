@@ -13,8 +13,8 @@ import type { Subscription } from '../../../src/shared/subscriptions/subscriptio
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { createHttpApp } from '../../../src/transport/server/app.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { subscriptionCollection } from '../../support/subscription-collection.js';

@@ -15,7 +15,7 @@ import { createHttpApp } from '../../../../src/transport/server/app.js';
 import { DELETIONS_FILE } from '../../../../src/domain/vault/deleted-documents.js';
 import { MarkdownVault } from '../../../../src/domain/vault/markdown-vault.js';
 import { SyntheticYouTube } from '../../../support/synthetic-youtube.js';
-import { youtubePlugin } from '../../../../src/domain/plugins/youtube/server.js';
+import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js';
 import { youtubeKey } from '../../../support/youtube-documents.js';
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';

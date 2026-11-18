@@ -10,8 +10,8 @@ import {
   PacingGate,
   type PacingGateOptions,
 } from '../../../src/domain/pacing/pacing-gate.js';
-import { rssDefinition } from '../../../src/domain/plugins/rss/server.js';
-import { YOUTUBE_PACING } from '../../../src/domain/plugins/youtube/server.js';
+import { rssDefinition } from '../../../src/domain/sources/rss/server.js';
+import { YOUTUBE_PACING } from '../../../src/domain/sources/youtube/server.js';
 import { SubscriptionService } from '../../../src/domain/subscriptions/subscription-service.js';
 import type { SubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';

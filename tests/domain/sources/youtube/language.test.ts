@@ -2,7 +2,7 @@
 // automatic, the -orig automatic track, and never live chat or an auto-translated track, so a
 // document holds the words as spoken.
 import { describe, expect, it } from 'vitest';
-import { chooseSubtitleTrack, type SubtitleTrack } from '../../../../src/domain/plugins/youtube/language.js';
+import { chooseSubtitleTrack, type SubtitleTrack } from '../../../../src/domain/sources/youtube/language.js';
 
 const track = (
   code: string,

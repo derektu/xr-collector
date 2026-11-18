@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PacingGate } from '../../../src/domain/pacing/pacing-gate.js';
-import { YOUTUBE_PACING } from '../../../src/domain/plugins/youtube/server.js';
+import { YOUTUBE_PACING } from '../../../src/domain/sources/youtube/server.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
@@ -19,13 +19,13 @@ import type {
   ResolvedYouTubeChannel,
   YouTubeSource,
   CapturedTranscript,
-} from '../../../src/domain/plugins/youtube/adapter.js';
-import { DEFAULT_POLICY } from '../../../src/domain/plugins/youtube/settings.js';
+} from '../../../src/domain/sources/youtube/adapter.js';
+import { DEFAULT_POLICY } from '../../../src/domain/sources/youtube/settings.js';
 import { readEventFiles } from '../../support/event-files.js';
 import type {
   YouTubeVideoRef,
-} from '../../../src/domain/plugins/youtube/url.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
+} from '../../../src/domain/sources/youtube/url.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import type { CapturedDocument, SubscriptionTarget } from '../../../src/shared/sources/source-contract.js';
 import type { DocumentKey } from '../../../src/shared/documents/document-types.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';

@@ -1,5 +1,5 @@
-import type { CollectorRuntime } from '../../app/runtime/collector-runtime.js';
-import type { NativeInstaller, UpdateApplyRequest } from '../../domain/updates/types.js';
+import type { CollectorRuntime } from '../../app/runtime/index.js';
+import type { NativeInstaller, UpdateApplyRequest } from '../../domain/updates/index.js';
 
 export interface UpdateCoordinatorHooks {
   shutdownOwned(): void;

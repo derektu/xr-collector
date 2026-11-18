@@ -21,9 +21,9 @@ import { startMeilisearchProcess } from '../../../src/domain/search/meilisearch-
 import { createHttpApp } from '../../../src/transport/server/app.js';
 import { startAgentAccess } from '../../support/agent-access.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
-import type { CapturedTranscript } from '../../../src/domain/plugins/youtube/adapter.js';
-import { youtubePlugin } from '../../../src/domain/plugins/youtube/server.js';
-import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
+import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { zipEntries } from '../../support/package-fixtures.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';

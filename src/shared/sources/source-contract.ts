@@ -12,8 +12,8 @@ import type { SubscriptionSettings } from '../subscriptions/subscription-types.j
  * source only through this contract.
  *
  * The declaration part is pure data and functions, so the web UI imports it as well
- * (`src/domain/plugins/<type>/shared.ts`); the server part adds network and file access
- * (`src/domain/plugins/<type>/server.ts`).
+ * (`src/domain/sources/<type>/shared.ts`); the server part adds network and file access
+ * (`src/domain/sources/<type>/server.ts`).
  */
 
 /** One collectable item: its key within the source type, its canonical address and its title once known. */

@@ -1,8 +1,7 @@
 import type { SubscriptionStore } from './subscription-store.js';
 import type { SubscriptionRemoval } from './subscription-files.js';
 import { checkPlan } from './candidates.js';
-import type { CheckActivity, JobManager } from '../jobs/job-manager.js';
-import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/subscription-port.js';
+import type { CheckActivity, JobManager, CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../jobs/index.js';
 import type { SourceDeclarations, SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import { AUTO_PAUSE_AFTER_MS, AUTO_PAUSE_FAILURES, MAX_CHECK_ATTEMPTS } from '../../shared/subscriptions/subscription-limits.js';

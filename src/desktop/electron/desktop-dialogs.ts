@@ -4,7 +4,7 @@ import type {
   BrowserWindow, Dialog, FileFilter, IpcMain, IpcMainInvokeEvent, OpenDialogOptions, SaveDialogOptions, WebContents,
 } from 'electron';
 import type { TransferStatus } from '../../shared/vault/vault-types.js';
-import { exportFileName } from '../../domain/vault/transfer-files.js';
+import { exportFileName } from '../../domain/vault/index.js';
 
 export interface DesktopDialogOptions {
   ipc: Pick<IpcMain, 'handle'>;
