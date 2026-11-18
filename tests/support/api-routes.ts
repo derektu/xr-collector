@@ -1,7 +1,7 @@
 // The API routes an HTTP app registers, and an app that registers all of them.
 import type { FastifyInstance } from 'fastify';
-import { ChangeFeed } from '../../src/core/change-feed.js';
-import { createHttpApp, type HttpAppOptions } from '../../src/server/app.js';
+import { ChangeFeed } from '../../src/app/runtime/change-feed.js';
+import { createHttpApp, type HttpAppOptions } from '../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
 
 export interface ApiRoute { method: string; url: string }

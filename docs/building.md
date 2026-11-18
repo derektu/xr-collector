@@ -51,7 +51,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 
 ### `npm run prepare:runtime`
 
-下載釘住版本的 yt-dlp、Deno 與 Meilisearch，核對 SHA-256 後放進使用者層級的 runtime cache，再安裝到這個 checkout 的 `resources/bin`。版本與 SHA-256 釘在 `scripts/runtime-dependency-pins.json` 與 `src/search/meilisearch-runtime-pins.json`。
+下載釘住版本的 yt-dlp、Deno 與 Meilisearch，核對 SHA-256 後放進使用者層級的 runtime cache，再安裝到這個 checkout 的 `resources/bin`。版本與 SHA-256 釘在 `scripts/runtime-dependency-pins.json` 與 `src/domain/search/meilisearch-runtime-pins.json`。
 
 - 第一次要連網下載，Meilisearch 約 340 MB；之後從 cache 安裝。
 - cache 位置：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`；可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 改位置。同一台機器的所有 checkout 與 worktree 共用，第二個 checkout 只需從 cache 安裝。
@@ -88,7 +88,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | `npm run typecheck:tests` | 測試（`tests/`）typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
 | `npm run verify` | Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
 
-**Vitest 測試**在 `tests/`，依功能分目錄：`core`、`plugins`、`sources`、`jobs`、`activity`、`subscriptions`、`vault`、`search`、`server`、`runtime`、`electron`、`updates`、`web`、`tooling` 等。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
+**Vitest 測試**在 `tests/`，路徑與受測的 `src/` 檔相同（`src/domain/jobs/job-queue.ts` 的測試是 `tests/domain/jobs/job-queue.test.ts`），不對應單一 src 檔的只在 `tooling`、`packaging` 與 `support`。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 
 **E2E 流程**由 verify skill（`.claude/skills/verify/`）執行：它在隔離的 profile、Vault 與 port 啟動 App，以 Playwright 依使用者的方式操作並留下截圖與 `results.json`。已收錄的回歸流程放在 `.claude/skills/verify/flows/`。
 

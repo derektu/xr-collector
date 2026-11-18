@@ -10,7 +10,7 @@ import { importsOf, PRODUCT_SOURCE } from '../support/source-imports.js';
 // it loads. This walks every file the bundle's entry reaches through imports that keep code, and fails
 // on an import of a Node built-in module. Type-only imports are erased from the bundle and not walked.
 
-const ENTRY_PAGE = 'src/web/index.html';
+const ENTRY_PAGE = 'src/transport/web/index.html';
 const NODE_BUILTINS = new Set(builtinModules);
 
 function isNodeBuiltin(specifier: string): boolean {
@@ -45,14 +45,14 @@ const bundle = bundleFiles();
 describe('a web bundle without Node code', () => {
   it('walks the bundle from its entry into the modules it shares with the server', () => {
     expect([...bundle.keys()]).toEqual(expect.arrayContaining([
-      'src/web/main.tsx',
-      'src/web/App.tsx',
-      'src/core/collector-error.ts',
-      'src/core/source-registry.ts',
-      'src/core/collection-settings.ts',
-      'src/plugins/youtube/shared.ts',
-      'src/plugins/youtube/settings.ts',
-      'src/plugins/rss/settings.ts',
+      'src/transport/web/main.tsx',
+      'src/transport/web/App.tsx',
+      'src/shared/lib/collector-error.ts',
+      'src/shared/sources/source-registry.ts',
+      'src/shared/sources/collection-settings.ts',
+      'src/domain/plugins/youtube/shared.ts',
+      'src/domain/plugins/youtube/settings.ts',
+      'src/domain/plugins/rss/settings.ts',
     ]));
   });
 

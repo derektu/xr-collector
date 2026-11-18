@@ -1,7 +1,7 @@
 // The build a user runs, as Settings shows it: the version and kind on the card are the ones the
 // device API reports, the API names the checkout under test, and a failed read can be retried from
 // the card. Without it a user or a bug report names the wrong build. The API serving one identity to the UI and an authorized Agent, before a
-// Vault is chosen too, is in tests/server/build-info-http.test.ts.
+// Vault is chosen too, is in tests/transport/server/routes/device.build-info.test.ts.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 

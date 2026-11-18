@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The worktree's dev instance: the built Web server (dist/node/server/main.js) on a slot of
+// The worktree's dev instance: the built Web server (dist/node/transport/server/main.js) on a slot of
 // DEV_POOL, with the worktree's own profile (.data) and the Vault a person tries tickets on. Any
 // number of worktrees, opened from any tool, share the pool, so no session owns a fixed port. Run
 // from the worktree:
@@ -88,7 +88,7 @@ async function start({ vault, build }) {
   const ports = await DEV_POOL.claim(ROOT, { prefer: last?.slot });
   mkdirSync(LOCAL, { recursive: true });
   const log = openSync(LOG, 'a');
-  const child = spawn(process.execPath, [path.join(ROOT, 'dist', 'node', 'server', 'main.js'), MARKER], {
+  const child = spawn(process.execPath, [path.join(ROOT, 'dist', 'node', 'transport', 'server', 'main.js'), MARKER], {
     cwd: ROOT, detached: true, stdio: ['ignore', log, log],
     env: {
       ...cleanEnv(),

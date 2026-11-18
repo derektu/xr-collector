@@ -6,7 +6,7 @@
 // Vault, arrives there while its E stays paused by itself. A broken path loses or overwrites a user's documents. External
 // collection uses synthetic YouTube data; all transfers use the production HTTP handlers and real
 // files and search indexes. A fixed Vault location refusing other Vaults is in
-// tests/vault/vault-open.test.ts.
+// tests/app/runtime/vault-workspace.open.test.ts.
 import { cp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { channel, channelUrl, collect, idle, launchWeb, subscribe, waitFor as settle } from '../scripts/lib/index.mjs';

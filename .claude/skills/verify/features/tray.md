@@ -44,11 +44,11 @@ Preconditions:
 
 ## Regression flows
 
-- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的圖示、項目與順序、自動檢查勾選，關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的圖示序列與文件數、自動檢查的切換、經 API 關閉自動檢查與開始檢查時畫出的選單自己更新、閒置 10 秒不讀狀態、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。選單文字在 tests/electron/tray-menu.test.ts。Desktop 流程，視窗隱藏時以 App 的顯示紀錄判斷；TRAY-D2、TRAY-D5、TRAY-D6、TRAY-D7 以 --visible 再核對畫面上的視窗。
+- `tray`：斷言 `tray-menu`、`tray-hide`、`tray-actions`、`tray-open`、`tray-hint`、`tray-second-launch`、`tray-quit`。閒置選單的圖示、項目與順序、自動檢查勾選，關閉後隱藏且 Agent API 的 instanceId 不變、隱藏時立即檢查的圖示序列與文件數、自動檢查的切換、經 API 關閉自動檢查與開始檢查時畫出的選單自己更新、閒置 10 秒不讀狀態、工作／記錄／開啟的頁面且沒有重新載入、提示只出現一次（重新啟動後也不再出現）、第二次啟動叫出原視窗、檢查中結束後 Meilisearch 也結束且重啟後接續完成。選單文字在 tests/desktop/electron/tray-menu.test.ts。Desktop 流程，視窗隱藏時以 App 的顯示紀錄判斷；TRAY-D2、TRAY-D5、TRAY-D6、TRAY-D7 以 --visible 再核對畫面上的視窗。
 - `notification-clicks`：斷言 `tray-menu`、`tray-open` 的 attention 優先圖示、需處理子選單、點通知顯示隱藏的視窗及訂閱入口；移除最後一筆後清除。Desktop 流程，聚焦與最小化還原以 --visible 驗證。
 
 更新提示以向上箭頭疊在原有閒置／收集中／自動檢查關閉圖示上，保留原狀態；Mac 使用單色 Template 與 2x 素材，Windows 使用有輪廓的箭頭與 2x 素材。開啟選單或設定不清除更新標記，執行新版後才消失。訂閱需要處理的 attention 圖示與離線圖示都優先於版本更新標記，版本選單仍保留完整狀態。離線圖示在 Mac 是 Template 加 × 角標，Windows 是灰底加 × 角標。
 
 ## Backlog
 
-- `tray-open`：若視窗聚焦列為必要結果，把選單列流程目前只記為 note 的聚焦改成斷言。離線、重試、排隊等純選單狀態留在 `tests/electron/tray-menu.test.ts`。
+- `tray-open`：若視窗聚焦列為必要結果，把選單列流程目前只記為 note 的聚焦改成斷言。離線、重試、排隊等純選單狀態留在 `tests/desktop/electron/tray-menu.test.ts`。

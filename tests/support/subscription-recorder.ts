@@ -1,11 +1,11 @@
-import type { SourceRegistry } from '../../src/core/source-registry.js';
+import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
-import type { ItemFailureEntry, SubscriptionSettings } from '../../src/core/subscription-types.js';
-import type { JobError, JobSubmission, SkipReason } from '../../src/core/job-types.js';
-import type { JobManager } from '../../src/jobs/job-manager.js';
-import { checkPlan } from '../../src/subscriptions/candidates.js';
-import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/jobs/subscription-port.js';
-import type { FailureClass, SubscriptionTarget } from '../../src/core/source-contract.js';
+import type { ItemFailureEntry, SubscriptionSettings } from '../../src/shared/subscriptions/subscription-types.js';
+import type { JobError, JobSubmission, SkipReason } from '../../src/shared/jobs/job-types.js';
+import type { JobManager } from '../../src/domain/jobs/job-manager.js';
+import { checkPlan } from '../../src/domain/subscriptions/candidates.js';
+import type { CheckEnd, CheckPlan, CheckReport, SubscribeResult, SubscriptionPort } from '../../src/domain/jobs/subscription-port.js';
+import type { FailureClass, SubscriptionTarget } from '../../src/shared/sources/source-contract.js';
 
 /** A subscription as the recorder holds it. */
 export interface RecordedSubscription extends SubscriptionTarget {

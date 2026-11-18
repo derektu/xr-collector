@@ -1,11 +1,11 @@
-// Guards the developer, not the user: the event catalog (`src/core/event-catalog.ts`) lists every kind
+// Guards the developer, not the user: the event catalog (`src/shared/activity/event-catalog.ts`) lists every kind
 // of event and how the activity summary shows it. An emitter or reader that names a kind the catalog
 // does not list fails the typecheck, so a new event cannot reach the log, or a branch on a misspelled
 // kind slip through, without its catalog entry.
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { eventSpec } from '../../src/core/event-catalog.js';
+import { eventSpec } from '../../src/shared/activity/event-catalog.js';
 
 describe('event catalog', () => {
   it('refuses an event kind the catalog does not list', () => {

@@ -20,8 +20,8 @@ const check = (target: { requires: Array<{ check: string; ok: boolean }> }, name
 describe('development target', () => {
   it('is refused while dist/node or dist/web is older than the sources it was built from', () => {
     const checkout = temp('checkout');
-    const sources = { web: path.join(checkout, 'src', 'web', 'App.tsx'), node: path.join(checkout, 'src', 'core', 'types.ts') };
-    const built = { web: path.join(checkout, 'dist', 'web', 'index.html'), node: path.join(checkout, 'dist', 'node', 'electron', 'main.js') };
+    const sources = { web: path.join(checkout, 'src', 'transport', 'web', 'App.tsx'), node: path.join(checkout, 'src', 'shared', 'jobs', 'job-types.ts') };
+    const built = { web: path.join(checkout, 'dist', 'web', 'index.html'), node: path.join(checkout, 'dist', 'node', 'desktop', 'electron', 'main.js') };
     for (const file of [...Object.values(sources), ...Object.values(built)]) write(file);
     for (const file of Object.values(sources)) at(file, 1_000);
     for (const file of Object.values(built)) at(file, 2_000);
@@ -32,7 +32,7 @@ describe('development target', () => {
     at(sources.node, 3_000);
     const target = desktopTarget({ checkout });
     expect(check(target, 'electronBuildCurrent')).toBe(false);
-    expect(() => requireTarget(target)).toThrow(/electronWebCurrent: .*npm run build; the Web build is older than src\/web/u);
+    expect(() => requireTarget(target)).toThrow(/electronWebCurrent: .*npm run build; the Web build is older than src\/transport\/web/u);
   });
 });
 

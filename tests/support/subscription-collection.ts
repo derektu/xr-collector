@@ -1,4 +1,4 @@
-import type { SubscriptionCollection } from '../../src/server/routes/subscriptions.js';
+import type { SubscriptionCollection } from '../../src/transport/server/routes/subscriptions.js';
 
 function unused(name: string): () => never {
   return () => { throw new Error(`${name} is not used by this test`); };

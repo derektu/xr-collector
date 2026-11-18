@@ -1,0 +1,48 @@
+// The indexed form of a YouTube document stays fixed, pinned by its content hash: a change would
+// make every existing search index look stale and rebuild it at the next start.
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { transcriptDocument } from '../../../src/domain/plugins/youtube/server.js';
+import { MeilisearchBackend } from '../../../src/domain/search/meilisearch-backend.js';
+import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
+import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
+import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+/** The documents a full rebuild sends to the index. */
+async function indexed(vault: MarkdownVault): Promise<Array<{ id: string; contentHash: string; youtube: unknown }>> {
+  const bodies: string[] = [];
+  const fetch = async (url: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === 'PUT' && typeof init.body === 'string') bodies.push(init.body);
+    return Response.json(String(url).includes('/tasks/') ? { status: 'succeeded' } : { taskUid: 1 });
+  };
+  const documents = await Promise.all((await vault.list()).map(async (entry) => (await vault.read(entry.id))!));
+  await new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: 'http://search.invalid', apiKey: 'key', fetch: fetch as typeof globalThis.fetch })
+    .replaceAll(documents);
+  return JSON.parse(bodies[0]!) as Array<{ id: string; contentHash: string; youtube: unknown }>;
+}
+
+describe('the indexed form of a YouTube document', () => {
+  // The digest is pinned: any change to the indexed form of a YouTube document makes every index
+  // already on disk look stale, and starting the search would then rebuild it.
+  it('keeps the content hash of an existing index', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-indexed-'));
+    roots.push(root);
+    const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => new Date('2026-10-15T04:00:00.000Z') });
+    await vault.add(transcriptDocument({
+      videoId: 'aaaaaaaaaa1', sourceUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaa1', title: '人工字幕',
+      channelId: 'UC111', channelTitle: '頻道一', publishedAt: '2026-10-01T08:00:00.000Z',
+      languageCode: 'zh-TW', languageName: '中文（台灣）', subtitleKind: 'manual', bodyMarkdown: '第一段。\n\n第二段。',
+    }));
+
+    expect(await indexed(vault)).toMatchObject([{
+      id: 'youtube:aaaaaaaaaa1',
+      youtube: { languageCode: 'zh-TW', languageName: '中文（台灣）', subtitleKind: 'manual' },
+      contentHash: '1f243620e19ed673338d4d60cbb869ca120a5415765e7addad30906f7dea203c',
+    }]);
+  });
+});

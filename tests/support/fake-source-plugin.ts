@@ -1,6 +1,6 @@
-import { CollectorError } from '../../src/core/collector-error.js';
-import type { SubscriptionSettings } from '../../src/core/subscription-types.js';
-import type { PacingGate } from '../../src/pacing/pacing-gate.js';
+import { CollectorError } from '../../src/shared/lib/collector-error.js';
+import type { SubscriptionSettings } from '../../src/shared/subscriptions/subscription-types.js';
+import type { PacingGate } from '../../src/domain/pacing/pacing-gate.js';
 import type {
   CapturedItem,
   FailureClass,
@@ -10,7 +10,7 @@ import type {
   SourceDefinition,
   SourcePlugin,
   SubscriptionTarget,
-} from '../../src/core/source-contract.js';
+} from '../../src/shared/sources/source-contract.js';
 import { HeldCaptures } from './held-captures.js';
 
 /**

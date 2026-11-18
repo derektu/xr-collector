@@ -14,7 +14,7 @@ import { runtimeCacheMiss, runtimeCacheRoot } from './runtime-cache.mjs';
 
 const exec = promisify(execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const pinsPath = path.join(projectRoot, 'src', 'search', 'meilisearch-runtime-pins.json');
+const pinsPath = path.join(projectRoot, 'src', 'domain', 'search', 'meilisearch-runtime-pins.json');
 
 export const TARGETS = {
   'darwin-arm64': { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', directory: 'mac', executable: 'meilisearch' },

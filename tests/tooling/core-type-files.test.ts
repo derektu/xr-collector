@@ -1,13 +1,15 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// Guards the developer and the window: the shared type files (`src/core/*-types.ts`) are imported by
+// Guards the developer and the window: the shared type files (`src/shared/<domain>/*-types.ts`) are imported by
 // the server, the Electron shell and the web bundle. A type file that holds code drags that code, and
 // whatever it imports, into every one of them, and a change to it looks as if it touched every block.
 // So a type file holds only interfaces and type aliases, and imports only types. Values the blocks
-// share live in their own modules, such as `CollectorError` in `src/core/collector-error.ts`.
+// share live in their own modules, such as `CollectorError` in `src/shared/lib/collector-error.ts`.
 
-const TYPE_FILES = readdirSync('src/core').filter((name) => name.endsWith('-types.ts')).map((name) => `src/core/${name}`);
+const TYPE_FILES = readdirSync('src/shared', { recursive: true }).map(String).filter((name) => name.endsWith('-types.ts'))
+  .map((name) => `src/shared/${name.split(path.sep).join('/')}`);
 
 /** Comments blanked out, keeping line numbers; a `//` right after `:` stays, because that is a URL in a string. */
 function withoutComments(text: string): string {
@@ -32,7 +34,7 @@ function codeLines(file: string): string[] {
 describe('the shared type files', () => {
   it('finds the type files of every block', () => {
     expect(TYPE_FILES).toEqual(expect.arrayContaining([
-      'src/core/document-types.ts', 'src/core/job-types.ts', 'src/core/subscription-types.ts', 'src/core/activity-types.ts',
+      'src/shared/documents/document-types.ts', 'src/shared/jobs/job-types.ts', 'src/shared/subscriptions/subscription-types.ts', 'src/shared/activity/activity-types.ts',
     ]));
   });
 

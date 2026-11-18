@@ -1,0 +1,354 @@
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
+import { parse, stringify } from 'yaml';
+import type { DocumentVault } from '../../shared/documents/document-vault.js';
+import type { SourceRegistry } from '../../shared/sources/source-registry.js';
+import type { ContentExtent, DeletionRecord, DocumentKey, DocumentMetadata, DocumentStatus, SavedDocument } from '../../shared/documents/document-types.js';
+import { storedDocumentStatus } from '../../shared/documents/document-status.js';
+import { CollectorError } from '../../shared/lib/collector-error.js';
+import type { VaultFiles } from '../../shared/vault/vault-files.js';
+import type { CapturedDocument } from '../../shared/sources/source-contract.js';
+import { collectedAtReadable, collectedBeforeDeletion } from '../../shared/documents/deletion-rule.js';
+import { documentId } from '../../shared/documents/document-id.js';
+import { DeletionLedger, deletionId } from './deleted-documents.js';
+import { documentKeyFromId, documentKeyFromPath, documentPath } from './document-paths.js';
+import { withDocumentStatus } from './document-status-edit.js';
+
+/**
+ * A document file's frontmatter. The core owns these keys; the `collector` block also carries the
+ * fields the source type's frontmatter codec writes, between `content_extent` and `source_tags`.
+ */
+interface StoredMetadata {
+  type: string;
+  title: string;
+  resource: string;
+  tags: string[];
+  /** Absent in a file another tool wrote; such a document is published. */
+  status?: DocumentStatus;
+  collector: {
+    id: string;
+    source: string;
+    source_id: string;
+    publisher: string;
+    publisher_id?: string;
+    published_at?: string;
+    collected_at: string;
+    /** When the app last changed the document, such as its status; absent until the first change. */
+    updated_at?: string;
+    content_extent: ContentExtent;
+    source_tags: [];
+    [field: string]: unknown;
+  };
+}
+
+/** A document file: the frontmatter between the `---` lines, starting at index 4, then the body. */
+const DOCUMENT_FILE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+
+function parseFrontmatter(sources: SourceRegistry, content: string): { metadata: StoredMetadata; body: string } {
+  const match = content.match(DOCUMENT_FILE);
+  if (!match?.[1]) throw new Error('Invalid document frontmatter');
+  const metadata = parse(match[1]) as StoredMetadata;
+  const definition = typeof metadata?.collector?.source === 'string' ? sources.definition(metadata.collector.source) : undefined;
+  if (!definition || metadata.type !== definition.item.documentType) {
+    throw new Error('Unsupported document format');
+  }
+  return {
+    metadata,
+    body: match[2] ?? '',
+  };
+}
+
+/**
+ * A document file the Vault lists by its name (`documents/<source type>/<source ID>.md`) that cannot
+ * be read as a document: unparseable frontmatter, an unsupported format, or an ID that differs from
+ * the file name. Such a file is the Vault's own data gone bad, so listing and export stop and name it.
+ */
+export class DocumentFileError extends CollectorError {
+  constructor(readonly file: string, options?: ErrorOptions) {
+    super('vault_invalid', `知識庫文件無法讀取，請修正或移除這個檔案後再試：${file}`, options);
+    this.name = 'DocumentFileError';
+  }
+}
+
+/** A document from the text of its file; throws when the text is not a document of a type of `sources`. */
+export function parseDocument(sources: SourceRegistry, content: string): SavedDocument {
+  const { metadata, body } = parseFrontmatter(sources, content);
+  return toSavedDocument(sources, metadata, body.trim());
+}
+
+/** How many document files a listing reads at once, so memory stays flat however large the Vault is. */
+const READ_CONCURRENCY = 16;
+
+function toSavedDocument(sources: SourceRegistry, metadata: StoredMetadata, bodyMarkdown: string): SavedDocument {
+  const sourceType = metadata.collector.source;
+  const details = sources.require(sourceType).frontmatter.read(metadata.collector);
+  return {
+    id: metadata.collector.id,
+    type: metadata.type,
+    sourceType,
+    sourceId: metadata.collector.source_id,
+    sourceUrl: metadata.resource,
+    title: metadata.title,
+    publisher: {
+      id: metadata.collector.publisher_id ?? null,
+      name: metadata.collector.publisher,
+    },
+    publishedAt: metadata.collector.published_at ?? null,
+    collectedAt: metadata.collector.collected_at,
+    status: storedDocumentStatus(metadata.status),
+    contentExtent: metadata.collector.content_extent === 'summary' ? 'summary' : 'full',
+    ...(details ? { [sourceType]: details } : {}),
+    bodyMarkdown,
+  };
+}
+
+export interface MarkdownVaultOptions {
+  /** The clock behind both `collected_at` and deletion times, so the two compare on one time source. */
+  now?: () => Date;
+}
+
+/** What opening a Vault found of deletions a stop left unfinished. */
+export interface DeletionRecovery {
+  /** Deletions whose document file was still there; the file is removed now. */
+  completed: DeletionRecord[];
+  /** Explicit re-collections that saved the document but did not lift the deletion; the record is lifted now. */
+  cleared: DeletionRecord[];
+  /**
+   * Deletions whose document file has no readable `collected_at`. Both the record and the file stay,
+   * and the document stays hidden, because the file cannot show whether it predates the deletion.
+   */
+  unresolved: DeletionRecord[];
+}
+
+/** The deletion state a package carries: which document files stay out and which records go in. */
+export interface PortableDeletions {
+  /** IDs of document files their deletion hides. */
+  hidden: Set<string>;
+  /** Records still in effect; a record whose document is newer belongs to a lifted deletion and is left out. */
+  records: DeletionRecord[];
+}
+
+/**
+ * Markdown documents of one Vault and its deletion records. A document with a deletion record is
+ * invisible when it was collected no later than the deletion, so the record alone makes a deletion
+ * take effect, before the file is gone.
+ */
+export class MarkdownVault implements DocumentVault {
+  readonly deletions: DeletionLedger;
+  readonly now: () => Date;
+  /** The source types whose documents this Vault reads and writes; those of `files`. */
+  readonly sources: SourceRegistry;
+  private readonly rootDir: string;
+
+  /** Writes go through `files`, the Vault's own. */
+  constructor(private readonly files: VaultFiles, options: MarkdownVaultOptions = {}) {
+    this.rootDir = files.root;
+    this.sources = files.sources;
+    this.now = options.now ?? (() => new Date());
+    this.deletions = new DeletionLedger(files, this.now);
+  }
+
+  async getByKey(key: DocumentKey): Promise<SavedDocument | null> {
+    return this.read(documentId(key));
+  }
+
+  /**
+   * Saves a captured item unless a visible document of the same item exists, which is returned
+   * instead. `collectedAt` stamps an explicit re-collection after its deletion time.
+   */
+  async add(capture: CapturedDocument, options: { collectedAt?: Date } = {}): Promise<SavedDocument> {
+    const definition = this.sources.definition(capture.sourceType);
+    if (!definition) throw new Error(`Source type ${capture.sourceType} is not registered`);
+    const key: DocumentKey = { sourceType: capture.sourceType, sourceId: capture.key };
+    const file = documentPath(key);
+    const id = documentId(key);
+    const existing = await this.read(id);
+    if (existing) return existing;
+    // A file hidden by its deletion record is the deleted document; the new one takes its place.
+    await this.files.remove(file);
+
+    const collectedAt = (options.collectedAt ?? this.now()).toISOString();
+    const metadata: StoredMetadata = {
+      type: definition.item.documentType,
+      title: capture.title,
+      resource: capture.sourceUrl,
+      tags: [],
+      status: 'published',
+      collector: {
+        id,
+        source: capture.sourceType,
+        source_id: capture.key,
+        publisher: capture.publisher.name,
+        collected_at: collectedAt,
+        content_extent: capture.contentExtent ?? 'full',
+        ...definition.frontmatter.write(capture.details),
+        source_tags: [],
+      },
+    };
+    if (capture.publisher.id) metadata.collector.publisher_id = capture.publisher.id;
+    if (capture.publishedAt) metadata.collector.published_at = capture.publishedAt;
+
+    const body = capture.bodyMarkdown.trim();
+    const serialized = `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body}\n`;
+    // A file another writer created first stays; the read below returns whichever file is there.
+    await this.files.create(file, serialized);
+
+    const saved = await this.readStored(id);
+    if (!saved) throw new Error('Document was not saved');
+    return saved;
+  }
+
+  /**
+   * Metadata of every visible document of every source type of `sources`, without bodies or content
+   * extent, newest collection first. Only files named `documents/<source type>/<source ID>.md` with a valid source
+   * ID are documents; any other file belongs to someone else and is not read. A document file that
+   * cannot be read fails the listing with a `DocumentFileError`.
+   */
+  async list(): Promise<DocumentMetadata[]> {
+    const relatives: string[] = [];
+    for (const definition of this.sources.definitions) {
+      const folder = `documents/${definition.id}`;
+      let files: string[];
+      try {
+        files = await readdir(path.join(this.rootDir, ...folder.split('/')));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      for (const file of files) {
+        const relative = `${folder}/${file}`;
+        if (documentKeyFromPath(this.sources, relative) !== null) relatives.push(relative);
+      }
+    }
+
+    const deletions = await this.deletionTimes();
+    const metadata: DocumentMetadata[] = [];
+    for (let start = 0; start < relatives.length; start += READ_CONCURRENCY) {
+      const batch = await Promise.all(relatives.slice(start, start + READ_CONCURRENCY).map((relative) => this.readListed(relative)));
+      for (const document of batch) {
+        if (!document || hidden(document, deletions)) continue;
+        const { bodyMarkdown: _body, contentExtent: _extent, ...rest } = document;
+        // A copy, because strings parsed out of the file can keep the whole file text in memory.
+        metadata.push(structuredClone(rest));
+      }
+    }
+    return metadata.sort((left, right) => right.collectedAt.localeCompare(left.collectedAt) || left.id.localeCompare(right.id));
+  }
+
+  /** A listed document file; its ID must match its name. */
+  private async readListed(relative: string): Promise<SavedDocument | null> {
+    const key = documentKeyFromPath(this.sources, relative)!;
+    let document: SavedDocument | null;
+    try {
+      document = await this.readFile(this.pathFor(key));
+    } catch (error) {
+      throw new DocumentFileError(relative, { cause: error });
+    }
+    if (document && document.id !== documentId(key)) throw new DocumentFileError(relative);
+    return document;
+  }
+
+  /** A visible document; null when it does not exist or its deletion hides it. */
+  async read(id: string): Promise<SavedDocument | null> {
+    const document = await this.readStored(id);
+    if (!document) return null;
+    const deletion = await this.deletions.get(id);
+    return deletion && collectedBeforeDeletion(document.collectedAt, deletion.deletedAt) ? null : document;
+  }
+
+  /**
+   * Sets the status of a document file and stamps `collector.updated_at` with the Vault clock. The
+   * rest of the file keeps its bytes. The caller checks that the document is visible.
+   */
+  async writeStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
+    const key = documentKeyFromId(this.sources, id);
+    if (!key) throw new Error(`Not a document ID: ${id}`);
+    const content = await readFile(this.pathFor(key), 'utf8');
+    const frontmatter = content.match(DOCUMENT_FILE)?.[1];
+    if (frontmatter === undefined) throw new DocumentFileError(documentPath(key));
+    const text = `---\n${withDocumentStatus(frontmatter, status, this.now().toISOString())}${content.slice(4 + frontmatter.length)}`;
+    const document = parseDocument(this.sources, text);
+    await this.files.writeText(documentPath(key), text);
+    return document;
+  }
+
+  /** Removes a document file; a missing file is already removed. */
+  async remove(id: string): Promise<void> {
+    const key = documentKeyFromId(this.sources, id);
+    if (!key) return;
+    await this.files.remove(documentPath(key));
+  }
+
+  /**
+   * Finishes what a stop left between a deletion record and its document file: a file collected
+   * no later than its deletion is removed, and a newer file, saved by an explicit re-collection,
+   * lifts the record.
+   */
+  async recoverDeletions(): Promise<DeletionRecovery> {
+    const recovery: DeletionRecovery = { completed: [], cleared: [], unresolved: [] };
+    for (const record of await this.deletions.list()) {
+      const id = deletionId(record);
+      const document = await this.readStored(id);
+      if (!document) continue;
+      if (!collectedAtReadable(document.collectedAt)) {
+        recovery.unresolved.push(record);
+      } else if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
+        await this.remove(id);
+        recovery.completed.push(record);
+      } else {
+        await this.deletions.clear(id);
+        recovery.cleared.push(record);
+      }
+    }
+    return recovery;
+  }
+
+  /**
+   * Applies the visibility rule to the files a package takes from this Vault, so a package never
+   * holds a document next to the record that hides it, even while a deletion is unfinished.
+   */
+  async portableDeletions(): Promise<PortableDeletions> {
+    const hidden = new Set<string>();
+    const records: DeletionRecord[] = [];
+    for (const record of await this.deletions.list()) {
+      const id = deletionId(record);
+      let document: SavedDocument | null;
+      try { document = await this.readStored(id); } catch { document = null; hidden.add(id); }
+      if (!document) { records.push(record); continue; }
+      if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
+        hidden.add(id);
+        records.push(record);
+      }
+    }
+    return { hidden, records };
+  }
+
+  /** A document file as stored, whether or not a deletion hides it. */
+  private async readStored(id: string): Promise<SavedDocument | null> {
+    const key = documentKeyFromId(this.sources, id);
+    if (!key) return null;
+    return this.readFile(this.pathFor(key));
+  }
+
+  private async deletionTimes(): Promise<Map<string, string>> {
+    return new Map((await this.deletions.list()).map((record) => [deletionId(record), record.deletedAt]));
+  }
+
+  private pathFor(key: DocumentKey): string {
+    return path.join(this.rootDir, ...documentPath(key).split('/'));
+  }
+
+  private async readFile(filePath: string): Promise<SavedDocument | null> {
+    try {
+      return parseDocument(this.sources, await readFile(filePath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+}
+
+function hidden(document: SavedDocument, deletions: Map<string, string>): boolean {
+  const deletedAt = deletions.get(document.id);
+  return deletedAt !== undefined && collectedBeforeDeletion(document.collectedAt, deletedAt);
+}

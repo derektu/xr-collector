@@ -58,7 +58,7 @@ Preconditions:
 
 ## Backlog
 
-- `vault-fixed`：沒有流程；固定位置時建立與開啟其他知識庫被拒在 `tests/vault/vault-open.test.ts` 與 `tests/runtime/collector-runtime.test.ts`，畫面只是把 API 的拒絕原因顯示出來。
+- `vault-fixed`：沒有流程；固定位置時建立與開啟其他知識庫被拒在 `tests/app/runtime/vault-workspace.open.test.ts` 與 `tests/app/runtime/collector-runtime.test.ts`，畫面只是把 API 的拒絕原因顯示出來。
 
 - `vault-import-merge`：預覽的筆數與同 ID 更新後的確切文件內容，不只比對筆數。
 - `vault-native-dialogs`：原生選檔／選資料夾的參數、取消沒有副作用與完成結果，以 Desktop 控制驗證；reveal 路徑與對話框種類已有斷言，不驗 Finder 與對話框外觀。

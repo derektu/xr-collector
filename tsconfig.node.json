@@ -16,18 +16,11 @@
     "types": ["node"]
   },
   "include": [
-    "src/activity/**/*.ts",
-    "src/core/**/*.ts",
-    "src/subscriptions/**/*.ts",
-    "src/pacing/**/*.ts",
-    "src/plugins/**/*.ts",
-    "src/jobs/**/*.ts",
-    "src/sources/**/*.ts",
-    "src/vault/**/*.ts",
-    "src/server/**/*.ts",
-    "src/runtime/**/*.ts",
-    "src/updates/**/*.ts",
-    "src/electron/**/*.ts",
-    "src/electron/**/*.cts"
+    "src/shared/**/*.ts",
+    "src/domain/**/*.ts",
+    "src/app/**/*.ts",
+    "src/transport/server/**/*.ts",
+    "src/desktop/**/*.ts",
+    "src/desktop/**/*.cts"
   ]
 }

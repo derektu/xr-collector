@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 // Guards the developer, not the user: a screen that compares, searches or cuts a server message
 // changes what it does when only the wording changes, and neither the types nor the tests notice.
 // Screens branch on structured fields (`state`, `outcome`, `code`, counts) and only show messages.
-// A file under src/web that compares a `.message` with `==`/`===`/`!=`/`!==`, or reads it (also through `?.`) with
+// A file under src/transport/web that compares a `.message` with `==`/`===`/`!=`/`!==`, or reads it (also through `?.`) with
 // startsWith/endsWith/includes/indexOf/match/slice, fails here.
 
 const BRANCHING = /\.message\s*(?:[!=]==?|\??\.(?:startsWith|endsWith|includes|indexOf|match|slice)\()/u;
@@ -17,9 +17,9 @@ function filesUnder(directory: string): string[] {
   });
 }
 
-/** `file:line` of every line under src/web that branches on a message's text. */
+/** `file:line` of every line under src/transport/web that branches on a message's text. */
 function messageBranches(): string[] {
-  return filesUnder('src/web').filter((file) => /\.tsx?$/u.test(file)).flatMap((file) => readFileSync(file, 'utf8').split('\n')
+  return filesUnder('src/transport/web').filter((file) => /\.tsx?$/u.test(file)).flatMap((file) => readFileSync(file, 'utf8').split('\n')
     .flatMap((line, index) => BRANCHING.test(line) ? [`${file}:${index + 1}`] : []));
 }
 

@@ -64,7 +64,7 @@ export async function run({ instance, page, record, waitFor }) {
     expect(ready.path === first && ready.enabled, '預設值預覽 文件/XR Collector 且可以建立', { id: 'ob.create.default-enabled', expected: { path: first, enabled: true }, actual: ready });
     await themed('create');
 
-    // The wording of each refusal is in tests/vault/new-vault.test.ts and tests/runtime/collector-runtime.test.ts.
+    // The wording of each refusal is in tests/domain/vault/new-vault.test.ts and tests/app/runtime/collector-runtime.test.ts.
     for (const [value, id] of [['Taken', 'conflict'], ['a/b', 'invalid-char'], ['', 'empty']]) {
       await name.fill(value);
       await preview(refused);

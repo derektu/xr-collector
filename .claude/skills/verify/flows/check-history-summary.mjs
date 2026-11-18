@@ -3,9 +3,9 @@
 // checks, going back keeps the Activity filters, a reload keeps them all, raw events stay available
 // with DEBUG on request, and a job's log can be opened by URL and copied for diagnosis. Without it
 // a quiet channel buries the page in identical rows, or the two screens disagree about what ran.
-// The grouping rules themselves are in tests/activity/activity-summary.test.ts and
-// tests/activity/activity-jobs.test.ts; the detail's paging order is in
-// tests/web/activity-group-pages.test.ts.
+// The grouping rules themselves are in tests/domain/activity/activity-views.test.ts and
+// tests/domain/jobs/job-manager.activity.test.ts; the detail's paging order is in
+// tests/transport/web/activity-group-pages.test.ts.
 import path from 'node:path';
 import { idle, subscribe } from '../scripts/lib/index.mjs';
 import { editJson, writeText } from './lib/files.mjs';

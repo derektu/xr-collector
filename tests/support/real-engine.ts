@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { bundledResources, checkoutRoot } from '../../src/runtime/bundled-resources.js';
+import { bundledResources, checkoutRoot } from '../../src/app/runtime/bundled-resources.js';
 
 // Real-engine tests carry the `real-engine` tag (vitest.config.ts) and run the Meilisearch that
 // `npm run download:runtime` (Mac arm64) or `npm run download:runtime:win` (Windows x64) installs.

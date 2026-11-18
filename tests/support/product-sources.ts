@@ -1,7 +1,7 @@
-import type { SourceDefinition } from '../../src/core/source-contract.js';
-import { SourceDeclarations, type SourceRegistry } from '../../src/core/source-registry.js';
-import { SOURCE_DECLARATIONS } from '../../src/plugins/declarations.js';
-import { SOURCE_DEFINITIONS, sourceRegistry } from '../../src/plugins/index.js';
+import type { SourceDefinition } from '../../src/shared/sources/source-contract.js';
+import { SourceDeclarations, type SourceRegistry } from '../../src/shared/sources/source-registry.js';
+import { SOURCE_DECLARATIONS } from '../../src/app/plugins/declarations.js';
+import { SOURCE_DEFINITIONS, sourceRegistry } from '../../src/app/plugins/index.js';
 
 /** The product's source types, as the web UI reads them. */
 export const PRODUCT_DECLARATIONS = new SourceDeclarations(SOURCE_DECLARATIONS);

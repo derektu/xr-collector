@@ -7,7 +7,7 @@ import { productFiles } from '../support/source-imports.js';
 // the role off the job kind itself, or spells a work key such as `youtube:item:<key>` by hand, writes
 // such a rule again, and its copy drifts from the others: two spellings of one key stop deduplicating.
 
-const ROLE_MODULE = 'src/core/job-role.ts';
+const ROLE_MODULE = 'src/shared/jobs/job-role.ts';
 
 /** A role read off a job kind. */
 const ROLE_READ = /\bjobRole\(/u;

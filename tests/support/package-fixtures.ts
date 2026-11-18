@@ -6,11 +6,11 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { VAULT_MARKER, writeVaultMarker } from '../../src/vault/vault-directory.js';
+import { VAULT_MARKER, writeVaultMarker } from '../../src/domain/vault/vault-directory.js';
 import {
   checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, packageFormatVersion, unpackPackage, writePackage, type PackageReader,
-} from '../../src/vault/vault-package.js';
-import type { SourceRegistry } from '../../src/core/source-registry.js';
+} from '../../src/domain/vault/vault-package.js';
+import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
 
 /** Package files for tests, held in memory: a package is small there and easier to change. */
