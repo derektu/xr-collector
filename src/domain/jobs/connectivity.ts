@@ -1,37 +1,24 @@
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { ConnectivityState, ConnectivityStatus } from '../../shared/api/device-types.js';
 
-/** Answers whether this device reaches the internet; aborting `signal` gives up the answer. */
 export type ConnectivityProbe = (signal: AbortSignal) => Promise<boolean>;
 
-/** How long one probe request may take. */
 export const PROBE_TIMEOUT_MS = 5_000;
-/** How often an offline device is confirmed again. */
 export const OFFLINE_RECHECK_MS = 30_000;
-/** How long an online answer stands in for another confirmation after a failed request. */
 export const ONLINE_REUSE_MS = 30_000;
 
-/** An address whose answer is known, and how to tell that answer. */
 export interface ProbeAddress {
   url: string;
   accepts: (response: Response) => Promise<boolean>;
 }
 
-/**
- * Two providers, so neither one being down or blocked reads as a lost network. Plain HTTP with a
- * known answer: a captive portal (a hotel network before sign-in) redirects or answers with its
- * own page, which matches neither. The requests carry no cookie, account or subscription.
- */
+// A captive portal answers a request to a vendor endpoint with its own page instead of the fixed response.
+// https://www.rfc-editor.org/rfc/rfc8952.html#appendix-A
 const PROBE_ADDRESSES: readonly ProbeAddress[] = [
   { url: 'http://connectivitycheck.gstatic.com/generate_204', accepts: async (response) => response.status === 204 },
   { url: 'http://captive.apple.com/hotspot-detect.html', accepts: async (response) => response.ok && (await response.text()).includes('Success') },
 ];
 
-/**
- * Online when any address gives its known answer within `PROBE_TIMEOUT_MS`; redirects are not
- * followed. Once one answers, the others are given up. `request` is the HTTP client, so the desktop
- * app can pass one that follows the system's proxy settings.
- */
 export function connectivityProbe(addresses: readonly ProbeAddress[], request: typeof fetch = fetch): ConnectivityProbe {
   return async (signal) => {
     const done = new AbortController();
@@ -52,7 +39,6 @@ export function connectivityProbe(addresses: readonly ProbeAddress[], request: t
   };
 }
 
-/** The two providers above, requested with `request`. */
 export function internetProbe(request: typeof fetch = fetch): ConnectivityProbe {
   return connectivityProbe(PROBE_ADDRESSES, request);
 }
@@ -126,7 +112,6 @@ export class Connectivity {
     if (this.closed) return this.state;
     this.state = online ? 'online' : 'offline';
     this.checkedAt = this.now();
-    // The next round is set before the pause listeners run, so none of them can stop it.
     if (online) {
       if (this.recheck) clearTimeout(this.recheck);
       this.recheck = null;
@@ -141,7 +126,6 @@ export class Connectivity {
     if (this.recheck) clearTimeout(this.recheck);
     this.recheck = setTimeout(() => {
       this.recheck = null;
-      // A sleeping system is confirmed when it wakes; until then the next round waits.
       if (this.options.pause.has('sleep')) this.scheduleRecheck();
       else void this.check();
     }, this.options.offlineRecheckMs ?? OFFLINE_RECHECK_MS);

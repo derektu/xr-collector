@@ -1,9 +1,7 @@
 import type { CollectionJob, JobItem, JobProgress, JobState } from '../../shared/jobs/job-types.js';
 
-/** States of a job that is not finished. */
 export const ACTIVE: ReadonlySet<JobState> = new Set(['queued', 'running']);
 
-/** A check job's item once the item job that collects it has finished. */
 export function settledItem(item: JobItem, child: CollectionJob): JobItem {
   const { wait: _wait, ...rest } = item;
   return {
@@ -17,7 +15,6 @@ export function settledItem(item: JobItem, child: CollectionJob): JobItem {
   };
 }
 
-/** A check job's progress over its items. */
 export function progressOf(items: JobItem[]): JobProgress {
   const progress: JobProgress = { total: items.length, done: 0, created: 0, existing: 0, failed: 0, skipped: 0 };
   for (const item of items) {

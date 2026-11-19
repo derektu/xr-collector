@@ -60,7 +60,7 @@ export interface SubscribeResult {
 /**
  * Everything a job needs from the subscriptions and everything it reports back to them. The job
  * manager owns queueing and running; the subscriptions own their records, dispatch times and
- * collection progress. Production wires it to the subscription services; tests use a recorder.
+ * collection progress.
  */
 export interface SubscriptionPort {
   /** The plan of a check whose discovery starts at `at`, or why the check stops instead. */
