@@ -11,10 +11,9 @@ import {
   loadBuildInfo,
   UpdateService,
   UnavailableInstaller,
-  acknowledgeMacUpdateLaunch,
   acknowledgeMacUpdateShutdown,
   MacNativeInstaller,
-  prepareMacUpdateRollback,
+  rollBackFailedMacLaunch,
   WindowsNativeInstaller,
   type NativeInstaller,
   type UpdateApplyRequest,
@@ -26,7 +25,6 @@ import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
 import { DesktopLoginStartup, type LoginItemAdapter } from './login-startup.js';
 import { runUpdateCoordinator } from './update-coordinator.js';
-import { recoverNativeInstallations } from './update-recovery.js';
 import { startUpdateCheckScheduler } from './update-check-scheduler.js';
 import { ElectronSystemNotifications } from './system-notifications.js';
 import { claimLaunch } from './desktop-launch.js';
@@ -231,19 +229,7 @@ app.whenReady().then(async () => {
     });
   }
   launch.finish();
-  const lastAttempt = updateService.status().lastAttempt;
-  const currentNeedsConfirmation = Boolean(lastAttempt && ['pending', 'unknown'].includes(lastAttempt.outcome)
-    && lastAttempt.version === buildInfo.version && lastAttempt.buildId === buildInfo.buildId);
-  let updateLaunchReady = true;
-  if (process.platform === 'darwin') {
-    const acknowledged = !currentNeedsConfirmation || await acknowledgeMacUpdateLaunch(buildInfo)
-      .catch((error) => { console.error('Unable to acknowledge macOS update launch', error); return false; });
-    const recovered = await recoverNativeInstallations(nativeInstaller, updateService,
-      (error) => console.error('Unable to preserve or clean up macOS update result', error))
-      .catch((error) => { console.error('Unable to recover macOS update launch', error); return false; });
-    updateLaunchReady = !currentNeedsConfirmation || acknowledged && recovered;
-  }
-  if (updateLaunchReady) await updateService.confirmRunningBuild();
+  await updateService.confirmLaunch((error) => console.error('Unable to confirm update launch', error));
   if (nativeInstaller.available) {
     updateCheckScheduler = startUpdateCheckScheduler({
       check: () => updateService?.check() ?? Promise.resolve(),
@@ -262,20 +248,11 @@ app.whenReady().then(async () => {
     safelyStopped = false;
     console.error('Unable to safely stop failed startup before update rollback', cleanupError);
   }
-  const shutdownAcknowledged = safelyStopped && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
-    ? await acknowledgeMacUpdateShutdown(startupBuildInfo).catch((shutdownError) => {
-      console.error('Unable to acknowledge safe macOS update shutdown', shutdownError); return false;
-    })
+  const rolledBack = safelyStopped && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
+    ? await rollBackFailedMacLaunch(resources.macUpdateHelper, startupBuildInfo, () => { isQuitting = true; app.exit(1); })
+      .catch((rollbackError) => { console.error('Unable to roll back failed macOS startup', rollbackError); return false; })
     : false;
-  if (safelyStopped && shutdownAcknowledged && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
-    && await prepareMacUpdateRollback(resources.macUpdateHelper, startupBuildInfo).catch((rollbackError) => {
-      console.error('Unable to prepare macOS startup rollback', rollbackError); return null;
-    })) {
-    isQuitting = true;
-    app.exit(1);
-    return;
-  }
-  app.quit();
+  if (!rolledBack) app.quit();
 });
 
 // Closing the window only hides it, so the window goes away only while quitting, and before-quit

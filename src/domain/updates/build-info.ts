@@ -4,13 +4,11 @@ import type { BuildInfo } from '../../shared/api/update-types.js';
 const manifestUrl = new URL('../../build-info.json', import.meta.url);
 let developmentInfo: Promise<BuildInfo> | undefined;
 
-/** Reads the build's own artifact; an installed App never consults Git or its working directory. */
 export async function loadBuildInfo(options: { packaged?: boolean } = {}): Promise<BuildInfo> {
   let value: unknown;
   try {
     value = JSON.parse(await readFile(manifestUrl, 'utf8'));
   } catch (error) {
-    // Source execution has no generated artifact. Compiled code must carry the writer's output.
     if (options.packaged || new URL('../../', import.meta.url).pathname.endsWith('/dist/node/')
       || (error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw new Error('Build information is missing or invalid; rebuild the application.', { cause: error });
@@ -30,7 +28,6 @@ async function sourceBuildInfo(): Promise<BuildInfo> {
   return validateBuildInfo(await producer.createBuildInfo({ kind: 'development' }));
 }
 
-/** Validates the serialized identity rather than constructing one from launch-time environment flags. */
 export function validateBuildInfo(
   value: unknown,
   options: { requirePackaged?: boolean; platform?: NodeJS.Platform; arch?: string } = {},

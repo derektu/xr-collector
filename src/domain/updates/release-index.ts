@@ -3,22 +3,15 @@ import type { BuildInfo, UpdateOffer } from '../../shared/api/update-types.js';
 import { validateBuildInfo } from './build-info.js';
 import type { UpdateIdentity } from './types.js';
 
-/**
- * One platform's release index, `release-<target>.json`, written by `package:*` next to the
- * installers. A release carries one index per platform; files are named, not linked, so the
- * source resolves each name to a URL in the release that holds the index.
- */
 interface PlatformIndex {
   schemaVersion: 1; version: string; commit: string; target: string; buildInfo: unknown;
   installer: IndexedFile; update: IndexedFile;
 }
 interface IndexedFile { name: string; bytes: number; sha256: string }
 
-/** Where an index was found: its URL, the release notes, and how its file names become URLs. */
 export interface IndexLocation {
   sourceId: string;
   indexUrl: string;
-  /** The tag of the release holding the index; its version must match. */
   tag?: string;
   releaseNotes: string;
   resolve(name: string): string;
@@ -73,7 +66,6 @@ export async function fetchJson(url: string, request: typeof fetch, signal?: Abo
   catch (error) { throw new CollectorError('update_metadata_invalid', '更新站點回傳的 JSON 無法讀取。', { cause: error }); }
 }
 
-/** Reads a text file that a release may omit; a 404 reads as empty. */
 export async function fetchOptionalText(url: string, request: typeof fetch, signal?: AbortSignal): Promise<string> {
   try { return (await fetchMetadata(url, 'text/plain', request, signal)).toString('utf8'); }
   catch (error) { if (error instanceof CollectorError && error.code === 'update_not_published') return ''; throw error; }
