@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { AutoPauseNotification, NotificationAvailability, NotificationState } from '../../shared/api/device-types.js';
-import type { SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
+import type { CheckFailures, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
 import { replaceFile } from '../../shared/lib/json-file.js';
 
@@ -14,7 +14,8 @@ export interface SystemNotificationAdapter {
 }
 
 interface StoredState { version: 1; enabled: boolean; events: AutoPauseNotification[] }
-export interface ActiveSubscription { vaultId: string; sourceType: string; subscription: SubscriptionRecord }
+interface ActiveSubscription { vaultId: string; sourceType: string; subscription: SubscriptionRecord }
+type AutoPausedRecord = SubscriptionRecord & { autoPausedAt: string; checkFailures: CheckFailures };
 
 export class NotificationCenter {
   private state: StoredState = { version: 1, enabled: true, events: [] };
@@ -39,7 +40,7 @@ export class NotificationCenter {
 
   async recordAutoPause(vaultId: string, sourceType: string, record: SubscriptionRecord): Promise<void> {
     await this.serial(async () => {
-      if (!record.autoPausedAt || !record.checkFailures) return;
+      if (!isAutoPaused(record)) return;
       const id = eventId(vaultId, sourceType, record.id, record.autoPausedAt);
       if (this.state.events.some((event) => event.id === id)) return;
       const event = fromSubscription(vaultId, sourceType, record, id);
@@ -62,11 +63,11 @@ export class NotificationCenter {
   }
 
   view(active: readonly ActiveSubscription[], activeVaultId: string | null): NotificationState {
-    const actionable = active.filter(({ subscription }) => !subscription.enabled && Boolean(subscription.autoPausedAt) && Boolean(subscription.checkFailures))
-      .map(({ vaultId, sourceType, subscription }) => {
-        const id = eventId(vaultId, sourceType, subscription.id, subscription.autoPausedAt!);
-        return this.state.events.find((event) => event.id === id) ?? fromSubscription(vaultId, sourceType, subscription, id);
-      });
+    const actionable = active.flatMap(({ vaultId, sourceType, subscription }) => {
+      if (subscription.enabled || !isAutoPaused(subscription)) return [];
+      const id = eventId(vaultId, sourceType, subscription.id, subscription.autoPausedAt);
+      return [this.state.events.find((event) => event.id === id) ?? fromSubscription(vaultId, sourceType, subscription, id)];
+    });
     const availability = this.adapter?.availability() ?? { state: 'unavailable' as const, message: '系統通知僅能在桌面 App 使用。' };
     return { enabled: this.state.enabled, availability: availability.state, availabilityMessage: availability.message,
       active: actionable, events: activeVaultId ? this.state.events.filter((event) => event.vaultId === activeVaultId) : [] };
@@ -96,15 +97,19 @@ export class NotificationCenter {
   }
 }
 
-function fromSubscription(vaultId: string, sourceType: string, record: SubscriptionRecord, id: string): AutoPauseNotification {
+function isAutoPaused(record: SubscriptionRecord): record is AutoPausedRecord {
+  return Boolean(record.autoPausedAt) && Boolean(record.checkFailures);
+}
+
+function fromSubscription(vaultId: string, sourceType: string, record: AutoPausedRecord, id: string): AutoPauseNotification {
   return { id, vaultId, sourceType, subscriptionId: record.id, title: safe(record.title, 120),
-    failureCount: record.checkFailures!.count,
-    error: { code: safe(record.checkFailures!.error.code, 80), message: safe(record.checkFailures!.error.message, 300) }, autoPausedAt: record.autoPausedAt!,
+    failureCount: record.checkFailures.count,
+    error: { code: safe(record.checkFailures.error.code, 80), message: safe(record.checkFailures.error.message, 300) }, autoPausedAt: record.autoPausedAt,
     delivery: 'suppressed', deliveryMessage: null };
 }
 
 function safe(value: string, max: number): string { return limitText(redact(value), max, 'head'); }
 
-export function eventId(vaultId: string, sourceType: string, subscriptionId: string, autoPausedAt: string): string {
+function eventId(vaultId: string, sourceType: string, subscriptionId: string, autoPausedAt: string): string {
   return createHash('sha256').update(JSON.stringify([vaultId, sourceType, subscriptionId, autoPausedAt])).digest('hex');
 }
