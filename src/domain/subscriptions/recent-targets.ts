@@ -1,13 +1,7 @@
 import type { SubscriptionTarget } from '../../shared/sources/source-contract.js';
 
-/** How long a preview's target stands in for resolving the same address again. */
 export const RECENT_TARGET_TTL_MS = 10 * 60_000;
 
-/**
- * Targets that previews resolved, by source type and classified address. Adding a subscription
- * right after its preview takes the target from here, so the address is resolved once; an address
- * nobody previewed, or one previewed too long ago, is resolved again.
- */
 export class RecentTargets {
   private readonly entries = new Map<string, { target: SubscriptionTarget; expiresAt: number }>();
 

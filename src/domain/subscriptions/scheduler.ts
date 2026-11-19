@@ -5,7 +5,6 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { CollectionSchedule, ScheduledCheck, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import type { JobSubmission } from '../../shared/jobs/job-types.js';
 
-/** What the Vault keeps for automatic collection; check times live with each subscription. */
 export interface StoredSchedule {
   enabled: boolean;
 }
@@ -15,7 +14,6 @@ export interface ScheduleStore {
   save(schedule: StoredSchedule): Promise<void>;
 }
 
-/** The subscription service of one source type, as the scheduler checks through it. */
 export interface ScheduledRunner {
   readonly type: string;
   list(): Promise<SubscriptionRecord[]>;
@@ -26,17 +24,8 @@ export interface ScheduledRunner {
 export interface SchedulerOptions {
   now?: () => Date;
   pollIntervalMs?: number;
-  /**
-   * Starts the timer that polls every `ms` and returns its cancel function; `setInterval` by
-   * default. The poll checks the due subscriptions, reports its own failure, and resolves when the
-   * check has finished.
-   */
   setTimer?: (poll: () => Promise<void>, ms: number) => () => void;
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
-  /**
-   * No check is dispatched while collection is paused; the due subscriptions are checked once it
-   * continues. Each pause reason coming into force or lifting is recorded in the activity log.
-   */
   pause?: CollectionPause;
 }
 
@@ -44,12 +33,6 @@ export interface UpdateSchedule {
   enabled: boolean;
 }
 
-/**
- * Checks each subscription of every source type when its own next check time arrives. Every poll
- * submits all due subscriptions together, one job per subscription, and returns without waiting
- * for them; the job manager bounds how many run at once. One switch turns automatic collection on
- * or off for every type.
- */
 export class CollectionScheduler {
   private readonly now: () => Date;
   private readonly pollIntervalMs: number;
@@ -94,7 +77,6 @@ export class CollectionScheduler {
     return (await this.ensureLoaded()).enabled;
   }
 
-  /** The switch, the newest finished check and, while collection is on, the subscription due first. */
   async getSchedule(): Promise<CollectionSchedule> {
     const { enabled } = await this.ensureLoaded();
     let lastCheck: ScheduledCheck | null = null;
@@ -112,10 +94,6 @@ export class CollectionScheduler {
     return { enabled, status: enabled ? 'scheduled' : 'paused', lastCheck, nextCheck };
   }
 
-  /**
-   * Turns automatic collection on or off. Turning it on keeps each next check time still ahead and
-   * counts the overdue ones from now, so a long pause never makes them all due at once.
-   */
   async updateSchedule(input: UpdateSchedule): Promise<CollectionSchedule> {
     if (typeof input?.enabled !== 'boolean') {
       throw new CollectorError('invalid_request', '自動檢查開關必須是 true 或 false。');
@@ -132,13 +110,11 @@ export class CollectionScheduler {
     return this.getSchedule();
   }
 
-  /** Checks every enabled subscription of every type now, whether or not automatic collection is on. */
   async runNow(): Promise<JobSubmission[]> {
     if (this.suspended) throw new CollectorError('vault_busy', '正在進行知識庫操作，請稍後再檢查。');
     const lists = await Promise.all(this.runners.map((runner) => runner.list()));
     const runners = this.runners.filter((_runner, index) => lists[index]!.some((subscription) => subscription.enabled));
-    // With nothing to check, the service of the first type answers as a manual check of nothing does.
-    if (runners.length === 0) return this.runners[0]?.startRun({ trigger: 'manual' }) ?? [];
+    if (runners.length === 0) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
     const submissions: JobSubmission[] = [];
     for (const runner of runners) submissions.push(...await runner.startRun({ trigger: 'manual' }));
     return submissions;
@@ -152,7 +128,6 @@ export class CollectionScheduler {
     return this.checking !== null;
   }
 
-  /** Resolves when the check in progress, if any, has finished. */
   async idle(): Promise<void> {
     await this.checking?.catch(() => undefined);
   }
@@ -169,7 +144,6 @@ export class CollectionScheduler {
     return operation;
   }
 
-  /** Submits the enabled subscriptions whose next check time has come. */
   private async runDueChecks(): Promise<void> {
     const schedule = await this.ensureLoaded();
     if (!schedule.enabled) return;
@@ -180,7 +154,6 @@ export class CollectionScheduler {
         await runner.planChecks({ overdue: false });
         subscriptions = await runner.list();
       }
-      // Due is decided once the subscriptions are read, by the clock at that moment.
       const now = this.now().getTime();
       const ids = subscriptions
         .filter((subscription) => subscription.enabled && subscription.nextCheckAt && new Date(subscription.nextCheckAt).getTime() <= now)
