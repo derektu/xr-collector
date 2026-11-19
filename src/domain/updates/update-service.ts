@@ -28,11 +28,9 @@ export interface UpdateServiceOptions {
   event?: (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void;
   apply?: (request: UpdateApplyRequest) => void;
   downloadIdleTimeoutMs?: number;
-  /** Filesystem seam for deterministic locked-file coverage; production uses fs.rm. */
   removeCacheEntry?: (target: string, options: { recursive?: boolean; force?: boolean }) => Promise<void>;
 }
 
-/** Owns update discovery and verified cached bytes; native installers only receive a pinned ready file. */
 export class UpdateService implements UpdateAccess {
   private readonly stateFile: string;
   private readonly cache: string;
@@ -176,7 +174,6 @@ export class UpdateService implements UpdateAccess {
     return this.status();
   }
 
-  /** Explicit application exit never installs and never resumes a partial transfer next start. */
   async close(): Promise<void> {
     this.closed = true;
     this.checkAbort?.abort(new CollectorError('update_cancelled', 'App 正在結束。'));
@@ -252,7 +249,6 @@ export class UpdateService implements UpdateAccess {
             if (written.bytesWritten === 0) throw new CollectorError('update_download_failed', '無法寫入更新檔。');
             offset += written.bytesWritten;
           }
-          // Readers follow each status change, so progress is reported once per percent.
           const percent = Math.floor(transferred / offer.payload.bytes * 100);
           if (percent !== this.state.progress?.percent) this.set({ progress: { transferred, total: offer.payload.bytes, percent } });
         }
@@ -382,16 +378,23 @@ export class UpdateService implements UpdateAccess {
         if (info.isDirectory() && !info.isSymbolicLink()) await remove(target, { recursive: true, force: true });
         else await remove(target, { force: true });
       } catch (error) {
-        // A newly launched Windows build can overlap the exiting NSIS process,
-        // which temporarily owns the previous installer. Cache maintenance is
-        // retried at the next startup/download and must not roll back the app.
         if (!this.options.identity.target.startsWith('win32-') || !isWindowsFileInUse(error)) throw error;
       }
     }
   }
 
-  /** Called only after the Collector runtime, UI and native restart acknowledgement are ready. */
-  async confirmRunningBuild(): Promise<void> {
+  async confirmLaunch(report: (error: Error) => void): Promise<void> {
+    const attempt = this.saved.attempt;
+    const acknowledge = Boolean(attempt && (attempt.outcome === 'pending' || attempt.outcome === 'unknown')
+      && attempt.version === this.options.identity.version && attempt.buildId === this.options.currentBuildId);
+    const installer = this.options.installer;
+    const launchReady = !installer.confirmLaunch || await installer.confirmLaunch({
+      acknowledge, record: (result) => this.consumeNativeRecovery(result), report,
+    }).catch((error: unknown) => { report(error instanceof Error ? error : new Error(String(error))); return false; });
+    if (!acknowledge || launchReady) await this.confirmRunningBuild();
+  }
+
+  private async confirmRunningBuild(): Promise<void> {
     const attempt = this.saved.attempt;
     if (!attempt) return;
     if ((attempt.outcome === 'pending' || attempt.outcome === 'unknown' && !this.nativeRecoveryRequired) && this.options.identity.version === attempt.version

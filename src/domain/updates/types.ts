@@ -9,11 +9,9 @@ export interface NativeInstaller {
   readonly available: boolean;
   validate(offer: UpdateOffer, packageFile: string, signal?: AbortSignal): Promise<void>;
   prepare(offer: UpdateOffer, packageFile: string, signal: AbortSignal): Promise<PreparedInstall>;
-  /** Reads only installer-owned receipts. The caller persists a result before invoking finalize. */
-  recover?(): Promise<NativeRecoveryResult>;
+  confirmLaunch?(launch: LaunchConfirmation): Promise<boolean>;
 }
 export interface PreparedInstall {
-  /** Opaque native journal identity. When present it becomes the existing install-attempt id. */
   recoveryToken?: string;
   handoff(): Promise<void>;
   cancel(): Promise<void>;
@@ -26,10 +24,12 @@ export interface NativeInstallRecovery {
   expectedVersion: string;
   expectedBuildId: string;
   reason?: string;
-  /** Removes the exact owned journal only after its result has been durably consumed. */
-  finalize(): Promise<void>;
 }
-export interface NativeRecoveryResult { launchReady: boolean; results: NativeInstallRecovery[] }
+export interface LaunchConfirmation {
+  acknowledge: boolean;
+  record(result: NativeInstallRecovery): Promise<boolean>;
+  report(error: Error): void;
+}
 export interface UpdateApplyRequest {
   offer: UpdateOffer;
   packageFile: string;
@@ -44,7 +44,6 @@ export interface UpdateAccess {
   download(selection: UpdateSelection): Promise<DeviceUpdateStatus>;
   apply(selection: UpdateSelection): Promise<DeviceUpdateStatus>;
   cancel(): Promise<DeviceUpdateStatus>;
-  /** Calls `listener` after each change of the status; returns the function that stops it. */
   subscribe?(listener: () => void): () => void;
 }
 export interface PackagedIdentity extends UpdateIdentity { buildInfo: BuildInfo }

@@ -20,6 +20,7 @@ const offer: UpdateOffer = {
   buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.1', builtAt: '2026-10-26T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'b', target: 'darwin-arm64', sourceDirty: false },
 };
 const identity = { version: '0.1.0', target: 'darwin-arm64' };
+const failOnReport = (error: Error) => { throw error; };
 
 /** An installer whose validation is `validate`; the service never prepares an install itself. */
 function nativeInstaller(validate: NativeInstaller['validate'] = async () => undefined): NativeInstaller {
@@ -173,7 +174,7 @@ it('persists an install attempt before handoff and confirms it only from the run
     event: (_severity, type) => events.push(type) });
   expect(next.status().lastAttempt).toMatchObject({ version: '0.1.1', outcome: 'pending' });
   expect(next.status().message).not.toContain('無效');
-  await next.confirmRunningBuild();
+  await next.confirmLaunch(failOnReport);
   expect(next.status()).toMatchObject({ message: '已安裝 0.1.1。', ready: null,
     lastAttempt: { version: '0.1.1', outcome: 'succeeded', message: '已安裝 0.1.1。' } });
   expect(next.status().message).not.toContain('無效');
@@ -201,7 +202,7 @@ it('does not replace a newer ready-version message when confirming the running b
   const restarted = await UpdateService.open({ identity: current, currentBuildId: 'current-build',
     source: { id: 'test', check: async () => newer }, installer: nativeInstaller(), directory });
   expect(restarted.status()).toMatchObject({ phase: 'ready', message: '0.1.2 已準備好。', ready: { version: '0.1.2' } });
-  await restarted.confirmRunningBuild();
+  await restarted.confirmLaunch(failOnReport);
   expect(restarted.status()).toMatchObject({ phase: 'ready', message: '0.1.2 已準備好。', ready: { version: '0.1.2' },
     lastAttempt: { version: '0.1.1', outcome: 'succeeded', message: '已安裝 0.1.1。' } });
 });
@@ -357,7 +358,7 @@ it('consumes native recovery only with exact token and A/B identities', async ()
   const next = await UpdateService.open({ identity: { ...identity, version: offer.version }, currentBuildId: offer.buildInfo.buildId,
     source: { id: 'test', check: async () => null }, installer: nativeInstaller(), directory });
   const recovery = { token: 'native-run', phase: 'succeeded' as const, previousVersion: identity.version, previousBuildId: 'build-a',
-    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, finalize: async () => undefined };
+    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId };
   expect(await next.consumeNativeRecovery({ ...recovery, token: 'wrong' })).toBe(false);
   expect(await next.consumeNativeRecovery(recovery)).toBe(true);
   expect(next.status().lastAttempt).toMatchObject({ outcome: 'succeeded', message: '已安裝 0.1.1。' });
@@ -373,7 +374,7 @@ it('records an exact rollback recovery as failed only while the previous build i
   const service = await UpdateService.open({ identity, currentBuildId: 'build-a', source: { id: 'test', check: async () => null },
     installer: nativeInstaller(), directory });
   const result = { token: 'rollback-run', phase: 'rolled_back' as const, previousVersion: identity.version, previousBuildId: 'build-a',
-    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, reason: 'helper restored A', finalize: async () => undefined };
+    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, reason: 'helper restored A' };
   expect(await service.consumeNativeRecovery({ ...result, phase: 'recovery_required' })).toBe(false);
   expect(await service.consumeNativeRecovery(result)).toBe(true);
   expect(service.status().lastAttempt).toMatchObject({ outcome: 'failed', message: expect.stringContaining('已還原') });
@@ -389,18 +390,18 @@ it('marks a Windows-style pending attempt unknown only after the previous build 
   const service = await UpdateService.open({ identity, currentBuildId: 'build-a', source: { id: 'test', check: async () => null },
     installer: nativeInstaller(), directory, event: (_severity, type) => events.push(type) });
   expect(service.status().lastAttempt?.outcome).toBe('pending');
-  await service.confirmRunningBuild();
+  await service.confirmLaunch(failOnReport);
   expect(service.status().lastAttempt).toMatchObject({ outcome: 'unknown', message: '無法確認 0.1.1 的安裝結果。' });
   expect(events).toEqual(['device.update_outcome_unknown']);
   expect(JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')).attempt.outcome).toBe('unknown');
 
   const expected = await UpdateService.open({ identity: { ...identity, version: offer.version }, currentBuildId: offer.buildInfo.buildId,
     source: { id: 'test', check: async () => null }, installer: nativeInstaller(), directory });
-  await expected.confirmRunningBuild();
+  await expected.confirmLaunch(failOnReport);
   expect(expected.status().lastAttempt).toMatchObject({ outcome: 'succeeded', message: '已安裝 0.1.1。' });
 });
 
-it('persists matching recovery-required state without finalizing or later inferring success', async () => {
+it('persists matching recovery-required state without later inferring success', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-recovery-required-'));
   await mkdir(path.join(directory, 'cache'));
   await writeFile(path.join(directory, 'state.json'), JSON.stringify({ schemaVersion: 1, ready: null, checkedAt: null, lastCheckAttemptAt: null,
@@ -408,17 +409,15 @@ it('persists matching recovery-required state without finalizing or later inferr
       outcome: 'pending', message: 'installing', previousVersion: identity.version, previousBuildId: 'build-a', eventRecorded: false } }));
   const service = await UpdateService.open({ identity: { ...identity, version: offer.version }, currentBuildId: offer.buildInfo.buildId,
     source: { id: 'test', check: async () => null }, installer: nativeInstaller(), directory });
-  let finalized = false;
   const recovery = { token: 'manual-run', phase: 'recovery_required' as const, previousVersion: identity.version, previousBuildId: 'build-a',
-    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, reason: 'manual repair needed', finalize: async () => { finalized = true; } };
+    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, reason: 'manual repair needed' };
   expect(await service.consumeNativeRecovery(recovery)).toBe(false);
-  expect(finalized).toBe(false);
   expect(service.status().lastAttempt).toMatchObject({ outcome: 'unknown', message: expect.stringContaining('人工復原') });
-  await service.confirmRunningBuild();
+  await service.confirmLaunch(failOnReport);
   expect(service.status().lastAttempt?.outcome).toBe('unknown');
 });
 
-it('does not consume or finalize native recovery until the result is durably saved and remains retryable', async () => {
+it('does not consume native recovery until the result is durably saved and remains retryable', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-recovery-save-'));
   await mkdir(path.join(directory, 'cache'));
   const stateFile = path.join(directory, 'state.json');
@@ -427,16 +426,37 @@ it('does not consume or finalize native recovery until the result is durably sav
   await writeFile(stateFile, JSON.stringify({ schemaVersion: 1, ready: null, checkedAt: null, lastCheckAttemptAt: null, attempt: pending }));
   const service = await UpdateService.open({ identity: { ...identity, version: offer.version }, currentBuildId: offer.buildInfo.buildId,
     source: { id: 'test', check: async () => null }, installer: nativeInstaller(), directory });
-  let finalized = 0;
   const result = { token: pending.id, phase: 'succeeded' as const, previousVersion: identity.version, previousBuildId: 'build-a',
-    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId, finalize: async () => { finalized += 1; } };
+    expectedVersion: offer.version, expectedBuildId: offer.buildInfo.buildId };
   await rm(stateFile); await mkdir(stateFile);
   await expect(service.consumeNativeRecovery(result)).rejects.toThrow();
   expect(service.status().lastAttempt?.outcome).toBe('pending');
-  expect(finalized).toBe(0);
   await rm(stateFile, { recursive: true });
   expect(await service.consumeNativeRecovery(result)).toBe(true);
-  await result.finalize();
-  expect(finalized).toBe(1);
   expect(JSON.parse(await readFile(stateFile, 'utf8')).attempt.outcome).toBe('succeeded');
+});
+
+it('confirms the running build only after the native installer reports the launch ready', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-launch-'));
+  await mkdir(path.join(directory, 'cache'));
+  await writeFile(path.join(directory, 'state.json'), JSON.stringify({ schemaVersion: 1, ready: null, checkedAt: null, lastCheckAttemptAt: null,
+    attempt: { id: 'launch-run', version: offer.version, buildId: offer.buildInfo.buildId, startedAt: new Date().toISOString(), finishedAt: null,
+      outcome: 'pending', message: 'installing', previousVersion: identity.version, previousBuildId: 'build-a', eventRecorded: false } }));
+  const open = (confirmLaunch: NonNullable<NativeInstaller['confirmLaunch']>) => UpdateService.open({
+    identity: { ...identity, version: offer.version }, currentBuildId: offer.buildInfo.buildId,
+    source: { id: 'test', check: async () => null }, installer: { ...nativeInstaller(), confirmLaunch }, directory });
+
+  const notReady = vi.fn(async () => false);
+  await (await open(notReady)).confirmLaunch(failOnReport);
+  expect(notReady).toHaveBeenCalledWith(expect.objectContaining({ acknowledge: true }));
+  expect(JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')).attempt.outcome).toBe('pending');
+
+  const report = vi.fn();
+  await (await open(async () => { throw new Error('helper crashed'); })).confirmLaunch(report);
+  expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: 'helper crashed' }));
+  expect(JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')).attempt.outcome).toBe('pending');
+
+  const ready = await open(async () => true);
+  await ready.confirmLaunch(failOnReport);
+  expect(ready.status().lastAttempt).toMatchObject({ outcome: 'succeeded', message: '已安裝 0.1.1。' });
 });
