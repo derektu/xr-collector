@@ -5,7 +5,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile 
 import path from 'node:path';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { BuildInfo, UpdateOffer } from '../../shared/api/update-types.js';
-import type { NativeInstaller, NativeInstallRecovery, NativeRecoveryResult, PreparedInstall } from './types.js';
+import type { LaunchConfirmation, NativeInstaller, NativeInstallRecovery, PreparedInstall } from './types.js';
 import yauzl from 'yauzl';
 
 const execFile = promisify(execFileCallback);
@@ -14,12 +14,10 @@ const launchKeys = ['XR_COLLECTOR_PROFILE', 'XR_COLLECTOR_VAULT', 'XR_COLLECTOR_
   'XR_COLLECTOR_VALIDATION_CONTROL', 'XR_COLLECTOR_VALIDATION_WINDOW_SIZE', 'XR_COLLECTOR_UPDATE_BASE_URL',
   'XR_COLLECTOR_EXPORT_DIR', 'XR_COLLECTOR_BACKUP_DIR'] as const;
 
-/** Unprivileged two-phase macOS App replacement. The Swift helper owns swap, launch verification and rollback. */
 export class MacNativeInstaller implements NativeInstaller {
   readonly available: boolean;
   constructor(private readonly options: {
     packaged: boolean;
-    /** The update helper (`bundledResources().macUpdateHelper`). */
     helper: string;
     executablePath: string;
     current: BuildInfo;
@@ -71,10 +69,15 @@ export class MacNativeInstaller implements NativeInstaller {
       throw error;
     }
   }
-  recover(): Promise<NativeRecoveryResult> { return recoverMacUpdateResults(this.options.helper, this.options.current); }
+  async confirmLaunch(launch: LaunchConfirmation): Promise<boolean> {
+    const acknowledged = !launch.acknowledge || await acknowledgeMacUpdateLaunch(this.options.current)
+      .catch((error: unknown) => { launch.report(asError(error)); return false; });
+    const recovered = await recoverMacUpdateResults(this.options.helper, this.options.current, launch)
+      .catch((error: unknown) => { launch.report(asError(error)); return false; });
+    return acknowledged && recovered;
+  }
 }
 
-/** @internal Exported so the cross-process protocol can be tested without constructing an App bundle. */
 export function preparedMacHandoff(options: {
   workDir: string;
   runId: string;
@@ -104,7 +107,6 @@ export function preparedMacHandoff(options: {
     cancel: async () => {
       if (finished) return;
       finished = true; options.signal.removeEventListener('abort', options.abort);
-      // A committed handoff cannot be cancelled by writing a later abort. The helper owns recovery.
       if (!handoffWritten) options.abort();
       if (await waitForExit(options.child, 5_000) && !handoffWritten) {
         await rm(options.workDir, { recursive: true, force: true });
@@ -113,7 +115,7 @@ export function preparedMacHandoff(options: {
   };
 }
 
-export async function acknowledgeMacUpdateLaunch(current: BuildInfo): Promise<boolean> {
+async function acknowledgeMacUpdateLaunch(current: BuildInfo): Promise<boolean> {
   if (process.platform !== 'darwin') return true;
   const context = (await trustedUpdateContexts()).find(({ request }) => request.expectedVersion === current.version && request.expectedBuildId === current.buildId);
   if (!context) return false;
@@ -125,11 +127,6 @@ export async function acknowledgeMacUpdateLaunch(current: BuildInfo): Promise<bo
   return true;
 }
 
-/**
- * Records that replacement B closed its update service and Collector runtime cleanly. The helper
- * requires this exact-process receipt before it may terminate B and restore A; absence is a
- * recovery-required result, never permission to run two Collectors against one profile.
- */
 export async function acknowledgeMacUpdateShutdown(current: BuildInfo): Promise<boolean> {
   if (process.platform !== 'darwin') return true;
   const context = (await trustedUpdateContexts()).find(({ request }) => request.expectedVersion === current.version
@@ -145,20 +142,19 @@ export async function acknowledgeMacUpdateShutdown(current: BuildInfo): Promise<
   return true;
 }
 
-/** Finishes an interrupted helper and returns receipts without deleting them. `helper` is the update helper. */
 export async function recoverMacUpdateResults(
   helper: string,
   current: BuildInfo,
+  launch: Pick<LaunchConfirmation, 'record' | 'report'>,
   dependencies: {
     platform?: NodeJS.Platform;
     contexts?: () => Promise<Array<{ workDir: string; request: Record<string, unknown> }>>;
     runHelper?: (helper: string, requestFile: string) => Promise<void>;
   } = {},
-): Promise<NativeRecoveryResult> {
-  if ((dependencies.platform ?? process.platform) !== 'darwin') return { launchReady: true, results: [] };
+): Promise<boolean> {
+  if ((dependencies.platform ?? process.platform) !== 'darwin') return true;
   const contexts = await (dependencies.contexts ?? trustedUpdateContexts)();
-  if (contexts.length === 0) return { launchReady: true, results: [] };
-  const results: NativeInstallRecovery[] = []; let launchReady = true; let foundCurrent = false;
+  let launchReady = true; let failed = false; let foundCurrent = false;
   for (const { workDir, request } of contexts) {
     const contextIsCurrent = requestMatchesCurrent(request, current);
     const selectedContext = !foundCurrent && contextIsCurrent;
@@ -179,14 +175,18 @@ export async function recoverMacUpdateResults(
       await (dependencies.runHelper ?? runRecoveryHelper)(helper, requestFile);
     }
     const raw = await readFile(resultFile, 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>).catch(() => null);
-    const recovery = raw && nativeRecoveryReceipt(workDir, request, raw, helper);
+    const recovery = raw && nativeRecoveryReceipt(request, raw);
     if (!recovery) continue;
-    results.push(recovery);
     if (selectedContext && recoveryMatchesCurrent(recovery, current)) {
       launchReady = recovery.phase !== 'recovery_required';
     }
+    try {
+      if (await launch.record(recovery) && recovery.phase !== 'recovery_required') await removeRecoveryJournal(helper, workDir);
+    } catch (error) {
+      failed = true; launch.report(asError(error));
+    }
   }
-  return { launchReady, results };
+  return launchReady && !failed;
 }
 
 async function hasLateAcknowledgement(workDir: string, request: Record<string, unknown>): Promise<boolean> {
@@ -202,13 +202,7 @@ async function runRecoveryHelper(helper: string, requestFile: string): Promise<v
   await new Promise<void>((resolve) => { child.once('error', () => resolve()); child.once('exit', () => resolve()); });
 }
 
-/**
- * Prepares rollback when replacement B reached this process but startup failed before it could
- * acknowledge readiness. The helper validates and locks the owned journal, then waits for this
- * exact B process to exit before exchanging bundles; callers must exit only after `true`.
- * `helper` is the update helper.
- */
-export async function prepareMacUpdateRollback(helper: string, current: BuildInfo): Promise<{ workDir: string } | null> {
+async function prepareMacUpdateRollback(helper: string, current: BuildInfo): Promise<{ workDir: string } | null> {
   if (process.platform !== 'darwin') return null;
   const context = (await trustedUpdateContexts()).find(({ request }) => request.expectedVersion === current.version
     && request.expectedBuildId === current.buildId);
@@ -221,10 +215,23 @@ export async function prepareMacUpdateRollback(helper: string, current: BuildInf
     child.unref();
     return { workDir: context.workDir };
   } catch {
-    // An already-running owned helper may hold the journal and complete its own rollback. Never
-    // compete with it or infer success from a lock failure/early exit.
     return null;
   }
+}
+
+export async function rollBackFailedMacLaunch(
+  helper: string,
+  current: BuildInfo,
+  exit: () => void,
+  dependencies: {
+    acknowledgeShutdown?: typeof acknowledgeMacUpdateShutdown;
+    prepareRollback?: typeof prepareMacUpdateRollback;
+  } = {},
+): Promise<boolean> {
+  if (!await (dependencies.acknowledgeShutdown ?? acknowledgeMacUpdateShutdown)(current)) return false;
+  if (!await (dependencies.prepareRollback ?? prepareMacUpdateRollback)(helper, current)) return false;
+  exit();
+  return true;
 }
 
 async function trustedUpdateContexts(): Promise<Array<{ workDir: string; request: Record<string, unknown> }>> {
@@ -243,7 +250,7 @@ async function trustedUpdateContexts(): Promise<Array<{ workDir: string; request
       if (request.workDir !== workDir || request.currentApp !== currentApp || typeof request.runId !== 'string' || typeof request.nonce !== 'string'
         || !/^[a-f0-9]{64}$/u.test(request.nonce) || explicit && request.nonce !== process.env.XR_COLLECTOR_UPDATE_NONCE) continue;
       trusted.push({ workDir, request, modified: attributes.mtimeMs });
-    } catch { /* A stale or partial owned attempt is ignored; the helper validates again before recovery. */ }
+    } catch { }
   }
   return trusted.sort((left, right) => right.modified - left.modified).map(({ workDir, request }) => ({ workDir, request }));
 }
@@ -252,40 +259,36 @@ function isTerminalRecoveryPhase(value: unknown): value is NativeInstallRecovery
   return ['succeeded', 'rolled_back', 'failed', 'recovery_required'].includes(String(value));
 }
 
-/** @internal Builds a receipt without consuming or deleting its journal. `helper` is the update helper. */
-export function nativeRecoveryReceipt(
-  workDir: string,
-  request: Record<string, unknown>,
-  result: Record<string, unknown>,
-  helper: string,
-): NativeInstallRecovery | null {
+function nativeRecoveryReceipt(request: Record<string, unknown>, result: Record<string, unknown>): NativeInstallRecovery | null {
   const phase = result.phase;
   if (result.schemaVersion !== 1 || !isTerminalRecoveryPhase(phase) || result.runId !== request.runId || typeof request.runId !== 'string'
     || typeof request.previousVersion !== 'string' || typeof request.previousBuildId !== 'string'
     || typeof request.expectedVersion !== 'string' || typeof request.expectedBuildId !== 'string') return null;
-  const requestFile = path.join(workDir, 'request.json');
   return {
     token: request.runId, phase,
     previousVersion: request.previousVersion, previousBuildId: request.previousBuildId,
     expectedVersion: request.expectedVersion, expectedBuildId: request.expectedBuildId,
     ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
-    finalize: async () => {
-      if (phase === 'recovery_required') throw new CollectorError('update_apply_failed', '需要人工復原的 macOS 更新紀錄不可自動清除。');
-      let lastExit: number | null = null;
-      // A replacement helper may have written the terminal receipt just before releasing its lock.
-      // Retry only the exact cleanup command briefly; every failed attempt leaves the journal intact.
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        const child = spawn(helper, ['--cleanup', requestFile], { stdio: 'ignore' });
-        await waitForSpawn(child); lastExit = await waitForChildExit(child);
-        const remains = await stat(workDir).then(() => true, (error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return false; throw error;
-        });
-        if (!remains) return;
-        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      throw new CollectorError('update_apply_failed', `macOS 更新 helper 未清除已消費的紀錄（${lastExit ?? 'signal'}）。`);
-    },
   };
+}
+
+async function removeRecoveryJournal(helper: string, workDir: string): Promise<void> {
+  const requestFile = path.join(workDir, 'request.json');
+  let lastExit: number | null = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const child = spawn(helper, ['--cleanup', requestFile], { stdio: 'ignore' });
+    await waitForSpawn(child); lastExit = await waitForChildExit(child);
+    const remains = await stat(workDir).then(() => true, (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false; throw error;
+    });
+    if (!remains) return;
+    if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new CollectorError('update_apply_failed', `macOS 更新 helper 未清除已消費的紀錄（${lastExit ?? 'signal'}）。`);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function recoveryMatchesCurrent(result: NativeInstallRecovery, current: BuildInfo): boolean {
@@ -358,7 +361,6 @@ async function waitForSpawn(child: ReturnType<typeof spawn>): Promise<void> {
   });
 }
 
-/** Rejects path traversal, case collisions and escaping symlinks before ditto writes any entry. */
 export async function validateMacUpdateArchive(file: string): Promise<void> {
   const zip = await yauzl.openPromise(file, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true })
     .catch((error) => { throw new CollectorError('update_integrity_failed', 'macOS 更新檔不是有效的 zip。', { cause: error }); });
