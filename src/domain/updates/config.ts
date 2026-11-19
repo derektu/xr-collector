@@ -3,7 +3,6 @@ export const UPDATE_REPOSITORY_METADATA_KEY = 'xrCollectorUpdateRepository';
 export const PRODUCTION_APP_ID = 'com.moneydj.xrcollector';
 export const APP_ID_METADATA_KEY = 'xrCollectorAppId';
 
-/** Resolves the repository baked into a validation package; ordinary packages use production. */
 export function updateRepositoryFromPackageMetadata(metadata: unknown): string {
   if (!metadata || typeof metadata !== 'object') return PRODUCTION_UPDATE_REPOSITORY;
   const value = (metadata as Record<string, unknown>)[UPDATE_REPOSITORY_METADATA_KEY];

@@ -3,10 +3,6 @@ import type { UpdateOffer } from '../../shared/api/update-types.js';
 import { fetchJson, fetchOptionalText, offerFromIndex, platformIndexName } from './release-index.js';
 import type { UpdateIdentity, UpdateSource } from './types.js';
 
-/**
- * Reads a release published as a plain directory: `release-<target>.json` and the files it names,
- * plus an optional `release-notes.md`, all under one base URL.
- */
 export class GenericIndexSource implements UpdateSource {
   readonly id = 'generic-index';
   constructor(readonly baseUrl: string, private readonly request: typeof fetch = fetch) {
@@ -24,10 +20,6 @@ export class GenericIndexSource implements UpdateSource {
   }
 }
 
-/**
- * Reads the latest stable GitHub Release. Each platform uploads its own index, so a Release
- * without this platform's index has no update for it yet.
- */
 export class GitHubReleasesSource implements UpdateSource {
   readonly id = 'github-releases';
   constructor(private readonly repository: string, private readonly request: typeof fetch = fetch) {
