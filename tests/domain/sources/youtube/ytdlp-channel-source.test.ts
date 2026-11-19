@@ -4,11 +4,13 @@
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import { YtDlpChannelSource } from '../../../../src/domain/sources/youtube/ytdlp-channel-source.js';
+import { UNGATED } from '../../../../src/domain/sources/youtube/ytdlp-capture.js';
 
 describe('YtDlpChannelSource', () => {
   it('resolves channel identity and lists one dated page of video references', async () => {
     const commands: string[][] = [];
     const source = new YtDlpChannelSource({
+      gate: UNGATED,
       run: async (args) => {
         commands.push(args);
         return JSON.stringify({
@@ -62,6 +64,7 @@ describe('YtDlpChannelSource', () => {
   it('resolves a channel through its videos tab alone', async () => {
     const urls: string[] = [];
     const source = new YtDlpChannelSource({
+      gate: UNGATED,
       run: async (args) => {
         urls.push(args.at(-1)!);
         return JSON.stringify({ channel_id: 'UCabcdefghijklmnopqrstuv', channel: '測試頻道' });
@@ -89,6 +92,7 @@ describe('YtDlpChannelSource', () => {
 
   it('reports a channel without a videos tab as one it cannot read', async () => {
     const source = new YtDlpChannelSource({
+      gate: UNGATED,
       run: async () => {
         throw new CollectorError('capture_failed', '字幕取得失敗，請稍後再試。', {
           detail: 'ERROR: [youtube:tab] @shortsonly: This channel does not have a videos tab',
@@ -103,6 +107,7 @@ describe('YtDlpChannelSource', () => {
   it('rejects a video URL before invoking yt-dlp', async () => {
     let invoked = false;
     const source = new YtDlpChannelSource({
+      gate: UNGATED,
       run: async () => {
         invoked = true;
         return '{}';
@@ -116,6 +121,7 @@ describe('YtDlpChannelSource', () => {
 
   it('accepts a mobile YouTube channel URL', async () => {
     const source = new YtDlpChannelSource({
+      gate: UNGATED,
       run: async () => JSON.stringify({
         channel_id: 'UCabcdefghijklmnopqrstuv',
         channel: '行動版頻道',

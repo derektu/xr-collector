@@ -5,10 +5,6 @@ import { resolve } from './feed.js';
 
 const FEED_TYPES = new Set(['application/rss+xml', 'application/atom+xml', 'application/rdf+xml', 'application/xml', 'text/xml']);
 
-/**
- * The feed addresses a web page announces with `<link rel="alternate">`, absolute and in page
- * order. Relative addresses resolve against the page's `<base href>`, else against `pageUrl`.
- */
 export function findFeedLinks(html: string, pageUrl: string): string[] {
   const tree = unified().use(rehypeParse).parse(html) as Root;
   const links: Element[] = [];
