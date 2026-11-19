@@ -25,7 +25,6 @@ export type SearchIndexProfile = typeof SEARCH_INDEX_PROFILE & {
   lexicon?: SearchLexiconIdentity;
 };
 
-/** The manifest beside a prepared Meilisearch: the pinned release asset and its executable identity. */
 export interface MeilisearchRuntimeManifest {
   schemaVersion: number;
   releaseRepository: string;

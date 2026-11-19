@@ -115,7 +115,7 @@ describe('ManagedTranscriptSearch', () => {
       async () => documents,
       undefined,
       () => new Date('2026-10-24T00:00:00.000Z'),
-      { forceRebuild: true, afterRebuild: async () => { recorded.push('profile'); } },
+      { forceRebuild: true, onFullRebuildSucceeded: async () => { recorded.push('profile'); } },
     );
     await search.start();
     expect(rebuilt).toEqual([documents]);
@@ -128,7 +128,7 @@ describe('ManagedTranscriptSearch', () => {
       async () => documents,
       undefined,
       () => new Date(),
-      { afterRebuild: async () => { throw new Error('marker disk full'); } },
+      { onFullRebuildSucceeded: async () => { throw new Error('marker disk full'); } },
     );
     await expect(search.start()).rejects.toThrow('marker disk full');
     expect(search.status()).toMatchObject({ state: 'error', message: '無法啟動搜尋索引。' });

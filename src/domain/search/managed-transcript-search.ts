@@ -5,33 +5,23 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 export interface SearchBackend {
   initialize(): Promise<void>;
   count(): Promise<number>;
-  /** Whether the index holds exactly these documents with identical content. */
   isCurrent(documents: SavedDocument[]): Promise<boolean>;
   replaceAll(documents: SavedDocument[]): Promise<void>;
   upsert(document: SavedDocument): Promise<void>;
   remove(ids: string[]): Promise<void>;
-  /** `excludeIds` are document IDs left out of the results and the total. */
   search(query: SearchQuery, excludeIds: string[]): Promise<SearchResponse>;
 }
 
-/**
- * Deleted documents the index may still hold, at most this many. Searches leave them out with an
- * engine filter; beyond the limit the index is rebuilt from the Vault, which keeps every filter short.
- */
 export const MAX_PENDING_REMOVALS = 100;
 
-/** Device-side record of index maintenance that outlives one process. */
 export interface SearchStateStore {
   load(): Promise<{ lastRebuiltAt: string | null }>;
   save(state: { lastRebuiltAt: string | null }): Promise<void>;
 }
 
 export interface SearchProjectionLifecycle {
-  /** An engine/schema profile change removed the old projection, so even an empty Vault is rebuilt. */
   forceRebuild?: boolean;
-  /** Commits the semantic profile only after a complete replacement succeeds. */
-  afterRebuild?: () => Promise<void>;
-  /** Hears each status change once `status()` returns it. */
+  onFullRebuildSucceeded?: () => Promise<void>;
   statusChanged?: () => void;
 }
 
@@ -49,7 +39,6 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
   }
 
   private operationTail: Promise<void> = Promise.resolve();
-  /** Deleted documents not yet confirmed gone from the index; searches exclude them. */
   private readonly pendingRemovals = new Set<string>();
 
   constructor(
@@ -72,7 +61,6 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
       await this.backend.initialize();
       const removed = [...this.pendingRemovals];
       const documents = await this.loadDocuments();
-      // Equal counts do not prove freshness; compare every document's content fingerprint.
       if (this.lifecycle.forceRebuild || !(await this.backend.isCurrent(documents))) await this.replaceAll(documents);
       for (const id of removed) this.pendingRemovals.delete(id);
       this.currentStatus = {
@@ -111,11 +99,6 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
     }, '無法更新搜尋索引。');
   }
 
-  /**
-   * Excludes the document from searches at once, then removes it from the index. A failed removal
-   * keeps the exclusion and is tried again with the next index change; once too many removals wait,
-   * the index is rebuilt from the Vault.
-   */
   remove(id: string): Promise<void> {
     this.pendingRemovals.add(id);
     if (this.pendingRemovals.size > MAX_PENDING_REMOVALS) {
@@ -178,7 +161,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
     await this.stateStore?.save({ lastRebuiltAt }).catch((error: unknown) => {
       console.warn('Unable to record the search rebuild time', error);
     });
-    await this.lifecycle.afterRebuild?.();
+    await this.lifecycle.onFullRebuildSucceeded?.();
   }
 
   private enqueue(work: () => Promise<void>, errorMessage: string): Promise<void> {
