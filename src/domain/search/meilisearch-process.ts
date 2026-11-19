@@ -88,16 +88,10 @@ export async function startMeilisearchProcess(
 
 interface PidRecord { pid: number; binaryPath: string; databasePath: string }
 
-/** The engine's process ID, kept beside its database so a later start can find an engine the app left behind. */
 export function pidFilePath(databasePath: string): string {
   return `${path.resolve(databasePath)}.pid`;
 }
 
-/**
- * Stops the engine a previous run left on this database when the app was killed before it could close
- * it. The recorded process is stopped only while its command line still names this binary and this
- * database, so a process that has since reused the ID is left alone.
- */
 export async function stopLeftoverMeilisearchProcess(options: StartMeilisearchOptions): Promise<void> {
   const databasePath = path.resolve(options.databasePath);
   const pidFile = pidFilePath(databasePath);
@@ -155,7 +149,6 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** The full command line of a running process, or null when it cannot be read. */
 async function processCommandLine(pid: number): Promise<string | null> {
   try {
     const { stdout } = process.platform === 'win32'
@@ -190,7 +183,6 @@ async function removePidFile(pidFile: string, pid: number | undefined): Promise<
     const record = JSON.parse(await readFile(pidFile, 'utf8')) as PidRecord;
     if (record.pid === pid) await rm(pidFile, { force: true });
   } catch {
-    // Nothing recorded, or another start already replaced the record.
   }
 }
 
@@ -236,7 +228,6 @@ async function waitUntilHealthy(
       });
       if (response.ok) return;
     } catch {
-      // The process has not opened its loopback listener yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

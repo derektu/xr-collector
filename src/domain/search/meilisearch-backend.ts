@@ -9,13 +9,11 @@ import { planFragmentQuery } from './fragment-query.js';
 import { normalizeSearchText, normalizeSearchTextWithMap } from './search-normalization.js';
 import type { SearchLexicon } from './search-lexicon.js';
 
-/** The index UID carries the schema version; a schema change gets a new index and a full rebuild. */
-const INDEX_UID = 'documents_v4';
-/** Indexes written by earlier schema versions, removed once the current index is in place. */
+const INDEX_SCHEMA_VERSION = 4;
+const INDEX_UID = `documents_v${INDEX_SCHEMA_VERSION}`;
 const RETIRED_INDEX_UIDS = ['transcripts'];
 const MAX_TOTAL_HITS = 10_000;
 
-/** Fields a search returns: the core's own and the details block of every source type of `sources`. */
 function retrievedAttributes(sources: SourceDeclarations): string[] {
   return [
     'id', 'type', 'sourceType', 'sourceId', 'sourceUrl', 'title', 'publisherId', 'publisherName',
@@ -26,7 +24,6 @@ function retrievedAttributes(sources: SourceDeclarations): string[] {
 interface MeilisearchBackendOptions {
   baseUrl: string;
   apiKey: string;
-  /** The source types whose details blocks a search returns. */
   sources: SourceDeclarations;
   lexicon?: SearchLexicon;
   fetch?: typeof fetch;
@@ -42,10 +39,6 @@ interface TaskResult {
   error: { message?: string } | null;
 }
 
-/**
- * One indexed document. Besides the core fields it carries one details block named after its source
- * type, between `status` and `bodyMarkdown`; that block is null when the document has no details.
- */
 interface IndexedDocument {
   [sourceType: string]: unknown;
   key: string;
@@ -65,7 +58,6 @@ interface IndexedDocument {
   searchTitle: string;
   searchPublisherName: string;
   searchBodyMarkdown: string;
-  /** Fingerprint of everything above, compared with the Vault to decide whether the index is current. */
   contentHash: string;
 }
 
@@ -81,13 +73,13 @@ interface MeilisearchSearchResponse {
   hitsPerPage?: number;
 }
 
-/** Meilisearch keys allow only `[A-Za-z0-9_-]`; base64url keeps the full document ID reversible and unique. */
+// Meilisearch document ids allow only A-Z, a-z, 0-9, '-' and '_':
+// https://www.meilisearch.com/docs/learn/getting_started/primary_key#formatting-the-document-id
 export function indexKey(documentId: string): string {
   return Buffer.from(documentId, 'utf8').toString('base64url');
 }
 
 const TASK_TIMEOUT_MS = 30_000;
-/** How long starting the search waits for the index settings to apply. */
 const SETTINGS_TASK_TIMEOUT_MS = 5 * 60_000;
 
 export class MeilisearchBackend implements SearchBackend {
@@ -126,7 +118,6 @@ export class MeilisearchBackend implements SearchBackend {
         }),
       },
     );
-    // Making a field filterable re-processes every stored document, which takes a while on a large index.
     await this.waitForTask(settingsTask.taskUid, SETTINGS_TASK_TIMEOUT_MS);
 
     for (const uid of RETIRED_INDEX_UIDS) {
@@ -137,7 +128,10 @@ export class MeilisearchBackend implements SearchBackend {
       await this.waitForTask(task.taskUid);
     }
 
-    // Loading the patched engine's lazy Jieba state is part of readiness, not the first user query.
+    await this.warmHanTokenizer();
+  }
+
+  private async warmHanTokenizer(): Promise<void> {
     await this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
       method: 'POST',
       body: JSON.stringify({ q: '中文初始化', hitsPerPage: 1, page: 1, attributesToRetrieve: ['id'] }),
@@ -151,7 +145,6 @@ export class MeilisearchBackend implements SearchBackend {
     return stats.numberOfDocuments;
   }
 
-  /** True when the index holds exactly the given documents with identical content. */
   async isCurrent(documents: SavedDocument[]): Promise<boolean> {
     const fragments = ContiguousFragmentIndex.fromDocuments(documents);
     const expected = new Map(documents.map((document) => {
@@ -219,10 +212,6 @@ export class MeilisearchBackend implements SearchBackend {
     this.fragments.remove(ids);
   }
 
-  /**
-   * One page of hits matching the query and every filter, with the counts by status of the hits
-   * matching every filter but the status.
-   */
   async search(query: SearchQuery, excludeIds: string[] = []): Promise<SearchResponse> {
     const { status, ...unfiltered } = query;
     const anyStatus = this.filters(unfiltered, excludeIds);
@@ -234,8 +223,9 @@ export class MeilisearchBackend implements SearchBackend {
     const filter = status ? [...anyStatus, statusFilter(status)] : anyStatus;
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    // Page-based search returns an exact total, which numbered pagination needs.
     const [result, counted] = await Promise.all([
+      // Only page/hitsPerPage pagination returns an exact totalHits; offset/limit returns an estimate:
+      // https://www.meilisearch.com/docs/guides/front_end/pagination
       this.request<MeilisearchSearchResponse>(
         `/indexes/${INDEX_UID}/search`,
         {
@@ -252,18 +242,7 @@ export class MeilisearchBackend implements SearchBackend {
           }),
         },
       ),
-      // With a status filter the page's own facets count one status only; a second query counts both.
-      status ? this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
-        method: 'POST',
-        body: JSON.stringify({
-          q: plan.normalized,
-          hitsPerPage: 0,
-          page: 1,
-          matchingStrategy: 'all',
-          facets: ['status'],
-          ...(anyStatus.length > 0 ? { filter: anyStatus } : {}),
-        }),
-      }) : null,
+      status ? this.countStatusesWithout(plan.normalized, anyStatus) : null,
     ]);
     const distribution = (counted ?? result).facetDistribution?.status ?? {};
 
@@ -276,7 +255,20 @@ export class MeilisearchBackend implements SearchBackend {
     };
   }
 
-  /** The engine filter of every condition of `query` but its status. */
+  private countStatusesWithout(q: string, filter: string[]): Promise<MeilisearchSearchResponse> {
+    return this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
+      method: 'POST',
+      body: JSON.stringify({
+        q,
+        hitsPerPage: 0,
+        page: 1,
+        matchingStrategy: 'all',
+        facets: ['status'],
+        ...(filter.length > 0 ? { filter } : {}),
+      }),
+    });
+  }
+
   private filters(query: Omit<SearchQuery, 'status'>, excludeIds: string[]): string[] {
     const filter: string[] = [];
     if (excludeIds.length > 0) {
@@ -299,11 +291,6 @@ export class MeilisearchBackend implements SearchBackend {
     return filter;
   }
 
-  /**
-   * Chinese fragment search: the hits are the IDs the fragment index and the engine agree on, ranked
-   * with the engine's matches first. `anyStatus` is the engine filter without the status, so the
-   * matched IDs give the status counts before the status filter narrows them.
-   */
   private async searchWithFragments(
     query: SearchQuery,
     excludeIds: string[],
@@ -421,10 +408,6 @@ export class MeilisearchBackend implements SearchBackend {
   }
 }
 
-/**
- * The indexed form of a document. The content hash covers the fields in this order, the details
- * block included, so it changes whenever anything the index shows changes.
- */
 function toIndexedDocument(document: SavedDocument): IndexedDocument {
   const fields = {
     key: indexKey(document.id),
@@ -468,7 +451,6 @@ function toSearchHit(hit: SearchHitDocument, bodyMatches?: NormalizedMatchPositi
 
 const SNIPPET_LENGTH = 180;
 
-/** Builds the search excerpt from original Vault text while using normalized UTF-8 hit positions. */
 export function originalSnippet(bodyMarkdown: string, matches: Array<{ start: number; length: number }>): string {
   if (matches.length === 0) {
     const end = graphemeBoundary(bodyMarkdown, Math.min(bodyMarkdown.length, SNIPPET_LENGTH), 1);
@@ -518,7 +500,6 @@ function graphemeBoundary(value: string, index: number, direction: -1 | 1): numb
   return index;
 }
 
-/** The details block a document carries under the field named after its source type. */
 function documentDetails(document: SavedDocument): unknown {
   return (document as unknown as Record<string, unknown>)[document.sourceType];
 }

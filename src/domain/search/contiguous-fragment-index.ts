@@ -19,7 +19,6 @@ export interface NormalizedMatchPosition {
   length: number;
 }
 
-/** Rebuildable in-memory acceleration only; Meilisearch remains the persistent projection. */
 export class ContiguousFragmentIndex {
   private readonly documents = new Map<string, FragmentDocument>();
   private readonly postings = new Map<string, Set<string>>();
@@ -69,7 +68,6 @@ export class ContiguousFragmentIndex {
     return result.sort((left, right) => left.order - right.order).map(({ id }) => id);
   }
 
-  /** The status of an indexed document; undefined when the index does not hold it. */
   status(id: string): DocumentStatus | undefined {
     return this.documents.get(id)?.status;
   }

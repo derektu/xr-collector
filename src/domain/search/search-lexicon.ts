@@ -34,7 +34,6 @@ interface LexiconManifest {
   output?: { file?: unknown; sha256?: unknown; bytes?: unknown };
 }
 
-/** The lexicon is a replaceable resource beside a provenance manifest, never part of the engine bytes. */
 export async function loadSearchLexicon(
   lexiconPath: string,
   manifestPath = `${lexiconPath.slice(0, -path.extname(lexiconPath).length)}.json`,
