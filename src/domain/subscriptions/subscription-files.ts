@@ -1,29 +1,9 @@
 import type { CheckFailures, ItemFailureEntry, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import type { SourceDefinition } from '../../shared/sources/source-contract.js';
 
-/**
- * Vault files of subscriptions, relative to the Vault root. Each source type with subscriptions has
- * its own file, named by its storage declaration:
- * `{ version: <version>, <list key>: [...], removed: [...] }`. Every subscription carries its own
- * settings and check times, and every removed subscription leaves a record
- * `{ id, title, url, removedAt }` that stays until the target is subscribed again, so an import
- * from another machine that still has the subscription does not bring it back. A file without
- * `removed` has no records.
- *
- * A subscription's collection progress lives in its record next to its settings: `outOfRange` and
- * `failures`, both keying items by the field the storage declaration names, and `checkFailures`, the
- * checks in a row that failed. `autoPausedAt` marks a pause the subscription made itself.
- *
- * The schedule file the assembly names is `{ version: 2, enabled }`, the automatic collection
- * switch of every type. Fields a subscription or file does not define are kept as they are, so a
- * file written by a newer program, or one with fields no longer in use, reads and saves without
- * losing them. Files of any other version are not read.
- */
 
-/** What reading a type's subscriptions file needs from its definition. */
 export type SubscriptionFileSpec = Pick<SourceDefinition, 'storage' | 'subscription'>;
 
-/** A removed subscription: when it was removed, and its name and address for people reading the record. */
 export interface SubscriptionRemoval { id: string; title: string; url: string; removedAt: string }
 export interface ScheduleFile { version: 2; enabled: boolean }
 
@@ -34,7 +14,6 @@ function storageOf(spec: SubscriptionFileSpec) {
   return { storage: spec.storage, subscription: spec.subscription };
 }
 
-/** The subscriptions of a type's file; a Vault without one has none. */
 export function subscriptionsFromJson(spec: SubscriptionFileSpec, value: unknown): SubscriptionRecord[] {
   if (value === undefined) return [];
   const { storage, subscription } = storageOf(spec);
@@ -47,7 +26,6 @@ export function subscriptionsFromJson(spec: SubscriptionFileSpec, value: unknown
   return list as SubscriptionRecord[];
 }
 
-/** The removal records of a type's file; a Vault without one, or a file without `removed`, has none. */
 export function removalsFromJson(spec: SubscriptionFileSpec, value: unknown): SubscriptionRemoval[] {
   subscriptionsFromJson(spec, value);
   const removed = (value as { removed?: unknown } | undefined)?.removed;
@@ -58,17 +36,15 @@ export function removalsFromJson(spec: SubscriptionFileSpec, value: unknown): Su
   return removed;
 }
 
-/** A type's file as written: the other top-level fields of `current` kept, the list and the records replaced. */
 export function subscriptionsToJson(
   spec: SubscriptionFileSpec, current: unknown, subscriptions: SubscriptionRecord[], removed?: SubscriptionRemoval[],
 ): Record<string, unknown> {
   const { storage } = storageOf(spec);
   const top = current && typeof current === 'object' && !Array.isArray(current) ? current as Record<string, unknown> : {};
-  const next: Record<string, unknown> = { ...top, version: storage.version, [storage.listKey]: subscriptions };
-  if (removed !== undefined) {
-    if (removed.length) next.removed = removed;
-    else delete next.removed;
-  }
+  const { removed: kept, ...rest } = top;
+  const next: Record<string, unknown> = { ...rest, version: storage.version, [storage.listKey]: subscriptions };
+  const removals = removed === undefined ? kept : removed.length > 0 ? removed : undefined;
+  if (removals !== undefined) next.removed = removals;
   return next;
 }
 
@@ -79,10 +55,6 @@ function isRemoval(value: unknown): value is SubscriptionRemoval {
     && typeof record.removedAt === 'string' && !Number.isNaN(Date.parse(record.removedAt));
 }
 
-/**
- * The automatic collection switch of a schedule file; a Vault without one collects automatically.
- * `description` names the file's content in the error for an invalid file.
- */
 export function scheduleEnabledFromJson(value: unknown, description: string): boolean {
   if (value === undefined) return true;
   const file = value as { version?: unknown; enabled?: unknown } | null;
