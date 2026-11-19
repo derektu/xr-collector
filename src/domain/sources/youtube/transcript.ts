@@ -28,10 +28,6 @@ export function formatTranscriptSegments(segments: string[]): string {
   return paragraphs.map(escapeMarkdownText).join('\n\n');
 }
 
-/**
- * Subtitle text is plain text; escaping Markdown syntax keeps characters such as `28*28` or a
- * leading `#` literal when the body is rendered as Markdown.
- */
 export function escapeMarkdownText(text: string): string {
   return text
     .replace(/[\\`*_[\]<>~|]/gu, (character) => `\\${character}`)

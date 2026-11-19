@@ -3,31 +3,25 @@ import { CollectorError } from '../../../shared/lib/collector-error.js';
 import type { ContentExtent } from '../../../shared/documents/document-types.js';
 import { htmlToText } from './html.js';
 
-/** One article of a feed, as the feed describes it. */
 export interface FeedEntry {
-  /** What identifies the article within its feed: its guid or Atom ID, else its address, else its title and time. */
   identity: string;
   title: string;
-  /** The article's address, absolute; null when the feed gives none. */
   link: string | null;
   publishedAt: string | null;
-  /** The article body as HTML, empty when the feed carries none. */
   html: string;
-  /** Whether `html` is the full article or only the summary the feed offers. */
   extent: ContentExtent;
-  /** The address relative links in `html` resolve against. */
   base: string;
 }
 
 export interface Feed {
   title: string;
-  /** Articles newest first. */
   entries: FeedEntry[];
 }
 
 type XmlNode = Record<string, unknown>;
 
-// Bodies stay raw text, so markup inside them is not parsed as feed elements; `rawText` decodes them.
+// Stop nodes keep their content as raw text, so rawText decodes CDATA and entities itself.
+// https://github.com/NaturalIntelligence/fast-xml-parser/blob/master/docs/v4%2C%20v5/2.XMLparseOptions.md#stopnodes
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
@@ -40,19 +34,11 @@ const parser = new XMLParser({
   isArray: (name) => name === 'item' || name === 'entry' || name === 'link',
 });
 
-/** Whether a response body looks like a feed rather than a web page. */
 export function looksLikeFeed(text: string): boolean {
   const start = text.slice(0, 2048).replace(/^﻿/u, '');
   return /<(rss|feed|rdf:RDF)[\s>]/u.test(start);
 }
 
-/**
- * Reads an RSS 2.0, RSS 1.0 (RDF) or Atom document fetched from `feedUrl`. Articles come newest
- * first; articles without a publish time come before the dated ones, in feed order, so a check
- * reaches them before the range ends its scan. Articles with nothing to identify them are left out,
- * and of articles with the same identity only the first is kept. Throws `feed_invalid` for a
- * document that is not a feed.
- */
 export function parseFeed(xml: string, feedUrl: string): Feed {
   let document: XmlNode;
   try {
@@ -65,11 +51,14 @@ export function parseFeed(xml: string, feedUrl: string): Feed {
   const atom = node(document.feed);
   let title: string;
   let entries: FeedEntry[];
-  if (rss || rdf) {
-    const channel = node((rss ?? rdf)!.channel) ?? {};
+  if (rss) {
+    const channel = node(rss.channel) ?? {};
     title = plainTitle(channel.title);
-    const items = list(rss ? channel.item : rdf!.item);
-    entries = items.map((item) => rssEntry(item, feedUrl));
+    entries = list(channel.item).map((item) => rssEntry(item, feedUrl));
+  } else if (rdf) {
+    const channel = node(rdf.channel) ?? {};
+    title = plainTitle(channel.title);
+    entries = list(rdf.item).map((item) => rssEntry(item, feedUrl));
   } else if (atom) {
     const feedBase = resolve(attribute(atom, 'xml:base'), feedUrl) ?? feedUrl;
     title = plainTitle(atom.title);
@@ -83,14 +72,25 @@ export function parseFeed(xml: string, feedUrl: string): Feed {
     seen.add(entry.identity);
     return true;
   });
-  const undated = unique.filter((entry) => !entry.publishedAt);
-  const dated = unique.filter((entry) => entry.publishedAt).sort((left, right) => right.publishedAt!.localeCompare(left.publishedAt!));
-  return { title: title || new URL(feedUrl).hostname, entries: [...undated, ...dated] };
+  return { title: title || new URL(feedUrl).hostname, entries: undatedFirstThenNewest(unique) };
+}
+
+type DatedFeedEntry = FeedEntry & { publishedAt: string };
+
+function hasPublishedAt(entry: FeedEntry): entry is DatedFeedEntry {
+  return Boolean(entry.publishedAt);
+}
+
+function undatedFirstThenNewest(entries: FeedEntry[]): FeedEntry[] {
+  const undated = entries.filter((entry) => !hasPublishedAt(entry));
+  const dated = entries.filter(hasPublishedAt).sort((left, right) => right.publishedAt.localeCompare(left.publishedAt));
+  return [...undated, ...dated];
 }
 
 function rssEntry(item: XmlNode, feedUrl: string): FeedEntry {
   const guid = text(item.guid);
-  // A guid is the article's address unless the feed marks it otherwise.
+  // RSS 2.0: a guid is a permalink unless isPermaLink is "false".
+  // https://www.rssboard.org/rss-specification#ltguidgtSubelementOfLtitemgt
   const permalink = attribute(item.guid, 'isPermaLink') !== 'false' ? resolve(guid, feedUrl) : null;
   const link = resolve(text(first(item.link)), feedUrl) ?? permalink;
   const publishedAt = date(text(item.pubDate) || text(item['dc:date']));
@@ -111,7 +111,8 @@ function atomEntry(entry: XmlNode, feedBase: string): FeedEntry {
   const publishedAt = date(text(entry.published) || text(entry.updated));
   const title = plainTitle(entry.title);
   const content = node(entry.content) ?? (typeof entry.content === 'string' ? { '#text': entry.content } : null);
-  // Content held at another address (`src`) is not in the feed.
+  // Atom content with src is out-of-line; the element itself is empty.
+  // https://www.rfc-editor.org/rfc/rfc4287#section-4.1.3.2
   const full = content && !attribute(content, 'src') ? atomText(content) : '';
   const summaryNode = node(entry.summary) ?? (typeof entry.summary === 'string' ? { '#text': entry.summary } : null);
   const summary = summaryNode ? atomText(summaryNode) : '';
@@ -122,7 +123,8 @@ function atomEntry(entry: XmlNode, feedBase: string): FeedEntry {
   };
 }
 
-/** An Atom text construct as HTML: `xhtml` is markup already, `html` is escaped markup, `text` is plain text. */
+// Atom text constructs have type text, html or xhtml; text is the default.
+// https://www.rfc-editor.org/rfc/rfc4287#section-3.1
 function atomText(construct: XmlNode): string {
   const type = attribute(construct, 'type') ?? 'text';
   const raw = typeof construct['#text'] === 'string' ? construct['#text'] : '';
@@ -137,15 +139,10 @@ function identity(id: string, link: string | null, title: string, publishedAt: s
   return title && publishedAt ? `title:${title}\n${publishedAt}` : '';
 }
 
-/** A title as plain text, whether the feed escaped markup into it or not. */
 function plainTitle(value: unknown): string {
   return htmlToText(text(value)).replace(/\s+/gu, ' ').trim();
 }
 
-/**
- * The text of an element the parser left raw: CDATA sections taken as they are and XML entities
- * decoded elsewhere.
- */
 function rawText(value: unknown): string {
   const raw = typeof value === 'string' ? value : text(value);
   return raw.split(/(<!\[CDATA\[[\s\S]*?\]\]>)/u)
@@ -177,7 +174,6 @@ function date(value: string): string | null {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
-/** An absolute http(s) address of `value` against `base`; null for none or another scheme. */
 export function resolve(value: string | null | undefined, base: string): string | null {
   if (!value) return null;
   try {

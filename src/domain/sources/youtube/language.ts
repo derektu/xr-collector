@@ -30,17 +30,11 @@ function isOrigTrack(track: SubtitleTrack): boolean {
   return track.kind === 'automatic' && /-orig$/i.test(track.code);
 }
 
-/** Original automatic captions, the `-orig` track before any other one. */
 function originalAutomatic(tracks: SubtitleTrack[]): SubtitleTrack | undefined {
   return tracks.find((track) => isOrigTrack(track) && track.isOriginal)
     ?? tracks.find((track) => track.kind === 'automatic' && track.isOriginal);
 }
 
-/**
- * Picks the subtitle track to download. Languages follow `LANGUAGE_PRIORITY`; within a language a
- * manual track comes first, then the `<lang>-orig` automatic track, then any other automatic track
- * in the spoken language. Automatic tracks translated from another language are never chosen.
- */
 export function chooseSubtitleTrack(tracks: SubtitleTrack[]): SubtitleTrack | null {
   const usable = tracks.filter(isUsable);
 
