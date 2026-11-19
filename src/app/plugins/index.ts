@@ -6,7 +6,6 @@ import { SOURCE_DECLARATIONS } from './declarations.js';
 import { subscriptionFileExchange } from '../../domain/subscriptions/index.js';
 import { createRssPlugin, rssDefinition, createYouTubePlugin, youtubeDefinition } from '../../domain/sources/server-entries.js';
 
-/** The server entry of each source type, by type ID. */
 const SERVER_ENTRIES: Readonly<Record<string, SourceEntry>> = {
   youtube: { definition: youtubeDefinition, create: createYouTubePlugin },
   rss: { definition: rssDefinition as SourceDefinition, create: createRssPlugin },
@@ -36,15 +35,10 @@ export const SOURCES: readonly SourceEntry[] = serverSources(SOURCE_DECLARATIONS
 
 export const SOURCE_DEFINITIONS: readonly SourceDefinition[] = SOURCES.map((entry) => entry.definition);
 
-/** The Vault file of the automatic collection switch that covers every type's subscriptions. */
 export const SCHEDULE_FILE = 'settings/youtube-schedule.json';
 const SCHEDULE_DESCRIPTION = 'YouTube channel schedule';
 
-/**
- * The registry of `definitions` with the product's schedule file and subscription files. The
- * assembly builds it from the plugins it creates (`createSourcePlugins`); a process that runs
- * without plugins, and a test, builds it from the definitions.
- */
+/** The registry of `definitions` with the product's schedule file and subscription files. */
 export function sourceRegistry(definitions: readonly SourceDefinition[] = SOURCE_DEFINITIONS): SourceRegistry {
   return new SourceRegistry(definitions, { file: SCHEDULE_FILE, description: SCHEDULE_DESCRIPTION }, subscriptionFileExchange);
 }

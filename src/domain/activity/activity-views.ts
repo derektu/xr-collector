@@ -19,10 +19,6 @@ const SNAPSHOT_TTL_MS = 30 * 60_000;
 const SNAPSHOT_LIMIT = 50;
 
 export interface ActivityViewsOptions {
-  /**
-   * The title of a job's item or target, for events written before the job knew it. The activity
-   * log stores events as they were recorded; the job record is where a title learned later lives.
-   */
   sourceTitle?: (jobId: string) => string | undefined;
 }
 
@@ -35,12 +31,6 @@ interface SummarySnapshot {
   groups: Map<string, { summary: ActivityCheckSummary; checks: ActivityCheckDetail[] }>;
 }
 
-/**
- * The pages read from the activity log: raw events newest first, and the summary that folds routine
- * subscription checks into one row each. The summary relies only on fields an event carries from
- * the moment it is recorded (`jobRole`, `parentJobId`, `trigger`, `check`) and on the event catalog,
- * so it reads the same after a restart and after the job records are pruned.
- */
 export class ActivityViews {
   private readonly snapshots = new Map<string, SummarySnapshot>();
 
@@ -51,7 +41,6 @@ export class ActivityViews {
   }
 
   async query(request: ActivityQuery, scope: ActivityScope): Promise<ActivityPage> {
-    // Bounds compare as text against stored UTC timestamps, so they take the same form.
     const query: ActivityQuery = {
       ...request,
       ...(request.since ? { since: new Date(request.since).toISOString() } : {}),
@@ -78,7 +67,6 @@ export class ActivityViews {
     };
   }
 
-  /** Completed checks folded before pagination; the snapshot freezes rows and group membership. */
   async summary(request: ActivityQuery, scope: ActivityScope): Promise<ActivitySummaryPage> {
     const query: ActivityQuery = {
       ...request, view: 'summary',
@@ -146,7 +134,6 @@ export class ActivityViews {
     };
   }
 
-  /** The retained events of `scope`, each with the title its job learned after the event was written. */
   private async events(scope: ActivityScope): Promise<JobEvent[]> {
     const titles = new Map<string, string | undefined>();
     const title = (jobId: string) => {
@@ -227,7 +214,7 @@ export class ActivityViews {
       for (const item of checks) {
         if (item.hidden) { flush(); continue; }
         const check = item.event.check!;
-        const eligible = eligibleRoutineCheck(item.event);
+        const eligible = isUneventfulScheduledCheck(item.event);
         if (!eligible) { flush(); run = [item]; flush(); continue; }
         if (run.length > 0 && run[run.length - 1]!.event.check!.result !== check.result) flush();
         run.push(item);
@@ -236,7 +223,7 @@ export class ActivityViews {
     }
     const checkJobIds = new Set(terminals.keys());
     const meaningfulStartJobIds = new Set([...terminals]
-      .filter(([, terminal]) => !terminal.hidden && !eligibleRoutineCheck(terminal.event))
+      .filter(([, terminal]) => !terminal.hidden && !isUneventfulScheduledCheck(terminal.event))
       .map(([jobId]) => jobId));
     const independent = base.filter((event) => {
       const spec = eventSpec(event.eventType);
@@ -278,8 +265,7 @@ function scopeKey(scope: ActivityScope): string {
   return JSON.stringify({ vaultPath: scope.vaultPath, vaultId: scope.vaultId ?? null });
 }
 
-/** Routine checks whose process noise is represented by one durable summary row. */
-function eligibleRoutineCheck(event: JobEvent): boolean {
+function isUneventfulScheduledCheck(event: JobEvent): boolean {
   const check = event.check;
   return check !== undefined && check.trigger === 'scheduled' && (check.result === 'empty' || check.result === 'network_error')
     && check.created === 0 && check.failed === 0 && check.skipped === 0;
@@ -299,7 +285,6 @@ function matchesQuery(event: JobEvent, query: ActivityQuery): boolean {
   return true;
 }
 
-/** Newest-first order: timestamp, then event ID for entries of the same millisecond. */
 function compareEvents(a: Pick<JobEvent, 'timestamp' | 'eventId'>, b: Pick<JobEvent, 'timestamp' | 'eventId'>): number {
   if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
   if (a.eventId === b.eventId) return 0;

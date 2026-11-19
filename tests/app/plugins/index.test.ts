@@ -20,6 +20,12 @@ describe('the product\'s source list', () => {
     SOURCES.forEach((source, index) => expect(source.definition).toMatchObject(SOURCE_DECLARATIONS[index]!));
   });
 
+  it('lists the type that owns every web address last, so the first owner of an address is never the catch-all by mistake', () => {
+    const address = 'https://example.test/any/page';
+    const catchAll = SOURCE_DECLARATIONS.filter((declaration) => declaration.owns(address, new URL(address))).map((declaration) => declaration.id);
+    expect(catchAll).toEqual([ids.at(-1)]);
+  });
+
   it('refuses a declared type without a server entry, and a server entry without a declaration', () => {
     const declarations = [fakeDefinition('fake', 'fake-net'), fakeDefinition('fake2', 'fake2-net')];
     expect(serverSources(declarations, { fake: entry('fake'), fake2: entry('fake2') }).map((source) => source.definition.id)).toEqual(['fake', 'fake2']);

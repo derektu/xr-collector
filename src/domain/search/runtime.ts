@@ -20,14 +20,12 @@ import { limitText, redact } from '../../shared/lib/redact.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
-  /** The source types whose details blocks a search returns. */
   sources: SourceDeclarations;
   binaryPath: string;
   lexiconPath: string;
   databasePath: string;
   port?: number;
   prepareProjection(profile: SearchIndexProfile): Promise<PreparedSearchProjection>;
-  /** Hears each change of the search status. */
   statusChanged?: () => void;
 }
 
@@ -69,16 +67,13 @@ export async function startSearchRuntime(
       () => loadAllDocuments(options.vault),
       fileSearchStateStore(`${options.databasePath}-state.json`),
       () => new Date(),
-      { forceRebuild: projection.forceRebuild, afterRebuild: projection.recordRebuild, ...(options.statusChanged ? { statusChanged: options.statusChanged } : {}) },
+      { forceRebuild: projection.forceRebuild, onFullRebuildSucceeded: projection.recordRebuild, ...(options.statusChanged ? { statusChanged: options.statusChanged } : {}) },
     );
-    const initialization = search.start();
-    // The search object records the failure state; attach a handler now so a later close can await
-    // the same operation without an unhandled rejection in the meantime.
-    void initialization.catch(() => undefined);
+    const started = search.start().catch(() => undefined);
     return {
       search,
       async close() {
-        await initialization.catch(() => undefined);
+        await started;
         await process.close();
       },
     };
@@ -91,7 +86,6 @@ export async function startSearchRuntime(
   }
 }
 
-/** Keeps search maintenance state beside the search database, outside the Vault. */
 export function fileSearchStateStore(filePath: string): SearchStateStore {
   return {
     async load() {
