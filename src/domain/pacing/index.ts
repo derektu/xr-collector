@@ -1,4 +1,3 @@
-/** The pacing module as other modules use it: the request channel of a pacing group. */
 export {
   PacingGate,
   pacingOptionsFromEnv,

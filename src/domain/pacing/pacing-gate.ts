@@ -3,49 +3,37 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { PacingStatus } from '../../shared/jobs/job-types.js';
 import type { PacingDeclaration } from '../../shared/sources/source-contract.js';
 
-/** `interactive` requests (a preview the user waits for) go before queued background work. */
 export type GatePriority = 'interactive' | 'background';
 
 export type PacingEvent =
   | { type: 'rate_limited'; until: string; level: number; detail?: string }
   | { type: 'cooldown_ended' };
 
-/** What jobs and HTTP routes read from one pacing group's request channel. */
 export interface Pacing {
-  /** The pacing group the channel serves. */
   readonly group: string;
   status(): PacingStatus;
-  /** Calls `listener` when a cooldown starts or ends; returns the function that stops it. */
   subscribe(listener: (event: PacingEvent) => void): () => void;
 }
 
-export interface WaitRange {
+interface WaitRange {
   min: number;
   max: number;
 }
 
-export interface CooldownPolicy {
-  /** The first cooldown after a limit. */
+interface CooldownPolicy {
   initialMs: number;
-  /** Each further consecutive limit doubles the cooldown up to this. */
   maxMs: number;
-  /** A limit this long after the previous one starts again from `initialMs`. */
   resetAfterMs: number;
 }
 
-export const DEFAULT_COOLDOWN: CooldownPolicy = { initialMs: 5 * 60_000, maxMs: 60 * 60_000, resetAfterMs: 2 * 60 * 60_000 };
+const DEFAULT_COOLDOWN: CooldownPolicy = { initialMs: 5 * 60_000, maxMs: 60 * 60_000, resetAfterMs: 2 * 60 * 60_000 };
 
 export interface PacingGateOptions {
-  /** Overrides the declaration's wait range. */
   waitRangeMs?: WaitRange;
-  /** Overrides the declaration's cooldown policy. */
   cooldown?: Partial<CooldownPolicy>;
-  /** File that keeps the cooldown across restarts; null keeps it in memory only. */
   statePath?: string | null;
   now?: () => Date;
-  /** Returns a number in [0, 1). */
   random?: () => number;
-  /** Starts a timer and returns its cancel function. */
   setTimer?: (callback: () => void, ms: number) => () => void;
 }
 
@@ -63,7 +51,6 @@ interface Waiter {
   onAbort: (() => void) | undefined;
 }
 
-/** Reads a wait range written as `min,max` (milliseconds), as acceptance runs and tests set it. */
 export function waitRangeFromEnv(value: string | undefined): WaitRange | undefined {
   const match = /^\s*(\d+)\s*,\s*(\d+)\s*$/u.exec(value ?? '');
   if (!match) return undefined;
@@ -72,13 +59,11 @@ export function waitRangeFromEnv(value: string | undefined): WaitRange | undefin
   return max >= min ? { min, max } : undefined;
 }
 
-/** Gate options a process takes from its environment through the declaration's variable. */
 export function pacingOptionsFromEnv(declaration: PacingDeclaration, env: NodeJS.ProcessEnv): Pick<PacingGateOptions, 'waitRangeMs'> {
   const waitRangeMs = declaration.envVar ? waitRangeFromEnv(env[declaration.envVar]) : undefined;
   return waitRangeMs ? { waitRangeMs } : {};
 }
 
-/** The file a pacing group keeps its cooldown in, inside the device profile. */
 export function pacingStateFile(group: string): string {
   return `${group}-pacing.json`;
 }
@@ -87,22 +72,12 @@ function clockTime(value: Date): string {
   return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
 }
 
-/**
- * The one channel every request of a pacing group in this process goes through. One request runs at
- * a time; consecutive requests are spaced by a random wait counted from the end of the previous
- * request, so the timing has no fixed rhythm. When the source limits requests, the channel cools
- * down: nothing is sent until the cooldown ends, and requests asked for meanwhile fail at once with
- * `rate_limited`. The cooldown starts at its initial length, doubles with each consecutive limit up
- * to its maximum, and starts over after a successful request or after a long enough time without a
- * limit. A group that declares `cooldown: false` never cools down: a limit fails only the request
- * that met it.
- */
 export class PacingGate implements Pacing {
   readonly group: string;
   private readonly label: string;
   private readonly waitRange: WaitRange;
-  /** Null for a group whose limits fail only the request that met them. */
   private readonly cooldown: CooldownPolicy | null;
+  private readonly statePath: string | null;
   private readonly now: () => Date;
   private readonly random: () => number;
   private readonly setTimer: (callback: () => void, ms: number) => () => void;
@@ -110,18 +85,18 @@ export class PacingGate implements Pacing {
   private readonly listeners = new Set<(event: PacingEvent) => void>();
   private active = false;
   private lastEndedAt: number | null = null;
-  /** The gap before the next request, drawn when the previous one ended. */
   private nextGapMs = 0;
   private cancelWaitTimer: (() => void) | null = null;
   private cancelCooldownTimer: (() => void) | null = null;
   private stored: StoredPacing = { cooldownUntil: null, level: 0, lastLimitedAt: null };
   private writing: Promise<void> = Promise.resolve();
 
-  private constructor(declaration: PacingDeclaration, private readonly options: PacingGateOptions) {
+  private constructor(declaration: PacingDeclaration, options: PacingGateOptions) {
     this.group = declaration.group;
     this.label = declaration.label;
     this.waitRange = options.waitRangeMs ?? declaration.waitRangeMs;
     this.cooldown = declaration.cooldown === false ? null : { ...DEFAULT_COOLDOWN, ...declaration.cooldown, ...options.cooldown };
+    this.statePath = this.cooldown ? options.statePath ?? null : null;
     this.now = options.now ?? (() => new Date());
     this.random = options.random ?? Math.random;
     this.setTimer = options.setTimer ?? ((callback, ms) => {
@@ -131,15 +106,11 @@ export class PacingGate implements Pacing {
     });
   }
 
-  /**
-   * Opens the channel with the cooldown its state file recorded; a missing or unreadable file starts
-   * fresh. A group without cooldowns reads no file and writes none.
-   */
   static async open(declaration: PacingDeclaration, options: PacingGateOptions = {}): Promise<PacingGate> {
     const gate = new PacingGate(declaration, options);
-    if (options.statePath && gate.cooldown) {
+    if (gate.statePath) {
       try {
-        const value = await readJsonFile(options.statePath) as Partial<StoredPacing> | undefined;
+        const value = await readJsonFile(gate.statePath) as Partial<StoredPacing> | undefined;
         if (value && typeof value === 'object') {
           gate.stored = {
             cooldownUntil: typeof value.cooldownUntil === 'string' && !Number.isNaN(Date.parse(value.cooldownUntil)) ? value.cooldownUntil : null,
@@ -151,6 +122,7 @@ export class PacingGate implements Pacing {
         console.warn(`Pacing state of ${gate.group} could not be read; starting without a cooldown.`, error);
       }
     }
+    gate.dropExpiredCooldown();
     gate.scheduleCooldownEnd();
     return gate;
   }
@@ -170,12 +142,6 @@ export class PacingGate implements Pacing {
     return () => { this.listeners.delete(listener); };
   }
 
-  /**
-   * Runs one request when its turn comes. Aborting `signal` before the request starts removes it
-   * from the queue and rejects with the signal's reason; a request already running finishes. A
-   * `rate_limited` failure starts the cooldown and is rethrown with its end time; without cooldowns
-   * it is rethrown as it is.
-   */
   run<T>(priority: GatePriority, request: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     const until = this.coolingUntil();
@@ -210,14 +176,17 @@ export class PacingGate implements Pacing {
         };
         signal.addEventListener('abort', waiter.onAbort, { once: true });
       }
-      // Interactive requests go after earlier interactive ones and before all background work.
-      const position = priority === 'interactive'
-        ? this.queue.findIndex((candidate) => candidate.priority === 'background')
-        : -1;
-      if (position >= 0) this.queue.splice(position, 0, waiter);
-      else this.queue.push(waiter);
+      this.enqueue(waiter);
       this.pump();
     });
+  }
+
+  private enqueue(waiter: Waiter): void {
+    const firstBackground = waiter.priority === 'interactive'
+      ? this.queue.findIndex((candidate) => candidate.priority === 'background')
+      : -1;
+    if (firstBackground < 0) this.queue.push(waiter);
+    else this.queue.splice(firstBackground, 0, waiter);
   }
 
   private pump(): void {
@@ -263,7 +232,6 @@ export class PacingGate implements Pacing {
     this.persist();
   }
 
-  /** Starts a cooldown after a limit and returns the error the request fails with. */
   private limited(cooldown: CooldownPolicy, error: CollectorError): CollectorError {
     const now = this.now();
     const last = this.stored.lastLimitedAt ? Date.parse(this.stored.lastLimitedAt) : Number.NaN;
@@ -285,7 +253,6 @@ export class PacingGate implements Pacing {
     });
   }
 
-  /** The end of the cooldown in force, or null. */
   private coolingUntil(): string | null {
     const until = this.stored.cooldownUntil;
     return until && Date.parse(until) > this.now().getTime() ? until : null;
@@ -304,13 +271,13 @@ export class PacingGate implements Pacing {
       this.emit({ type: 'cooldown_ended' });
       this.pump();
     };
-    if (remaining <= 0) {
-      // A cooldown that ended while the service was stopped ends silently.
-      this.stored = { ...this.stored, cooldownUntil: null };
-      this.persist();
-      return;
-    }
     this.cancelCooldownTimer = this.setTimer(end, remaining);
+  }
+
+  private dropExpiredCooldown(): void {
+    if (!this.stored.cooldownUntil || this.coolingUntil()) return;
+    this.stored = { ...this.stored, cooldownUntil: null };
+    this.persist();
   }
 
   private emit(event: PacingEvent): void {
@@ -320,7 +287,7 @@ export class PacingGate implements Pacing {
   }
 
   private persist(): void {
-    const statePath = this.options.statePath;
+    const statePath = this.statePath;
     if (!statePath) return;
     const value = { ...this.stored };
     this.writing = this.writing.then(() => writeJsonFile(statePath, value)).catch((error: unknown) => {
@@ -328,7 +295,6 @@ export class PacingGate implements Pacing {
     });
   }
 
-  /** Resolves once the state file reflects every change so far. */
   flush(): Promise<void> {
     return this.writing;
   }
