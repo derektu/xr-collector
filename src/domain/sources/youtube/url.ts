@@ -1,12 +1,10 @@
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 
-/** One YouTube video: its 11-character ID and its canonical watch address. */
 export interface YouTubeVideoRef {
   videoId: string;
   canonicalUrl: string;
 }
 
-/** What a single pasted YouTube address asks for. Shared by the UI button label and the HTTP entry point. */
 export type YouTubeInput =
   | { kind: 'video'; video: YouTubeVideoRef }
   | { kind: 'channel'; url: string };
@@ -15,17 +13,26 @@ export const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/u;
 const HANDLE_PATTERN = /^@[\p{L}\p{N}._-]{1,100}$/u;
 const YOUTUBE_HOST = /(^|\.)youtube\.com$/u;
 
-/** The canonical watch address of a video. */
 export function videoUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-/** Whether an input is a YouTube address or an @handle, judged by its syntax alone. */
 export function ownsYouTubeInput(input: string, url: URL | null): boolean {
   if (input.startsWith('@')) return true;
   if (!url) return false;
   const host = url.hostname.toLowerCase();
   return YOUTUBE_HOST.test(host) || host === 'youtu.be';
+}
+
+function tryParseYouTubeVideoUrl(input: string): YouTubeVideoRef | null {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    return null;
+  }
+  const videoId = videoIdFromUrl(url);
+  return videoId ? { videoId, canonicalUrl: videoUrl(videoId) } : null;
 }
 
 export function parseYouTubeVideoUrl(input: string): YouTubeVideoRef {
@@ -35,7 +42,14 @@ export function parseYouTubeVideoUrl(input: string): YouTubeVideoRef {
   } catch {
     throw new CollectorError('invalid_url', '請輸入有效的 YouTube 影片網址。');
   }
+  const videoId = videoIdFromUrl(url);
+  if (!videoId) {
+    throw new CollectorError('invalid_url', '這個網址不包含可辨識的 YouTube 影片 ID。');
+  }
+  return { videoId, canonicalUrl: videoUrl(videoId) };
+}
 
+function videoIdFromUrl(url: URL): string | null {
   const host = url.hostname.toLowerCase();
   let videoId: string | null = null;
 
@@ -52,20 +66,9 @@ export function parseYouTubeVideoUrl(input: string): YouTubeVideoRef {
     }
   }
 
-  if (!videoId || !VIDEO_ID_PATTERN.test(videoId)) {
-    throw new CollectorError('invalid_url', '這個網址不包含可辨識的 YouTube 影片 ID。');
-  }
-
-  return {
-    videoId,
-    canonicalUrl: videoUrl(videoId),
-  };
+  return videoId && VIDEO_ID_PATTERN.test(videoId) ? videoId : null;
 }
 
-/**
- * Classifies a video or channel address by its syntax alone. A watch URL that also names a
- * playlist is the single video; a playlist-only URL is unsupported. Nothing here contacts YouTube.
- */
 export function classifyYouTubeInput(input: string): YouTubeInput {
   const trimmed = input.trim();
   if (trimmed === '') throw new CollectorError('invalid_url', '請輸入 YouTube 影片網址、頻道網址或 @handle。');
@@ -88,16 +91,12 @@ export function classifyYouTubeInput(input: string): YouTubeInput {
 
   const parts = url.pathname.split('/').filter(Boolean);
   const first = parts[0] ?? '';
-  // An embedded playlist's path segment is 11 characters long and would otherwise read as a video ID.
   if (youtube && first === 'embed' && parts[1] === 'videoseries') {
     throw new CollectorError('unsupported_url', '目前不支援播放清單網址；請貼上清單中的單支影片網址。');
   }
 
-  try {
-    return { kind: 'video', video: parseYouTubeVideoUrl(trimmed) };
-  } catch {
-    // Not a video address; it may still be a playlist or a channel.
-  }
+  const video = tryParseYouTubeVideoUrl(trimmed);
+  if (video) return { kind: 'video', video };
 
   if (youtube && (first === 'playlist' || (first === 'watch' && url.searchParams.has('list')))) {
     throw new CollectorError('unsupported_url', '目前不支援播放清單網址；請貼上清單中的單支影片網址。');
