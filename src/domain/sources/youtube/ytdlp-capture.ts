@@ -48,23 +48,19 @@ export interface CommandResult {
   stderr: string;
 }
 
-/** Runs yt-dlp with the given arguments; failures are already classified as CollectorError. */
 export type YtDlpRunner = (args: string[]) => Promise<CommandResult>;
 
-/** The YouTube request channel as yt-dlp callers use it. */
 export interface RequestGate {
   run<T>(priority: GatePriority, request: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
-/** Without a gate, requests run directly; used by tests and tools that make a single request. */
 export const UNGATED: RequestGate = { run: (_priority, request) => request() };
 
 export interface YtDlpCaptureOptions {
   binaryPath?: string;
   javaScriptRuntimePath?: string;
   timeoutMs?: number;
-  /** Every yt-dlp request waits its turn here. */
-  gate?: RequestGate;
+  gate: RequestGate;
   run?: YtDlpRunner;
 }
 
@@ -72,10 +68,6 @@ function firstTrackName(formats: YtDlpFormat[] | undefined): string | null {
   return formats?.find((format) => format.name)?.name ?? null;
 }
 
-/**
- * The format yt-dlp downloads for `--sub-format json3`: its subtitle selection takes the last json3
- * entry of the code, else the last entry.
- */
 function downloadedFormat(formats: YtDlpFormat[]): YtDlpFormat | undefined {
   return formats.findLast((format) => format.ext === 'json3') ?? formats.at(-1);
 }
@@ -101,8 +93,6 @@ function tracksFromInfo(info: YtDlpInfo): SubtitleTrack[] {
       code,
       name: firstTrackName(formats),
       kind: 'automatic' as const,
-      // A code lists several sources; only the format yt-dlp would download decides whether the
-      // track is in the spoken language or translated into it.
       isOriginal: code.endsWith('-orig') || !isTranslation(downloadedFormat(formats)),
     }),
   );
@@ -144,18 +134,14 @@ export class YtDlpCapture implements YouTubeCapture {
   private readonly gate: RequestGate;
   private readonly runner: YtDlpRunner;
 
-  constructor(options: YtDlpCaptureOptions = {}) {
+  constructor(options: YtDlpCaptureOptions) {
     this.binaryPath = options.binaryPath ?? 'yt-dlp';
     this.javaScriptRuntimePath = options.javaScriptRuntimePath ?? null;
     this.timeoutMs = options.timeoutMs ?? 90_000;
-    this.gate = options.gate ?? UNGATED;
+    this.gate = options.gate;
     this.runner = options.run ?? ((args) => this.runCommand(args));
   }
 
-  /**
-   * Reads the video's information, then downloads one subtitle track from that information. These
-   * are two YouTube requests, each taking its own turn in the gate.
-   */
   async capture(video: YouTubeVideoRef, options: CaptureOptions = {}): Promise<CapturedTranscript> {
     const { info, raw } = await this.readInfo(video, options.signal);
     if (options.publishedNotBefore && !publishedSince(publishedAtFromInfo(info), options.publishedNotBefore)) {
@@ -168,10 +154,9 @@ export class YtDlpCapture implements YouTubeCapture {
 
     const workDir = await mkdtemp(path.join(tmpdir(), 'xr-collector-caption-'));
     try {
-      // The subtitle request reuses the information just read instead of loading the video page again.
-      // Without `webpage_url`, a failed download ends the request; yt-dlp would otherwise load the
-      // page again on its own, outside the gate.
       const infoFile = path.join(workDir, 'info.json');
+      // yt-dlp retries a failed --load-info-json download by loading webpage_url itself, which would bypass the gate.
+      // https://github.com/yt-dlp/yt-dlp/blob/28b379d666051e795cbb663adac85179d5ce81f7/yt_dlp/YoutubeDL.py#L3725-L3731
       const { webpage_url: _pageUrl, ...pageless } = JSON.parse(raw) as Record<string, unknown>;
       await writeFile(infoFile, JSON.stringify(pageless), 'utf8');
       await this.request([
@@ -263,6 +248,8 @@ export class YtDlpCapture implements YouTubeCapture {
   }
 }
 
+const STDERR_TAIL_CHARS = 4000;
+
 export function classifyYtDlpError(
   error: Error & { code?: string | number | null },
   stderr: string,
@@ -276,10 +263,7 @@ export function classifyYtDlpError(
   }
 
   const details = `${error.message}\n${stderr}`;
-  // The end of stderr names the failure; the activity log masks and shortens it further.
-  const diagnostic = stderr.trim() ? { detail: stderr.trim().slice(-4000) } : {};
-  // YouTube limiting requests is checked first: its "sign in to confirm you're not a bot" wording
-  // must not read as an unavailable video.
+  const diagnostic = stderr.trim() ? { detail: stderr.trim().slice(-STDERR_TAIL_CHARS) } : {};
   if (/http error 429|too many requests|confirm you['’]re not a bot|rate-limited by youtube/i.test(details)) {
     return new CollectorError('rate_limited', 'YouTube 暫時限制連線。', {
       cause: error, ...diagnostic,

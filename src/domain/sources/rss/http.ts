@@ -1,25 +1,15 @@
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 
-/** A fetched document: the address it came from after redirects, and its text. */
 export interface FetchedText {
   url: string;
   text: string;
 }
 
-/** A request gives up after this long. */
 export const FETCH_TIMEOUT_MS = 20_000;
-/** Feeds and pages larger than this are not read. */
 export const MAX_BYTES = 5 * 1024 * 1024;
 
 const ACCEPT = 'application/rss+xml, application/atom+xml, application/rdf+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.8, */*;q=0.5';
 
-/**
- * Fetches a feed or web page. Failures raise the RSS error codes: `network_error` for a connection
- * failure, a timeout or a server error, `rate_limited` for HTTP 429, `feed_not_found` for 404 and
- * 410, and `feed_unavailable` for any other refusal and for a body over `MAX_BYTES`. The text is
- * decoded with the charset the response or the document declares, UTF-8 otherwise. Aborting
- * `signal` rejects with its reason.
- */
 export async function fetchText(url: string, signal?: AbortSignal): Promise<FetchedText> {
   const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   let response: Response;
@@ -72,7 +62,6 @@ async function readLimited(response: Response): Promise<Uint8Array> {
   return bytes;
 }
 
-/** Decodes with the charset of the Content-Type header, else of the XML declaration or an HTML meta tag, else UTF-8. */
 export function decode(bytes: Uint8Array, contentType: string | null): string {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
   const charset = contentType?.match(/charset=["']?([\w-]+)/iu)?.[1]

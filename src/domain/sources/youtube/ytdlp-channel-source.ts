@@ -8,13 +8,13 @@ import type {
 } from './adapter.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import type { SubscriptionTarget } from '../../../shared/sources/source-contract.js';
-import { classifyYtDlpError, UNGATED, type RequestGate } from './ytdlp-capture.js';
+import { classifyYtDlpError, type RequestGate } from './ytdlp-capture.js';
+import { VIDEO_ID_PATTERN, videoUrl } from './url.js';
 
 interface YtDlpChannelEntry {
   id?: string;
   title?: string;
   channel_id?: string;
-  /** Present with `youtubetab:approximate_date`: the listing's relative age turned into a time. */
   timestamp?: number;
   release_timestamp?: number;
   live_status?: string;
@@ -36,8 +36,7 @@ export interface YtDlpChannelSourceOptions {
   binaryPath?: string;
   javaScriptRuntimePath?: string;
   timeoutMs?: number;
-  /** Every yt-dlp request waits its turn here. */
-  gate?: RequestGate;
+  gate: RequestGate;
   run?: CommandRunner;
 }
 
@@ -48,16 +47,16 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
   private readonly commandRunner: CommandRunner;
   private readonly gate: RequestGate;
 
-  constructor(options: YtDlpChannelSourceOptions = {}) {
+  constructor(options: YtDlpChannelSourceOptions) {
     this.binaryPath = options.binaryPath ?? 'yt-dlp';
     this.javaScriptRuntimePath = options.javaScriptRuntimePath ?? null;
     this.timeoutMs = options.timeoutMs ?? 90_000;
     this.commandRunner = options.run ?? ((args) => this.runCommand(args));
-    this.gate = options.gate ?? UNGATED;
+    this.gate = options.gate;
   }
 
   async resolve(inputUrl: string, options: RequestOptions = {}): Promise<ResolvedYouTubeChannel> {
-    const url = normalizeChannelUrl(inputUrl);
+    const url = channelVideosUrl(inputUrl);
     const info = await this.readInfo(url, { offset: 0, limit: 1 }, true, options);
     const id = channelIdFromInfo(info);
     const title = info.channel?.trim() || info.uploader?.trim() || info.title?.trim();
@@ -76,13 +75,13 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
     const seen = new Set<string>();
     return (info.entries ?? []).flatMap((entry) => {
       const id = entry.id?.trim();
-      if (!id || !/^[A-Za-z0-9_-]{11}$/u.test(id) || seen.has(id)) return [];
+      if (!id || !VIDEO_ID_PATTERN.test(id) || seen.has(id)) return [];
       seen.add(id);
       const timestamp = entry.timestamp ?? entry.release_timestamp;
       return [{
         id,
         title: entry.title?.trim() || `YouTube ${id}`,
-        url: `https://www.youtube.com/watch?v=${id}`,
+        url: videoUrl(id),
         publishedAt: typeof timestamp === 'number' ? new Date(timestamp * 1000).toISOString() : null,
         upcoming: entry.live_status === 'is_upcoming' || entry.live_status === 'is_live',
       }];
@@ -100,6 +99,8 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
       output = await this.gate.run(options.priority ?? 'background', () => this.commandRunner([
         ...this.runtimeArgs(),
         '--flat-playlist',
+        // yt-dlp fills an approximate upload_date and timestamp for flat-playlist entries only with approximate_date.
+        // https://github.com/yt-dlp/yt-dlp#youtubetab-youtube-playlists-channels-feeds-etc
         '--extractor-args',
         'youtubetab:approximate_date',
         '--playlist-start',
@@ -110,9 +111,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
         url,
       ]), options.signal);
     } catch (error) {
-      // A request given up before it started is not an answer about the channel.
       if (options.signal?.aborted && error === options.signal.reason) throw error;
-      // Temporary failures keep their own code; anything else means the address names no readable channel.
       if (resolvingChannel && error instanceof CollectorError && error.code !== 'network_error' && error.code !== 'rate_limited') {
         throw new CollectorError('invalid_subscription', '無法讀取這個 YouTube 頻道。', {
           cause: error,
@@ -154,7 +153,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
   }
 }
 
-function normalizeChannelUrl(input: string): string {
+function channelVideosUrl(input: string): string {
   const trimmed = input.trim();
   const candidate = trimmed.startsWith('@')
     ? `https://www.youtube.com/${trimmed}`
@@ -175,9 +174,6 @@ function normalizeChannelUrl(input: string): string {
   if (url.protocol !== 'https:' || hostname !== 'youtube.com' || !acceptedPath) {
     throw new CollectorError('invalid_subscription', '請輸入 YouTube 頻道網址或 @handle。');
   }
-  // A channel address without a tab makes yt-dlp read the videos, live and shorts tabs, one page
-  // each. Resolving reads the videos tab alone, the tab subscriptions list from; a channel without
-  // one fails here instead of after it is subscribed.
   if (parts.length === (first.startsWith('@') ? 1 : 2)) {
     url.pathname = `/${[...parts, 'videos'].join('/')}`;
   }

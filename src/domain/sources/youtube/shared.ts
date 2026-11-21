@@ -3,7 +3,6 @@ import type { SubtitleKind } from './adapter.js';
 import { type CollectionPolicy, YOUTUBE_SETTINGS } from './settings.js';
 import { classifyYouTubeInput, ownsYouTubeInput, parseYouTubeVideoUrl, VIDEO_ID_PATTERN, videoUrl } from './url.js';
 
-/** Subtitle details that only YouTube transcripts carry. */
 export interface YouTubeDocumentMetadata {
   languageCode: string;
   languageName: string | null;
@@ -12,22 +11,16 @@ export interface YouTubeDocumentMetadata {
 
 declare module '../../../shared/documents/document-types.js' {
   interface DocumentDetails {
-    /** Subtitle details of a YouTube transcript. */
     youtube?: YouTubeDocumentMetadata;
   }
 }
 
-/** The subtitle a YouTube document was made from, e.g. "字幕：中文（台灣）・人工字幕". */
 export function subtitleLine(details: YouTubeDocumentMetadata | undefined): string | null {
   if (!details) return null;
   const language = details.languageName ?? details.languageCode;
   return `字幕：${language}・${details.subtitleKind === 'manual' ? '人工字幕' : '自動字幕'}`;
 }
 
-/**
- * YouTube as a source type: single videos by their watch address, and channels by address or
- * @handle as subscriptions. Every name and label the UI shows for YouTube comes from here.
- */
 export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
   id: 'youtube',
   label: 'YouTube',

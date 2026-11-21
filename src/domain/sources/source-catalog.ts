@@ -14,13 +14,10 @@ import type {
 } from '../../shared/subscriptions/subscription-types.js';
 import type { SourceTypeDeclaration } from './source-types.js';
 
-/** Rows a subscription's collection record shows. */
 export const COLLECTION_LIMIT = 30;
 
-/** Checks that stopped for these reasons collected nothing on their own and are left out of the record. */
 const UNLISTED_SKIPS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed', 'superseded']);
 
-/** What the catalog reads from the subscriptions of one source type. */
 export interface CatalogSubscriptions {
   readonly type: string;
   listSubscriptions(): Promise<Subscription[]>;
@@ -28,14 +25,7 @@ export interface CatalogSubscriptions {
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
 }
 
-/**
- * Subscriptions as one list across source types, or the subscriptions of one type. A document
- * belongs to the subscription of its type whose target published it, including items collected one
- * by one from a subscribed target; documents of no current subscription form the separate
- * single-item summary.
- */
 export class SourceCatalog {
-  /** `sources` gives each type's failure labels and item addresses for the collection record. */
   constructor(
     private readonly sources: SourceRegistry,
     private readonly declarations: SourceTypeDeclaration[],
@@ -44,17 +34,16 @@ export class SourceCatalog {
     private readonly checkSummaries?: (type: string, id: string) => Promise<ActivityCheckSummary[]>,
   ) {}
 
-  /** Every type's subscriptions, or with `type` only that type's, with the documents and counts of the same scope. */
   async list(type?: string): Promise<SubscriptionList> {
     const collections = type === undefined ? this.subscriptions : this.subscriptions.filter((collection) => collection.type === type);
     const declarations = type === undefined ? this.declarations : this.declarations.filter((declaration) => declaration.id === type);
-    const [lists, documents, pendingLists] = await Promise.all([
-      Promise.all(collections.map((collection) => collection.listSubscriptions())),
+    const [listed, documents, pendingLists] = await Promise.all([
+      Promise.all(collections.map(async (collection) => ({ collection, list: await collection.listSubscriptions() }))),
       this.documents(),
       Promise.all(collections.map((collection) => collection.pendingSubscriptions?.() ?? Promise.resolve([]))),
     ]);
-    const subscribed = new Map(collections.map((collection, index) =>
-      [collection.type, new Set(lists[index]!.map((subscription) => subscription.id))]));
+    const subscribed = new Map(listed.map(({ collection, list }) =>
+      [collection.type, new Set(list.map((subscription) => subscription.id))]));
     let documentCount = 0;
     let lastCollectedAt: string | null = null;
     for (const document of documents) {
@@ -63,8 +52,8 @@ export class SourceCatalog {
       documentCount += 1;
       if (!lastCollectedAt || document.collectedAt > lastCollectedAt) lastCollectedAt = document.collectedAt;
     }
-    const subscriptions = collections.flatMap((collection, index) =>
-      lists[index]!.map((subscription) => this.entry(collection.type, subscription)));
+    const subscriptions = listed.flatMap(({ collection, list }) =>
+      list.map((subscription) => this.entry(collection.type, subscription)));
     return {
       subscriptions,
       pending: pendingLists.flat(),
@@ -97,11 +86,6 @@ export class SourceCatalog {
   }
 }
 
-/**
- * A subscription's collection record, newest first: its documents, the items its checks failed to
- * collect or skipped (an item with a document shows as collected), and a summary of each finished
- * check. Checks still running, interrupted, or stopped by a pause, a removal or a later job are left out.
- */
 export function collectionRecord(
   sources: SourceRegistry, type: string, subscription: Subscription, documents: readonly DocumentMetadata[], checks: readonly JobView[],
   summaries?: readonly ActivityCheckSummary[],
@@ -112,17 +96,19 @@ export function collectionRecord(
     kind: 'collected', at: document.collectedAt, key: document.sourceId, title: document.title, documentId: document.id,
   }));
   const collected = new Set(documents.map((document) => document.sourceId));
-  for (const failure of keyField ? subscription.failures ?? [] : []) {
-    const key = String(failure[keyField!]);
-    if (collected.has(key)) continue;
-    const reason = definition?.failureLabels?.[failure.errorCode] ?? '收集失敗';
-    const common = {
-      at: failure.failedAt, key, title: failure.title, url: failure.url ?? definition?.item.urlForKey?.(key) ?? '', errorCode: failure.errorCode, reason,
-      attempts: failure.attempts,
-    };
-    entries.push(failure.skipped
-      ? { kind: 'skipped', ...common, skippedBy: definition?.classifyFailure({ code: failure.errorCode }) === 'skip' ? 'failure' : 'limit' }
-      : { kind: 'failed', ...common, maxAttempts: MAX_CHECK_ATTEMPTS });
+  if (keyField) {
+    for (const failure of subscription.failures ?? []) {
+      const key = String(failure[keyField]);
+      if (collected.has(key)) continue;
+      const reason = definition?.failureLabels?.[failure.errorCode] ?? '收集失敗';
+      const common = {
+        at: failure.failedAt, key, title: failure.title, url: failure.url ?? definition?.item.urlForKey?.(key) ?? '', errorCode: failure.errorCode, reason,
+        attempts: failure.attempts,
+      };
+      entries.push(failure.skipped
+        ? { kind: 'skipped', ...common, skippedBy: definition?.classifyFailure({ code: failure.errorCode }) === 'skip' ? 'failure' : 'limit' }
+        : { kind: 'failed', ...common, maxAttempts: MAX_CHECK_ATTEMPTS });
+    }
   }
   for (const summary of summaries ?? []) {
     if (summary.count === 1) {
@@ -147,8 +133,11 @@ export function collectionRecord(
       error: job.state === 'failed' ? job.error : null,
     });
   }
-  // A check finishes after the items it collected, so at the same instant it comes first.
   return entries
-    .sort((left, right) => right.at.localeCompare(left.at) || Number(right.kind === 'check' || right.kind === 'check-group') - Number(left.kind === 'check' || left.kind === 'check-group'))
+    .sort((left, right) => right.at.localeCompare(left.at) || Number(isCheckRow(right)) - Number(isCheckRow(left)))
     .slice(0, COLLECTION_LIMIT);
+}
+
+function isCheckRow(entry: SubscriptionCollectionEntry): boolean {
+  return entry.kind === 'check' || entry.kind === 'check-group';
 }

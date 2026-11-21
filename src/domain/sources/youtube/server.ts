@@ -3,6 +3,7 @@ import type {
   CapturedItem,
   FailureClass,
   ListedItem,
+  PacingDeclaration,
   PluginRuntime,
   RequestContext,
   SourceDefinition,
@@ -15,9 +16,7 @@ import { youtubeDeclaration, type YouTubeDocumentMetadata } from './shared.js';
 import { YtDlpCapture } from './ytdlp-capture.js';
 import { YtDlpChannelSource } from './ytdlp-channel-source.js';
 
-/** Videos read per listing request. */
 export const LISTING_PAGE = 50;
-/** Listed videos one check reads at most, so a listing full of upcoming streams still ends. */
 export const LISTING_SCAN_LIMIT = 200;
 
 const FAILURES: Readonly<Record<string, FailureClass>> = {
@@ -34,20 +33,17 @@ interface StoredSubtitle {
   kind: YouTubeDocumentMetadata['subtitleKind'];
 }
 
-/**
- * The server definition of YouTube: the declaration, how its failures are treated, the request
- * pacing every YouTube request shares, where its subscriptions live and the subtitle block of its
- * documents' frontmatter.
- */
+export const YOUTUBE_PACING: PacingDeclaration = {
+  group: 'youtube',
+  label: 'YouTube',
+  waitRangeMs: { min: 4_000, max: 12_000 },
+  envVar: 'XR_COLLECTOR_YOUTUBE_WAIT_MS',
+};
+
 export const youtubeDefinition: SourceDefinition<CollectionPolicy> = {
   ...youtubeDeclaration,
   classifyFailure: (error) => FAILURES[error.code] ?? 'skip',
-  pacing: {
-    group: 'youtube',
-    label: 'YouTube',
-    waitRangeMs: { min: 4_000, max: 12_000 },
-    envVar: 'XR_COLLECTOR_YOUTUBE_WAIT_MS',
-  },
+  pacing: YOUTUBE_PACING,
   storage: {
     subscriptionsFile: 'settings/youtube-channels.json',
     version: 3,
@@ -77,10 +73,6 @@ export const youtubeDefinition: SourceDefinition<CollectionPolicy> = {
   },
 };
 
-/** The pacing group every YouTube request goes through. */
-export const YOUTUBE_PACING = youtubeDefinition.pacing!;
-
-/** A captured transcript as the item the core saves. */
 export function transcriptItem(transcript: CapturedTranscript): CapturedItem {
   const details: YouTubeDocumentMetadata = {
     languageCode: transcript.languageCode,
@@ -98,7 +90,6 @@ export function transcriptItem(transcript: CapturedTranscript): CapturedItem {
   };
 }
 
-/** A captured transcript as a YouTube document to save. */
 export function transcriptDocument(transcript: CapturedTranscript): CapturedDocument {
   return { sourceType: youtubeDefinition.id, ...transcriptItem(transcript) };
 }
@@ -107,10 +98,6 @@ function listedItem(video: DiscoveredYouTubeVideo): ListedItem {
   return { key: video.id, url: video.url, title: video.title, publishedAt: video.publishedAt, eligible: !video.upcoming };
 }
 
-/**
- * A channel's videos, newest first, read a page at a time and at most `LISTING_SCAN_LIMIT` of them.
- * Pages are requested only as the reader asks for more items.
- */
 export async function* listChannelVideos(source: Pick<YouTubeSource, 'discover'>, channel: SubscriptionTarget, request: RequestOptions = {}): AsyncGenerator<DiscoveredYouTubeVideo> {
   for (let offset = 0; offset < LISTING_SCAN_LIMIT; offset += LISTING_PAGE) {
     const page = await source.discover(channel, { offset, limit: LISTING_PAGE }, request);
@@ -119,15 +106,10 @@ export async function* listChannelVideos(source: Pick<YouTubeSource, 'discover'>
   }
 }
 
-/** A channel's listing as the items the core selects from, newest first. */
 export async function* channelItems(source: Pick<YouTubeSource, 'discover'>, channel: SubscriptionTarget, request: RequestOptions = {}): AsyncGenerator<ListedItem> {
   for await (const video of listChannelVideos(source, channel, request)) yield listedItem(video);
 }
 
-/**
- * The YouTube plugin over a source of YouTube requests. Every request the plugin makes passes the
- * request context on unchanged, so its abort signal and priority reach the YouTube request channel.
- */
 export function youtubePlugin(source: YouTubeSource): SourcePlugin<CollectionPolicy> {
   return {
     ...youtubeDefinition,
@@ -139,10 +121,8 @@ export function youtubePlugin(source: YouTubeSource): SourcePlugin<CollectionPol
   };
 }
 
-/** The YouTube plugin of the product: yt-dlp, with Deno for YouTube's scripts, behind the `youtube` request channel. */
 export function createYouTubePlugin(runtime: PluginRuntime): SourcePlugin<CollectionPolicy> {
   const ytdlp = {
-    // The official folder build: the executable beside its `_internal` libraries.
     binaryPath: runtime.program('yt-dlp/yt-dlp', 'XR_COLLECTOR_YTDLP'),
     javaScriptRuntimePath: runtime.program('deno', 'XR_COLLECTOR_DENO'),
     gate: runtime.gate(YOUTUBE_PACING.group),
