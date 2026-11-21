@@ -17,7 +17,6 @@ import type { FileChanges } from './vault-merge.js';
  */
 export type ImportFault = 'staged' | 'renaming';
 
-/** Refuses work whose files would not fit on the disk of `folder`, keeping the margin of `spaceMargin` free. */
 export async function checkFreeSpace(folder: string, bytes: number, statfsOf: StatFs = statfs): Promise<void> {
   const required = bytes + spaceMargin(bytes);
   const space = await statfsOf(await nearestExisting(folder));
@@ -27,28 +26,10 @@ export async function checkFreeSpace(folder: string, bytes: number, statfsOf: St
   }
 }
 
-/**
- * The journal of an in-place import, `journal.json` in its working folder
- * `<Vault>/.xr-collector-import-<UUID>/`: `{ "version": 1, "entries": [{ "path": "<Vault path>",
- * "staged": "files/<n>" | null }] }`. Each entry puts a staged file at its path, or removes the
- * path when `staged` is null.
- *
- * The journal is written once every staged file is complete, and that write is the commit point:
- * a working folder without a journal is dropped and the Vault stays as it was; with one, the
- * entries are carried out again on the next open until every one is done. Before the first entry,
- * and again before an open carries them out, `VaultFileWriter.admit` raises the marker to the
- * program's format version. Each entry then goes through `VaultFileWriter`: putting a file in
- * place is a rename within the Vault folder, so each path holds either its old or its new file, and
- * a repeated entry finds its staged file gone and moves on.
- */
 interface InPlaceJournal { version: 1; entries: { path: string; staged: string | null }[] }
 
 const STAGED = /^files\/\d+$/u;
 
-/**
- * Applies `changes` to the Vault at `root` through a working folder inside it; see `InPlaceJournal`.
- * Files taken from the export file stream out of `reader`.
- */
 export async function applyInPlace(
   root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges,
   progress: (done: number, total: number) => void,
@@ -89,11 +70,6 @@ async function placeEntry(files: VaultFileWriter, work: string, entry: InPlaceJo
   else await files.place(entry.path, path.join(work, entry.staged));
 }
 
-/**
- * Settles in-place imports a stop interrupted, before the Vault opens: a working folder with a
- * journal has its entries carried out, one without is dropped. Returns whether any import was
- * carried out, in which case the search index needs a rebuild.
- */
 export async function finishInPlaceImports(root: string, sources: SourceRegistry): Promise<boolean> {
   let names: string[];
   try { names = await readdir(root); } catch { return false; }
@@ -116,12 +92,6 @@ export async function finishInPlaceImports(root: string, sources: SourceRegistry
   return finished;
 }
 
-/**
- * Creates a Vault in the new folder `folder` from an export file. The files unpack into a staging
- * folder beside the target, which becomes the Vault once complete; the profile journal lets the
- * next start take back an import a stop interrupted.
- * The new Vault gets its own ID and keeps the automatic collection switch the export file holds.
- */
 export async function importNewVault(options: {
   packageFile: unknown; folder: unknown; profilePath: string; createdBy: string; sources: SourceRegistry; statfs?: StatFs;
 }): Promise<string> {

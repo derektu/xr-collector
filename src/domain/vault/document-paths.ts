@@ -2,14 +2,6 @@ import type { SourceDeclarations } from '../../shared/sources/source-registry.js
 import { documentId } from '../../shared/documents/document-id.js';
 import type { DocumentKey, DocumentSourceType } from '../../shared/documents/document-types.js';
 
-/**
- * Where documents live in a Vault and how a document ID maps to its file. A document ID is
- * `<source type>:<source ID>` and its file is `documents/<source type>/<source ID>.md`, relative to
- * the Vault root with `/` separators. Each source type of `sources` declares which source IDs it
- * accepts, so a path or ID of a type `sources` lacks, or a malformed source ID, is never a
- * document.
- */
-
 export function isSourceType(sources: SourceDeclarations, value: string): value is DocumentSourceType {
   return sources.get(value) !== undefined;
 }
@@ -22,7 +14,6 @@ export function documentPath(key: DocumentKey): string {
   return `documents/${key.sourceType}/${key.sourceId}.md`;
 }
 
-/** The source type and ID of a document file path, or null when the path is not a document. */
 export function documentKeyFromPath(sources: SourceDeclarations, relative: string): DocumentKey | null {
   const match = /^documents\/([^/]+)\/([^/]+)\.md$/u.exec(relative);
   if (!match) return null;
@@ -31,7 +22,6 @@ export function documentKeyFromPath(sources: SourceDeclarations, relative: strin
   return { sourceType, sourceId };
 }
 
-/** The source type and ID of a document ID, or null when the ID is malformed. */
 export function documentKeyFromId(sources: SourceDeclarations, id: string): DocumentKey | null {
   const separator = id.indexOf(':');
   if (separator < 0) return null;

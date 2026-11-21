@@ -16,52 +16,20 @@ import { MarkdownVault, parseDocument } from './markdown-vault.js';
 import { VAULT_MARKER } from './vault-directory.js';
 import { VaultFileWriter } from './vault-files.js';
 import type { FileSource } from './vault-merge.js';
+import { errorCode } from './errno.js';
 
-/**
- * The export file (`.zip`): a zip of the files a Vault registers, each at its path relative to the
- * Vault root, text compressed with deflate, plus `manifest.json`:
- *
- * ```json
- * { "format": "xr-collector-package", "formatVersion": 2,
- *   "exportedAt": "<ISO time>", "createdBy": "<program>",
- *   "source": { "vaultId": "<UUID>", "machine": "<name>", "folderName": "<name>" },
- *   "summary": { "documents": 0, "subscriptions": 0, "deletions": 0 },
- *   "files": [{ "path": "documents/<source type>/<ID>.md", "size": 0, "sha256": "<hex>" }] }
- * ```
- *
- * `source` names the Vault, the machine and the Vault folder the export came from: the ID and machine
- * for diagnosis, the folder name as the name a Vault created from the export starts with. An import
- * compares the files themselves, whose documents, subscriptions and records carry their own times.
- *
- * The registered files are the documents `MarkdownVault.list` returns and the settings files:
- * the subscriptions file each source type of the registry declares, the schedule file and the deletion
- * file. Nothing else in the Vault folder is read or packed, so files a person keeps there never
- * fail an export. Packages are written and read as streams: memory holds the manifest and the file
- * in hand, never the whole package. A file read into memory to be checked (a document or a
- * settings file) is at most `FILE_LIMIT` bytes, and the manifest at most `MANIFEST_LIMIT`; a
- * package has no limit on its total size.
- */
 export const PACKAGE_FORMAT = 'xr-collector-package';
 export const MANIFEST = 'manifest.json';
 export const FILE_LIMIT = 64 * 1024 * 1024;
 export const MANIFEST_LIMIT = 64 * 1024 * 1024;
-/** Every manifest row holds at least a 64-character digest, so a manifest within its limit lists no more files than this. */
 const ENTRY_LIMIT = MANIFEST_LIMIT / 64;
-/** Operating-system files that are never counted as a person's files in the Vault. */
 const SYSTEM_FILES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
-/** Working folder of an import being applied in place, inside the Vault: `.xr-collector-import-<UUID>`. */
 export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
-/** The settings files a package may hold, in the order an export packs them. */
 function settingsFiles(sources: SourceRegistry): string[] {
   return [...sources.subscriptionDefinitions.map((definition) => definition.storage!.subscriptionsFile), sources.schedule.file, DELETIONS_FILE];
 }
 
-/**
- * The package format version of a program with the source types of `sources`: the highest
- * `packageFormatVersion` they declare, and at least 1. The program writes every package at this
- * version and reads none above it.
- */
 export function packageFormatVersion(sources: SourceRegistry): number {
   return Math.max(1, ...sources.definitions.map((definition) => definition.packageFormatVersion));
 }
@@ -85,36 +53,23 @@ function invalid(message: string): never {
 
 const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 
-/**
- * The name of this machine as export files and the activity log record it: `XR_COLLECTOR_MACHINE_NAME`
- * when set, otherwise the host name without the `.local` suffix macOS adds.
- */
 export function machineName(): string {
   const configured = process.env.XR_COLLECTOR_MACHINE_NAME?.trim();
   return configured || hostname().replace(/\.local$/iu, '') || '這台電腦';
 }
 
-/** Whether a path names a file a package may hold: a document file or one of the settings files. */
 export function packagePath(sources: SourceRegistry, value: string): boolean {
   return documentKeyFromPath(sources, value) !== null || settingsFiles(sources).includes(value);
 }
 
-/** A file of a Vault that a package holds: read from `absolute`, or `bytes` the export wrote itself. */
-export interface RegisteredFile { path: string; absolute?: string; bytes?: Buffer }
+export type RegisteredFile = { path: string; absolute: string } | { path: string; bytes: Buffer };
 
 export interface RegisteredFiles {
   files: RegisteredFile[];
-  /** Files in the Vault folder that belong to no record of the Vault and stay out of the package. */
   unregisteredFiles: number;
   summary: PackageSummary;
 }
 
-/**
- * The files of a Vault a package holds. Deletion records and document files go through the same
- * visibility rule as `MarkdownVault.list`: a document file a deletion hides stays out, and a record
- * whose document is newer stays out, so a package never holds a document next to the record that
- * hides it, even while a deletion is unfinished.
- */
 export async function registeredFiles(root: string, sources: SourceRegistry): Promise<RegisteredFiles> {
   const vault = new MarkdownVault(new VaultFileWriter(root, sources));
   const documents = await vault.list();
@@ -148,22 +103,17 @@ export async function registeredFiles(root: string, sources: SourceRegistry): Pr
   };
 }
 
-/** The absolute path of a registered file, or null when it does not exist; anything but a regular file fails the export. */
 async function regularFile(root: string, relative: string): Promise<string | null> {
   const absolute = path.join(root, relative);
   try {
     if (!(await lstat(absolute)).isFile()) invalid(`知識庫檔案不是一般檔案，無法匯出：${relative}`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (errorCode(error) === 'ENOENT') return null;
     throw error;
   }
   return absolute;
 }
 
-/**
- * Counts the entries of the Vault folder that no record owns, without reading them or following
- * symbolic links. Folders that cannot be read are skipped: the count only informs the person.
- */
 async function countOthers(root: string, relative: string, owned: ReadonlySet<string>): Promise<number> {
   let entries;
   try {
@@ -182,7 +132,6 @@ async function countOthers(root: string, relative: string, owned: ReadonlySet<st
   return count;
 }
 
-/** Hashes and counts the bytes passing through, failing past `limit`. */
 class Measure extends Transform {
   readonly hash = createHash('sha256');
   size = 0;
@@ -197,16 +146,10 @@ class Measure extends Transform {
 
 export interface WrittenPackage { unregisteredFiles: number; summary: PackageSummary }
 
-/**
- * Writes the package of a Vault to `file`, a new file. Each registered file streams into the zip
- * in turn and its digest is taken on the way; the manifest goes last, once every digest is known.
- * `info` describes the package for people choosing it and for an import comparing it.
- */
 export async function writePackage(
   root: string, sources: SourceRegistry, file: string, info: { createdBy?: string; exportedAt?: Date; source?: PackageSource } = {},
 ): Promise<WrittenPackage> {
   const registered = await registeredFiles(root, sources);
-  // Opening first refuses an existing file before any entry is read, so only a file this call created is removed on failure.
   const handle = await open(file, 'wx', 0o600);
   const zip = new yazl.ZipFile();
   const output = zip.outputStream as unknown as Readable;
@@ -217,10 +160,11 @@ export async function writePackage(
     zip.addReadStreamLazy(entry.path, { mtime }, (done) => {
       const measure = new Measure(FILE_LIMIT, () => new CollectorError('invalid_request', `知識庫檔案超過 64 MiB，無法匯出：${entry.path}`));
       measure.on('end', () => rows.push({ path: entry.path, size: measure.size, sha256: measure.hash.digest('hex') }));
-      const source = entry.bytes ? Readable.from([entry.bytes]) : createReadStream(entry.absolute!);
+      const source = 'bytes' in entry ? Readable.from([entry.bytes]) : createReadStream(entry.absolute);
       source.on('error', (error: Error) => measure.destroy(
         new CollectorError('invalid_request', `知識庫檔案在匯出途中無法讀取，請稍後再試：${entry.path}`, { cause: error })));
       // The zip does not listen for errors of the streams it reads, so a failed file ends the output and with it the export.
+      // https://github.com/thejoshwolfe/yazl/blob/3.3.1/index.js#L59-L79
       measure.on('error', (error: Error) => output.destroy(error));
       done(null, source.pipe(measure));
     });
@@ -245,25 +189,16 @@ export async function writePackage(
   return { unregisteredFiles: registered.unregisteredFiles, summary: registered.summary };
 }
 
-/** A package opened for reading; every file read from it is checked against its manifest row. */
 export interface PackageReader {
   manifest: PackageManifest;
-  /** A digest of the manifest, which changes whenever the package content does. */
   identity: string;
   has(file: string): boolean;
   paths(): string[];
-  /** The bytes of a file, checked against its size and SHA-256. */
   read(file: string): Promise<Buffer>;
-  /** Writes a file to `target`, a new file, checking it on the way; a file that does not match is removed. */
   extract(file: string, target: string): Promise<void>;
   close(): void;
 }
 
-/**
- * Opens a package file and checks its structure: a zip whose entries are exactly `manifest.json`
- * and the files the manifest lists, each at a path a package may hold, with the size the manifest
- * gives. Contents are checked as they are read.
- */
 export async function openPackage(file: string, sources: SourceRegistry): Promise<PackageReader> {
   let zip: yauzl.ZipFile;
   try {
@@ -293,19 +228,21 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
     if (manifestEntry.uncompressedSize > MANIFEST_LIMIT) invalid('匯出檔的 manifest.json 超過 64 MiB。');
     const manifestBytes = await readEntry(zip, manifestEntry, MANIFEST_LIMIT);
     const manifest = parseManifest(manifestBytes, sources);
-    const rows = new Map(manifest.files.map((row) => [row.path, row]));
+    const rows = new Map<string, { row: ManifestFile; entry: yauzl.Entry }>();
     for (const row of manifest.files) {
       const entry = entries.get(row.path);
       if (!entry) invalid(`匯出檔缺少 manifest 列出的檔案：${row.path}`);
       if (entry.uncompressedSize !== row.size) invalid(`匯出檔的內容與 manifest 不一致：${row.path}`);
+      rows.set(row.path, { row, entry });
     }
     for (const name of entries.keys()) {
       if (name !== MANIFEST && !rows.has(name)) invalid(`匯出檔含有 manifest 沒有列出的項目：${name}`);
     }
     const open = async (name: string): Promise<{ stream: Readable; measure: Measure; row: ManifestFile }> => {
-      const row = rows.get(name);
-      if (!row) throw new Error(`Not in the package: ${name}`);
-      const stream = await zip.openReadStreamPromise(entries.get(name)!);
+      const listed = rows.get(name);
+      if (!listed) throw new Error(`Not in the package: ${name}`);
+      const { row, entry } = listed;
+      const stream = await zip.openReadStreamPromise(entry);
       const measure = new Measure(row.size, () => new CollectorError('invalid_request', `匯出檔的內容與 manifest 不一致：${name}`));
       return { stream, measure, row };
     };
@@ -336,7 +273,7 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
           verify(measure, row);
         } catch (error) {
           await rm(target, { force: true }).catch(() => undefined);
-          if (error instanceof CollectorError || (error as NodeJS.ErrnoException).code) throw error;
+          if (error instanceof CollectorError || errorCode(error)) throw error;
           invalid(`匯出檔已損壞：${name}`);
         }
       },
@@ -364,12 +301,16 @@ async function readEntry(zip: yauzl.ZipFile, entry: yauzl.Entry, limit: number):
   return Buffer.concat(chunks);
 }
 
+function isSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value);
+}
+
 function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest {
   let value: Partial<PackageManifest>;
   try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
   if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
   const formatVersion = value.formatVersion;
-  if (!Number.isInteger(formatVersion) || formatVersion! < 1 || formatVersion! > packageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
+  if (!isSafeInteger(formatVersion) || formatVersion < 1 || formatVersion > packageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
   if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
   const seen = new Set<string>();
   for (const row of value.files as unknown[]) {
@@ -377,7 +318,7 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
     if (!file || typeof file.path !== 'string' || !packagePath(sources, file.path)) {
       invalid(`匯出檔含有不支援的路徑：${typeof file?.path === 'string' ? file.path : '(無效)'}`);
     }
-    if (!Number.isSafeInteger(file.size) || file.size! < 0 || file.size! > FILE_LIMIT) invalid(`匯出檔中的檔案大小無效或超過 64 MiB：${file.path}`);
+    if (!isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT) invalid(`匯出檔中的檔案大小無效或超過 64 MiB：${file.path}`);
     if (typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(file.sha256)) invalid(`匯出檔中的校驗碼無效：${file.path}`);
     const key = file.path.toLocaleLowerCase('en-US');
     if (seen.has(key)) invalid('匯出檔含有重複或只差大小寫的路徑。');
@@ -387,7 +328,7 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
   const source = value.source as Partial<PackageSource> | undefined;
   const sourceValid = !!source && typeof source === 'object' && typeof source.vaultId === 'string' && typeof source.machine === 'string';
   return {
-    format: PACKAGE_FORMAT, formatVersion: formatVersion!,
+    format: PACKAGE_FORMAT, formatVersion,
     ...(typeof value.exportedAt === 'string' ? { exportedAt: value.exportedAt } : {}),
     ...(typeof value.createdBy === 'string' ? { createdBy: value.createdBy } : {}),
     ...(sourceValid ? { source: {
@@ -399,17 +340,10 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
   };
 }
 
-/** The total size of the files a package holds once unpacked. */
 export function unpackedBytes(reader: PackageReader): number {
   return reader.manifest.files.reduce((sum, row) => sum + row.size, 0);
 }
 
-/**
- * Checks what a package holds before an import uses it: every document is a document of
- * its path, the settings files read as current settings, no document sits next to the deletion
- * record that would hide it, and no subscription next to its removal record (an export never
- * writes either pair).
- */
 export async function checkPackageContent(reader: PackageReader, sources: SourceRegistry): Promise<void> {
   const json = async (file: string) => (reader.has(file) ? JSON.parse((await reader.read(file)).toString('utf8')) as unknown : undefined);
   let records;
@@ -427,7 +361,6 @@ export async function checkPackageContent(reader: PackageReader, sources: Source
     if (error instanceof CollectorError) throw error;
     invalid('匯出檔中的訂閱或排程設定格式無效。');
   }
-  // A subscription ID is unique within its type.
   for (const { subscriptions, removals } of types) {
     const ids = new Set<string>();
     for (const subscription of subscriptions) {
@@ -454,7 +387,6 @@ export async function checkPackageContent(reader: PackageReader, sources: Source
   }
 }
 
-/** Writes the files of a checked package into `destination`, a new private folder. */
 export async function unpackPackage(
   reader: PackageReader, destination: string, progress: (done: number, total: number) => void,
 ): Promise<void> {
@@ -467,7 +399,6 @@ export async function unpackPackage(
   }
 }
 
-/** The registered files of a Vault as one side of an import. */
 export function registeredSource(registered: RegisteredFiles): FileSource {
   const files = new Map(registered.files.map((file) => [file.path, file]));
   return {
@@ -476,7 +407,7 @@ export function registeredSource(registered: RegisteredFiles): FileSource {
     read: async (file) => {
       const entry = files.get(file);
       if (!entry) throw new Error(`Not a registered file: ${file}`);
-      return entry.bytes ?? readFile(entry.absolute!);
+      return 'bytes' in entry ? entry.bytes : readFile(entry.absolute);
     },
   };
 }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { replaceFile } from '../../shared/lib/json-file.js';
+import { errorCode } from './errno.js';
 
 /** Device-local record of which Vault this profile uses; never stored inside a Vault. */
 export class VaultSelection {
@@ -13,7 +14,7 @@ export class VaultSelection {
     try {
       value = JSON.parse(await readFile(this.file, 'utf8'));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if (errorCode(error) === 'ENOENT') return null;
       throw new Error('Invalid Vault selection file', { cause: error });
     }
     if (!value || typeof value !== 'object' || !('path' in value)

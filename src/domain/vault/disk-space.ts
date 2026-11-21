@@ -1,7 +1,7 @@
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
+import { errorCode } from './errno.js';
 
-/** Space kept free on top of the bytes a Vault operation writes: 5% of them, and at least 16 MiB. */
 export const SPACE_MARGIN_RATIO = 0.05;
 export const SPACE_MARGIN_MIN_BYTES = 16 * 1024 * 1024;
 
@@ -12,7 +12,6 @@ export function spaceMargin(bytes: number): number {
 /** Free space of the volume holding `folder`, as `fs.statfs` reports it. */
 export type StatFs = (folder: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
 
-/** The path itself or its nearest ancestor that exists. */
 export async function nearestExisting(target: string): Promise<string> {
   let current = target;
   for (;;) {
@@ -20,7 +19,7 @@ export async function nearestExisting(target: string): Promise<string> {
       await lstat(current);
       return current;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (errorCode(error) !== 'ENOENT') throw error;
     }
     const parent = path.dirname(current);
     if (parent === current) return current;

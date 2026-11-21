@@ -8,8 +8,8 @@ import type { VaultFiles } from '../../shared/vault/vault-files.js';
 import { DELETIONS_FILE } from './deleted-documents.js';
 import { documentKeyFromPath } from './document-paths.js';
 import { ensureVaultFormat } from './vault-directory.js';
+import { errorCode } from './errno.js';
 
-/** Refuses a path that names no Vault file: a document, a subscriptions file, the schedule file or the deletion file. */
 function checkVaultFile(sources: SourceRegistry, relative: string): void {
   if (documentKeyFromPath(sources, relative)) return;
   if (sources.subscriptionDefinitions.some((definition) => definition.storage!.subscriptionsFile === relative)) return;
@@ -17,11 +17,6 @@ function checkVaultFile(sources: SourceRegistry, relative: string): void {
   throw new Error(`Not a Vault file: ${relative}`);
 }
 
-function missing(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-/** The files of the Vault at `root` that holds the types of `sources`; see `VaultFiles`. */
 export class VaultFileWriter implements VaultFiles {
   constructor(readonly root: string, readonly sources: SourceRegistry) {}
 
@@ -53,7 +48,7 @@ export class VaultFileWriter implements VaultFiles {
       await copyFile(temporary, target, constants.COPYFILE_EXCL);
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      if (errorCode(error) === 'EEXIST') return false;
       throw error;
     } finally {
       await rm(temporary, { force: true });
@@ -66,15 +61,14 @@ export class VaultFileWriter implements VaultFiles {
   }
 
   /**
-   * Moves the finished file `from`, in the same file system, to `relative` with a rename, so the path
-   * holds either its old or its new file. Returns false when `from` is gone: an earlier attempt
-   * already put it in place, after the marker was raised.
+   * A rename within one file system replaces the target atomically:
+   * https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
    */
   async place(relative: string, from: string): Promise<boolean> {
     try {
       await access(from);
     } catch (error) {
-      if (missing(error)) return false;
+      if (errorCode(error) === 'ENOENT') return false;
       throw error;
     }
     await this.admitFile(relative);
@@ -84,16 +78,11 @@ export class VaultFileWriter implements VaultFiles {
       await rename(from, target);
       return true;
     } catch (error) {
-      if (missing(error)) return false;
+      if (errorCode(error) === 'ENOENT') return false;
       throw error;
     }
   }
 
-  /**
-   * Raises the marker for files that are to sit at the Vault paths `relative`. An import calls it
-   * before it puts the first of its files in place, so a stop between two renames never leaves a
-   * file of a newer format in a Vault whose marker an older program still opens.
-   */
   async admit(relative: Iterable<string>): Promise<void> {
     for (const file of relative) checkVaultFile(this.sources, file);
     await ensureVaultFormat(this.root, this.sources);
