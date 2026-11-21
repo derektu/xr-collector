@@ -200,7 +200,8 @@ export class ActivityLog implements EventRecorder {
       try {
         await mkdir(directory, { recursive: true });
         const file = path.join(directory, `${day}.jsonl`);
-        await this.appendOnFreshLine(file, batch.map((event) => `${JSON.stringify(event)}\n`).join(''));
+        const lines = batch.map((event) => `${JSON.stringify(event)}\n`).join('');
+        await this.append(file, (await endsMidLine(file) ? '\n' : '') + lines);
       } catch (error) {
         this.healthValue = {
           ...this.healthValue,
@@ -283,10 +284,6 @@ export class ActivityLog implements EventRecorder {
     }
     this.cache.set(file, cached);
     return cached.events;
-  }
-
-  private async appendOnFreshLine(file: string, text: string): Promise<void> {
-    await this.append(file, (await endsMidLine(file) ? '\n' : '') + text);
   }
 
   private maskWithCurrentSecrets(event: JobEvent): JobEvent {
