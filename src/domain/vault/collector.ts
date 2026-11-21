@@ -23,23 +23,18 @@ import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { NO_PUBLISHER_ID, type DocumentVault } from '../../shared/documents/document-vault.js';
 import type { DocumentCollector, IndexOutcome, SaveIntent } from '../../shared/documents/document-collector.js';
 
-/** The subscriptions of one source type, as the document source groups name publishers after them. */
 export interface TypeSubscriptions {
   subscriptions: SubscriptionRecord[];
-  /** Removal records of subscriptions removed and not added again. */
   removals?: Array<{ id: string; title: string }>;
 }
 
 export interface SaveResult {
   document: SavedDocument;
-  /** The save lifted a deletion record. */
   recollected: boolean;
 }
 
 export interface CollectorOptions {
-  /** Records a Vault-level event, such as a deletion, in the device activity log. */
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
-  /** Hears each document saved, indexed or deleted, once reads return the change. */
   noteChange?: NoteChange;
 }
 
@@ -161,7 +156,6 @@ export class Collector implements DocumentCollector {
         indexed = false;
         indexMessage = '搜尋服務尚未啟用；下次啟動搜尋時會排除這份文件。';
       } else {
-        // Calling remove excludes the document from searches at once; the index entry goes in the background.
         void this.search.remove(id).catch((error: unknown) => {
           console.error('Search index removal failed', error);
           this.options.recordEvent?.({
@@ -170,7 +164,6 @@ export class Collector implements DocumentCollector {
           });
         });
       }
-      // Noted once searches exclude the document, so a reader searching again after it no longer finds it.
       this.noted(id);
       this.options.recordEvent?.({ eventType: 'document.deleted', message: `已刪除「${document.title}」。`, ...event });
       return {
@@ -233,7 +226,6 @@ export class Collector implements DocumentCollector {
     this.options.noteChange?.({ kind: 'document', id });
   }
 
-  /** Runs `work` after every earlier operation on the same item has finished. */
   private exclusive<T>(id: string, work: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(id) ?? Promise.resolve();
     const run = previous.then(work);
@@ -285,7 +277,6 @@ export class Collector implements DocumentCollector {
       groups.set(document.sourceType, publishers);
       const key = document.publisher.id ?? NO_PUBLISHER_ID;
       const entry = publishers.get(key);
-      // Documents arrive newest first, so the first name seen is the most recent one.
       if (entry) entry.count += 1;
       else publishers.set(key, { id: document.publisher.id, name: document.publisher.name, count: 1, subscribed: false, removed: false });
     }
@@ -323,7 +314,6 @@ export class Collector implements DocumentCollector {
   }
 }
 
-/** Whether the request is explicit and made after the deletion; a request at the deletion time counts as before it. */
 function explicitAfter(intent: SaveIntent, deletedAt: string): boolean {
   return intent.explicitAt !== null && !collectedBeforeDeletion(intent.explicitAt, deletedAt);
 }
@@ -334,7 +324,6 @@ function matchesFilter(document: DocumentMetadata, filter: Omit<DocumentFilter, 
   return filter.publisherId === NO_PUBLISHER_ID ? document.publisher.id === null : document.publisher.id === filter.publisherId;
 }
 
-/** Named publishers alphabetically, same names by ID; documents without a publisher ID last. */
 function comparePublishers(left: DocumentSourcePublisher, right: DocumentSourcePublisher): number {
   if ((left.id === null) !== (right.id === null)) return left.id === null ? 1 : -1;
   return left.name.localeCompare(right.name, 'zh-Hant') || (left.id ?? '').localeCompare(right.id ?? '');

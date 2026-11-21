@@ -1,20 +1,18 @@
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
+import { documentId } from '../../shared/documents/document-id.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { Collector, type CollectorOptions } from './collector.js';
-import { deletionId } from './deleted-documents.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { readVaultId } from './vault-directory.js';
 import { VaultFileWriter } from './vault-files.js';
 
-/** An event about a Vault's documents, recorded in the activity log under that Vault. */
 export type VaultEvent = Omit<NewJobEvent, 'vaultPath' | 'jobId'>;
 
 /** A Vault's files, opened for the services built on them. */
 export interface OpenedVault {
   readonly root: string;
-  /** ID from the Vault's marker. */
   readonly vaultId: string;
   /** The way every write of the Vault's files goes, also that of the subscription and schedule stores. */
   readonly files: VaultFileWriter;
@@ -39,16 +37,16 @@ export async function openVault(root: string, sources: SourceRegistry): Promise<
   const recoveryEvents: VaultEvent[] = [
     ...recovery.completed.map((record): VaultEvent => ({
       eventType: 'document.delete_resumed', message: `已完成上次未完成的刪除：「${record.title}」。`,
-      documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
+      documentId: documentId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
     })),
     ...recovery.unresolved.map((record): VaultEvent => ({
       eventType: 'document.delete_unresolved',
       message: `「${record.title}」有刪除紀錄，但文件檔缺少可讀的收集時間；文件維持隱藏，檔案與刪除紀錄都保留。`,
-      documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
+      documentId: documentId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
     })),
     ...recovery.cleared.map((record): VaultEvent => ({
       eventType: 'document.recollected', message: `已重新收集「${record.title}」，解除刪除紀錄。`,
-      documentId: deletionId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
+      documentId: documentId(record), sourceId: record.sourceId, sourceTitle: record.title, namesSource: true,
     })),
   ];
   return {

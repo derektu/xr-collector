@@ -11,7 +11,7 @@
 | `youtube` | `Transcript` | 影片 ID（11 個 `[A-Za-z0-9_-]` 字元） |
 | `rss` | `Article` | 訂閱 ID 與文章在 feed 中的識別合併後取 SHA-256 的前 16 個十六進位字元；訂閱 ID 是 feed 網址的同一種雜湊 |
 
-收集到已有文件的項目時回傳既有文件，不覆寫內容。
+收集到已有文件的項目時回傳既有文件，不覆寫內容。被刪除紀錄隱藏的檔案是已刪除的文件，新收集的文件取代它。
 
 | 欄位 | 寫入行為 |
 | --- | --- |
@@ -39,6 +39,8 @@ reader 接受 `collector.source` 是已登錄的來源類型、且 `type` 等於
 對外的文件是固定欄位投影：`id`、`type`、`sourceType`、`sourceId`、`sourceUrl`、`title`、`publisher`、`publishedAt`、`collectedAt`、`status`，單份讀取另有 `contentExtent` 與正文；codec 讀出的來源專屬資訊放在以來源類型為名的欄位，目前只有 YouTube 的 `youtube`（字幕語言與人工／自動）。沒有 `publisher_id` 的文件以 `publisher.id: null` 呈現。未知的 frontmatter 不透過 API 呈現；讀取不改寫檔案，未知欄位保留在 Vault。
 
 只有檔名是 `documents/<來源類型>/<來源 ID>.md` 的檔案是文件；Vault 資料夾中的其他檔案不屬於知識庫，程式不讀取，也不放進匯出檔。文件檔讀不出這個格式，或 frontmatter 的 ID 與檔名不符時，列表與匯出失敗並指出該檔案。
+
+列表依 `collected_at` 由新到舊排列，同時最多讀取 16 個文件檔，讀檔佔用的記憶體不隨 Vault 大小增加。來源統計依來源類型與 `publisher_id` 計算篇數；發布者名稱取訂閱的名稱，訂閱已移除時取移除紀錄的名稱，都沒有時取該發布者最近收集的文件的 `collector.publisher`；沒有 `publisher_id` 的文件歸為未知發布者。
 
 ## 修改
 

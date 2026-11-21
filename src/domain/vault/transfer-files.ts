@@ -3,20 +3,14 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile 
 import path from 'node:path';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import { VAULT_MARKER } from './vault-directory.js';
+import { errorCode } from './errno.js';
 
-/**
- * Local files of Vault export and import: export files a person or Agent names by path, the export
- * folder and its file names, the folder an import from Onboarding creates, and the profile record
- * of that import while it runs.
- */
+function invalid(message: string): never {
+  throw new CollectorError('invalid_request', message);
+}
 
-const invalid = (message: string): never => { throw new CollectorError('invalid_request', message); };
-
-/**
- * The real location of a path, resolving symbolic links of whichever ancestors exist. On a
- * case-insensitive volume the real path also carries the spelling stored on disk, so two spellings
- * of one folder resolve to the same location.
- */
+// On a case-insensitive volume (the macOS and Windows defaults), realpath returns the spelling stored
+// on disk, so two spellings of one folder resolve to the same location.
 async function resolved(target: string): Promise<string> {
   const missing: string[] = [];
   let current = path.resolve(target);
@@ -24,7 +18,7 @@ async function resolved(target: string): Promise<string> {
     try {
       return path.join(await realpath(current), ...missing.reverse());
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (errorCode(error) !== 'ENOENT') throw error;
       const parent = path.dirname(current);
       if (parent === current) return path.resolve(target);
       missing.push(path.basename(current));
@@ -33,7 +27,6 @@ async function resolved(target: string): Promise<string> {
   }
 }
 
-/** Whether `target` is `folder` or inside it, after resolving symbolic links. */
 export async function isWithin(target: string, folder: string): Promise<boolean> {
   const relative = path.relative(await resolved(folder), await resolved(target));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -41,15 +34,10 @@ export async function isWithin(target: string, folder: string): Promise<boolean>
 
 const STAGING = /\.importing-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-/**
- * Whether a folder carries the name of an import's working folder (`.importing-<UUID>`). Recovery
- * at startup deletes such folders, so they never become a Vault in use or an import target.
- */
 export function isWorkFolder(folder: string): boolean {
   return STAGING.test(path.basename(path.resolve(folder)));
 }
 
-/** Folders an export file may not be placed in: the active Vault and the profile. */
 export interface ProtectedFolders { vaultRoot: string; profilePath: string }
 
 async function refuseProtected(target: string, folders: ProtectedFolders, what: string): Promise<void> {
@@ -59,41 +47,35 @@ async function refuseProtected(target: string, folders: ProtectedFolders, what: 
 
 function absolute(value: unknown, message: string): string {
   if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value)) invalid(message);
-  return path.normalize(value as string);
+  return path.normalize(value);
 }
 
-/** Checks an export file a caller named by its absolute path (a `.zip` file) and returns that path. */
 export async function checkPackageFile(value: unknown): Promise<string> {
   const file = absolute(value, '請提供匯出檔的完整路徑。');
   if (!/\.zip$/iu.test(file)) invalid('只能匯入 XR Collector 的 .zip 匯出檔。');
   let info;
   try { info = await stat(file); } catch { invalid('找不到這個匯出檔。'); }
-  if (!info!.isFile()) invalid('這個路徑不是檔案。');
+  if (!info.isFile()) invalid('這個路徑不是檔案。');
   return file;
 }
 
-/**
- * Checks where an export may be written: an absolute `.zip` path in an existing folder, outside the
- * active Vault and the profile. An existing file is replaced only with `overwrite`.
- */
 export async function checkExportFile(value: unknown, overwrite: boolean, folders: ProtectedFolders): Promise<string> {
   const file = absolute(value, '請提供匯出檔的完整路徑。');
   if (!/\.zip$/iu.test(file)) invalid('匯出檔名必須以 .zip 結尾。');
   await refuseProtected(file, folders, '匯出檔');
   let parent;
   try { parent = await stat(path.dirname(file)); } catch { invalid('匯出檔所在的資料夾不存在。'); }
-  if (!parent!.isDirectory()) invalid('匯出檔所在的資料夾不存在。');
+  if (!parent.isDirectory()) invalid('匯出檔所在的資料夾不存在。');
   try {
     const existing = await lstat(file);
     if (!existing.isFile()) invalid('這個路徑已有資料夾或其他項目，請換一個檔名。');
     if (!overwrite) throw new CollectorError('file_exists', `「${path.basename(file)}」已經存在。要取代它，請確認覆寫。`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (errorCode(error) !== 'ENOENT') throw error;
   }
   return file;
 }
 
-/** Name of the folder exports go to by default, inside the person's Documents folder. */
 export const EXPORT_FOLDER_NAME = 'XR Collector 匯出';
 
 /**
@@ -105,7 +87,6 @@ export function exportFolder(documents: string, paths: Pick<typeof path, 'join'>
   return configured ? path.resolve(configured) : paths.join(documents, EXPORT_FOLDER_NAME);
 }
 
-/** Name of the folder an import backs the Vault up to before it applies, inside the person's Documents folder. */
 export const BACKUP_FOLDER_NAME = 'XR Collector 備份';
 
 /**
@@ -125,12 +106,14 @@ export function exportFileName(now: Date): string {
   return `XR Collector 匯出 ${localDay(now)}.zip`;
 }
 
-/** "匯入前備份 2026-10-19 143005.zip", in local time: the backup an import takes before it applies. */
 export function backupFileName(now: Date): string {
   return `匯入前備份 ${localDay(now)} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
 }
 
-/** Writes a file through a temporary file beside it, so the named file is either whole or untouched. */
+/**
+ * Writes a file through a temporary file beside it, so the named file is either whole or untouched.
+ * rename(2) replaces an existing target atomically: https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
+ */
 async function writeAtomically(file: string, bytes: Buffer): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
@@ -141,10 +124,6 @@ async function writeAtomically(file: string, bytes: Buffer): Promise<void> {
   }
 }
 
-/**
- * Checks the folder an import from Onboarding creates its Vault in: an absolute path that does not
- * exist yet, in an existing folder, and not a working folder of an import.
- */
 export async function checkImportFolder(value: unknown): Promise<string> {
   const folder = absolute(value, '請提供新知識庫的完整路徑。');
   if (isWorkFolder(folder)) invalid('這是匯入使用的暫存資料夾，請選擇其他位置。');
@@ -152,27 +131,18 @@ export async function checkImportFolder(value: unknown): Promise<string> {
     await lstat(folder);
     invalid(`這個位置已經有「${path.basename(folder)}」，請換個名稱。`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (errorCode(error) !== 'ENOENT') throw error;
   }
   let parent;
   try { parent = await stat(path.dirname(folder)); } catch { invalid('找不到新知識庫所在的資料夾。'); }
-  if (!parent!.isDirectory()) invalid('找不到新知識庫所在的資料夾。');
+  if (!parent.isDirectory()) invalid('找不到新知識庫所在的資料夾。');
   return folder;
 }
 
-/** The temporary folder an import from Onboarding unpacks into, beside the folder it becomes. */
 export function stagingFolder(folder: string): string {
   return `${folder}.importing-${randomUUID()}`;
 }
 
-/**
- * Profile record of an import from Onboarding in progress, kept until the device selection names
- * the new Vault:
- * `{ "staging": "<path>", "target": "<path>", "placed": <boolean>, "marker": "<sha256>" }`.
- * The import unpacks into the staging folder and renames it to the target once it is complete.
- * `placed` is set just before that rename; `marker` is the digest of the Vault marker the import
- * wrote, which tells the new folder apart from anything else at the target path.
- */
 export const IMPORT_JOURNAL = 'vault-import-journal.json';
 
 export interface ImportJournal {
@@ -191,29 +161,21 @@ export async function clearImportJournal(profilePath: string): Promise<void> {
   await rm(path.join(profilePath, IMPORT_JOURNAL), { force: true });
 }
 
-/** The digest of a Vault's marker file, or null when it has none. */
 export async function markerDigest(folder: string): Promise<string | null> {
   try {
     return createHash('sha256').update(await readFile(path.join(folder, VAULT_MARKER))).digest('hex');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return null;
+    if (errorCode(error) === 'ENOENT' || errorCode(error) === 'ENOTDIR') return null;
     throw error;
   }
 }
 
-/**
- * Takes back an import from Onboarding a stop interrupted, unless `kept` names its target (the
- * device selection and the Vault being opened): the staging folder is removed, and a target folder
- * whose marker is the one the import wrote is renamed back to a staging name and removed. Only folders named like an import's staging folder
- * and a target carrying the import's own marker are touched; a journal naming anything else is
- * dropped without touching it. Returns the folders removed.
- */
 export async function recoverImport(profilePath: string, kept: readonly (string | null)[]): Promise<string[]> {
   let journal: Partial<ImportJournal> | null;
   try {
     journal = JSON.parse(await readFile(path.join(profilePath, IMPORT_JOURNAL), 'utf8')) as Partial<ImportJournal>;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (errorCode(error) === 'ENOENT') return [];
     journal = null;
   }
   const removed: string[] = [];
@@ -234,7 +196,6 @@ export async function recoverImport(profilePath: string, kept: readonly (string 
   return removed;
 }
 
-/** Whether a folder exists and holds nothing. */
 export async function isEmptyFolder(folder: string): Promise<boolean> {
   try { return (await readdir(folder)).length === 0; } catch { return false; }
 }

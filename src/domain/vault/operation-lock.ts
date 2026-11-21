@@ -17,9 +17,7 @@ export interface OperationReporter {
   progress(state: ProgressState, message: string, files?: { completed: number; total: number }): void;
   files(completed: number, total?: number): void;
   blockReads(): void;
-  /** The held jobs belong to a bundle that has been replaced and will be closed instead of released. */
-  discardHold(): void;
-  /** Marks a failure that cannot safely resume collection until the process restarts. */
+  holdClosesWithReplacedBundle(): void;
   stop(error: CollectorError): never;
 }
 
@@ -34,7 +32,6 @@ interface LockDependencies {
   hold(signal: AbortSignal): Promise<() => void>;
   idle(): Promise<void>;
   suspend(value: boolean): void;
-  /** Hears each change of the status once `status()` returns it. */
   changed?: () => void;
 }
 
@@ -61,10 +58,6 @@ class StoppedOperation extends Error {
   constructor(readonly problem: CollectorError) { super(problem.message, { cause: problem }); }
 }
 
-/**
- * Owns the single Vault operation and every state it exposes. A terminal state is published only
- * after collection and ordinary writes can resume, except for an explicitly stopped operation.
- */
 export class VaultOperationLock {
   private current: OperationStatus = {
     state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
@@ -83,7 +76,6 @@ export class VaultOperationLock {
   constructor(private readonly dependencies: LockDependencies) {}
 
   status(): OperationStatus { return { ...this.value }; }
-  /** Resolves after the operation active when this is called has published its terminal state. */
   finished(): Promise<void> { return this.active; }
   isLocked(): boolean { return this.lifecycle.kind !== 'idle'; }
 
@@ -107,15 +99,12 @@ export class VaultOperationLock {
     };
   }
 
-  /** Atomically excludes Vault operations/new writes, then drains existing writes and collection. */
   async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
     if (this.lifecycle.kind !== 'idle' || this.updateContext) throw this.busyWrite();
     const context: UpdateContext = { releaseHold: null, transferred: false, signal };
     this.updateContext = context;
     this.dependencies.suspend(true);
     try {
-      // JobManager.hold increments its dispatch gate before its first await. Acquire it first so
-      // queued work cannot start while existing request writes drain.
       const release = await this.dependencies.hold(signal);
       if (signal.aborted) { release(); throw signal.reason; }
       context.releaseHold = release;
@@ -133,8 +122,6 @@ export class VaultOperationLock {
         if (finished || this.updateContext !== context) throw new CollectorError('update_busy', '更新等待已經結束。');
         if (context.signal.aborted) { finished = true; this.releaseUpdate(context); throw context.signal.reason; }
         finished = true; context.transferred = true;
-        // The runtime now owns a destructive close. Keep the gate and hold in force; jobs.close()
-        // consumes them, and a close failure must not claim the old runtime resumed safely.
       },
     };
   }
@@ -144,17 +131,16 @@ export class VaultOperationLock {
     let resolveFinished!: () => void;
     this.active = new Promise<void>((resolve) => { resolveFinished = resolve; });
     const task = this.perform(run, context).finally(resolveFinished);
-    // Background operations deliberately do not await the task; their result is exposed by status.
     void task.catch(() => undefined);
     return task;
   }
 
   cancelWait(): OperationStatus {
-    if (this.lifecycle.kind !== 'running' || !this.lifecycle.context.abort) {
+    const context = this.lifecycle.kind === 'running' ? this.lifecycle.context : null;
+    const abort = context?.abort;
+    if (!context || !abort) {
       throw new CollectorError('invalid_request', '目前沒有等待中的知識庫操作；已開始的處理無法取消。');
     }
-    const context = this.lifecycle.context;
-    const abort = context.abort!;
     const cancellation = new CollectorError('transfer_cancelled', '已取消，資料未變更。');
     context.cancelled = true;
     context.cancellation = cancellation;
@@ -204,13 +190,11 @@ export class VaultOperationLock {
         this.value = { ...this.value, completedFiles: completed, ...(total === undefined ? {} : { totalFiles: total }) };
       },
       blockReads: () => { if (ownsLock()) context.blockReading = true; },
-      discardHold: () => { context.releaseHold = null; },
+      holdClosesWithReplacedBundle: () => { context.releaseHold = null; },
       stop: (error) => { throw new StoppedOperation(error); },
     };
     try {
       await this.settle(context);
-      // The wait can resolve just before cancelWait aborts it. Cancellation still owns that turn,
-      // so never let its already-queued continuation enter the operation body.
       if (context.cancelled) throw context.cancellation;
       const completed = await run.body(reporter);
       this.release(context);
@@ -222,7 +206,6 @@ export class VaultOperationLock {
     } catch (error) {
       if (context.cancelled || error instanceof CollectorError && error.code === 'transfer_cancelled') {
         this.release(context);
-        // cancelWait already published idle; this run may unwind after a newer one has finished.
         throw error;
       }
       const stopped = error instanceof StoppedOperation;
@@ -230,7 +213,6 @@ export class VaultOperationLock {
       const failed = this.mapFailure(run, problem);
       if (stopped && ownsLock()) this.lifecycle = { kind: 'stopped', context };
       else this.release(context);
-      // A superseding operation can exist only after cancellation; never publish over it.
       if (!stopped && this.lifecycle.kind !== 'idle') throw problem;
       this.value = {
         ...this.value, state: 'error', message: failed.message, result: failed.result ?? null,
@@ -294,11 +276,10 @@ export class VaultOperationLock {
   }
 }
 
-/** Settles with `work`, or rejects with the signal's reason once it is aborted. */
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason as Error);
+  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason as Error);
+    const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
