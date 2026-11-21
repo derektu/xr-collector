@@ -80,14 +80,10 @@ export function rssPlugin(fetcher: FeedFetcher, options: { now?: () => number } 
   const read = new Map<string, ReadFeed>();
   const reading = new Map<string, Promise<ReadFeed>>();
 
-  const evictExpiredReads = (at: number): void => {
-    for (const [kept, earlier] of read) if (at - earlier.at > FEED_CACHE_MS) read.delete(kept);
-  };
-
   const remember = (id: string, feed: Feed): ReadFeed => {
     const entries = new Map(feed.entries.map((entry) => [articleKey(id, entry), entry]));
     const value = { feed, at: now(), entries };
-    evictExpiredReads(value.at);
+    for (const [kept, earlier] of read) if (value.at - earlier.at > FEED_CACHE_MS) read.delete(kept);
     read.set(id, value);
     return value;
   };
