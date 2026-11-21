@@ -5,14 +5,11 @@ export const SEARCH_QUERY_STRATEGY_REVISION = 1;
 
 export interface FragmentQueryPlan {
   normalized: string;
-  /** Exact normalized substrings. Every group is required, but groups may occur in different fields. */
   groups: string[];
-  /** Unquoted non-Han terms whose typo/prefix behavior remains owned by Meilisearch. */
   latinQuery: string;
   hasHan: boolean;
 }
 
-/** Converts a user query into Jieba word groups without using result labels or document contents. */
 export function planFragmentQuery(rawQuery: string, lexicon: SearchLexicon): FragmentQueryPlan {
   const normalized = normalizeSearchText(rawQuery);
   const groups: string[] = [];

@@ -46,3 +46,27 @@ describe('the indexed form of a YouTube document', () => {
     }]);
   });
 });
+
+describe('starting the search engine', () => {
+  it('loads the Han tokenizer before it reports ready, so the first user query does not pay for it', async () => {
+    const requests: Array<{ url: string; method: string; body: string | undefined }> = [];
+    const fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      const method = init?.method ?? 'GET';
+      requests.push({ url: target, method, body: typeof init?.body === 'string' ? init.body : undefined });
+      if (method === 'GET' && target.includes('/indexes/') && !target.includes('/tasks/')) {
+        return requests.length === 1 ? Response.json({}) : new Response(null, { status: 404 });
+      }
+      if (target.includes('/tasks/')) return Response.json({ status: 'succeeded' });
+      if (target.endsWith('/search')) return Response.json({ hits: [] });
+      return Response.json({ taskUid: 1 });
+    };
+    await new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: 'http://search.invalid', apiKey: 'key', fetch: fetch as typeof globalThis.fetch })
+      .initialize();
+
+    const last = requests.at(-1)!;
+    expect(last).toMatchObject({ method: 'POST' });
+    expect(last.url).toMatch(/\/search$/u);
+    expect(JSON.parse(last.body!).q).toMatch(/\p{Script=Han}/u);
+  });
+});

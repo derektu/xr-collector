@@ -8,7 +8,6 @@ interface Unit { text: string; rawStart: number; rawEnd: number }
 
 export interface NormalizedText {
   text: string;
-  /** Converts a UTF-8 byte range in normalized text back to a UTF-16 range in the original text. */
   rawRange(start: number, length: number): { start: number; end: number } | null;
 }
 
@@ -20,7 +19,6 @@ const openCcStages = {
   t2tw: buildOpenCcStages('t2tw'),
 };
 
-/** The search-only projection; Vault content and displayed fields always retain the original text. */
 export function normalizeSearchText(raw: string): string {
   const nfkc = raw.normalize('NFKC').replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
   return t2tw(s2t(nfkc)).replaceAll('臺', '台')
