@@ -631,7 +631,7 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     await w.close();
   });
 
-  it('builds the collection record from documents, failures and finished checks, newest first (N69-T7)', async () => {
+  it('builds the collection record from documents, failures and finished checks, newest first, a check before the items of the same instant since it ends after them (N69-T7)', async () => {
     const { collectionRecord, COLLECTION_LIMIT } = await import('../../../src/domain/sources/source-catalog.js');
     const w = await world();
     const [failing, gone, ok] = w.sources.fake.addFeed('r', w.clock.now, [1, 2, 3]);
