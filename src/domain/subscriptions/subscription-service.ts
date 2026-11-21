@@ -527,11 +527,12 @@ export function checkStatus(
   }
   if (context.loginRequired) return { state: 'login_required' };
   if (check) return check.status.state === 'downloading' ? { state: 'downloading', done: check.done, total: check.total } : check.status;
+  if (!context.autoCheck) {
+    return record.checkFailures ? { state: 'failing', failures: record.checkFailures.count, nextCheckAt: null } : { state: 'auto_check_off' };
+  }
   const next = record.nextCheckAt ?? null;
-  const unplanned = next === null;
-  if (context.autoCheck && (unplanned || new Date(next).getTime() <= context.now.getTime())) return { state: 'queued' };
-  if (record.checkFailures) return { state: 'failing', failures: record.checkFailures.count, nextCheckAt: context.autoCheck ? next : null };
-  if (!context.autoCheck || unplanned) return { state: 'auto_check_off' };
+  if (next === null || new Date(next).getTime() <= context.now.getTime()) return { state: 'queued' };
+  if (record.checkFailures) return { state: 'failing', failures: record.checkFailures.count, nextCheckAt: next };
   return { state: 'scheduled', nextCheckAt: next };
 }
 
