@@ -176,17 +176,13 @@ export class PacingGate implements Pacing {
         };
         signal.addEventListener('abort', waiter.onAbort, { once: true });
       }
-      this.enqueue(waiter);
+      const firstBackground = priority === 'interactive'
+        ? this.queue.findIndex((candidate) => candidate.priority === 'background')
+        : -1;
+      if (firstBackground < 0) this.queue.push(waiter);
+      else this.queue.splice(firstBackground, 0, waiter);
       this.pump();
     });
-  }
-
-  private enqueue(waiter: Waiter): void {
-    const firstBackground = waiter.priority === 'interactive'
-      ? this.queue.findIndex((candidate) => candidate.priority === 'background')
-      : -1;
-    if (firstBackground < 0) this.queue.push(waiter);
-    else this.queue.splice(firstBackground, 0, waiter);
   }
 
   private pump(): void {
