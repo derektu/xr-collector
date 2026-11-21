@@ -118,6 +118,8 @@ export class MeilisearchBackend implements SearchBackend {
         }),
       },
     );
+    // Updating filterableAttributes re-indexes every stored document, in time proportional to the index size.
+    // https://www.meilisearch.com/docs/learn/filtering_and_sorting/filter_search_results#configure-index-settings
     await this.waitForTask(settingsTask.taskUid, SETTINGS_TASK_TIMEOUT_MS);
 
     for (const uid of RETIRED_INDEX_UIDS) {
@@ -128,10 +130,6 @@ export class MeilisearchBackend implements SearchBackend {
       await this.waitForTask(task.taskUid);
     }
 
-    await this.warmHanTokenizer();
-  }
-
-  private async warmHanTokenizer(): Promise<void> {
     await this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
       method: 'POST',
       body: JSON.stringify({ q: '中文初始化', hitsPerPage: 1, page: 1, attributesToRetrieve: ['id'] }),
