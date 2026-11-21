@@ -134,12 +134,8 @@ export function collectionRecord(
     });
   }
   return entries
-    .sort(newestFirstChecksBeforeItems)
+    .sort((left, right) => right.at.localeCompare(left.at) || Number(isCheckRow(right)) - Number(isCheckRow(left)))
     .slice(0, COLLECTION_LIMIT);
-}
-
-function newestFirstChecksBeforeItems(left: SubscriptionCollectionEntry, right: SubscriptionCollectionEntry): number {
-  return right.at.localeCompare(left.at) || Number(isCheckRow(right)) - Number(isCheckRow(left));
 }
 
 function isCheckRow(entry: SubscriptionCollectionEntry): boolean {
