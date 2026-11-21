@@ -13,17 +13,12 @@ import { importNewVault } from './vault-import.js';
 import { VaultSelection } from './vault-selection.js';
 
 export interface DeviceVaultsOptions {
-  /** Device profile folder, where the selection and the journal of an import from Onboarding live. */
   profilePath: string;
-  /** The source types of every Vault this device opens or creates. */
   sources: SourceRegistry;
-  /** Application name and version written into markers of Vaults it creates. */
   createdBy: string;
-  /** Free space of a volume; defaults to `fs.statfs`. */
   statfs?: StatFs;
 }
 
-/** The Vault a start opens: the one at `root`, none chosen yet, or a chosen one that cannot be used and why. */
 export type InitialVault =
   | { kind: 'open'; root: string }
   | { kind: 'unset' }
@@ -34,7 +29,6 @@ export type InitialVault =
  * Onboarding steps that check, create, import or open a Vault while none is in use.
  */
 export class DeviceVaults {
-  /** Device record of the active Vault, never stored inside a Vault. */
   readonly selection: VaultSelection;
   /** Name of a new Vault folder when the person gives none. */
   readonly defaultName = DEFAULT_VAULT_NAME;

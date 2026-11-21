@@ -7,8 +7,8 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { VaultInspection } from '../../shared/vault/vault-types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
 import { replaceFile } from '../../shared/lib/json-file.js';
+import { errorCode } from './errno.js';
 
-/** Root file that marks a directory as a self-contained XR Collector Vault. */
 export const VAULT_MARKER = 'xr-collector-vault.json';
 export const VAULT_FORMAT = 'xr-collector-vault';
 
@@ -17,23 +17,14 @@ export interface VaultMarker {
   formatVersion: number;
   createdAt: string;
   createdBy: string;
-  /**
-   * Identity of the Vault: written when the Vault is created or imported and kept when it moves.
-   * Export files never carry the marker, so every Vault created from one gets a new ID.
-   */
   id: string;
 }
 
 const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-/** Operating-system files that do not make a directory non-empty. */
+// Finder (.DS_Store, .localized) and Windows Explorer (Thumbs.db, desktop.ini) create these files on their own,
+// so they do not make a folder non-empty.
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
-/**
- * Settings files and what each must read as: the subscriptions file of every type of `sources` with
- * subscriptions, the schedule file and the deletion file. An unreadable deletion file would let
- * deleted documents return, and a subscription or schedule file of another version would be
- * misread, so any of them failing makes the directory no Vault this program opens.
- */
 function settingsFiles(sources: SourceRegistry): Array<{ file: string; check: (value: unknown) => unknown }> {
   const exchange = sources.exchange;
   return [
@@ -41,10 +32,6 @@ function settingsFiles(sources: SourceRegistry): Array<{ file: string; check: (v
     { file: sources.schedule.file, check: exchange.checkSchedule },
     { file: DELETIONS_FILE, check: (value) => deletionsFromJson(value, sources) },
   ];
-}
-
-function errorCode(error: unknown): string | undefined {
-  return (error as NodeJS.ErrnoException | undefined)?.code;
 }
 
 function unreadableReason(error: unknown, subject: string): string {
@@ -79,7 +66,6 @@ function markerProblem(value: unknown, sources: SourceRegistry): string | null {
   return null;
 }
 
-/** The `.md` files in the document folder of every source type of `sources`. */
 async function countDocuments(root: string, sources: SourceRegistry): Promise<number> {
   let count = 0;
   for (const definition of sources.definitions) {
@@ -94,10 +80,6 @@ async function countDocuments(root: string, sources: SourceRegistry): Promise<nu
   return count;
 }
 
-/**
- * Reads a directory and classifies it without changing anything inside it; the settings files and
- * document folders it reads are those of the types of `sources`.
- */
 export async function inspectVaultDirectory(input: string, sources: SourceRegistry): Promise<VaultInspection> {
   if (!path.isAbsolute(input)) return { kind: 'invalid', path: input, reason: '請提供完整的絕對路徑。' };
   const root = path.resolve(input);
@@ -110,7 +92,7 @@ export async function inspectVaultDirectory(input: string, sources: SourceRegist
       const parent = path.dirname(root);
       try {
         if ((await stat(parent)).isDirectory()) return { kind: 'empty', path: root, exists: false };
-      } catch { /* reported below */ }
+      } catch { }
       return { kind: 'invalid', path: root, reason: '找不到這個目錄，上層目錄也不存在。' };
     }
     return { kind: 'invalid', path: root, reason: unreadableReason(error, '這個目錄') };
@@ -157,17 +139,14 @@ export async function inspectVaultDirectory(input: string, sources: SourceRegist
   }
 }
 
-/** A folder that holds other files, or nothing, is named as not being a Vault. */
 function notAVaultReason(root: string): string {
   return `「${path.basename(root) || root}」不是 XR Collector 知識庫。`;
 }
 
-/** Why a directory chosen to open is no Vault; a Vault that cannot be read gives its own reason. */
 export function notAVault(inspection: Exclude<VaultInspection, { kind: 'existing' }>): string {
   return inspection.kind === 'empty' ? notAVaultReason(inspection.path) : inspection.reason;
 }
 
-/** Writes the marker that turns an empty directory into a Vault of the format of `sources`, with a new Vault ID. */
 export async function writeVaultMarker(root: string, createdBy: string, sources: SourceRegistry, now = new Date()): Promise<void> {
   const marker: VaultMarker = {
     format: VAULT_FORMAT, formatVersion: vaultFormatVersion(sources), createdAt: localTimestamp(now), createdBy, id: randomUUID(),
@@ -175,21 +154,10 @@ export async function writeVaultMarker(root: string, createdBy: string, sources:
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
 }
 
-/**
- * The Vault format version of a program with the source types of `sources`: the highest
- * `vaultFormatVersion` they declare, and at least 1. The program writes every Vault at this version
- * and opens none above it.
- */
 export function vaultFormatVersion(sources: SourceRegistry): number {
   return Math.max(1, ...sources.definitions.map((definition) => definition.vaultFormatVersion));
 }
 
-/**
- * Raises the marker of the Vault at `root` to the format version of `sources` before a Vault file
- * is written. `VaultFileWriter` calls it for every Vault file it writes, and nothing else does. A
- * Vault already at that version is left as it is, and a Vault read without being written keeps its
- * marker. A directory without a readable marker is not a Vault this hook changes.
- */
 export async function ensureVaultFormat(root: string, sources: SourceRegistry): Promise<void> {
   const file = path.join(root, VAULT_MARKER);
   let marker: VaultMarker;
@@ -205,7 +173,6 @@ export async function ensureVaultFormat(root: string, sources: SourceRegistry): 
   await replaceFile(temporary, file);
 }
 
-/** Creates a Vault only in a missing or empty directory. */
 export async function createVaultDirectory(input: string, createdBy: string, sources: SourceRegistry): Promise<string> {
   const inspection = await inspectVaultDirectory(input, sources);
   if (inspection.kind === 'existing') throw new CollectorError('vault_invalid', '這個目錄已經是知識庫，請改用開啟。');
@@ -222,7 +189,6 @@ export async function createVaultDirectory(input: string, createdBy: string, sou
   return inspection.path;
 }
 
-/** The Vault ID in a Vault's marker, or null when the marker has none or cannot be read. */
 export async function readVaultId(root: string): Promise<string | null> {
   try {
     const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8')) as Partial<VaultMarker> | null;
