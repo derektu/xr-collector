@@ -5,16 +5,10 @@ import type { VaultFiles } from '../../shared/vault/vault-files.js';
 import type { ScheduleStore, StoredSchedule } from './scheduler.js';
 import { scheduleEnabledFromJson, type ScheduleFile } from './subscription-files.js';
 
-/**
- * The automatic collection switch in the Vault file the source registry names. A Vault without the file
- * collects automatically. Saving keeps the other fields of the file and goes through the Vault's
- * `VaultFiles`.
- */
 export class JsonScheduleStore implements ScheduleStore {
   private readonly filePath: string;
   private mutation: Promise<void> = Promise.resolve();
 
-  /** `noteChange` hears each saved switch once the file holds it. */
   constructor(private readonly files: VaultFiles, private readonly noteChange: NoteChange = () => undefined) {
     this.filePath = path.join(files.root, ...files.sources.schedule.file.split('/'));
   }

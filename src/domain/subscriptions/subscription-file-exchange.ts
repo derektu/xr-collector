@@ -4,7 +4,6 @@ import type { SourceDefinition } from '../../shared/sources/source-contract.js';
 import { importedSubscription, subscriptionContent } from './subscription-fields.js';
 import { removalsFromJson, scheduleEnabledFromJson, subscriptionsFromJson, subscriptionsToJson } from './subscription-files.js';
 
-/** The subscriptions file of one source type, as the Vault opens, exports and imports it. */
 function fileExchange(definition: SourceDefinition): SubscriptionFileExchange {
   return {
     type: definition.id,
@@ -31,14 +30,11 @@ function fileExchange(definition: SourceDefinition): SubscriptionFileExchange {
         if (removal) removals.set(id, removal);
         else removals.delete(id);
       }
-      // The records go last, after the subscription list.
-      const { removed: _removed, ...kept } = local && typeof local === 'object' && !Array.isArray(local) ? local as Record<string, unknown> : {};
-      return subscriptionsToJson(definition, kept, [...rows.values()], [...removals.values()]);
+      return subscriptionsToJson(definition, local, [...rows.values()], [...removals.values()]);
     },
   };
 }
 
-/** The subscription and schedule files of the registry's source types, for the Vault. */
 export function subscriptionFileExchange(registry: SourceRegistry): SubscriptionExchange {
   return {
     files: () => registry.subscriptionDefinitions.map(fileExchange),

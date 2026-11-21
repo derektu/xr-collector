@@ -9,6 +9,7 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { ChannelJobTrigger, JobView, JobError, JobSubmission, SkipReason } from '../../shared/jobs/job-types.js';
 import type { DocumentMetadata } from '../../shared/documents/document-types.js';
 import type {
+  CheckFailures,
   ItemFailureEntry,
   OutOfRangeEntry,
   PendingSubscription,
@@ -19,28 +20,18 @@ import type {
   SubscriptionSettings,
 } from '../../shared/subscriptions/subscription-types.js';
 
-/** A preview resolves synchronously; a slower lookup reports a network problem instead of hanging. */
 export const PREVIEW_TIMEOUT_MS = 60_000;
 
-/** How long removing a subscription with its documents waits for the captures already running. */
 export const REMOVAL_SETTLE_MS = 30_000;
 
-/** What happens to a removed subscription's documents. */
 export type RemovedDocuments = 'keep' | 'delete';
 
 export interface SubscriptionRemovalResult {
-  /** Documents of the subscription left in the Vault. */
   documentsKept: number;
-  /**
-   * Documents deleted with the subscription; each leaves a deletion record. A capture its deletion
-   * record stopped from saving never became a document and is not counted; one that saved first is.
-   */
   documentsDeleted: number;
-  /** Documents the removal tried to delete and could not; they stay in the Vault. */
   documentsFailed: number;
 }
 
-/** A deletion record for an item that has no document yet. */
 export interface PendingDeletion {
   sourceType: string;
   sourceId: string;
@@ -51,58 +42,39 @@ export interface PendingDeletion {
 }
 
 export interface SubscriptionServiceOptions {
-  /** The source types of the Vault; the service's type is one of them with subscriptions. */
   sources: SourceRegistry;
-  /** Whether automatic collection is on; previews report it. */
   autoCollection: () => Promise<boolean>;
-  /** Resolves a subscription address for a preview; aborting `signal` drops a request that has not started. */
   resolveTarget: (url: string, signal: AbortSignal) => Promise<SubscriptionTarget>;
   documents: () => Promise<DocumentMetadata[]>;
-  /** Deletes one document as a user deletion does; required to remove a subscription with its documents. */
   deleteDocument?: (id: string) => Promise<unknown>;
-  /** Records the deletion of an item still capturing, so it is not saved when the capture ends. */
   recordDeletion?: (entry: PendingDeletion) => Promise<unknown>;
-  /** Whether the subscription's source needs the user to sign in again; a source without accounts never does. */
   loginRequired?: (subscription: SubscriptionRecord) => boolean;
-  /** Records the exact transition that automatically paused a subscription. */
   onAutoPaused?: (subscription: SubscriptionRecord) => void | Promise<void>;
   now?: () => Date;
   previewTimeoutMs?: number;
-  /** Overrides REMOVAL_SETTLE_MS. */
   removalSettleMs?: number;
 }
 
-/** Which subscriptions of the service's type a check covers, and why it runs. */
 export interface StartRunRequest {
   trigger: Extract<ChannelJobTrigger, 'scheduled' | 'manual'>;
-  /** Only these subscriptions; by default every enabled one. */
   subscriptionIds?: string[];
 }
 
-/** What applying one subscription's settings to the others of its type changed. */
 export interface ApplySettingsResult {
-  /** Subscriptions that took the settings, paused ones included. */
   updated: number;
-  /** How many of them are paused; they keep the settings for their next resume. */
   paused: number;
 }
 
 export interface EnabledResult {
   subscription: SubscriptionRecord;
-  /** The check a resume started. */
   submission: JobSubmission | null;
 }
 
-/**
- * The subscriptions of one source type and the entry points that turn them into collection jobs.
- * Every subscription is known by its type and its ID within the type. The service is the only
- * writer of its subscriptions: it creates them, dispatches every check, which moves the dispatch
- * times, and records what checks report as collection progress.
- */
 export class SubscriptionService {
   private readonly now: () => Date;
   private readonly definition: SourceDefinition;
   private readonly subscription: SubscriptionDeclaration;
+  private readonly storage: NonNullable<SourceDefinition['storage']>;
 
   constructor(
     readonly type: string,
@@ -112,15 +84,15 @@ export class SubscriptionService {
   ) {
     this.now = options.now ?? (() => new Date());
     this.definition = options.sources.require(type);
-    if (!this.definition.subscription) throw new Error(`Source type ${type} has no subscriptions`);
+    if (!this.definition.subscription || !this.definition.storage) throw new Error(`Source type ${type} has no subscriptions`);
     this.subscription = this.definition.subscription;
+    this.storage = this.definition.storage;
   }
 
   list(): Promise<SubscriptionRecord[]> {
     return this.store.list();
   }
 
-  /** Subscriptions with their current job, check status, document count and newest collection time. */
   async listSubscriptions(): Promise<Subscription[]> {
     const [records, documents, autoCheck] = await Promise.all([this.store.list(), this.options.documents(), this.options.autoCollection()]);
     const counts = new Map<string, { count: number; latest: string | null }>();
@@ -136,7 +108,7 @@ export class SubscriptionService {
     return records.map((record) => {
       const { check = null, capturing = false } = work.get(record.id) ?? {};
       const totals = counts.get(record.id);
-      const failed = record.enabled && !check && record.checkFailures !== undefined;
+      const failures = record.enabled && !check ? record.checkFailures : undefined;
       return {
         ...record,
         lastCheckedAt: record.lastCheckedAt ?? null,
@@ -144,10 +116,10 @@ export class SubscriptionService {
         autoPausedAt: record.autoPausedAt ?? null,
         nextCheckAt: record.nextCheckAt ?? null,
         lastDispatchedAt: record.lastDispatchedAt ?? null,
-        status: !record.enabled ? 'paused' : check ? 'collecting' : failed ? 'error' : 'tracking',
+        status: !record.enabled ? 'paused' : check ? 'collecting' : failures ? 'error' : 'tracking',
         checkStatus: checkStatus(record, check, { autoCheck, now, loginRequired: this.options.loginRequired?.(record) ?? false }),
         capturing,
-        lastError: failed ? record.checkFailures!.error : null,
+        lastError: failures?.error ?? null,
         activeJob: check ? { id: check.jobId, done: check.done, total: check.total } : null,
         documentCount: totals?.count ?? 0,
         lastCollectedAt: totals?.latest ?? null,
@@ -155,10 +127,6 @@ export class SubscriptionService {
     });
   }
 
-  /**
-   * Subscription requests still resolving their address. A request that already subscribed its
-   * target is left out, since the subscription itself is listed.
-   */
   async pendingSubscriptions(): Promise<PendingSubscription[]> {
     const subscribed = new Set((await this.store.list()).map((record) => record.id));
     return this.jobs.subscriptionWork(this.type).adds
@@ -169,17 +137,14 @@ export class SubscriptionService {
       }));
   }
 
-  /** The Vault's removal records: subscriptions removed and not added again. */
   async listRemovals(): Promise<SubscriptionRemoval[]> {
     return await this.store.removals?.() ?? [];
   }
 
-  /** Check jobs of one subscription, newest first, as far back as the job history keeps them. */
   checkJobs(id: string): JobView[] {
     return this.jobs.checkJobs(this.type).get(id) ?? [];
   }
 
-  /** Resolves a subscription address now and reports its subscription state and the settings it uses or would start with. */
   async preview(url: string): Promise<SubscriptionPreview> {
     const input = this.definition.classify(url);
     if (input.kind !== 'subscription') throw new CollectorError('invalid_subscription', this.definition.prompts.subscriptionInput);
@@ -198,20 +163,11 @@ export class SubscriptionService {
     };
   }
 
-  /**
-   * Accepts a subscription address; the job resolves it, subscribes and runs the first check.
-   * Settings left out of `settings` take the source type's defaults.
-   */
   async add(inputUrl: string, settings: Partial<SubscriptionSettings> = {}): Promise<JobSubmission> {
     this.subscription.parseSettingsPatch(settings, { allowEmpty: true });
     return this.jobs.submitSubscriptionAdd(this.type, inputUrl, { ...this.subscription.defaults, ...settings } as SubscriptionSettings);
   }
 
-  /**
-   * Changes one subscription's settings. A new interval counts from the subscription's last check
-   * and is due at once if that time has passed; a new range applies to every check whose discovery
-   * starts afterwards, queued ones included. No work starts.
-   */
   async updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
     this.subscription.parseSettingsPatch(patch, { allowEmpty: true });
     const now = this.now();
@@ -224,10 +180,6 @@ export class SubscriptionService {
     return record;
   }
 
-  /**
-   * Gives every other subscription of the same type this subscription's settings. Paused ones take
-   * them too and stay paused, so the check a later resume starts uses them. No work starts.
-   */
   async applySettingsToAll(id: string): Promise<ApplySettingsResult> {
     const now = this.now();
     let source: SubscriptionRecord | undefined;
@@ -248,10 +200,6 @@ export class SubscriptionService {
     return { updated: updated.length, paused };
   }
 
-  /**
-   * Gives each enabled subscription without a next check time one an interval from now, and with
-   * `overdue` (automatic collection was turned on) also those whose time has passed.
-   */
   async planChecks(options: { overdue: boolean }): Promise<void> {
     const now = this.now();
     await this.store.updateWith((records) => new Map(records
@@ -260,10 +208,6 @@ export class SubscriptionService {
       .map((record) => [record.id, { nextCheckAt: addMinutes(now, record.settings.intervalMinutes).toISOString() }] as const)));
   }
 
-  /**
-   * Pausing stops the subscription's queued work; resuming starts a check and clears the failures
-   * that paused it or that it had when it was paused. Setting the state it already has changes nothing.
-   */
   async setEnabled(id: string, enabled: boolean): Promise<EnabledResult> {
     const current = (await this.store.list()).find((record) => record.id === id);
     if (!current) throw this.notFound();
@@ -286,17 +230,6 @@ export class SubscriptionService {
     return { subscription: record, submission };
   }
 
-  /**
-   * Stops collecting a subscription. With `documents: 'keep'` its documents stay in the Vault. With
-   * `'delete'`, the items of the subscription still capturing (from any of its checks, a stopped one
-   * included) first get deletion records, so one that finishes at any later time is not saved.
-   * The removal then waits a bounded time for those captures and for single-item requests, whose
-   * publisher is known only after capture, and deletes every document of the subscription one by
-   * one as a user deletion does: each leaves a deletion record, leaves the search and records its
-   * own event. A single-item request still running after the bound deletes its document when it
-   * ends, if the document belongs to the subscription. A document that cannot be deleted is counted
-   * and kept; the removal itself always completes and records its event.
-   */
   async remove(id: string, options: { documents?: RemovedDocuments } = {}): Promise<SubscriptionRemovalResult> {
     const removing = options.documents ?? 'keep';
     const deleteDocument = this.options.deleteDocument;
@@ -350,7 +283,6 @@ export class SubscriptionService {
     return { documentsKept: kept, documentsDeleted: deleted, documentsFailed: failed };
   }
 
-  /** Deletes the document a single-item request saves, once it ends, when it belongs to the removed subscription. */
   private async deleteWhenSaved(jobId: string, subscriptionId: string, deleteDocument: (id: string) => Promise<unknown>): Promise<void> {
     try {
       const job = await this.jobs.whenSettled(jobId);
@@ -367,10 +299,6 @@ export class SubscriptionService {
     return (await this.options.documents()).filter((document) => document.sourceType === this.type && document.publisher.id === id);
   }
 
-  /**
-   * The listed subscriptions a manual check covers, each checked before any job starts: a missing
-   * or paused one refuses the whole request.
-   */
   async checkable(ids: readonly string[]): Promise<SubscriptionRecord[]> {
     const all = await this.store.list();
     return [...new Set(ids)].map((id) => {
@@ -381,18 +309,9 @@ export class SubscriptionService {
     });
   }
 
-  /**
-   * Dispatches one check per subscription: the listed ones, or every enabled one. A subscription
-   * whose job is still queued or running returns that job, so the check joins it. A scheduled check
-   * also joins the subscription's newest check when that one began listing after the subscription
-   * came due. Each checked subscription's next automatic check moves on, also when it joined: a
-   * scheduled check keeps its rhythm from the time that came due, any other dispatch counts an
-   * interval from now.
-   */
   async startRun(request: StartRunRequest): Promise<JobSubmission[]> {
     let selected: SubscriptionRecord[];
     if (request.subscriptionIds && request.trigger === 'scheduled') {
-      // Due subscriptions were read a moment ago; one paused or removed since then is left out.
       const ids = new Set(request.subscriptionIds);
       selected = (await this.store.list()).filter((record) => ids.has(record.id) && record.enabled);
     } else if (request.subscriptionIds) {
@@ -407,7 +326,6 @@ export class SubscriptionService {
     return this.dispatch(selected, request.trigger);
   }
 
-  /** Submits a check of each subscription and records the dispatch. */
   private async dispatch(selected: readonly SubscriptionRecord[], trigger: StartRunRequest['trigger']): Promise<JobSubmission[]> {
     const now = this.now();
     const submissions: JobSubmission[] = [];
@@ -416,8 +334,6 @@ export class SubscriptionService {
       submissions.push(await this.jobs.submitCheck(this.type, record, trigger, dueAt));
     }
     const ids = new Set(selected.map((record) => record.id));
-    // Computed from the current rows, so a settings change made meanwhile keeps its interval and
-    // a subscription paused meanwhile gets no next check.
     await this.store.updateWith((records) => new Map(records
       .filter((record) => ids.has(record.id) && record.enabled)
       .map((record) => [record.id, {
@@ -426,24 +342,16 @@ export class SubscriptionService {
     return submissions;
   }
 
-  /** Port entry: why a subscription's work stops, or null while it exists and is enabled. */
   async stopped(id: string): Promise<SkipReason | null> {
     const record = (await this.store.list()).find((candidate) => candidate.id === id);
     if (!record) return 'subscription_removed';
     return record.enabled ? null : 'subscription_paused';
   }
 
-  /** Port entry: a manual check of one subscription, such as retrying a check whose listing failed. */
   async checkNow(id: string): Promise<JobSubmission> {
     return (await this.startRun({ trigger: 'manual', subscriptionIds: [id] }))[0]!;
   }
 
-  /**
-   * Port entry: the plan of a check whose discovery starts at `at`. The range comes from the
-   * subscription's settings now, and the candidates follow `checkPlan`. An item stays out while it is
-   * out of range for a range that starts no earlier than the one that left it out, and while it is
-   * skipped after failing.
-   */
   async planCheck(id: string, at: Date): Promise<CheckPlan | { stopped: SkipReason }> {
     const record = (await this.store.list()).find((candidate) => candidate.id === id);
     if (!record?.enabled) return { stopped: record ? 'subscription_paused' : 'subscription_removed' };
@@ -454,12 +362,6 @@ export class SubscriptionService {
     return checkPlan(record, range, excluded);
   }
 
-  /**
-   * Port entry: records what a check's listing found. With the check's candidates, out-of-range
-   * items that are no longer candidates are forgotten, and so are failed items that are no longer
-   * candidates or already have a document: a failure stays only while the item is skipped or among
-   * the items the check collects. Returns why the subscription's work stops, if it does.
-   */
   async checked(id: string, report: CheckReport): Promise<SkipReason | null> {
     const { candidates, collecting } = report;
     const key = (entry: OutOfRangeEntry | ItemFailureEntry) => entry[this.keyField] as string;
@@ -484,25 +386,17 @@ export class SubscriptionService {
     return current.enabled ? null : 'subscription_paused';
   }
 
-  /**
-   * Port entry: records when a check ended, keeping a later time already recorded. A counted success
-   * clears the failures in a row; a counted failure adds one, and the subscription pauses itself
-   * once AUTO_PAUSE_FAILURES of them span AUTO_PAUSE_AFTER_MS. An end the job does not count, and a
-   * failure because the source needs a new sign-in, which concerns every subscription of its type,
-   * leave the count as it is.
-   */
   async checkEnded(id: string, end: CheckEnd): Promise<void> {
-    let paused: SubscriptionRecord | undefined;
+    let paused: CheckFailures | undefined;
     const [record] = await this.store.updateWith((records) => {
       const current = records.find((candidate) => candidate.id === id);
       if (!current) return new Map();
       const patch: Partial<SubscriptionRecord> = {};
       if (!current.lastCheckedAt || current.lastCheckedAt < end.at) patch.lastCheckedAt = end.at;
-      if (!end.counted || end.failureClass === 'login_required') {
-        // The time alone.
-      } else if (!end.error) {
+      const countsTowardFailures = end.counted && end.failureClass !== 'login_required';
+      if (countsTowardFailures && !end.error) {
         if (current.checkFailures) patch.checkFailures = undefined;
-      } else {
+      } else if (countsTowardFailures && end.error) {
         const failures = {
           count: (current.checkFailures?.count ?? 0) + 1, since: current.checkFailures?.since ?? end.at, error: end.error,
         };
@@ -510,7 +404,7 @@ export class SubscriptionService {
         if (current.enabled && failures.count >= AUTO_PAUSE_FAILURES
           && new Date(end.at).getTime() - new Date(failures.since).getTime() >= AUTO_PAUSE_AFTER_MS) {
           Object.assign(patch, { enabled: false, nextCheckAt: null, autoPausedAt: end.at });
-          paused = current;
+          paused = failures;
         }
       }
       return Object.keys(patch).length > 0 ? new Map([[id, patch]]) : new Map();
@@ -519,14 +413,13 @@ export class SubscriptionService {
     this.jobs.stopSubscription(this.type, id, 'subscription_paused');
     this.jobs.recordEvent({
       eventType: 'subscription.auto_paused',
-      message: `「${record.title}」連續 ${record.checkFailures!.count} 次檢查失敗，已自動暫停：${record.checkFailures!.error.message}`,
-      errorCode: record.checkFailures!.error.code, ...this.subject(id, record.title),
+      message: `「${record.title}」連續 ${paused.count} 次檢查失敗，已自動暫停：${paused.error.message}`,
+      errorCode: paused.error.code, ...this.subject(id, record.title),
     });
     try { await this.options.onAutoPaused?.(record); }
     catch (error) { console.warn('Unable to record auto-pause notification', error); }
   }
 
-  /** Port entry: a collected item no longer counts as failed. */
   async itemCollected(id: string, itemKey: string): Promise<void> {
     await this.store.updateWith((records) => {
       const current = records.find((candidate) => candidate.id === id);
@@ -536,12 +429,6 @@ export class SubscriptionService {
     });
   }
 
-  /**
-   * Port entry: counts one failed check of an item. `skip`, and reaching MAX_CHECK_ATTEMPTS, mark
-   * it skipped. A source's limit or a source that needs a new sign-in is no failure of the item and
-   * counts nothing. Returns the item's failure record, or null when nothing was counted or the
-   * subscription is gone.
-   */
   async itemFailed(id: string, item: { key: string; title: string | null; url: string }, error: JobError, failureClass: FailureClass): Promise<ItemFailureEntry | null> {
     if (failureClass === 'login_required' || failureClass === 'rate_limited') return null;
     let recorded: ItemFailureEntry | null = null;
@@ -561,7 +448,6 @@ export class SubscriptionService {
     return recorded;
   }
 
-  /** Port entry: remembers an item published before the range start `before` of the check that found it. */
   async itemOutOfRange(id: string, itemKey: string, before: string): Promise<void> {
     await this.store.updateWith((records) => {
       const current = records.find((candidate) => candidate.id === id);
@@ -574,12 +460,6 @@ export class SubscriptionService {
     });
   }
 
-  /**
-   * Port entry: subscribes a resolved target with the settings accepted with the request and
-   * dispatches its first check; the next check is an interval later. An existing subscription keeps
-   * its own state and settings and gets no check, unless the request that created it was interrupted
-   * before its first check (`resumed`).
-   */
   async subscribe(target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
     const existing = (await this.store.list()).find((record) => record.id === target.id);
     if (existing && !options.resumed) return { subscription: existing, outcome: 'existing', check: null };
@@ -593,13 +473,12 @@ export class SubscriptionService {
       });
       this.jobs.recordEvent({ eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
     }
-    // The dispatch times were written with the subscription, so a first check resumed after a stop keeps them.
     const check = await this.jobs.submitCheck(this.type, subscription, 'subscribe');
     return { subscription, outcome: 'created', check };
   }
 
   private get keyField(): string {
-    return this.definition.storage!.outOfRangeKeyField;
+    return this.storage.outOfRangeKeyField;
   }
 
   whenSettled(jobId: string): Promise<JobView> {
@@ -610,19 +489,11 @@ export class SubscriptionService {
     return new CollectorError('subscription_not_found', `找不到這個 ${this.options.sources.subscriptionKindLabel(this.type)}訂閱。`);
   }
 
-  /**
-   * The fields that tie a subscription event to its subscription, so the activity view can show and
-   * filter it by source. Every subscription event's message names the subscription.
-   */
   private subject(id: string, title: string): { sourceType: string; sourceId: string; sourceTitle: string; subscriptionId: string; namesSource: true } {
     return { sourceType: this.type, sourceId: id, sourceTitle: title, subscriptionId: id, namesSource: true };
   }
 }
 
-/**
- * The store change that gives `record` new settings. A new interval on an enabled subscription
- * counts from its last dispatch and is due at once if that time has passed.
- */
 function settingsPatch(record: SubscriptionRecord, settings: SubscriptionSettings, now: Date): Partial<SubscriptionRecord> {
   const patch: Partial<SubscriptionRecord> = { settings: { ...settings } };
   if (record.enabled && settings.intervalMinutes !== record.settings.intervalMinutes) {
@@ -632,11 +503,6 @@ function settingsPatch(record: SubscriptionRecord, settings: SubscriptionSetting
   return patch;
 }
 
-/**
- * A scheduled check keeps the subscription's rhythm: the next check is whole intervals after the
- * one that came due, the first of them after `now`, so polling delay never accumulates and missed
- * periods are not checked one by one. Any other dispatch counts an interval from `now`.
- */
 function nextCheckAfterDispatch(record: SubscriptionRecord, trigger: StartRunRequest['trigger'], now: Date): Date {
   const interval = record.settings.intervalMinutes * 60_000;
   if (trigger !== 'scheduled' || !record.nextCheckAt) return new Date(now.getTime() + interval);
@@ -651,14 +517,6 @@ interface StatusContext {
   loginRequired: boolean;
 }
 
-/**
- * What a subscription is doing now. Its own state comes first: paused, by the person or by itself
- * after its checks kept failing, then a source that needs a new sign-in. An active check shows what
- * it is doing, with its item progress while it downloads. Without a check, a check that came due
- * and was not dispatched yet, or has no time yet, is queued while automatic checks are on; failures
- * in a row show otherwise, with the next automatic check that tries again; then automatic checks
- * being off; otherwise the next check time shows.
- */
 export function checkStatus(
   record: Pick<SubscriptionRecord, 'enabled' | 'nextCheckAt' | 'checkFailures' | 'autoPausedAt'>,
   check: CheckActivity | null,
@@ -669,16 +527,15 @@ export function checkStatus(
   }
   if (context.loginRequired) return { state: 'login_required' };
   if (check) return check.status.state === 'downloading' ? { state: 'downloading', done: check.done, total: check.total } : check.status;
+  if (!context.autoCheck) {
+    return record.checkFailures ? { state: 'failing', failures: record.checkFailures.count, nextCheckAt: null } : { state: 'auto_check_off' };
+  }
   const next = record.nextCheckAt ?? null;
-  // Without a time yet, the scheduler plans one at its next round, so the check waits like a due one.
-  const due = !next || new Date(next).getTime() <= context.now.getTime();
-  if (context.autoCheck && due) return { state: 'queued' };
-  if (record.checkFailures) return { state: 'failing', failures: record.checkFailures.count, nextCheckAt: context.autoCheck ? next : null };
-  if (!context.autoCheck) return { state: 'auto_check_off' };
-  return { state: 'scheduled', nextCheckAt: next! };
+  if (next === null || new Date(next).getTime() <= context.now.getTime()) return { state: 'queued' };
+  if (record.checkFailures) return { state: 'failing', failures: record.checkFailures.count, nextCheckAt: next };
+  return { state: 'scheduled', nextCheckAt: next };
 }
 
-/** Deletes one document; one deleted meanwhile, such as by an Agent, counts as gone, and any other failure is logged. */
 async function deleteQuietly(deleteDocument: (id: string) => Promise<unknown>, id: string): Promise<'deleted' | 'gone' | 'failed'> {
   try {
     await deleteDocument(id);
@@ -690,7 +547,6 @@ async function deleteQuietly(deleteDocument: (id: string) => Promise<unknown>, i
   }
 }
 
-/** Waits for `work` at most `timeoutMs`; only the end of the wait matters, not its result. */
 async function settleWithin(work: Promise<unknown>, timeoutMs: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
@@ -701,7 +557,6 @@ function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
 }
 
-/** Runs `work` for at most `timeoutMs`; on timeout its signal aborts, so a request still waiting its turn is dropped. */
 function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, message: string): Promise<T> {
   const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -715,20 +570,13 @@ function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: nu
   return Promise.race([work(abort.signal), timeout]).finally(() => clearTimeout(timer));
 }
 
-/**
- * The subscription services of one Vault, one per source type with subscriptions, in the order of
- * its source types. HTTP routes and the scheduler reach a subscription through its type's service; the job
- * manager reaches every type through this object as its subscription port.
- */
 export class SubscriptionServices implements SubscriptionPort {
   private readonly byType: Map<string, SubscriptionService>;
 
-  /** `sources` names a type in the error for a subscription of a type without a service. */
   constructor(private readonly sources: SourceDeclarations, services: Iterable<SubscriptionService>) {
     this.byType = new Map([...services].map((service) => [service.type, service]));
   }
 
-  /** The service of a type; null for a type without subscriptions or one the Vault lacks. */
   of(type: string): SubscriptionService | null {
     return this.byType.get(type) ?? null;
   }
@@ -737,11 +585,6 @@ export class SubscriptionServices implements SubscriptionPort {
     return [...this.byType.values()];
   }
 
-  /**
-   * Checks the listed subscriptions of any types now. The whole list is validated first, so a
-   * missing or paused subscription, or a type without subscriptions, refuses the request before
-   * any job starts.
-   */
   async startChecks(listed: ReadonlyArray<{ type: string; id: string }>): Promise<JobSubmission[]> {
     return startChecks(this.sources, (type) => this.of(type), listed);
   }
@@ -774,7 +617,6 @@ export class SubscriptionServices implements SubscriptionPort {
     return this.require(type).subscribe(target, settings, options);
   }
 
-  /** A type without subscriptions here has none to stop, so its work counts as removed. */
   async stopped(type: string, id: string): Promise<SkipReason | null> {
     return this.of(type)?.stopped(id) ?? 'subscription_removed';
   }
@@ -790,16 +632,11 @@ export class SubscriptionServices implements SubscriptionPort {
   }
 }
 
-/** The part of a type's subscription service a manual check of listed subscriptions uses. */
 export interface CheckEntry {
   checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
   startRun(request: StartRunRequest): Promise<JobSubmission[]>;
 }
 
-/**
- * Checks listed subscriptions of any types: every type's list is validated before the first job
- * starts, so a refused request starts nothing.
- */
 export async function startChecks(
   sources: SourceDeclarations,
   serviceOf: (type: string) => CheckEntry | null,

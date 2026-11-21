@@ -276,6 +276,13 @@ describe('per-subscription scheduling (A2)', () => {
     expect(await w.channel(id)).toMatchObject({ lastDispatchedAt: '2026-10-15T04:10:00.000Z', nextCheckAt: '2026-10-15T04:40:00.000Z' });
   });
 
+  it('refuses a manual check when no subscription of any type is enabled', async () => {
+    const w = await world({ enabled: false });
+    const id = await w.subscribe('paused', { intervalMinutes: 30 });
+    await w.channelStore.update(id, { enabled: false });
+    await expect(w.scheduler.runNow()).rejects.toMatchObject({ code: 'invalid_request', message: '沒有可檢查的訂閱。' });
+  });
+
   it('plans subscriptions without a next check one interval from the first poll', async () => {
     const w = await world();
     const id = await w.subscribe('unplanned', { intervalMinutes: 60 });
