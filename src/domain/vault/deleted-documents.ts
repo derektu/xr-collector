@@ -7,15 +7,6 @@ import type { SourceDeclarations } from '../../shared/sources/source-registry.js
 import type { VaultFiles } from '../../shared/vault/vault-files.js';
 import { isSourceId, isSourceType } from './document-paths.js';
 
-/**
- * Vault file of deleted documents, relative to the Vault root. Each record keeps a source item from
- * coming back through automatic or subscription collection; only an explicit single-item collection
- * started after the deletion lifts it.
- *
- * `{ "version": 1, "deleted": [record, ...] }`. A record is keyed by `sourceType` and `sourceId`,
- * which together form the document ID (`<source type>:<source ID>`), and keeps the title and publisher so
- * an import or a deleted-document page can still name the item.
- */
 export const DELETIONS_FILE = 'settings/deleted-documents.json';
 const DELETIONS_VERSION = 1;
 
@@ -26,15 +17,6 @@ export interface DeletionsFile {
 
 export class InvalidDeletionsFile extends Error {}
 
-/** The document ID a record stands for. */
-export function deletionId(record: Pick<DeletionRecord, 'sourceType' | 'sourceId'>): string {
-  return documentId(record);
-}
-
-/**
- * The records of a deletions file; a missing file has none. Unknown versions and malformed records,
- * among them records of a type `sources` lacks, are refused.
- */
 export function deletionsFromJson(value: unknown, sources: SourceDeclarations): DeletionRecord[] {
   if (value === undefined) return [];
   const file = value as Partial<DeletionsFile> | null;
@@ -44,7 +26,7 @@ export function deletionsFromJson(value: unknown, sources: SourceDeclarations): 
   }
   const ids = new Set<string>();
   for (const record of file.deleted) {
-    const id = deletionId(record);
+    const id = documentId(record);
     if (ids.has(id)) throw new InvalidDeletionsFile(`Duplicate deleted document ${id}`);
     ids.add(id);
   }
@@ -55,10 +37,6 @@ export function deletionsToJson(records: DeletionRecord[]): DeletionsFile {
   return { version: DELETIONS_VERSION, deleted: records };
 }
 
-/**
- * The deletions file of one Vault. Reads go to the file every time, so records written by an
- * import are seen at once; writes from this process run one after another.
- */
 export class DeletionLedger implements DeletionRecords {
   private readonly filePath: string;
   private writeTail: Promise<void> = Promise.resolve();
@@ -72,19 +50,17 @@ export class DeletionLedger implements DeletionRecords {
   }
 
   async get(id: string): Promise<DeletionRecord | null> {
-    return (await this.list()).find((record) => deletionId(record) === id) ?? null;
+    return (await this.list()).find((record) => documentId(record) === id) ?? null;
   }
 
-  /** Records a deletion stamped with the Vault clock, replacing an earlier record of the same item. */
   record(entry: Omit<DeletionRecord, 'deletedAt'>): Promise<DeletionRecord> {
     const record: DeletionRecord = { ...entry, deletedAt: this.now().toISOString() };
-    return this.write(async (records) => [...records.filter((candidate) => deletionId(candidate) !== deletionId(record)), record])
+    return this.write(async (records) => [...records.filter((candidate) => documentId(candidate) !== documentId(record)), record])
       .then(() => record);
   }
 
-  /** Lifts the deletion of one item; nothing happens when it has none. */
   clear(id: string): Promise<void> {
-    return this.write(async (records) => records.filter((record) => deletionId(record) !== id));
+    return this.write(async (records) => records.filter((record) => documentId(record) !== id));
   }
 
   private write(change: (records: DeletionRecord[]) => Promise<DeletionRecord[]>): Promise<void> {

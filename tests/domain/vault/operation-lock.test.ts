@@ -221,6 +221,16 @@ describe('Vault operation lock', () => {
     expect(() => held.value.enter('vault-write')).toThrowError(/更新/u);
   });
 
+  it('takes the job hold before waiting for request writes, so a queued job cannot start while they drain', async () => {
+    const hold = vi.fn(async () => () => undefined);
+    const held = lock({ hold });
+    const releaseWrite = held.value.enter('vault-write');
+    const prepared = held.value.prepareUpdate(new AbortController().signal);
+    expect(hold).toHaveBeenCalledOnce();
+    releaseWrite();
+    (await prepared).cancel();
+  });
+
   it('cancels only its own update gate and hold', async () => {
     const held = lock();
     const lease = await held.value.prepareUpdate(new AbortController().signal);

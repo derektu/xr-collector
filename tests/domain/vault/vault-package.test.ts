@@ -383,7 +383,7 @@ describe('Vaults of an earlier format (CMP-01)', () => {
   });
 });
 
-it('never writes over an existing file', async () => {
+it('refuses an existing file and leaves it untouched, since a failed export removes only a file it created', async () => {
   const root = path.join(await temp(), 'Vault'); await seed(root);
   const file = path.join(root, '..', 'exists.zip');
   await writeFile(file, 'keep');

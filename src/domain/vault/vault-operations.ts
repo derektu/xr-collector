@@ -29,79 +29,46 @@ import {
   checkPackageContent, machineName, openPackage, registeredFiles, registeredSource, writePackage, type PackageReader, type WrittenPackage,
 } from './vault-package.js';
 import type { VaultSelection } from './vault-selection.js';
+import { errorCode } from './errno.js';
 
-/** A Vault whose services are built and started but not yet in use. */
 export interface PreparedVault {
-  /** Makes it the Vault in use, once the device selection names it, and returns the one it replaced. */
   activate(): ReplacedVault;
-  /** Stops its services; it never became the Vault in use. */
   discard(): Promise<void>;
 }
 
-/** The Vault a switch replaced, whose services still run until `settle`. */
 export interface ReplacedVault {
   readonly root: string;
-  /**
-   * Stops its services, recording its unfinished jobs as interrupted with `reason`, then continues
-   * the unfinished jobs of the Vault now in use and starts its scheduler. Never fails: the switch
-   * has already happened.
-   */
   settle(reason: string): Promise<{ interruptedJobs: number; resumedJobs: number }>;
 }
 
-/** What the operations need from the workspace that builds the services of each Vault it opens. */
 export interface OperationsHost {
-  /** The Vault in use at the time of the call and its search, which an import updates. */
   current(): { vault: OpenedVault; search: TranscriptSearch };
-  /** Stops collection of the Vault in use from starting steps, waits for running ones, and returns the release. */
   hold(signal: AbortSignal): Promise<() => void>;
-  /** Resolves once the scheduler of the Vault in use has no check under way. */
   idle(): Promise<void>;
-  /** Suspends or resumes the scheduler of the Vault in use. */
   suspend(value: boolean): void;
-  /** Records an event in the device activity log. */
   event(entry: NewJobEvent): void;
-  /** Resolves once every change of the device's job records so far is written, such as the jobs a switch interrupted. */
   flushJobs(): Promise<void>;
-  /** Restarts collection checks after an import replaced the subscriptions. */
   reloadSchedule(): Promise<void>;
-  /** Builds and starts the services of the Vault at `root` and indexes it, without making it the one in use. */
   prepare(root: string): Promise<PreparedVault>;
 }
 
 export interface VaultOperationsOptions {
-  /** The source types of every Vault these operations open, create, export or import. */
   sources: SourceRegistry;
-  /** Device record of the active Vault; writing it is the commit point of a switch. */
   selection: VaultSelection;
-  /** Device profile folder: no Vault, export or import names a file inside it. */
   profilePath: string;
-  /** Folder exports go to when no other place is chosen. */
   exportFolder: string;
-  /** Folder an import backs the Vault up to before it applies. */
   backupFolder: string;
-  /** Application name and version written into markers and exports. */
   createdBy: string;
-  /** Name of this machine in exports; defaults to `machineName()`. */
   machineName?: string;
-  /** Free space of a volume; defaults to `fs.statfs`. */
   statfs?: StatFs;
-  /** Called at each step of an in-place import, for tests that make a step fail or stop there; see `ImportFault`. */
   importFaults?: (phase: ImportFault, count?: number) => void | Promise<void>;
-  /** The Vault location is fixed for this run, so no other Vault is created or opened. */
   fixedLocation?: boolean;
-  /** Hears each change of the operation status, and of the Vault's contents once an import or switch completes. */
   noteChange: NoteChange;
 }
 
-/**
- * An import comparison waiting to be applied: the export file it compared, what it found, and a
- * digest of the local items and the file it stands on.
- */
 interface Preview { value: ImportPreview; comparison: Comparison; baseline: string; file: string; identity: string }
 
-/** An import whose journal may be written: what it changes and what it reports once its files are in place. */
-interface AppliedImport {
+interface CommittingImport {
   preview: Preview;
   mode: ImportMode;
   counts: ChangeCounts;
@@ -132,7 +99,6 @@ export class VaultOperations {
       changed: () => {
         const status = this.lock.status();
         options.noteChange({ kind: 'vault', scope: 'transfer' });
-        // A finished import or switch replaced what every page shows.
         if (status.state === 'completed' && status.operation !== 'export') options.noteChange({ kind: 'vault', scope: 'contents' });
       },
     });
@@ -146,7 +112,6 @@ export class VaultOperations {
    */
   async recover(root: string, pending = false): Promise<boolean> {
     const selected = await this.options.selection.read().catch(() => null);
-    // The selected Vault and the one being opened are never taken back, whatever the journal says.
     if (!pending) await recoverImport(this.options.profilePath, [selected, root]);
     return finishInPlaceImports(root, this.options.sources);
   }
@@ -159,7 +124,6 @@ export class VaultOperations {
     };
   }
 
-  /** Why no other Vault can be created or opened in place of the active one; null when it can. */
   private relocationProblem(): CollectorError | null {
     if (this.options.fixedLocation) {
       return new CollectorError('vault_location_fixed', '這次啟動指定了固定的知識庫位置，無法建立或開啟其他知識庫。');
@@ -214,7 +178,6 @@ export class VaultOperations {
     }
     const target = await checkExportFile(requested, overwrite, this.folders);
     await this.run('export', '匯出', async (reporter) => {
-      // Written beside the target and renamed, so the named file is either a whole export or untouched.
       const temporary = `${target}.${randomUUID()}.tmp`;
       let written: WrittenPackage;
       try {
@@ -246,7 +209,6 @@ export class VaultOperations {
   async previewImport(file: unknown): Promise<ImportPreview> {
     const source = await checkPackageFile(file);
     return this.run('import', '匯入', async (reporter) => {
-      // A comparison refused for a busy Vault leaves the previous one usable.
       this.dropPreview();
       reporter.progress('validating', '正在檢查匯出檔…');
       const reader = await openPackage(source, this.options.sources);
@@ -269,11 +231,6 @@ export class VaultOperations {
     });
   }
 
-  /**
-   * Compares the local items with the file's items. The baseline digest covers what an apply stands
-   * on: the local items and the file. Collection progress and check times are no items, so a check
-   * the scheduler runs after a preview leaves the baseline as it was.
-   */
   private async compare(reader: PackageReader): Promise<{ comparison: Comparison; baseline: string; local: ItemStates; incoming: ItemStates }> {
     const sources = this.options.sources;
     const local = await itemStates(sources, registeredSource(await registeredFiles(this.host.current().vault.root, sources)));
@@ -309,10 +266,6 @@ export class VaultOperations {
     return this.status();
   }
 
-  /**
-   * Exports the Vault as it is into the backup folder before an import changes it, so a wrong
-   * import can be undone by importing this file.
-   */
   private async backUp(reporter: OperationReporter): Promise<string> {
     const folder = this.options.backupFolder;
     await mkdir(folder, { recursive: true });
@@ -332,11 +285,10 @@ export class VaultOperations {
 
   private async importOnce(preview: Preview, mode: ImportMode, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     const root = this.host.current().vault.root;
-    let reader: PackageReader | null = null;
-    let applied: AppliedImport | null = null;
+    reporter.progress('validating', '正在檢查本機資料…');
+    const reader = await openPackage(preview.file, this.options.sources);
+    let committing: CommittingImport | null = null;
     try {
-      reporter.progress('validating', '正在檢查本機資料…');
-      reader = await openPackage(preview.file, this.options.sources);
       const current = reader.identity === preview.identity ? await this.compare(reader) : null;
       if (!current || current.baseline !== preview.baseline) {
         this.dropPreview();
@@ -347,18 +299,17 @@ export class VaultOperations {
       reporter.progress('exporting', '正在匯出目前的內容…');
       const backup = await this.backUp(reporter);
       const incomingBytes = [...plan.changes.values()].reduce((sum, change) => sum + (!change ? 0
-        : 'bytes' in change ? change.bytes.length : reader!.manifest.files.find((row) => row.path === change.incoming)?.size ?? 0), 0);
+        : 'bytes' in change ? change.bytes.length : reader.manifest.files.find((row) => row.path === change.incoming)?.size ?? 0), 0);
       await checkFreeSpace(root, incomingBytes, this.options.statfs);
       reporter.blockReads();
-      applied = { preview, mode, counts, plan, backup };
+      committing = { preview, mode, counts, plan, backup };
       reporter.progress('extracting', '正在套用匯入的內容…', { completed: 0, total: plan.changes.size });
       await applyInPlace(root, this.options.sources, reader, plan.changes, (done, total) => {
         reporter.files(done, total);
       }, this.options.importFaults);
-      return await this.importApplied(applied, mode === 'replace', reporter);
+      return await this.finishImport(committing, mode === 'replace', reporter);
     } catch (error) {
-      if (!applied) throw error;
-      // Past the journal, the import is carried out to its end; before it, the Vault was never touched.
+      if (!committing) throw error;
       let finished: boolean;
       try {
         finished = await finishInPlaceImports(root, this.options.sources);
@@ -368,23 +319,18 @@ export class VaultOperations {
       }
       if (!finished) throw error;
       console.error('An import failed while it put files in place and was carried out to its end', error);
-      return await this.importApplied(applied, true, reporter);
+      return await this.finishImport(committing, true, reporter);
     } finally {
-      reader?.close();
+      reader.close();
     }
   }
 
-  /**
-   * Completes an import whose files are in place: updates the search index (rebuilding it when
-   * `rebuild` is set or an update fails), reloads the schedule and reports the import as done. An
-   * index that cannot be rebuilt either leaves the import done, with the rebuild left to the person.
-   */
-  private async importApplied(applied: AppliedImport, rebuild: boolean, reporter: OperationReporter): Promise<OperationCompletion<void>> {
+  private async finishImport(committing: CommittingImport, rebuild: boolean, reporter: OperationReporter): Promise<OperationCompletion<void>> {
     reporter.progress('indexing', '正在更新搜尋索引…');
     let indexed = true;
     try {
       if (rebuild) await this.host.current().search.rebuild();
-      else await this.indexChanged(applied.plan.changes);
+      else await this.indexChanged(committing.plan.changes);
       await this.host.reloadSchedule();
     } catch (error) {
       console.error('Updating the search index after an import failed; rebuilding it', error);
@@ -397,7 +343,7 @@ export class VaultOperations {
       }
     }
     this.dropPreview();
-    const { counts, mode, backup, plan } = applied;
+    const { counts, mode, backup, plan } = committing;
     const summary = changeSummary(counts);
     const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
     const done = indexed ? `${how}：${summary}。` : `匯入已完成，搜尋索引需要重建：請到設定按「重建索引」，或重新啟動程式。${summary}。`;
@@ -405,7 +351,7 @@ export class VaultOperations {
     const result: TransferResult = {
       importMode: mode, imported: counts, writtenFiles: plan.changes.size, backupPath: backup, ...(indexed ? {} : { searchRebuildNeeded: true }),
     };
-    const { fileName, machine } = applied.preview.value.package;
+    const { fileName, machine } = committing.preview.value.package;
     const file = machine ? `${fileName}，來自 ${machine}` : fileName;
     this.record(indexed ? 'info' : 'warning', 'vault.imported', indexed
       ? `${how}（${file}）：${summary}。匯入前的內容已備份到 ${backup}`
@@ -413,7 +359,6 @@ export class VaultOperations {
     return { value: undefined, message, result };
   }
 
-  /** Brings the search index up to date with the documents an import wrote or removed. */
   private async indexChanged(changes: ReadonlyMap<string, unknown>): Promise<void> {
     const { vault: opened, search } = this.host.current();
     const vault = new MarkdownVault(opened.files);
@@ -469,7 +414,6 @@ export class VaultOperations {
       try {
         return await this.openOnce(root, reporter, 'created');
       } catch (error) {
-        // Once the switch committed, the new Vault is the one in use and stays.
         if (this.host.current().vault.root !== root) {
           await rm(root, { recursive: true, force: true }).catch((cleanup: unknown) => console.error('Removing the new Vault failed', cleanup));
         }
@@ -479,23 +423,16 @@ export class VaultOperations {
     return this.status();
   }
 
-  /**
-   * Makes the Vault at `root` the one in use. Writing the device selection is the commit point of
-   * every switch: before it the previous Vault stays active and untouched, after it the switch is
-   * never undone.
-   */
   private async openOnce(root: string, reporter: OperationReporter, how: 'opened' | 'created' = 'opened'): Promise<OperationCompletion<void>> {
     let candidate: PreparedVault | null = null;
     let previous: ReplacedVault;
     try {
       reporter.progress('indexing', '正在開啟知識庫並建立搜尋索引…');
-      // An import a stop interrupted after its commit point is finished before anything reads the Vault;
-      // preparing the Vault then indexes the finished content.
       await finishInPlaceImports(root, this.options.sources);
       candidate = await this.host.prepare(root);
       await this.options.selection.write(root);
       previous = candidate.activate();
-      reporter.discardHold();
+      reporter.holdClosesWithReplacedBundle();
       candidate = null;
     } catch (error) {
       if (!(error instanceof CollectorError)) console.error('Opening another Vault failed', error);
@@ -509,12 +446,10 @@ export class VaultOperations {
     const resumed = resumedJobs ? `這個知識庫有 ${resumedJobs} 個收集工作接續。` : '';
     const message = `已${how === 'created' ? '建立並開啟' : '開啟'}知識庫 ${root}。原知識庫保留在 ${previous.root}。${paused}${resumed}`;
     const result: TransferResult = { previousVaultPath: previous.root, interruptedJobs, resumedJobs };
-    // Device-level, so both Vaults show the switch.
     this.record('info', how === 'created' ? 'vault.created' : 'vault.opened', message, null);
     return { value: undefined, message, result };
   }
 
-  /** Runs one operation step under the lock; the lock is released whether it succeeds or fails. */
   private run<T>(operation: TransferOperation, label: string, body: (reporter: OperationReporter) => Promise<OperationCompletion<T>>): Promise<T> {
     return this.lock.start({
       operation, body, failed: (error) => this.failure(error, label),
@@ -529,7 +464,6 @@ export class VaultOperations {
     return { message, result: null, errorCode: error instanceof CollectorError ? error.code : null };
   }
 
-  /** Records an operation in the device activity log, under the active Vault unless `vaultPath` says otherwise. */
   private record(severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, vaultPath?: string | null, errorCode?: string): void {
     const own = vaultPath === undefined;
     const { root, vaultId } = this.host.current().vault;
@@ -541,7 +475,6 @@ export class VaultOperations {
   }
 }
 
-/** "文件：新增 2、更新 1、刪除 1；訂閱：新增 1", for the activity log; "沒有變更" when nothing changes. */
 function changeSummary(counts: ChangeCounts): string {
   const part = (label: string, kind: ChangeCounts['documents']) => {
     const items = [['新增', kind.added], ['更新', kind.updated], ['刪除', kind.removed]].filter(([, count]) => count)
@@ -553,7 +486,7 @@ function changeSummary(counts: ChangeCounts): string {
 
 async function exists(target: string): Promise<boolean> {
   try { await lstat(target); return true; } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (errorCode(error) === 'ENOENT') return false;
     throw error;
   }
 }

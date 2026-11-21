@@ -7,20 +7,16 @@ import type { NewVaultCheck, PackageDescription } from '../../shared/vault/vault
 import { checkPackageFile, isWithin, isWorkFolder } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import { openPackage } from './vault-package.js';
+import { errorCode } from './errno.js';
 
-/** Name of a new Vault folder when the person gives none, and of one created from an export that records none. */
 export const DEFAULT_VAULT_NAME = 'XR Collector';
 
-/** Characters no folder name may hold on macOS or Windows. */
+/** Characters no folder name may hold on macOS or Windows; see https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions. */
 const FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f]/u;
-/** Device names Windows reserves, with or without an extension. */
+/** Device names Windows reserves, with or without an extension; see https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions. */
 const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 const NAME_BYTES = 255;
 
-/**
- * Why `name` cannot name a Vault folder, or null when it can. The rules are those of both desktop
- * platforms, so a Vault folder keeps its name when the Vault is copied to the other one.
- */
 export function nameProblem(name: string): string | null {
   if (!name.trim()) return '請輸入名稱。';
   if (FORBIDDEN.test(name)) return '名稱不能包含 \\ / : * ? " < > | 等字元。';
@@ -32,18 +28,8 @@ export function nameProblem(name: string): string | null {
   return null;
 }
 
-function errorCode(error: unknown): string | undefined {
-  return (error as NodeJS.ErrnoException | undefined)?.code;
-}
-
-/** Folders the app keeps its own files in, where no new Vault goes: the active Vault, if any, and the profile. */
 export interface AppFolders { vaultRoot?: string | undefined; profilePath: string }
 
-/**
- * Checks a new Vault folder named `name` inside the folder `location`: the location exists and can be
- * written, outside the app's own `folders`, the name can name a folder, and nothing of that name is
- * in the location yet. `path` is the folder that would be created, null when the input names none.
- */
 export async function checkNewVault(location: unknown, name: unknown, folders?: AppFolders): Promise<NewVaultCheck> {
   if (typeof location !== 'string' || !location.trim()) return { path: null, problem: '請選擇位置。' };
   if (!path.isAbsolute(location)) return { path: null, problem: '位置必須是完整的絕對路徑。' };
@@ -74,14 +60,12 @@ export async function checkNewVault(location: unknown, name: unknown, folders?: 
   return { path: target, problem: null };
 }
 
-/** The folder a new Vault goes in, or the reason it cannot be created as a `vault_invalid` error. */
 export async function newVaultFolder(location: unknown, name: unknown, folders?: AppFolders): Promise<string> {
   const checked = await checkNewVault(location, name, folders);
   if (checked.problem || !checked.path) throw new CollectorError('vault_invalid', checked.problem ?? '請選擇位置並輸入名稱。');
   return checked.path;
 }
 
-/** Creates the folder `name` in `location` as a new, empty Vault and returns its path; see `checkNewVault`. */
 export async function createNewVault(location: unknown, name: unknown, createdBy: string, sources: SourceRegistry, folders?: AppFolders): Promise<string> {
   const target = await newVaultFolder(location, name, folders);
   try {
@@ -99,10 +83,6 @@ export async function createNewVault(location: unknown, name: unknown, createdBy
   return target;
 }
 
-/**
- * What an export file holds, read from its manifest once its structure is checked. Creating a Vault
- * from the file checks every document again.
- */
 export async function describePackage(file: unknown, sources: SourceRegistry): Promise<PackageDescription> {
   const checked = await checkPackageFile(file);
   const reader = await openPackage(checked, sources);
