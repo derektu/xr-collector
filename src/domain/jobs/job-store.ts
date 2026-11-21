@@ -10,10 +10,6 @@ import type { EventRecorder, NewJobEvent } from '../../shared/activity/activity-
 
 const JOBS_FILE = 'jobs.json';
 const FILE_VERSION = 1;
-/**
- * Completed and failed jobs beyond this count are dropped oldest first. Queued, running and
- * interrupted jobs are always kept, because an interrupted job's scope and progress are what resumes it.
- */
 const FINISHED_JOB_LIMIT = 1000;
 
 interface JobsFile {
@@ -67,7 +63,6 @@ export class JobStore {
       if (jobs) {
         for (const job of jobs) store.jobs.set(job.id, job);
       } else {
-        // An unreadable record must not keep the service from starting; it is set aside for diagnosis.
         const target = path.join(directory, JOBS_FILE);
         const corrupt = `${target}.corrupt-${now().toISOString().replace(/[:.]/gu, '-')}`;
         await rename(target, corrupt);
@@ -93,11 +88,10 @@ export class JobStore {
    * jobs at the path that carry no ID.
    */
   list(vaultPath: string, vaultId: string | null = null): CollectionJob[] {
-    // The map keeps insertion order, and the sort is stable, so reversing first puts later submissions first.
     return [...this.jobs.values()]
       .filter((job) => belongsTo(job, vaultPath, vaultId))
       .reverse()
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort(byCreatedAtDescending)
       .map((job) => structuredClone(job));
   }
 
@@ -129,7 +123,6 @@ export class JobStore {
     };
     this.jobs.set(job.id, interrupted);
     this.noteChange({ kind: 'job', id: job.id, parentId: job.parentId, state: 'interrupted' });
-    // A crash is the only unexpected interruption. Shutdowns and Vault operations resume normally.
     const planned = options.stop !== 'crash';
     this.event({
       severity: planned ? 'debug' : 'warning', eventType: 'job.interrupted', message, ...(job.phase ? { phase: job.phase } : {}),
@@ -163,22 +156,20 @@ export class JobStore {
     }
   }
 
-  /** Writes what is left. */
   async close(): Promise<void> {
     await this.flush();
   }
 
   private scheduleFlush(): void {
+    const { directory } = this;
+    if (!directory) return;
     this.dirty = true;
-    if (this.flushing || !this.directory) {
-      if (!this.directory) this.dirty = false;
-      return;
-    }
+    if (this.flushing) return;
     this.flushing = (async () => {
       while (this.dirty) {
         this.dirty = false;
         try {
-          await this.write();
+          await this.write(directory);
         } catch (error) {
           console.error('Collection jobs write failed', error);
         }
@@ -186,8 +177,7 @@ export class JobStore {
     })().finally(() => { this.flushing = null; });
   }
 
-  private async write(): Promise<void> {
-    const directory = this.directory!;
+  private async write(directory: string): Promise<void> {
     await mkdir(directory, { recursive: true });
     const target = path.join(directory, JOBS_FILE);
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -223,4 +213,8 @@ function parseJobs(contents: string): CollectionJob[] | null {
   const valid = parsed.jobs.every((job) => job && typeof job === 'object' && typeof job.id === 'string'
     && typeof job.vaultPath === 'string' && typeof job.state === 'string');
   return valid ? parsed.jobs : null;
+}
+
+function byCreatedAtDescending(a: CollectionJob, b: CollectionJob): number {
+  return b.createdAt.localeCompare(a.createdAt);
 }

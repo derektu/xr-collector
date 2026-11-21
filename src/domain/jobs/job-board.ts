@@ -3,33 +3,22 @@ import type { SourceDeclarations } from '../../shared/sources/source-registry.js
 import type { JobOverview, JobOverviewEntry, JobView } from '../../shared/jobs/job-types.js';
 import type { WorkStatus } from '../../shared/subscriptions/subscription-types.js';
 
-/** How long a failed single item or subscription request stays in the failed section. */
 export const FAILED_RETENTION_MS = 7 * 86_400_000;
 
-/** What the jobs page needs to know about work beyond the jobs themselves. */
 export interface JobBoardContext {
-  /** The source types whose job kinds the board reads. */
   sources: SourceDeclarations;
   now: Date;
-  /** Where a job that has not started stands in its queue; smaller starts earlier. Unknown for jobs not in a queue. */
-  queuePosition(job: JobView): number | undefined;
-  /** Whether an item of this type and key already has a document. */
+  queueJoinOrder(job: JobView): number | undefined;
   hasDocument(type: string, key: string): Promise<boolean>;
 }
 
-/**
- * What a queued or running top-level job is doing. A job that has not started is queued, also
- * while its source cools down; once started it never is again. A started job retries while its own
- * step waits for a retry or a cooldown, and a check also while every item it still collects does;
- * otherwise a check is downloading once it knows items to collect and checking before.
- */
 export function workStatus(sources: SourceDeclarations, job: JobView): WorkStatus {
   if (!job.startedAt) return { state: 'queued' };
   const own = retryOf(job);
   if (own) return own;
   const unfinished = (job.items ?? []).filter((item) => item.state === 'queued' || item.state === 'running');
-  const items = unfinished.map(retryOf);
-  if (items.length > 0 && items.every((item) => item !== null)) return earliest(items, (item) => item.at)!;
+  const retries = unfinished.map(retryOf).filter((retry) => retry !== null);
+  if (retries.length === unfinished.length && isNonEmpty(retries)) return earliest(retries, (retry) => retry.at);
   const view = roleView(sources, job);
   if (view === null) return { state: 'downloading' };
   switch (view.role) {
@@ -40,7 +29,6 @@ export function workStatus(sources: SourceDeclarations, job: JobView): WorkStatu
   }
 }
 
-/** The retry a job or a check's item waits for: the cooldown's end, or its next attempt. */
 function retryOf(work: Pick<JobView, 'wait' | 'retry'>): Extract<WorkStatus, { state: 'retrying' }> | null {
   if (work.wait) return { state: 'retrying', at: work.wait.until, cause: { reason: 'rate_limited' } };
   if (!work.retry?.nextAttemptAt) return null;
@@ -48,11 +36,6 @@ function retryOf(work: Pick<JobView, 'wait' | 'retry'>): Extract<WorkStatus, { s
   return { state: 'retrying', at: nextAttemptAt, cause: { reason: 'failed', error: lastError, attempt: attempts + 1, maxAttempts } };
 }
 
-/**
- * The jobs page from the Vault's top-level jobs, live ones with their items' current state. Work
- * that started is running until it finishes; work that has not started is queued in the order it
- * starts. Only the newest job of each target counts for the failed section.
- */
 export async function jobOverview(jobs: readonly JobView[], context: JobBoardContext): Promise<JobOverview> {
   const running: JobOverviewEntry[] = [];
   const queued: Array<{ entry: JobOverviewEntry; position: number }> = [];
@@ -61,7 +44,7 @@ export async function jobOverview(jobs: readonly JobView[], context: JobBoardCon
     if (!view || job.parentId !== null || (job.state !== 'queued' && job.state !== 'running')) continue;
     const status = workStatus(context.sources, job);
     const entry = entryOf(job, view, status);
-    if (status.state === 'queued') queued.push({ entry, position: context.queuePosition(job) ?? Number.MAX_SAFE_INTEGER });
+    if (status.state === 'queued') queued.push({ entry, position: context.queueJoinOrder(job) ?? Number.MAX_SAFE_INTEGER });
     else running.push(entry);
   }
   queued.sort((left, right) => left.position - right.position);
@@ -72,11 +55,6 @@ export async function jobOverview(jobs: readonly JobView[], context: JobBoardCon
   };
 }
 
-/**
- * Failed single items and subscription requests the failed section lists, newest first: not
- * retried, not removed, younger than the retention, newer than every other job of the same target,
- * and, for an item, without a document of the same type and key.
- */
 export async function failedJobs(jobs: readonly JobView[], context: Pick<JobBoardContext, 'sources' | 'now' | 'hasDocument'>): Promise<JobView[]> {
   const newest = new Map<string, JobView>();
   for (const job of jobs) {
@@ -113,6 +91,12 @@ function entryOf(job: JobView, view: RoleView, status: WorkStatus | null): JobOv
   };
 }
 
-function earliest<T>(values: T[], at: (value: T) => string): T | null {
-  return values.reduce<T | null>((best, value) => best === null || at(value) < at(best) ? value : best, null);
+type NonEmpty<T> = [T, ...T[]];
+
+function isNonEmpty<T>(values: T[]): values is NonEmpty<T> {
+  return values.length > 0;
+}
+
+function earliest<T>([first, ...rest]: NonEmpty<T>, at: (value: T) => string): T {
+  return rest.reduce((best, value) => at(value) < at(best) ? value : best, first);
 }

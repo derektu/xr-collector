@@ -110,19 +110,19 @@ describe('the job queue', () => {
     expect(queue.nextCapture(always)).toBeUndefined();
   });
 
-  it('orders positions by when each job last joined, until the job is forgotten', () => {
+  it('orders join orders by when each job last joined, until the job is forgotten', () => {
     const queue = new JobQueue();
     queue.add('first', DISCOVERY);
     queue.add('item', lane('a'));
     queue.add('stopped', lane('a'), true);
     queue.nextCapture(always);
     queue.nextCapture(always);
-    const positions = ['stopped', 'first', 'item'].map((id) => queue.position(id)!);
-    expect([...positions].sort((left, right) => left - right)).toEqual(positions);
+    const joinOrders = ['stopped', 'first', 'item'].map((id) => queue.joinOrder(id)!);
+    expect([...joinOrders].sort((left, right) => left - right)).toEqual(joinOrders);
     // A job that joins again moves behind every job that joined before.
     queue.add('first', DISCOVERY);
-    expect(queue.position('first')!).toBeGreaterThan(queue.position('item')!);
+    expect(queue.joinOrder('first')!).toBeGreaterThan(queue.joinOrder('item')!);
     queue.forget('item');
-    expect(queue.position('item')).toBeUndefined();
+    expect(queue.joinOrder('item')).toBeUndefined();
   });
 });
