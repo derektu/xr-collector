@@ -22,7 +22,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 依賴 Electron 或平台能力的 scenario 才用原生 Desktop：原生對話框、preload bridge、路徑與權限、程序生命週期、視窗行為、Tray／選單列、登入自啟、安裝與更新。其餘以 Web 畫面截圖作證據，截圖說明標示為 Web 模式；Web 畫面證據不替代原生 UI 證據。
 
-**背景模式**：原生 Desktop 驗收預設設定 `XR_COLLECTOR_VALIDATION_HIDDEN=1`（`launchElectron` 的預設），視窗不顯示、不搶焦點，Playwright 照常操作與截圖，開發者可以同時在同一台機器上工作。會開原生對話框的 scenario 以 `stubDialogs` 替換回應；這證明 App 對對話框參數與結果的處理，不證明對話框本身。平台功能（Tray、登入自啟、更新等）經只在驗證模式開啟的控制通道查詢與觸發，以環境變數開關，正式使用時不開啟。
+**背景模式**：原生 Desktop 驗收預設設定 `XR_COLLECTOR_VALIDATION_HIDDEN=1`（`launchElectron` 的預設），視窗不顯示、不搶焦點，macOS 的 Dock 圖示從程式啟動就隱藏，Playwright 照常操作與截圖，開發者可以同時在同一台機器上工作。視窗大小由 `XR_COLLECTOR_VALIDATION_WINDOW_SIZE` 指定，格式為 `<寬>x<高>`（例如 `1440x900`），未設定或格式不符時為 1240×820；`launchElectron` 以 `size` 參數設定，預設 `1280x900`。會開原生對話框的 scenario 以 `stubDialogs` 替換回應；這證明 App 對對話框參數與結果的處理，不證明對話框本身。平台功能（Tray、登入自啟、更新等）經只在驗證模式開啟的控制通道查詢與觸發，以環境變數開關，正式使用時不開啟。
 
 驗證視窗、聚焦、Dock、Tray／選單列本身、原生對話框本身或作業系統畫面時，關閉背景模式。這會跳出視窗，所以先取得使用者同意，並把這類 scenario 集中一次跑完；除錯先在背景模式或單元測試完成。只有正確與否取決於作業系統畫面的項目，才在驗收計畫標為實機目視，數量盡量少。
 

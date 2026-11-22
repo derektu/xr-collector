@@ -1,17 +1,31 @@
 import { readJsonFile, writeJsonFile } from '../../shared/lib/json-file.js';
 
-/**
- * Whether the device has already been told, the first time its window closed, that the app keeps
- * running in the tray. The record lives in the Electron device profile; a missing or unreadable
- * file counts as not told, so at worst the hint shows once more.
- */
+export interface StillRunningHint {
+  title: string;
+  content: string;
+}
+
+export interface CloseHintOptions {
+  platform: NodeJS.Platform;
+  record: Pick<CloseHintRecord, 'shown' | 'markShown'>;
+  notify: (hint: StillRunningHint) => void;
+}
+
+const STILL_RUNNING_HINT: StillRunningHint = {
+  title: 'XR Collector 仍在系統匣執行',
+  content: '收集會繼續。要結束，在系統匣圖示按右鍵選「結束」。',
+};
+
+function recordsHintShown(value: unknown): value is { closeHintShown: true } {
+  return typeof value === 'object' && value !== null && 'closeHintShown' in value && value.closeHintShown === true;
+}
+
 export class CloseHintRecord {
   constructor(private readonly file: string) {}
 
   async shown(): Promise<boolean> {
     try {
-      const parsed = await readJsonFile(this.file);
-      return typeof parsed === 'object' && parsed !== null && (parsed as { closeHintShown?: unknown }).closeHintShown === true;
+      return recordsHintShown(await readJsonFile(this.file));
     } catch (error: unknown) {
       console.warn('Unable to read the close hint record', error);
       return false;
@@ -21,4 +35,10 @@ export class CloseHintRecord {
   async markShown(): Promise<void> {
     await writeJsonFile(this.file, { closeHintShown: true });
   }
+}
+
+export async function hintStillRunning({ platform, record, notify }: CloseHintOptions): Promise<void> {
+  if (platform !== 'win32' || await record.shown()) return;
+  notify(STILL_RUNNING_HINT);
+  await record.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
 }

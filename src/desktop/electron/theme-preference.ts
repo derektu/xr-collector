@@ -2,19 +2,20 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { replaceFile } from '../../shared/lib/json-file.js';
 
-/** `system` follows the operating system's light or dark appearance; it is also the value for a missing or invalid file. */
 export type StoredTheme = 'system' | 'dark' | 'light';
 export function isStoredTheme(value: unknown): value is StoredTheme { return value === 'system' || value === 'dark' || value === 'light'; }
 
-/** Stores only a presentation preference in the Electron device profile. */
+function hasStoredTheme(value: unknown): value is { theme: StoredTheme } {
+  return typeof value === 'object' && value !== null && 'theme' in value && isStoredTheme(value.theme);
+}
+
 export class FileThemePreference {
-  // Writes share one temporary file name, so each write waits for the previous one to finish.
   private pending: Promise<void> = Promise.resolve();
   constructor(private readonly file: string) {}
   async read(): Promise<StoredTheme> {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.file, 'utf8'));
-      if (typeof parsed === 'object' && parsed !== null && isStoredTheme((parsed as { theme?: unknown }).theme)) return (parsed as { theme: StoredTheme }).theme;
+      if (hasStoredTheme(parsed)) return parsed.theme;
     } catch (error: unknown) {
       if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') console.warn('Unable to read theme preference', error);
     }

@@ -43,7 +43,7 @@ describe('tray menu (#32 T1)', () => {
   beforeEach(() => { process.env.TZ = 'Asia/Taipei'; });
   afterEach(() => { process.env.TZ = timeZone; });
 
-  it('offers only opening and quitting while no Vault is open', () => {
+  it('offers only opening and quitting while the App\'s state cannot be read', () => {
     const menu = trayModel(null, now);
     expect(menu).toMatchObject({ icon: 'idle', tooltip: quiet });
     expect(status(menu)).toEqual([]);
@@ -116,7 +116,7 @@ describe('tray menu (#32 T1)', () => {
     expect(withAttention).toMatchObject({ icon: 'attention', tooltip: { attention: 1, work: { state: 'offline' }, newVersion: null } });
     expect(withAttention.updateBadge).toBeUndefined();
     expect(status(withAttention).slice(0, 2)).toEqual([{ text: 'offline' }, { text: 'offline_waiting', waiting: 1 }]);
-    const withUpdate = trayModel({ overview: overview(), schedule: schedule({ connectivity: offline }), updateAvailable: true, update: offered }, now);
+    const withUpdate = trayModel({ overview: overview(), schedule: schedule({ connectivity: offline }), update: offered }, now);
     expect(withUpdate).toMatchObject({ icon: 'offline', tooltip: { work: { state: 'offline' }, newVersion: null } });
     expect(withUpdate.updateBadge).toBeUndefined();
     expect(action(withUpdate, 'check_app_update')).toMatchObject({ label: { text: 'app_update', phase: 'available', version: '0.1.1' } });
@@ -170,22 +170,19 @@ describe('tray menu (#32 T1)', () => {
     expect(label({ phase: 'error', errorCode: 'update_failed' })).toMatchObject({ label: { phase: 'error' } });
   });
 
-  it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational and future update icons (#136)', () => {
-    const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true, updateAvailable = false) =>
-      trayModel({ overview: overview(overrides), schedule: schedule({ enabled }), actionable, updateAvailable }, now);
+  it('shows 0→1→2→1→0 actionable subscriptions and attention overrides operational icons and the update badge (#136)', () => {
+    const make = (actionable: AutoPauseNotification[], overrides: Parameters<typeof overview>[0] = {}, enabled = true) =>
+      trayModel({ overview: overview(overrides), schedule: schedule({ enabled }), actionable }, now);
     expect(make([]).items.some((item) => item.kind === 'submenu')).toBe(false);
-    const one = make([alert('a', 'A')], {}, false, true);
+    const one = make([alert('a', 'A')], {}, false);
     expect(one.icon).toBe('attention');
     expect(one.tooltip).toEqual({ attention: 1, work: { state: 'auto_check_off' }, newVersion: null });
     expect(one.items).toContainEqual({ kind: 'submenu', label: { text: 'attention', count: 1 }, items: [{ action: 'subscription:a', label: { text: 'subscription', title: 'A' } }] });
     const busy = entry({ progress: { done: 3, total: 10 }, status: { state: 'downloading' } });
-    const two = make([alert('a', 'A'), alert('bb', 'B')], { running: [busy] }, true, true);
+    const two = make([alert('a', 'A'), alert('bb', 'B')], { running: [busy] });
     expect(two.icon).toBe('attention');
     expect(two.tooltip).toEqual({ attention: 2, work: { state: 'collecting', progress: { done: 3, total: 10 } }, newVersion: null });
     expect(two.items).toContainEqual(expect.objectContaining({ kind: 'submenu', label: { text: 'attention', count: 2 } }));
-    expect(make([alert('bb', 'B')]).tooltip).toEqual({ attention: 1, work: { state: 'idle' }, newVersion: null });
-    expect(make([], {}, true, true)).toMatchObject({ icon: 'update_available', tooltip: quiet });
-    expect(make([], { running: [busy] }, true, true)).toMatchObject({ icon: 'update_available', tooltip: quiet });
     expect(make([]).icon).toBe('idle');
     const offered = update({ phase: 'available', offer: { version: '0.1.1' } as DeviceUpdateStatus['offer'] });
     const attentionWithUpdate = trayModel({ overview: overview(), schedule: schedule(), actionable: [alert('a', 'A')], update: offered }, now);
@@ -196,7 +193,12 @@ describe('tray menu (#32 T1)', () => {
 
   it('counts subscriptions that need attention while the Vault\'s work is unknown', () => {
     expect(trayModel({ actionable: [alert('a', 'A'), alert('b', 'B')] }, now)).toMatchObject({ icon: 'attention', tooltip: { attention: 2, work: null } });
-    expect(trayModel({ updateAvailable: true }, now)).toMatchObject({ icon: 'update_available', tooltip: quiet });
+  });
+
+  it('names idle work in the tooltip only beside subscriptions that need attention', () => {
+    const idle = { overview: overview(), schedule: schedule() };
+    expect(trayModel(idle, now).tooltip).toEqual(quiet);
+    expect(trayModel({ ...idle, actionable: [alert('a', 'A')] }, now).tooltip).toEqual({ attention: 1, work: { state: 'idle' }, newVersion: null });
   });
 });
 

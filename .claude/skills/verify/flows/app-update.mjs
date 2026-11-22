@@ -162,7 +162,7 @@ export async function run({ instance, page, record, waitFor }) {
         chooseVaultLocation: async () => null, chooseVault: async () => null, chooseExportFile: async () => null, chooseImportFile: async () => null,
         revealVault: async () => undefined, revealExport: async () => undefined, platform: 'darwin',
         onNavigate: (listener) => { navigate = listener; },
-        ready: () => { readyCalled = true; },
+        navigationReady: () => { readyCalled = true; },
       };
       window.__verifyDesktopReady = () => readyCalled && typeof navigate === 'function';
       window.__verifyOpenUpdate = () => navigate('update');

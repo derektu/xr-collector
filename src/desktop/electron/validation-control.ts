@@ -6,19 +6,17 @@ import type { TrayAction } from './tray-menu.js';
 export interface ValidationControlOptions {
   tray: AppTray;
   window: Pick<MainWindow, 'current' | 'shown' | 'show'>;
-  /** The system notifications shown so far, including the first-close hint. */
   notifications(): readonly { id?: string; title: string; content: string }[];
   update(): DeviceUpdateStatus | null;
 }
 
-/**
- * The validation control channel, for native acceptance runs only: Playwright reads and drives the
- * tray and the window through `globalThis.__xrCollectorValidation` in this process. The caller
- * opens it only when the run asks for it.
- */
+declare global {
+  var __xrCollectorValidation: unknown;
+}
+
 export function exposeValidationControl(options: ValidationControlOptions): void {
   const { tray, window } = options;
-  (globalThis as { __xrCollectorValidation?: unknown }).__xrCollectorValidation = {
+  globalThis.__xrCollectorValidation = {
     tray: async () => { await tray.refresh(); return tray.current(); },
     trayShown: () => ({ menu: tray.current(), reads: tray.reads, reading: tray.reading }),
     click: (action: TrayAction) => tray.run(action),

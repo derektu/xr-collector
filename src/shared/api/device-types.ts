@@ -13,6 +13,8 @@ export interface LoginStartupStatus {
   message: string;
 }
 
+export type DesktopPlatform = 'darwin' | 'win32' | 'other';
+
 /** Whether the device has a network, as collection needs to know it. */
 export type ConnectivityState = 'online' | 'offline';
 

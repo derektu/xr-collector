@@ -63,6 +63,7 @@ App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno 與 Mac 更新�
 
 - 開發版可用環境變數指定其他位置的檔案：`XR_COLLECTOR_MEILISEARCH`、`XR_COLLECTOR_YTDLP`、`XR_COLLECTOR_DENO` 指定程式，`XR_COLLECTOR_SEARCH_LEXICON` 指定搜尋詞庫。安裝包不讀這些變數，一律用自己附帶的檔案。
 - Mac 更新小幫手只隨 Mac 安裝包附帶，由 `package:mac` 建置。開發版要先執行 `node scripts/build-mac-update-helper.mjs`，checkout 的 `resources/bin/mac` 才有它。
+- `resources/tray` 的系統匣圖示由 `node scripts/render-tray-icons.mjs` 產生，圖示改了要重新執行並一起提交圖檔。
 
 ## 功能開發
 

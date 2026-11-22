@@ -22,7 +22,7 @@ describe('system notification delivery (#136)', () => {
     const notification = Object.assign(new EventEmitter(), { show: vi.fn() });
     const shown = vi.fn();
     const failed = vi.fn();
-    expect(() => attemptDelivery(notification, 'id', shown, failed)).not.toThrow();
+    expect(() => attemptDelivery(notification, shown, failed)).not.toThrow();
     expect(notification.show).toHaveBeenCalledOnce();
     expect(shown).not.toHaveBeenCalled();
     expect(failed).not.toHaveBeenCalled();
@@ -31,7 +31,7 @@ describe('system notification delivery (#136)', () => {
   it('reports a later failure without changing the synchronous attempt', () => {
     const notification = Object.assign(new EventEmitter(), { show: vi.fn() });
     const failed = vi.fn();
-    attemptDelivery(notification, 'id', vi.fn(), failed);
+    attemptDelivery(notification, vi.fn(), failed);
     notification.emit('failed', {}, 'blocked');
     expect(failed).toHaveBeenCalledWith('系統通知發送失敗：blocked');
   });
@@ -44,7 +44,7 @@ describe('secrets in system notifications (#254)', () => {
   it('masks secrets in the failure the OS reports', () => {
     const notification = Object.assign(new EventEmitter(), { show: vi.fn() });
     const failed = vi.fn();
-    attemptDelivery(notification, 'id', vi.fn(), failed);
+    attemptDelivery(notification, vi.fn(), failed);
     notification.emit('failed', {}, `denied ${agentToken} Authorization: Bearer os-bearer`);
     expect(failed).toHaveBeenCalledWith('系統通知發送失敗：denied [已遮蔽] Authorization: [已遮蔽]');
   });

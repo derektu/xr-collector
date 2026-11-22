@@ -5,28 +5,19 @@ import type { ChangeBatch } from '../../shared/api/changes.js';
 import { API_ROUTES, type ApiRoute, type BodyOf, type ResponseOf } from '../../shared/api/api-routes.js';
 import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
+import type { DesktopTarget } from './main-window.js';
 
-/** The shortest time between the starts of two state reads; changes meanwhile share the next read. */
 export const READ_GAP_MS = 1000;
 
 export interface AppTrayOptions {
-  /** The app's own UI/API origin; the menu reads and changes state through the same API as the page. */
+  platform: NodeJS.Platform;
   serverUrl: string;
-  /** Folder of the icon images (see scripts/render-tray-icons.mjs). */
   iconFolder: string;
-  /** The runtime's change stream; the menu reads its state again after each change to what it shows. */
   changes: { subscribe(listener: (batch: ChangeBatch) => void): () => void };
-  /** Opens the window, on a page when given. */
-  show(page?: 'jobs' | 'activity' | 'settings' | 'update' | { notificationId: string }): void;
+  show(page?: Extract<DesktopTarget, string> | { notificationId: string }): void;
   quit(): void;
 }
 
-/**
- * The macOS menu bar item or Windows notification area icon: the open Vault's work at a glance and
- * the actions that do not need the window. It reads the app's API as the page does, after each change
- * to what it shows, at most once per `READ_GAP_MS`. At local midnight it draws the last state again,
- * so "明天" turns into today without a read.
- */
 export class AppTray {
   private readonly tray: Tray;
   private shown: TrayModel = trayModel(null);
@@ -39,33 +30,25 @@ export class AppTray {
   private stopped = false;
   private midnight: ReturnType<typeof setTimeout> | undefined;
   private readonly stopFollowing: () => void;
-  /** State reads since the tray was created; validation compares it across an idle period. */
   reads = 0;
 
   constructor(private readonly options: AppTrayOptions) {
     this.tray = new Tray(this.image('idle'));
-    // Windows opens the window on a click and the menu on a right click; macOS opens the menu on a click.
-    if (process.platform === 'win32') this.tray.on('click', () => options.show());
+    // Windows shows a notification area icon's context menu on right click and leaves left click to the app;
+    // macOS opens a menu bar item's menu on left click.
+    if (options.platform === 'win32') this.tray.on('click', () => options.show());
     this.draw();
     this.stopFollowing = options.changes.subscribe((batch) => { if (menuStaleAfter(batch.changes)) void this.refresh(); });
     void this.refresh();
     this.atMidnight();
   }
 
-  /** The menu as last drawn. */
   current(): TrayMenu { return this.menu; }
 
-  /** What the menu last drawn shows, before it is put into words. */
   model(): TrayModel { return this.shown; }
 
-  /** Whether a state read is running or waiting for its turn; validation waits for it to end before it watches an idle period. */
   get reading(): boolean { return this.pending !== null; }
 
-  /**
-   * Reads the state and redraws. One read runs at a time, starting at least `READ_GAP_MS` after the
-   * previous one; a call during a read reads once more after it, and resolves once the menu shows a
-   * state read after the call.
-   */
   refresh(): Promise<void> {
     if (this.pending) { this.again = true; return this.pending; }
     this.pending = (async () => {
@@ -74,7 +57,6 @@ export class AppTray {
           const wait = this.lastRead + READ_GAP_MS - Date.now();
           if (wait > 0) await new Promise((resolve) => { setTimeout(resolve, wait); });
           if (this.stopped) return;
-          // The read below starts after every change so far, including those during the wait.
           this.again = false;
           this.lastRead = Date.now();
           const state = await this.read();
@@ -83,7 +65,6 @@ export class AppTray {
           this.show(trayModel(state));
         } while (this.again);
       } finally {
-        // Cleared in the same step as the last check of `again`, so a later call starts a new read.
         this.pending = null;
       }
     })();
@@ -151,7 +132,6 @@ export class AppTray {
     })));
   }
 
-  /** The open Vault's work and schedule; null while no Vault is open, the routes then answer 404. */
   private async read(): Promise<TrayState | null> {
     this.reads += 1;
     try {
@@ -185,10 +165,11 @@ export class AppTray {
     if (!response.ok) throw new Error(`${route.method} ${route.path} answered ${response.status}: ${await response.text()}`);
   }
 
-  /** macOS takes black template images it tints for the menu bar; Windows takes colored ones. */
+  // macOS tints menu bar template images: black plus alpha, file name ending in Template.
+  // https://www.electronjs.org/docs/latest/api/native-image#template-image-macos
   private image(icon: TrayIcon, updateBadge = false): Electron.NativeImage {
     const state = `${icon}${updateBadge ? '-update' : ''}`;
-    const name = process.platform === 'darwin' ? `tray-${state}Template.png` : `tray-${state}.png`;
+    const name = this.options.platform === 'darwin' ? `tray-${state}Template.png` : `tray-${state}.png`;
     return nativeImage.createFromPath(path.join(this.options.iconFolder, name));
   }
 }

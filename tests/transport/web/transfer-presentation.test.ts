@@ -44,7 +44,7 @@ describe('export and import presentation', () => {
   it('names the file manager and the operations that switch Vaults', () => {
     expect(fileManager('darwin')).toBe('finder');
     expect(fileManager('win32')).toBe('explorer');
-    expect(fileManager('linux')).toBe('other');
+    expect(fileManager('other')).toBe('other');
     expect(switchesVault({ operation: 'open' })).toBe(true);
     expect(switchesVault({ operation: 'create' })).toBe(true);
     expect(switchesVault({ operation: 'import' })).toBe(false);

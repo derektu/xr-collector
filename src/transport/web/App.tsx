@@ -92,7 +92,7 @@ export default function App() {
       openSource,
       announce: (message) => announce(message, 'error'),
     });
-  }); desktopBridge?.ready(); }, []);
+  }); desktopBridge?.navigationReady(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
   useEffect(() => { if (updateRead.value) setUpdate(updateRead.value); }, [updateRead.value]);
   useEffect(() => {

@@ -11,7 +11,7 @@
 | 檢查收集哪些項目（候選規則） | `src/domain/subscriptions/candidates.ts` |
 | 等待條件與其計時器 | `src/domain/jobs/job-waits.ts` |
 | 請求通道與冷卻 | `src/domain/pacing/pacing-gate.ts` |
-| 斷網與睡眠 | `src/domain/jobs/connectivity.ts`、`src/shared/jobs/collection-pause.ts` |
+| 斷網與睡眠 | `src/domain/jobs/connectivity.ts`、`src/shared/jobs/collection-pause.ts`；桌面版另有 `src/desktop/electron/network-watch.ts`、`sleep-watch.ts` |
 | 檢查結束、項目失敗與連續失敗的計入 | `src/domain/subscriptions/subscription-service.ts` |
 | 狀態 | `src/domain/jobs/job-board.ts`（`workStatus`）、`subscription-service.ts`（`checkStatus`） |
 
@@ -92,7 +92,7 @@ RSS 的每個 feed 是不同的網站，一個 feed 限流不代表其他 feed �
 
 收集暫停是整台裝置一個開關（`CollectionPause`），原因有 `offline` 與 `sleep`；知識庫操作（匯出、匯入、建立新的知識庫、開啟其他知識庫）與準備套用 App 更新以 `hold`（`src/domain/vault/operation-lock.ts`）對單一 Vault 產生相同效果。
 
-- 斷網只在請求以 `network_error` 失敗時才確認，在線時不探測；斷網期間定時再確認，睡眠中不確認，喚醒時立即確認。間隔見 `connectivity.ts` 的常數。
+- 在線時不定時探測。請求以 `network_error` 失敗時確認網路；桌面版讀到作業系統對網路的判斷改變（例如 Wi-Fi 斷線或連上）時也立即確認，因為作業系統的判斷只反映網路介面，不代表連得到外部網站。這個判斷定時讀取（`network-watch.ts` 的 `NETWORK_WATCH_MS`），讀取不發出任何請求。斷網期間定時再確認，睡眠中不確認，喚醒時立即確認；這些間隔見 `connectivity.ts` 的常數。
 - 確認時同時向兩家廠商的固定回應網址發出請求，任一家回應正確就算在線，所以單一廠商故障或被擋不會被當成斷網。請求不帶 cookie、帳號或訂閱資訊。
 - 暫停期間不派檢查、不開始新步驟；等通道的步驟放棄等待，已送出的請求跑完，若因暫時性錯誤失敗也退回佇列，不算一次嘗試。
 - 需要網路的操作（送出網址或單一項目、辨識網址、新增訂閱、預覽、重試）在斷網時以 `offline` 拒絕，不建立工作；立即檢查先重新確認網路，仍然斷網才拒絕。訂閱不會因斷網顯示錯誤。

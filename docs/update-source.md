@@ -43,16 +43,16 @@ App 要先能找到下一份 index，才能透過更新改用新來源。因此�
 
 ### macOS
 
-macOS 的安裝由 App 內附的 helper（`src/desktop/electron/mac-update-helper.swift`）執行，App 端在 `src/domain/updates/mac-installer.ts`。兩邊經由 App 旁邊的工作目錄 `.xr-update-<runId>` 溝通。這個目錄只有目前使用者可讀寫，裡面每個檔案都帶這次安裝的 nonce，App 只採信 owner、權限與 nonce 都相符的目錄。目錄同時是這次安裝的 journal：裡面還有尚未處理完的結果時，就不能刪。
+macOS 的安裝由 App 內附的 helper（`src/desktop/electron/mac-update-helper.swift`）執行，App 端在 `src/domain/updates/mac-installer.ts`。helper 不具特權：準備與使用者同意都由執行中的 App 負責，helper 不更動 code signing、quarantine、Gatekeeper 或系統原則。兩邊經由 App 旁邊的工作目錄 `.xr-update-<runId>` 溝通。這個目錄只有目前使用者可讀寫，裡面每個檔案都帶這次安裝的 nonce，App 只採信 owner、權限與 nonce 都相符的目錄。目錄同時是這次安裝的 journal：裡面還有尚未處理完的結果時，就不能刪。
 
 1. 準備：App 把更新檔解開到工作目錄、寫入 `request.json`，啟動 helper。helper 回報 `prepared` 才算準備完成；使用者取消時 App 寫入 `abort.json`。
 2. 交接：App 寫入 `handoff.json`，helper 回報 `waiting_for_exit` 後舊版 A 結束。helper 等 A 結束後交換 bundle，啟動新版 B。
-3. 啟動確認：B 啟動時寫入 `ack.json`。runtime 就緒後，B 讀取 helper 的最終結果（`succeeded`、`rolled_back`、`failed` 或 `recovery_required`），先存進安裝紀錄，存檔成功且結果不是 `recovery_required` 時，才請 helper 清除工作目錄。存檔失敗或結果是 `recovery_required` 時保留工作目錄，下次啟動再處理。B 確認就緒前，App 不把更新記為已安裝。
-4. 清除：以 `--cleanup` 請 helper 刪除工作目錄，短暫重試同一個指令。剛結束的 helper 可能在釋放鎖之前才寫下最終結果；每次失敗都保留 journal。
+3. 啟動確認：B 啟動時寫入 `ack.json`。runtime 就緒後，B 讀取 helper 的最終結果（`succeeded`、`rolled_back`、`failed` 或 `recovery_required`），先存進安裝紀錄，存檔成功且結果不是 `recovery_required` 時，才請 helper 清除工作目錄。存檔失敗或結果是 `recovery_required` 時保留工作目錄，下次啟動再處理。B 確認就緒前，App 不把更新記為已安裝。helper 先記錄 B 為 `succeeded`，才刪除工作目錄裡 A 的備份；備份刪除失敗時仍保留 B，結果加註 `backupRetained`。
+4. 清除：以 `--cleanup` 請 helper 刪除工作目錄，短暫重試同一個指令。剛結束的 helper 可能在釋放鎖之前才寫下最終結果；每次失敗都保留 journal。helper 從驗證最終結果到遞迴刪完目錄都持有 journal 的鎖，中間不會有 `--recover` 進來；開始刪除後，錯誤處理不再寫入狀態。
 
-同一次安裝同時只有一個 helper 能處理 journal，由 journal 的鎖保證。B 啟動時若 helper 還沒寫出最終結果，B 先等一下再看，仍沒有結果才以 `--recover` 啟動 helper 補完。拿不到鎖、helper 提早結束，都不代表安裝成功。
+同一次安裝同時只有一個 helper 能處理 journal，由 journal 的鎖保證。B 啟動時若 helper 還沒寫出最終結果，B 先等一下再看，仍沒有結果才以 `--recover` 啟動 helper 補完。拿不到鎖、helper 提早結束，都不代表安裝成功。`--recover` 依兩個 bundle 的身分判斷實際交換到哪一步，不看 journal 的最後一筆，因為被中斷的 helper 可能還沒寫下它。App 位置上是已就緒的 B 時，helper 補完這次安裝；B 還沒就緒時回報 `recovery_required`，不退回 A。
 
-B 在確認就緒前啟動失敗時，由 B 自己發起回復：先寫入 `shutdown-safe.json`，表示這個 B 程序已乾淨關閉更新服務與 Collector runtime；再以 `--rollback` 啟動 helper，helper 回報 `rollback_prepared` 後 B 才結束。helper 等這個 B 程序結束，確認回條是它寫的，才把 bundle 換回 A。沒有回條時，helper 回報 `recovery_required`，不強制結束 B、也不還原 A，因為同一個 profile 同時只能有一個 Collector 在執行。`recovery_required` 保留備份，由使用者處理。
+B 在確認就緒前啟動失敗時，由 B 自己發起回復：先寫入 `shutdown-safe.json`，表示這個 B 程序已乾淨關閉更新服務與 Collector runtime；再以 `--rollback` 啟動 helper，helper 回報 `rollback_prepared` 後 B 才結束。helper 等這個 B 程序結束，確認回條是它寫的，才把 bundle 換回 A。沒有回條時，helper 回報 `recovery_required`，不強制結束 B、也不還原 A，因為同一個 profile 同時只能有一個 Collector 在執行。`recovery_required` 保留備份，由使用者處理。helper 要結束自己啟動的 B 時，經 `NSRunningApplication` 的 terminate 請 B 走正常的 runtime 關閉流程，不送 signal，讓 B 的搜尋子程序與寫到一半的資料先完成，A 才重新啟動。
 
 ### Windows
 

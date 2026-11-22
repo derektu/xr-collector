@@ -5,22 +5,14 @@ import type { Change } from '../../shared/api/changes.js';
 import type { AutoPauseNotification } from '../../shared/api/device-types.js';
 import { upcomingTime, upcomingTimeText, type UpcomingTime } from '../../shared/subscriptions/upcoming-time.js';
 
-/** What the menu shows comes from jobs and their pacing, the network, the schedule and subscriptions, updates and notifications, and the open Vault. */
 const MENU_STALE_AFTER: ReadonlySet<Change['kind']> = new Set(['job', 'pacing', 'connectivity', 'schedule', 'subscription', 'update', 'notifications', 'vault']);
 
-/** True when the menu must read its state again after these changes. */
 export function menuStaleAfter(changes: readonly Change[]): boolean {
   return changes.some((change) => MENU_STALE_AFTER.has(change.kind));
 }
 
-/**
- * The tray icon states, highest priority first: subscriptions need attention, the device has no
- * network, an App update is available, then the work state (work queued or running, nothing to do,
- * automatic checks off).
- */
-export type TrayIcon = 'attention' | 'offline' | 'update_available' | 'collecting' | 'idle' | 'auto_check_off';
+export type TrayIcon = 'attention' | 'offline' | 'collecting' | 'idle' | 'auto_check_off';
 
-/** What the menu acts on; the menu's own items use these as their ids. */
 export type TrayAction = 'open' | 'check_now' | 'toggle_auto_check' | 'jobs' | 'activity' | 'check_app_update' | 'quit'
   | `subscription:${string}`;
 
@@ -34,16 +26,13 @@ export type TrayMenuItem = MenuItem<string>;
 
 export interface TrayMenu {
   icon: TrayIcon;
-  /** An update shape over the existing work-state icon; no system notification. */
   updateBadge?: boolean;
   tooltip: string;
   items: TrayMenuItem[];
 }
 
-/** What the running work does, as its status line names it. */
 export type RunningActivity = 'collecting' | 'checking' | 'retrying';
 
-/** What a menu label says, before it is put into words. */
 export type TrayLabel =
   | { text: 'open' }
   | { text: 'quit' }
@@ -62,20 +51,16 @@ export type TrayLabel =
   | { text: 'attention'; count: number }
   | { text: 'subscription'; title: string }
   | { text: 'app_version'; version: string }
-  /** `version`: the offered version while it is available or downloaded; `percent`: the download's progress once its size is known. */
   | { text: 'app_update'; phase: DeviceUpdateStatus['phase']; version: string | null; percent: number | null };
 
-/** The work the tooltip names after the App name; `idle` only beside subscriptions that need attention. */
 export type TrayWork = { state: 'offline' | 'auto_check_off' | 'idle' } | { state: 'collecting'; progress: { done: number; total: number } | null };
 
-/** The tooltip: subscriptions that need attention, the work it names, and a newer App version behind the update shape. */
 export interface TrayTooltip {
   attention: number;
   work: TrayWork | null;
   newVersion: string | null;
 }
 
-/** The menu as the rules decide it; `trayMenu` puts its labels and tooltip into words. */
 export interface TrayModel {
   icon: TrayIcon;
   updateBadge?: boolean;
@@ -83,29 +68,21 @@ export interface TrayModel {
   items: Array<MenuItem<TrayLabel>>;
 }
 
-/**
- * The open Vault's work and schedule as the menu reads them from the app's API; null while no Vault
- * is open (Onboarding, or the Vault is unavailable).
- */
 export interface TrayState {
   overview?: JobOverview;
   schedule?: CollectionScheduleView;
   update?: DeviceUpdateStatus;
   actionable?: AutoPauseNotification[];
-  /** Contract for #36; #136 does not populate this from an update service. */
-  updateAvailable?: boolean;
 }
 
 const separator = { kind: 'separator' } as const;
 const open = { kind: 'action', action: 'open', label: { text: 'open' } } as const;
 const quit = { kind: 'action', action: 'quit', label: { text: 'quit' } } as const;
 
-/** The tray icon, its tooltip and its menu for the open Vault's work, or for no open Vault. */
 export function trayMenu(state: TrayState | null, now: Date = new Date()): TrayMenu {
   return trayMenuText(trayModel(state, now));
 }
 
-/** The menu in words. */
 export function trayMenuText(model: TrayModel): TrayMenu {
   const label = (value: TrayLabel) => trayLabelText(value);
   return {
@@ -123,12 +100,11 @@ export function trayMenuText(model: TrayModel): TrayMenu {
   };
 }
 
-/** Which icon, tooltip and items the menu shows for the open Vault's work, or for no open Vault. */
 export function trayModel(state: TrayState | null, now: Date = new Date()): TrayModel {
   if (!state) return { icon: 'idle', tooltip: { attention: 0, work: null, newVersion: null }, items: [open, separator, quit] };
   const actionable = state.actionable ?? [];
   if (!state.overview || !state.schedule) return withUpdateBadge({
-    icon: actionable.length > 0 ? 'attention' : state.updateAvailable ? 'update_available' : 'idle',
+    icon: actionable.length > 0 ? 'attention' : 'idle',
     tooltip: { attention: actionable.length, work: null, newVersion: null },
     items: [open, ...actionableItems(actionable), separator, ...updateItems(state.update), quit],
   }, state.update);
@@ -138,8 +114,8 @@ export function trayModel(state: TrayState | null, now: Date = new Date()): Tray
   const offline = schedule.connectivity.state === 'offline';
   const status = offline ? offlineLines(waiting, schedule.enabled) : workLines(overview, schedule, now);
   const operational: TrayIcon = offline ? 'offline' : waiting > 0 ? 'collecting' : schedule.enabled ? 'idle' : 'auto_check_off';
-  const icon: TrayIcon = actionable.length > 0 ? 'attention' : !offline && state.updateAvailable ? 'update_available' : operational;
-  const shown = actionable.length > 0 || (icon === operational && operational !== 'idle');
+  const icon: TrayIcon = actionable.length > 0 ? 'attention' : operational;
+  const shown = actionable.length > 0 || operational !== 'idle';
   return withUpdateBadge({
     icon,
     tooltip: { attention: actionable.length, work: shown ? workOf(operational, current) : null, newVersion: null },
@@ -160,7 +136,6 @@ export function trayModel(state: TrayState | null, now: Date = new Date()): Tray
   }, state.update);
 }
 
-/** While offline the menu says what resumes once the network is back, not what is running. */
 function offlineLines(waiting: number, autoCheck: boolean): TrayLabel[] {
   if (waiting > 0) return [{ text: 'offline' }, { text: 'offline_waiting', waiting }];
   return [{ text: 'offline' }, autoCheck ? { text: 'check_on_reconnect' } : { text: 'auto_check_off' }];
@@ -181,7 +156,7 @@ function workLines(overview: JobOverview, schedule: CollectionScheduleView, now:
 
 function withUpdateBadge(menu: TrayModel, update: DeviceUpdateStatus | undefined): TrayModel {
   const version = (update?.ready ?? update?.offer)?.version;
-  if (['attention', 'offline', 'update_available'].includes(menu.icon) || !version || version === update?.currentVersion) return menu;
+  if (['attention', 'offline'].includes(menu.icon) || !version || version === update?.currentVersion) return menu;
   return { ...menu, updateBadge: true, tooltip: { ...menu.tooltip, newVersion: version } };
 }
 
@@ -218,7 +193,6 @@ function workOf(icon: TrayIcon, current: JobOverviewEntry | undefined): TrayWork
   return { state: 'idle' };
 }
 
-/** An address without its scheme and `www.`, as the jobs page shows work whose title is unknown. */
 function displayAddress(url: string): string {
   return url.replace(/^https?:\/\//u, '').replace(/^www\./u, '');
 }
@@ -240,7 +214,6 @@ const UPDATE_PHASE_TEXT: Record<DeviceUpdateStatus['phase'], string> = {
   error: 'App 更新：錯誤',
 };
 
-/** A menu label in words. */
 export function trayLabelText(label: TrayLabel): string {
   switch (label.text) {
     case 'open': return '開啟 XR Collector';
@@ -281,7 +254,6 @@ function workText(work: TrayWork): string {
   }
 }
 
-/** The tooltip in words: "XR Collector・1 個訂閱需要處理・收集中 3/10 · 有新版本 0.1.1". */
 export function trayTooltipText(tooltip: TrayTooltip): string {
   const parts = ['XR Collector'];
   if (tooltip.attention > 0) parts.push(`${tooltip.attention} 個訂閱需要處理`);

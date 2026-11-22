@@ -1,5 +1,3 @@
-// Standalone, unprivileged replacement helper. The running App owns preparation and user consent.
-// This helper never changes code-signing, quarantine, Gatekeeper, or system policy.
 import Foundation
 import AppKit
 import Darwin
@@ -148,8 +146,9 @@ private func identity(_ appPath: String, _ r: UpdateRequest) throws -> BuildIden
     return BuildIdentity(version: version, buildId: buildId)
 }
 private func exchange(_ r: UpdateRequest) throws {
-    // RENAME_SWAP is atomic on one filesystem: the public application path never disappears.
-    let result = r.currentApp.withCString { from in r.stagedApp.withCString { to in exchangePaths(AT_FDCWD, from, AT_FDCWD, to, 0x00000002) } }
+    // With RENAME_SWAP, renameatx_np swaps source and target atomically on a volume that supports it, so neither path is ever missing.
+    // macOS rename(2) man page, RENAME_SWAP.
+    let result = r.currentApp.withCString { from in r.stagedApp.withCString { to in exchangePaths(AT_FDCWD, from, AT_FDCWD, to, UInt32(RENAME_SWAP)) } }
     guard result == 0 else { throw fail("atomic_exchange_failed_\(errno)") }
     synchronizeDirectory(URL(fileURLWithPath: r.currentApp).deletingLastPathComponent().path)
     synchronizeDirectory(r.workDir)
@@ -192,8 +191,6 @@ private func launch(_ r: UpdateRequest, rollback: Bool = false) throws -> OwnedP
 }
 private func stopLaunched(_ process: OwnedProcess, _ r: UpdateRequest) throws {
     if sameProcess(process, appPath: r.currentApp) {
-        // Ask the exact replacement App to quit through its normal runtime shutdown. A signal
-        // could leave its search child or a write behind while the old App starts again.
         guard let application = NSRunningApplication(processIdentifier: process.pid),
               sameProcess(process, appPath: r.currentApp), application.terminate() else { throw fail("new_application_declined_quit") }
         guard try waitFor(15, until: { !sameProcess(process, appPath: r.currentApp) }) else { throw fail("new_application_did_not_exit") }
@@ -210,7 +207,6 @@ private func shutdownAcknowledged(_ process: OwnedProcess, _ r: UpdateRequest) t
 private func complete(_ r: UpdateRequest) throws {
     guard try acknowledgement(r, process: launched) else { throw fail("runtime_acknowledgement_invalid") }
     try status("succeeded", ["version": r.expectedVersion, "buildId": r.expectedBuildId])
-    // A verified, running B is committed before deleting A. Cleanup failure cannot roll B back.
     do {
         guard try identity(r.stagedApp, r) == BuildIdentity(version: r.previousVersion, buildId: r.previousBuildId) else { throw fail("backup_identity_changed") }
         try fm.removeItem(atPath: r.stagedApp)
@@ -266,8 +262,6 @@ private func main() throws {
         guard result["schemaVersion"] as? Int == 1, result["runId"] as? String == r.runId,
               let phase = result["phase"] as? String, ["succeeded", "rolled_back", "failed"].contains(phase),
               phase == "succeeded" ? currentIdentity == new : currentIdentity == old else { throw fail("cleanup_terminal_identity_mismatch") }
-        // Keep the journal lock through recursive removal so no recovery helper can enter between
-        // validation and deletion. Suppress catch-path status writes once cleanup begins.
         safeToWrite = false
         try fm.removeItem(atPath: r.workDir)
         synchronizeDirectory(parent)
@@ -289,8 +283,6 @@ private func main() throws {
         return
     }
     if recovering {
-        // Infer the actual exchange from both bundle identities; a killed helper may not have
-        // committed its last journal write. A valid ready B may finish an interrupted attempt.
         if currentIdentity == new {
             if try acknowledgement(r, process: nil) {
                 if fm.fileExists(atPath: r.stagedApp) {
@@ -298,8 +290,6 @@ private func main() throws {
                     try complete(r)
                 } else { try status("succeeded", ["version": r.expectedVersion, "buildId": r.expectedBuildId]) }
             } else {
-                // B may still be starting or its candidate ack may have raced with process exit.
-                // Preserve the recovery boundary; never turn this into permission to downgrade.
                 try status("recovery_required", ["reason": "replacement_runtime_not_ready", "backupRetained": true])
             }
             return
@@ -331,7 +321,6 @@ private func main() throws {
     try status("waiting_for_exit")
     guard try waitFor(30, until: { !sameProcess(originalProcess, appPath: r.currentApp) }) else { throw fail("parent_exit_timeout") }
     safeParentExited = true
-    // Revalidate just before touching either bundle, after the source process is gone.
     guard try identity(r.currentApp, r) == old, try identity(r.stagedApp, r) == new else { throw fail("pre_swap_identity_changed") }
     try exchange(r)
     swapped = true

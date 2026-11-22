@@ -7,7 +7,8 @@ import { loginStartupStatus, type LoginStartupAccess } from '../../shared/api/lo
 import { replaceFile } from '../../shared/lib/json-file.js';
 
 export const LOGIN_STARTUP_ARGUMENT = '--login-startup';
-/** Matches the AppUserModelID so Electron's Windows openAtLogin read-back addresses this value. */
+// On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
+// https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
 export const LOGIN_STARTUP_NAME = 'com.moneydj.xrcollector';
 
 interface LaunchItem {
@@ -41,7 +42,6 @@ interface RegistrationRecord {
 
 const WINDOWS_ARGS = [LOGIN_STARTUP_ARGUMENT];
 
-/** Electron's packaged login-item API, with conservative repair of an owned Windows registration after relocation. */
 export class DesktopLoginStartup implements LoginStartupAccess {
   private tail: Promise<void> = Promise.resolve();
 
@@ -101,7 +101,6 @@ export class DesktopLoginStartup implements LoginStartupAccess {
     });
   }
 
-  /** Called only on a manual packaged launch. Never overrides an OS-disabled registration. */
   async repairMovedRegistration(): Promise<{ repaired: boolean; status: LoginStartupStatus }> {
     return this.serial(async () => {
       let removed: RegistrationRecord | null = null;
@@ -113,8 +112,6 @@ export class DesktopLoginStartup implements LoginStartupAccess {
         const old = this.adapter.get(this.windowsQueryOptions(remembered.path, remembered.args));
         const owned = ownedWindowsItem(old, remembered.path);
         if (!owned?.enabled || !old.openAtLogin) return { repaired: false, status: current };
-        // Windows identifies a Run value by name, not path. Remove the proven old value first,
-        // then create and verify the new value so the removal cannot delete the repaired entry.
         this.adapter.set({ openAtLogin: false, enabled: false, path: remembered.path, args: remembered.args, name: LOGIN_STARTUP_NAME });
         removed = remembered;
         this.adapter.set({ openAtLogin: true, enabled: true, ...this.currentWindowsOptions(), name: LOGIN_STARTUP_NAME });
@@ -123,15 +120,13 @@ export class DesktopLoginStartup implements LoginStartupAccess {
         await this.writeRecord({ version: 1, path: this.adapter.executablePath, args: WINDOWS_ARGS });
         return { repaired: true, status: repaired };
       } catch (cause) {
-        // Best effort: a failed replacement must not intentionally leave a previously enabled
-        // owned item removed. Restoring the old path is safer than claiming the repair succeeded.
         if (removed) {
           try {
             this.adapter.set({ openAtLogin: true, enabled: true, path: removed.path, args: removed.args, name: LOGIN_STARTUP_NAME });
             const restored = this.adapter.get(this.windowsQueryOptions(removed.path, removed.args));
-            const owned = ownedWindowsItem(restored, removed!.path);
+            const owned = ownedWindowsItem(restored, removed.path);
             if (!restored.openAtLogin || !owned?.enabled) throw new Error('old registration read-back stayed disabled');
-          } catch { /* the failure reported below remains authoritative */ }
+          } catch {}
         }
         if (cause instanceof CollectorError) throw cause;
         throw loginFailure('XR Collector 已搬到新位置，但無法修復登入自啟；請重新開啟設定。', cause);
@@ -148,12 +143,9 @@ export class DesktopLoginStartup implements LoginStartupAccess {
   }
 
   private windowsQueryOptions(executablePath: string, args: string[]) {
-    // Electron 44 parses get(options.path) as a command line before extracting the program. A raw
-    // path containing spaces is truncated, so quote queries only; set() receives the raw path.
     return { path: `"${executablePath}"`, args };
   }
 
-  /** A false enabled bit is insufficient: disabling must remove this App's owned OS registration. */
   private async registrationWasRemoved(): Promise<boolean> {
     if (this.adapter.platform === 'darwin') {
       return this.adapter.get({ type: 'mainAppService' }).status === 'not-registered';
@@ -227,9 +219,8 @@ function windowsStatus(settings: LoginItemSettings, executablePath: string): Log
 }
 
 function ownedWindowsItem(settings: LoginItemSettings, executablePath: string): LaunchItem | undefined {
-  // Electron's Windows launchItems come from Chromium CommandLine::GetArgs(), which omits
-  // --switches such as our --login-startup marker. openAtLogin already proves the complete
-  // path-and-args command matches; the launch item independently proves ownership and OS approval.
+  // On Windows, Electron fills launchItems[].args from Chromium's CommandLine::GetArgs(), which leaves out switches such as --login-startup.
+  // https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
   return settings.launchItems?.find((item) => item.name === LOGIN_STARTUP_NAME
     && item.scope === 'user' && samePath(item.path, executablePath));
 }
@@ -238,12 +229,10 @@ function samePath(left: string, right: string): boolean {
   return path.resolve(left).toLocaleLowerCase('en-US') === path.resolve(right).toLocaleLowerCase('en-US');
 }
 
-/** Distinguishes an OS login launch from a manual first or second launch. */
 export function isLoginStartupLaunch(platform: NodeJS.Platform, argv: readonly string[], wasOpenedAtLogin = false): boolean {
   return platform === 'win32' ? argv.includes(LOGIN_STARTUP_ARGUMENT) : platform === 'darwin' && wasOpenedAtLogin;
 }
 
-/** An activation during login-startup initialization is not a request to show the window; later Dock activations are. */
 export function shouldShowForActivation(startedAtLogin: boolean, startupFinished: boolean): boolean {
   return !startedAtLogin || startupFinished;
 }

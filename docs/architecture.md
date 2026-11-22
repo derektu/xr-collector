@@ -40,6 +40,8 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 啟動時先讀出 Agent 金鑰並在所有輸出中遮蔽，再開啟 Vault（接續的工作此時就可能失敗並寫出錯誤），最後啟動 listener。啟動 listener 的函式由傳輸層提供，失敗時自己先關閉已啟動的 listener；runtime 接著關閉 Agent 連線、Vault 與工作紀錄，啟動以失敗結束。開啟 Vault 時，先撤回 Onboarding 中被中斷且選擇沒有指向的匯入、完成知識庫內被中斷的原地匯入，接著 workspace 接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。關閉時先停止網路確認與變動追蹤（進行中的網路確認直接放棄，workspace 停止期間沒有工作在等它），停止 listeners 並等待已接受的 handler；再由 workspace 等待進行中的知識庫操作、停止排程與收集（等待執行中的步驟，把其餘工作記為中斷）並關閉搜尋 process；最後關閉工作紀錄與活動記錄。
 
+Electron 版關閉視窗只會把它隱藏，視窗只在結束 App 時才真正關閉。結束 App 時 `before-quit` 先擋下這次結束，等 runtime 關閉後自己再結束一次。
+
 尚未設定 Vault 或已記錄的 Vault 無法開啟時，runtime 進入 `not_ready`：標為裝置資料的 route（health、Vault 狀態與設定、Agent 連線、裝置、工作、活動記錄、請求通道、變動串流）照常回應，其他業務 API 回傳 503 `vault_not_ready`；不建立替代空 Vault 或搜尋資料。UI Onboarding 或 Agent 透過設定 API 建立或開啟 Vault 後，runtime 在同一組 listener 上掛上 workspace 並啟動排程。原生目錄選擇由 Electron preload 提供，只回傳路徑；建立、開啟與驗證都經由 HTTP API。開發與驗收可用 `XR_COLLECTOR_VAULT` 指定 Vault，空目錄會自動建立，無法辨識的內容則進入 `not_ready`。Vault 目錄規則見 [儲存與搜尋](storage-and-search.md#vault-目錄與選址)。
 
 每個 `VaultWorkspace` 的 `VaultOperations`（`operations` 屬性）持有一個知識庫操作鎖，匯出、匯入、建立新的知識庫與開啟其他知識庫都經同一個生命週期執行：停止派工、等待進行中的收集、執行操作、恢復收集，再發布完成或錯誤狀態。套用匯入時鎖會升級為連讀取也拒絕；如果匯入無法收尾，鎖進入停止狀態並維持寫入與排程停止，等待重新啟動恢復。HTTP route config 把路由分為知識庫讀取、知識庫寫入、裝置資料與知識庫操作；沒有宣告時依 method 推定，鎖依分類決定是否接受請求。操作狀態每次改變都發出變動事件；匯出以外的操作（匯入的比對與套用、建立新的知識庫、開啟其他知識庫）完成時，另發出知識庫內容整份換過的變動，每個頁面重新讀取資料。

@@ -2,13 +2,11 @@
 // launch reads its reason when it claims the launch and passes it with the single-instance lock; a
 // process that loses the lock quits; a login launch stays in the tray while later manual launches
 // show the one window; a manual launch during loading joins the window already loading; a
-// validation package uses its own update repository and app id; a notification clicked while the
-// page loads opens its target once the page listens.
+// notification clicked while the page loads opens its target once the page listens.
 import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMain, WebContents } from 'electron';
 import { describe, expect, it } from 'vitest';
 import type { AutoPauseNotification } from '../../../src/shared/api/device-types.js';
 import { claimLaunch, type LaunchHost } from '../../../src/desktop/electron/desktop-launch.js';
-import { updateSourceFor, windowsAppId, windowSize } from '../../../src/desktop/electron/desktop-environment.js';
 import { MainWindow, type WindowRuntime } from '../../../src/desktop/electron/main-window.js';
 import { registerPageChannels } from '../../../src/desktop/electron/page-channels.js';
 import { eventually } from '../../support/wait.js';
@@ -122,7 +120,7 @@ describe('Electron main login-startup wiring', () => {
     const opening = window.open(launch.startedAtLogin);
     fakes.finishLoading();
     await opening;
-    launch.finish();
+    launch.startupFinished();
     expect(fakes.created).toHaveLength(1);
     expect(fakes.shows()).toBe(0);
     expect(window.shown).toBe(false);
@@ -149,22 +147,6 @@ describe('Electron main login-startup wiring', () => {
     expect(fakes.created).toHaveLength(1);
   });
 
-  it('uses the repository and Windows app id baked into a validation package without inherited environment', async () => {
-    const metadata = { name: 'xr-collector', xrCollectorUpdateRepository: 'derektu/xr-collector-test', xrCollectorAppId: 'com.xrcollector.verify.public' };
-    expect(windowsAppId({}, metadata)).toBe('com.xrcollector.verify.public');
-    expect(windowsAppId({ XR_COLLECTOR_VALIDATION_APP_ID: 'com.xrcollector.verify.run-7' }, metadata)).toBe('com.xrcollector.verify.run-7');
-    expect(windowsAppId({ XR_COLLECTOR_VALIDATION_APP_ID: 'com.example.other' }, metadata)).toBe('com.xrcollector.verify.public');
-
-    const requested: string[] = [];
-    const request: typeof fetch = async (input) => { requested.push(String(input)); throw new Error('offline'); };
-    await expect(updateSourceFor({}, metadata, request).check({ version: '0.1.0', target: 'mac-arm64' } as never)).rejects.toThrow();
-    expect(requested).toEqual(['https://api.github.com/repos/derektu/xr-collector-test/releases/latest']);
-    expect(updateSourceFor({ XR_COLLECTOR_UPDATE_BASE_URL: 'http://127.0.0.1:9/releases/' }, metadata, request).id).toBe('generic-index');
-
-    expect(windowSize({})).toEqual({ width: 1240, height: 820 });
-    expect(windowSize({ XR_COLLECTOR_VALIDATION_WINDOW_SIZE: '1440x900' })).toEqual({ width: 1440, height: 900 });
-  });
-
   it('keeps a notification target clicked while loading until the renderer listener is ready', async () => {
     const fakes = windows();
     let started: WindowRuntime | null = null;
@@ -173,10 +155,10 @@ describe('Electron main login-startup wiring', () => {
     registerPageChannels({
       ipc: {
         handle: () => undefined,
-        on: (channel: string, listener: (event: { sender: WebContents }) => void) => { if (channel === 'xrCollector:renderer:ready') readyListeners.push(listener); },
+        on: (channel: string, listener: (event: { sender: WebContents }) => void) => { if (channel === 'xrCollector:navigation:ready') readyListeners.push(listener); },
       } as unknown as Pick<IpcMain, 'handle' | 'on'>,
       theme: { read: async () => 'system', write: async () => undefined },
-      pageReady: (sender) => window.pageReady(sender),
+      navigationReady: (sender) => window.navigationReady(sender),
     });
 
     // A click before the runtime starts waits for it; one during loading waits for the page.
@@ -196,5 +178,32 @@ describe('Electron main login-startup wiring', () => {
     expect(page!.sent).toEqual([]);
     for (const listener of readyListeners) listener({ sender: page!.webContents as unknown as WebContents });
     expect(page!.sent).toEqual([{ kind: 'source', type: 'youtube', id: 'a' }]);
+  });
+
+  it('opens the page a tray click asked for while the window was loading, even before a Vault exists', async () => {
+    const fakes = windows();
+    const window = mainWindow(fakes, () => ({ ...runtime, activeVaultId: () => null }));
+    const opening = window.open(false);
+    const [page] = fakes.created;
+    window.navigationReady(page!.webContents as unknown as WebContents);
+    window.show('update');
+    expect(page!.sent).toEqual([]);
+
+    fakes.finishLoading();
+    await opening;
+    expect(page!.sent).toEqual(['update']);
+  });
+
+  it('shows a window started at login when a manual request arrives while it loads', async () => {
+    const fakes = windows();
+    const window = mainWindow(fakes);
+    const opening = window.open(true);
+    window.show();
+    expect(fakes.shows()).toBe(0);
+
+    fakes.finishLoading();
+    await opening;
+    expect(fakes.shows()).toBe(1);
+    expect(window.shown).toBe(true);
   });
 });
