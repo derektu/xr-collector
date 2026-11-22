@@ -4,7 +4,7 @@
 // recognition applied only to the address it answered.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
-import type { ScheduledCheck, SubscriptionEntry } from '../../../src/shared/subscriptions/subscription-types.js';
+import type { PendingSubscription, ScheduledCheck, SubscriptionEntry } from '../../../src/shared/subscriptions/subscription-types.js';
 import type { UrlRecognition } from '../../../src/shared/sources/source-info-types.js';
 import { rssDeclaration } from '../../../src/domain/sources/rss/shared.js';
 import { youtubeDeclaration } from '../../../src/domain/sources/youtube/shared.js';
@@ -15,17 +15,22 @@ import {
   currentRecognition,
   displayUrl,
   failureLabel,
+  filterPending,
   filterSources,
   initials,
   nextCheck,
+  nextCheckLabel,
   parseSourceListState,
   retryCause,
   shortTime,
+  shortTimeLabel,
   sourceListSearch,
   sourcePath,
   sourceRouteForPath,
   timeSpan,
+  typedNumber,
 } from '../../../src/transport/web/source-presentation.js';
+import { subscriptionStatusText } from '../../../src/transport/web/subscription-presentation.js';
 import { PRODUCT_DECLARATIONS } from '../../support/product-sources.js';
 
 const originalZone = process.env.TZ;
@@ -61,16 +66,53 @@ describe('source presentation (T-09)', () => {
 
   it('filters by type and by name', () => {
     const sources = [source({ id: 'a', title: 'Alpha Talks' }), source({ id: 'b', title: '財經八百' })];
-    expect(filterSources(sources, { type: '', query: 'alpha' }).map((entry) => entry.id)).toEqual(['a']);
+    expect(filterSources(sources, { type: null, query: 'alpha' }).map((entry) => entry.id)).toEqual(['a']);
     expect(filterSources(sources, { type: 'youtube', query: '八百' }).map((entry) => entry.id)).toEqual(['b']);
     expect(filterSources(sources, { type: 'rss', query: '' })).toEqual([]);
+  });
+
+  it('filters subscription requests by their type and by their address until a title resolves', () => {
+    const request = (overrides: Partial<PendingSubscription>): PendingSubscription => ({
+      type: 'youtube', jobId: 'j', url: 'https://www.youtube.com/@alpha', title: null, checkStatus: { state: 'queued' }, ...overrides,
+    });
+    const pending = [
+      request({ jobId: 'unresolved' }),
+      request({ jobId: 'resolved', url: 'https://www.youtube.com/@beta', title: '財經八百' }),
+      request({ jobId: 'feed', type: 'rss', url: 'https://example.com/youtube.com/feed.xml' }),
+    ];
+    expect(filterPending(pending, { type: null, query: ' ALPHA ' }).map((entry) => entry.jobId)).toEqual(['unresolved']);
+    expect(filterPending(pending, { type: null, query: 'beta' })).toEqual([]);
+    expect(filterPending(pending, { type: null, query: '八百' }).map((entry) => entry.jobId)).toEqual(['resolved']);
+    expect(filterPending(pending, { type: 'rss', query: '' }).map((entry) => entry.jobId)).toEqual(['feed']);
+    expect(filterPending(pending, { type: 'youtube', query: 'youtube.com' }).map((entry) => entry.jobId)).toEqual(['unresolved']);
+  });
+
+  it('draws time labels the same at any hour of a day, so a screen redraws them only when the day changes', () => {
+    const afternoon = new Date('2026-10-15T06:00:00.000Z');
+    const day = new Date(afternoon);
+    day.setHours(0, 0, 0, 0);
+    for (const at of ['2026-10-15T05:30:00.000Z', '2026-10-14T13:05:00.000Z', '2026-10-16T01:00:00.000Z', '2025-12-31T01:00:00.000Z']) {
+      expect(shortTimeLabel(at, day)).toBe(shortTimeLabel(at, afternoon));
+      expect(nextCheckLabel({ enabled: true, nextCheckAt: at }, true, day)).toBe(nextCheckLabel({ enabled: true, nextCheckAt: at }, true, afternoon));
+      expect(subscriptionStatusText({ state: 'scheduled', nextCheckAt: at }, day)).toBe(subscriptionStatusText({ state: 'scheduled', nextCheckAt: at }, afternoon));
+    }
+  });
+
+  it('typed text that is not all digits stays text, so the number field rejects it instead of reading a number', () => {
+    expect(typedNumber(' 30 ')).toBe(30);
+    expect(typedNumber('3.5')).toBe('3.5');
+    expect(typedNumber('-1')).toBe('-1');
+    expect(typedNumber('1e3')).toBe('1e3');
+    expect(typedNumber('')).toBe('');
   });
 
   it('keeps list filters and source detail addresses in the URL', () => {
     const filters = { type: 'youtube', query: '財經' };
     expect(sourceListSearch(filters)).toBe('?type=youtube&q=%E8%B2%A1%E7%B6%93');
     expect(parseSourceListState('?type=youtube&q=%E8%B2%A1%E7%B6%93')).toEqual(filters);
-    expect(sourceListSearch({ type: '', query: '' })).toBe('');
+    expect(sourceListSearch({ type: null, query: '' })).toBe('');
+    expect(parseSourceListState('')).toEqual({ type: null, query: '' });
+    expect(parseSourceListState('?type=')).toEqual({ type: null, query: '' });
     expect(sourcePath('youtube', 'UC/1')).toBe('/sources/youtube/UC%2F1');
     expect(sourceRouteForPath('/sources/youtube/UC%2F1')).toEqual({ type: 'youtube', id: 'UC/1' });
     expect(sourceRouteForPath('/sources/youtube/')).toBeNull();

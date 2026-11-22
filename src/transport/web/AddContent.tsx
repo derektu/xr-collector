@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { settingsErrors } from '../../shared/sources/collection-settings.js';
+import { settingsFor, subscribeWaitsForSettings, type ChosenSettings } from './add-content.js';
 import type { RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../../shared/sources/source-info-types.js';
 import type { SubscriptionSettings } from '../../shared/subscriptions/subscription-types.js';
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
@@ -18,17 +19,10 @@ type Recognition =
   | { state: 'done'; input: string; recognition: UrlRecognition }
   | { state: 'error'; message: string };
 
-/**
- * The add dialog of one mode: 加入網址 adds one document, a subscription kind's dialog adds a subscription.
- * Pasting an address asks the service what it is; the card and the action come from that answer,
- * and a new subscription's settings fields from its source type's declaration. An address of the
- * other kind offers to switch dialogs, keeping the address.
- */
 export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, onOpenSource }: {
   mode: AddMode;
   sourceTypes: SourceTypeInfo[];
   onClose: () => void;
-  /** The action was accepted with this response; the dialog's work is done. */
   onDone: (response: unknown) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
@@ -40,8 +34,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const [recognition, setRecognition] = useState<Recognition>({ state: 'idle' });
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  /** The settings chosen on the card; they belong to the recognition they were chosen for. */
-  const [chosen, setChosen] = useState<{ recognition: UrlRecognition; settings: SubscriptionSettings } | null>(null);
+  const [chosen, setChosen] = useState<ChosenSettings | null>(null);
   const sequence = useRef(0);
 
   useEffect(() => {
@@ -50,15 +43,12 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     input.current?.focus();
   }, []);
 
-  // A switch to the other dialog recognizes the kept address again.
   useEffect(() => {
     const trimmed = url.trim();
     setFailure(null);
     if (!trimmed) { sequence.current += 1; setRecognition({ state: 'idle' }); return undefined; }
     const current = ++sequence.current;
     const controller = new AbortController();
-    // Any edit invalidates the previous answer at once, so its card and action cannot be used
-    // for the new address while the debounce runs.
     setRecognition({ state: 'recognizing' });
     const timer = setTimeout(() => {
       api.recognizeUrl(trimmed, controller.signal).then((result) => {
@@ -75,7 +65,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     setBusy(true);
     setFailure(null);
     try {
-      const settings = chosen?.recognition === found ? chosen.settings : found.settings;
+      const settings = settingsFor(chosen, found);
       onDone(await api.performAction(action.id === 'subscribe' && settings
         ? { ...action, request: { ...action.request, body: { ...action.request.body, settings } } }
         : action));
@@ -97,10 +87,9 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const unsupported = found !== null && !mismatch && isUnsupportedUrl(found);
   const primary = !mismatch && !unsupported ? answer?.primary ?? null : null;
   const fields = sourceTypes.find((type) => type.id === found?.sourceType)?.settings ?? [];
-  const settings = found && chosen?.recognition === found ? chosen.settings : found?.settings ?? null;
+  const settings = found ? settingsFor(chosen, found) : null;
   const primaryLabel = mode === 'url' ? '加入' : primary?.id === 'resume' ? '恢復訂閱' : '訂閱';
-  /** A new subscription's settings with a value its fields do not accept; subscribing waits until they are fixed. */
-  const invalidSettings = primary?.id === 'subscribe' && settings !== null && settingsErrors(fields, settings).length > 0;
+  const invalidSettings = subscribeWaitsForSettings(primary, fields, settings);
 
   function submit(event: FormEvent): void {
     event.preventDefault();
@@ -141,7 +130,6 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
 function RecognitionCard({ recognition, fields, settings, disabled, onSettings, onOpenSource }: {
   recognition: UrlRecognition;
   fields: SourceSettingField[];
-  /** The settings a new subscription will start with. */
   settings: SubscriptionSettings | null;
   disabled: boolean;
   onSettings: (patch: Partial<SubscriptionSettings>) => void;

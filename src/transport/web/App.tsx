@@ -243,21 +243,21 @@ export default function App() {
       onDeleted={(message) => { announce(message); back('/documents', true); }} />;
   } else if (sourceRoute) {
     body = <SourceDetail key={`${sourceRoute.type}:${sourceRoute.id}`} type={sourceRoute.type} id={sourceRoute.id} sourceTypes={sourceTypes} schedule={status.schedule}
-      onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onChanged={announce}
+      onBack={() => back('/')} onOpenDocument={(id) => openDocument(id, 'source')} onNotice={announce}
       onRemoved={(message) => { announce(message); back('/', true); }} />;
   } else if (page === 'sources') {
     body = <Sources state={sourceListState} onState={onSourceListState} sourceTypes={sourceTypes} schedule={status.schedule}
-      offline={offline} onAdd={setAdding} onOpenSource={openSource} onChanged={announce} />;
+      offline={offline} onAdd={setAdding} onOpenSource={openSource} onNotice={announce} />;
   } else if (page === 'documents') {
-    body = <Documents state={listState} offline={offline} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onChanged={announce} />;
+    body = <Documents state={listState} offline={offline} scroller={scroller} onState={onListState} onOpen={openDocument} onNavigate={navigate} onAdd={setAdding} onNotice={announce} />;
   } else if (page === 'jobs') {
-    body = <Jobs offline={offline} onChanged={announce} />;
+    body = <Jobs offline={offline} onNotice={announce} />;
   } else if (page === 'activity') {
     body = <Activity search={location.search} onState={onActivityState}
-      onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onChanged={announce} />;
+      onOpenDocument={(id) => openDocument(id)} onOpenSource={openSource} onNotice={announce} />;
   } else {
     body = <Settings vaultPath={vault.vaultPath}
-      themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onChanged={announce} />;
+      themePreference={themePreference} update={update} onUpdate={setUpdate} onThemePreference={persist} onNotice={announce} />;
   }
   const updateLabel = update ? sidebarUpdateLabel(update) : null;
 

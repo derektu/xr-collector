@@ -22,10 +22,10 @@ const kindOf = (status: TransferStatus): 'create' | 'open' => (status.operation 
  * another one in its place, and its export and import. Creating and opening are unavailable when the
  * status names a reason, such as a location fixed at startup.
  */
-export function VaultLocationSection({ vaultPath, counts, onChanged }: {
+export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   vaultPath: string | null;
   counts: { documents: number; sources: number } | null;
-  onChanged: (message: string) => void;
+  onNotice: (message: string) => void;
 }) {
   const desktop = window.xrCollectorDesktop;
   const [open, setOpen] = useState<Open | null>(null);
@@ -81,7 +81,7 @@ export function VaultLocationSection({ vaultPath, counts, onChanged }: {
         {desktop ? <button type="button" className="button" onClick={() => void reveal()} data-testid="vault-reveal">{revealLabel(desktop.platform)}</button> : null}
       </div>
       <div className="vault-action-group vault-actions-secondary">
-        {current ? <ExchangeActions onChanged={onChanged} /> : null}
+        {current ? <ExchangeActions onNotice={onNotice} /> : null}
       </div>
     </div>
     {unavailable ? <p className="hint" data-testid="vault-relocation-unavailable">{unavailable.message}</p> : null}

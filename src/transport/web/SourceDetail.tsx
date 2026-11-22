@@ -28,45 +28,33 @@ import { useSourceDeclarations } from './source-declarations.js';
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
 
-/** How long a typed number waits before it saves, so a number typed digit by digit saves once. */
 const TYPED_SAVE_DELAY_MS = 600;
 
-/**
- * One subscription: its state, counts, collection settings and collection record (collected,
- * failed and skipped items and check summaries), with pause, resume and remove. A chosen option
- * saves at once and a typed number once typing pauses; settings with an invalid value are not
- * saved, and applying them to the other subscriptions waits until they are.
- */
-export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDocument, onChanged, onRemoved }: {
+export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDocument, onNotice, onRemoved }: {
   type: string;
   id: string;
   sourceTypes: SourceTypeInfo[];
   schedule: CollectionSchedule | null;
   onBack: () => void;
   onOpenDocument: (documentId: string) => void;
-  onChanged: (message: string, tone?: 'ok' | 'error') => void;
+  onNotice: (message: string, tone?: 'ok' | 'error') => void;
   onRemoved: (message: string) => void;
 }) {
   const declarations = useSourceDeclarations();
-  // Day-relative labels ("今天", "明天") draw again at midnight.
-  useDay();
+  const today = useDay();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState<Saving>({ kind: 'idle' });
-  /** Settings shown while a save is in flight; the saved detail replaces them. */
-  const [pending, setPending] = useState<SubscriptionSettings | null>(null);
-  /** Settings edited and not sent yet: invalid ones, or a typed number waiting for typing to pause. */
+  const [savingSettings, setSavingSettings] = useState<SubscriptionSettings | null>(null);
   const [draft, setDraft] = useState<SubscriptionSettings | null>(null);
   const typedSave = useRef<{ timer: ReturnType<typeof setTimeout>; send: () => void } | null>(null);
   const [reload, setReload] = useState(0);
   const saveSequence = useRef(0);
   const saveInFlight = useRef(false);
-  /** Saves go out one at a time in the order made, so a later change is never overwritten by an earlier one. */
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
-  // A subscription that no longer exists is an answer, so the screen counts as caught up with it.
   const read = useLiveRead(['subscriptions'], (signal) => api.subscriptionDetail(type, id, signal).then((detail) => ({ detail }), (error: unknown) => {
     if (error instanceof ApiError && error.code === 'subscription_not_found') return { detail: null };
     throw error;
@@ -80,11 +68,9 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     if (!read.value) return;
     if (!read.value.detail) { setState({ kind: 'missing' }); return; }
     setState({ kind: 'ready', detail: read.value.detail });
-    // A reload that answers before the save finished still holds the previous settings.
-    if (!saveInFlight.current) setPending(null);
+    if (!saveInFlight.current) setSavingSettings(null);
   }, [read.value, read.error]);
 
-  // Leaving the page sends a typed number that is still waiting.
   useEffect(() => () => {
     const waiting = typedSave.current;
     if (waiting) {
@@ -111,16 +97,16 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     setBusy(true);
     try {
       await api.setSubscriptionEnabled(source.type, source.id, paused);
-      onChanged(paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`);
+      onNotice(paused ? `已恢復「${source.title}」，開始檢查。` : `已暫停「${source.title}」。`);
     } catch (error) {
-      onChanged(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
+      onNotice(error instanceof Error ? error.message : '操作失敗，請稍後再試。', 'error');
     } finally {
       setBusy(false);
     }
   }
 
   function editSettings(patch: Partial<SubscriptionSettings>): void {
-    const next = { ...(draft ?? pending ?? source.settings), ...patch } as SubscriptionSettings;
+    const next = { ...(draft ?? savingSettings ?? source.settings), ...patch } as SubscriptionSettings;
     if (typedSave.current) clearTimeout(typedSave.current.timer);
     typedSave.current = null;
     if (settingsErrors(fields, next).length > 0) {
@@ -143,7 +129,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
 
   function saveSettings(patch: Partial<SubscriptionSettings>): void {
     const sequence = ++saveSequence.current;
-    setPending({ ...(pending ?? source.settings), ...patch } as SubscriptionSettings);
+    setSavingSettings({ ...(savingSettings ?? source.settings), ...patch } as SubscriptionSettings);
     setSaving({ kind: 'saving' });
     saveInFlight.current = true;
     const send = async () => {
@@ -156,7 +142,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       } catch (error) {
         if (sequence !== saveSequence.current) return;
         saveInFlight.current = false;
-        setPending(null);
+        setSavingSettings(null);
         setSaving({ kind: 'error', message: error instanceof Error ? error.message : '無法儲存，請稍後再試。' });
         setReload((value) => value + 1);
       }
@@ -177,7 +163,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       <div className="detail-heading">
         <div className="detail-title-line">
           <h1 className="page-title" tabIndex={-1} data-page-heading>{source.title}</h1>
-          <span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="detail-status" {...subscriptionStatusData(source.checkStatus)}>{subscriptionStatusText(source.checkStatus)}</span>
+          <span className={`status-chip ${subscriptionStatusTone(source.checkStatus)}`} data-testid="detail-status" {...subscriptionStatusData(source.checkStatus)}>{subscriptionStatusText(source.checkStatus, today)}</span>
         </div>
         <p className="detail-kind"><Icon name={typeInfo?.icon ?? 'file'} size={14} />{source.kindLabel} ·
           <a href={source.url} target="_blank" rel="noopener noreferrer">{displayUrl(source.url)}</a></p>
@@ -193,7 +179,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     {source.checkFailures && (source.autoPausedAt || source.status === 'error')
       ? <p className="detail-problem" role="alert" data-testid="detail-problem"
         data-kind={source.autoPausedAt ? 'auto_paused' : 'failing'} data-failures={source.checkFailures.count} data-error-code={source.checkFailures.error.code}>{source.autoPausedAt
-        ? `連續失敗 ${source.checkFailures.count} 次，${shortTimeLabel(source.autoPausedAt)} 自動暫停：`
+        ? `連續失敗 ${source.checkFailures.count} 次，${shortTimeLabel(source.autoPausedAt, today)} 自動暫停：`
         : `最近一次檢查失敗（連續 ${source.checkFailures.count} 次）：`}{source.checkFailures.error.message}</p>
       : null}
     {source.checkStatus.state === 'retrying'
@@ -201,9 +187,9 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
 
     <dl className="stats">
       <div><dt>文件</dt><dd>{source.documentCount}</dd></div>
-      <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt) : '—'}</dd></div>
-      <div><dt>上次檢查</dt><dd data-testid="detail-last-checked" data-at={source.lastCheckedAt ?? undefined}>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt) : '尚未檢查'}</dd></div>
-      <div><dt>新增時間</dt><dd>{shortTimeLabel(source.addedAt)}</dd></div>
+      <div><dt>最近新增</dt><dd>{source.lastCollectedAt ? shortTimeLabel(source.lastCollectedAt, today) : '—'}</dd></div>
+      <div><dt>上次檢查</dt><dd data-testid="detail-last-checked" data-at={source.lastCheckedAt ?? undefined}>{source.lastCheckedAt ? shortTimeLabel(source.lastCheckedAt, today) : '尚未檢查'}</dd></div>
+      <div><dt>新增時間</dt><dd>{shortTimeLabel(source.addedAt, today)}</dd></div>
     </dl>
 
     <section className="panel settings-panel" data-testid="detail-settings">
@@ -216,10 +202,10 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
           data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
       </div>
       <div className="panel-body">
-        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={draft ?? pending ?? source.settings}
+        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={draft ?? savingSettings ?? source.settings}
           onChange={editSettings} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
-        <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null)}</p>
+        <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null, today)}</p>
       </div>
     </section>
 
@@ -227,8 +213,8 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       <div className="panel-heading"><h2>收集紀錄</h2></div>
       {collection.length === 0 ? <p className="panel-text muted">還沒有收集紀錄。</p>
         : <ul className="collection-rows">{collection.map((entry) => {
-          const label = collectionEntryLabel(declarations, entry, source.type);
-          const when = <span className="collection-when">{shortTimeLabel(entry.at)}</span>;
+          const label = collectionEntryLabel(declarations, entry, source.type, today);
+          const when = <span className="collection-when">{shortTimeLabel(entry.at, today)}</span>;
           if (entry.kind === 'collected') {
             return <li key={`document:${entry.documentId}`} className="collection-row collected" data-testid="collection-collected">
               <a href={readerPath(entry.documentId)} onClick={(event) => openDocument(event, entry.documentId)}>
@@ -258,7 +244,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     </section>
 
     {applying ? <ConfirmApplySettings source={source} onCancel={() => setApplying(false)}
-      onApplied={(message) => { setApplying(false); onChanged(message); }} /> : null}
+      onApplied={(message) => { setApplying(false); onNotice(message); }} /> : null}
     {removing ? <ConfirmRemove source={source} onCancel={() => setRemoving(false)} onRemoved={(message) => { setRemoving(false); onRemoved(message); }} /> : null}
   </div>;
 }

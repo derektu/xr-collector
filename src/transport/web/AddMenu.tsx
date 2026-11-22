@@ -3,20 +3,12 @@ import { useFloatingMenu } from './floating-menu.js';
 import { menuIndexForKey, unsupportedText, type AddMenuItem, type AddMode } from './add-menu.js';
 import { Icon } from './icons.js';
 
-/**
- * A button that opens its add menu right below it. Supported items open their add dialog through
- * `onChoose`; the others open a dialog saying they are not supported yet. Escape, a click outside
- * and choosing an item close the menu; focus returns to the button whenever the menu or the
- * unsupported dialog closes from the keyboard or a dialog button.
- */
 export function AddMenu({ label, items, onChoose, primary, align = 'end', disabledReason, testId }: {
   label: string;
   items: readonly AddMenuItem[];
   onChoose: (mode: AddMode) => void;
   primary?: boolean;
-  /** Which edge of the button the menu lines up with. */
   align?: 'start' | 'end';
-  /** Why adding is unavailable now; the button is disabled and shows it as its tooltip. */
   disabledReason?: string | null;
   testId: string;
 }) {
@@ -71,11 +63,11 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', disabl
   </div>;
 }
 
-/** Says that an add menu item is not supported yet. */
 function UnsupportedDialog({ item, onClose }: { item: AddMenuItem; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const confirm = useRef<HTMLButtonElement>(null);
-  // The modal dialog closes first, so the menu button outside it can take focus back.
+  // A modal <dialog> makes the rest of the page inert, so it closes before onClose focuses the menu button.
+  // https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/dialog
   const finish = () => { dialog.current?.close(); onClose(); };
   useEffect(() => {
     const element = dialog.current;

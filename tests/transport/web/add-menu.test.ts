@@ -4,9 +4,12 @@
 // unsupported.
 import { describe, expect, it } from 'vitest';
 import type { UrlRecognition } from '../../../src/shared/sources/source-info-types.js';
+import { SourceDeclarations } from '../../../src/shared/sources/source-registry.js';
+import { SOURCE_DECLARATIONS } from '../../../src/app/plugins/declarations.js';
 import {
   addDialogTitles,
   addMismatch,
+  addPlaceholder,
   DOCUMENT_ADD_ITEMS,
   isUnsupportedUrl,
   menuIndexForKey,
@@ -15,6 +18,7 @@ import {
   unsupportedText,
 } from '../../../src/transport/web/add-menu.js';
 import { PRODUCT_DECLARATIONS } from '../../support/product-sources.js';
+import { fakeDefinition } from '../../support/fake-source-plugin.js';
 
 function recognition(overrides: Partial<UrlRecognition>): UrlRecognition {
   return {
@@ -32,7 +36,7 @@ describe('add menus (N75-T2)', () => {
     expect(addDialogTitles(PRODUCT_DECLARATIONS)).toEqual({ url: '加入網址', 'youtube-channel': '訂閱 YouTube 頻道', 'rss-feed': '訂閱 RSS' });
   });
 
-  it('names the unsupported dialog after its item', () => {
+  it('names the unsupported dialog after its item, setting a Latin name off from the Chinese text with a space', () => {
     const dialog = (items: typeof DOCUMENT_ADD_ITEMS, id: string) => {
       const item = items.find((candidate) => candidate.id === id)!;
       return [item.dialogTitle, unsupportedText(item)];
@@ -41,6 +45,14 @@ describe('add menus (N75-T2)', () => {
     expect(dialog(subscriptionAddItems(PRODUCT_DECLARATIONS), 'x')).toEqual(['訂閱 X 帳號', '目前還不支援 X 帳號。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'file')).toEqual(['加入檔案', '目前還不支援檔案。']);
     expect(dialog(DOCUMENT_ADD_ITEMS, 'note')).toEqual(['寫筆記', '目前還不支援寫筆記。']);
+  });
+
+  it('the URL dialog uses the hint of the one type that adds single items, and a general hint once several do', () => {
+    const youtube = PRODUCT_DECLARATIONS.get('youtube')!;
+    expect(addPlaceholder(PRODUCT_DECLARATIONS, 'url')).toBe(youtube.prompts.itemPlaceholder);
+    const several = new SourceDeclarations([...SOURCE_DECLARATIONS, fakeDefinition('blog', 'blog-net')]);
+    expect(addPlaceholder(several, 'url')).not.toBe(youtube.prompts.itemPlaceholder);
+    expect(addPlaceholder(several, 'url')).not.toBe(several.get('blog')!.prompts.itemPlaceholder);
   });
 
   it('moves through the menu with wrapping arrows and jumps with Home and End', () => {

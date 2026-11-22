@@ -1,5 +1,3 @@
-// What each row of the Jobs page shows: the title or the address while the title is unknown, the
-// source type's icon, the status of started work, when and why it retries, and why it failed.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JobOverviewEntry } from '../../../src/shared/jobs/job-types.js';
 import { youtubeDeclaration } from '../../../src/domain/sources/youtube/shared.js';
@@ -36,12 +34,20 @@ describe('jobs page rows (N69-T11)', () => {
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ status: { state: 'queued' } }))).toMatchObject({ status: null, retry: null, failure: null });
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: { state: 'checking' } })).status).toEqual({ state: 'checking', adding: false });
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'add', status: { state: 'checking' } })).status).toEqual({ state: 'checking', adding: true });
-    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: { state: 'downloading' }, progress: { done: 2, total: 5 } })).status).toEqual({ state: 'downloading', progress: { done: 2, total: 5 } });
-    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ status: { state: 'downloading' }, progress: { done: 0, total: 0 } })).status).toEqual({ state: 'downloading', progress: null });
+    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: { state: 'downloading' }, progress: { done: 2, total: 5 } }))).toMatchObject({ status: { state: 'downloading' }, progress: { done: 2, total: 5 } });
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ status: retrying }))).toMatchObject({ status: { state: 'retrying', retryAt: '10:35' }, retry: { reason: 'failed', error: lastError, attempt: 2, maxAttempts: 3 } });
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ status: { state: 'retrying', at: '2026-10-20T02:42:00.000Z', cause: { reason: 'rate_limited' } } })))
       .toMatchObject({ status: { state: 'retrying', retryAt: '10:42' }, retry: { reason: 'rate_limited', source: 'YouTube' } });
     const error = { code: 'no_subtitles', message: 'no subtitles' };
     expect(jobEntry(PRODUCT_DECLARATIONS, entry({ error }))).toMatchObject({ status: null, failure: error });
+  });
+
+  it('shows a check\'s progress while it runs, also while it waits for a retry, once its total is known', () => {
+    const progress = { done: 2, total: 5 };
+    const retrying = { state: 'retrying' as const, at: '2026-10-20T02:42:00.000Z', cause: { reason: 'rate_limited' as const } };
+    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: retrying, progress })).progress).toEqual(progress);
+    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: { state: 'downloading' }, progress: { done: 0, total: 0 } })).progress).toBeNull();
+    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: { state: 'queued' }, progress })).progress).toBeNull();
+    expect(jobEntry(PRODUCT_DECLARATIONS, entry({ role: 'check', status: null, progress })).progress).toBeNull();
   });
 });

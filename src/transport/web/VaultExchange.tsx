@@ -17,7 +17,7 @@ type Open = { kind: 'export'; file?: { path: string; overwrite: boolean } } | { 
  * chosen with the system dialogs, which start in the export folder; in a browser the dialogs take
  * absolute paths on this computer.
  */
-export function ExchangeActions({ onChanged }: { onChanged: (message: string) => void }) {
+export function ExchangeActions({ onNotice }: { onNotice: (message: string) => void }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const desktop = window.xrCollectorDesktop;
@@ -46,7 +46,7 @@ export function ExchangeActions({ onChanged }: { onChanged: (message: string) =>
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
     {open?.kind === 'export' ? <ExportDialog file={open.file} onClose={() => setOpen(null)} /> : null}
     {open?.kind === 'import' ? <ImportDialog file={open.file}
-      onClose={(imported) => { setOpen(null); if (imported) onChanged('匯入完成。'); }} /> : null}
+      onClose={(imported) => { setOpen(null); if (imported) onNotice('匯入完成。'); }} /> : null}
   </>;
 }
 

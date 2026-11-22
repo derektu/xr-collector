@@ -124,7 +124,7 @@ describe('theme writes', () => {
 describe('offline check time', () => {
   it('shows only the time for a check made today and adds the date for an earlier day', () => {
     const checkedAt = new Date(2026, 10, 22, 9, 5).toISOString();
-    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 22, 23, 0).toDateString())).toBe('09:05');
-    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 23, 0, 1).toDateString())).toBe('11-22 09:05');
+    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 22))).toBe('09:05');
+    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 23))).toBe('11-22 09:05');
   });
 });

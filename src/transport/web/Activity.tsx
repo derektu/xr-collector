@@ -50,12 +50,12 @@ interface LogState {
  * The persistent log, filtered by level, source, time and job. Filters live in the address so
  * other pages can open the log already filtered.
  */
-export function Activity({ search, onState, onOpenDocument, onOpenSource, onChanged }: {
+export function Activity({ search, onState, onOpenDocument, onOpenSource, onNotice }: {
   search: string;
   onState: (next: ActivityViewState) => void;
   onOpenDocument: (id: string) => void;
   onOpenSource: (type: string, id: string) => void;
-  onChanged: (message: string, tone?: 'ok' | 'error') => void;
+  onNotice: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const declarations = useSourceDeclarations();
   const state = parseActivityState(search);
@@ -182,9 +182,9 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onChan
     try {
       const page = await api.activity({ jobId: job.id, limit: 100 });
       await navigator.clipboard.writeText(diagnosticsText(declarations, job, page.events));
-      onChanged('已複製診斷資訊。');
+      onNotice('已複製診斷資訊。');
     } catch {
-      onChanged('無法複製診斷資訊。', 'error');
+      onNotice('無法複製診斷資訊。', 'error');
     }
   }
 

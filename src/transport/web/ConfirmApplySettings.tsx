@@ -2,10 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { SubscriptionEntry } from '../../shared/subscriptions/subscription-types.js';
 import { api } from './api-client.js';
 
-/**
- * Confirms giving every other source of the same kind this source's collection settings. The
- * count includes paused sources, which take the settings and stay paused.
- */
 export function ConfirmApplySettings({ source, onCancel, onApplied }: {
   source: Pick<SubscriptionEntry, 'id' | 'type' | 'kind' | 'kindLabel'>;
   onCancel: () => void;

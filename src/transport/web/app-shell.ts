@@ -18,11 +18,11 @@ export const settingsNavigation: NavigationItem = { page: 'settings', label: '�
 
 export const OFFLINE_UNAVAILABLE = '沒有網路時無法使用';
 
-export function offlineCheckedLabel(checkedAt: string, today: string): string {
+export function offlineCheckedLabel(checkedAt: string, today: Date): string {
   const date = new Date(checkedAt);
   const two = (value: number) => String(value).padStart(2, '0');
   const time = `${two(date.getHours())}:${two(date.getMinutes())}`;
-  return date.toDateString() === today ? time : `${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`;
+  return date.toDateString() === today.toDateString() ? time : `${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`;
 }
 
 export function jobsBadge(unfinished: number): string | null {
