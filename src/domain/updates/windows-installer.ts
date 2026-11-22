@@ -16,6 +16,8 @@ export class PinnedNsisUpdater extends NsisUpdater {
     this.on('error', (error: Error) => { this.installError = error; });
   }
   async accept(offer: UpdateOffer, file: string): Promise<void> {
+    // NsisUpdater checks the signature only when app-update.yml names a publisherName; an unsigned build has none and passes.
+    // https://github.com/electron-userland/electron-builder/blob/electron-updater@6.8.12/packages/electron-updater/src/NsisUpdater.ts#L109-L124
     const verify = Reflect.get(this, 'verifySignature') as (file: string) => Promise<string | null>;
     const signatureError = await verify.call(this, file);
     if (signatureError) throw new CollectorError('update_integrity_failed', `Windows 安裝檔簽章驗證失敗：${signatureError}`);

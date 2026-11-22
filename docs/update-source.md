@@ -35,6 +35,27 @@ App 要先能找到下一份 index，才能透過更新改用新來源。因此�
 
 版本更新不送作業系統通知。可用版本、下載、等待與安裝結果只透過設定頁、側欄、原生選單、系統匣圖示、裝置更新 API 與持久事件呈現。
 
+## 原生安裝與回復
+
+下載與驗證屬於 `UpdateService`，原生安裝器只接手已驗證的檔案，不自己探索或下載。
+
+### macOS
+
+macOS 的安裝由 App 內附的 helper（`src/desktop/electron/mac-update-helper.swift`）執行，App 端在 `src/domain/updates/mac-installer.ts`。兩邊經由 App 旁邊的工作目錄 `.xr-update-<runId>` 溝通。這個目錄只有目前使用者可讀寫，裡面每個檔案都帶這次安裝的 nonce，App 只採信 owner、權限與 nonce 都相符的目錄。目錄同時是這次安裝的 journal：裡面還有尚未處理完的結果時，就不能刪。
+
+1. 準備：App 把更新檔解開到工作目錄、寫入 `request.json`，啟動 helper。helper 回報 `prepared` 才算準備完成；使用者取消時 App 寫入 `abort.json`。
+2. 交接：App 寫入 `handoff.json`，helper 回報 `waiting_for_exit` 後舊版 A 結束。helper 等 A 結束後交換 bundle，啟動新版 B。
+3. 啟動確認：B 啟動時寫入 `ack.json`。runtime 就緒後，B 讀取 helper 的最終結果（`succeeded`、`rolled_back`、`failed` 或 `recovery_required`），先存進安裝紀錄，存檔成功且結果不是 `recovery_required` 時，才請 helper 清除工作目錄。存檔失敗或結果是 `recovery_required` 時保留工作目錄，下次啟動再處理。B 確認就緒前，App 不把更新記為已安裝。
+4. 清除：以 `--cleanup` 請 helper 刪除工作目錄，短暫重試同一個指令。剛結束的 helper 可能在釋放鎖之前才寫下最終結果；每次失敗都保留 journal。
+
+同一次安裝同時只有一個 helper 能處理 journal，由 journal 的鎖保證。B 啟動時若 helper 還沒寫出最終結果，B 先等一下再看，仍沒有結果才以 `--recover` 啟動 helper 補完。拿不到鎖、helper 提早結束，都不代表安裝成功。
+
+B 在確認就緒前啟動失敗時，由 B 自己發起回復：先寫入 `shutdown-safe.json`，表示這個 B 程序已乾淨關閉更新服務與 Collector runtime；再以 `--rollback` 啟動 helper，helper 回報 `rollback_prepared` 後 B 才結束。helper 等這個 B 程序結束，確認回條是它寫的，才把 bundle 換回 A。沒有回條時，helper 回報 `recovery_required`，不強制結束 B、也不還原 A，因為同一個 profile 同時只能有一個 Collector 在執行。`recovery_required` 保留備份，由使用者處理。
+
+### Windows
+
+Windows 由 electron-updater 的 `NsisUpdater` 執行 NSIS 安裝檔（`src/domain/updates/windows-installer.ts`）。服務把已驗證的安裝檔交給 updater 的下載快取，不設定它的 provider。簽章檢查沿用 `NsisUpdater` 的規則，NSIS 開始執行後的安裝結果沒有回呼，由下次啟動核對。
+
 ## 驗收身分
 
 同一個 commit 要建立隔離的 A／B 安裝包時，封裝指令接受驗收身分，不修改 `package.json`：

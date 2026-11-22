@@ -378,6 +378,9 @@ export class UpdateService implements UpdateAccess {
         if (info.isDirectory() && !info.isSymbolicLink()) await remove(target, { recursive: true, force: true });
         else await remove(target, { force: true });
       } catch (error) {
+        // Windows cannot delete a file another process holds open, and the exiting NSIS installer can still hold the
+        // previous installer while the new build starts; the next startup or download cleans it.
+        // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew#remarks
         if (!this.options.identity.target.startsWith('win32-') || !isWindowsFileInUse(error)) throw error;
       }
     }
