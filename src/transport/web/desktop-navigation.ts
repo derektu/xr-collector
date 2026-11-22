@@ -8,7 +8,6 @@ interface DesktopNavigationActions {
   announce(message: string): void;
 }
 
-/** Applies a native navigation request. */
 export function handleDesktopNavigation(target: DesktopNavigationTarget, actions: DesktopNavigationActions): void {
   if (typeof target === 'string') {
     actions.navigate(target);

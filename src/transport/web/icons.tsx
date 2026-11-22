@@ -23,12 +23,10 @@ const PATHS: Record<string, ReactNode> = {
   offline: <><path d="M2 8.8a15 15 0 0 1 20 0" /><path d="M5 12.5a10 10 0 0 1 14 0" /><path d="M8.5 16.4a5 5 0 0 1 7 0" /><path d="M12 20h.01" /><path d="M3 3l18 18" /></>,
 };
 
-/** Adds icons by name, such as the icon each source type is drawn with; the web assembly registers them. */
 export function registerIcons(icons: Record<string, ReactNode>): void {
   Object.assign(PATHS, icons);
 }
 
-/** Line icons drawn with the current text color; they are decorative unless a label is given. */
 export function Icon({ name, size = 16, label }: { name: string; size?: number; label?: string }) {
   if (name === 'more') {
     return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden={label ? undefined : true} aria-label={label} role={label ? 'img' : undefined}>
@@ -41,7 +39,6 @@ export function Icon({ name, size = 16, label }: { name: string; size?: number; 
   </svg>;
 }
 
-/** The square badge a source type is drawn with in lists and cards; its size comes from the surrounding CSS. */
 export function SourceTypeBadge({ icon }: { icon: string }) {
   return <span className={`type-badge type-${icon}`} aria-hidden="true"><Icon name={icon} size={17} /></span>;
 }

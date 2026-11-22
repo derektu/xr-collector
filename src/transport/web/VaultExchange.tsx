@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ImportMode, ImportPreview, TransferResult, TransferStatus } from '../../shared/vault/vault-types.js';
 import { api, ApiError } from './api-client.js';
-import { readUntil, useLiveRead } from './use-changes.js';
+import { readUntil } from './read-until.js';
+import { changeHub, useLiveRead } from './use-changes.js';
 import {
   changeText, hasChanges, localNewerText, progressText, removalText, revealLabel, sourceText, transferRunning,
 } from './transfer-presentation.js';
@@ -83,7 +84,7 @@ export function useTransferProgress(active: boolean): TransferProgress {
 
 /** The transfer's status once it no longer runs. */
 export function followTransfer(): Promise<TransferStatus> {
-  return readUntil(() => api.vaultTransferStatus(), (status) => !transferRunning(status), (change) => change.kind === 'vault');
+  return readUntil(changeHub, () => api.vaultTransferStatus(), (status) => !transferRunning(status), (change) => change.kind === 'vault');
 }
 
 /** The progress line; while the transfer waits for collection steps it offers to cancel. */
@@ -91,7 +92,7 @@ export function Progress({ progress, fallback }: { progress: TransferProgress; f
   const [problem, setProblem] = useState<string | null>(null);
   async function cancel(): Promise<void> {
     setProblem(null);
-    try { await api.cancelTransfer(); } catch (error) { setProblem(errorText(error, '無法取消。')); }
+    try { await api.cancelVaultWait(); } catch (error) { setProblem(errorText(error, '無法取消。')); }
   }
   return <>
     <div className="transfer-progress-line">

@@ -10,11 +10,12 @@ import { AddContent } from './AddContent.js';
 import type { AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import {
-  createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, navigation, offlineCheckedLabel, pathForRoute, resolveTheme, routeForPath, settingsNavigation, jobsBadge,
+  createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, navigation, offlineCheckedLabel, pathForRoute, resolveTheme, routeForPath, serializeThemeWrites, settingsNavigation, jobsBadge,
   type NavigationItem, type ShellPage, type ThemePreference, type ThemeStore,
 } from './app-shell.js';
 import { Documents } from './Documents.js';
 import { handleDesktopNavigation } from './desktop-navigation.js';
+import { backTarget, openedFromSource, readAppHistoryState, type AppHistoryState } from './history-navigation.js';
 import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
 import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
@@ -24,6 +25,7 @@ import { sidebarUpdateLabel } from './update-presentation.js';
 import { SourceDetail } from './SourceDetail.js';
 import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceRouteForPath, type SourceListState } from './source-presentation.js';
 import { Sources } from './Sources.js';
+import { trackSubscriptionRequests } from './subscription-requests.js';
 import { targetNoun } from './subscription-presentation.js';
 import { useChangeStream, useLiveRead } from './use-changes.js';
 import { useCollectionStatus } from './use-collection-status.js';
@@ -33,14 +35,7 @@ import { useSourceDeclarations } from './source-declarations.js';
 
 const NOTICE_MS = 5000;
 
-/**
- * History entries the app pushed itself; Back controls return through them instead of jumping to a
- * fixed page. `from` names the page that opened the entry, so its Back control can say where it goes.
- */
-interface AppHistoryState { returnable?: boolean; from?: 'source' }
-
 const darkSchemeQuery = '(prefers-color-scheme: dark)';
-/** Tracks the operating system's light or dark appearance and updates when it changes. */
 function useSystemDark(): boolean {
   const [dark, setDark] = useState(() => window.matchMedia(darkSchemeQuery).matches);
   useEffect(() => {
@@ -56,8 +51,7 @@ function useSystemDark(): boolean {
 export default function App() {
   const declarations = useSourceDeclarations();
 
-  // Day-relative labels ("今天", "明天") draw again at midnight.
-  useDay();
+  const today = useDay();
   const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
   const page = routeForPath(location.pathname);
   const readerId = page === 'documents' ? readerIdForPath(location.pathname) : null;
@@ -65,11 +59,12 @@ export default function App() {
   const content = useRef<HTMLElement>(null);
   const bridge = window.xrCollectorTheme;
   const desktop = navigator.userAgent.includes('Electron');
-  const store = useMemo<ThemeStore | null>(() => bridge ? createElectronThemeStore(bridge) : desktop ? null : createBrowserThemeStore(window.localStorage), [bridge, desktop]);
+  const store = useMemo<ThemeStore | null>(() => {
+    const persisted = bridge ? createElectronThemeStore(bridge) : desktop ? null : createBrowserThemeStore(window.localStorage);
+    return persisted && serializeThemeWrites(persisted);
+  }, [bridge, desktop]);
   const [themePreference, setThemePreference] = useState<ThemePreference>(defaultThemePreference);
   const [themeReady, setThemeReady] = useState(!bridge);
-  // Theme writes run one after another so the last choice is the one that stays saved.
-  const themeWrites = useRef<Promise<void>>(Promise.resolve());
   const systemDark = useSystemDark();
   const [vault, setVault] = useState<VaultSetupStatus | null>(null);
   const [vaultLoadError, setVaultLoadError] = useState<string>();
@@ -89,7 +84,6 @@ export default function App() {
   useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setThemePreference(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
   useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
   useEffect(() => { void loadVault(); }, []);
-  // The tray menu opens the window on a page; navigating only touches the history and location state.
   useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
     if (next === 'update') { openUpdate(); return; }
     if (next === 'settings') { navigate('settings'); return; }
@@ -101,7 +95,6 @@ export default function App() {
   }); desktopBridge?.ready(); }, []);
   useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
   useEffect(() => { if (updateRead.value) setUpdate(updateRead.value); }, [updateRead.value]);
-  // Focus the page heading after navigation so keyboard and screen reader users start at the new page.
   useEffect(() => {
     const frame = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[data-page-heading], .reader-title')?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
@@ -113,14 +106,12 @@ export default function App() {
   }, [notice]);
   useEffect(() => {
     if (!updateNavigation) return undefined;
-    // A request lasts one visit to Settings; opening Settings again later keeps the page top.
     if (page !== 'settings') {
       handledUpdateNavigation.current = updateNavigation;
       handledUpdatePanel.current = null;
       return undefined;
     }
     const currentPanel = document.getElementById('software-update');
-    // Within the visit, a panel that mounts again (the Vault finishing setup) is revealed again.
     const panelUnchanged = handledUpdatePanel.current === null || currentPanel === handledUpdatePanel.current;
     if (updateNavigation <= handledUpdateNavigation.current && panelUnchanged) return undefined;
     const root = content.current ?? document.body;
@@ -141,8 +132,6 @@ export default function App() {
       layout.observe(container);
       return true;
     };
-    // BuildInfoCard mounts SoftwareUpdate asynchronously. The cards above it also finish loading
-    // independently, so keep the requested panel visible while that Settings layout settles.
     const mount = new MutationObserver(() => { if (observeLayout()) mount.disconnect(); });
     if (!observeLayout()) mount.observe(root, { childList: true, subtree: true });
     let stopped = false;
@@ -167,21 +156,11 @@ export default function App() {
     return stop;
   }, [page, updateNavigation, vault?.state]);
 
-  // A subscription request this window sent that ended without subscribing reports why; its row has
-  // left the list. Requests from Agents report only in the log.
-  const subscribing = useRef<Set<string>>(new Set());
+  const [subscriptions] = useState(trackSubscriptionRequests);
   useEffect(() => {
     if (!status.active) return;
-    const current = new Set(status.active.filter((job) => roleOf(declarations, job) === 'add').map((job) => job.id));
-    const missing = [...subscribing.current].filter((id) => !current.has(id));
-    for (const id of missing) subscribing.current.delete(id);
-    for (const id of missing) {
-      void api.getJob(id).then((job) => {
-        // A list read before the request was accepted does not show it yet.
-        if (job.state === 'queued' || job.state === 'running') subscribing.current.add(id);
-        else if (job.state === 'failed') announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(declarations, job.source.type)}失敗。`}`, 'error');
-      }).catch(() => undefined);
-    }
+    void subscriptions.activeListRead(status.active, (id) => api.getJob(id),
+      (job) => announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(declarations, job.source.type)}失敗。`}`, 'error'));
   }, [status.active]);
 
   async function loadVault(): Promise<void> { setVaultLoadError(undefined); try { setVault(await api.getVaultSetup()); } catch (error: unknown) { setVaultLoadError(error instanceof Error ? error.message : '無法連線到 Collector 服務。'); } }
@@ -192,14 +171,10 @@ export default function App() {
     setLocation({ pathname, search });
     content.current?.scrollTo({ top: 0 });
   }
-  const historyState = (): AppHistoryState => (window.history.state as AppHistoryState | null) ?? {};
-  /**
-   * Back control of a page opened from inside the app; a page opened directly returns to `fallback`.
-   * `replace` drops the current entry, for a page that no longer exists after the action.
-   */
   function back(fallback: string, replace = false): void {
-    if (historyState().returnable) window.history.back();
-    else go(fallback, '', {}, replace);
+    const target = backTarget(readAppHistoryState(window.history.state), fallback, replace);
+    if (target.kind === 'history') window.history.back();
+    else go(target.path, '', {}, target.replace);
   }
   function navigate(next: ShellPage): void { if (next === 'settings') stopUpdateNavigationTracking.current?.(); go(pathForRoute(next)); }
   function openUpdate(): void { navigate('settings'); setUpdateNavigation((value) => value + 1); }
@@ -208,7 +183,6 @@ export default function App() {
   const onListState = useCallback((next: DocumentListState) => {
     const current = parseListState(window.location.search);
     const search = listStateSearch(next);
-    // List changes replace the entry so Back from the Reader returns to the latest list position.
     window.history.replaceState(window.history.state, '', `/documents${search}`);
     setLocation({ pathname: '/documents', search });
     if (next.page !== current.page || next.source !== current.source || next.query !== current.query) content.current?.scrollTo({ top: 0 });
@@ -229,16 +203,13 @@ export default function App() {
   function announce(text: string, tone: 'ok' | 'error' = 'ok'): void {
     setNotice({ tone, text, key: Date.now() });
   }
-  /** An add dialog's action was accepted: the dialog closes and the current page stays, without a notice. */
   function added(response: unknown): void {
     setAdding(null);
-    const job = (response as { job?: { id?: unknown; kind?: unknown } } | null)?.job;
-    if (typeof job?.kind === 'string' && roleOf(declarations, { kind: job.kind }) === 'add' && typeof job.id === 'string') subscribing.current.add(job.id);
+    subscriptions.sent(response, (kind) => roleOf(declarations, { kind }) === 'add');
   }
   function persist(next: ThemePreference): void {
     setThemePreference(next);
-    if (!store) return;
-    themeWrites.current = themeWrites.current.then(() => store.write(next)).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
+    void store?.write(next).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
   }
 
   const themeName = resolveTheme(themePreference, systemDark) === 'light' ? 'silverblue' : 'duskblue';
@@ -267,7 +238,7 @@ export default function App() {
 
   let body;
   if (readerId) {
-    const fromSource = historyState().returnable === true && historyState().from === 'source';
+    const fromSource = openedFromSource(readAppHistoryState(window.history.state));
     body = <Reader key={readerId} id={readerId} backLabel={fromSource ? '訂閱' : '文件'} onBack={() => back('/documents')} onOpenSource={openSource}
       onDeleted={(message) => { announce(message); back('/documents', true); }} />;
   } else if (sourceRoute) {
@@ -304,7 +275,7 @@ export default function App() {
     <main className="content" ref={content}>
       {offline && !readerId ? <p className="offline-banner" role="status" data-testid="offline-banner" data-checked-at={connectivity.checkedAt ?? undefined}>
         <Icon name="offline" size={16} />
-        <span><strong>目前沒有網路</strong>，恢復後自動檢查。{connectivity.checkedAt ? <span className="muted">（{offlineCheckedLabel(connectivity.checkedAt)} 確認）</span> : null}</span>
+        <span><strong>目前沒有網路</strong>，恢復後自動檢查。{connectivity.checkedAt ? <span className="muted">（{offlineCheckedLabel(connectivity.checkedAt, today)} 確認）</span> : null}</span>
       </p> : null}
       <div className={readerId ? 'page reader-page' : 'page'} data-testid={`page-${readerId ? 'reader' : sourceRoute ? 'source-detail' : page}`}>{body}</div>
       {notice ? <p key={notice.key} className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="notice" data-tone={notice.tone}>{notice.text}</p> : null}

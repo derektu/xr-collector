@@ -10,7 +10,10 @@ import {
   routeForPath,
   settingsNavigation,
   jobsBadge,
+  offlineCheckedLabel,
+  serializeThemeWrites,
   themePreferenceFromValue,
+  type ThemePreference,
 } from '../../../src/transport/web/app-shell.js';
 
 describe('App Shell routes', () => {
@@ -78,5 +81,50 @@ describe('browser theme persistence', () => {
     values.set('xr-collector.theme', 'dark');
     await expect(store.read()).resolves.toBe('dark');
     await expect(store.write('light')).rejects.toThrow('storage is unavailable');
+  });
+});
+
+describe('theme writes', () => {
+  it('saves theme choices in the order they were made so the last choice is the one stored', async () => {
+    let stored: ThemePreference = 'system';
+    let finishDarkWrite!: () => void;
+    const darkWriteFinishes = new Promise<void>((resolve) => { finishDarkWrite = resolve; });
+    const slow = {
+      read: async () => stored,
+      write: async (preference: ThemePreference) => {
+        if (preference === 'dark') await darkWriteFinishes;
+        stored = preference;
+      },
+    };
+    const store = serializeThemeWrites(slow);
+
+    const writes = Promise.all([store.write('dark'), store.write('light')]);
+    finishDarkWrite();
+    await writes;
+    expect(stored).toBe('light');
+    await expect(store.read()).resolves.toBe('light');
+  });
+
+  it('keeps saving later choices after a write fails', async () => {
+    let stored: ThemePreference = 'system';
+    const flaky = {
+      read: async () => stored,
+      write: async (preference: ThemePreference) => { if (preference === 'dark') throw new Error('unavailable'); stored = preference; },
+    };
+    const store = serializeThemeWrites(flaky);
+
+    const failed = store.write('dark');
+    const later = store.write('light');
+    await expect(failed).rejects.toThrow('unavailable');
+    await later;
+    expect(stored).toBe('light');
+  });
+});
+
+describe('offline check time', () => {
+  it('shows only the time for a check made today and adds the date for an earlier day', () => {
+    const checkedAt = new Date(2026, 10, 22, 9, 5).toISOString();
+    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 22, 23, 0).toDateString())).toBe('09:05');
+    expect(offlineCheckedLabel(checkedAt, new Date(2026, 10, 23, 0, 1).toDateString())).toBe('11-22 09:05');
   });
 });

@@ -5,31 +5,20 @@ export interface MenuSize { width: number; height: number }
 export interface Viewport { width: number; height: number }
 export type MenuAlign = 'start' | 'end';
 
-/** Space kept between the menu and its button, and between the menu and the viewport edge. */
-const GAP = 4;
-const MARGIN = 8;
+const BUTTON_GAP = 4;
+const VIEWPORT_MARGIN = 8;
 
-/**
- * Where a menu opened from `button` goes, in viewport coordinates. It opens below the button and
- * opens above instead when the space below cannot hold it and the space above is larger. `end`
- * lines up the right edges, `start` the left edges; the menu then stays inside the viewport.
- */
 export function menuPosition(button: MenuRect, menu: MenuSize, viewport: Viewport, align: MenuAlign): { top: number; left: number } {
-  const below = viewport.height - button.bottom - GAP - MARGIN;
-  const above = button.top - GAP - MARGIN;
+  const below = viewport.height - button.bottom - BUTTON_GAP - VIEWPORT_MARGIN;
+  const above = button.top - BUTTON_GAP - VIEWPORT_MARGIN;
   const top = menu.height > below && above > below
-    ? Math.max(MARGIN, button.top - GAP - menu.height)
-    : button.bottom + GAP;
+    ? Math.max(VIEWPORT_MARGIN, button.top - BUTTON_GAP - menu.height)
+    : button.bottom + BUTTON_GAP;
   const preferred = align === 'end' ? button.right - menu.width : button.left;
-  const left = Math.min(Math.max(MARGIN, preferred), Math.max(MARGIN, viewport.width - MARGIN - menu.width));
+  const left = Math.min(Math.max(VIEWPORT_MARGIN, preferred), Math.max(VIEWPORT_MARGIN, viewport.width - VIEWPORT_MARGIN - menu.width));
   return { top, left };
 }
 
-/**
- * Keeps an open `.menu` fixed to the viewport next to its button, so a scrolling or clipping
- * container around the button never cuts it off. The menu follows the button while any container
- * scrolls or the window resizes.
- */
 export function useFloatingMenu(open: boolean, button: RefObject<HTMLElement | null>, menu: RefObject<HTMLElement | null>, align: MenuAlign = 'end'): void {
   useLayoutEffect(() => {
     if (!open) return undefined;

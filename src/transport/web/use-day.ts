@@ -14,7 +14,6 @@ function waitForMidnight(): void {
   }, next.getTime() - Date.now());
 }
 
-/** Calls `listener` at each local midnight while subscribed; returns the function that stops it. */
 export function watchDay(listener: () => void): () => void {
   listeners.add(listener);
   if (listeners.size === 1) { today = new Date().toDateString(); waitForMidnight(); }
@@ -24,12 +23,10 @@ export function watchDay(listener: () => void): () => void {
   };
 }
 
-/** The local date, which changes at midnight; a screen that shows "今天" or "明天" reads it to draw again then. */
 export function useDay(): string {
   return useSyncExternalStore(watchDay, currentDay);
 }
 
-/** The local date as `useDay` last saw it. */
 export function currentDay(): string {
   return today;
 }

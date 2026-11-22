@@ -17,11 +17,17 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 每一項有 `label`、開啟的對話框標題 `dialogTitle` 與 `mode`。`mode` 是 `url` 或 `<類型>-<種類>`，由 `src/transport/web/AddContent.tsx` 顯示成對應的對話框，標題取自 `addDialogTitles(declarations)`。`mode` 為 null 的項目標為「尚未支援」，點選後開啟只有「目前還不支援＿＿。」的小對話框。
 
-`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape 與 Tab 關閉選單並把焦點還給按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
+`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape 與 Tab 關閉選單並把焦點還給按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。開啟的選單以 `src/transport/web/floating-menu.ts` 固定在視窗座標、貼著按鈕，外層可捲動或會裁切的容器不會切掉它；任何容器捲動或視窗縮放時選單跟著按鈕移動。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
 
 ## 頁面
 
 `src/transport/web/app-shell.ts` 定義每個 `ShellPage` 的路徑、側欄的 `navigation` 與獨立的 `settingsNavigation`；`src/transport/web/App.tsx` 把每個頁面對應到元件。新增頂層頁面時兩處一起改。明細頁（`/sources/<類型>/<ID>`、`/documents/<ID>`）在導覽上屬於各自的列表頁。換頁後頁面標題取得焦點，讓鍵盤操作有固定的起點。
+
+返回鍵經 app 自己推入的 history 項目回到開啟它的頁面，直接開啟的頁面回到該頁的預設上一層；動作完成後頁面已不存在時，返回以 replace 離開，不留下指向它的項目。列表的篩選或位置改變時取代目前的 history 項目，所以從 Reader 返回會回到最新的列表位置。新增對話框的動作被接受後，對話框關閉、留在原頁，不另外顯示通知。
+
+系統匣或通知要求打開設定頁的軟體更新區塊時，這個要求只在這次進入設定頁有效：離開設定頁後再進來，畫面停在頁首。同一次進入期間，區塊重新掛載（例如 Vault 設定完成後整頁重畫）時再捲到它一次。
+
+側欄的工作數量與排程狀態讀取失敗時保留上次讀到的值；讀取錯誤由各頁自己顯示。
 
 ## 主題
 
@@ -33,3 +39,7 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 畫面等讀到 Electron 存的值才顯示 App，所以第一次繪製不會以預設值覆蓋已存的值；只有使用者選取時才寫入。值缺少或無效時跟隨系統。寫入失敗只記錄錯誤，所選主題在這次執行期間照樣套用。
 
 單選群組依 WAI-ARIA radio 模式：選中的選項是群組唯一的 Tab 停駐點，方向鍵移到前後選項並循環，Home、End 跳到頭尾，焦點與選取一起移動。寫入進行中選項保持可用，鍵盤焦點留在選中的選項上。
+
+## 畫面與變動串流
+
+每個畫面以 `src/transport/web/use-changes.ts` 的 `useChanges` 宣告哪些變動會讓它的資料過時，再以 `track` 交出為這次變動發出的讀取。讀取進行中的變動不立刻觸發重讀：讀取結束、且距離上一次重讀至少 `READ_GAP_MS` 後才合併成一次重讀，所以變動來得比讀取快時，畫面仍能顯示一次完整的結果。畫面重新掛載前發出的讀取只算前一次掛載的結果，不讓新的畫面被當成已跟上。
