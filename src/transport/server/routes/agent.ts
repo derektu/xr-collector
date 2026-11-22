@@ -4,7 +4,6 @@ import type { AgentPortSetting } from '../../../shared/api/device-types.js';
 import type { AgentConnectionAccess } from '../../../app/runtime/index.js';
 import { serve } from '../api-route.js';
 
-/** The Agent connection: its status, the connection data, the port setting, a new key and the Skill download. */
 export function registerAgentRoutes(app: FastifyInstance, agent: AgentConnectionAccess): void {
   serve(app, API_ROUTES.agent, async () => ({ agent: agent.status() }));
   serve(app, API_ROUTES.agentConnection, async () => ({ connection: agent.connection() }));

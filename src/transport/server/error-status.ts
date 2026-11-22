@@ -50,7 +50,6 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   activity_group_expired: 410,
 };
 
-/** The HTTP status of an error code: the core's own, else the one a source type of `sources` declares, else 500. */
 export function errorStatus(sources: SourceRegistry, code: string): number {
   const core = (ERROR_STATUS as Record<string, number>)[code];
   if (core !== undefined) return core;
@@ -61,7 +60,6 @@ export function errorStatus(sources: SourceRegistry, code: string): number {
   return 500;
 }
 
-/** The 4xx status Fastify gave an error about the request itself, or null for any other error. */
 export function requestErrorStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object' || !('statusCode' in error) || typeof error.statusCode !== 'number') return null;
   return error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : null;

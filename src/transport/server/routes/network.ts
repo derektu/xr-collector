@@ -1,25 +1,18 @@
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import type { ConnectivityState, ConnectivityStatus } from '../../../shared/api/device-types.js';
 
-/** The device's network as collection depends on it. */
 export interface ConnectivityAccess {
   status(): ConnectivityStatus;
-  /** Confirms the network now. */
   check(): Promise<ConnectivityState>;
-  /** Confirms the network after a request failed for lack of it. */
   confirm(): Promise<ConnectivityState>;
 }
 
 const OFFLINE_MESSAGE = '目前沒有網路，恢復後再試。';
 
-/** How routes that reach the network treat the device's network; without `connectivity`, it is always online. */
 export interface NetworkGuard {
   status(): ConnectivityStatus;
-  /** Refuses work that would only fail without a network. */
   requireOnline(): void;
-  /** Checking subscriptions is how a person asks for the network to be confirmed again. */
   confirmOnline(): Promise<void>;
-  /** A preview that found no network confirms it, and answers `offline` when the device has none. */
   confirmingNetwork<T>(work: () => Promise<T>): Promise<T>;
 }
 

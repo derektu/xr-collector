@@ -8,7 +8,6 @@ import { ownedAddress, requiredUrl } from './addresses.js';
 import type { NetworkGuard } from './network.js';
 import { isInstant, pagination, singleValues } from './query-params.js';
 
-/** Accepts collection work and answers job queries for the active Vault. */
 export interface CollectionJobs {
   submit(type: string, url: string): Promise<JobSubmission>;
   submitItem(type: string, url: string): Promise<JobSubmission>;
@@ -16,13 +15,10 @@ export interface CollectionJobs {
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
   summary(since: string): JobSummary;
   retry(id: string): Promise<JobSubmission>;
-  /** The jobs page: running, queued and failed work. */
   overview(): Promise<JobOverview>;
-  /** Removes a failed single item or subscription request from the failed section. */
   dismiss(id: string): Promise<JobView>;
 }
 
-/** Collection work: submitting an address or a single item, and reading, retrying and dismissing jobs. */
 export function registerJobRoutes(app: FastifyInstance, jobs: CollectionJobs, sources: SourceRegistry, network: NetworkGuard): void {
   serve(app, API_ROUTES.submitAddress, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
     const { type, input } = ownedAddress(sources, requiredUrl(request.body?.url, '請貼上要加入的網址。'));

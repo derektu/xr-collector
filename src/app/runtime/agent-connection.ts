@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { buffer } from 'node:stream/consumers';
 import yazl from 'yazl';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { AgentConnection, AgentConnectionStatus, AgentPortSetting } from '../../shared/api/device-types.js';
@@ -19,7 +19,6 @@ export interface AgentConnectionAccess {
   authorize(header: string | undefined): boolean;
 }
 
-/** The listener that serves the Agent API, as the connection reports it. */
 export interface AgentListener {
   url: string;
   port: number;
@@ -40,11 +39,13 @@ export class AgentConnectionService implements AgentConnectionAccess {
   private server: AgentListener | null = null;
   private unavailableMessage = 'AI 助理連線尚未啟動。';
   private writes: Promise<void> = Promise.resolve();
-  /** Whether the saved settings were read, or new ones saved; only then can the listener start. */
-  opened = false;
+  private openedValue = false;
 
   constructor(private readonly settingsFile: string, private readonly skillPath: string, private readonly autoStartPort: number,
     private readonly event?: AgentEvent) {}
+
+  /** Whether the saved settings were read, or new ones saved; only then can the listener start. */
+  get opened(): boolean { return this.openedValue; }
 
   async open(): Promise<void> {
     let saved: SavedAgentSettings | null = null;
@@ -52,7 +53,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code && code !== 'ENOENT') throw error;
-      // The app is not released yet: discard an incompatible local format instead of carrying a migration layer.
       if (!code) await rm(this.settingsFile, { force: true });
     }
     this.configured = saved?.port ?? { mode: 'auto' };
@@ -61,7 +61,7 @@ export class AgentConnectionService implements AgentConnectionAccess {
     protectSecret(this.token);
     if (!saved) await this.save({ schemaVersion: 1, token: this.token, port: this.configured });
     else await chmod(this.settingsFile, 0o600);
-    this.opened = true;
+    this.openedValue = true;
   }
 
   /** The ports the listener tries in order: the fixed port, or the preferred range and then any free port. */
@@ -117,7 +117,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
     return zipFiles([{ name: 'xr-collector-agent/SKILL.md', data: skill },
       { name: 'xr-collector-agent/connection.json', data: Buffer.from(`${JSON.stringify({ schemaVersion: 1, ...this.connection() }, null, 2)}\n`) }]);
   }
-  /** Closes the attached listener. */
   async close(): Promise<void> { await this.server?.close(); this.server = null; }
   fail(message: string): void { this.unavailableMessage = message; }
   private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.writes.then(work, work); this.writes = result.then(() => undefined, () => undefined); return result; }
@@ -133,11 +132,6 @@ export interface AgentSettingsOptions {
   event?: AgentEvent;
 }
 
-/**
- * Loads the Agent credential and protects it in every text the app writes or shows, without
- * listening yet. The runtime opens it before the Vault, so work that resumes and fails at startup
- * already has the token masked.
- */
 export async function openAgentConnection(options: AgentSettingsOptions): Promise<AgentConnectionService> {
   const service = new AgentConnectionService(options.settingsFile, options.skillPath, options.preferredPort, options.event);
   try { await service.open(); }
@@ -164,4 +158,4 @@ function validatePortSetting(value: unknown): AgentPortSetting {
 }
 function clonePort(value: AgentPortSetting): AgentPortSetting { return value.mode === 'auto' ? { mode: 'auto' } : { mode: 'fixed', port: value.port }; }
 function samePort(a: AgentPortSetting, b: AgentPortSetting): boolean { return a.mode === b.mode && (a.mode === 'auto' || (b.mode === 'fixed' && a.port === b.port)); }
-function zipFiles(files: Array<{ name: string; data: Buffer }>): Promise<Buffer> { const zip = new yazl.ZipFile(); for (const file of files) zip.addBuffer(file.data, file.name); zip.end(); return new Promise((resolve, reject) => { const chunks: Buffer[] = []; const output = zip.outputStream as unknown as Readable; output.on('data', (chunk: Buffer) => chunks.push(chunk)); output.on('end', () => resolve(Buffer.concat(chunks))); output.on('error', reject); }); }
+function zipFiles(files: Array<{ name: string; data: Buffer }>): Promise<Buffer> { const zip = new yazl.ZipFile(); for (const file of files) zip.addBuffer(file.data, file.name); zip.end(); return buffer(zip.outputStream); }

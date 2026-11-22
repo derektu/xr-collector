@@ -1,14 +1,8 @@
 import type { AgentConnectionService } from '../../app/runtime/index.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 
-/** What the Agent listener serves: every option of a server except the port and the authorization, which the connection decides. */
 export type AgentServerOptions = Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection'>;
 
-/**
- * Starts the Agent listener of `connection` on the first of its candidate ports that is free and
- * attaches it. A connection whose settings could not be read starts none; a listener that cannot
- * start leaves the connection unavailable and the rest of the app running. Either returns null.
- */
 export async function startAgentListener(connection: AgentConnectionService, options: AgentServerOptions): Promise<RunningServer | null> {
   if (!connection.opened) return null;
   try {

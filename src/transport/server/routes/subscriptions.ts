@@ -22,7 +22,6 @@ import type { NetworkGuard } from './network.js';
 import { singleValues } from './query-params.js';
 import type { ScheduleManagement } from './schedule.js';
 
-/** The subscriptions of one source type, as the HTTP API manages them. */
 export interface SubscriptionCollection {
   readonly type: string;
   list(): Promise<SubscriptionRecord[]>;
@@ -33,11 +32,8 @@ export interface SubscriptionCollection {
   updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord>;
   applySettingsToAll(id: string): Promise<{ updated: number; paused: number }>;
   remove(id: string, options?: { documents?: 'keep' | 'delete' }): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }>;
-  /** Subscription requests still resolving their address. */
   pendingSubscriptions?(): Promise<PendingSubscription[]>;
-  /** Subscriptions removed and not added again. */
   listRemovals?(): Promise<Array<{ id: string; title: string }>>;
-  /** The listed subscriptions a manual check covers; refuses a missing or paused one. */
   checkable(ids: readonly string[]): Promise<SubscriptionRecord[]>;
   startRun(request: { trigger: 'manual'; subscriptionIds?: string[] }): Promise<JobSubmission[]>;
   checkJobs(id: string): JobView[];
@@ -45,25 +41,17 @@ export interface SubscriptionCollection {
 
 export interface SubscriptionRouteOptions {
   sources: SourceRegistry;
-  /** The subscriptions of each source type with subscriptions; without any, only the source types are served. */
   subscriptions: readonly SubscriptionCollection[];
-  /** The source types' address recognition. */
   sourceTypes: SourceTypeDeclaration[];
   network: NetworkGuard;
-  /** Checks every subscription when a check names none. */
   schedule?: ScheduleManagement;
   collector?: Collector;
   activity?: ActivityAccess;
 }
 
-/**
- * Subscriptions of every source type: preview, add, change, remove and check them; the source types
- * and address recognition; and the subscription list and detail.
- */
 export function registerSubscriptionRoutes(app: FastifyInstance, options: SubscriptionRouteOptions): void {
   const { sources, subscriptions, sourceTypes, network } = options;
 
-  /** The subscriptions of a type, or `subscription_not_found` for a type without subscriptions. */
   const collectionOf = (type: string): { collection: SubscriptionCollection; subscription: SubscriptionDeclaration; targetNoun: string } => {
     const collection = subscriptions.find((candidate) => candidate.type === type);
     const subscription = sources.get(type)?.subscription;
@@ -71,7 +59,6 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
     return { collection, subscription, targetNoun: subscription.targetNoun };
   };
 
-  /** The type of a subscription address; an address of a type without subscriptions is not one. */
   const subscriptionAddress = (url: unknown): { type: string; input: string } & ReturnType<typeof collectionOf> => {
     const { type, input } = ownedAddress(sources, requiredUrl(url, '請貼上要訂閱的網址。'));
     if (!subscriptions.some((candidate) => candidate.type === type)) {
@@ -94,7 +81,6 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
       return await collection.add(input, settings);
     });
 
-    // Settings change first, so the check a resume in the same request starts uses the new range.
     serve(app, API_ROUTES.updateSubscription, async (request: FastifyRequest<{
       Params: { type: string; id: string };
       Body: { enabled?: unknown; settings?: unknown } | null;
@@ -117,7 +103,6 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
     serve(app, API_ROUTES.applySubscriptionSettings, async (request: FastifyRequest<{ Params: { type: string; id: string } }>) =>
       collectionOf(request.params.type).collection.applySettingsToAll(request.params.id));
 
-    // `documents=keep` (the default) leaves the subscription's documents; `documents=delete` deletes them.
     serve(app, API_ROUTES.removeSubscription, async (request: FastifyRequest<{ Params: { type: string; id: string }; Querystring: Record<string, unknown> }>) => {
       const { collection } = collectionOf(request.params.type);
       const { documents = 'keep' } = singleValues(request.query);
@@ -137,7 +122,6 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
       }
       await network.confirmOnline();
       if (listed === undefined) {
-        // Checking every subscription goes through the scheduler, which refuses while a Vault operation runs.
         if (!options.schedule) throw new CollectorError('invalid_request', '沒有可檢查的訂閱。');
         const submissions = await options.schedule.runNow();
         return { submissions };
@@ -151,12 +135,13 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
 
   if (subscriptions.length > 0) {
     const activity = options.activity;
+    const summarize = activity?.summary?.bind(activity);
     const catalog = new SourceCatalog(sources, sourceTypes, subscriptions, async () => await options.collector?.list() ?? [],
-      activity?.summary ? async (type, id) => {
+      summarize ? async (type, id) => {
         const summaries: ActivityCheckSummary[] = [];
         let cursor: string | undefined;
         do {
-          const page = await activity.summary!({ view: 'summary', sourceType: type, subscriptionId: id, limit: 100, ...(cursor ? { cursor } : {}) });
+          const page = await summarize({ view: 'summary', sourceType: type, subscriptionId: id, limit: 100, ...(cursor ? { cursor } : {}) });
           summaries.push(...page.entries.filter((entry) => entry.kind === 'check'));
           cursor = page.nextCursor ?? undefined;
         } while (cursor && summaries.length < 30);
@@ -165,7 +150,6 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
     const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> =>
       network.confirmingNetwork(() => collectionOf(type).collection.preview(url));
 
-    // Every address answers 200 with a status; only a missing address is a malformed request.
     serve(app, API_ROUTES.recognizeUrl, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {
         throw new CollectorError('invalid_request', '請貼上要加入的網址。');

@@ -3,7 +3,6 @@ import type { DocumentFilter, DocumentStatus } from '../../../shared/documents/d
 import { parseDocumentStatus } from '../../../shared/documents/document-status.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';
 
-/** Rejects repeated query parameters so each filter has exactly one value. */
 export function singleValues(query: Record<string, unknown>): Record<string, string | undefined> {
   const values: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(query)) {
@@ -30,7 +29,6 @@ export function pagination(query: { offset?: string | undefined; limit?: string 
   return { offset: parse(query.offset, 0, 0, 1_000_000), limit: parse(query.limit, 50, 1, 100) };
 }
 
-/** An ISO date-time with an explicit offset or Z, so the instant does not depend on the server's time zone. */
 export function isInstant(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) && !Number.isNaN(Date.parse(value));
 }
@@ -41,14 +39,12 @@ export function isCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
 }
 
-/** A document status a request names; any other value is an `invalid_request`. */
 export function requestedStatus(value: unknown): DocumentStatus {
   const status = parseDocumentStatus(value);
   if (!status) throw new CollectorError('invalid_request', 'status 只接受 draft 或 published。');
   return status;
 }
 
-/** Source filters use stable IDs; publisher names are display text and never filter. */
 export function documentFilter(sources: SourceRegistry, query: Record<string, string | undefined>): DocumentFilter {
   if (query.channel !== undefined) {
     throw new CollectorError('invalid_request', '不支援以頻道名稱篩選，請改用 sourceType 與 publisherId。');

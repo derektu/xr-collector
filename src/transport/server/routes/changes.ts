@@ -6,22 +6,19 @@ import { CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeKind } from '..
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import { maskSecretsJson } from '../../../shared/lib/redact.js';
 
-/** Event connections one listener serves at once. */
 export const MAX_STREAMS = 16;
-/** A comment line keeps an idle connection open through sleep and proxies. */
+/**
+ * A comment line keeps an idle connection open through sleep and proxies.
+ * https://html.spec.whatwg.org/multipage/server-sent-events.html#authoring-notes
+ */
 const HEARTBEAT_MS = 30_000;
 const MAX_WAIT_SECONDS = 60;
 
-/**
- * Serves the change stream: the `XR-Revision` header on every API response, the event stream at
- * `/api/events` and the waiting read at `/api/changes`. A read's header names the revision its
- * data is at least as new as; a write's header includes the changes the write itself made.
- */
 export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed): void {
   const started = new WeakMap<object, string>();
   app.addHook('onRequest', async (request) => { started.set(request, changes.revision); });
-  // A request that an earlier hook refused (wrong host, missing token) never reached the hook above
-  // and learns nothing about the changes.
+  // Fastify still runs onSend for a request an earlier hook replied to, without the onRequest hook above.
+  // https://fastify.dev/docs/latest/Reference/Hooks/#respond-to-a-request-from-a-hook
   app.addHook('onSend', async (request, reply, payload) => {
     const revision = started.get(request);
     if (revision !== undefined && request.url.startsWith('/api/')) {
@@ -80,7 +77,7 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
       throw new CollectorError('invalid_request', `wait 必須是 0 到 ${MAX_WAIT_SECONDS} 的整數秒數。`);
     }
     const kinds = list(query.kind);
-    if (kinds?.some((kind) => !CHANGE_KINDS.includes(kind as ChangeKind))) {
+    if (kinds?.some((kind) => !isChangeKind(kind))) {
       throw new CollectorError('invalid_request', `kind 只能是 ${CHANGE_KINDS.join('、')}。`);
     }
     const ids = list(query.id);
@@ -110,7 +107,6 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
       const timer = setTimeout(finish, wait * 1000);
       const unsubscribe = changes.subscribe((batch) => { if (matches(batch)) finish(); });
       waiting.add(finish);
-      // The client gave up waiting.
       reply.raw.once('close', finish);
     });
   });
@@ -120,4 +116,8 @@ function list(value: unknown): string[] | null {
   if (value === undefined) return null;
   const items = (Array.isArray(value) ? value : [value]).flatMap((item) => String(item).split(',')).map((item) => item.trim()).filter(Boolean);
   return items.length > 0 ? items : null;
+}
+
+function isChangeKind(value: string): value is ChangeKind {
+  return CHANGE_KINDS.some((kind) => kind === value);
 }

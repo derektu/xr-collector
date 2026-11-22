@@ -31,7 +31,6 @@ import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
 
 
-/** Everything a workspace needs except the Vault location, which the runtime decides. */
 export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity' | 'sources'>;
 
 export interface CollectorRuntimeOptions {
@@ -56,7 +55,6 @@ export interface CollectorRuntimeOptions {
   createdBy?: string;
   agentSettingsFile: string;
   skillPath: string;
-  /** Preferred Agent API port; the Agent API takes any free port when omitted. */
   agentPort?: number;
   /** Packaged desktop login-startup service; absent servers report the setting unavailable. */
   loginStartup?: LoginStartupAccess;
@@ -100,10 +98,6 @@ export interface RuntimeListeners {
   close(): Promise<void>;
 }
 
-/**
- * Starts the listeners of a runtime once its Agent credential and Vault are open; the transport
- * layer provides it. It closes whatever it started before it throws.
- */
 export type StartListeners<L extends RuntimeListeners> = (services: RuntimeServices) => Promise<L>;
 
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
@@ -122,7 +116,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
   readonly notifications: NotificationCenter;
-  /** The process's change stream, which both listeners serve. */
   readonly changes: ChangeFeed;
   private workspaceValue: VaultWorkspace | null;
   private failure: { path: string; reason: string } | null;
@@ -161,7 +154,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     this.message = initial.workspace ? '服務已就緒。' : initial.message;
   }
 
-  /** The ID of the Vault in use; null while none is. */
   activeVaultId(): string | null { return this.workspaceValue?.activeVaultId() ?? null; }
 
   /** The export or import of the Vault in use, as `GET /api/vault/status` answers it; null while no Vault is in use. */
@@ -178,7 +170,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
 
   /** Records a device-wide desktop event; global events stay visible with any Vault selected. */
   recordDeviceEvent(severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string): void {
-    this.records?.activity.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
+    recordDeviceEvent(this.records, severity, eventType, message, errorCode);
   }
 
   /**
@@ -196,8 +188,9 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
     let agentConnection: AgentConnectionService | null = null;
     let runtime: CollectorRuntime<L> | null = null;
+    const currentWorkspace = (): VaultWorkspace | null => runtime ? runtime.workspaceValue : initial.workspace;
     const current = (): VaultWorkspace => {
-      const workspace = runtime ? runtime.workspaceValue : initial.workspace;
+      const workspace = currentWorkspace();
       if (!workspace) throw new CollectorError('vault_not_ready', runtime?.message ?? initial.message);
       return workspace;
     };
@@ -205,12 +198,10 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       state: 'starting', instanceId, profilePath: path.resolve(options.profilePath),
       vaultPath: initial.workspace?.operations.status().vaultPath ?? null, message: '服務啟動中。',
     };
-    // Collection jobs are device data kept in the profile, across every Vault this device opens.
     const changes = new ChangeFeed();
     const records = options.workspace ? await openJobRecords(path.join(options.profilePath, 'jobs'), sources, { noteChange: changes.note }) : null;
-    const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string) => {
-      records?.activity.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
-    };
+    const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string) =>
+      recordDeviceEvent(records, severity, eventType, message, errorCode);
     if (options.startedAtLogin) deviceEvent('info', 'device.login_startup_launched', 'XR Collector 由電腦登入自動啟動，並在背景執行。');
     const pause = options.pause ?? new CollectionPause();
     const connectivity = new Connectivity({ ...options.connectivity, pause });
@@ -228,14 +219,10 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
         changes.note({ kind: 'notifications' });
       },
     } : null;
-    // Activity is read from the device log directly, so a Vault that is locked or not open never blocks it.
     const activity: ActivityAccess | undefined = records ? {
-      query: (query) => records.views.query(query,
-        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
-      summary: (query) => records.views.summary(query,
-        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }),
-      group: (groupId, limit, cursor, severity) => records.views.group(groupId,
-        (runtime ? runtime.workspaceValue : initial.workspace)?.activityScope() ?? { vaultPath: null }, limit, cursor, severity),
+      query: (query) => records.views.query(query, currentWorkspace()?.activityScope() ?? { vaultPath: null }),
+      summary: (query) => records.views.summary(query, currentWorkspace()?.activityScope() ?? { vaultPath: null }),
+      group: (groupId, limit, cursor, severity) => records.views.group(groupId, currentWorkspace()?.activityScope() ?? { vaultPath: null }, limit, cursor, severity),
       health: () => records.views.health(),
     } : undefined;
     const services = options.workspace ? {
@@ -247,11 +234,12 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       search: forwarding<TranscriptSearch>(() => current().search),
       ...(options.workspace.pacing ? { pacing: options.workspace.pacing } : {}),
     } : {};
-    const loginStartup: LoginStartupAccess | undefined = options.loginStartup ? {
-      status: () => options.loginStartup!.status(),
+    const startupService = options.loginStartup;
+    const loginStartup: LoginStartupAccess | undefined = startupService ? {
+      status: () => startupService.status(),
       update: async (enabled) => {
         try {
-          const status = await options.loginStartup!.update(enabled);
+          const status = await startupService.update(enabled);
           deviceEvent('info', enabled ? 'device.login_startup_enabled' : 'device.login_startup_disabled',
             enabled ? '已開啟登入電腦時自動啟動。' : '已關閉登入電腦時自動啟動。');
           return status;
@@ -264,8 +252,8 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       },
     } : undefined;
     const notificationAccess: NotificationAccess = {
-      read: async () => { const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
-      update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = runtime?.workspaceValue ?? initial.workspace; return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+      read: async () => { const workspace = currentWorkspace(); return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+      update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = currentWorkspace(); return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
     };
     const shared = { ...services, sources, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
@@ -281,7 +269,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       preferredPort: options.agentPort ?? DEVELOPMENT_AGENT_PORT, settingsFile: options.agentSettingsFile, skillPath: options.skillPath, event: deviceEvent,
     };
     try {
-      // The Agent token is protected before the Vault opens, where resumed and due work can fail at once.
       agentConnection = await openAgentConnection(agentSettings);
       if (workspaceServices) initial = await CollectorRuntime.openInitial(options, workspaceServices, vaults);
       const listeners = await listen({
@@ -302,7 +289,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     }
   }
 
-  /** Opens the explicit or previously selected Vault; an unusable one leaves the runtime Not Ready. */
   private static async openInitial(
     options: CollectorRuntimeOptions,
     services: WorkspaceServices,
@@ -324,7 +310,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     };
   }
 
-  /** Checks a new Vault folder before it is created; see `DeviceVaults.checkNew`. */
   checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
     return this.vaults.checkNew(location, name, this.workspaceValue?.operations.status().vaultPath);
   }
@@ -400,7 +385,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
         try { workspaceLease?.transferToShutdown(); }
         catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
         finished = true;
-        // Keep preparingUpdate true: this runtime is now terminal and must close, not resume.
       },
     };
   }
@@ -424,14 +408,10 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   }
 
   private async closeOnce(): Promise<void> {
-    // Each listener stops accepting requests and waits for accepted handlers,
-    // including work whose client disconnected, before the workspace stops.
-    // A confirmation under way is given up, so no job waits on it while the workspace stops.
     this.connectivity.close();
     this.stopFollowing();
     const listeners = await Promise.allSettled([this.listeners.close()]);
     const workspace = this.workspaceValue ? await Promise.allSettled([this.workspaceValue.close()]) : [];
-    // Jobs and activity close last; the workspace records interrupted jobs into them while it stops.
     const store = this.records ? await Promise.allSettled([this.records.close()]) : [];
     const failed = [...listeners, ...workspace, ...store]
       .find((result): result is PromiseRejectedResult => result.status === 'rejected');
@@ -446,8 +426,11 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   }
 }
 
-/** The services every Vault this runtime opens shares: the caller's, with the device's job record, pause and network. */
 type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'sources' | 'jobStore' | 'pause' | 'connectivity'>>;
+
+function recordDeviceEvent(records: JobRecords | null, severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string): void {
+  records?.activity.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });
+}
 
 interface Opening {
   workspace: VaultWorkspace | null;

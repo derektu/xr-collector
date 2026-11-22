@@ -57,6 +57,13 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 - cache 位置：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`；可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 改位置。同一台機器的所有 checkout 與 worktree 共用，第二個 checkout 只需從 cache 安裝。
 - App 執行時只讀 `resources/bin`，不讀 cache。
 
+### 隨附資源的位置
+
+App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno 與 Mac 更新小幫手）、搜尋詞庫、Agent Skill 與系統匣圖示。開發版從 checkout 讀取 `resources/bin/<mac|win>`、`resources/search`、`resources/tray` 與 `skills`；安裝包從 App 的 resources 資料夾讀取 `bin`、`search`、`tray` 與 `skills`，由 `electron-builder.yml` 放進去。`tests/app/runtime/bundled-resources.test.ts` 檢查兩邊的位置一致。
+
+- 開發版可用環境變數指定其他位置的檔案：`XR_COLLECTOR_MEILISEARCH`、`XR_COLLECTOR_YTDLP`、`XR_COLLECTOR_DENO` 指定程式，`XR_COLLECTOR_SEARCH_LEXICON` 指定搜尋詞庫。安裝包不讀這些變數，一律用自己附帶的檔案。
+- Mac 更新小幫手只隨 Mac 安裝包附帶，由 `package:mac` 建置。開發版要先執行 `node scripts/build-mac-update-helper.mjs`，checkout 的 `resources/bin/mac` 才有它。
+
 ## 功能開發
 
 ### 執行

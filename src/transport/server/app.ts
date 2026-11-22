@@ -30,49 +30,34 @@ import { registerSubscriptionRoutes, type SubscriptionCollection } from './route
 import { registerVaultSetupRoutes } from './routes/vault-setup.js';
 import { registerVaultTransferRoutes } from './routes/vault-transfer.js';
 
-/** The services an app serves, each declared beside the routes that use it. */
 export type {
   ActivityAccess, CollectionJobs, ConnectivityAccess, NotificationAccess, ScheduleManagement, SubscriptionCollection, VaultSetup,
 };
 
 export interface HttpAppOptions {
-  /** The source types the service offers: addresses, documents, subscriptions, error statuses and pacing labels. */
   sources: SourceRegistry;
   buildInfo?: BuildInfo;
-  /** The process's change stream; every API response names its revision and `/api/events` serves it. */
   changes?: ChangeFeed;
   collector?: Collector;
   jobs?: CollectionJobs;
   activity?: ActivityAccess;
   transfer?: VaultOperations;
-  /** The subscriptions of each source type with subscriptions. */
   subscriptions?: readonly SubscriptionCollection[];
   schedule?: ScheduleManagement;
   search?: TranscriptSearch;
-  /** The device's request channels, one per pacing group; readable whatever state the Vault is in. */
   pacing?: readonly Pacing[];
-  /**
-   * The device's network. While it is offline, requests that start collection right away are
-   * refused with `offline`; checking subscriptions confirms the network first.
-   */
   connectivity?: ConnectivityAccess;
   webRoot?: string;
   agentToken?: string;
   agentAuthorize?: (header: string | undefined) => boolean;
   agentConnection?: AgentConnectionAccess;
   runtimeStatus?: () => CollectorRuntimeStatus;
-  /** Returns why business routes are unavailable, or null once a Vault is active. */
   notReady?: () => string | null;
   vaultSetup?: VaultSetup;
   loginStartup?: LoginStartupAccess;
   updates?: UpdateAccess;
   notifications?: NotificationAccess;
-  /** Address recognition of the source types; those of `sources` unless tests replace them to exercise other declarations. */
   sourceTypes?: SourceTypeDeclaration[];
-  /**
-   * Host names a request may address, each accepted only with the port this server listens on;
-   * other Host headers get 403. Unset, every Host is accepted.
-   */
   allowedHosts?: string[];
 }
 
@@ -82,18 +67,11 @@ export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
   return appDrains.get(app)?.() ?? Promise.resolve();
 }
 
-/**
- * Builds the HTTP app: the hook chain every request passes (Host check, Agent authorization, the
- * not-ready gate, the change revision, the Vault operation lock, response headers and errors), then
- * the routes of each area for the services `options` gives. Hooks and routes register in this order.
- * Every answer the app serializes has the process's literal secrets masked, whichever
- * route, hook or not-found answer sends it; files and the pages of the UI pass unchanged.
- */
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
   // Set on each reply in the first hook: an answer without a matching route (404, or refused by a
   // hook) gets no app-level serializer from Fastify. A reply's own serializer leaves the content type
-  // to the serializer.
+  // to the serializer. https://fastify.dev/docs/latest/Reference/Reply/#serializerfunc
   app.addHook('onRequest', async (_request, reply) => {
     void reply.serializer((payload) => {
       if (typeof payload === 'string') return maskSecrets(payload);
@@ -128,6 +106,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     // Any page this computer opens can reach a server on the loopback interface. A page on another
     // site that rebinds its own name to 127.0.0.1 still sends that name in Host, so accepting only
     // the server's own names keeps such pages out of the UI's unauthenticated routes.
+    // https://en.wikipedia.org/wiki/DNS_rebinding
     const names = options.allowedHosts;
     app.addHook('onRequest', async (request, reply) => {
       const address = app.server.address();
@@ -140,8 +119,9 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   }
 
   if (options.agentAuthorize) {
+    const agentAuthorize = options.agentAuthorize;
     app.addHook('onRequest', async (request, reply) => {
-      if (!options.agentAuthorize!(request.headers.authorization)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
+      if (!agentAuthorize(request.headers.authorization)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
         error: { code: 'unauthorized', message: '請使用目前的 Agent 連線金鑰。' },
       });
     });
@@ -161,7 +141,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (options.notReady) {
     const notReady = options.notReady;
     app.addHook('onRequest', async (request, reply) => {
-      const access = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
+      const access = request.routeOptions.config.vaultAccess;
       if (!request.url.startsWith('/api/') || access === 'device-data') return;
       const message = notReady();
       if (message) {
@@ -179,7 +159,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     const writes = new WeakMap<object, () => void>();
     app.addHook('preHandler', async (request) => {
       if (!request.url.startsWith('/api/')) return;
-      const declared = (request.routeOptions.config as { vaultAccess?: VaultAccess }).vaultAccess;
+      const declared = request.routeOptions.config.vaultAccess;
       if (declared === 'device-data') return;
       const inferred: VaultAccess = ['GET', 'HEAD', 'OPTIONS'].includes(request.method) ? 'vault-read' : 'vault-write';
       writes.set(request, transfer.enter(declared ?? inferred));
@@ -219,10 +199,11 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     });
   });
 
+  const activity = options.activity;
   registerDeviceRoutes(app, {
     sources: options.sources, buildInfo, network,
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
-    ...(options.activity ? { activityHealth: () => options.activity!.health() } : {}),
+    ...(activity ? { activityHealth: () => activity.health() } : {}),
     ...(options.notifications ? { notifications: options.notifications } : {}),
     ...(options.updates ? { updates: options.updates } : {}),
     ...(options.loginStartup ? { loginStartup: options.loginStartup } : {}),
@@ -235,14 +216,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     ...(options.search ? { search: options.search } : {}),
   });
   if (options.jobs) registerJobRoutes(app, options.jobs, options.sources, network);
-  if (options.activity) registerActivityRoutes(app, options.activity);
+  if (activity) registerActivityRoutes(app, activity);
   if (options.schedule) registerScheduleRoutes(app, options.schedule, network);
   registerSubscriptionRoutes(app, {
     sources: options.sources, subscriptions, network,
     sourceTypes: options.sourceTypes ?? sourceTypeDeclarations(options.sources),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.collector ? { collector: options.collector } : {}),
-    ...(options.activity ? { activity: options.activity } : {}),
+    ...(activity ? { activity } : {}),
   });
 
   const webRoot = options.webRoot && existsSync(options.webRoot) ? options.webRoot : null;
