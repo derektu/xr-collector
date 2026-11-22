@@ -8,11 +8,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '無法檢查這個位置，請稍後再試。';
 }
 
-/**
- * Checks the new Vault folder `name` in `location` after a pause in typing; a newer input aborts the
- * older check. `ready` is true only while the latest check says the folder can be created. Nothing is
- * checked while `enabled` is false.
- */
 export function useNewVaultCheck(location: string, name: string, enabled = true): { check: NewVaultCheck | null; checking: boolean; ready: boolean } {
   const [check, setCheck] = useState<NewVaultCheck | null>(null);
   const [checking, setChecking] = useState(true);
@@ -34,10 +29,6 @@ export function useNewVaultCheck(location: string, name: string, enabled = true)
   return { check, checking, ready: !checking && !!check?.path && !check.problem };
 }
 
-/**
- * One row of an `ob-list`: a title with an optional line under it, and its control on the right.
- * A `field` row is a form field: a short label with its control filling the rest, left-aligned.
- */
 export function ListRow({ title, detail, children, testId, field }: { title: string; detail?: ReactNode; children?: ReactNode; testId?: string; field?: boolean }) {
   return <div className={field ? 'ob-row ob-field' : 'ob-row'} data-testid={testId}>
     <div className="ob-row-text"><strong>{title}</strong>{detail ? <p>{detail}</p> : null}</div>
@@ -45,11 +36,6 @@ export function ListRow({ title, detail, children, testId, field }: { title: str
   </div>;
 }
 
-/**
- * The name and location of a new Vault, with the folder it creates or why it cannot. `onChooseLocation`
- * opens the desktop folder picker; without it the location is typed, as in a browser session.
- * `before` adds rows above the name, such as the export file a Vault is created from.
- */
 export function NewVaultFields({ name, location, check, checking, onName, onLocation, onChooseLocation, busy, before }: {
   name: string;
   location: string;

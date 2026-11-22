@@ -1,18 +1,20 @@
 import { markdownToPlainText } from '../../shared/documents/document-text.js';
 import { trimSearchQueryWhitespace } from '../../shared/api/search-query.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
-import type { DocumentFilter, DocumentMetadata, DocumentSources, DocumentStatus, DocumentStatusCounts } from '../../shared/documents/document-types.js';
+import type { DocumentFilter, DocumentMetadata, DocumentSources, DocumentSourceType, DocumentStatus, DocumentStatusCounts } from '../../shared/documents/document-types.js';
 import { parseDocumentStatus } from '../../shared/documents/document-status.js';
 
 export const DOCUMENTS_PAGE_SIZE = 20;
 export const SEARCH_DEBOUNCE_MS = 300;
 
-/** Browse/search position that the documents URL carries, so returning or reloading restores it. */
+export interface DocumentSourceChoice {
+  sourceType: DocumentSourceType;
+  publisherId: string | null;
+}
+
 export interface DocumentListState {
   query: string;
-  /** '' for all sources, `<sourceType>` for one type, `<sourceType>:<publisherId>` for one publisher. */
-  source: string;
-  /** null for every status. */
+  source: DocumentSourceChoice | null;
   status: DocumentStatus | null;
   page: number;
 }
@@ -22,7 +24,7 @@ export function parseListState(search: string): DocumentListState {
   const page = Number.parseInt(parameters.get('page') ?? '1', 10);
   return {
     query: parameters.get('q') ?? '',
-    source: parameters.get('source') ?? '',
+    source: parseSourceParam(parameters.get('source') ?? ''),
     status: parseDocumentStatus(parameters.get('status')),
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
   };
@@ -31,37 +33,44 @@ export function parseListState(search: string): DocumentListState {
 export function listStateSearch(state: DocumentListState): string {
   const parameters = new URLSearchParams();
   if (state.query) parameters.set('q', state.query);
-  if (state.source) parameters.set('source', state.source);
+  if (state.source) parameters.set('source', sourceParam(state.source));
   if (state.status) parameters.set('status', state.status);
   if (state.page > 1) parameters.set('page', String(state.page));
   const text = parameters.toString();
   return text ? `?${text}` : '';
 }
 
-/**
- * The search box text after the URL query changes. A draft whose trimmed text already is the query
- * stays as typed, so a pause after a trailing space does not strip it mid-typing; any other query
- * (back, reload, clear) replaces the draft.
- */
 export function draftForQuery(draft: string, query: string): string {
   return trimSearchQueryWhitespace(draft) === query ? draft : query;
 }
 
-export function sourceFilter(source: string): DocumentFilter {
-  if (!source) return {};
-  const separator = source.indexOf(':');
-  if (separator < 0) return { sourceType: source as NonNullable<DocumentFilter['sourceType']> };
-  return { sourceType: source.slice(0, separator) as NonNullable<DocumentFilter['sourceType']>, publisherId: source.slice(separator + 1) };
+export function sourceParam(source: DocumentSourceChoice | null): string {
+  if (!source) return '';
+  return source.publisherId === null ? source.sourceType : `${source.sourceType}:${source.publisherId}`;
 }
 
-/** The status filters of the Documents list, in order; `status` null stands for every status. */
+export function parseSourceParam(text: string): DocumentSourceChoice | null {
+  if (!text) return null;
+  const separator = text.indexOf(':');
+  if (separator < 0) return { sourceType: text, publisherId: null };
+  return { sourceType: text.slice(0, separator), publisherId: text.slice(separator + 1) };
+}
+
+export function sameSource(left: DocumentSourceChoice | null, right: DocumentSourceChoice | null): boolean {
+  return sourceParam(left) === sourceParam(right);
+}
+
+export function sourceFilter(source: DocumentSourceChoice | null): DocumentFilter {
+  if (!source) return {};
+  return source.publisherId === null ? { sourceType: source.sourceType } : { sourceType: source.sourceType, publisherId: source.publisherId };
+}
+
 export const STATUS_FILTERS: ReadonlyArray<{ status: DocumentStatus | null; label: string }> = [
   { status: null, label: '全部' },
   { status: 'draft', label: '草稿' },
   { status: 'published', label: '正式' },
 ];
 
-/** How many documents a status filter shows, from the counts by status. */
 export function statusFilterCount(counts: DocumentStatusCounts, status: DocumentStatus | null): number {
   return status ? counts[status] : counts.draft + counts.published;
 }
@@ -76,25 +85,20 @@ export interface SourceOptionGroup {
   options: SourceOption[];
 }
 
-/** A source menu entry as data: every document, one source type, or one publisher (marked when its subscription was removed). */
 export type SourceMenuEntry =
-  | { value: string; scope: 'all'; count: number }
-  | { value: string; scope: 'type'; typeLabel: string; count: number }
-  | { value: string; scope: 'publisher'; name: string; removed: boolean; count: number };
+  | { source: null; scope: 'all'; count: number }
+  | { source: DocumentSourceChoice; scope: 'type'; typeLabel: string; count: number }
+  | { source: DocumentSourceChoice; scope: 'publisher'; name: string; removed: boolean; count: number };
 
-/**
- * One grouped menu: every document, then per source type its own "all" entry followed by its
- * publishers. A publisher whose subscription was removed is marked; one only added item by item is not.
- */
 export function sourceMenu(sources: DocumentSources | null): { all: SourceMenuEntry; groups: Array<{ label: string; entries: SourceMenuEntry[] }> } {
   return {
-    all: { value: '', scope: 'all', count: sources?.total ?? 0 },
+    all: { source: null, scope: 'all', count: sources?.total ?? 0 },
     groups: (sources?.groups ?? []).map((group) => ({
       label: group.label,
       entries: [
-        { value: group.sourceType, scope: 'type', typeLabel: group.label, count: group.count },
+        { source: { sourceType: group.sourceType, publisherId: null }, scope: 'type', typeLabel: group.label, count: group.count },
         ...group.publishers.map((publisher): SourceMenuEntry => ({
-          value: `${group.sourceType}:${publisher.id ?? 'none'}`, scope: 'publisher', name: publisher.name, removed: publisher.removed, count: publisher.count,
+          source: { sourceType: group.sourceType, publisherId: publisher.id ?? 'none' }, scope: 'publisher', name: publisher.name, removed: publisher.removed, count: publisher.count,
         })),
       ],
     })),
@@ -111,7 +115,7 @@ function sourceMenuText(entry: SourceMenuEntry): string {
 
 export function sourceOptions(sources: DocumentSources | null): { all: SourceOption; groups: SourceOptionGroup[] } {
   const menu = sourceMenu(sources);
-  const option = (entry: SourceMenuEntry) => ({ value: entry.value, label: sourceMenuText(entry) });
+  const option = (entry: SourceMenuEntry) => ({ value: sourceParam(entry.source), label: sourceMenuText(entry) });
   return { all: option(menu.all), groups: menu.groups.map((group) => ({ label: group.label, options: group.entries.map(option) })) };
 }
 
@@ -119,7 +123,6 @@ export function sourceTag(declarations: SourceDeclarations, document: DocumentMe
   return `${declarations.get(document.sourceType)?.label ?? document.sourceType} · ${document.publisher.name}`;
 }
 
-/** Date-only values are shown as recorded; timestamps use the viewer's local date. */
 export function publishedDate(publishedAt: string | null): string | null {
   if (!publishedAt) return null;
   if (/^\d{4}-\d{2}-\d{2}$/u.test(publishedAt)) return publishedAt;
@@ -146,7 +149,6 @@ export function dateTimeLabel(value: string): string {
   return `${localDate(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-/** The line of type-specific details the source type shows under a document's title; null when it has none. */
 export function subtitleLabel(declarations: SourceDeclarations, document: DocumentMetadata): string | null {
   return declarations.get(document.sourceType)?.documentDetailLine?.(document) ?? null;
 }
@@ -156,10 +158,6 @@ export interface SnippetPart {
   match: boolean;
 }
 
-/**
- * Splits a search snippet on its `<mark>` markers after reducing its Markdown to plain text;
- * everything stays text, nothing becomes HTML. Adjacent matches join into one highlight.
- */
 export function snippetParts(raw: string): SnippetPart[] {
   const snippet = markdownToPlainText(raw.replaceAll('</mark><mark>', ''));
   const parts: SnippetPart[] = [];
@@ -174,15 +172,19 @@ export function snippetParts(raw: string): SnippetPart[] {
   return parts.filter((part) => part.text !== '');
 }
 
-/** Page numbers to show, with `null` for a gap, always including the first, last and neighbours of the current page. */
-export function pageItems(current: number, totalPages: number): Array<number | null> {
-  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+export type PageItem = number | 'gap';
+
+export const MAX_PAGES_WITHOUT_GAPS = 7;
+
+export function pageItems(current: number, totalPages: number): PageItem[] {
+  if (totalPages <= MAX_PAGES_WITHOUT_GAPS) return Array.from({ length: totalPages }, (_, index) => index + 1);
   const pages = new Set([1, totalPages, current - 1, current, current + 1].filter((page) => page >= 1 && page <= totalPages));
-  const sorted = [...pages].sort((left, right) => left - right);
-  const items: Array<number | null> = [];
-  for (const [index, page] of sorted.entries()) {
-    if (index > 0 && page - sorted[index - 1]! > 1) items.push(null);
+  const items: PageItem[] = [];
+  let previous: number | null = null;
+  for (const page of [...pages].sort((left, right) => left - right)) {
+    if (previous !== null && page - previous > 1) items.push('gap');
     items.push(page);
+    previous = page;
   }
   return items;
 }
@@ -191,7 +193,6 @@ export function totalPages(total: number): number {
   return Math.max(1, Math.ceil(total / DOCUMENTS_PAGE_SIZE));
 }
 
-/** Path of the Reader for one document; IDs are encoded because they contain `:`. */
 export function readerPath(id: string): string {
   return `/documents/${encodeURIComponent(id)}`;
 }
@@ -214,18 +215,10 @@ function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-/**
- * The page a loaded list should show: the same page while it has rows, otherwise the last page that
- * has any, such as after the last document of a page was deleted here or from the Reader.
- */
 export function pageWithRows(page: number, rowsOnPage: number, total: number): number {
   return rowsOnPage === 0 && page > 1 ? Math.min(page - 1, totalPages(total)) : page;
 }
 
-/**
- * The source address of a document ID, for collecting a deleted document again; null for an unknown
- * ID and for a type whose keys do not determine an address.
- */
 export function sourceUrlOfDocumentId(declarations: SourceDeclarations, id: string): string | null {
   const separator = id.indexOf(':');
   if (separator < 0) return null;

@@ -28,6 +28,11 @@ describe('MarkdownBody', () => {
     expect(html).not.toMatch(/<img/u);
     expect(html).not.toContain('onerror="');
     expect(html).not.toContain('javascript:');
-    expect(html).toContain('圖片：圖');
+  });
+
+  it('renders a body image as a link to its source so reading never fetches a remote image', () => {
+    const html = render('![chart](https://example.com/p.png)');
+    expect(html).not.toMatch(/<img/u);
+    expect(html).toContain('href="https://example.com/p.png"');
   });
 });

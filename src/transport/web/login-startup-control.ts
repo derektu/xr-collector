@@ -7,18 +7,11 @@ export interface LoginStartupState {
   error: string | null;
 }
 
-/** Reading and writing the operating system's login item; each call answers with what the OS reports. */
 export interface LoginStartupPort {
   read(signal: AbortSignal): Promise<LoginStartupStatus>;
   write(enabled: boolean, signal: AbortSignal): Promise<LoginStartupStatus>;
 }
 
-/**
- * The login startup switch's state. The switch always shows what the OS reports: a write answers
- * with the OS state read back, a failed write reads the state again instead of keeping the
- * requested value, and the window regaining focus reads it again unless a write is on its way.
- * Only the latest read or write answers, so a slow earlier read never overwrites a newer write.
- */
 export class LoginStartupControl {
   private state: LoginStartupState = { status: null, pending: false, error: null };
   private readonly requests = createLatestRequest();
@@ -32,26 +25,24 @@ export class LoginStartupControl {
     return this.state;
   }
 
-  /** Starts showing the OS state, again after `close()` when the screen comes back. */
   start(): Promise<void> {
     this.open = true;
     return this.refresh();
   }
 
-  /** Reads the OS state; `clearError` keeps a write's error shown while the state is read again. */
-  async refresh(clearError = true): Promise<void> {
+  async refresh({ keepError = false }: { keepError?: boolean } = {}): Promise<void> {
     try {
       const result = await this.requests.run((signal) => this.port.read(signal));
       if (!result.current || !this.open) return;
-      this.set({ ...this.state, status: result.value, ...(clearError ? { error: null } : {}) });
+      this.set({ ...this.state, status: result.value, ...(keepError ? {} : { error: null }) });
     } catch (caught) {
-      if (this.open && (caught as { name?: string }).name !== 'AbortError') {
+      if (this.open && !(caught instanceof Error && caught.name === 'AbortError')) {
         this.set({ ...this.state, error: caught instanceof Error ? caught.message : '無法讀取登入自啟狀態。' });
       }
     }
   }
 
-  /** The window regained focus: the user may have changed the login item in the OS settings. */
+  // The user can change the login item in the OS settings while the window is out of focus.
   async focus(): Promise<void> {
     if (!this.writing) await this.refresh();
   }
@@ -67,14 +58,13 @@ export class LoginStartupControl {
     } catch (caught) {
       if (!this.open) return;
       this.set({ ...this.state, error: caught instanceof Error ? caught.message : '無法更新登入自啟。' });
-      await this.refresh(false);
+      await this.refresh({ keepError: true });
     } finally {
       this.writing = false;
       if (this.open) this.set({ ...this.state, pending: false });
     }
   }
 
-  /** Drops every answer still on its way, for a screen that went away. */
   close(): void {
     this.open = false;
     this.requests.cancel();
@@ -86,10 +76,6 @@ export class LoginStartupControl {
   }
 }
 
-/**
- * What the setting says below the switch. The switch alone shows the routine `enabled` and
- * `disabled` states; every other state carries guidance, shown in the server's own message.
- */
 export type LoginStartupNote =
   | { kind: 'pending' | 'loading' | 'unavailable' }
   | { kind: 'error' | 'status'; message: string }

@@ -1,6 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 
-/** A readable hover explanation that can also be pinned for keyboard and touch users. */
 export function AgentConnectionHelp({ onboarding = false }: { onboarding?: boolean }) {
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);

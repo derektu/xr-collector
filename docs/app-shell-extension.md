@@ -21,7 +21,7 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 ## 頁面
 
-`src/transport/web/app-shell.ts` 定義每個 `ShellPage` 的路徑、側欄的 `navigation` 與獨立的 `settingsNavigation`；`src/transport/web/App.tsx` 把每個頁面對應到元件。新增頂層頁面時兩處一起改。明細頁（`/sources/<類型>/<ID>`、`/documents/<ID>`）在導覽上屬於各自的列表頁。換頁後頁面標題取得焦點，讓鍵盤操作有固定的起點。
+`src/transport/web/app-shell.ts` 定義每個 `ShellPage` 的路徑、側欄的 `navigation` 與獨立的 `settingsNavigation`；`src/transport/web/App.tsx` 把每個頁面對應到元件。新增頂層頁面時兩處一起改。明細頁（`/sources/<類型>/<ID>`、`/documents/<ID>`）在導覽上屬於各自的列表頁。換頁後頁面標題取得焦點，讓鍵盤操作有固定的起點。開啟 Reader 時 Shell 收合側欄，Reader 佔滿內容區。
 
 返回鍵經 app 自己推入的 history 項目回到開啟它的頁面，直接開啟的頁面回到該頁的預設上一層；動作完成後頁面已不存在時，返回以 replace 離開，不留下指向它的項目。列表的篩選或位置改變時取代目前的 history 項目，所以從 Reader 返回會回到最新的列表位置。新增對話框的動作被接受後，對話框關閉、留在原頁，不另外顯示通知。
 

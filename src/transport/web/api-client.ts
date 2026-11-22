@@ -38,6 +38,7 @@ import type {
 } from '../../shared/api/device-types.js';
 import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey, type ActivityParameters } from '../../shared/api/api-routes.js';
 import { pageOfView } from './activity-view.js';
+import { ApiError } from './api-error.js';
 
 interface ErrorResponse {
   error?: {
@@ -46,15 +47,6 @@ interface ErrorResponse {
   };
 }
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   // Fastify rejects a request labelled application/json whose body is empty.

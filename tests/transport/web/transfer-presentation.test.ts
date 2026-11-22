@@ -3,7 +3,8 @@
 // and which operations switch the Vault.
 import { describe, expect, it } from 'vitest';
 import {
-  changes, exportTime, fileManager, fileProgress, hasChanges, relocates, sizeLabel, transferRunning,
+  changes, exportTime, fileManager, fileName, fileProgress, hasChanges, importApplyOutcome, relocationPhase, sizeLabel, switchesVault,
+  transferRunning,
 } from '../../../src/transport/web/transfer-presentation.js';
 
 const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', number>>, subscriptions: Partial<Record<'added' | 'updated' | 'removed', number>> = {}) => ({
@@ -44,8 +45,28 @@ describe('export and import presentation', () => {
     expect(fileManager('darwin')).toBe('finder');
     expect(fileManager('win32')).toBe('explorer');
     expect(fileManager('linux')).toBe('other');
-    expect(relocates({ operation: 'open' })).toBe(true);
-    expect(relocates({ operation: 'create' })).toBe(true);
-    expect(relocates({ operation: 'import' })).toBe(false);
+    expect(switchesVault({ operation: 'open' })).toBe(true);
+    expect(switchesVault({ operation: 'create' })).toBe(true);
+    expect(switchesVault({ operation: 'import' })).toBe(false);
+  });
+
+  it('keeps the comparison after an apply cancelled while waiting for collection, because nothing was written', () => {
+    expect(importApplyOutcome({ state: 'idle' })).toBe('keepComparison');
+    expect(importApplyOutcome({ state: 'completed' })).toBe('imported');
+  });
+
+  it('discards the comparison after a failed apply, so the file is compared again before another try', () => {
+    expect(importApplyOutcome({ state: 'error' })).toBe('discardComparison');
+  });
+
+  it('returns a cancelled switch to its form so it can be started again, while a failed one stays failed', () => {
+    expect(relocationPhase({ state: 'idle' })).toBe('input');
+    expect(relocationPhase({ state: 'error' })).toBe('failed');
+    expect(relocationPhase({ state: 'completed' })).toBe('done');
+  });
+
+  it('names a folder by its last segment even with a trailing separator, so a typed folder path still shows its name', () => {
+    expect(fileName('/Users/me/Vaults/Research/')).toBe('Research');
+    expect(fileName('C:\\Vaults\\Research')).toBe('Research');
   });
 });

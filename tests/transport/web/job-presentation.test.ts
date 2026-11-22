@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
-import { jobKind } from '../../../src/transport/web/job-presentation.js';
+import { jobKind, jobKindLabel } from '../../../src/transport/web/job-presentation.js';
 import { PRODUCT_DECLARATIONS } from '../../support/product-sources.js';
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
@@ -18,5 +18,11 @@ describe('job presentation', () => {
     expect(jobKind(PRODUCT_DECLARATIONS, job({ kind: 'youtube.channel' }))).toEqual({ kind: 'check', trigger: null });
     expect(jobKind(PRODUCT_DECLARATIONS, job({}))).toEqual({ kind: 'item' });
     expect(jobKind(PRODUCT_DECLARATIONS, job({ kind: 'youtube.channel-add' }))).toEqual({ kind: 'subscribe' });
+  });
+
+  it('labels a job of an unregistered source type by its kind instead of calling it a subscription', () => {
+    const unregistered = job({ kind: 'podcast.episode', source: { type: 'podcast', id: 'ep1', url: 'https://example.com/ep1', title: 'Episode' } });
+    expect(jobKind(PRODUCT_DECLARATIONS, unregistered)).toEqual({ kind: 'unregistered' });
+    expect(jobKindLabel(PRODUCT_DECLARATIONS, unregistered)).toBe('podcast.episode');
   });
 });

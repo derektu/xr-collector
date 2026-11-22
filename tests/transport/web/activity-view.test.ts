@@ -21,7 +21,7 @@ describe('activity page view', () => {
     expect(pageOfView(SUMMARY, 'summary')).toBe(SUMMARY);
   });
 
-  it('rejects a page whose view does not match the read', () => {
+  it('rejects a page whose view does not match the read, so a wrong answer never shows as an empty log', () => {
     expect(() => pageOfView(SUMMARY, 'raw')).toThrow('answered view "summary" to a raw query');
     expect(() => pageOfView(RAW, 'summary')).toThrow('answered view "raw" to a summary query');
   });

@@ -3,25 +3,15 @@ import type { TransferStatus } from '../../shared/vault/vault-types.js';
 import { api } from './api-client.js';
 import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
 import { useLiveRead } from './use-changes.js';
-import { relocates, revealLabel, transferRunning } from './transfer-presentation.js';
+import { fileName, relocationPhase, revealLabel, switchesVault, transferRunning } from './transfer-presentation.js';
 import { NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 
-/** The dialog shown: creating a new Vault or opening another, started here or followed after it ran in the background. */
 type Open = { kind: 'create' | 'open'; resume: boolean; source?: string };
 
-/**
- * The switch the person sent to the background. It outlives the Settings page, so returning to
- * Settings shows the outcome of the switch that ran while another page was open.
- */
 let background: 'create' | 'open' | null = null;
 
 const kindOf = (status: TransferStatus): 'create' | 'open' => (status.operation === 'create' ? 'create' : 'open');
 
-/**
- * Settings section for the active Vault: where it is, what it holds, creating a new Vault or opening
- * another one in its place, and its export and import. Creating and opening are unavailable when the
- * status names a reason, such as a location fixed at startup.
- */
 export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   vaultPath: string | null;
   counts: { documents: number; sources: number } | null;
@@ -29,18 +19,15 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
 }) {
   const desktop = window.xrCollectorDesktop;
   const [open, setOpen] = useState<Open | null>(null);
-  // Follows the status while no dialog is open, so a switch running in the background shows its progress here.
   const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: !open });
   const [problem, setProblem] = useState<string | null>(null);
   const current = status?.vaultPath ?? vaultPath;
   const unavailable = status?.relocationUnavailable ?? null;
-  const running = relocates(status) && transferRunning(status);
+  const running = switchesVault(status) && transferRunning(status);
 
-  /** The status read before the dialog went to the background; only a newer one can tell that the operation ended. */
   const shownBefore = useRef<TransferStatus | null>(null);
   useEffect(() => {
-    if (open || !background || !status || status === shownBefore.current || !relocates(status) || transferRunning(status)) return;
-    // The background operation ended: show its outcome in its own dialog.
+    if (open || !background || !status || status === shownBefore.current || !switchesVault(status) || transferRunning(status)) return;
     setOpen({ kind: background, resume: true });
     background = null;
   }, [status, open]);
@@ -50,7 +37,6 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
     try { await desktop?.revealVault(); } catch (error) { setProblem(errorText(error, '無法開啟資料夾。')); }
   }
 
-  /** On the desktop the folder picker comes first, starting in the folder that holds the active Vault. */
   async function openOther(): Promise<void> {
     setProblem(null);
     if (!desktop) { setOpen({ kind: 'open', resume: false }); return; }
@@ -100,7 +86,6 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   </section>;
 }
 
-/** Runs a switch that the server accepted, or follows one already running, to its end. */
 function useRelocation(resume: boolean) {
   const [phase, setPhase] = useState<'input' | 'running' | 'done' | 'failed'>(resume ? 'running' : 'input');
   const [outcome, setOutcome] = useState<TransferStatus | null>(null);
@@ -110,10 +95,10 @@ function useRelocation(resume: boolean) {
 
   async function follow(): Promise<void> {
     const status = await followTransfer();
+    const next = relocationPhase(status);
     setOutcome(status);
-    if (status.state === 'completed') setPhase('done');
-    else if (status.state === 'idle') { setFailure(status.message); setPhase('input'); }
-    else { setFailure(status.message); setPhase('failed'); }
+    if (next !== 'done') setFailure(status.message);
+    setPhase(next);
   }
 
   useEffect(() => {
@@ -137,7 +122,6 @@ function useRelocation(resume: boolean) {
   return { phase, outcome, failure, progress, start, setFailure };
 }
 
-/** The outcome of a finished switch: the Vault now in use and where the previous one stays. */
 function SwitchOutcome({ outcome, done, testId }: { outcome: TransferStatus; done: string; testId: string }) {
   const result = outcome.result;
   return <>
@@ -148,28 +132,27 @@ function SwitchOutcome({ outcome, done, testId }: { outcome: TransferStatus; don
   </>;
 }
 
-/**
- * Creates a new Vault with the same name and location form as Onboarding, starting in the folder
- * that holds the active Vault, then switches to it. The active Vault stays where it is.
- */
+type NewVaultForm = { loaded: false } | { loaded: true; name: string; location: string };
+
 function CreateDialog({ resume, onBackground, onClose }: {
   resume: boolean; onBackground: () => void; onClose: (switched: boolean) => void;
 }) {
   const desktop = window.xrCollectorDesktop;
-  const [name, setName] = useState<string | null>(null);
-  const [location, setLocation] = useState<string | null>(null);
-  const { check, checking, ready } = useNewVaultCheck(location ?? '', name ?? '');
+  const [form, setForm] = useState<NewVaultForm>({ loaded: false });
+  const { check, checking, ready } = useNewVaultCheck(form.loaded ? form.location : '', form.loaded ? form.name : '', form.loaded);
   const { phase, outcome, failure, progress, start, setFailure } = useRelocation(resume);
 
-  // A resumed create that ends cancelled returns to the form, so the defaults load either way.
   useEffect(() => {
-    api.getVaultSetup().then((setup) => { setName(setup.newVault.name); setLocation(setup.newVault.location); })
+    api.getVaultSetup().then((setup) => setForm({ loaded: true, name: setup.newVault.name, location: setup.newVault.location }))
       .catch((error: unknown) => setFailure(errorText(error, '無法讀取預設位置。')));
   }, []);
 
+  const setName = (name: string) => setForm((current) => (current.loaded ? { ...current, name } : current));
+  const setLocation = (location: string) => setForm((current) => (current.loaded ? { ...current, location } : current));
+
   async function chooseLocation(): Promise<void> {
     try {
-      const chosen = await desktop?.chooseVaultLocation(location ?? undefined);
+      const chosen = await desktop?.chooseVaultLocation(form.loaded ? form.location : undefined);
       if (chosen) setLocation(chosen);
     } catch (error) {
       setFailure(`無法開啟資料夾選擇視窗：${errorText(error, '請稍後再試。')}`);
@@ -177,8 +160,8 @@ function CreateDialog({ resume, onBackground, onClose }: {
   }
 
   return <Modal title="建立新的知識庫" {...(phase === 'input' ? { width: 'form' as const } : {})} busy={phase === 'running'} onDismiss={() => onClose(phase === 'done')} testId="create-vault-dialog">
-    {phase === 'input' && name !== null && location !== null
-      ? <NewVaultFields name={name} location={location} check={check} checking={checking} busy={false}
+    {phase === 'input' && form.loaded
+      ? <NewVaultFields name={form.name} location={form.location} check={check} checking={checking} busy={false}
         onName={setName} onLocation={setLocation} {...(desktop ? { onChooseLocation: () => void chooseLocation() } : {})} />
       : null}
     {phase === 'running' ? <Progress progress={progress} fallback="正在建立知識庫…" /> : null}
@@ -187,8 +170,8 @@ function CreateDialog({ resume, onBackground, onClose }: {
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={() => onClose(false)}>取消</button>
-        <button type="button" className="button primary" disabled={!ready || name === null || location === null}
-          onClick={() => void start(() => api.createVault(location!, name!))} data-testid="create-vault-confirm">建立</button>
+        <button type="button" className="button primary" disabled={!ready || !form.loaded}
+          onClick={() => { if (form.loaded) void start(() => api.createVault(form.location, form.name)); }} data-testid="create-vault-confirm">建立</button>
       </> : null}
       {phase === 'running' ? <button type="button" className="button" onClick={onBackground}>在背景繼續</button> : null}
       {phase === 'done' || phase === 'failed'
@@ -198,11 +181,6 @@ function CreateDialog({ resume, onBackground, onClose }: {
   </Modal>;
 }
 
-/**
- * Opens another existing Vault in place of the active one as soon as the chosen folder proves to be
- * one. The desktop folder picker runs before the dialog and hands it `source`; a browser session types
- * the path here.
- */
 function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
   resume: boolean; source?: string; onBackground: () => void; onClose: (switched: boolean) => void;
 }) {
@@ -216,7 +194,7 @@ function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
     try {
       const inspection = await api.inspectVault(path);
       if (inspection.kind === 'existing') await start(() => api.openOtherVault(inspection.path));
-      else setFailure(inspection.kind === 'empty' ? `「${baseName(inspection.path)}」不是 XR Collector 知識庫。` : inspection.reason);
+      else setFailure(inspection.kind === 'empty' ? `「${fileName(inspection.path)}」不是 XR Collector 知識庫。` : inspection.reason);
     } catch (error) {
       setFailure(errorText(error, '無法檢查這個資料夾。'));
     } finally {
@@ -247,9 +225,4 @@ function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
         : null}
     </div>
   </Modal>;
-}
-
-/** The last segment of a path, on either platform's separator. */
-function baseName(value: string): string {
-  return value.split(/[\\/]/u).filter(Boolean).pop() ?? value;
 }

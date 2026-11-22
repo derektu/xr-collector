@@ -16,22 +16,29 @@ import {
   eventText,
   jobBadge,
   MIN_LEVEL_OPTIONS,
+  MIN_LEVELS,
   RECORD_TYPE_OPTIONS,
+  RECORD_TYPES,
   logTime,
   logWarning,
   mergeNewest,
   parseActivityState,
   RANGE_OPTIONS,
+  RANGES,
+  severityAtLeast,
   summaryRange,
+  type ActivityMinLevel,
   type ActivityViewState,
 } from './activity-presentation.js';
-import { api, ApiError } from './api-client.js';
+import { api } from './api-client.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import { Icon } from './icons.js';
 import { useChanges } from './use-changes.js';
 import { ActivityGroupPages, type GroupPagesState } from './activity-group-pages.js';
 import { readerPath } from './document-presentation.js';
+import { readFilteredJob } from './filtered-job.js';
 import { jobTitle } from './job-presentation.js';
+import { isOneOf } from './one-of.js';
 import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 import { useSourceDeclarations } from './source-declarations.js';
@@ -46,10 +53,6 @@ interface LogState {
   health: ActivityLogHealth;
 }
 
-/**
- * The persistent log, filtered by level, source, time and job. Filters live in the address so
- * other pages can open the log already filtered.
- */
 export function Activity({ search, onState, onOpenDocument, onOpenSource, onNotice }: {
   search: string;
   onState: (next: ActivityViewState) => void;
@@ -59,7 +62,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
 }) {
   const declarations = useSourceDeclarations();
   const state = parseActivityState(search);
-  const effectiveMode = state.job ? 'raw' : state.mode;
+  const effectiveMode = state.jobId ? 'raw' : state.mode;
   const filter = activityStateSearch({ ...state, mode: effectiveMode });
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [log, setLog] = useState<LogState | null>(null);
@@ -71,7 +74,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   const subscriptionChanges = useChanges(['subscriptions']);
   const logChanges = useChanges(['activity']);
   const jobChanges = useChanges(['jobs']);
-  /** The log request in flight; a change meanwhile reads the log once more when it ends. */
   const logFlight = useRef<{ filter: string; again: boolean } | null>(null);
 
   useEffect(() => {
@@ -80,12 +82,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     return () => controller.abort();
   }, [subscriptionChanges.tick]);
 
-  // A changed filter starts over. Raw refreshes add new entries above loaded history. Summary refreshes
-  // replace the whole snapshot until an older page is requested; pagination then keeps that snapshot
-  // fixed until a filter/mode change or page reload, so rows and cursors can never cross snapshots.
-  // Refreshes never cancel a request in flight, so frequent progress updates cannot keep the log empty.
-  // The time bounds of a filter are fixed when it is first loaded, so "today" keeps meaning the same
-  // day and cursors stay valid when the page stays open past midnight.
   const currentFilter = useRef(filter);
   currentFilter.current = filter;
   const filterQuery = useRef<{ filter: string; query: ActivityQuery } | null>(null);
@@ -136,15 +132,14 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   }, [filter, logChanges.tick, effectiveMode]);
 
   useEffect(() => {
-    if (!state.job) { setFilteredJob(null); jobChanges.track(Promise.resolve()); return undefined; }
+    if (!state.jobId) { setFilteredJob(null); jobChanges.track(Promise.resolve()); return undefined; }
     let alive = true;
-    // A job no longer kept is an answer; other failures leave the filter behind until reads work again.
-    jobChanges.track(api.getJob(state.job).then((job) => { if (alive) setFilteredJob(job); }, (error: unknown) => {
+    jobChanges.track(readFilteredJob((id) => api.getJob(id), state.jobId).then((job) => { if (alive) setFilteredJob(job); }, (error: unknown) => {
       if (alive) setFilteredJob(null);
-      if (!(error instanceof ApiError && error.code === 'job_not_found')) throw error;
+      throw error;
     }));
     return () => { alive = false; };
-  }, [state.job, jobChanges.tick]);
+  }, [state.jobId, jobChanges.tick]);
 
   function change(patch: Partial<ActivityViewState>): void {
     onState({ ...state, ...patch });
@@ -188,7 +183,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     }
   }
 
-  /** Plain clicks stay in the app; modified clicks keep the browser's own link behavior. */
   function open(event: MouseEvent, action: () => void): void {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
@@ -196,7 +190,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   }
 
   const warning = logWarning(log?.health ?? null);
-  const sourceKnown = !state.source || subscriptions.some((subscription) => subscription.id === state.source);
+  const unlistedSubscriptionId = state.subscriptionId !== null && !subscriptions.some((subscription) => subscription.id === state.subscriptionId)
+    ? state.subscriptionId : null;
 
   if (state.group) return <ActivityGroup groupId={state.group} returnTo={state.returnTo} state={state} onState={onState} />;
 
@@ -214,7 +209,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
         </div>
         <span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">紀錄類型</span>
-          <select value={state.recordType} onChange={(event) => change({ recordType: event.target.value as ActivityViewState['recordType'] })}
+          <select value={state.recordType} onChange={(event) => { const value = event.target.value; if (isOneOf(RECORD_TYPES, value)) change({ recordType: value }); }}
             onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
             onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
             onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-type">
@@ -222,7 +217,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">最低等級</span>
-          <select value={state.minLevel} onChange={(event) => change({ minLevel: event.target.value as ActivityViewState['minLevel'] })}
+          <select value={state.minLevel} onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) change({ minLevel: value }); }}
             onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
             onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
             onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-level">
@@ -230,17 +225,17 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">訂閱</span>
-          <select value={state.source ?? ''} onChange={(event) => change({ source: event.target.value || null })}
+          <select value={state.subscriptionId ?? ''} onChange={(event) => change({ subscriptionId: event.target.value || null })}
             onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
             onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
             onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-source">
             <option value="">所有訂閱</option>
             {subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.title}</option>)}
-            {sourceKnown ? null : <option value={state.source!}>{state.source}</option>}
+            {unlistedSubscriptionId === null ? null : <option value={unlistedSubscriptionId}>{unlistedSubscriptionId}</option>}
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">時間</span>
-          <select value={state.range} onChange={(event) => change({ range: event.target.value as ActivityViewState['range'] })}
+          <select value={state.range} onChange={(event) => { const value = event.target.value; if (isOneOf(RANGES, value)) change({ range: value }); }}
             onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
             onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
             onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-range">
@@ -248,9 +243,9 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
           </select>
         </label>
       </div>
-      {state.job ? <div className="log-job-filter" data-testid="log-job-filter">
+      {state.jobId ? <div className="log-job-filter" data-testid="log-job-filter">
         <span className="chip active">工作：{filteredJob ? `${jobBadge(declarations, filteredJob)}・${jobTitle(filteredJob)}` : '…'}
-          <button type="button" className="chip-clear" aria-label="清除工作篩選" onClick={() => change({ job: null })}>×</button></span>
+          <button type="button" className="chip-clear" aria-label="清除工作篩選" onClick={() => change({ jobId: null })}>×</button></span>
         {filteredJob ? <button type="button" className="button small" onClick={() => void copyDiagnostics(filteredJob)} data-testid="copy-diagnostics">複製診斷資訊</button> : null}
       </div> : null}
       {warning ? <p className="log-warning" role="alert" data-testid="log-warning">{warning}</p> : null}
@@ -270,9 +265,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
             const text = eventText(declarations, event);
             const documentId = event.documentId;
             const subscriptionId = event.subscriptionId;
-            // An entry written before events named their source type belongs to the first type with subscriptions.
-            const subscriptionType = event.sourceType ?? declarations.list.find((declaration) => declaration.subscription)?.id ?? '';
-            const type = event.sourceType ? declarations.get(event.sourceType) : undefined;
+            const sourceType = event.sourceType;
+            const type = sourceType ? declarations.get(sourceType) : undefined;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
               data-event-type={event.eventType} data-severity={event.severity}>
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
@@ -282,8 +276,8 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
               </span>
               {documentId
                 ? <a href={readerPath(documentId)} onClick={(click) => open(click, () => onOpenDocument(documentId))}>{text}</a>
-                : subscriptionId
-                  ? <a href={sourcePath(subscriptionType, subscriptionId)} onClick={(click) => open(click, () => onOpenSource(subscriptionType, subscriptionId))}>{text}</a>
+                : subscriptionId && sourceType
+                  ? <a href={sourcePath(sourceType, subscriptionId)} onClick={(click) => open(click, () => onOpenSource(sourceType, subscriptionId))}>{text}</a>
                   : <span>{text}</span>}
             </li>;
           })}</ol>}
@@ -296,10 +290,9 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
 
 function SummaryEvent({ event }: { event: JobEvent }) {
   const declarations = useSourceDeclarations();
-  const subscriptionType = event.sourceType ?? declarations.list.find((declaration) => declaration.subscription)?.id;
   return <li className="summary-row" data-testid="summary-event" data-event-type={event.eventType} data-severity={event.severity}><Icon name="activity" size={16} />
     <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(declarations, event)}</a>
-      : event.subscriptionId && subscriptionType ? <a href={sourcePath(subscriptionType, event.subscriptionId)}>{eventText(declarations, event)}</a>
+      : event.subscriptionId && event.sourceType ? <a href={sourcePath(event.sourceType, event.subscriptionId)}>{eventText(declarations, event)}</a>
         : eventText(declarations, event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
 }
 
@@ -320,8 +313,7 @@ function summaryCheckTitle(declarations: SourceDeclarations, entry: Extract<Acti
 
 function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string; returnTo: string | null; state: ActivityViewState; onState: (next: ActivityViewState) => void }) {
   const declarations = useSourceDeclarations();
-  const severity = activityQuery(state, new Date()).severity;
-  const { page, error, loading, older } = useActivityGroupPages(groupId, severity);
+  const { page, error, loading, older } = useActivityGroupPages(groupId, state.minLevel);
   const back = () => {
     if (returnTo && sourceRouteForPath(returnTo)) { location.href = returnTo; return; }
     onState({ ...state, group: null, returnTo: null });
@@ -336,7 +328,7 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
         <span>{page.group.sourceTitle ? `${page.group.sourceTitle} · ` : ''}{summaryRange(page.group.firstFinishedAt, page.group.lastFinishedAt)} · 完整事件</span></section>
       <section className="activity-card"><div className="log-toolbar"><h2>每次收集</h2><span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">最低等級</span><select value={state.minLevel}
-          onChange={(event) => onState({ ...state, minLevel: event.target.value as ActivityViewState['minLevel'] })}
+          onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) onState({ ...state, minLevel: value }); }}
           onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
           onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
           onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="group-level">
@@ -374,16 +366,12 @@ function checkResultTitle(declarations: SourceDeclarations, check: ActivityGroup
   return parts.length ? `完成收集：${parts.join('・')}` : '完成收集';
 }
 
-/** A check group's detail pages for the screen, read again when the group or the levels change. */
-function useActivityGroupPages(groupId: string, severity: ActivityQuery['severity']): GroupPagesState & { older: () => Promise<void> } {
+function useActivityGroupPages(groupId: string, minLevel: ActivityMinLevel): GroupPagesState & { older: () => Promise<void> } {
   const [state, setState] = useState<GroupPagesState>({ page: null, error: null, loading: false });
-  const pages = useRef<ActivityGroupPages | null>(null);
-  pages.current ??= new ActivityGroupPages((id, query) => api.activityGroup(id, query), setState);
-  const severityKey = severity?.join(',') ?? '';
+  const [pages] = useState(() => new ActivityGroupPages((id, query) => api.activityGroup(id, query), setState));
   useEffect(() => {
-    void pages.current!.show(groupId, severity);
-    return () => pages.current!.close();
-    // The levels are compared by value; a new array of the same levels keeps the loaded checks.
-  }, [groupId, severityKey]);
-  return { ...state, older: () => pages.current!.older() };
+    void pages.show(groupId, [...severityAtLeast(minLevel)]);
+    return () => pages.close();
+  }, [groupId, minLevel]);
+  return { ...state, older: () => pages.older() };
 }

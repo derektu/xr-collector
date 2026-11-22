@@ -8,7 +8,6 @@ const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
   starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用',
 };
 
-/** Settings section that shows whether the search index matches the Vault and lets the user rebuild it. */
 export function SearchIndexCard() {
   const read = useLiveRead(['search'], (signal) => api.getSearchStatus(signal), []);
   const [rebuilding, setRebuilding] = useState(false);

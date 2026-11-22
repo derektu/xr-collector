@@ -6,7 +6,8 @@ import type {
   SubscriptionSettings,
 } from '../../shared/subscriptions/subscription-types.js';
 import type { SourceTypeInfo } from '../../shared/sources/source-info-types.js';
-import { ApiError, api } from './api-client.js';
+import { api } from './api-client.js';
+import { ApiError } from './api-error.js';
 import { useLiveRead } from './use-changes.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { ConfirmApplySettings } from './ConfirmApplySettings.js';

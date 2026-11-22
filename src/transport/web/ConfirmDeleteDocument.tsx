@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DocumentMetadata } from '../../shared/documents/document-types.js';
-import { api, ApiError } from './api-client.js';
+import { api } from './api-client.js';
+import { ApiError } from './api-error.js';
 
-/** Confirms deleting a document; the subscription it came from stays. */
 export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
   document: Pick<DocumentMetadata, 'id' | 'title'>;
   onCancel: () => void;
@@ -24,7 +24,6 @@ export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
       await api.deleteDocument(document.id);
       onDeleted(`已刪除「${document.title}」。`);
     } catch (error) {
-      // Deleted elsewhere meanwhile, such as by an Agent or another window: the outcome is the same.
       if (error instanceof ApiError && error.code === 'document_deleted') {
         onDeleted(`已刪除「${document.title}」。`);
         return;
