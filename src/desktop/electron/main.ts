@@ -286,7 +286,6 @@ app.on('before-quit', (event) => {
   if (action.kind === 'quit') return;
   event.preventDefault();
   if (action.kind === 'wait-for-update') return;
-  shutdownOwner = 'person';
   isQuitting = true;
   stopSleepWatch?.();
   stopSleepWatch = null;

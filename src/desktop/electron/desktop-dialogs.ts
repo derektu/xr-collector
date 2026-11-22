@@ -18,7 +18,7 @@ export interface DesktopDialogOptions {
 
 export function registerDesktopDialogs(options: DesktopDialogOptions): void {
   const { ipc, dialog } = options;
-  // Electron shows `message` only on macOS, above the panel's controls; the macOS open panel does not display `title`.
+  // Electron shows `message` only on macOS, above the dialog's input boxes.
   // https://github.com/electron/electron/blob/v44.10.0/docs/api/dialog.md
   const chooseFolder = async (event: IpcMainInvokeEvent, start: unknown, text: { title: string; buttonLabel: string; message: string },
     properties: NonNullable<OpenDialogOptions['properties']>): Promise<string | null> => {
