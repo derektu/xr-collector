@@ -4,7 +4,6 @@ import { api } from './api-client.js';
 import './build-info.css';
 import { SoftwareUpdate } from './SoftwareUpdate.js';
 
-/** Build identity comes from the same device API used by an authorized Agent. */
 export function BuildInfoCard({ compact = false, update = null, onUpdate }: { compact?: boolean; update?: DeviceUpdateStatus | null; onUpdate?: (status: DeviceUpdateStatus) => void }) {
   const [info, setInfo] = useState<BuildInfo | null>(null);
   const [failed, setFailed] = useState(false);

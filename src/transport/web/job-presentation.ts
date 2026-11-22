@@ -16,11 +16,15 @@ function targetOf(declarations: SourceDeclarations, job: Pick<JobView, 'source'>
   return declarationOf(declarations, job)?.subscription?.targetNoun ?? '';
 }
 
-export type JobKindView = { kind: 'item' } | { kind: 'check'; trigger: ChannelJobTrigger | null } | { kind: 'subscribe' };
+export type JobKindView =
+  | { kind: 'item' }
+  | { kind: 'check'; trigger: ChannelJobTrigger | null }
+  | { kind: 'subscribe' }
+  | { kind: 'unregistered' };
 
 export function jobKind(declarations: SourceDeclarations, job: JobView): JobKindView {
   const view = roleView(declarations, job);
-  if (view === null) return { kind: 'subscribe' };
+  if (view === null) return { kind: 'unregistered' };
   switch (view.role) {
     case 'item': return { kind: 'item' };
     case 'check': return { kind: 'check', trigger: view.trigger };
@@ -35,6 +39,7 @@ export function jobKindLabel(declarations: SourceDeclarations, job: JobView): st
     case 'item': return nounOf(declarations, job);
     case 'check': return triggerLabel(declarations, kind.trigger, job.source.type);
     case 'subscribe': return `訂閱${targetOf(declarations, job)}`;
+    case 'unregistered': return job.kind;
   }
 }
 

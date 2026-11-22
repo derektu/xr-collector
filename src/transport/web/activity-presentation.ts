@@ -1,31 +1,29 @@
 import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
-import type { ActivityLogHealth, ActivityQuery, JobEvent } from '../../shared/activity/activity-types.js';
+import type { ActivityLogHealth, ActivityQuery, EventSeverity, JobEvent } from '../../shared/activity/activity-types.js';
 import type { JobError, JobPhase, JobState, JobView } from '../../shared/jobs/job-types.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
+import { isOneOf } from './one-of.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 
 export type ActivityRecordType = 'all' | 'documents';
 export type ActivityMinLevel = 'debug' | 'info' | 'warning' | 'error';
 export type ActivityRange = 'today' | '7d' | '30d';
 
-/** The log filters the activity page keeps in its address, so a link can open it filtered. */
 export interface ActivityViewState {
   mode: 'summary' | 'raw';
   recordType: ActivityRecordType;
   minLevel: ActivityMinLevel;
-  /** Subscription (channel ID) whose activity is shown; null for every source. */
-  source: string | null;
+  subscriptionId: string | null;
   range: ActivityRange;
-  /** Job whose events are shown, with the videos it queued; null for every job. */
-  job: string | null;
+  jobId: string | null;
   group: string | null;
   returnTo: string | null;
 }
 
-const RECORD_TYPES: readonly ActivityRecordType[] = ['all', 'documents'];
-const MIN_LEVELS: readonly ActivityMinLevel[] = ['debug', 'info', 'warning', 'error'];
-const RANGES: readonly ActivityRange[] = ['today', '7d', '30d'];
+export const RECORD_TYPES: readonly ActivityRecordType[] = ['all', 'documents'];
+export const MIN_LEVELS: readonly ActivityMinLevel[] = ['debug', 'info', 'warning', 'error'];
+export const RANGES: readonly ActivityRange[] = ['today', '7d', '30d'];
 
 export const RECORD_TYPE_OPTIONS: Array<{ value: ActivityRecordType; label: string }> = [
   { value: 'all', label: '全部' }, { value: 'documents', label: '新增文件' },
@@ -40,16 +38,16 @@ export const RANGE_OPTIONS: Array<{ value: ActivityRange; label: string }> = [
 
 export function parseActivityState(search: string): ActivityViewState {
   const parameters = new URLSearchParams(search);
-  const recordType = parameters.get('type') as ActivityRecordType | null;
-  const minLevel = parameters.get('minLevel') as ActivityMinLevel | null;
-  const range = parameters.get('range') as ActivityRange | null;
+  const recordType = parameters.get('type');
+  const minLevel = parameters.get('minLevel');
+  const range = parameters.get('range');
   return {
     mode: parameters.get('mode') === 'raw' ? 'raw' : 'summary',
-    recordType: recordType && RECORD_TYPES.includes(recordType) ? recordType : 'all',
-    minLevel: minLevel && MIN_LEVELS.includes(minLevel) ? minLevel : 'info',
-    source: parameters.get('source') || null,
-    range: range && RANGES.includes(range) ? range : '30d',
-    job: parameters.get('job') || null,
+    recordType: isOneOf(RECORD_TYPES, recordType) ? recordType : 'all',
+    minLevel: isOneOf(MIN_LEVELS, minLevel) ? minLevel : 'info',
+    subscriptionId: parameters.get('source') || null,
+    range: isOneOf(RANGES, range) ? range : '30d',
+    jobId: parameters.get('job') || null,
     group: parameters.get('group') || null,
     returnTo: parameters.get('return') || null,
   };
@@ -60,36 +58,38 @@ export function activityStateSearch(state: ActivityViewState): string {
   if (state.mode === 'raw') parameters.set('mode', 'raw');
   if (state.recordType !== 'all') parameters.set('type', state.recordType);
   if (state.minLevel !== 'info') parameters.set('minLevel', state.minLevel);
-  if (state.source) parameters.set('source', state.source);
+  if (state.subscriptionId) parameters.set('source', state.subscriptionId);
   if (state.range !== '30d') parameters.set('range', state.range);
-  if (state.job) parameters.set('job', state.job);
+  if (state.jobId) parameters.set('job', state.jobId);
   if (state.group) parameters.set('group', state.group);
   if (state.returnTo) parameters.set('return', state.returnTo);
   const search = parameters.toString();
   return search ? `?${search}` : '';
 }
 
-/** Midnight of the local day `daysBack` days before `now`; the log stores UTC, the page counts local days. */
 export function localDayStart(now: Date, daysBack = 0): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack);
 }
 
-/** The events the "新增文件" record type lists. */
 const DOCUMENT_EVENTS: readonly EventType[] = ['document.saved'];
 
-/** The activity query for the page's record type and inclusive minimum severity. */
+const SEVERITY_AT_LEAST: Record<ActivityMinLevel, readonly EventSeverity[]> = {
+  debug: ['debug', 'info', 'warning', 'error'],
+  info: ['info', 'warning', 'error'],
+  warning: ['warning', 'error'],
+  error: ['error'],
+};
+
+export function severityAtLeast(minLevel: ActivityMinLevel): readonly EventSeverity[] {
+  return SEVERITY_AT_LEAST[minLevel];
+}
+
 export function activityQuery(state: ActivityViewState, now: Date): ActivityQuery {
   const query: ActivityQuery = {};
-  const severity = {
-    debug: ['debug', 'info', 'warning', 'error'],
-    info: ['info', 'warning', 'error'],
-    warning: ['warning', 'error'],
-    error: ['error'],
-  } as const;
-  query.severity = [...severity[state.minLevel]];
+  query.severity = [...severityAtLeast(state.minLevel)];
   if (state.recordType === 'documents') query.eventType = [...DOCUMENT_EVENTS];
-  if (state.source) query.subscriptionId = state.source;
-  if (state.job) query.jobId = state.job;
+  if (state.subscriptionId) query.subscriptionId = state.subscriptionId;
+  if (state.jobId) query.jobId = state.jobId;
   if (state.range === 'today') query.since = localDayStart(now).toISOString();
   if (state.range === '7d') query.since = localDayStart(now, 6).toISOString();
   return query;
@@ -97,7 +97,6 @@ export function activityQuery(state: ActivityViewState, now: Date): ActivityQuer
 
 export type EventLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
-/** The log's level label from the severity persisted with the event. */
 export function eventLevel(event: Pick<JobEvent, 'severity'>): EventLevel {
   if (event.severity === 'error') return 'ERROR';
   if (event.severity === 'warning') return 'WARN';
@@ -105,23 +104,13 @@ export function eventLevel(event: Pick<JobEvent, 'severity'>): EventLevel {
   return 'INFO';
 }
 
-/**
- * What a log line says. `source` is the source's title that leads the line; an event whose message
- * names its source itself (`namesSource`) keeps its own wording and has none. `adding` marks a
- * subscription request. `collected` is a completion that collected: an item stored new, or a check
- * that was not skipped and recorded its counts. Any other completion keeps its message.
- */
 export type EventLine =
-  | { line: 'accepted' | 'started'; source: string | null; adding: boolean }
+  | { line: 'accepted' | 'started'; source: string | null; subscriptionRequest: boolean }
   | { line: 'document_saved' | 'subscribed'; source: string | null }
   | { line: 'subscription_added'; source: string | null }
   | { line: 'collected'; source: string | null; collected: Collected }
   | { line: 'failed' | 'completed' | 'message'; source: string | null; message: string };
 
-/**
- * What a collection produced: an item stored (`indexed` false when search was not updated), a check
- * that found nothing new, or a check's counts of items.
- */
 export type Collected =
   | { result: 'stored'; indexed: boolean }
   | { result: 'nothing_new' }
@@ -139,15 +128,15 @@ function collected(event: LineEvent): Collected | null {
 
 export function eventLine(event: LineEvent): EventLine {
   const source = event.sourceTitle || null;
-  const adding = event.jobRole === 'add';
+  const subscriptionRequest = event.jobRole === 'add';
   switch (event.eventType) {
-    case 'job.accepted': return { line: 'accepted', source, adding };
-    case 'job.started': return { line: 'started', source, adding };
+    case 'job.accepted': return { line: 'accepted', source, subscriptionRequest };
+    case 'job.started': return { line: 'started', source, subscriptionRequest };
     case 'document.saved': return { line: 'document_saved', source };
     case 'subscription.added': return { line: 'subscription_added', source };
     case 'job.failed': return { line: 'failed', source, message: event.message };
     case 'job.completed': {
-      if (adding) return { line: 'subscribed', source };
+      if (subscriptionRequest) return { line: 'subscribed', source };
       const result = collected(event);
       return result ? { line: 'collected', source, collected: result } : { line: 'completed', source, message: event.message };
     }
@@ -167,16 +156,12 @@ function collectedText(declarations: SourceDeclarations, sourceType: string | un
   return parts.length ? `：${parts.join('・')}。` : '。';
 }
 
-/**
- * The log line: the source's title, the reason a channel job started it, then the message. A message
- * that already names the source, such as a subscription change, keeps its own wording.
- */
 export function eventText(declarations: SourceDeclarations, event: LineEvent & Pick<JobEvent, 'sourceType'>): string {
   const line = eventLine(event);
   const prefix = line.source ? `${line.source}：` : '';
   switch (line.line) {
-    case 'accepted': return line.adding ? `${prefix}訂閱請求已排入佇列。` : `${prefix}加入收集佇列。`;
-    case 'started': return line.adding ? `${prefix}開始新增訂閱。` : `${prefix}開始收集。`;
+    case 'accepted': return line.subscriptionRequest ? `${prefix}訂閱請求已排入佇列。` : `${prefix}加入收集佇列。`;
+    case 'started': return line.subscriptionRequest ? `${prefix}開始新增訂閱。` : `${prefix}開始收集。`;
     case 'document_saved': return `${prefix}已新增文件。`;
     case 'subscription_added': return `新增訂閱${line.source ? `：${line.source}` : ''}。`;
     case 'failed': return `${prefix}發生錯誤：${line.message}`;
@@ -191,19 +176,16 @@ function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-/** Local time of a log entry: "10-15 14:02:11". */
 export function logTime(value: string): string {
   const date = new Date(value);
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-/** A check run's inclusive completed-at range, retaining both dates across midnight. */
 export function summaryRange(first: string, last: string): string {
   if (first === last) return logTime(last);
   return `${logTime(first)}–${logTime(last)}`;
 }
 
-/** Why the log may miss events: writes fail with events waiting (`dropped` null while none were lost), or some were lost earlier. */
 export type LogProblem = { state: 'failing'; pending: number; dropped: number | null } | { state: 'lost'; dropped: number };
 
 export function logProblem(health: ActivityLogHealth | null): LogProblem | null {
@@ -213,7 +195,6 @@ export function logProblem(health: ActivityLogHealth | null): LogProblem | null 
   return null;
 }
 
-/** The warning above the log while events cannot be written, or after some were lost. */
 export function logWarning(health: ActivityLogHealth | null): string | null {
   const problem = logProblem(health);
   if (!problem) return null;
@@ -223,12 +204,10 @@ export function logWarning(health: ActivityLogHealth | null): string | null {
   return `有 ${problem.dropped} 筆記錄未能寫入而遺失。`;
 }
 
-/** Short kind label of a job row, e.g. "定時檢查" or "單篇". */
 export function jobBadge(declarations: SourceDeclarations, job: JobView): string {
   return jobKind(declarations, job).kind === 'item' ? '單篇' : jobKindLabel(declarations, job);
 }
 
-/** A job's diagnostics as data: its record, what is known of failures, retries and restarts, and its events oldest first. */
 export interface Diagnostics {
   id: string;
   kind: string;
@@ -272,7 +251,6 @@ export function diagnostics(job: JobView, events: JobEvent[]): Diagnostics {
   };
 }
 
-/** Plain-text diagnostics of a job for a bug report; event text is already masked by the service. */
 export function diagnosticsText(declarations: SourceDeclarations, job: JobView, events: JobEvent[]): string {
   const data = diagnostics(job, events);
   const lines = [
@@ -299,7 +277,6 @@ export function diagnosticsText(declarations: SourceDeclarations, job: JobView, 
   return lines.join('\n');
 }
 
-/** Merges a fresh first page into the loaded log: new entries first, each entry once. */
 export function mergeNewest(loaded: JobEvent[], fresh: JobEvent[]): JobEvent[] {
   const seen = new Set(fresh.map((event) => event.eventId));
   return [...fresh, ...loaded.filter((event) => !seen.has(event.eventId))];

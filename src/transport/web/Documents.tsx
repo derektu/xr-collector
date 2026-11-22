@@ -4,7 +4,8 @@ import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import type { DocumentMetadata, DocumentSources, DocumentStatus, DocumentStatusCounts } from '../../shared/documents/document-types.js';
 import { trimSearchQueryWhitespace } from '../../shared/api/search-query.js';
-import { ApiError, api } from './api-client.js';
+import { api } from './api-client.js';
+import { ApiError } from './api-error.js';
 import { OFFLINE_UNAVAILABLE, radioIndexForKey } from './app-shell.js';
 import {
   DOCUMENTS_PAGE_SIZE,
@@ -14,16 +15,19 @@ import {
   draftForQuery,
   pageWithRows,
   pageItems,
+  parseSourceParam,
   publishedLabel,
   readerPath,
   snippetParts,
   sourceFilter,
   sourceOptions,
+  sourceParam,
   sourceTag,
   statusFilterCount,
   totalPages,
   type DocumentListState,
 } from './document-presentation.js';
+import { isAppHistoryState, type AppHistoryState } from './history-navigation.js';
 import { createLatestRequest } from './latest-request.js';
 import { useChanges } from './use-changes.js';
 import { useFloatingMenu } from './floating-menu.js';
@@ -43,23 +47,24 @@ interface Results {
   statusCounts: DocumentStatusCounts;
 }
 
-/** History state the list entry keeps so returning from the Reader can restore the scroll position. */
-interface ListHistoryState {
+interface ListHistoryState extends AppHistoryState {
   documentsScroll?: number;
+}
+
+function isListHistoryState(value: unknown): value is ListHistoryState {
+  if (!isAppHistoryState(value)) return false;
+  const scroll = 'documentsScroll' in value ? value.documentsScroll : undefined;
+  return scroll === undefined || typeof scroll === 'number';
 }
 
 export function Documents({ state, offline, scroller, onState, onOpen, onNavigate, onAdd, onNotice }: {
   state: DocumentListState;
-  /** The device has no network, so adding is unavailable. */
   offline: boolean;
-  /** The scrolling element whose position is saved before opening the Reader. */
   scroller: () => HTMLElement | null;
   onState: (state: DocumentListState) => void;
   onOpen: (id: string) => void;
   onNavigate: (page: 'settings') => void;
-  /** Opens the add dialog the menu item names. */
   onAdd: (mode: AddMode) => void;
-  /** Reports the result of a row action. */
   onNotice: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const declarations = useSourceDeclarations();
@@ -69,12 +74,12 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   const [searchProblem, setSearchProblem] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  /** Bumped after a row action, so the sources and the current page load again. */
   const [edits, setEdits] = useState(0);
   const requests = useMemo(createLatestRequest, []);
   const sourceChanges = useChanges(['documents']);
   const listChanges = useChanges(['documents', 'search']);
-  const restoreScroll = useRef<number | null>((window.history.state as ListHistoryState | null)?.documentsScroll ?? null);
+  const sourceKey = sourceParam(state.source);
+  const restoreScroll = useRef<number | null>(isListHistoryState(window.history.state) ? window.history.state.documentsScroll ?? null : null);
 
   useEffect(() => { setDraft((current) => draftForQuery(current, state.query)); }, [state.query]);
 
@@ -87,17 +92,15 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
     return () => controller.abort();
   }, [sourceChanges.tick, edits]);
 
-  // Typing updates the URL after a pause; the URL is what drives loading.
   useEffect(() => {
     const query = trimSearchQueryWhitespace(draft);
     if (query === state.query) return undefined;
-    const timer = setTimeout(() => onState({ query, source: state.source, status: state.status, page: 1 }), SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => onState({ query, source: parseSourceParam(sourceKey), status: state.status, page: 1 }), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft, state.query, state.source, state.status, onState]);
+  }, [draft, state.query, sourceKey, state.status, onState]);
 
   useEffect(() => {
-    let active = true;
-    const filter = { ...sourceFilter(state.source), ...(state.status ? { status: state.status } : {}) };
+    const filter = { ...sourceFilter(parseSourceParam(sourceKey)), ...(state.status ? { status: state.status } : {}) };
     const offset = (state.page - 1) * DOCUMENTS_PAGE_SIZE;
     const browse = (signal: AbortSignal) => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
       .then((page): Results => ({
@@ -115,14 +118,13 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
           problem: null,
         };
       } catch (error) {
-        // Browsing and reading do not depend on the search engine, so fall back to the Vault list.
         if (error instanceof ApiError && error.code === 'search_unavailable') {
           return { results: await browse(signal), problem: error.message };
         }
         throw error;
       }
     }).then((outcome) => {
-      if (!active || !outcome.current) return;
+      if (!outcome.current) return;
       const { rows, total } = outcome.value.results;
       const page = pageWithRows(state.page, rows.length, total);
       if (page !== state.page) { onState({ ...state, page }); return; }
@@ -131,13 +133,12 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       setLoadError(null);
       setLoading(false);
     }).catch((error: unknown) => {
-      if (!active || (error instanceof DOMException && error.name === 'AbortError')) return;
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       setLoadError(error instanceof Error ? error.message : '無法讀取文件。');
       setLoading(false);
       throw error;
     }));
-    return () => { active = false; };
-  }, [state.query, state.source, state.status, state.page, requests, listChanges.tick, edits]);
+  }, [state.query, sourceKey, state.status, state.page, requests, listChanges.tick, edits]);
 
   useEffect(() => () => requests.cancel(), [requests]);
 
@@ -152,7 +153,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
     const scrollTop = scroller()?.scrollTop ?? 0;
-    const current = (window.history.state ?? {}) as ListHistoryState;
+    const current: ListHistoryState = isListHistoryState(window.history.state) ? window.history.state : {};
     window.history.replaceState({ ...current, documentsScroll: scrollTop } satisfies ListHistoryState, '');
     onOpen(id);
   }
@@ -200,7 +201,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       <label className="source-select">
         <span className="visually-hidden">篩選文件</span>
         <Icon name="sources" size={15} />
-        <select value={state.source} onChange={(event) => onState({ ...state, source: event.target.value, page: 1 })}
+        <select value={sourceKey} onChange={(event) => onState({ ...state, source: parseSourceParam(event.target.value), page: 1 })}
           onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
           onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
           onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="documents-source">
@@ -258,7 +259,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
 
     {results && results.total > DOCUMENTS_PAGE_SIZE ? <nav className="pagination" aria-label="分頁" data-testid="documents-pagination">
       <button type="button" disabled={state.page <= 1} onClick={() => onState({ ...state, page: state.page - 1 })}>上一頁</button>
-      {pageItems(state.page, pages).map((page, index) => page === null
+      {pageItems(state.page, pages).map((page, index) => page === 'gap'
         ? <span key={`gap-${index}`} className="page-gap">…</span>
         : <button key={page} type="button" className={page === state.page ? 'page-number current' : 'page-number'} aria-current={page === state.page ? 'page' : undefined} onClick={() => onState({ ...state, page })}>{page}</button>)}
       <button type="button" disabled={state.page >= pages} onClick={() => onState({ ...state, page: state.page + 1 })}>下一頁</button>
@@ -266,7 +267,6 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   </>;
 }
 
-/** The status filter of the list: every document, drafts or published ones, each with its count. */
 function StatusFilter({ status, counts, onChange }: {
   status: DocumentStatus | null;
   counts: DocumentStatusCounts;
@@ -274,7 +274,6 @@ function StatusFilter({ status, counts, onChange }: {
 }) {
   const options = useRef<Array<HTMLButtonElement | null>>([]);
   const current = STATUS_FILTERS.findIndex((filter) => filter.status === status);
-  // A radio group: one Tab stop on the chosen option, arrow keys and Home/End choose another.
   return <div className="segmented" role="radiogroup" aria-label="文件狀態" data-testid="documents-status" onKeyDown={(event) => {
     const next = radioIndexForKey(event.key, current, STATUS_FILTERS.length);
     if (next === null) return;
@@ -290,7 +289,6 @@ function StatusFilter({ status, counts, onChange }: {
   </div>;
 }
 
-/** The more-actions menu of one list row. */
 function DocumentActions({ document: item, onDeleted, onStatusChanged, onFailed }: {
   document: DocumentMetadata;
   onDeleted: (message: string) => void;

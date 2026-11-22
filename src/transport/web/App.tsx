@@ -16,7 +16,7 @@ import {
 import { Documents } from './Documents.js';
 import { handleDesktopNavigation } from './desktop-navigation.js';
 import { backTarget, openedFromSource, readAppHistoryState, type AppHistoryState } from './history-navigation.js';
-import { listStateSearch, parseListState, readerIdForPath, readerPath, type DocumentListState } from './document-presentation.js';
+import { listStateSearch, parseListState, readerIdForPath, readerPath, sameSource, type DocumentListState } from './document-presentation.js';
 import { Icon } from './icons.js';
 import { Reader } from './Reader.js';
 import { Settings } from './Settings.js';
@@ -185,7 +185,7 @@ export default function App() {
     const search = listStateSearch(next);
     window.history.replaceState(window.history.state, '', `/documents${search}`);
     setLocation({ pathname: '/documents', search });
-    if (next.page !== current.page || next.source !== current.source || next.query !== current.query) content.current?.scrollTo({ top: 0 });
+    if (next.page !== current.page || !sameSource(next.source, current.source) || next.query !== current.query) content.current?.scrollTo({ top: 0 });
   }, []);
   const sourceListState = parseSourceListState(location.search);
   const onSourceListState = useCallback((next: SourceListState) => {

@@ -11,10 +11,6 @@ import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };
 
-/**
- * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
- * settings belong to each source.
- */
 export function Settings({ vaultPath, themePreference, update, onUpdate, onThemePreference, onNotice }: {
   vaultPath: string | null;
   themePreference: ThemePreference;
@@ -36,7 +32,6 @@ export function Settings({ vaultPath, themePreference, update, onUpdate, onTheme
       <AgentConnection />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>
-        {/* A radio group: one Tab stop on the chosen option, arrow keys and Home/End choose another. */}
         <div className="segmented" role="radiogroup" aria-label="主題" onKeyDown={(event) => {
           const next = radioIndexForKey(event.key, themePreferences.indexOf(themePreference), themePreferences.length);
           if (next === null) return;

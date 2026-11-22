@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { SavedDocument } from '../../shared/documents/document-types.js';
-import { ApiError, api } from './api-client.js';
+import { api } from './api-client.js';
+import { ApiError } from './api-error.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
 import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } from './document-presentation.js';
 import { Icon } from './icons.js';
@@ -17,20 +18,15 @@ type ReaderState =
   | { kind: 'deleted' }
   | { kind: 'error'; message: string };
 
-/** How collecting a deleted document again is going. */
 type Recollect = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string };
 
-/** How changing the document's status is going. */
 type StatusChange = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string };
 
-/** Full-width reading view for one document; the shell collapses its sidebar while this is open. */
-/** `backLabel` names the page the Back control returns to. */
 export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   id: string;
   backLabel: string;
   onBack: () => void;
   onOpenSource: (type: string, id: string) => void;
-  /** Called after the document is deleted; the Reader has nothing left to show. */
   onDeleted: (message: string) => void;
 }) {
   const declarations = useSourceDeclarations();
@@ -41,7 +37,6 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   const [statusChange, setStatusChange] = useState<StatusChange>({ kind: 'idle' });
   const subscriptionChanges = useChanges(['documents'], (change) => change.kind === 'subscription');
   const documentChanges = useChanges(['documents'], (change) => change.kind === 'document' && change.id === id);
-  const shownId = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -50,11 +45,8 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     return () => controller.abort();
   }, [subscriptionChanges.tick]);
 
-  // A change to the document reads it again in place; another document starts from the loading state.
   useEffect(() => {
     const controller = new AbortController();
-    if (shownId.current !== id) { setState({ kind: 'loading' }); setStatusChange({ kind: 'idle' }); }
-    shownId.current = id;
     documentChanges.track(api.readDocument(id, controller.signal).then((document) => setState({ kind: 'ready', document })).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       if (error instanceof ApiError && error.code === 'document_not_found') setState({ kind: 'missing' });
@@ -64,7 +56,6 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     return () => controller.abort();
   }, [id, documentChanges.tick]);
 
-  // An explicit single-address collection, the one way a deleted document comes back.
   useEffect(() => {
     if (recollect.kind !== 'running') return undefined;
     let active = true;
@@ -73,14 +64,13 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     const type = id.slice(0, Math.max(0, id.indexOf(':')));
     const item = declarations.get(type)?.item;
     const finish = (next: Recollect) => { if (active) setRecollect(next); };
-    // The collected document's own change reads it again; this only reports how the job ended.
-    const follow = (jobId: string) => readUntil(changeHub, () => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
+    const awaitRecollectOutcome = (jobId: string) => readUntil(changeHub, () => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
       (change) => change.kind === 'job' && change.id === jobId, following.signal).then((job) => {
       if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' });
       else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });
     });
     if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' });
-    else api.collect(url).then((submission) => follow(submission.job.id))
+    else api.collect(url).then((submission) => awaitRecollectOutcome(submission.job.id))
       .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }));
     return () => { active = false; following.abort(); };
   }, [recollect.kind, id]);
@@ -88,7 +78,6 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   function changeStatus(document: SavedDocument): void {
     setStatusChange({ kind: 'running' });
     api.setDocumentStatus(document.id, document.status === 'draft' ? 'published' : 'draft').then((changed) => {
-      if (shownId.current !== changed.id) return;
       setState({ kind: 'ready', document: changed });
       setStatusChange({ kind: 'idle' });
     }, (error: unknown) => {

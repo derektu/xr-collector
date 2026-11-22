@@ -31,7 +31,7 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 }
 
 describe('activity presentation', () => {
-  it('derives level labels from severity, type and outcome', () => {
+  it('labels each event by its severity alone', () => {
     expect(eventLevel({ severity: 'debug' })).toBe('DEBUG');
     expect(eventLevel({ severity: 'info' })).toBe('INFO');
     expect(eventLevel({ severity: 'warning' })).toBe('WARN');
@@ -40,10 +40,10 @@ describe('activity presentation', () => {
 
   it('leads a line with its source and tells subscription requests from collection', () => {
     const source = '3Blue1Brown';
-    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'accepted', source, adding: false });
-    expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'started', source, adding: false });
-    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'accepted', source, adding: true });
-    expect(eventLine({ ...base, eventType: 'job.started', jobRole: 'add' })).toEqual({ line: 'started', source: null, adding: true });
+    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'accepted', source, subscriptionRequest: false });
+    expect(eventLine({ ...base, eventType: 'job.started', sourceTitle: source, jobRole: 'check' })).toEqual({ line: 'started', source, subscriptionRequest: false });
+    expect(eventLine({ ...base, eventType: 'job.accepted', sourceTitle: source, jobRole: 'add' })).toEqual({ line: 'accepted', source, subscriptionRequest: true });
+    expect(eventLine({ ...base, eventType: 'job.started', jobRole: 'add' })).toEqual({ line: 'started', source: null, subscriptionRequest: true });
     expect(eventLine({ ...base, eventType: 'document.saved', sourceTitle: source })).toEqual({ line: 'document_saved', source });
     expect(eventLine({ ...base, eventType: 'subscription.added', sourceTitle: source })).toEqual({ line: 'subscription_added', source });
     expect(eventLine({ ...base, eventType: 'job.failed', sourceTitle: source })).toEqual({ line: 'failed', source, message: base.message });
@@ -83,17 +83,17 @@ describe('activity presentation', () => {
     expect(eventLine({ ...base, eventType: 'job.retry_scheduled', sourceTitle: source, message: naming })).toEqual({ line: 'message', source, message: naming });
   });
 
-  it('keeps filters in the address and turns them into a query with local day bounds', () => {
+  it('keeps filters in the address so a link opens the log filtered, and turns them into a query with local day bounds', () => {
     const state = parseActivityState('?mode=raw&type=documents&minLevel=warning&source=UC1&range=today&job=job-9&group=g1&return=%2Factivity');
-    expect(state).toEqual({ mode: 'raw', recordType: 'documents', minLevel: 'warning', source: 'UC1', range: 'today', job: 'job-9', group: 'g1', returnTo: '/activity' });
+    expect(state).toEqual({ mode: 'raw', recordType: 'documents', minLevel: 'warning', subscriptionId: 'UC1', range: 'today', jobId: 'job-9', group: 'g1', returnTo: '/activity' });
     expect(activityStateSearch(state)).toBe('?mode=raw&type=documents&minLevel=warning&source=UC1&range=today&job=job-9&group=g1&return=%2Factivity');
-    expect(parseActivityState('?type=bogus&minLevel=fatal&range=year')).toEqual({ mode: 'summary', recordType: 'all', minLevel: 'info', source: null, range: '30d', job: null, group: null, returnTo: null });
+    expect(parseActivityState('?type=bogus&minLevel=fatal&range=year')).toEqual({ mode: 'summary', recordType: 'all', minLevel: 'info', subscriptionId: null, range: '30d', jobId: null, group: null, returnTo: null });
     expect(activityStateSearch(parseActivityState(''))).toBe('');
 
     const now = new Date(2026, 9, 15, 0, 30);
     expect(activityQuery(state, now)).toEqual({ severity: ['warning', 'error'], eventType: ['document.saved'], subscriptionId: 'UC1', jobId: 'job-9', since: new Date(2026, 9, 15).toISOString() });
-    expect(activityQuery({ mode: 'summary', recordType: 'documents', minLevel: 'error', source: null, range: '7d', job: null, group: null, returnTo: null }, now)).toEqual({ severity: ['error'], eventType: ['document.saved'], since: new Date(2026, 9, 9).toISOString() });
-    expect(activityQuery({ mode: 'summary', recordType: 'all', minLevel: 'debug', source: null, range: '30d', job: null, group: null, returnTo: null }, now)).toEqual({ severity: ['debug', 'info', 'warning', 'error'] });
+    expect(activityQuery({ mode: 'summary', recordType: 'documents', minLevel: 'error', subscriptionId: null, range: '7d', jobId: null, group: null, returnTo: null }, now)).toEqual({ severity: ['error'], eventType: ['document.saved'], since: new Date(2026, 9, 9).toISOString() });
+    expect(activityQuery({ mode: 'summary', recordType: 'all', minLevel: 'debug', subscriptionId: null, range: '30d', jobId: null, group: null, returnTo: null }, now)).toEqual({ severity: ['debug', 'info', 'warning', 'error'] });
     expect(localDayStart(now).getHours()).toBe(0);
     expect(localDayStart(now).getDate()).toBe(15);
   });

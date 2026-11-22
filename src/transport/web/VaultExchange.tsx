@@ -1,22 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { ImportMode, ImportPreview, TransferResult, TransferStatus } from '../../shared/vault/vault-types.js';
-import { api, ApiError } from './api-client.js';
+import type { ExportSuggestion, ImportMode, ImportPreview, TransferResult, TransferStatus } from '../../shared/vault/vault-types.js';
+import { api } from './api-client.js';
+import { ApiError } from './api-error.js';
 import { readUntil } from './read-until.js';
 import { changeHub, useLiveRead } from './use-changes.js';
 import {
-  changeText, hasChanges, localNewerText, progressText, removalText, revealLabel, sourceText, transferRunning,
+  changeText, hasChanges, importApplyOutcome, localNewerText, progressText, removalText, revealLabel, sourceText, transferRunning,
+  type ImportApplyOutcome,
 } from './transfer-presentation.js';
 
 export const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
 
 type Open = { kind: 'export'; file?: { path: string; overwrite: boolean } } | { kind: 'import'; file?: string };
 
-/**
- * Export and import of the active Vault, in the Vault section of Settings. An export file carries
- * the Vault to another machine and back, and doubles as a backup. In the desktop app files are
- * chosen with the system dialogs, which start in the export folder; in a browser the dialogs take
- * absolute paths on this computer.
- */
 export function ExchangeActions({ onNotice }: { onNotice: (message: string) => void }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -50,10 +46,6 @@ export function ExchangeActions({ onNotice }: { onNotice: (message: string) => v
   </>;
 }
 
-/**
- * A modal dialog that cannot be dismissed with Escape while `busy`. `width` widens it from a short
- * message: `form` fits the new Vault form at the size Onboarding shows it, `wide` fits a comparison.
- */
 export function Modal({ title, width, busy, onDismiss, children, testId }: {
   title: string; width?: 'form' | 'wide'; busy: boolean; onDismiss: () => void; children: ReactNode; testId: string;
 }) {
@@ -72,22 +64,18 @@ export function Modal({ title, width, busy, onDismiss, children, testId }: {
 
 export interface TransferProgress {
   text: string;
-  /** The transfer still waits for collection steps and can be cancelled. */
   waiting: boolean;
 }
 
-/** Progress of the running transfer, read from the status while `active`. */
 export function useTransferProgress(active: boolean): TransferProgress {
   const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: active });
   return active && status && transferRunning(status) ? { text: progressText(status), waiting: status.state === 'waiting' } : { text: '', waiting: false };
 }
 
-/** The transfer's status once it no longer runs. */
 export function followTransfer(): Promise<TransferStatus> {
   return readUntil(changeHub, () => api.vaultTransferStatus(), (status) => !transferRunning(status), (change) => change.kind === 'vault');
 }
 
-/** The progress line; while the transfer waits for collection steps it offers to cancel. */
 export function Progress({ progress, fallback }: { progress: TransferProgress; fallback: string }) {
   const [problem, setProblem] = useState<string | null>(null);
   async function cancel(): Promise<void> {
@@ -113,10 +101,20 @@ export function PathField({ label, value, onChange, testId, hint }: {
   </label>;
 }
 
+type PathInput = { loaded: false } | { loaded: true; path: string };
+
+function useSuggestedPath(given: string | undefined, pick: (suggestion: ExportSuggestion) => string): [PathInput, (path: string) => void] {
+  const [input, setInput] = useState<PathInput>(given === undefined ? { loaded: false } : { loaded: true, path: given });
+  useEffect(() => {
+    if (given !== undefined) return;
+    api.exportSuggestion().then((suggestion) => setInput({ loaded: true, path: pick(suggestion) }))
+      .catch(() => setInput({ loaded: true, path: '' }));
+  }, [given]);
+  return [input, (path) => setInput({ loaded: true, path })];
+}
+
 function ExportDialog({ file, onClose }: { file: { path: string; overwrite: boolean } | undefined; onClose: () => void }) {
-  // Null until the suggested path is back: the field appears already filled, and the suggestion
-  // never changes it afterwards.
-  const [target, setTarget] = useState<string | null>(file?.path ?? null);
+  const [target, setTarget] = useSuggestedPath(file?.path, (suggestion) => suggestion.path);
   const [phase, setPhase] = useState<'input' | 'running' | 'exists' | 'done' | 'failed'>(file ? 'running' : 'input');
   const [result, setResult] = useState<TransferResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -129,11 +127,6 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
     setFailure(null);
     try { await desktop?.revealExport(); } catch (error) { setFailure(errorText(error, '無法開啟資料夾。')); }
   }
-
-  useEffect(() => {
-    if (file) return;
-    api.exportSuggestion().then((suggestion) => setTarget((current) => current ?? suggestion.path)).catch(() => setTarget((current) => current ?? ''));
-  }, [file]);
 
   async function run(path: string, overwrite: boolean): Promise<void> {
     chosen.current = path;
@@ -154,8 +147,8 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
   }, [file]);
 
   return <Modal title="匯出知識庫" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">
-    {phase === 'input' && target !== null ? <>
-      <PathField label="匯出檔位置" value={target} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .zip 結尾。" />
+    {phase === 'input' && target.loaded ? <>
+      <PathField label="匯出檔位置" value={target.path} onChange={setTarget} testId="export-path" hint="完整路徑，檔名以 .zip 結尾。" />
     </> : null}
     {phase === 'running' ? <Progress progress={progress} fallback="處理中…" /> : null}
     {phase === 'exists' ? <div data-testid="export-exists">
@@ -170,7 +163,8 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={onClose}>取消</button>
-        <button type="button" className="button primary" disabled={!target?.trim()} onClick={() => void run(target?.trim() ?? '', false)} data-testid="export-confirm">匯出</button>
+        <button type="button" className="button primary" disabled={!target.loaded || !target.path.trim()}
+          onClick={() => { if (target.loaded) void run(target.path.trim(), false); }} data-testid="export-confirm">匯出</button>
       </> : null}
       {phase === 'exists' ? <>
         <button type="button" className="button" onClick={() => { if (file) onClose(); else setPhase('input'); }} data-testid="export-keep">取消</button>
@@ -182,11 +176,23 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
   </Modal>;
 }
 
+type FailedApply = { outcome: Exclude<ImportApplyOutcome, 'imported'>; message: string };
+
+async function applyAndFollow(id: string, how: ImportMode): Promise<{ outcome: 'imported'; status: TransferStatus } | FailedApply> {
+  try {
+    await api.applyImport(id, how);
+    const status = await followTransfer();
+    const outcome = importApplyOutcome(status);
+    return outcome === 'imported' ? { outcome, status } : { outcome, message: status.message };
+  } catch (error) {
+    return { outcome: 'discardComparison', message: errorText(error, '匯入失敗。') };
+  }
+}
+
 type ImportPhase = 'input' | 'comparing' | 'preview' | 'replace' | 'applying' | 'done';
 
 function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (imported: boolean) => void }) {
-  // Null until the suggested folder is back, as the export path is.
-  const [source, setSource] = useState<string | null>(file ?? null);
+  const [source, setSource] = useSuggestedPath(file, (suggestion) => `${suggestion.folder}/`);
   const [phase, setPhase] = useState<ImportPhase>(file ? 'comparing' : 'input');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mode, setMode] = useState<ImportMode>('merge');
@@ -195,11 +201,6 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const [recording, setRecording] = useState(false);
   const progress = useTransferProgress(phase === 'comparing' || phase === 'applying');
   const started = useRef(false);
-
-  useEffect(() => {
-    if (file) return;
-    api.exportSuggestion().then((suggestion) => setSource((current) => current ?? `${suggestion.folder}/`)).catch(() => setSource((current) => current ?? ''));
-  }, [file]);
 
   async function compare(path: string): Promise<void> {
     setPhase('comparing');
@@ -218,47 +219,31 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     if (file && !started.current) { started.current = true; void compare(file); }
   }, [file]);
 
+  function showFailedApply(failed: FailedApply): void {
+    setFailure(failed.message);
+    if (failed.outcome === 'keepComparison') { setPhase('preview'); return; }
+    setPreview(null);
+    setPhase('input');
+  }
+
   async function apply(how: ImportMode): Promise<void> {
     if (!preview) return;
     setPhase('applying');
     setFailure(null);
-    try {
-      await api.applyImport(preview.id, how);
-      const status = await followTransfer();
-      if (status.state === 'error') throw new Error(status.message);
-      // Cancelled while waiting for collection: nothing was written and the comparison still holds.
-      if (status.state === 'idle') { setFailure(status.message); setPhase('preview'); return; }
-      setResult(status);
-      setPhase('done');
-    } catch (error) {
-      setFailure(errorText(error, '匯入失敗。'));
-      // A failed apply discards the comparison, so the file is compared again before another try.
-      setPreview(null);
-      setPhase('input');
-    }
+    const applied = await applyAndFollow(preview.id, how);
+    if (applied.outcome !== 'imported') { showFailedApply(applied); return; }
+    setResult(applied.status);
+    setPhase('done');
   }
 
-  /**
-   * Closes a comparison with nothing to show. When the merge still has deletion records to write, it
-   * applies the merge first, keeping the screen as it is, so those videos stay deleted on this Vault.
-   */
   async function finish(): Promise<void> {
     if (!preview?.mergeRecords) { await cancel(); return; }
     setRecording(true);
     setFailure(null);
-    try {
-      await api.applyImport(preview.id, 'merge');
-      const status = await followTransfer();
-      if (status.state === 'error') throw new Error(status.message);
-      if (status.state === 'idle') { setFailure(status.message); return; }
-      onClose(true);
-    } catch (error) {
-      setFailure(errorText(error, '匯入失敗。'));
-      setPreview(null);
-      setPhase('input');
-    } finally {
-      setRecording(false);
-    }
+    const applied = await applyAndFollow(preview.id, 'merge');
+    setRecording(false);
+    if (applied.outcome !== 'imported') { showFailedApply(applied); return; }
+    onClose(true);
   }
 
   async function cancel(): Promise<void> {
@@ -277,8 +262,8 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
 
   return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying' || recording}
     onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="import-dialog">
-    {phase === 'input' && source !== null ? <>
-      <PathField label="匯出檔" value={source} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
+    {phase === 'input' && source.loaded ? <>
+      <PathField label="匯出檔" value={source.path} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
     </> : null}
     {phase === 'comparing' ? <Progress progress={progress} fallback="正在比對…" /> : null}
     {phase === 'preview' && preview && mergeable ? <div data-testid="import-preview">
@@ -316,7 +301,8 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={() => onClose(false)}>取消</button>
-        <button type="button" className="button primary" disabled={!source?.trim()} onClick={() => void compare(source?.trim() ?? '')} data-testid="import-compare">比對</button>
+        <button type="button" className="button primary" disabled={!source.loaded || !source.path.trim()}
+          onClick={() => { if (source.loaded) void compare(source.path.trim()); }} data-testid="import-compare">比對</button>
       </> : null}
       {phase === 'preview' && !mergeable ? <>
         {replaceable ? <button type="button" className="button" disabled={recording} onClick={() => setPhase('replace')}
