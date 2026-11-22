@@ -1,6 +1,4 @@
-/** The theme the user picks in Settings; `system` follows the operating system's light or dark appearance. */
 export type ThemePreference = 'system' | 'dark' | 'light';
-/** The theme the screen actually shows. */
 export type Theme = 'dark' | 'light';
 export const themePreferences: readonly ThemePreference[] = ['system', 'dark', 'light'];
 export const defaultThemePreference: ThemePreference = 'system';
@@ -8,10 +6,8 @@ export type ShellPage = 'sources' | 'documents' | 'jobs' | 'settings' | 'activit
 
 const pagePaths: Record<ShellPage, string> = { sources: '/', documents: '/documents', jobs: '/jobs', settings: '/settings', activity: '/activity' };
 
-/** One sidebar entry. */
 export interface NavigationItem { page: ShellPage; label: string; icon: string }
 
-/** The sidebar pages in order; Settings sits apart at the bottom. */
 export const navigation: readonly NavigationItem[] = [
   { page: 'sources', label: '訂閱', icon: 'sources' },
   { page: 'documents', label: '文件', icon: 'documents' },
@@ -20,19 +16,15 @@ export const navigation: readonly NavigationItem[] = [
 ];
 export const settingsNavigation: NavigationItem = { page: 'settings', label: '設定', icon: 'settings' };
 
-/** Tooltip of the controls that need a network while the device has none. */
 export const OFFLINE_UNAVAILABLE = '沒有網路時無法使用';
 
-/** When the network was last confirmed, for the offline message: "14:32" today, "10-23 14:32" before. */
-export function offlineCheckedLabel(checkedAt: string, now: Date = new Date()): string {
+export function offlineCheckedLabel(checkedAt: string, today: string): string {
   const date = new Date(checkedAt);
   const two = (value: number) => String(value).padStart(2, '0');
   const time = `${two(date.getHours())}:${two(date.getMinutes())}`;
-  const today = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  return today ? time : `${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`;
+  return date.toDateString() === today ? time : `${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`;
 }
 
-/** The count next to 工作 in the sidebar: work running or queued, shown only when there is some. */
 export function jobsBadge(unfinished: number): string | null {
   return unfinished > 0 ? String(unfinished) : null;
 }
@@ -44,18 +36,17 @@ export function routeForPath(pathname: string): ShellPage {
   return (Object.entries(pagePaths).find(([, path]) => path === normalized)?.[0] as ShellPage | undefined) ?? 'sources';
 }
 export function pathForRoute(page: ShellPage): string { return pagePaths[page]; }
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return themePreferences.some((preference) => preference === value);
+}
 export function themePreferenceFromValue(value: unknown): ThemePreference {
-  return themePreferences.includes(value as ThemePreference) ? value as ThemePreference : defaultThemePreference;
+  return isThemePreference(value) ? value : defaultThemePreference;
 }
 export function resolveTheme(preference: ThemePreference, systemDark: boolean): Theme {
   if (preference === 'system') return systemDark ? 'dark' : 'light';
   return preference;
 }
 
-/**
- * Radio-group keyboard movement (WAI-ARIA): arrows move to the previous or next option and wrap
- * around, Home and End jump to the ends. Returns null for keys the group does not handle.
- */
 export function radioIndexForKey(key: string, current: number, count: number): number | null {
   if (key === 'ArrowRight' || key === 'ArrowDown') return (current + 1) % count;
   if (key === 'ArrowLeft' || key === 'ArrowUp') return (current - 1 + count) % count;
@@ -72,4 +63,15 @@ export function createBrowserThemeStore(storage: StorageLike, key = 'xr-collecto
 export interface ElectronThemeBridge { read(): Promise<unknown>; write(preference: ThemePreference): Promise<void>; }
 export function createElectronThemeStore(bridge: ElectronThemeBridge): ThemeStore {
   return { read: async () => themePreferenceFromValue(await bridge.read()), write: (preference) => bridge.write(preference) };
+}
+export function serializeThemeWrites(store: ThemeStore): ThemeStore {
+  let writes: Promise<void> = Promise.resolve();
+  return {
+    read: () => store.read(),
+    write: (preference) => {
+      const write = writes.then(() => store.write(preference));
+      writes = write.catch(() => undefined);
+      return write;
+    },
+  };
 }

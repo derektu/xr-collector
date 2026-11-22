@@ -1,7 +1,3 @@
-/**
- * Runs one request at a time for a view: starting a new one aborts the previous request, and a
- * response that arrives after a newer request started is dropped instead of overwriting newer results.
- */
 export function createLatestRequest() {
   let sequence = 0;
   let controller: AbortController | null = null;

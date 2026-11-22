@@ -1,12 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 
-/**
- * The source types the components read, from the root down: a component takes them with
- * `useSourceDeclarations()` and hands them to the presentation functions that name a type's words.
- * Rendering a component outside `SourceDeclarationsProvider` throws, so a page never runs without
- * source types.
- */
 const SourceDeclarationsContext = createContext<SourceDeclarations | null>(null);
 
 export function SourceDeclarationsProvider({ value, children }: { value: SourceDeclarations; children: ReactNode }) {

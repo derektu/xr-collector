@@ -27,6 +27,21 @@ describe('change stream on screen', () => {
     expect(receive(state.revision, { type: 'reset', revision: 'ab:9' })).toEqual({ revision: 'ab:9', refresh: { kind: 'all' } });
   });
 
+  it('re-reads subscriptions after job, document, pacing and schedule changes because their status and counts come from them', () => {
+    const subscriptions = staleAfter(['subscriptions']);
+    expect(subscriptions({ kind: 'job', id: 'j', parentId: null, state: 'completed' })).toBe(true);
+    expect(subscriptions({ kind: 'document', id: 'd' })).toBe(true);
+    expect(subscriptions({ kind: 'pacing', group: 'youtube' })).toBe(true);
+    expect(subscriptions({ kind: 'schedule' })).toBe(true);
+  });
+
+  it('keeps the last revision on a same-instance hello that is ahead, so the batches replayed after it still refresh the screen', () => {
+    const hello = receive('ab:4', { type: 'hello', revision: 'ab:7' });
+    expect(hello).toEqual({ revision: 'ab:4', refresh: { kind: 'none' } });
+    const replayed = receive(hello.revision, { type: 'change', batch: { revision: 'ab:5', at: '', changes: [{ kind: 'document', id: 'd' }] } });
+    expect(replayed.refresh).toEqual({ kind: 'changes', changes: [{ kind: 'document', id: 'd' }] });
+  });
+
   it('counts a screen caught up only at the same instance and an equal or newer revision', () => {
     expect(caughtUp('ab:4', 'ab:4')).toBe(true);
     expect(caughtUp('ab:5', 'ab:4')).toBe(true);

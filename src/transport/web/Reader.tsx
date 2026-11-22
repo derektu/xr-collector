@@ -6,7 +6,8 @@ import { collectedLabel, publishedLabel, sourceUrlOfDocumentId, subtitleLabel } 
 import { Icon } from './icons.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { sourcePath } from './source-presentation.js';
-import { readUntil, useChanges } from './use-changes.js';
+import { readUntil } from './read-until.js';
+import { changeHub, useChanges } from './use-changes.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 type ReaderState =
@@ -73,7 +74,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     const item = declarations.get(type)?.item;
     const finish = (next: Recollect) => { if (active) setRecollect(next); };
     // The collected document's own change reads it again; this only reports how the job ended.
-    const follow = (jobId: string) => readUntil(() => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
+    const follow = (jobId: string) => readUntil(changeHub, () => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
       (change) => change.kind === 'job' && change.id === jobId, following.signal).then((job) => {
       if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' });
       else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });

@@ -57,7 +57,8 @@ export class ApiError extends Error {
 }
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
-  // A JSON content type without a body is rejected by the server, so only label requests that carry one.
+  // Fastify rejects a request labelled application/json whose body is empty.
+  // https://fastify.dev/docs/latest/Reference/Errors/#fst_err_ctp_empty_json_body
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -65,23 +66,20 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
       ...init?.headers,
     },
   });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as ErrorResponse;
-    throw new ApiError(
-      body.error?.message ?? `HTTP ${response.status}`,
-      body.error?.code ?? 'unknown_error',
-    );
-  }
+  if (!response.ok) throw await apiError(response);
   return response.json() as Promise<unknown>;
 }
 
-/** What calling `Route` takes: its path parameters, its JSON body and its query, each when the route has one. */
+async function apiError(response: Response): Promise<ApiError> {
+  const body = (await response.json().catch(() => ({}))) as ErrorResponse;
+  return new ApiError(body.error?.message ?? `HTTP ${response.status}`, body.error?.code ?? 'unknown_error');
+}
+
 type CallInput<Route extends { path: string }> = { signal?: AbortSignal }
   & ([PathParams<Route['path']>] extends [never] ? unknown : { params: Record<PathParams<Route['path']>, string> })
   & (undefined extends BodyOf<Route> ? { body?: BodyOf<Route> } : { body: BodyOf<Route> })
   & (undefined extends QueryOf<Route> ? { query?: QueryOf<Route> } : Record<string, never> extends QueryOf<Route> ? { query?: QueryOf<Route> } : { query: QueryOf<Route> });
 
-/** Calls a JSON route of the API table and answers its response type. */
 function call<Route extends ApiRoute<unknown, unknown, unknown> & { path: string }>(
   route: Route, ...[input]: Record<string, never> extends CallInput<Route> ? [CallInput<Route>?] : [CallInput<Route>]
 ): Promise<ResponseOf<Route>> {
@@ -158,28 +156,21 @@ export const api = {
   },
   async downloadAgentSkill(): Promise<Blob> {
     const response = await fetch(API_ROUTES.agentSkill.path);
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as ErrorResponse;
-      throw new ApiError(body.error?.message ?? `HTTP ${response.status}`, body.error?.code ?? 'unknown_error');
-    }
+    if (!response.ok) throw await apiError(response);
     return response.blob();
   },
-  /** The automatic collection switch; one switch covers the subscriptions of every type. */
   async getSchedule(): Promise<CollectionScheduleView> {
     return (await call(API_ROUTES.schedule)).schedule;
   },
 
-  /** Turns automatic collection on or off. */
   async setAutoCollection(enabled: boolean): Promise<CollectionScheduleView> {
     return (await call(API_ROUTES.setSchedule, { body: { enabled } })).schedule;
   },
 
-  /** Saves some of one subscription's settings; fields left out keep their value. */
   async updateSubscriptionSettings(type: string, id: string, settings: Partial<SubscriptionSettings>): Promise<SubscriptionRecord> {
     return (await call(API_ROUTES.updateSubscription, { params: { type, id }, body: { settings } })).subscription;
   },
 
-  /** Gives every other subscription of the same type this subscription's settings. */
   applySubscriptionSettings(type: string, id: string): Promise<{ updated: number; paused: number }> {
     return call(API_ROUTES.applySubscriptionSettings, { params: { type, id } });
   },
@@ -188,17 +179,14 @@ export const api = {
     return call(API_ROUTES.updateSubscription, { params: { type, id }, body: { enabled } });
   },
 
-  /** Removes a subscription, keeping or deleting its documents. */
   async removeSubscription(type: string, id: string, documents: 'keep' | 'delete' = 'keep'): Promise<{ documentsKept: number; documentsDeleted: number; documentsFailed: number }> {
     return call(API_ROUTES.removeSubscription, { params: { type, id }, query: { documents } });
   },
 
-  /** Checks every enabled subscription of every type now. */
   async checkAllSubscriptions(): Promise<JobSubmission[]> {
     return (await call(API_ROUTES.checkSubscriptions)).submissions;
   },
 
-  /** Checks the listed subscriptions now. */
   async checkSubscriptions(subscriptions: SubscriptionKey[]): Promise<JobSubmission[]> {
     return (await call(API_ROUTES.checkSubscriptions, { body: { subscriptions } })).submissions;
   },
@@ -253,17 +241,14 @@ export const api = {
     return (await call(API_ROUTES.document, { params: { id }, signal })).document;
   },
 
-  /** Sets a document's status: `published` publishes a draft, `draft` takes a published document back to draft. */
   async setDocumentStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
     return (await call(API_ROUTES.setDocumentStatus, { params: { id }, body: { status } })).document;
   },
 
-  /** Deletes a document; automatic and subscription collection skip it until the user collects it again by its address. */
   deleteDocument(id: string): Promise<DocumentDeletion> {
     return call(API_ROUTES.deleteDocument, { params: { id } });
   },
 
-  /** Collects one item by its address; the service finds the source type the address belongs to. */
   collect(url: string): Promise<JobSubmission> {
     return call(API_ROUTES.collectItem, { body: { url } });
   },
@@ -283,12 +268,10 @@ export const api = {
     return (await call(API_ROUTES.recognizeUrl, { body: { url }, signal })).recognition;
   },
 
-  /** Sends the request a recognized address offers, exactly as the service described it. */
   performAction(action: RecognitionAction): Promise<unknown> {
     return request(action.request.path, { method: action.request.method, body: JSON.stringify(action.request.body) });
   },
 
-  /** Every subscription across source types, with pending subscription requests and unsubscribed documents. */
   listSubscriptions(signal?: AbortSignal): Promise<SubscriptionList> {
     return call(API_ROUTES.subscriptions, { signal });
   },
@@ -309,22 +292,18 @@ export const api = {
     return call(API_ROUTES.vaultStatus, { signal });
   },
 
-  /** The export folder and today's export file in it. */
   exportSuggestion(): Promise<ExportSuggestion> {
     return call(API_ROUTES.exportSuggestion);
   },
 
-  /** Writes the export of the active Vault to an absolute `.zip` path on this computer. */
   exportVault(path: string, overwrite: boolean): Promise<TransferStatus> {
     return call(API_ROUTES.exportVault, { body: { path, overwrite } });
   },
 
-  /** Compares an export file with the active Vault. */
   previewImport(path: string): Promise<ImportPreview> {
     return call(API_ROUTES.previewImport, { body: { path } });
   },
 
-  /** Applies a compared import; follow `vaultTransferStatus`. */
   applyImport(id: string, mode: ImportMode): Promise<TransferStatus> {
     return call(API_ROUTES.applyImport, { body: { id, mode } });
   },
@@ -333,7 +312,6 @@ export const api = {
     await call(API_ROUTES.cancelImport, { body: { id } });
   },
 
-  /** Switches to another existing Vault; follow `vaultTransferStatus`. */
   openOtherVault(path: string): Promise<TransferStatus> {
     return call(API_ROUTES.openVault, { body: { path } });
   },
@@ -342,8 +320,7 @@ export const api = {
     return call(API_ROUTES.createVault, { body: { location, name } });
   },
 
-  /** Cancels a Vault operation that is still waiting for collection steps. */
-  cancelTransfer(): Promise<TransferStatus> {
+  cancelVaultWait(): Promise<TransferStatus> {
     return call(API_ROUTES.cancelVaultWait);
   },
 };
@@ -352,7 +329,6 @@ function filterParameters(filter: DocumentFilter): { sourceType: string | undefi
   return { sourceType: filter.sourceType || undefined, publisherId: filter.publisherId || undefined, status: filter.status || undefined };
 }
 
-/** The filters both activity views take. */
 function activityParameters(query: ActivityQuery): ActivityParameters {
   return {
     severity: query.severity?.join(','), eventType: query.eventType?.join(','),
