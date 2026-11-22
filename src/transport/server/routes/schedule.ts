@@ -9,13 +9,11 @@ import type { NetworkGuard } from './network.js';
 export interface ScheduleManagement {
   getSchedule(): Promise<CollectionSchedule>;
   updateSchedule(input: { enabled: boolean }): Promise<CollectionSchedule>;
-  /** Checks every enabled subscription now. */
   runNow(): Promise<JobSubmission[]>;
 }
 
 const SCHEDULE_FIELDS = new Set(['enabled']);
 
-/** The automatic check switch; one switch covers the subscriptions of every source type. */
 export function registerScheduleRoutes(app: FastifyInstance, schedule: ScheduleManagement, network: NetworkGuard): void {
   const scheduleView = (value: CollectionSchedule): CollectionScheduleView => ({ ...value, connectivity: network.status() });
   serve(app, API_ROUTES.schedule, async () => ({

@@ -98,6 +98,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
  * The server's close waits for every open connection, and a browser keeps connections it opened
  * ahead of need, or after a response, without a request on them. Draining ends each connection
  * that carries no request at once, and each other one once its response is sent.
+ * https://nodejs.org/api/http.html#serverclosecallback
  */
 function trackConnections(server: Server): { drain(): void } {
   const responding = new Map<Socket, number>();
@@ -111,8 +112,9 @@ function trackConnections(server: Server): { drain(): void } {
     const socket = request.socket;
     responding.set(socket, (responding.get(socket) ?? 0) + 1);
     response.once('close', () => {
-      if (!responding.has(socket)) return;
-      const remaining = responding.get(socket)! - 1;
+      const count = responding.get(socket);
+      if (count === undefined) return;
+      const remaining = count - 1;
       responding.set(socket, remaining);
       if (draining && remaining === 0) socket.end();
     });

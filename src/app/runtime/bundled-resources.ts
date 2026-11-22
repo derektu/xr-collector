@@ -1,46 +1,21 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/**
- * Where the files the App ships beside its code live: the runtime programs (Meilisearch, the
- * programs the source plugins run and the macOS update helper), the search lexicon, the Agent Skill
- * and the tray icons. This module is the only place that knows their layout; every entry point asks
- * it for the paths.
- *
- * Development runs read them from the checkout: `resources/bin/<mac|win>`, `resources/search`,
- * `resources/tray` and `skills`. A package reads them from its resources folder, where
- * `electron-builder.yml` puts them: `bin`, `search`, `tray` and `skills`
- * (`tests/app/runtime/bundled-resources.test.ts` checks the two agree).
- */
 export type ResourceLayout =
-  | { packaged: false; /** The checkout's root folder. */ checkout: string }
-  | { packaged: true; /** The package's resources folder (Electron's `process.resourcesPath`). */ resourcesPath: string };
+  | { packaged: false; checkout: string }
+  | { packaged: true; /** The package's resources folder: Electron's [`process.resourcesPath`](https://www.electronjs.org/docs/latest/api/process#processresourcespath-readonly). */ resourcesPath: string };
 
 export interface BundledResources {
-  /**
-   * An external program, by its path under the runtime folder without extension, such as
-   * `meilisearch`. Outside a package the environment variable `environmentName` may name it instead.
-   */
   program(name: string, environmentName: string): string;
-  /** The Meilisearch program. */
   readonly searchBinary: string;
-  /** The search lexicon. Outside a package `XR_COLLECTOR_SEARCH_LEXICON` may name it instead. */
   readonly searchLexicon: string;
-  /** The folder of the Agent Skill the App hands to Agents. */
   readonly skill: string;
-  /** The folder of the tray icons. */
   readonly trayIcons: string;
-  /**
-   * The helper that replaces the App during a macOS update. Only a Mac package ships it; a
-   * development run finds it in the checkout only after `scripts/build-mac-update-helper.mjs`.
-   */
   readonly macUpdateHelper: string;
 }
 
 export interface ResourceEnvironment {
-  /** Defaults to `process.platform`; Windows paths use Windows separators. */
   platform?: NodeJS.Platform;
-  /** Defaults to `process.env`. */
   env?: Readonly<Record<string, string | undefined>>;
 }
 

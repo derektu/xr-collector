@@ -145,6 +145,17 @@ describe('CollectorRuntime', () => {
     next.cancel();
   });
 
+  it('refuses Vault setup and update preparation once the update lease passes to shutdown, because the runtime must close rather than resume', async () => {
+    const setup = await options({ capture: vi.fn() });
+    const { explicitVaultPath: _explicit, ...notReady } = setup.value;
+    const runtime = await startCollectorServer(notReady);
+    cleanups.push(() => runtime.close());
+    const lease = await runtime.prepareUpdate(new AbortController().signal);
+    lease.transferToShutdown();
+    await expect(runtime.setup({ action: 'create', location: setup.root, name: 'vault' })).rejects.toMatchObject({ code: 'update_busy' });
+    await expect(runtime.prepareUpdate(new AbortController().signal)).rejects.toMatchObject({ code: 'update_busy' });
+  });
+
   it('refuses update preparation while Onboarding is setting up a Vault', async () => {
     const setup = await options({ capture: vi.fn() });
     const { explicitVaultPath: _explicit, ...notReady } = setup.value;

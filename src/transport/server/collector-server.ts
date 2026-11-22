@@ -4,7 +4,6 @@ import {
 import { startAgentListener } from './agent-access.js';
 import { startServer, type RunningServer } from './start.js';
 
-/** The two HTTP listeners of a process: the UI's, and the Agents', which is null when it could not start. */
 export interface HttpListeners extends RuntimeListeners {
   ui: RunningServer;
   agent: RunningServer | null;
@@ -27,10 +26,6 @@ export function startCollectorServer(options: CollectorServerOptions): Promise<C
   }));
 }
 
-/**
- * Starts the Agent listener on its connection's port, then the UI listener, which also serves the
- * Agent connection settings. Both serve the same routes; only the Agent's asks for the key.
- */
 async function startHttpListeners(services: RuntimeServices, ui: { port: number; host?: string; webRoot?: string }): Promise<HttpListeners> {
   const { agentConnection, ...shared } = services;
   const agent = await startAgentListener(agentConnection, shared);

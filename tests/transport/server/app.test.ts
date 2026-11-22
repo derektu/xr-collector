@@ -260,6 +260,34 @@ describe('HTTP app', () => {
     await app.close();
   });
 
+  it('changes settings before resuming in one request, so the check the resume starts collects the new range', async () => {
+    let record = {
+      id: 'UC-paused', title: '暫停頻道', url: 'https://www.youtube.com/channel/UC-paused/videos', enabled: false,
+      addedAt: '2026-09-17T00:00:00.000Z', settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
+    };
+    const resumedWithRange: number[] = [];
+    const channels = subscriptionCollection('youtube', {
+      updateSettings: async (_id, patch) => {
+        record = { ...record, settings: { ...record.settings, ...patch } };
+        return record;
+      },
+      setEnabled: async (_id, enabled) => {
+        resumedWithRange.push(record.settings.backfillDays);
+        record = { ...record, enabled };
+        return { subscription: record, submission: null };
+      },
+    });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: makeCollector(), subscriptions: [channels] });
+
+    const resumed = await app.inject({
+      method: 'PATCH', url: `/api/subscriptions/youtube/${record.id}`, payload: { enabled: true, settings: { backfillDays: 45 } },
+    });
+
+    expect(resumed.json()).toMatchObject({ subscription: { enabled: true, settings: { backfillDays: 45 } } });
+    expect(resumedWithRange).toEqual([45]);
+    await app.close();
+  });
+
   it('searches with stable source filters, published dates and page bounds', async () => {
     const searchRequests: unknown[] = [];
     const hit = {

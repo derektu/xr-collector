@@ -5,7 +5,6 @@ import type { ActivityAccess, ActivityQuery, EventSeverity } from '../../../shar
 import { serve } from '../api-route.js';
 import { isInstant, pagination, singleValues } from './query-params.js';
 
-/** The activity log: raw events or check summaries, and the events of one group. */
 export function registerActivityRoutes(app: FastifyInstance, activity: ActivityAccess): void {
   serve(app, API_ROUTES.activity, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
     const query = activityQuery(singleValues(request.query));
@@ -17,29 +16,40 @@ export function registerActivityRoutes(app: FastifyInstance, activity: ActivityA
     const unknown = Object.keys(query).find((key) => key !== 'limit' && key !== 'cursor' && key !== 'severity');
     if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
     const { limit } = pagination({ limit: query.limit ?? '50' });
-    const severity = query.severity?.split(',').map((item) => item.trim()).filter(Boolean);
-    if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
-      throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
-    }
+    const severity = parseSeverity(query.severity);
     if (!activity.group) throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
-    return activity.group(request.params.groupId, limit, query.cursor, severity as EventSeverity[] | undefined);
+    return activity.group(request.params.groupId, limit, query.cursor, severity);
   });
 }
 
 const SEVERITIES: ReadonlySet<string> = new Set<EventSeverity>(['debug', 'info', 'warning', 'error']);
 const ACTIVITY_PARAMETERS = new Set(['view', 'severity', 'eventType', 'jobId', 'subscriptionId', 'sourceType', 'since', 'until', 'limit', 'cursor']);
 
+function isEventSeverity(value: string): value is EventSeverity {
+  return SEVERITIES.has(value);
+}
+
+function list(value: string | undefined): string[] | undefined {
+  return value?.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function parseSeverity(value: string | undefined): EventSeverity[] | undefined {
+  const severity = list(value);
+  if (!severity) return undefined;
+  if (severity.length === 0 || !severity.every(isEventSeverity)) {
+    throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
+  }
+  return severity;
+}
+
 function activityQuery(query: Record<string, string | undefined>): ActivityQuery {
   const unknown = Object.keys(query).find((key) => !ACTIVITY_PARAMETERS.has(key));
   if (unknown) throw new CollectorError('invalid_request', `不支援的查詢參數：${unknown}`);
-  if (query.view !== undefined && query.view !== 'raw' && query.view !== 'summary') {
+  const view = query.view;
+  if (view !== undefined && view !== 'raw' && view !== 'summary') {
     throw new CollectorError('invalid_request', 'view 只能是 raw 或 summary。');
   }
-  const list = (value: string | undefined) => value?.split(',').map((item) => item.trim()).filter(Boolean);
-  const severity = list(query.severity);
-  if (severity && (severity.length === 0 || !severity.every((value) => SEVERITIES.has(value)))) {
-    throw new CollectorError('invalid_request', 'severity 只能是 debug、info、warning、error，以逗號分隔。');
-  }
+  const severity = parseSeverity(query.severity);
   const eventType = list(query.eventType);
   if (eventType && (eventType.length === 0 || !eventType.every((value) => /^[a-z_.]{1,60}$/u.test(value)))) {
     throw new CollectorError('invalid_request', 'eventType 格式無效。');
@@ -57,8 +67,8 @@ function activityQuery(query: Record<string, string | undefined>): ActivityQuery
   }
   const { limit } = pagination({ limit: query.limit ?? '50' });
   return {
-    ...(query.view ? { view: query.view as 'raw' | 'summary' } : {}),
-    ...(severity ? { severity: severity as EventSeverity[] } : {}),
+    ...(view ? { view } : {}),
+    ...(severity ? { severity } : {}),
     ...(eventType ? { eventType } : {}),
     ...(query.jobId ? { jobId: query.jobId } : {}),
     ...(query.subscriptionId ? { subscriptionId: query.subscriptionId } : {}),

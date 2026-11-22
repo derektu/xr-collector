@@ -2,7 +2,7 @@
 
 更新服務（`src/domain/updates/`）讀取每個平台各自的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，由 `package:*` 與安裝檔一起產生、隨該平台上傳到 Release。服務只讀自己 `target` 的 index，版本高於目前版本時，以 index 記錄的檔名、大小與 SHA-256 下載更新檔並驗證。
 
-檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/desktop/electron/update-check-scheduler.ts`，只在有原生安裝器的平台啟用），使用者也可以在設定頁手動檢查；下載與套用只由使用者觸發。套用前保存安裝嘗試，新版本的 runtime、畫面與原生啟動都確認完成後才記為成功；無法確認時記為 `unknown`，不以程序退出推測成功。
+檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/desktop/electron/update-check-scheduler.ts`，只在有原生安裝器的平台啟用），使用者也可以在設定頁手動檢查；下載與套用只由使用者觸發。套用時先等待收集與知識庫寫入安全停止，最多兩分鐘，期間可以取消，取消或逾時後收集恢復；等待完成並保存安裝嘗試後，服務轉為關閉並交給原生安裝器，此後只會結束，不再恢復收集。新版本的 runtime、畫面與原生啟動都確認完成後才記為成功；無法確認時記為 `unknown`，不以程序退出推測成功。
 
 ## Release index
 

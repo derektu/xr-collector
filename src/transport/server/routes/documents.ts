@@ -14,11 +14,9 @@ export interface DocumentRouteOptions {
   sources: SourceRegistry;
   collector?: Collector;
   search?: TranscriptSearch;
-  /** The subscriptions of each source type with subscriptions, which name the sources of documents. */
   subscriptions: readonly SubscriptionCollection[];
 }
 
-/** The documents of the active Vault: listing, their sources, search and the index, reading, status and deleting. */
 export function registerDocumentRoutes(app: FastifyInstance, options: DocumentRouteOptions): void {
   const { sources, subscriptions } = options;
   serve(app, API_ROUTES.documents, async (request: FastifyRequest<{ Querystring: Record<string, unknown> }>) => {
@@ -88,8 +86,8 @@ export function registerDocumentRoutes(app: FastifyInstance, options: DocumentRo
     document: await options.collector!.read(request.params.id),
   }));
 
-  serve(app, API_ROUTES.setDocumentStatus, async (request: FastifyRequest<{ Params: { id: string }; Body: unknown }>) => ({
-    document: await options.collector!.setStatus(request.params.id, requestedStatus((request.body as { status?: unknown } | null)?.status)),
+  serve(app, API_ROUTES.setDocumentStatus, async (request: FastifyRequest<{ Params: { id: string }; Body: { status?: unknown } | null }>) => ({
+    document: await options.collector!.setStatus(request.params.id, requestedStatus(request.body?.status)),
   }));
 
   serve(app, API_ROUTES.deleteDocument, async (request: FastifyRequest<{ Params: { id: string } }>) =>

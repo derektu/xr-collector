@@ -7,10 +7,6 @@ export function requiredUrl(value: unknown, prompt: string): string {
   return value;
 }
 
-/**
- * The source type of `sources` that owns an address, with the address as that type reads it. An
- * address no type owns is `unsupported_url`, or `invalid_url` when it is not an address at all.
- */
 export function ownedAddress(sources: SourceRegistry, value: string): { type: string; input: string } {
   const { input, url, owner } = addressOwner(value, sources.list);
   if (!owner) {

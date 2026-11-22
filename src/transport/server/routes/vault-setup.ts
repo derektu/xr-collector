@@ -6,7 +6,6 @@ import { serve } from '../api-route.js';
 
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
 
-/** Reads the body of `POST /api/vault/setup`; see `VaultSetupRequest`. */
 function setupRequest(body: Record<string, unknown>): VaultSetupRequest {
   const { action, location, name, path: vaultPath, packagePath } = body;
   if (action === 'open') {

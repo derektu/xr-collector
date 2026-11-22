@@ -17,17 +17,12 @@ export interface DeviceRouteOptions {
   network: NetworkGuard;
   runtimeStatus?: () => CollectorRuntimeStatus;
   activityHealth?: () => ActivityLogHealth;
-  /** Kept in memory for this app when absent, as no desktop delivers notifications. */
   notifications?: NotificationAccess;
-  /** Refused as unavailable when absent. */
   updates?: UpdateAccess;
-  /** Reported unavailable when absent. */
   loginStartup?: LoginStartupAccess;
-  /** The device's request channels, one per pacing group; readable whatever state the Vault is in. */
   pacing?: readonly Pacing[];
 }
 
-/** The device's own state, readable whatever state the Vault is in: health, build, notifications, updates, login startup and pacing. */
 export function registerDeviceRoutes(app: FastifyInstance, options: DeviceRouteOptions): void {
   const { buildInfo, network } = options;
   let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [], events: [] };
@@ -79,7 +74,6 @@ export function registerDeviceRoutes(app: FastifyInstance, options: DeviceRouteO
     return { loginStartup: await loginStartup.update(body.enabled) };
   });
 
-  // Each pacing group is labelled with the name its source type declares for it.
   serve(app, API_ROUTES.pacing, async () => ({
     groups: (options.pacing ?? []).map((gate) => ({ group: gate.group, label: pacingLabel(options.sources, gate.group), ...gate.status() })),
   }));
@@ -95,7 +89,6 @@ function updateSelection(body: unknown): UpdateSelection {
   return { version: value.version, sha256: value.sha256 };
 }
 
-/** The label a source type gives its pacing group; the group ID when no type of `sources` declares it. */
 function pacingLabel(sources: SourceRegistry, group: string): string {
   return sources.definitions.find((definition) => definition.pacing?.group === group)?.pacing?.label ?? group;
 }

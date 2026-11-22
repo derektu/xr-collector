@@ -1,16 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { formatCursor, type Change, type ChangeBatch, type ChangeCursor, type NoteChange } from '../../shared/api/changes.js';
 
-/** What a reader at a cursor receives: the batches after it, or `reset` when they are no longer all kept. */
 export type Catchup = { kind: 'batches'; batches: ChangeBatch[] } | { kind: 'reset' };
 
 export interface ChangeFeedOptions {
   now?: () => Date;
   epoch?: string;
-  /** Batches kept for readers catching up; older ones answer `reset`. */
   keepBatches?: number;
   keepMs?: number;
-  /** Defers publishing pending changes; the changes noted in one turn of the event loop share a revision. */
   defer?: (publish: () => void) => void;
 }
 
@@ -43,7 +40,6 @@ export class ChangeFeed {
     this.defer = options.defer ?? ((publish) => { setImmediate(publish); });
   }
 
-  /** The cursor of the last published revision. */
   get revision(): string {
     return formatCursor({ epoch: this.epoch, number: this.number });
   }
@@ -55,7 +51,6 @@ export class ChangeFeed {
     this.defer(() => { this.flush(); });
   };
 
-  /** Publishes the pending changes now and returns the resulting revision. */
   flush(): string {
     this.scheduled = false;
     if (this.pending.length === 0) return this.revision;
@@ -89,7 +84,9 @@ export class ChangeFeed {
   }
 
   private prune(now: number): void {
-    while (this.kept.length > this.keepBatches || (this.kept.length > 0 && now - this.kept[0]!.time > this.keepMs)) this.kept.shift();
+    for (let first = this.kept[0]; first && (this.kept.length > this.keepBatches || now - first.time > this.keepMs); first = this.kept[0]) {
+      this.kept.shift();
+    }
   }
 }
 
@@ -97,7 +94,6 @@ function publicBatch(batch: ChangeBatch): ChangeBatch {
   return { revision: batch.revision, at: batch.at, changes: batch.changes };
 }
 
-/** One entry per resource, the last noted for it; job progress noted many times in one turn keeps its last state. */
 function dedupe(changes: readonly Change[]): Change[] {
   const byKey = new Map<string, Change>();
   for (const change of changes) {
