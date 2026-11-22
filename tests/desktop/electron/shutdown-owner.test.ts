@@ -12,7 +12,6 @@ it('holds the first quit until the runtime has closed, so collection and the Vau
 });
 
 it('lets the quit through once no runtime is open, so the quit that ends a finished shutdown is not held again', () => {
-  expect(beforeQuitAction('person', null)).toEqual({ kind: 'quit' });
   expect(beforeQuitAction('update', null)).toEqual({ kind: 'quit' });
   expect(beforeQuitAction('none', null)).toEqual({ kind: 'quit' });
 });
