@@ -20,7 +20,7 @@ import {
 } from '../../domain/updates/index.js';
 import { startCollectorServer, type CollectorServer } from '../../transport/server/index.js';
 import { backupFolder, exportFolder } from '../../domain/vault/index.js';
-import { CloseHintRecord } from './close-hint.js';
+import { CloseHintRecord, hintStillRunning } from './close-hint.js';
 import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
 import { DesktopLoginStartup, type LoginItemAdapter } from './login-startup.js';
@@ -33,39 +33,35 @@ import { updateSourceFor, windowsAppId, windowSize } from './desktop-environment
 import { MainWindow } from './main-window.js';
 import { registerPageChannels } from './page-channels.js';
 import { exposeValidationControl } from './validation-control.js';
+import { watchSleep } from './sleep-watch.js';
+import { watchNetwork } from './network-watch.js';
+import { beforeQuitAction, type ShutdownOwner } from './shutdown-owner.js';
 
 let runtime: CollectorServer | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
 let updateService: UpdateService | null = null;
 let updateCheckScheduler: ReturnType<typeof startUpdateCheckScheduler> | null = null;
-let updateShutdownOwned = false;
+let shutdownOwner: ShutdownOwner = 'none';
 let startupBuildInfo: BuildInfo | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
-let networkWatch: ReturnType<typeof setInterval> | null = null;
-/** How often the system's own view of the network is read; reading it sends nothing. */
-const NETWORK_WATCH_MS = 5_000;
+let stopNetworkWatch: (() => void) | null = null;
+let stopSleepWatch: (() => void) | null = null;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
-const packageMetadata = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')) as Record<string, unknown>;
+const packageMetadata: unknown = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8'));
 
-// Background validation mode, for native acceptance runs only: the window is never shown or
-// focused and macOS shows no Dock icon, so a developer keeps working on the same machine while
-// Playwright drives and screenshots the page. The Dock icon is hidden at program start so it
-// never appears during launch.
 const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
 if (validationHidden) app.dock?.hide();
-// Validation control channel, for native acceptance runs only (see validation-control.ts).
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
 const validationNotifications: { id?: string; title: string; content: string }[] = [];
 
-// Windows shows the app's notifications only for an app identity that matches the installer's Start
-// menu shortcut (electron-builder's appId).
-if (process.platform === 'win32') app.setAppUserModelId(windowsAppId(process.env, packageMetadata));
+// Windows shows an app's notifications only when its Start menu shortcut carries the same AppUserModelID.
+// https://www.electronjs.org/docs/latest/tutorial/notifications#windows
+if (process.platform === 'win32') app.setAppUserModelId(windowsAppId(packageMetadata));
 
-/** The files the App ships beside its code, from the package's resources or the checkout. */
 const resources = bundledResources(app.isPackaged
   ? { packaged: true, resourcesPath: process.resourcesPath }
   : { packaged: false, checkout: app.getAppPath() });
@@ -85,21 +81,18 @@ const mainWindow = new MainWindow({
   },
   quitting: () => isQuitting,
   sessionEnded: () => { isQuitting = true; },
-  closedByPerson: () => { void hintStillRunning(); },
+  closedByPerson: () => {
+    if (!closeHint) return;
+    void hintStillRunning({
+      platform: process.platform,
+      record: closeHint,
+      notify: (hint) => {
+        new Notification({ title: hint.title, body: hint.content }).show();
+        if (validationControl) validationNotifications.push(hint);
+      },
+    });
+  },
 });
-
-/**
- * The first time the window closes on Windows, says the app keeps running in the notification area;
- * a window closing there otherwise looks like the app quitting. macOS keeps the Dock icon, so it
- * needs no hint.
- */
-async function hintStillRunning(): Promise<void> {
-  if (process.platform !== 'win32' || !closeHint || await closeHint.shown()) return;
-  const hint = { title: 'XR Collector 仍在系統匣執行', content: '收集會繼續。要結束，在系統匣圖示按右鍵選「結束」。' };
-  new Notification({ title: hint.title, body: hint.content }).show();
-  if (validationControl) validationNotifications.push(hint);
-  await closeHint.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
-}
 
 app.whenReady().then(async () => {
   const launch = claimLaunch({
@@ -124,9 +117,8 @@ app.whenReady().then(async () => {
   registerPageChannels({
     ipc: ipcMain,
     theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json')),
-    pageReady: (sender) => mainWindow.pageReady(sender),
+    navigationReady: (sender) => mainWindow.navigationReady(sender),
   });
-  // Exports go to this folder unless the person picks another place; the import dialog opens here too.
   const exports = exportFolder(app.getPath('documents'));
   registerDesktopDialogs({
     ipc: ipcMain,
@@ -137,15 +129,9 @@ app.whenReady().then(async () => {
     exports,
     vaultStatus: () => runtime?.transferStatus() ?? undefined,
   });
-  // Collection pauses from suspend to resume. macOS sends neither event during the dark wakes of a
-  // sleeping Mac (Power Nap, maintenance), so nothing is checked until the person wakes it. The
-  // person unlocking or returning to the session also ends the pause, so a resume the system never
-  // sends cannot hold collection back.
-  powerMonitor.on('suspend', pauseForSleep);
-  powerMonitor.on('resume', continueAfterSleep);
-  powerMonitor.on('unlock-screen', continueAfterSleep);
-  powerMonitor.on('user-did-become-active', continueAfterSleep);
-  // One request channel per pacing group for every source request this process makes.
+  // Electron's powerMonitor suspend and resume follow macOS's sleep and wake notifications, which
+  // macOS does not post for dark wakes (Power Nap, maintenance wakes).
+  stopSleepWatch = watchSleep(powerMonitor, { asleep: pauseForSleep, awake: continueAfterSleep });
   const sources = await createSourcePlugins({
     profilePath: app.getPath('userData'),
     env: process.env,
@@ -155,8 +141,6 @@ app.whenReady().then(async () => {
   startupBuildInfo = buildInfo;
   const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
   const updateSource = updateSourceFor(process.env, packageMetadata, updateRequest);
-  // Platform adapters replace this unavailable boundary only when the installed package has a
-  // verified native handoff path. Discovery remains useful in development without pretending it can install.
   const nativeInstaller: NativeInstaller = process.platform === 'darwin'
     ? new MacNativeInstaller({ packaged: app.isPackaged, helper: resources.macUpdateHelper, executablePath: process.execPath, current: buildInfo })
     : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
@@ -176,7 +160,8 @@ app.whenReady().then(async () => {
     profilePath: app.getPath('userData'),
     sources: sources.registry,
     pause: collectionPause,
-    // Electron's client follows the system's proxy settings, as the person's other apps do.
+    // Electron's net module follows the system proxy configuration, including WPAD and PAC files.
+    // https://www.electronjs.org/docs/latest/api/net
     connectivity: { probe: internetProbe((input, init) => net.fetch(input instanceof URL ? input.href : input, init)) },
     workspace: {
       plugins: sources.plugins, pacing: sources.pacing,
@@ -211,7 +196,9 @@ app.whenReady().then(async () => {
         'login_startup_failed');
     }
   }
-  watchNetwork();
+  // Electron's net.isOnline() returning true is inconclusive: a link can be up while remote sites stay unreachable.
+  // https://www.electronjs.org/docs/latest/api/net#netisonline
+  stopNetworkWatch = watchNetwork({ isOnline: () => net.isOnline(), check: () => { void runtime?.connectivity.check(); } });
   await mainWindow.open(startedAtLogin);
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
@@ -220,6 +207,7 @@ app.whenReady().then(async () => {
     iconFolder: resources.trayIcons,
     show: (page) => mainWindow.show(page),
     quit: () => app.quit(),
+    platform: process.platform,
   });
   if (validationControl) {
     exposeValidationControl({
@@ -228,7 +216,7 @@ app.whenReady().then(async () => {
       update: () => updateService?.status() ?? null,
     });
   }
-  launch.finish();
+  launch.startupFinished();
   await updateService.confirmLaunch((error) => console.error('Unable to confirm update launch', error));
   if (nativeInstaller.available) {
     updateCheckScheduler = startUpdateCheckScheduler({
@@ -255,9 +243,8 @@ app.whenReady().then(async () => {
   if (!rolledBack) app.quit();
 });
 
-// Closing the window only hides it, so the window goes away only while quitting, and before-quit
-// finishes that quit itself once the runtime has closed. Quitting again here, inside that quit,
-// leaves the app hanging on Windows. The listener stays so Electron does not quit on its own.
+// Electron quits the app once every window has closed unless something listens for window-all-closed.
+// https://www.electronjs.org/docs/latest/api/app#event-window-all-closed
 app.on('window-all-closed', () => undefined);
 
 function pauseForSleep(): void {
@@ -269,20 +256,17 @@ function continueAfterSleep(): void {
   void updateCheckScheduler?.wake().catch((error: unknown) => console.error('Unable to check for updates after wake', error));
 }
 
-/** Applies one user-confirmed ready package; the two-minute signal spans every Vault drain stage. */
 async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeInstaller): Promise<void> {
   const activeRuntime = runtime;
   if (!activeRuntime) return request.failed('update_apply_failed', 'Collector 服務尚未就緒。');
   await runUpdateCoordinator(request, installer, activeRuntime, {
-    shutdownOwned: () => { updateShutdownOwned = true; },
+    shutdownOwned: () => { shutdownOwner = 'update'; },
     completed: () => { updateCheckScheduler?.stop(); updateCheckScheduler = null; runtime = null; isQuitting = true; app.quit(); },
     terminalFailure: async (error) => {
-      // A transferred runtime can be partly closed and cannot safely resume collection. The
-      // installer has been cancelled and the durable attempt is failed before this native notice.
-      updateShutdownOwned = false; runtime = null; isQuitting = true;
-      if (networkWatch) clearInterval(networkWatch);
+      shutdownOwner = 'none'; runtime = null; isQuitting = true;
+      stopNetworkWatch?.();
       updateCheckScheduler?.stop();
-      networkWatch = null; updateCheckScheduler = null;
+      stopNetworkWatch = null; updateCheckScheduler = null;
       tray?.destroy(); tray = null;
       const notice: Electron.MessageBoxOptions = {
         type: 'error', title: 'App 更新未安裝', message: 'App 更新沒有安裝。',
@@ -297,40 +281,23 @@ async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeIn
   });
 }
 
-/**
- * The system's view of the network changing (Wi-Fi lost or joined) has the runtime confirm the
- * network at once. The system's view alone decides nothing: it still reports a connection on a
- * hotel network before sign-in or behind a router that lost its uplink.
- */
-function watchNetwork(): void {
-  let online = net.isOnline();
-  networkWatch = setInterval(() => {
-    const now = net.isOnline();
-    if (now === online) return;
-    online = now;
-    void runtime?.connectivity.check();
-  }, NETWORK_WATCH_MS);
-}
-
 app.on('before-quit', (event) => {
-  if (!runtime) return;
+  const action = beforeQuitAction(shutdownOwner, runtime);
+  if (action.kind === 'quit') return;
   event.preventDefault();
-  // Once the update lease transfers to shutdown, only its prepared native handoff may terminate
-  // this process. A concurrent menu/OS quit must not win the race and skip installation.
-  if (updateShutdownOwned) return;
+  if (action.kind === 'wait-for-update') return;
+  shutdownOwner = 'person';
   isQuitting = true;
-  powerMonitor.removeListener('suspend', pauseForSleep);
-  powerMonitor.removeListener('resume', continueAfterSleep);
-  powerMonitor.removeListener('unlock-screen', continueAfterSleep);
-  powerMonitor.removeListener('user-did-become-active', continueAfterSleep);
-  if (networkWatch) clearInterval(networkWatch);
+  stopSleepWatch?.();
+  stopSleepWatch = null;
+  stopNetworkWatch?.();
+  stopNetworkWatch = null;
   updateCheckScheduler?.stop();
   updateCheckScheduler = null;
-  networkWatch = null;
   tray?.destroy();
   tray = null;
   mainWindow.destroy();
-  const activeRuntime = runtime;
+  const activeRuntime = action.runtime;
   runtime = null;
   void (async () => {
     try {
@@ -340,8 +307,6 @@ app.on('before-quit', (event) => {
         await acknowledgeMacUpdateShutdown(startupBuildInfo);
       }
     } catch (error) {
-      // Preserve the existing explicit-quit outcome, but without a receipt the helper refuses to
-      // restore A. That prevents a partially closed B and relaunched A from sharing one profile.
       console.error('Unable to safely close before quitting', error);
     } finally {
       app.quit();

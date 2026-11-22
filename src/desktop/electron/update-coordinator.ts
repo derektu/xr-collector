@@ -7,7 +7,6 @@ export interface UpdateCoordinatorHooks {
   terminalFailure(error: Error): Promise<void> | void;
 }
 
-/** Coordinates the cancellable drain and the irreversible runtime-close/native-handoff boundary. */
 export async function runUpdateCoordinator(
   request: UpdateApplyRequest,
   installer: NativeInstaller,
@@ -42,10 +41,6 @@ export async function runUpdateCoordinator(
   } catch (error) {
     await prepared?.cancel().catch(() => undefined);
     if (!transferred) lease?.cancel();
-    // Before ownership transfers, the coordinator's signal is the authoritative reason for
-    // cancellation. A dependency commonly rejects with a generic AbortError and would otherwise
-    // hide whether the user cancelled or the two-minute safety deadline elapsed. After transfer,
-    // preserve the concrete close/handoff failure because the old runtime is no longer reusable.
     const problem = !transferred && controller.signal.aborted && controller.signal.reason instanceof Error
       ? controller.signal.reason
       : error instanceof Error ? error : new Error('無法安全套用更新。');

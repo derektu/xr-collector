@@ -1,3 +1,4 @@
+import type { DesktopPlatform } from '../../shared/api/device-types.js';
 import type { ChangeCounts, ItemCounts, PackageDescription, TransferStatus } from '../../shared/vault/vault-types.js';
 
 const pad = (value: number) => String(value).padStart(2, '0');
@@ -17,11 +18,11 @@ export function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-export function fileManager(platform: string): 'finder' | 'explorer' | 'other' {
+export function fileManager(platform: DesktopPlatform): 'finder' | 'explorer' | 'other' {
   return platform === 'darwin' ? 'finder' : platform === 'win32' ? 'explorer' : 'other';
 }
 
-export function revealLabel(platform: string): string {
+export function revealLabel(platform: DesktopPlatform): string {
   const names = { finder: '在 Finder 顯示', explorer: '在檔案總管顯示', other: '在檔案管理員顯示' } as const;
   return names[fileManager(platform)];
 }

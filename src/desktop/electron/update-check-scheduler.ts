@@ -10,7 +10,6 @@ export interface UpdateCheckSchedulerOptions {
   clearTimeout?: typeof globalThis.clearTimeout;
 }
 
-/** Schedules one startup check and at most one check per 24 hours, including wake events after failures. */
 export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions): { wake(): Promise<boolean>; stop(): void } {
   const now = options.now ?? Date.now;
   const schedule = options.setTimeout ?? globalThis.setTimeout;
@@ -31,8 +30,6 @@ export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions):
     timer = schedule(() => {
       timer = null;
       const lastAttempt = attemptTime();
-      // Every process gets its promised startup check. Only an attempt made
-      // during this same process suppresses the duplicate 30-second check.
       if (startup && (lastAttempt === null || lastAttempt < startedAt)) {
         void attempt().catch(() => {});
         return;

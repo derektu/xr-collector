@@ -11,7 +11,7 @@ import {
 
 export const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback;
 
-type Open = { kind: 'export'; file?: { path: string; overwrite: boolean } } | { kind: 'import'; file?: string };
+type Open = { kind: 'export'; file?: { path: string; overwriteConfirmed: boolean } } | { kind: 'import'; file?: string };
 
 export function ExchangeActions({ onNotice }: { onNotice: (message: string) => void }) {
   const [open, setOpen] = useState<Open | null>(null);
@@ -113,7 +113,7 @@ function useSuggestedPath(given: string | undefined, pick: (suggestion: ExportSu
   return [input, (path) => setInput({ loaded: true, path })];
 }
 
-function ExportDialog({ file, onClose }: { file: { path: string; overwrite: boolean } | undefined; onClose: () => void }) {
+function ExportDialog({ file, onClose }: { file: { path: string; overwriteConfirmed: boolean } | undefined; onClose: () => void }) {
   const [target, setTarget] = useSuggestedPath(file?.path, (suggestion) => suggestion.path);
   const [phase, setPhase] = useState<'input' | 'running' | 'exists' | 'done' | 'failed'>(file ? 'running' : 'input');
   const [result, setResult] = useState<TransferResult | null>(null);
@@ -143,7 +143,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwrite: bool
     }
   }
   useEffect(() => {
-    if (file && !started.current) { started.current = true; void run(file.path, file.overwrite); }
+    if (file && !started.current) { started.current = true; void run(file.path, file.overwriteConfirmed); }
   }, [file]);
 
   return <Modal title="匯出知識庫" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">

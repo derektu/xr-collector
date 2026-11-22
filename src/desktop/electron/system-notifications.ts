@@ -36,7 +36,7 @@ export class ElectronSystemNotifications implements SystemNotificationAdapter {
       if (process.platform !== 'win32') notification.on('click', () => this.activate(event.id));
       this.live.set(event.id, notification);
       this.observed?.({ id: event.id, title, content: body });
-      attemptDelivery(notification, event.id,
+      attemptDelivery(notification,
         () => { this.state = { state: 'available', message: null }; },
         (message) => { this.state = { state: 'failed', message }; this.failureListener?.(event.id, message); });
     } catch (error) {
@@ -63,8 +63,7 @@ interface DeliveryNotification {
   show(): void;
 }
 
-/** Hands the notification to the OS immediately; async OS events update diagnostics without blocking collection. */
-export function attemptDelivery(notification: DeliveryNotification, _id: string, shown: () => void, failed: (message: string) => void): void {
+export function attemptDelivery(notification: DeliveryNotification, shown: () => void, failed: (message: string) => void): void {
   notification.once('show', shown);
   notification.once('failed', (_event, error) => failed(safeFailure(error)));
   notification.show();

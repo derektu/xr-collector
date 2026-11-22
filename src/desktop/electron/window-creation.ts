@@ -1,4 +1,3 @@
-/** Coalesces every request made while the one main BrowserWindow is still loading. */
 export class WindowCreationGate {
   private currentValue: Promise<void> | null = null;
 

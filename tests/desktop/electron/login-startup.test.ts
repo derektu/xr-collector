@@ -2,7 +2,7 @@
 // macOS approval is surfaced, and on Windows only the App's own Run entry with its executable and
 // login switch counts, followed after the App moves, so the setting never shows on or off while the
 // OS does otherwise. A login launch is told apart from a manual one.
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import {
   DesktopLoginStartup, isLoginStartupLaunch, LOGIN_STARTUP_ARGUMENT, LOGIN_STARTUP_NAME,
   type LoginItemAdapter, type LoginItemSettings,
 } from '../../../src/desktop/electron/login-startup.js';
+import { windowsAppId } from '../../../src/desktop/electron/desktop-environment.js';
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -19,6 +20,7 @@ class WindowsAdapter implements LoginItemAdapter {
   readonly isPackaged = true;
   /** Windows Run entries are keyed by registry value name, irrespective of path. */
   readonly items = new Map<string, { name: string; path: string; args: string[]; enabled: boolean; scope: 'user' | 'machine' }>();
+  readonly writes: { openAtLogin: boolean; path: string | undefined }[] = [];
   failEnablingPath: string | null = null;
   ignoreDisabling = false;
   constructor(readonly executablePath: string) {}
@@ -40,6 +42,7 @@ class WindowsAdapter implements LoginItemAdapter {
     };
   }
   set(options: { openAtLogin: boolean; enabled?: boolean; path?: string; args?: string[]; name?: string }): void {
+    this.writes.push({ openAtLogin: options.openAtLogin, path: options.path });
     if (options.openAtLogin && options.path === this.failEnablingPath) throw new Error('synthetic registry write failure');
     const item = { name: options.name ?? LOGIN_STARTUP_NAME, path: options.path!, args: options.args ?? [], enabled: options.enabled ?? options.openAtLogin, scope: 'user' as const };
     if (options.openAtLogin) this.items.set(item.name, item);
@@ -161,6 +164,25 @@ describe('desktop login startup', () => {
       status: { enabled: false, message: expect.stringContaining('位置已變更') },
     });
     expect([...movedAgain.items.values()].some((item) => item.path === movedAgain.executablePath && item.enabled)).toBe(false);
+  });
+
+  it('repairs a moved registration by removing the old Run value before writing the new one, because both share one value name', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-login-')); roots.push(root);
+    const record = path.join(root, 'login-startup.json');
+    const old = new WindowsAdapter('C:\\old\\XR Collector.exe');
+    await new DesktopLoginStartup(old, record).update(true);
+    const moved = new WindowsAdapter('D:\\apps\\XR Collector.exe');
+    moved.items.set(LOGIN_STARTUP_NAME, [...old.items.values()][0]!);
+    await expect(new DesktopLoginStartup(moved, record).repairMovedRegistration()).resolves.toMatchObject({ repaired: true });
+    expect(moved.writes).toEqual([
+      { openAtLogin: false, path: old.executablePath },
+      { openAtLogin: true, path: moved.executablePath },
+    ]);
+  });
+
+  it('names the Windows login item after the package appId, because Electron reads openAtLogin back from the AppUserModelId value', async () => {
+    const packageMetadata: unknown = JSON.parse(await readFile(path.join(process.cwd(), 'package.json'), 'utf8'));
+    expect(LOGIN_STARTUP_NAME).toBe(windowsAppId(packageMetadata));
   });
 
   it('does not mistake another Windows startup entry for this App', async () => {

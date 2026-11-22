@@ -67,9 +67,9 @@ describe('desktop dialogs', () => {
 
   it('adds .zip to an export name and asks before replacing it, but keeps a name the dialog confirmed', async () => {
     const plain = dialogs({ save: path.join(root, 'backup') });
-    expect(await plain.invoke('xrCollector:desktop:chooseExportFile')).toEqual({ path: path.join(root, 'backup.zip'), overwrite: false });
+    expect(await plain.invoke('xrCollector:desktop:chooseExportFile')).toEqual({ path: path.join(root, 'backup.zip'), overwriteConfirmed: false });
     const zipped = dialogs({ save: path.join(root, 'backup.ZIP') });
-    expect(await zipped.invoke('xrCollector:desktop:chooseExportFile')).toEqual({ path: path.join(root, 'backup.ZIP'), overwrite: true });
+    expect(await zipped.invoke('xrCollector:desktop:chooseExportFile')).toEqual({ path: path.join(root, 'backup.ZIP'), overwriteConfirmed: true });
     expect(await dialogs().invoke('xrCollector:desktop:chooseExportFile')).toBeNull();
     expect(await dialogs().invoke('xrCollector:desktop:chooseImportFile')).toBeNull();
   });

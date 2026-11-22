@@ -18,7 +18,7 @@ const jobChange: ChangeBatch = { revision: 'a:1', at: '2026-10-24T10:00:00.000Z'
 /** The status lines above the actions. */
 const status = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []).slice(0, 2);
 
-/** The app's API as the tray reads it; `hold` keeps reads waiting until `release`. */
+/** The app's API as the tray reads it; `hold` keeps reads waiting until `release`, and a held read answers what the API held when it was asked. */
 function api(nextCheckAt = '2026-10-24T18:52:00+08:00') {
   let held: Array<() => void> | null = null;
   const bodies: Record<string, unknown> = {
@@ -29,10 +29,12 @@ function api(nextCheckAt = '2026-10-24T18:52:00+08:00') {
       nextCheck: { type: 'youtube', subscriptionId: 's', title: 'A', at: nextCheckAt } } },
   };
   vi.stubGlobal('fetch', async (url: URL) => {
+    const body = JSON.stringify(bodies[url.pathname]);
     if (held) await new Promise<void>((resolve) => { held!.push(resolve); });
-    return new Response(JSON.stringify(bodies[url.pathname]), { status: 200 });
+    return new Response(body, { status: 200 });
   });
   return {
+    needsAttention() { bodies['/api/device/notifications'] = { notifications: { active: [{ id: 'a', title: 'A' }] } }; },
     hold() { held = []; },
     release() { const waiting = held ?? []; held = null; for (const resolve of waiting) resolve(); },
   };
@@ -46,7 +48,7 @@ function changes() {
   };
 }
 
-const create = (feed: ReturnType<typeof changes>['feed']) => new AppTray({ serverUrl: 'http://127.0.0.1:1', iconFolder: '/icons', changes: feed, show() {}, quit() {} });
+const create = (feed: ReturnType<typeof changes>['feed']) => new AppTray({ platform: 'darwin', serverUrl: 'http://127.0.0.1:1', iconFolder: '/icons', changes: feed, show() {}, quit() {} });
 
 describe('tray reads', () => {
   const timeZone = process.env.TZ;
@@ -94,6 +96,62 @@ describe('tray reads', () => {
     expect(tray.reads).toBe(3);
     await vi.advanceTimersByTimeAsync(READ_GAP_MS * 3);
     expect(tray.reads).toBe(3);
+    tray.destroy();
+  });
+
+  it('a refresh called during a read resolves only after the menu shows a state read after the call', async () => {
+    const server = api();
+    const tray = create(changes().feed);
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS);
+    server.hold();
+    void tray.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tray.reads).toBe(2);
+    server.needsAttention();
+    let resolved = false;
+    void tray.refresh().then(() => { resolved = true; });
+    server.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tray.model().icon).toBe('idle');
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS);
+    expect(tray.reads).toBe(3);
+    expect(tray.model().icon).toBe('attention');
+    expect(resolved).toBe(true);
+    tray.destroy();
+  });
+
+  it('changes arriving during the read gap are covered by the read that follows, without another read', async () => {
+    const server = api();
+    const stream = changes();
+    const tray = create(stream.feed);
+    await vi.advanceTimersByTimeAsync(0);
+    stream.emit(jobChange);
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS / 2);
+    server.needsAttention();
+    stream.emit(jobChange);
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS / 2);
+    expect(tray.reads).toBe(2);
+    expect(tray.model().icon).toBe('attention');
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS * 3);
+    expect(tray.reads).toBe(2);
+    tray.destroy();
+  });
+
+  it('a refresh right after a read finishes starts a new read instead of returning the finished one', async () => {
+    const server = api();
+    const tray = create(changes().feed);
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS);
+    const first = tray.refresh();
+    const next = first.then(() => { server.needsAttention(); return tray.refresh(); });
+    await vi.advanceTimersByTimeAsync(0);
+    await first;
+    expect(tray.reads).toBe(2);
+    expect(tray.model().icon).toBe('idle');
+    await vi.advanceTimersByTimeAsync(READ_GAP_MS);
+    await next;
+    expect(tray.reads).toBe(3);
+    expect(tray.model().icon).toBe('attention');
     tray.destroy();
   });
 
