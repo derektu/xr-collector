@@ -18,8 +18,8 @@ describe('the day screens follow', () => {
 
   it('changes at local midnight and tells each screen once a day', () => {
     const drawn: string[] = [];
-    const stop = watchDay(() => drawn.push(currentDay()));
-    expect(currentDay()).toBe(new Date('2026-10-24T23:59:00+08:00').toDateString());
+    const stop = watchDay(() => drawn.push(currentDay().toDateString()));
+    expect(currentDay().toDateString()).toBe(new Date('2026-10-24T23:59:00+08:00').toDateString());
     vi.advanceTimersByTime(59_000);
     expect(drawn).toEqual([]);
     vi.advanceTimersByTime(2_000);
@@ -35,7 +35,7 @@ describe('the day screens follow', () => {
     watchDay(() => undefined)();
     vi.setSystemTime(new Date('2026-10-26T09:00:00+08:00'));
     const stop = watchDay(() => undefined);
-    expect(currentDay()).toBe(new Date('2026-10-26T09:00:00+08:00').toDateString());
+    expect(currentDay().toDateString()).toBe(new Date('2026-10-26T09:00:00+08:00').toDateString());
     stop();
   });
 });

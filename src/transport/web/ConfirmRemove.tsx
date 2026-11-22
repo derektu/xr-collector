@@ -3,7 +3,6 @@ import type { SubscriptionEntry } from '../../shared/subscriptions/subscription-
 import { api } from './api-client.js';
 import { asksAboutDocuments, removeChoices, removedMessage } from './subscription-presentation.js';
 
-/** Confirms removing a subscription and asks whether its documents stay (the default) or go with it. */
 export function ConfirmRemove({ source, onCancel, onRemoved }: {
   source: Pick<SubscriptionEntry, 'type' | 'id' | 'title' | 'documentCount' | 'checkStatus' | 'capturing'>;
   onCancel: () => void;

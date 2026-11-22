@@ -7,14 +7,9 @@ import { jobEntryLabel } from './jobs-presentation.js';
 import { useLiveRead } from './use-changes.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
-/**
- * Everything the app is doing now: work that started with what it is doing, work queued in the
- * order it starts, and failed single items with retry and remove. It reads the work again after each change to it.
- */
-export function Jobs({ offline, onChanged }: {
-  /** The device has no network, so a failed item cannot be retried now. */
+export function Jobs({ offline, onNotice }: {
   offline: boolean;
-  onChanged: (message: string, tone?: 'ok' | 'error') => void;
+  onNotice: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const declarations = useSourceDeclarations();
   const [acting, setActing] = useState<string | null>(null);
@@ -29,9 +24,9 @@ export function Jobs({ offline, onChanged }: {
     try {
       if (action === 'retry') await api.retryJob(entry.jobId);
       else await api.dismissJob(entry.jobId);
-      onChanged(action === 'retry' ? `已重新排入「${jobEntryLabel(declarations, entry).title}」。` : `已移除「${jobEntryLabel(declarations, entry).title}」。`);
+      onNotice(action === 'retry' ? `已重新排入「${jobEntryLabel(declarations, entry).title}」。` : `已移除「${jobEntryLabel(declarations, entry).title}」。`);
     } catch (reason) {
-      onChanged(reason instanceof Error ? reason.message : '操作失敗，請稍後再試。', 'error');
+      onNotice(reason instanceof Error ? reason.message : '操作失敗，請稍後再試。', 'error');
     } finally {
       setActing(null);
     }
@@ -44,9 +39,8 @@ export function Jobs({ offline, onChanged }: {
     return <>{header}<section className="empty-state jobs-empty" data-testid="jobs-empty"><h2>沒有進行中的工作</h2></section></>;
   }
 
-  const row = (entry: JobOverviewEntry, extra: { order?: number; running?: boolean; failed?: boolean }) => {
+  const row = (entry: JobOverviewEntry, extra: { order?: number; failed?: boolean }) => {
     const label = jobEntryLabel(declarations, entry);
-    const progress = extra.running && entry.progress && entry.progress.total > 0 ? entry.progress : null;
     return <li key={entry.jobId} className="job-row" data-testid={`job-${entry.jobId}`}>
       {extra.order !== undefined ? <span className="job-order">{extra.order}</span> : null}
       <SourceTypeBadge icon={label.icon} />
@@ -57,7 +51,7 @@ export function Jobs({ offline, onChanged }: {
         {extra.failed && label.reason ? <span className="job-sub failed">{label.reason}</span>
           : label.subtitle ? <span className="job-sub">{label.subtitle}</span> : null}
         {label.retryReason ? <span className="job-sub retrying" data-testid="job-retry-reason" data-cause={entry.status?.state === 'retrying' ? entry.status.cause.reason : undefined}>{label.retryReason}</span> : null}
-        {progress ? <progress value={progress.done} max={progress.total} aria-label={`${label.title}進度`} /> : null}
+        {label.progress ? <progress value={label.progress.done} max={label.progress.total} aria-label={`${label.title}進度`} /> : null}
       </span>
       {label.status ? <span className={`status-chip ${label.status.tone}`} data-testid="job-status">{label.status.text}</span> : null}
       {extra.failed ? <span className="job-actions">
@@ -78,7 +72,7 @@ export function Jobs({ offline, onChanged }: {
     {header}
     {error ? <p className="load-error" role="alert">{error}</p> : null}
     <div className="jobs-sections">
-      {section('running', '進行中', overview.running, (entry) => row(entry, { running: true }))}
+      {section('running', '進行中', overview.running, (entry) => row(entry, {}))}
       {section('queued', '排隊中', overview.queued, (entry, index) => row(entry, { order: index + 1 }), true)}
       {section('failed', '失敗', overview.failed, (entry) => row(entry, { failed: true }))}
     </div>

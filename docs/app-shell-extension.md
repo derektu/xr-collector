@@ -17,7 +17,7 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 每一項有 `label`、開啟的對話框標題 `dialogTitle` 與 `mode`。`mode` 是 `url` 或 `<類型>-<種類>`，由 `src/transport/web/AddContent.tsx` 顯示成對應的對話框，標題取自 `addDialogTitles(declarations)`。`mode` 為 null 的項目標為「尚未支援」，點選後開啟只有「目前還不支援＿＿。」的小對話框。
 
-`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape 與 Tab 關閉選單並把焦點還給按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。開啟的選單以 `src/transport/web/floating-menu.ts` 固定在視窗座標、貼著按鈕，外層可捲動或會裁切的容器不會切掉它；任何容器捲動或視窗縮放時選單跟著按鈕移動。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
+`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape、Tab、點選單外面或選了項目都會關閉選單；以鍵盤關閉時焦點回到按鈕。「尚未支援」的對話框以按鈕或 Escape 關閉後，焦點同樣回到選單按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。開啟的選單以 `src/transport/web/floating-menu.ts` 固定在視窗座標、貼著按鈕，外層可捲動或會裁切的容器不會切掉它；任何容器捲動或視窗縮放時選單跟著按鈕移動。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
 
 ## 頁面
 

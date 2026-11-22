@@ -15,13 +15,13 @@ const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', d
  * Device and Vault settings: Vault location with export and import, search index and appearance. Collection
  * settings belong to each source.
  */
-export function Settings({ vaultPath, themePreference, update, onUpdate, onThemePreference, onChanged }: {
+export function Settings({ vaultPath, themePreference, update, onUpdate, onThemePreference, onNotice }: {
   vaultPath: string | null;
   themePreference: ThemePreference;
   update: DeviceUpdateStatus | null;
   onUpdate: (status: DeviceUpdateStatus) => void;
   onThemePreference: (preference: ThemePreference) => void;
-  onChanged: (message: string) => void;
+  onNotice: (message: string) => void;
 }) {
   const themeOptions = useRef<Array<HTMLButtonElement | null>>([]);
   const { value: counts } = useLiveRead(['documents'], (signal) => Promise.all([api.documentSources(signal), api.listSubscriptions(signal)])
@@ -30,9 +30,9 @@ export function Settings({ vaultPath, themePreference, update, onUpdate, onTheme
   return <>
     <div className="page-header"><h1 className="page-title" tabIndex={-1} data-page-heading>設定</h1></div>
     <div className="settings-sections">
-      <VaultLocationSection vaultPath={vaultPath} counts={counts} onChanged={onChanged} />
+      <VaultLocationSection vaultPath={vaultPath} counts={counts} onNotice={onNotice} />
       <SearchIndexCard />
-      <LoginStartup onChanged={onChanged} />
+      <LoginStartup onNotice={onNotice} />
       <AgentConnection />
       <section className="settings-section" data-testid="settings-appearance">
         <h2>外觀</h2>

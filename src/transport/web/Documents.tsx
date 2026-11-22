@@ -48,7 +48,7 @@ interface ListHistoryState {
   documentsScroll?: number;
 }
 
-export function Documents({ state, offline, scroller, onState, onOpen, onNavigate, onAdd, onChanged }: {
+export function Documents({ state, offline, scroller, onState, onOpen, onNavigate, onAdd, onNotice }: {
   state: DocumentListState;
   /** The device has no network, so adding is unavailable. */
   offline: boolean;
@@ -60,7 +60,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   /** Opens the add dialog the menu item names. */
   onAdd: (mode: AddMode) => void;
   /** Reports the result of a row action. */
-  onChanged: (message: string, tone?: 'ok' | 'error') => void;
+  onNotice: (message: string, tone?: 'ok' | 'error') => void;
 }) {
   const declarations = useSourceDeclarations();
   const [draft, setDraft] = useState(state.query);
@@ -158,7 +158,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   }
 
   function deleted(message: string): void {
-    onChanged(message);
+    onNotice(message);
     setEdits((value) => value + 1);
   }
 
@@ -252,7 +252,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
           </span>
         </a>
         <DocumentActions document={document} onDeleted={deleted}
-          onStatusChanged={() => setEdits((value) => value + 1)} onFailed={(message) => onChanged(message, 'error')} />
+          onStatusChanged={() => setEdits((value) => value + 1)} onFailed={(message) => onNotice(message, 'error')} />
       </li>)}
     </ol> : null}
 

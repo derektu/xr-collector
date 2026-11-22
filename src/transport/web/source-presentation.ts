@@ -9,7 +9,6 @@ import type {
 import type { JobError, JobView } from '../../shared/jobs/job-types.js';
 import type { RecognitionAction, UrlRecognition } from '../../shared/sources/source-info-types.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
-import type { SourcePluginDeclaration } from '../../shared/sources/source-contract.js';
 import { itemCount, itemNoun } from './subscription-presentation.js';
 
 export type ShortTime =
@@ -17,10 +16,6 @@ export type ShortTime =
   | { day: 'this_year'; date: string; time: string }
   | { day: 'earlier'; date: string };
 
-/**
- * A compact local time: today or yesterday with the time, the month and day with the time this
- * year, the full date before.
- */
 export function shortTime(value: string, now: Date = new Date()): ShortTime {
   const date = new Date(value);
   const time = clock(date);
@@ -30,7 +25,6 @@ export function shortTime(value: string, now: Date = new Date()): ShortTime {
   return { day: 'earlier', date: `${date.getFullYear()}-${monthDay(date)}` };
 }
 
-/** "今天 13:30", "昨天 21:05", "10-14 08:00" this year, "2025-12-31" before. */
 export function shortTimeText(at: ShortTime): string {
   switch (at.day) {
     case 'today': return `今天 ${at.time}`;
@@ -44,13 +38,10 @@ export function shortTimeLabel(value: string, now: Date = new Date()): string {
   return shortTimeText(shortTime(value, now));
 }
 
-/** One end of a time range: today, yesterday or a date (with its year when it is needed), and the time. */
 export type RangeEnd = { day: 'today' | 'yesterday'; time: string } | { day: 'date'; date: string; time: string };
 
-/** A compact inclusive range: the day once when both ends share it, both days otherwise. */
 export type TimeSpan = { sameDay: true; start: RangeEnd; endTime: string } | { sameDay: false; start: RangeEnd; end: RangeEnd };
 
-/** Years show when the range crosses one or does not fall in the current year; today and yesterday only within one year. */
 export function timeSpan(first: string, last: string, now: Date = new Date()): TimeSpan {
   const start = new Date(first);
   const end = new Date(last);
@@ -74,7 +65,6 @@ function rangeEndDay(end: RangeEnd): string {
   }
 }
 
-/** "今天 08:00–14:00", "昨天 23:00–今天 01:00", "2025-12-31 23:00–2026-01-01 01:00". */
 export function timeSpanText(span: TimeSpan): string {
   if (span.sameDay) return `${rangeEndDay(span.start)} ${span.start.time}–${span.endTime}`;
   return `${rangeEndDay(span.start)} ${span.start.time}–${rangeEndDay(span.end)} ${span.end.time}`;
@@ -84,7 +74,6 @@ export function summaryTimeRange(first: string, last: string, now: Date = new Da
   return timeSpanText(timeSpan(first, last, now));
 }
 
-/** Whether `date` falls on the local day `offset` days from `reference`. */
 function sameDay(date: Date, reference: Date, offset: number): boolean {
   const day = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate() + offset);
   return date.getFullYear() === day.getFullYear() && date.getMonth() === day.getMonth() && date.getDate() === day.getDate();
@@ -103,16 +92,14 @@ export function calendarDate(value: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-/** Type and name filters of the Sources page; the URL carries them so returning restores the list. */
 export interface SourceListState {
-  /** '' for every type. */
-  type: string;
+  type: string | null;
   query: string;
 }
 
 export function parseSourceListState(search: string): SourceListState {
   const parameters = new URLSearchParams(search);
-  return { type: parameters.get('type') ?? '', query: parameters.get('q') ?? '' };
+  return { type: parameters.get('type') || null, query: parameters.get('q') ?? '' };
 }
 
 export function sourceListSearch(state: SourceListState): string {
@@ -123,11 +110,19 @@ export function sourceListSearch(state: SourceListState): string {
   return text ? `?${text}` : '';
 }
 
-/** Sources of the chosen type whose name contains the query, ignoring case. */
-export function filterSources(sources: SubscriptionEntry[], state: SourceListState): SubscriptionEntry[] {
+function sourceListMatcher(state: SourceListState): (type: string, name: string) => boolean {
   const query = state.query.trim().toLocaleLowerCase();
-  return sources.filter((source) => (!state.type || source.type === state.type)
-    && (!query || source.title.toLocaleLowerCase().includes(query)));
+  return (type, name) => (state.type === null || type === state.type) && (!query || name.toLocaleLowerCase().includes(query));
+}
+
+export function filterSources(sources: SubscriptionEntry[], state: SourceListState): SubscriptionEntry[] {
+  const matches = sourceListMatcher(state);
+  return sources.filter((source) => matches(source.type, source.title));
+}
+
+export function filterPending(pending: PendingSubscription[], state: SourceListState): PendingSubscription[] {
+  const matches = sourceListMatcher(state);
+  return pending.filter((entry) => matches(entry.type, entry.title ?? entry.url));
 }
 
 export function sourcePath(type: string, id: string): string {
@@ -144,41 +139,28 @@ export function sourceRouteForPath(pathname: string): { type: string; id: string
   }
 }
 
-/** Top-level jobs still queued or running; a channel job counts once however many videos it holds. */
 export function activeJobs(jobs: JobView[]): JobView[] {
   return jobs.filter((job) => job.parentId === null && (job.state === 'queued' || job.state === 'running'));
 }
 
-/** First letters of a source name for its avatar. */
 export function initials(title: string): string {
   const letters = [...title.replace(/[【】\s]/gu, '')];
   return letters.slice(0, 2).join('').toUpperCase() || '?';
 }
 
-/**
- * The source type of a subscription request, told by which type owns its address, with the label of
- * that type's subscription kind; undefined when no registered type owns it.
- */
-export function pendingOwner(declarations: SourceDeclarations, entry: Pick<PendingSubscription, 'url'>): { declaration: SourcePluginDeclaration; kindLabel: string } | undefined {
-  let url: URL | null = null;
-  try { url = new URL(entry.url); } catch { url = null; }
-  const declaration = declarations.list.find((candidate) => candidate.subscription && candidate.owns(entry.url, url));
-  if (!declaration) return undefined;
-  const kind = declaration.kinds.find((candidate) => candidate.capability === 'subscription');
-  return { declaration, kindLabel: kind?.label ?? declaration.label };
+export function subscriptionKindLabel(declarations: SourceDeclarations, type: string): string | undefined {
+  const declaration = declarations.get(type);
+  return declaration?.kinds.find((candidate) => candidate.capability === 'subscription')?.label ?? declaration?.label;
 }
 
-/** A subscription address as shown under a source name, without the scheme and the listing suffix. */
 export function displayUrl(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/u, '').replace(/\/videos\/?$/u, '');
 }
 
-/** A failure in the source type's own short words, or its message when the type has none for its code. */
 export function failureLabel(declarations: SourceDeclarations, type: string, error: { code: string; message: string }): string {
   return declarations.get(type)?.failureLabels?.[error.code] ?? error.message;
 }
 
-/** Why work waits for a retry: the source limits requests, or a failure with the attempt that comes next. */
 export type RetryCauseView =
   | { reason: 'rate_limited'; source: string }
   | { reason: 'failed'; error: JobError; attempt: number; maxAttempts: number };
@@ -188,7 +170,6 @@ export function retryCause(declarations: SourceDeclarations, type: string, cause
   return { reason: 'failed', error: cause.error, attempt: cause.attempt, maxAttempts: cause.maxAttempts };
 }
 
-/** "網路錯誤（第 2／3 次）", or "<source> 限制連線". */
 export function retryCauseLabel(declarations: SourceDeclarations, type: string, cause: RetryCause): string {
   return retryCauseText(declarations, type, retryCause(declarations, type, cause));
 }
@@ -198,11 +179,6 @@ export function retryCauseText(declarations: SourceDeclarations, type: string, v
   return `${failureLabel(declarations, type, view.error)}（第 ${view.attempt}／${view.maxAttempts} 次）`;
 }
 
-/**
- * One row of a subscription's collection record as data: an item with its title (the address while
- * it has none) and its state, or a check's outcome. A group of checks carries its count and, when it
- * holds more than one, its time span.
- */
 export type CollectionRow =
   | { kind: 'collected'; title: string }
   | { kind: 'failed'; title: string; reason: string; attempts: number; maxAttempts: number }
@@ -240,12 +216,8 @@ export function collectionRow(entry: SubscriptionCollectionEntry, now: Date = ne
   }
 }
 
-/**
- * One row of a subscription's collection record: an item with its state ("沒有字幕・已試 2/3 次",
- * "已略過・影片不存在") or a check's summary ("完成收集：新增 2 支影片", "完成檢查：沒有新影片").
- */
-export function collectionEntryLabel(declarations: SourceDeclarations, entry: SubscriptionCollectionEntry, type: string): { title: string; detail: string } {
-  const row = collectionRow(entry);
+export function collectionEntryLabel(declarations: SourceDeclarations, entry: SubscriptionCollectionEntry, type: string, now: Date = new Date()): { title: string; detail: string } {
+  const row = collectionRow(entry, now);
   switch (row.kind) {
     case 'collected': return { title: row.title, detail: '' };
     case 'failed': return { title: row.title, detail: `${row.reason}・已試 ${row.attempts}/${row.maxAttempts} 次` };
@@ -267,16 +239,11 @@ export function collectionEntryLabel(declarations: SourceDeclarations, entry: Su
   }
 }
 
-/** A check with the subscription it is for. */
 export interface NamedCheck {
   at: ShortTime;
   title: string;
 }
 
-/**
- * The check times under the subscription list: the newest finished check (null before any) and the
- * subscription due next, or why none is due.
- */
 export interface CheckTimes {
   last: NamedCheck | null;
   next: { state: 'auto_check_off' } | { state: 'none' } | ({ state: 'scheduled' } & NamedCheck);
@@ -289,10 +256,6 @@ export function checkTimes(schedule: Pick<CollectionSchedule, 'enabled' | 'lastC
   return { last, next: { state: 'scheduled', at: shortTime(schedule.nextCheck.at, now), title: schedule.nextCheck.title } };
 }
 
-/**
- * The check times under the subscription list, each with its subscription's name, so both match
- * that subscription's detail page: "上次檢查 今天 14:00（財經八百） · 下次檢查 今天 14:30（3Blue1Brown）".
- */
 export function checkTimesLine(schedule: Pick<CollectionSchedule, 'enabled' | 'lastCheck' | 'nextCheck'>, now: Date = new Date()): string {
   const times = checkTimes(schedule, now);
   const named = (check: NamedCheck) => `${shortTimeText(check.at)}（${check.title}）`;
@@ -304,7 +267,6 @@ export function checkTimesLine(schedule: Pick<CollectionSchedule, 'enabled' | 'l
   }
 }
 
-/** When one subscription is checked next: paused, automatic checks off, at a time, or queued without one. */
 export type NextCheck = { state: 'paused' | 'auto_check_off' | 'queued' } | { state: 'scheduled'; at: ShortTime };
 
 export function nextCheck(source: Pick<Subscription, 'enabled' | 'nextCheckAt'>, autoCollection: boolean | null, now: Date = new Date()): NextCheck {
@@ -313,7 +275,6 @@ export function nextCheck(source: Pick<Subscription, 'enabled' | 'nextCheckAt'>,
   return source.nextCheckAt ? { state: 'scheduled', at: shortTime(source.nextCheckAt, now) } : { state: 'queued' };
 }
 
-/** When one subscription is checked next, as its detail page shows it. */
 export function nextCheckLabel(source: Pick<Subscription, 'enabled' | 'nextCheckAt'>, autoCollection: boolean | null, now: Date = new Date()): string {
   const next = nextCheck(source, autoCollection, now);
   switch (next.state) {
@@ -328,11 +289,12 @@ function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-/**
- * The recognition answer that applies to the address now in the input, with its primary action.
- * An answer for an earlier address is not returned, so it can never act on the wrong URL.
- */
 export function currentRecognition(answer: { input: string; recognition: UrlRecognition } | null, input: string): { recognition: UrlRecognition; primary: RecognitionAction | null } | null {
   if (!answer || answer.input !== input.trim()) return null;
   return { recognition: answer.recognition, primary: answer.recognition.actions.find((action) => action.primary) ?? null };
+}
+
+export function typedNumber(text: string): string | number {
+  const trimmed = text.trim();
+  return /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : text;
 }

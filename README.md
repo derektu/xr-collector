@@ -17,6 +17,7 @@ App 以 Mac（Apple Silicon）與 Windows x64 的桌面程式發布，常駐在�
 | 做一張票的步驟、驗收計畫、驗證層級與門檻 | [做一張票](docs/worker-workflow.md)、[開發驗證流程](docs/development-validation.md)、[專案驗證設定](docs/project-validation.md)、[測試說明](tests/README.md) |
 | 發布正式版 | [Release 發布手冊](docs/release-runbook.md)、[更新來源](docs/update-source.md) |
 | App Shell 的路由、新增選單與類型擴充位置 | [App Shell 擴充點](docs/app-shell-extension.md) |
+| 各頁面的操作與更新規則 | [畫面行為](docs/web-ui.md) |
 | Agent 的操作與 HTTP 契約 | [Agent Skill](skills/xr-collector-agent/SKILL.md) |
 
 ## 執行模式

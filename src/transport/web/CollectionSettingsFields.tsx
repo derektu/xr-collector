@@ -3,24 +3,10 @@ import { settingFieldError, settingsErrors } from '../../shared/sources/collecti
 import type { SourceSettingField } from '../../shared/sources/source-info-types.js';
 import type { SubscriptionSettings } from '../../shared/subscriptions/subscription-types.js';
 import { useSourceDeclarations } from './source-declarations.js';
+import { typedNumber } from './source-presentation.js';
 
-/** A typed number as a number when it is all digits; anything else stays text, which no number field accepts. */
-function typedNumber(text: string): string | number {
-  const trimmed = text.trim();
-  return /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : text;
-}
-
-/**
- * The collection settings of one subscription as a check interval row and a sentence saying what
- * every check collects. Inputs, limits and labels come from the source type's declared fields, and
- * the sentence's words from its subscription declaration; a type without a sentence shows each
- * range field in a row with its own label. `value` may hold what the user typed into a number
- * field even when it is invalid; each invalid field shows why under the fields, and the parent
- * checks the same fields with `settingsErrors` before it saves.
- */
 export function CollectionSettingsFields({ idPrefix, type, fields, value, onChange, disabled = false }: {
   idPrefix: string;
-  /** The source type whose settings these are. */
   type: string | null;
   fields: SourceSettingField[];
   value: SubscriptionSettings;

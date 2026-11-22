@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api-client.js';
 import { LoginStartupControl, loginStartupNote, type LoginStartupState } from './login-startup-control.js';
 
-export function LoginStartup({ onChanged }: { onChanged: (message: string) => void }) {
+export function LoginStartup({ onNotice }: { onNotice: (message: string) => void }) {
   const [{ status, pending, error }, setState] = useState<LoginStartupState>({ status: null, pending: false, error: null });
-  const announce = useRef(onChanged);
-  announce.current = onChanged;
+  const announce = useRef(onNotice);
+  announce.current = onNotice;
   const control = useMemo(() => new LoginStartupControl({
     read: (signal) => api.getLoginStartup(signal),
     write: (enabled, signal) => api.setLoginStartup(enabled, signal),
