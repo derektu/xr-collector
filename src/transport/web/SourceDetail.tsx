@@ -174,7 +174,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
         {saving.kind === 'saving' ? <span className="save-state" role="status">儲存中…</span> : null}
         {saving.kind === 'saved' ? <span className="save-state saved" role="status" data-testid="settings-saved">已儲存</span> : null}
         <span className="panel-spacer" />
-        <button type="button" className="button small" disabled={draft !== null} onClick={() => setApplying(true)}
+        <button type="button" className="button small" disabled={draft !== null && settingsErrors(fields, draft).length > 0} onClick={() => setApplying(true)}
           data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
       </div>
       <div className="panel-body">
