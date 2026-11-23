@@ -48,7 +48,7 @@ export async function stageImport(root: string, sources: SourceRegistry, reader:
 
 export async function removeImportStaging(root: string): Promise<void> {
   for (const name of await readdir(root)) {
-    if (name.startsWith(IMPORT_STAGING_PREFIX)) await rm(path.join(root, name), { recursive: true, force: true });
+    if (name.startsWith(IMPORT_STAGING_PREFIX)) await removeStaging(path.join(root, name));
   }
 }
 
