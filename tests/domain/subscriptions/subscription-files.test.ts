@@ -70,6 +70,13 @@ describe('subscription file versions', () => {
     const root = await vault({ schedule: { version: 2 } });
     await expect(new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).load()).rejects.toThrow('Invalid YouTube channel schedule settings');
   });
+
+  it('rejects the whole file when any subscription lacks updatedAt, since import merge decides between two copies by it', async () => {
+    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const { updatedAt: _updatedAt, ...withoutUpdatedAt } = row('UCb');
+    const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings: valid }, { ...withoutUpdatedAt, settings: valid }] } });
+    await expect(new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
+  });
 });
 
 describe('JsonSubscriptionStore', () => {
