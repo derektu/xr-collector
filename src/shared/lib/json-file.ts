@@ -15,8 +15,7 @@ export async function readJsonFile(filePath: string): Promise<unknown> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  const value: unknown = JSON.parse(contents);
-  return value;
+  return JSON.parse(contents);
 }
 
 /** Replaces the file with pretty-printed JSON, creating missing folders; readers see the old file or the new one, never part of it. */
