@@ -1,10 +1,5 @@
 import type { JobState } from '../jobs/job-types.js';
 
-/**
- * What changed, without the data itself: readers fetch the resource again. `vault` with `scope:
- * 'contents'` means the Vault's data was replaced as a whole (import, another Vault opened,
- * setup), so every resource reads again.
- */
 export type Change =
   | { kind: 'job'; id: string; parentId: string | null; state: JobState }
   | { kind: 'document'; id: string }
@@ -26,14 +21,12 @@ export const CHANGE_KINDS: readonly ChangeKind[] = [
 /** Records a change that readers can already see. */
 export type NoteChange = (change: Change) => void;
 
-/** The changes published under one revision. `revision` is the cursor `<epoch>:<number>`. */
 export interface ChangeBatch {
   revision: string;
   at: string;
   changes: Change[];
 }
 
-/** Where a reader stands: the server instance and the last revision it has seen there. */
 export interface ChangeCursor { epoch: string; number: number }
 
 export function formatCursor(cursor: ChangeCursor): string {
@@ -43,6 +36,8 @@ export function formatCursor(cursor: ChangeCursor): string {
 /** Parses `<epoch>:<number>`; null for anything else. */
 export function parseCursor(value: unknown): ChangeCursor | null {
   if (typeof value !== 'string') return null;
-  const match = /^([0-9a-f]{1,32}):(0|[1-9]\d{0,15})$/u.exec(value.trim());
-  return match ? { epoch: match[1]!, number: Number(match[2]) } : null;
+  const text = value.trim();
+  if (!/^[0-9a-f]{1,32}:(0|[1-9]\d{0,15})$/u.test(text)) return null;
+  const separator = text.indexOf(':');
+  return { epoch: text.slice(0, separator), number: Number(text.slice(separator + 1)) };
 }

@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import type { DocumentMetadata, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { CapturedDocument } from '../../../src/shared/sources/source-contract.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
@@ -56,6 +57,11 @@ class MemoryVault implements DocumentVault {
   async read(): Promise<SavedDocument | null> {
     return this.document;
   }
+
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
+  readonly now = () => new Date();
 }
 
 describe('Collector', () => {

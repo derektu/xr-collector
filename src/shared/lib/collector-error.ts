@@ -57,7 +57,6 @@ export class CollectorError extends Error {
   readonly code: CollectorErrorCode;
   /** Diagnostic output of an external tool, such as its stderr; masked and shortened before it is recorded. */
   readonly detail: string | undefined;
-  /** For `rate_limited`: when the source's requests continue. */
   readonly retryAt: string | undefined;
 
   constructor(code: CollectorErrorCode, message: string, options?: ErrorOptions & { detail?: string; retryAt?: string }) {

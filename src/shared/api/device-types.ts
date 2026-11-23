@@ -1,9 +1,5 @@
 import type { JobError } from '../jobs/job-types.js';
 
-/**
- * Device login-startup state, shared by the Settings UI and authorized Agents. `relocated` is off
- * because the App was registered from another location (Windows) and can be turned on again here.
- */
 export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'relocated' | 'unavailable';
 
 export interface LoginStartupStatus {
@@ -15,7 +11,6 @@ export interface LoginStartupStatus {
 
 export type DesktopPlatform = 'darwin' | 'win32' | 'other';
 
-/** Whether the device has a network, as collection needs to know it. */
 export type ConnectivityState = 'online' | 'offline';
 
 export interface ConnectivityStatus {
@@ -47,10 +42,9 @@ export interface NotificationState {
   active: AutoPauseNotification[]; events: AutoPauseNotification[];
 }
 
-/** How the Agent listener picks its port: the first free one from the default, or one fixed port. */
+/** How the Agent listener picks its port: the first free one of the preferred range, else any free port; or one fixed port. */
 export type AgentPortSetting = { mode: 'auto' } | { mode: 'fixed'; port: number };
 
-/** The address and key an Agent connects with. */
 export interface AgentConnection { url: string; token: string }
 
 export interface AgentConnectionStatus {
@@ -58,7 +52,6 @@ export interface AgentConnectionStatus {
   configured: AgentPortSetting; restartRequired: boolean; message: string;
 }
 
-/** The device's system notification setting and the notifications it keeps. */
 export interface NotificationAccess {
   read(): Promise<NotificationState>;
   update(enabled: boolean): Promise<NotificationState>;

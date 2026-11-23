@@ -33,7 +33,7 @@ import type { JobStore } from './job-store.js';
 import type { SubscriptionPort } from './subscription-port.js';
 import { JobWaits, type WaitCondition } from './job-waits.js';
 import { JobQueue, type QueuePlace } from './job-queue.js';
-import { resumeInterrupted, resumedRecord, resumeMessage, storedItem } from './job-recovery.js';
+import { type InterruptedJob, resumeInterrupted, resumedRecord, resumeMessage, storedItem } from './job-recovery.js';
 import { SubscriptionReports } from './subscription-reports.js';
 import { ACTIVE, progressOf, settledItem } from './check-items.js';
 
@@ -67,7 +67,7 @@ const COOLDOWN_WITHOUT_END_MS = 5 * 60_000;
 
 export interface JobManagerOptions {
   vaultPath: string;
-  vaultId?: string | null;
+  vaultId: string;
   store: JobStore;
   sources: SourceDeclarations;
   plugins: readonly SourcePlugin[];
@@ -287,14 +287,10 @@ export class JobManager {
 
   get vaultPath(): string { return this.options.vaultPath; }
 
-  private get vaultId(): string | null { return this.options.vaultId ?? null; }
-
-  private vaultTag(): { vaultId?: string } {
-    return this.vaultId ? { vaultId: this.vaultId } : {};
-  }
+  private get vaultId(): string { return this.options.vaultId; }
 
   private owns(job: CollectionJob): boolean {
-    return job.vaultPath === this.options.vaultPath && (job.vaultId ?? null) === this.vaultId;
+    return job.vaultPath === this.options.vaultPath && job.vaultId === this.vaultId;
   }
 
   /** Accepts a pasted address of a source type according to its syntax: one item, or a subscription. */
@@ -576,7 +572,7 @@ export class JobManager {
     return (await this.options.documents.findExisting({ sourceType: type, sourceId: key })) !== null;
   }
 
-  /** Top-level job counts: queued or running now, and completed or failed (and not retried) since `since`. */
+  /** Top-level job counts: queued or running now, and completed or failed since `since`; a failed job counts until it is retried or dismissed. */
   summary(since: string): JobSummary {
     const bound = new Date(since).toISOString();
     const summary: JobSummary = { active: 0, completed: 0, failed: 0, since: bound };
@@ -592,7 +588,7 @@ export class JobManager {
 
   /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
   recordEvent(entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
-    this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, ...this.vaultTag(), jobId: null });
+    this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, vaultId: this.vaultId, jobId: null });
   }
 
   /**
@@ -719,7 +715,7 @@ export class JobManager {
     this.pump();
   }
 
-  private restore(stored: CollectionJob, options: { queue: boolean } = { queue: true }): CollectionJob {
+  private restore(stored: InterruptedJob, options: { queue: boolean } = { queue: true }): CollectionJob {
     const job = resumedRecord(this.options.sources, stored, this.now().toISOString());
     const waitsForItems = job.state === 'running';
     const key = jobKey(this.options.sources, job);
@@ -734,7 +730,7 @@ export class JobManager {
       else delete job.wait;
     }
     this.options.store.put(job);
-    const stopReason = job.recovery?.lastStop ?? 'unknown';
+    const stopReason = job.recovery.lastStop;
     this.event(job, {
       severity: job.parentId ? 'debug' : 'info', eventType: 'job.resumed', stopReason, message: resumeMessage(stopReason),
     });
@@ -846,7 +842,7 @@ export class JobManager {
       state: 'queued',
       phase: null,
       vaultPath: this.options.vaultPath,
-      ...this.vaultTag(),
+      vaultId: this.vaultId,
       parentId,
       source: { type, ...source },
       createdAt: timestamp,
@@ -1249,9 +1245,9 @@ export class JobManager {
       trigger: job.scope.trigger,
       result: (state === 'failed' && error?.code === 'network_error' ? 'network_error'
         : state === 'completed' && result.outcome !== 'skipped'
-          && progress.created === 0 && progress.failed === 0 && (progress.skipped ?? 0) === 0
+          && progress.created === 0 && progress.failed === 0 && progress.skipped === 0
           ? 'empty' : 'other') as 'empty' | 'network_error' | 'other',
-      created: progress.created, existing: progress.existing, failed: progress.failed, skipped: progress.skipped ?? 0,
+      created: progress.created, existing: progress.existing, failed: progress.failed, skipped: progress.skipped,
     } : undefined;
     const role = roleOf(this.options.sources, job);
     const completedSeverity = role === 'check'

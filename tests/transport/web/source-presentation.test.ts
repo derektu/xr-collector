@@ -47,7 +47,7 @@ function source(overrides: Partial<SubscriptionEntry>): SubscriptionEntry {
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
-    id: 'job', kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: '/vault', parentId: null,
+    id: 'job', kind: 'youtube.channel', state: 'running', phase: 'capture', vaultPath: '/vault', vaultId: 'vault-id', parentId: null,
     source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/@one', title: '頻道一' },
     createdAt: '2026-10-15T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-10-15T00:00:00.000Z',
     progress: null, items: null, result: null, error: null, ...overrides,
@@ -121,7 +121,7 @@ describe('source presentation (T-09)', () => {
 
   it('counts each active top-level job once', () => {
     const jobs = [
-      job({ id: 'a', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0 } }),
+      job({ id: 'a', progress: { total: 10, done: 4, created: 4, existing: 0, failed: 0, skipped: 0 } }),
       job({ id: 'b', state: 'queued', source: { type: 'youtube', id: null, url: 'https://youtu.be/x', title: null } }),
       job({ id: 'c', state: 'completed' }),
       job({ id: 'd', kind: 'youtube.video', parentId: 'a' }),

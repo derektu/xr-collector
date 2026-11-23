@@ -9,15 +9,12 @@ export interface SearchQuery extends DocumentFilter {
 }
 
 export interface SearchHit extends DocumentMetadata {
-  /** Cropped body text around the match, with matched terms wrapped in `<mark>` and `</mark>`. */
   snippet: string;
 }
 
 export interface SearchResponse {
   hits: SearchHit[];
-  /** Exact number of matching documents. */
   total: number;
-  /** Documents matching every filter but the status, by status. */
   statusCounts: DocumentStatusCounts;
   offset: number;
   limit: number;
@@ -28,12 +25,10 @@ export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'er
 export interface SearchStatus {
   state: SearchState;
   indexedDocuments: number;
-  /** When the index was last rebuilt from the Vault, including rebuilds at startup. */
   lastRebuiltAt: string | null;
   message?: string;
 }
 
-/** Search status as the HTTP API reports it, next to the Vault's own document count. */
 export interface SearchStatusReport extends SearchStatus {
   vaultDocuments: number;
 }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Collector } from '../../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../../src/shared/documents/document-vault.js';
+import { withoutDocumentChanges } from '../../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../../src/shared/jobs/job-types.js';
 import type { SavedDocument } from '../../../../src/shared/documents/document-types.js';
@@ -23,6 +24,7 @@ import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 // one is chosen, the summary and retry contract, and parameter validation.
 
 const VAULT = '/vaults/http';
+const VAULT_ID = 'vault-id';
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -45,12 +47,13 @@ function services(failures: CollectorError[] = []) {
     },
     list: async () => [],
     read: async () => saved,
+    ...withoutDocumentChanges(),
   };
   const records = memoryJobRecords(PRODUCT_SOURCES);
   const store = records.jobs;
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
-    vaultPath: VAULT, store, sources: PRODUCT_SOURCES, documents: collector,
+    vaultPath: VAULT, vaultId: VAULT_ID, store, sources: PRODUCT_SOURCES, documents: collector,
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new CollectorError('invalid_subscription', '無法辨認'); },
       discover: async () => [],

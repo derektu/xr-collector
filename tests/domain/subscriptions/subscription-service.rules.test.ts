@@ -64,7 +64,7 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
     let services!: SubscriptionServices;
     const jobs: JobManager = new JobManager({
       sources: SOURCES,
-      vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,
+      vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,
       limits: { discovery: 1, capture: 1 }, retry: { maxAttempts: 1 }, setTimer: () => () => undefined,
     });
     const service = (type: FakeType) => new SubscriptionService(type, stores[type], jobs, {

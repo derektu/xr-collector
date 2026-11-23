@@ -71,7 +71,7 @@ async function world(connectivity?: ConnectivityAccess) {
   const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now) };
   const jobs: JobManager = new JobManager({
     sources: SOURCES,
-    vaultPath: root, store: memoryJobRecords(SOURCES, { now }).jobs, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(SOURCES, { now }).jobs, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },
   });
   let scheduler!: CollectionScheduler;

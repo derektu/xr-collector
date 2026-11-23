@@ -6,6 +6,7 @@ import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
 import type { ChangeBatch } from '../../../src/shared/api/changes.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { withoutDocumentChanges } from '../../support/document-vault-stubs.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import type { CheckEnd } from '../../../src/domain/jobs/subscription-port.js';
@@ -14,6 +15,7 @@ import { SubscriptionRecorder } from '../../support/subscription-recorder.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const VAULT = '/vaults/order';
+const VAULT_ID = 'vault-id';
 const CHANNEL = { id: 'UCorder', title: '順序', url: 'https://www.youtube.com/channel/UCorder/videos' };
 
 /** A subscription port whose first check-end write waits until the test releases it. */
@@ -44,6 +46,7 @@ const emptyVault: DocumentVault = {
   add: async () => { throw new Error('nothing is collected'); },
   list: async () => [],
   read: async () => null,
+  ...withoutDocumentChanges(),
 };
 
 describe('a check ending', () => {
@@ -56,7 +59,7 @@ describe('a check ending', () => {
     const subs = new SlowEnd(changes);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, store, subscriptions: subs, documents: new Collector(emptyVault),
+      vaultPath: VAULT, vaultId: VAULT_ID, store, subscriptions: subs, documents: new Collector(emptyVault),
       plugins: [youtubePlugin({
         resolveChannel: async () => CHANNEL, discover: async () => [], capture: async () => { throw new Error('no capture'); },
       })],
@@ -68,7 +71,7 @@ describe('a check ending', () => {
 
     await subs.entered;
     changes.flush();
-    const waiting = { state: manager.get(submission.job.id).state, listed: store.list(VAULT)[0]?.state,
+    const waiting = { state: manager.get(submission.job.id).state, listed: store.list(VAULT, VAULT_ID)[0]?.state,
       ended: subs.of('ended').length, events: records.views.query({ limit: 50 }, { vaultPath: null }) };
     expect(waiting).toMatchObject({ state: 'running', listed: 'running', ended: 0 });
     const again = await manager.submitCheck('youtube', subscription, 'manual');

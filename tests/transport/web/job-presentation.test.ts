@@ -5,7 +5,7 @@ import { PRODUCT_DECLARATIONS } from '../../support/product-sources.js';
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
-    id: 'job-1', kind: 'youtube.video', state: 'completed', phase: 'index', vaultPath: '/vault', parentId: null,
+    id: 'job-1', kind: 'youtube.video', state: 'completed', phase: 'index', vaultPath: '/vault', vaultId: 'vault-id', parentId: null,
     source: { type: 'youtube', id: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'Video' },
     createdAt: '2026-10-15T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-10-15T00:00:00.000Z',
     progress: null, items: null, result: null, error: null, ...overrides,

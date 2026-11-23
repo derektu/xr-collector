@@ -84,10 +84,9 @@ export class JobStore {
 
   /**
    * Jobs of one Vault, newest first; jobs created in the same millisecond keep their submission order.
-   * A job belongs to the Vault when both its path and its Vault ID match; `vaultId` null selects the
-   * jobs at the path that carry no ID.
+   * A job belongs to the Vault when both its path and its Vault ID match.
    */
-  list(vaultPath: string, vaultId: string | null = null): CollectionJob[] {
+  list(vaultPath: string, vaultId: string): CollectionJob[] {
     return [...this.jobs.values()]
       .filter((job) => belongsTo(job, vaultPath, vaultId))
       .reverse()
@@ -198,8 +197,8 @@ export class JobStore {
   }
 }
 
-function belongsTo(job: CollectionJob, vaultPath: string, vaultId: string | null): boolean {
-  return job.vaultPath === vaultPath && (job.vaultId ?? null) === vaultId;
+function belongsTo(job: CollectionJob, vaultPath: string, vaultId: string): boolean {
+  return job.vaultPath === vaultPath && job.vaultId === vaultId;
 }
 
 function parseJobs(contents: string): CollectionJob[] | null {

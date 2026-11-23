@@ -59,7 +59,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const collector = new Collector(documents);
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}), ...(connectivity ? { connectivity } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);

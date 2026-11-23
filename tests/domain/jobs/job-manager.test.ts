@@ -8,6 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
@@ -29,6 +30,7 @@ import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const VAULT = '/vaults/a';
+const VAULT_ID = 'vault-id';
 
 function videoId(index: number, prefix = 'v'): string {
   return `${prefix}${String(index).padStart(10, '0')}`.slice(0, 11);
@@ -62,6 +64,10 @@ class MemoryVault implements DocumentVault {
   }
   async list(): Promise<DocumentSummary[]> { return []; }
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
+  readonly now = () => new Date();
 }
 
 /** A YouTube source whose captures wait until the test releases them. */
@@ -107,7 +113,7 @@ function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; fai
   let sequence = 0;
   const manager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
+    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.recentTargets ? { recentTarget: (type: string, url: string) => options.recentTargets!.get(type, url) } : {}),
     createId: () => `job-${++sequence}`,
@@ -324,7 +330,7 @@ describe('JobManager', () => {
 
     const other = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: '/vaults/b', store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: new SubscriptionRecorder(),
+      vaultPath: '/vaults/b', vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: new SubscriptionRecorder(),
     });
     expect(other.list().jobs).toEqual([]);
     expect(() => other.get(first.jobs[0]!.id)).toThrowError(expect.objectContaining({ code: 'job_not_found' }));
@@ -409,7 +415,7 @@ describe('JobStore', () => {
     const channelJob = reopened.get(accepted.job.id)!;
     expect(channelJob).toMatchObject({ state: 'interrupted', source: { title: '停止中的頻道' }, progress: { done: 1, created: 1 } });
     expect(channelJob.items?.map((item) => item.state)).toEqual(['completed', 'interrupted']);
-    expect(reopened.list(VAULT).filter((job) => job.state === 'interrupted').length).toBeGreaterThanOrEqual(2);
+    expect(reopened.list(VAULT, VAULT_ID).filter((job) => job.state === 'interrupted').length).toBeGreaterThanOrEqual(2);
 
     await reopenedRecords.activity.flush();
     const events = await readEventFiles(directory);
@@ -452,7 +458,7 @@ describe('JobStore', () => {
   it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
     const store = memoryJobRecords(PRODUCT_SOURCES).jobs;
     const record = (id: string, state: 'completed' | 'interrupted', minute: number): CollectionJob => ({
-      id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, parentId: null,
+      id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
       source: { type: 'youtube', id: null, url: watchUrl(videoId(minute)), title: null },
       createdAt: new Date(Date.UTC(2026, 9, 1, 0, minute)).toISOString(), startedAt: null, finishedAt: null,
       updatedAt: new Date(Date.UTC(2026, 9, 1, 0, minute)).toISOString(),
@@ -464,7 +470,7 @@ describe('JobStore', () => {
 
     expect(store.get('oldest-interrupted')).toMatchObject({ state: 'interrupted' });
     expect(store.get('oldest-completed')).toBeUndefined();
-    expect(store.list(VAULT)).toHaveLength(1001);
+    expect(store.list(VAULT, VAULT_ID)).toHaveLength(1001);
   });
 
   it.each(['', '{"version":1,"jobs":"broken"}', '{"version":99,"jobs":[]}'])(
@@ -476,7 +482,7 @@ describe('JobStore', () => {
       try {
         const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => new Date('2026-10-15T01:02:03.456Z') });
         const store = records.jobs;
-        expect(store.list(VAULT)).toEqual([]);
+        expect(store.list(VAULT, VAULT_ID)).toEqual([]);
         expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
         expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);
         expect(error).toHaveBeenCalledOnce();

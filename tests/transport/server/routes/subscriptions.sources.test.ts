@@ -37,7 +37,7 @@ async function world() {
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 },
     // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },

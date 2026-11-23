@@ -1,11 +1,7 @@
 import type { DocumentKey, SavedDocument } from './document-types.js';
 import type { CapturedDocument } from '../sources/source-contract.js';
 
-/**
- * Why a document is being saved. `explicitAt` is when the user asked for this one item; it is null
- * for automatic and subscription collection. Only an explicit request made after a deletion collects a
- * deleted item again.
- */
+/** `explicitAt` is when the user asked for this one item; null for automatic and subscription collection. */
 export interface SaveIntent {
   explicitAt: string | null;
 }
@@ -13,14 +9,9 @@ export interface SaveIntent {
 export interface IndexOutcome {
   indexed: boolean;
   message?: string;
-  /** The document was deleted before it could be indexed; nothing was indexed. */
   deleted?: boolean;
 }
 
-/**
- * What collection work asks of the Vault it writes to: whether an item is already there or deleted,
- * saving a captured item, and indexing the saved document. The Vault module's `Collector` provides it.
- */
 export interface DocumentCollector {
   findExisting(key: DocumentKey): Promise<SavedDocument | null>;
   /** Whether discovery should pass over this item: it is in the Vault or the user deleted it. */

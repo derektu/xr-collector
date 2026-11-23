@@ -17,6 +17,7 @@ import type { Subscription } from '../../../src/shared/subscriptions/subscriptio
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const VAULT = '/vault/activity-summary';
+const VAULT_ID = 'vault-id';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
@@ -228,7 +229,7 @@ describe('durable summary retention (#96 A6)', () => {
     for (let index = 0; index < 12; index += 1) records.activity.record(terminal(`durable-${index}`, at(index)));
     await records.close();
     records = await openJobRecords(root, PRODUCT_SOURCES, { now: () => now });
-    expect(records.jobs.list(VAULT)).toHaveLength(1000);
+    expect(records.jobs.list(VAULT, VAULT_ID)).toHaveLength(1000);
     let page = await records.views.summary({ view: 'summary' }, scope);
     const group = page.entries.find((entry) => entry.kind === 'check')!;
     expect(group.count).toBe(12);
@@ -244,7 +245,7 @@ describe('durable summary retention (#96 A6)', () => {
 
 function finishedJob(id: string, timestamp: string): CollectionJob {
   return {
-    id, kind: 'youtube-video', state: 'completed', phase: null, vaultPath: VAULT, parentId: null,
+    id, kind: 'youtube-video', state: 'completed', phase: null, vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
     source: { type: 'youtube', id, url: `https://example.test/${id}`, title: id }, createdAt: timestamp,
     startedAt: timestamp, finishedAt: timestamp, updatedAt: timestamp, progress: null, items: null,
     result: { outcome: 'existing' }, error: null,

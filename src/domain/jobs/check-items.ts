@@ -20,7 +20,7 @@ export function progressOf(items: JobItem[]): JobProgress {
   for (const item of items) {
     if (ACTIVE.has(item.state)) continue;
     progress.done += 1;
-    if (item.state === 'completed' && item.outcome) progress[item.outcome] = (progress[item.outcome] ?? 0) + 1;
+    if (item.state === 'completed' && item.outcome) progress[item.outcome] += 1;
     else progress.failed += 1;
   }
   return progress;

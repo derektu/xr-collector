@@ -130,7 +130,7 @@ async function world(options: { holdAdds?: boolean } = {}) {
     stores.push(store);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: subs,
+      vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: subs,
       limits: { discovery: 1, capture: 1 }, now: () => clock.now, createId: () => `job-${++sequence}`,
     });
     subs.attach(manager);

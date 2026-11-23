@@ -1,12 +1,18 @@
 import { jobKey, roleOf } from '../../shared/jobs/job-role.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import type { SubscriptionTarget } from '../../shared/sources/source-contract.js';
-import type { CollectionJob, JobError, JobItem, JobResult, SkipReason } from '../../shared/jobs/job-types.js';
+import type { CollectionJob, JobError, JobItem, JobRecovery, JobResult, JobStopKind, SkipReason } from '../../shared/jobs/job-types.js';
 import { ACTIVE, progressOf, settledItem } from './check-items.js';
 
 export const MAX_UNCLEAN_STOPS = 3;
 
 export const INTERRUPTED_REPEATEDLY = 'interrupted_repeatedly';
+
+export type InterruptedJob = CollectionJob & { state: 'interrupted'; recovery: JobRecovery };
+
+function isInterrupted(job: CollectionJob): job is InterruptedJob {
+  return job.state === 'interrupted' && job.recovery !== undefined;
+}
 
 export interface RecoveryHost {
   sources: SourceDeclarations;
@@ -17,15 +23,15 @@ export interface RecoveryHost {
   stopped(type: string, id: string): Promise<SkipReason | null>;
   settle(job: CollectionJob, state: 'completed' | 'failed', result: JobResult, error: JobError | null): void;
   updateStored(job: CollectionJob, patch: Partial<CollectionJob>): void;
-  restore(job: CollectionJob, options?: { queue: boolean }): CollectionJob;
+  restore(job: InterruptedJob, options?: { queue: boolean }): CollectionJob;
   subscribeResolved(job: CollectionJob, target: SubscriptionTarget): Promise<void>;
   watchItems(checkId: string): void;
 }
 
 export async function resumeInterrupted(host: RecoveryHost): Promise<void> {
   const { sources } = host;
-  const superseded: CollectionJob[] = [];
-  const pending: CollectionJob[] = [];
+  const superseded: InterruptedJob[] = [];
+  const pending: InterruptedJob[] = [];
   const seen = new Set<string>();
   const unknownTypes = new Set<string>();
   for (const job of host.stored()) {
@@ -36,7 +42,7 @@ export async function resumeInterrupted(host: RecoveryHost): Promise<void> {
     const key = jobKey(sources, job);
     const later = seen.has(key);
     seen.add(key);
-    if (job.state === 'interrupted') (later ? superseded : pending).push(job);
+    if (isInterrupted(job)) (later ? superseded : pending).push(job);
   }
   for (const kind of unknownTypes) console.warn(`Interrupted ${kind} jobs are kept and not resumed: their source type is not available`);
   pending.reverse();
@@ -63,7 +69,7 @@ export async function resumeInterrupted(host: RecoveryHost): Promise<void> {
     }
     settle(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
   };
-  const tooManyStops = (job: CollectionJob) => (job.recovery?.uncleanStops ?? 0) >= MAX_UNCLEAN_STOPS;
+  const tooManyStops = (job: InterruptedJob) => job.recovery.uncleanStops >= MAX_UNCLEAN_STOPS;
   const repeated: JobError = { code: INTERRUPTED_REPEATEDLY, message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
 
   for (const job of superseded) {
@@ -102,28 +108,26 @@ export async function resumeInterrupted(host: RecoveryHost): Promise<void> {
   for (const job of checkJobs) host.watchItems(job.id);
 }
 
-export function resumedRecord(sources: SourceDeclarations, stored: CollectionJob, timestamp: string): CollectionJob {
+export function resumedRecord(sources: SourceDeclarations, stored: InterruptedJob, timestamp: string): CollectionJob & { recovery: JobRecovery } {
   const waitsForItems = roleOf(sources, stored) === 'check' && stored.items !== null;
   return {
     ...stored,
     state: waitsForItems ? 'running' : 'queued',
     finishedAt: null,
     error: null,
-    recovery: {
-      ...stored.recovery,
-      resumedCount: (stored.recovery?.resumedCount ?? 0) + 1,
-      uncleanStops: stored.recovery?.uncleanStops ?? 0,
-      lastInterruptedAt: stored.recovery?.lastInterruptedAt ?? stored.updatedAt,
-      lastResumedAt: timestamp,
-    },
+    recovery: { ...stored.recovery, resumedCount: stored.recovery.resumedCount + 1, lastResumedAt: timestamp },
     updatedAt: timestamp,
   };
 }
 
-export function resumeMessage(stopReason: string): string {
-  return stopReason === 'shutdown' ? '服務正常關閉後重新啟動，接續收集工作。'
-    : stopReason === 'crash' ? '服務異常結束後重新啟動，接續收集工作。'
-      : stopReason === 'vault_switch' ? '回到這個知識庫，接續收集工作。' : '服務重新啟動後接續收集工作。';
+const RESUME_MESSAGES: Record<JobStopKind, string> = {
+  shutdown: '服務正常關閉後重新啟動，接續收集工作。',
+  crash: '服務異常結束後重新啟動，接續收集工作。',
+  vault_switch: '回到這個知識庫，接續收集工作。',
+};
+
+export function resumeMessage(stopReason: JobStopKind): string {
+  return RESUME_MESSAGES[stopReason];
 }
 
 export function storedItem(host: Pick<RecoveryHost, 'storedJob' | 'itemName'>, check: CollectionJob, item: JobItem): JobItem {
