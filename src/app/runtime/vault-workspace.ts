@@ -39,7 +39,6 @@ export interface WorkspaceOptions {
   exportFolder: string;
   backupFolder: string;
   machineName?: string;
-  holdTimeoutMs?: number;
   createdBy: string;
   sources: SourceRegistry;
   plugins: readonly SourcePlugin[];
@@ -92,11 +91,9 @@ export class VaultWorkspace {
   readonly schedule = forwarding(() => this.current.schedule);
   readonly search = forwarding<TranscriptSearch>(() => this.current.runtime.search);
   private readonly jobStore: JobStore;
-  private readonly holdTimeoutMs: number | undefined;
 
   private constructor(private readonly options: WorkspaceOptions) {
     this.jobStore = options.jobStore ?? JobStore.memory(options.sources, ActivityLog.memory());
-    this.holdTimeoutMs = options.holdTimeoutMs;
     this.operations = new VaultOperations({
       sources: options.sources, selection: options.selection,
       exportFolder: options.exportFolder, backupFolder: options.backupFolder, createdBy: options.createdBy,
@@ -105,7 +102,7 @@ export class VaultWorkspace {
       ...(options.fixedLocation ? { fixedLocation: options.fixedLocation } : {}),
     }, {
       current: () => ({ vault: this.current.vault, search: this.current.runtime.search }),
-      hold: (signal) => this.current.jobs.hold(this.holdTimeoutMs, signal),
+      hold: () => this.current.jobs.hold(),
       idle: () => this.current.schedule.idle(),
       suspend: (value) => this.current.schedule.setSuspended(value),
       event: (entry) => this.jobStore.event(entry),
@@ -241,7 +238,6 @@ export class VaultWorkspace {
         },
         documents: () => collector.list(),
         deleteDocument: (id) => collector.delete(id),
-        recordDeletion: (entry) => collector.recordDeletion(entry),
         ...(login ? { loginRequired: () => login.status() === 'required' } : {}),
         ...(onAutoPaused ? { onAutoPaused: (record) => onAutoPaused(vault.vaultId, plugin.id, record) } : {}),
       });

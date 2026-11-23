@@ -34,7 +34,6 @@ import { MainWindow } from './main-window.js';
 import { registerPageChannels } from './page-channels.js';
 import { exposeValidationControl } from './validation-control.js';
 import { watchSleep } from './sleep-watch.js';
-import { watchNetwork } from './network-watch.js';
 import { beforeQuitAction, type ShutdownOwner } from './shutdown-owner.js';
 
 let runtime: CollectorServer | null = null;
@@ -46,7 +45,6 @@ let shutdownOwner: ShutdownOwner = 'none';
 let startupBuildInfo: BuildInfo | null = null;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
-let stopNetworkWatch: (() => void) | null = null;
 let stopSleepWatch: (() => void) | null = null;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
@@ -76,7 +74,6 @@ const mainWindow = new MainWindow({
   openExternal: (url) => { void shell.openExternal(url); },
   runtime: () => runtime && {
     url: runtime.listeners.ui.url,
-    resolveNotification: (id) => runtime ? runtime.resolveNotification(id) : Promise.resolve(null),
     activeVaultId: () => runtime?.activeVaultId() ?? null,
   },
   quitting: () => isQuitting,
@@ -182,7 +179,7 @@ app.whenReady().then(async () => {
     loginStartup,
     startedAtLogin,
     updates: updateService,
-    systemNotifications: new ElectronSystemNotifications((id) => mainWindow.show({ notificationId: id }),
+    systemNotifications: new ElectronSystemNotifications((notification) => mainWindow.show({ notification }),
       validationControl ? (notification) => validationNotifications.push(notification) : undefined),
   });
   for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
@@ -196,9 +193,6 @@ app.whenReady().then(async () => {
         'login_startup_failed');
     }
   }
-  // Electron's net.isOnline() returning true is inconclusive: a link can be up while remote sites stay unreachable.
-  // https://www.electronjs.org/docs/latest/api/net#netisonline
-  stopNetworkWatch = watchNetwork({ isOnline: () => net.isOnline(), check: () => { void runtime?.connectivity.check(); } });
   await mainWindow.open(startedAtLogin);
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({
@@ -264,9 +258,8 @@ async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeIn
     completed: () => { updateCheckScheduler?.stop(); updateCheckScheduler = null; runtime = null; isQuitting = true; app.quit(); },
     terminalFailure: async (error) => {
       shutdownOwner = 'none'; runtime = null; isQuitting = true;
-      stopNetworkWatch?.();
       updateCheckScheduler?.stop();
-      stopNetworkWatch = null; updateCheckScheduler = null;
+      updateCheckScheduler = null;
       tray?.destroy(); tray = null;
       const notice: Electron.MessageBoxOptions = {
         type: 'error', title: 'App 更新未安裝', message: 'App 更新沒有安裝。',
@@ -289,8 +282,6 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   stopSleepWatch?.();
   stopSleepWatch = null;
-  stopNetworkWatch?.();
-  stopNetworkWatch = null;
   updateCheckScheduler?.stop();
   updateCheckScheduler = null;
   tray?.destroy();

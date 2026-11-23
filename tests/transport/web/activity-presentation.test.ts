@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
-import type { JobEvent } from '../../../src/shared/activity/activity-types.js';
+import type { ActivitySummaryEntry, JobEvent } from '../../../src/shared/activity/activity-types.js';
 import {
   activityQuery,
   activityStateSearch,
@@ -8,16 +8,16 @@ import {
   eventLevel,
   eventLine,
   localDayStart,
-  logProblem,
   logTime,
   mergeNewest,
+  mergeSummary,
   parseActivityState,
   summaryRange,
 } from '../../../src/transport/web/activity-presentation.js';
 
 // The Activity page: level labels, what each log line says and whose it is, filters kept in the
-// address and turned into a query, log write problems, check summary ranges, and diagnostics of a
-// job for a bug report (A-T11).
+// address and turned into a query, check summary ranges, refreshed pages merged with the ones already
+// loaded, and diagnostics of a job for a bug report (A-T11).
 
 const base = { eventId: 'e1', timestamp: '2026-10-15T06:00:00.000Z', vaultPath: '/v', jobId: 'j1', message: 'message' } as const;
 
@@ -98,15 +98,6 @@ describe('activity presentation', () => {
     expect(localDayStart(now).getDate()).toBe(15);
   });
 
-  it('reports events waiting to be written and events lost', () => {
-    const health = { state: 'ok' as const, pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 3 };
-    expect(logProblem(null)).toBeNull();
-    expect(logProblem(health)).toBeNull();
-    expect(logProblem({ ...health, state: 'failing', pending: 4 })).toEqual({ state: 'failing', pending: 4, dropped: null });
-    expect(logProblem({ ...health, state: 'failing', pending: 4, dropped: 1 })).toEqual({ state: 'failing', pending: 4, dropped: 1 });
-    expect(logProblem({ ...health, dropped: 2 })).toEqual({ state: 'lost', dropped: 2 });
-  });
-
   it('shows both dates for a summary spanning local midnight and one time for a singleton', () => {
     const first = '2026-10-20T15:59:00.000Z';
     const last = '2026-10-20T16:01:00.000Z';
@@ -134,5 +125,29 @@ describe('activity presentation', () => {
   it('adds a fresh first page above loaded entries without repeating any', () => {
     const entry = (id: string) => ({ ...base, eventId: id, severity: 'info' as const, eventType: 'job.started' as const });
     expect(mergeNewest([entry('b'), entry('a')], [entry('c'), entry('b')]).map((item) => item.eventId)).toEqual(['c', 'b', 'a']);
+  });
+
+  const row = (id: string, minute: number): ActivitySummaryEntry => ({
+    kind: 'event', event: { ...base, eventId: id, timestamp: `2026-10-15T06:${String(minute).padStart(2, '0')}:00.000Z`, severity: 'info', eventType: 'job.started' },
+  });
+  const ids = (list: { entries: ActivitySummaryEntry[] }) => list.entries.map((entry) => entry.kind === 'event' ? entry.event.eventId : entry.groupId);
+
+  it.each([
+    ['keeps loaded rows older than the fresh page, so older pages stay shown and continue from their cursor',
+      { entries: [row('c', 30), row('b', 20), row('a', 10)], nextCursor: 'older' }, { entries: [row('d', 40), row('c', 30)], nextCursor: 'fresh' },
+      ['d', 'c', 'b', 'a'], 'older'],
+    ['keeps a loaded row from the same millisecond as the fresh page\'s last row, which the server orders after it',
+      { entries: [row('c', 30), row('b2', 20), row('a', 10)], nextCursor: 'older' }, { entries: [row('d', 40), row('c', 30), row('b1', 20)], nextCursor: 'fresh' },
+      ['d', 'c', 'b1', 'b2', 'a'], 'older'],
+    ['takes a fresh page that reaches the end as the whole list',
+      { entries: [row('b', 20), row('a', 10)], nextCursor: null }, { entries: [row('c', 30), row('b', 20), row('a', 10)], nextCursor: null },
+      ['c', 'b', 'a'], null],
+    ['takes the fresh page when nothing older was loaded',
+      { entries: [row('b', 20)], nextCursor: 'fresh-before' }, { entries: [row('c', 30), row('b', 20)], nextCursor: 'fresh' },
+      ['c', 'b'], 'fresh'],
+  ])('%s', (_name, loaded, fresh, expected, cursor) => {
+    const merged = mergeSummary(loaded, fresh);
+    expect(ids(merged)).toEqual(expected);
+    expect(merged.nextCursor).toBe(cursor);
   });
 });

@@ -5,7 +5,6 @@
 // notification clicked while the page loads opens its target once the page listens.
 import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMain, WebContents } from 'electron';
 import { describe, expect, it } from 'vitest';
-import type { AutoPauseNotification } from '../../../src/shared/api/device-types.js';
 import { claimLaunch, type LaunchHost } from '../../../src/desktop/electron/desktop-launch.js';
 import { MainWindow, type WindowRuntime } from '../../../src/desktop/electron/main-window.js';
 import { registerPageChannels } from '../../../src/desktop/electron/page-channels.js';
@@ -71,7 +70,6 @@ function windows() {
 
 const runtime: WindowRuntime = {
   url: 'http://127.0.0.1:1',
-  resolveNotification: async (id) => ({ id, vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' }) as AutoPauseNotification,
   activeVaultId: () => 'vault-a',
 };
 
@@ -162,7 +160,7 @@ describe('Electron main login-startup wiring', () => {
     });
 
     // A click before the runtime starts waits for it; one during loading waits for the page.
-    window.show({ notificationId: 'event' });
+    window.show({ notification: { vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' } });
     started = runtime;
     window.runtimeStarted();
     const opening = window.open(false);

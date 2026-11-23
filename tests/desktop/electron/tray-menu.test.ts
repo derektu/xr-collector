@@ -33,7 +33,6 @@ const action = (menu: TrayModel, id: string) => menu.items.find((item) => item.k
 const alert = (id: string, title: string): AutoPauseNotification => ({
   id, title, vaultId: 'vault', sourceType: 'youtube', subscriptionId: id, failureCount: 5,
   error: { code: 'network_error', message: 'unreachable' }, autoPausedAt: `2026-10-24T0${id.length}:00:00.000Z`,
-  delivery: 'attempted', deliveryMessage: null,
 });
 const offline = { state: 'offline' as const, checkedAt: '2026-10-24T02:20:00.000Z' };
 const quiet = { attention: 0, work: null, newVersion: null };

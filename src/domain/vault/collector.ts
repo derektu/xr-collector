@@ -1,6 +1,5 @@
 import type { NoteChange } from '../../shared/api/changes.js';
 import type {
-  DeletionRecord,
   DocumentDeletion,
   DocumentFilter,
   DocumentKey,
@@ -202,20 +201,6 @@ export class Collector implements DocumentCollector {
         message: status === 'published' ? `已發布「${document.title}」。` : `已將「${document.title}」改回草稿。`,
       });
       return document;
-    });
-  }
-
-  /**
-   * Records the deletion of an item that has no document yet, such as an item still capturing, so
-   * a capture that finishes later is not saved (`document_deleted`) unless an explicit request
-   * comes after the record. An item already in the Vault or already deleted is left alone.
-   */
-  recordDeletion(entry: Omit<DeletionRecord, 'deletedAt'>): Promise<void> {
-    const id = documentId(entry);
-    return this.exclusive(id, async () => {
-      const { deletions } = this.vault;
-      if (await this.vault.read(id) || await deletions.get(id)) return;
-      await deletions.record(entry);
     });
   }
 

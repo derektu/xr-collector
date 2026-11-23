@@ -22,8 +22,6 @@ import type {
 
 export const PREVIEW_TIMEOUT_MS = 60_000;
 
-export const REMOVAL_SETTLE_MS = 30_000;
-
 export type RemovedDocuments = 'keep' | 'delete';
 
 export interface SubscriptionRemovalResult {
@@ -32,27 +30,16 @@ export interface SubscriptionRemovalResult {
   documentsFailed: number;
 }
 
-export interface PendingDeletion {
-  sourceType: string;
-  sourceId: string;
-  sourceUrl: string;
-  title: string;
-  publisherId: string;
-  publisherName: string;
-}
-
 export interface SubscriptionServiceOptions {
   sources: SourceRegistry;
   autoCollection: () => Promise<boolean>;
   resolveTarget: (url: string, signal: AbortSignal) => Promise<SubscriptionTarget>;
   documents: () => Promise<DocumentMetadata[]>;
   deleteDocument?: (id: string) => Promise<unknown>;
-  recordDeletion?: (entry: PendingDeletion) => Promise<unknown>;
   loginRequired?: (subscription: SubscriptionRecord) => boolean;
   onAutoPaused?: (subscription: SubscriptionRecord) => void | Promise<void>;
   now?: () => Date;
   previewTimeoutMs?: number;
-  removalSettleMs?: number;
 }
 
 export interface StartRunRequest {
@@ -242,25 +229,6 @@ export class SubscriptionService {
     let incomplete = false;
     try {
       if (removing === 'delete' && deleteDocument) {
-        const { checkItems, singleItems } = this.jobs.pendingCaptures(this.type, id);
-        for (const item of checkItems) {
-          if (!item.source.id) continue;
-          try {
-            await this.options.recordDeletion?.({
-              sourceType: this.type, sourceId: item.source.id, sourceUrl: item.source.url, title: item.source.title ?? item.source.id,
-              publisherId: id, publisherName: record.title,
-            });
-          } catch (error) {
-            console.error('Deletion record for a capturing item failed', error);
-          }
-        }
-        const unsettled = new Set(singleItems.map((item) => item.id));
-        const settling = [
-          ...checkItems.map((item) => this.jobs.whenSettled(item.id)),
-          ...singleItems.map((item) => this.jobs.whenSettled(item.id).finally(() => unsettled.delete(item.id))),
-        ];
-        await settleWithin(Promise.allSettled(settling), this.options.removalSettleMs ?? REMOVAL_SETTLE_MS);
-        for (const jobId of unsettled) void this.deleteWhenSaved(jobId, id, deleteDocument);
         for (const document of await this.subscriptionDocuments(id)) {
           const outcome = await deleteQuietly(deleteDocument, document.id);
           if (outcome === 'deleted') deleted += 1;
@@ -281,18 +249,6 @@ export class SubscriptionService {
       ...this.subject(id, record.title),
     });
     return { documentsKept: kept, documentsDeleted: deleted, documentsFailed: failed };
-  }
-
-  private async deleteWhenSaved(jobId: string, subscriptionId: string, deleteDocument: (id: string) => Promise<unknown>): Promise<void> {
-    try {
-      const job = await this.jobs.whenSettled(jobId);
-      const documentId = job.result?.documentId;
-      if (!documentId) return;
-      const document = (await this.subscriptionDocuments(subscriptionId)).find((candidate) => candidate.id === documentId);
-      if (document) await deleteQuietly(deleteDocument, document.id);
-    } catch (error) {
-      console.error('Deleting a document of a removed subscription failed', error);
-    }
   }
 
   private async subscriptionDocuments(id: string): Promise<DocumentMetadata[]> {
@@ -330,8 +286,7 @@ export class SubscriptionService {
     const now = this.now();
     const submissions: JobSubmission[] = [];
     for (const record of selected) {
-      const dueAt = trigger === 'scheduled' ? record.nextCheckAt ?? undefined : undefined;
-      submissions.push(await this.jobs.submitCheck(this.type, record, trigger, dueAt));
+      submissions.push(await this.jobs.submitCheck(this.type, record, trigger));
     }
     const ids = new Set(selected.map((record) => record.id));
     await this.store.updateWith((records) => new Map(records
@@ -417,7 +372,7 @@ export class SubscriptionService {
       errorCode: paused.error.code, ...this.subject(id, record.title),
     });
     try { await this.options.onAutoPaused?.(record); }
-    catch (error) { console.warn('Unable to record auto-pause notification', error); }
+    catch (error) { console.warn('Unable to send auto-pause notification', error); }
   }
 
   async itemCollected(id: string, itemKey: string): Promise<void> {
@@ -460,29 +415,21 @@ export class SubscriptionService {
     });
   }
 
-  async subscribe(target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
+  async subscribe(target: SubscriptionTarget, settings: SubscriptionSettings): Promise<SubscribeResult> {
     const existing = (await this.store.list()).find((record) => record.id === target.id);
-    if (existing && !options.resumed) return { subscription: existing, outcome: 'existing', check: null };
-    let subscription = existing;
-    if (!subscription) {
-      await options.beforeCreate();
-      const now = this.now();
-      subscription = await this.store.add({
-        id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), updatedAt: now.toISOString(), lastCheckedAt: null,
-        settings: { ...settings }, lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, settings.intervalMinutes).toISOString(),
-      });
-      this.jobs.recordEvent({ eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
-    }
+    if (existing) return { subscription: existing, outcome: 'existing', check: null };
+    const now = this.now();
+    const subscription = await this.store.add({
+      id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), updatedAt: now.toISOString(), lastCheckedAt: null,
+      settings: { ...settings }, lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, settings.intervalMinutes).toISOString(),
+    });
+    this.jobs.recordEvent({ eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
     const check = await this.jobs.submitCheck(this.type, subscription, 'subscribe');
     return { subscription, outcome: 'created', check };
   }
 
   private get keyField(): string {
     return this.storage.outOfRangeKeyField;
-  }
-
-  whenSettled(jobId: string): Promise<JobView> {
-    return this.jobs.whenSettled(jobId);
   }
 
   private notFound(): CollectorError {
@@ -547,12 +494,6 @@ async function deleteQuietly(deleteDocument: (id: string) => Promise<unknown>, i
   }
 }
 
-async function settleWithin(work: Promise<unknown>, timeoutMs: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
-  await Promise.race([work.then(() => undefined, () => undefined), timeout]).finally(() => clearTimeout(timer));
-}
-
 function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
 }
@@ -613,8 +554,8 @@ export class SubscriptionServices implements SubscriptionPort {
     return this.require(type).itemOutOfRange(id, key, before);
   }
 
-  subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
-    return this.require(type).subscribe(target, settings, options);
+  subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings): Promise<SubscribeResult> {
+    return this.require(type).subscribe(target, settings);
   }
 
   async stopped(type: string, id: string): Promise<SkipReason | null> {

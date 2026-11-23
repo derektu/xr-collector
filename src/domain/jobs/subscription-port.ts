@@ -83,11 +83,9 @@ export interface SubscriptionPort {
   itemOutOfRange(type: string, id: string, key: string, before: string): Promise<void>;
   /**
    * A subscription request resolved its address to `target`: subscribes it with `settings` and
-   * dispatches its first check. `resumed` says the request was interrupted after it started
-   * subscribing, so a subscription found under that ID is its own and still gets its first check.
-   * `beforeCreate` runs before a new subscription is written.
+   * dispatches its first check. A subscription already in the list keeps its own state.
    */
-  subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult>;
+  subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings): Promise<SubscribeResult>;
   /** Null while the subscription exists and is enabled; otherwise why its work stops. */
   stopped(type: string, id: string): Promise<SkipReason | null>;
   /** Dispatches a check of the subscription now, as a manual check does. */

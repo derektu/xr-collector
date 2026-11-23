@@ -1,7 +1,7 @@
 // Subscriptions over HTTP: a request shows in the list while its channel resolves, a removed
 // channel stays marked in the document filter, and removing a subscription with its documents
-// deletes them as a user deletion does, including a video still capturing, so they never come back.
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+// reports the documents it could not delete.
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,11 +12,9 @@ import { Collector } from '../../../../src/domain/vault/collector.js';
 import { JobManager } from '../../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../../src/app/runtime/job-records.js';
 import { createHttpApp } from '../../../../src/transport/server/app.js';
-import { DELETIONS_FILE } from '../../../../src/domain/vault/deleted-documents.js';
 import { MarkdownVault } from '../../../../src/domain/vault/markdown-vault.js';
 import { SyntheticYouTube } from '../../../support/synthetic-youtube.js';
 import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js';
-import { youtubeKey } from '../../../support/youtube-documents.js';
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
@@ -28,7 +26,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
  * Real subscription, job and document services over synthetic channels and a Markdown Vault with
  * deletion records, served twice: to the UI without a token and to Agents with one.
  */
-async function world(options: { removalSettleMs?: number; failDeleting?: (id: string) => boolean } = {}) {
+async function world(options: { failDeleting?: (id: string) => boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-http-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
@@ -36,8 +34,7 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const source = new SyntheticYouTube();
   const records = memoryJobRecords(PRODUCT_SOURCES, { now });
   const store = records.jobs;
-  const removedFromSearch: string[] = [];
-  const search = { index: async () => undefined, remove: async (id: string) => { removedFromSearch.push(id); } };
+  const search = { index: async () => undefined, remove: async () => undefined };
   const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', now);
   const jobs: JobManager = new JobManager({
@@ -52,7 +49,6 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
       if (options.failDeleting?.(id)) throw new Error('disk error');
       return collector.delete(id);
     },
-    recordDeletion: (entry) => collector.recordDeletion(entry), removalSettleMs: options.removalSettleMs ?? 5_000,
   });
   const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
   const send = async (method: 'GET' | 'DELETE', url: string) => {
@@ -64,10 +60,8 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
     return jobs.whenSettled(added.result!.followUpJobId!);
   };
   const events = async () => (await records.views.query({ limit: 200 }, { vaultPath: root })).events;
-  /** Resolves once a removal has written the deletion record of a video that is still capturing. */
-  const deletionRecorded = (videoId: string) => eventually(async () => expect(await collector.isDeletedFor(youtubeKey(videoId), { explicitAt: null })).toBe(true));
   const close = async () => { await eventually(() => expect(jobs.isBusy()).toBe(false)); await agent.close(); };
-  return { root, clock, source, collector, jobs, channels, agent, send, subscribe, events, removedFromSearch, deletionRecorded, close };
+  return { root, clock, source, collector, jobs, channels, agent, send, subscribe, events, close };
 }
 
 describe('subscription requests in the list (N75-T6)', () => {
@@ -131,118 +125,6 @@ describe('removed subscriptions in the document channel filter (N75-T7)', () => 
 });
 
 describe('removing a subscription with its documents (N75-T8)', () => {
-  it('deletes each document as a user deletion does, waits for a running capture and collects nothing later', async () => {
-    const w = await world();
-    const leaving = w.source.addChannel('leaving', '【合成】要移除');
-    const other = w.source.addChannel('other', '【合成】其他');
-    const videos = w.source.publish(leaving, 'l', w.clock.now, [1, 2, 3]);
-    w.source.publish(other, 'o', w.clock.now, [1]);
-    await w.subscribe('other');
-    await w.subscribe('leaving');
-    // A newer video is capturing when the subscription goes.
-    w.clock.now = new Date(w.clock.now.getTime() + 60_000);
-    const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
-    w.source.holdCaptures = true;
-    const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await w.source.holds.reach([late!]);
-
-    let answered = false;
-    const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`).finally(() => { answered = true; });
-    // The capturing video is marked deleted first, and the removal waits for the capture to end.
-    await w.deletionRecorded(late!);
-    expect(answered).toBe(false);
-    w.source.release(late!);
-    const removed = await removal;
-    await w.jobs.whenSettled(check.job.id);
-
-    // The capturing video got its deletion record first, so it was never saved; the saved ones were deleted.
-    expect(removed).toEqual({ status: 200, body: { removed: true, documentsKept: 0, documentsDeleted: 3, documentsFailed: 0 } });
-    expect((await w.jobs.whenSettled(check.job.id)).items?.find((item) => item.sourceId === late)?.skipReason).toBe('deleted');
-    const saved = videos.map((id) => `youtube:${id}`).sort();
-    expect((await w.collector.list()).map((document) => document.publisher.id)).toEqual([other]);
-    const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceId: string }> };
-    expect(ledger.deleted.map((record) => `youtube:${record.sourceId}`).sort()).toEqual([...saved, `youtube:${late}`].sort());
-    expect([...w.removedFromSearch].sort()).toEqual(saved);
-    const events = await w.events();
-    expect(events.filter((event) => event.eventType === 'document.deleted').map((event) => event.documentId).sort()).toEqual(saved);
-    expect(events.find((event) => event.eventType === 'subscription.removed')?.message).toBe('已移除「【合成】要移除」，並刪除 3 份文件。');
-
-    // Later checks leave the channel alone, and its deleted videos stay deleted.
-    expect(await w.channels.startRun({ trigger: 'scheduled' })).toHaveLength(1);
-    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
-    expect((await w.collector.list()).every((document) => document.publisher.id === other)).toBe(true);
-    await w.close();
-  });
-
-  it('deletes the video a paused subscription is still capturing', async () => {
-    const w = await world();
-    const leaving = w.source.addChannel('leaving', '【合成】要移除');
-    w.source.publish(leaving, 'l', w.clock.now, [1]);
-    await w.subscribe('leaving');
-    w.clock.now = new Date(w.clock.now.getTime() + 60_000);
-    const [late] = w.source.publish(leaving, 'n', w.clock.now, [0]);
-    w.source.holdCaptures = true;
-    await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] });
-    await w.source.holds.reach([late!]);
-    await w.channels.setEnabled(leaving, false);
-    expect((await w.send('GET', '/api/subscriptions?type=youtube')).body.subscriptions[0]).toMatchObject({ capturing: true, checkStatus: { state: 'paused' } });
-
-    const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
-    await w.deletionRecorded(late!);
-    w.source.release(late!);
-    expect((await removal).body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
-    await eventually(() => expect(w.jobs.isBusy()).toBe(false));
-    expect(await w.collector.list()).toEqual([]);
-    const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceId: string }> };
-    expect(ledger.deleted.map((record) => record.sourceId)).toContain(late);
-    await w.close();
-  });
-
-  it('waits for a single-video request of the channel and deletes what it saved', async () => {
-    const w = await world();
-    const leaving = w.source.addChannel('leaving', '【合成】要移除');
-    w.source.publish(leaving, 'l', w.clock.now, [1]);
-    await w.subscribe('leaving');
-    const [single] = w.source.publish(leaving, 's', w.clock.now, [0]);
-    w.source.holdCaptures = true;
-    const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await w.source.holds.reach([single!]);
-
-    // Whether the capture ends before or while the removal waits, its document is saved and then deleted.
-    const removal = w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
-    w.source.release(single!);
-    expect((await removal).body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 2, documentsFailed: 0 });
-    expect((await w.jobs.whenSettled(request.job.id)).state).toBe('completed');
-    expect(await w.collector.list()).toEqual([]);
-    await w.close();
-  });
-
-  it('keeps a capture that ends after the wait from saving, and deletes a late single-video document', async () => {
-    const w = await world({ removalSettleMs: 30 });
-    const leaving = w.source.addChannel('leaving', '【合成】要移除');
-    w.source.publish(leaving, 'l', w.clock.now, [1]);
-    await w.subscribe('leaving');
-    w.clock.now = new Date(w.clock.now.getTime() + 60_000);
-    const [late, single] = w.source.publish(leaving, 'n', w.clock.now, [0, 0]);
-    w.source.holdCaptures = true;
-    const check = (await w.channels.startRun({ trigger: 'manual', subscriptionIds: [leaving] }))[0]!;
-    await w.source.holds.started(late!);
-    const request = await w.jobs.submitItem('youtube', `https://youtu.be/${single}`);
-    await w.source.holds.started(single!);
-
-    // The removal answers after its bounded wait while both captures still run.
-    const removed = await w.send('DELETE', `/api/subscriptions/youtube/${leaving}?documents=delete`);
-    expect(removed.body).toEqual({ removed: true, documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
-    w.source.release(late!);
-    w.source.release(single!);
-    await w.jobs.whenSettled(check.job.id);
-    await w.jobs.whenSettled(request.job.id);
-    await eventually(async () => expect(await w.collector.list()).toEqual([]));
-    const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceId: string }> };
-    expect(ledger.deleted.map((record) => record.sourceId)).toEqual(expect.arrayContaining([late, single]));
-    await w.close();
-  });
-
   it('completes the removal and reports the documents it could not delete', async () => {
     const w = await world({ failDeleting: (id) => id.endsWith('2') });
     const leaving = w.source.addChannel('leaving', '【合成】要移除');
@@ -257,18 +139,6 @@ describe('removing a subscription with its documents (N75-T8)', () => {
     const event = (await w.events()).find((entry) => entry.eventType === 'subscription.removed');
     expect(event).toMatchObject({ severity: 'warning', message: '已移除「【合成】要移除」，刪除 2 份文件，1 份無法刪除。' });
     expect((await w.send('GET', '/api/subscriptions?type=youtube')).body.subscriptions).toEqual([]);
-    await w.close();
-  });
-
-  it('keeps the documents by default and says so', async () => {
-    const w = await world();
-    const leaving = w.source.addChannel('leaving', '【合成】要移除');
-    w.source.publish(leaving, 'l', w.clock.now, [1, 2]);
-    await w.subscribe('leaving');
-
-    expect(await w.send('DELETE', `/api/subscriptions/youtube/${leaving}`)).toEqual({ status: 200, body: { removed: true, documentsKept: 2, documentsDeleted: 0, documentsFailed: 0 } });
-    expect(await w.collector.list()).toHaveLength(2);
-    expect((await w.events()).find((event) => event.eventType === 'subscription.removed')?.message).toBe('已移除「【合成】要移除」，文件保留。');
     await w.close();
   });
 });

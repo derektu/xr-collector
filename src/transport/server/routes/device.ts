@@ -25,7 +25,7 @@ export interface DeviceRouteOptions {
 
 export function registerDeviceRoutes(app: FastifyInstance, options: DeviceRouteOptions): void {
   const { buildInfo, network } = options;
-  let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [], events: [] };
+  let fallbackNotifications: NotificationState = { enabled: true, availability: 'unavailable', availabilityMessage: '系統通知僅能在桌面 App 使用。', active: [] };
   const notifications: NotificationAccess = options.notifications ?? {
     read: async () => fallbackNotifications,
     update: async (enabled) => (fallbackNotifications = { ...fallbackNotifications, enabled }),

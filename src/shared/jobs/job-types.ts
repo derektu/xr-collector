@@ -18,7 +18,7 @@ export type JobPhase = 'resolve' | 'discover' | 'capture' | 'save' | 'index';
 /** `empty`: a check whose discovery found nothing to collect. */
 export type JobOutcome = 'created' | 'existing' | 'partial' | 'failed' | 'empty' | 'skipped';
 
-export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'superseded' | 'deleted';
+export type SkipReason = 'out_of_range' | 'subscription_paused' | 'subscription_removed' | 'deleted';
 
 export interface JobError {
   code: string;
@@ -49,11 +49,8 @@ export type JobStopKind = 'shutdown' | 'crash' | 'vault_switch';
 
 export interface JobCheckpoint {
   savedDocumentId?: string;
-  claimedAt?: string;
   settings?: SubscriptionSettings;
   target?: { id: string; title: string; url: string };
-  subscribing?: { subscriptionId: string; title: string; url: string };
-  retryItems?: Array<{ sourceId: string; title: string; url: string }>;
 }
 
 export interface JobItem {
@@ -120,14 +117,12 @@ export interface CollectionJob {
   wait?: JobWait;
   recovery?: JobRecovery;
   checkpoint?: JobCheckpoint;
-  claimedByUser?: boolean;
   retryOf?: string;
   dismissedAt?: string;
   retriedBy?: string;
-  activityIncomplete?: boolean;
 }
 
-export type JobView = Omit<CollectionJob, 'checkpoint' | 'claimedByUser'>;
+export type JobView = Omit<CollectionJob, 'checkpoint'>;
 
 export interface JobSubmission {
   job: JobView;

@@ -16,7 +16,7 @@ import type { SourceTypeDeclaration } from './source-types.js';
 
 export const COLLECTION_LIMIT = 30;
 
-const UNLISTED_SKIPS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed', 'superseded']);
+const UNLISTED_SKIPS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed']);
 
 export interface CatalogSubscriptions {
   readonly type: string;

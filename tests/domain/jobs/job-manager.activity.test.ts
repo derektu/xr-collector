@@ -179,7 +179,7 @@ const noSubtitles = () => new CollectorError('no_subtitles', '這支影片沒有
 const network = () => new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。', { detail: 'ERROR: Unable to download webpage: <urlopen error timed out>' });
 
 describe('manual retry (A-T9)', () => {
-  it('retries a failed video with a new job once, and refuses other retries', async () => {
+  it('retries a failed video with a new job, and refuses a job that did not fail', async () => {
     const { manager, source, events } = setup();
     source.captureFailures.set('aaaaaaaaaaa', [noSubtitles()]);
     const failed = await manager.whenSettled((await manager.submitItem('youtube', watchUrl('aaaaaaaaaaa'))).job.id);
@@ -192,7 +192,6 @@ describe('manual retry (A-T9)', () => {
     expect(manager.get(failed.id).retriedBy).toBe(retried.job.id);
     expect(await manager.whenSettled(retried.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
 
-    await expect(manager.retry(failed.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
     await expect(manager.retry(retried.job.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
     await expect(manager.retry('missing')).rejects.toMatchObject({ code: 'job_not_found' });
 
@@ -273,59 +272,23 @@ describe('manual retry (A-T9)', () => {
     expect(manager.get(failedAgain.id).retriedBy).toBeUndefined();
   });
 
-  it('collects the failed videos of a channel job again, without discovery or reporting a check', async () => {
-    const { manager, source, subs, vault } = setup();
-    subscribe(subs, 'UC3');
-    const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
-    source.channelVideos.set('UC3', [video('mmmmmmmmmmm'), video('nnnnnnnnnnn')]);
-    source.captureFailures.set('mmmmmmmmmmm', [noSubtitles()]);
-    source.captureFailures.set('nnnnnnnnnnn', [noSubtitles()]);
-    const first = await manager.submitCheck('youtube', subs.get('youtube', 'UC3')!, 'scheduled');
-    const failed = await manager.whenSettled(first.job.id);
-    // Failed videos are left to later checks; the check itself completes.
-    expect(failed).toMatchObject({ state: 'completed', result: { outcome: 'partial' }, progress: { failed: 2 } });
-    expect(subs.of('failed').map((report) => [report.key, report.errorCode])).toEqual([
-      ['mmmmmmmmmmm', 'no_subtitles'], ['nnnnnnnnnnn', 'no_subtitles'],
-    ]);
-    expect(subs.of('checked')).toHaveLength(1);
-
-    // The videos left the listing: a new check would find nothing.
-    source.channelVideos.set('UC3', []);
-    source.discoverFailures.push(new CollectorError('capture_failed', '這次重試不應該重新發現影片。'));
-    const retried = await manager.retry(failed.id);
-    expect(retried.job).toMatchObject({ kind: 'youtube.channel', retryOf: failed.id, scope: { trigger: 'manual' } });
-    const done = await manager.whenSettled(retried.job.id);
-    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { total: 2, created: 2 } });
-    expect(done.items!.map((item) => item.sourceId)).toEqual(['mmmmmmmmmmm', 'nnnnnnnnnnn']);
-    expect(done.items!.every((item) => manager.get(item.jobId!).publishedNotBefore === undefined)).toBe(true);
-    expect(source.discoverFailures).toHaveLength(1);
-    expect(subs.of('checked')).toHaveLength(1);
-    expect(subs.of('collected').map((report) => report.key)).toEqual(['mmmmmmmmmmm', 'nnnnnnnnnnn']);
-    expect(await vault.getBySourceId('nnnnnnnnnnn')).not.toBeNull();
-    expect(manager.get(failed.id).retriedBy).toBe(retried.job.id);
-    await expect(manager.retry(failed.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
-  });
-
-  it('retries only the failed videos of a channel job that completed with some failing', async () => {
+  it('retries a channel job with failed videos as a check of its subscription now, and refuses a clean one', async () => {
     const { manager, source, subs } = setup();
     const channel = subscribe(subs, 'UC4');
     const video = (id: string) => ({ id, title: `頻道影片 ${id}`, url: watchUrl(id), publishedAt: T0.toISOString(), upcoming: false });
     source.channelVideos.set('UC4', [video('ooooooooooo'), video('ppppppppppp')]);
     source.captureFailures.set('ppppppppppp', [noSubtitles()]);
-    const first = await manager.submitCheck('youtube', channel, 'scheduled');
-    const partial = await manager.whenSettled(first.job.id);
+    const partial = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'scheduled')).job.id);
     expect(partial).toMatchObject({ state: 'completed', result: { outcome: 'partial' } });
 
     const retried = await manager.retry(partial.id);
+    expect(retried.job).toMatchObject({ kind: 'youtube.channel', retryOf: partial.id, scope: { trigger: 'manual' } });
     const done = await manager.whenSettled(retried.job.id);
-    expect(done.items!.map((item) => item.sourceId)).toEqual(['ppppppppppp']);
-    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' }, items: [expect.objectContaining({ sourceId: 'ppppppppppp' })] });
+    expect(subs.of('checkNow')).toHaveLength(1);
+    expect(subs.of('checked')).toHaveLength(2);
     expect(manager.get(partial.id).retriedBy).toBe(retried.job.id);
-
-    const clean = await manager.submitCheck('youtube', channel, 'manual');
-    const finished = await manager.whenSettled(clean.job.id);
-    expect(finished.state).toBe('completed');
-    await expect(manager.retry(finished.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
+    await expect(manager.retry(done.id)).rejects.toMatchObject({ code: 'job_not_retryable' });
   });
 });
 

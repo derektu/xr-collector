@@ -2,6 +2,7 @@ import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
 import type { MainWindow } from './main-window.js';
 import type { AppTray } from './tray.js';
 import type { TrayAction } from './tray-menu.js';
+import type { NotificationTarget } from './notification-navigation.js';
 
 export interface ValidationControlOptions {
   tray: AppTray;
@@ -21,7 +22,7 @@ export function exposeValidationControl(options: ValidationControlOptions): void
     trayShown: () => ({ menu: tray.current(), reads: tray.reads, reading: tray.reading }),
     click: (action: TrayAction) => tray.run(action),
     notifications: () => [...options.notifications()],
-    activateNotification: (id: string) => window.show({ notificationId: id }),
+    activateNotification: (notification: NotificationTarget) => window.show({ notification }),
     window: () => {
       const current = window.current;
       return {

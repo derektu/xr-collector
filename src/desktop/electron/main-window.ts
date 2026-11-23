@@ -1,6 +1,5 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions, WebContents } from 'electron';
-import type { AutoPauseNotification } from '../../shared/api/device-types.js';
-import { notificationNavigation } from './notification-navigation.js';
+import { notificationNavigation, type NotificationTarget } from './notification-navigation.js';
 import { WindowCreationGate } from './window-creation.js';
 
 export type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
@@ -8,7 +7,6 @@ export type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
 
 export interface WindowRuntime {
   url: string;
-  resolveNotification(id: string): Promise<AutoPauseNotification | null>;
   activeVaultId(): string | null;
 }
 
@@ -33,7 +31,7 @@ export class MainWindow {
   private readonly creation = new WindowCreationGate();
   private rendererReady = false;
   private pendingNavigation: DesktopTarget | undefined;
-  private pendingNotificationId: string | undefined;
+  private pendingNotification: NotificationTarget | undefined;
   private manualShow = false;
   private shownValue = false;
 
@@ -43,10 +41,10 @@ export class MainWindow {
   get shown(): boolean { return this.shownValue; }
 
   runtimeStarted(): void {
-    if (!this.pendingNotificationId) return;
-    const id = this.pendingNotificationId;
-    this.pendingNotificationId = undefined;
-    this.show({ notificationId: id });
+    if (!this.pendingNotification) return;
+    const notification = this.pendingNotification;
+    this.pendingNotification = undefined;
+    this.show({ notification });
   }
 
   async open(startedAtLogin: boolean): Promise<void> {
@@ -116,16 +114,12 @@ export class MainWindow {
     }
   }
 
-  show(page?: DesktopTarget | { notificationId: string }): void {
+  show(page?: DesktopTarget | { notification: NotificationTarget }): void {
     this.manualShow = true;
-    if (typeof page === 'object' && 'notificationId' in page) {
+    if (typeof page === 'object' && 'notification' in page) {
       const runtime = this.options.runtime();
-      if (!runtime) { this.pendingNotificationId = page.notificationId; return; }
-      void runtime.resolveNotification(page.notificationId).then((event) => {
-        this.pendingNavigation = notificationNavigation(event, this.options.runtime()?.activeVaultId() ?? null);
-        this.show();
-      }).catch((error: unknown) => console.warn('Unable to resolve notification target', error));
-      return;
+      if (!runtime) { this.pendingNotification = page.notification; return; }
+      this.pendingNavigation = notificationNavigation(page.notification, runtime.activeVaultId());
     } else if (page) this.pendingNavigation = page;
     if (this.creation.current) {
       return;

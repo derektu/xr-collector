@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActivityLogHealth, ActivityPage, ActivitySummaryPage } from '../../../src/shared/activity/activity-types.js';
 import { pageOfView } from '../../../src/transport/web/activity-view.js';
 
-const HEALTH: ActivityLogHealth = { state: 'ok', pending: 0, dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 0 };
+const HEALTH: ActivityLogHealth = { dropped: 0, lastFailureAt: null, lastError: null, skippedLines: 0 };
 const RAW: ActivityPage = { view: 'raw', events: [], nextCursor: null, retentionDays: 30, log: HEALTH };
 const SUMMARY: ActivitySummaryPage = { view: 'summary', entries: [], nextCursor: null, retentionDays: 30, log: HEALTH };
 

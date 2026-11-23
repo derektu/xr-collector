@@ -388,34 +388,6 @@ describe('deletions and collection (A4)', () => {
     expect((await w.checkChannel(manager)).result?.outcome).toBe('empty');
     expect(w.source.captures).toHaveLength(captures);
   });
-
-  it('skips a deleted video when a channel job retries its failed videos', async () => {
-    const w = await world();
-    const { manager } = await w.boot();
-    const [a, b] = [vid('alpha'), vid('bravo')];
-    w.source.listing = [a, b];
-    w.source.failures.set(a, new CollectorError('capture_failed', '收集失敗。'));
-    const first = await w.checkChannel(manager);
-    expect(first.result?.outcome).toBe('partial');
-
-    // The user collects the failed video directly, then deletes it.
-    w.source.failures.delete(a);
-    w.tick();
-    await w.collect(manager, a);
-    w.tick();
-    await w.collector.delete(`youtube:${a}`);
-
-    const captures = w.source.captures.length;
-    const checks = w.subs.of('checked').length;
-    const retry = await manager.retry(first.id);
-    const retried = await manager.whenSettled(retry.job.id);
-    expect(retried.items).toEqual([expect.objectContaining({ sourceId: a, outcome: 'skipped', skipReason: 'deleted' })]);
-    // Collecting failed videos again is no check of the subscription.
-    expect(w.subs.of('checked')).toHaveLength(checks);
-    expect(await w.vault.read(`youtube:${a}`)).toBeNull();
-    // The deletion is checked before capture, so YouTube is not asked for the transcript.
-    expect(w.source.captures).toHaveLength(captures);
-  });
 });
 
 describe('deletion races (A5)', () => {
@@ -458,53 +430,6 @@ describe('deletion races (A5)', () => {
 
     w.tick();
     expect((await w.collect(manager, a)).result).toMatchObject({ outcome: 'created' });
-  });
-
-  it('collects a video again when a direct submission after the deletion joins a job queued before it', async () => {
-    const w = await world();
-    const { manager } = await w.boot();
-    const [hold, a] = [vid('hold'), vid('alpha')];
-    w.source.held.add(hold);
-    const blocker = await manager.submitItem('youtube', watchUrl(hold));
-    await w.source.capturing(hold);
-    const early = await manager.submitItem('youtube', watchUrl(a));
-    w.tick();
-    await w.vault.add(transcriptDocument(captured(a)));
-    w.tick();
-    await w.collector.delete(`youtube:${a}`);
-    w.tick();
-
-    const again = await manager.submitItem('youtube', watchUrl(a));
-    expect(again).toMatchObject({ deduplicated: true, job: { id: early.job.id } });
-    w.source.release(hold);
-    await manager.whenSettled(blocker.job.id);
-
-    expect((await manager.whenSettled(early.job.id)).result).toMatchObject({ outcome: 'created', documentId: `youtube:${a}` });
-    expect(await w.vault.deletions.list()).toEqual([]);
-    expect(await w.collector.findExisting(youtubeKey(a))).not.toBeNull();
-  });
-
-  it('takes the latest direct submission of a video a channel job queued', async () => {
-    const w = await world();
-    const { manager } = await w.boot();
-    const [hold, a] = [vid('hold'), vid('alpha')];
-    w.source.listing = [hold, a];
-    w.source.held.add(hold);
-    const channel = await manager.submitCheck('youtube', w.subscription, 'manual');
-    await w.source.capturing(hold);
-    // The user claims the queued video, the document arrives and is deleted, then the user asks again.
-    expect(await manager.submitItem('youtube', watchUrl(a))).toMatchObject({ deduplicated: true });
-    w.tick();
-    await w.vault.add(transcriptDocument(captured(a)));
-    w.tick();
-    await w.collector.delete(`youtube:${a}`);
-    w.tick();
-    expect(await manager.submitItem('youtube', watchUrl(a))).toMatchObject({ deduplicated: true });
-    w.source.release(hold);
-
-    const job = await manager.whenSettled(channel.job.id);
-    expect(job.items).toContainEqual(expect.objectContaining({ sourceId: a, outcome: 'created' }));
-    expect(await w.vault.deletions.list()).toEqual([]);
   });
 
   it('does not bring a document back through jobs resumed after a restart', async () => {

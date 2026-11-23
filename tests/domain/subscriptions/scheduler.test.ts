@@ -16,7 +16,6 @@ import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { CollectionPause } from '../../../src/shared/jobs/collection-pause.js';
 import { Connectivity } from '../../../src/domain/jobs/connectivity.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
-import type { JobSubmission } from '../../../src/shared/jobs/job-types.js';
 import type { NewJobEvent } from '../../../src/shared/activity/activity-types.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from '../../support/synthetic-youtube.js';
@@ -429,28 +428,8 @@ describe('lost network (#128)', () => {
     await eventually(() => expect(w.events).toEqual(['schedule.dispatched', 'collection.paused', 'collection.resumed', 'schedule.dispatched']));
     await w.idle();
     expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
-    // The stalled check finishes and takes the due check of its subscription; each subscription has one scheduled check.
     expect(w.jobs.get(stalled)).toMatchObject({ state: 'completed' });
-    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
-    connectivity.close();
-    await w.scheduler.close();
-  });
-
-  it('takes the due check from a stalled check that finishes before the poll submits it (#229)', async () => {
-    const { w, connectivity, quarter, hourly, stalled, reconnect } = await offlineWithStalledCheck();
-    // The poll has read the due subscriptions; it submits them only once the stalled check has finished.
-    w.runs.mockImplementationOnce(async (request) => {
-      await w.jobs.whenSettled(stalled);
-      return SubscriptionService.prototype.startRun.call(w.channels, request);
-    });
-    await reconnect();
-    await eventually(() => expect(w.runs).toHaveBeenCalledTimes(1));
-    const submissions = await w.runs.mock.results[0]!.value as JobSubmission[];
-    await w.idle();
-    expect(w.runs.mock.calls).toEqual([[{ trigger: 'scheduled', subscriptionIds: [quarter, hourly] }]]);
-    expect(submissions[0]).toMatchObject({ job: { id: stalled }, deduplicated: true });
-    expect([w.scheduledChecks(quarter), w.scheduledChecks(hourly)]).toEqual([1, 1]);
-    expect(await w.channel(quarter)).toMatchObject({ nextCheckAt: '2026-10-15T05:30:00.000Z' });
+    expect(w.scheduledChecks(hourly)).toBe(1);
     connectivity.close();
     await w.scheduler.close();
   });

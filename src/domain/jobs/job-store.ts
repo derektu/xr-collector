@@ -139,14 +139,6 @@ export class JobStore {
     return this.jobs.get(id)?.source.title || undefined;
   }
 
-  /** Marks a job whose events were lost, so its record is not mistaken for complete. */
-  noteActivityLost(id: string): void {
-    const job = this.jobs.get(id);
-    if (!job || job.activityIncomplete) return;
-    job.activityIncomplete = true;
-    this.scheduleFlush();
-  }
-
   /** Resolves once every job change so far is on disk. */
   async flush(): Promise<void> {
     while (this.dirty || this.flushing) {

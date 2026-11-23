@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,15 +13,15 @@ import { memoryJobRecords } from '../../../../src/app/runtime/job-records.js';
 import { startCollectorServer } from '../../../../src/transport/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../../../src/domain/search/managed-transcript-search.js';
 import { createHttpApp, type ActivityAccess } from '../../../../src/transport/server/app.js';
-import type { CapturedTranscript } from '../../../../src/domain/sources/youtube/adapter.js';
 import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../../support/youtube-documents.js';
 import { withYouTube } from '../../../support/youtube-sources.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 
-// The activity and job query routes: device data readable while an import holds the Vault and before
-// one is chosen, the summary and retry contract, and parameter validation.
+// The activity and job query routes: device data readable before a Vault is chosen, the summary,
+// group and retry routes with their statuses, and parameter validation. The rules behind the pages
+// are tested in tests/domain/activity and tests/domain/jobs.
 
 const VAULT = '/vaults/http';
 const VAULT_ID = 'vault-id';
@@ -110,20 +110,9 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect(detail.json().checks[0].events.map((event: { eventType: string }) => event.eventType).sort()).toEqual(['job.completed', 'job.started']);
     const next = await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?limit=1&cursor=${encodeURIComponent(detail.json().nextCursor)}` });
     expect(next.json().checks).toHaveLength(1);
-    expect((await ui.inject({ method: 'GET', url: '/api/activity?view=bogus' })).statusCode).toBe(400);
-    expect((await ui.inject({ method: 'GET', url: '/api/activity?view=summary&cursor=bogus' })).statusCode).toBe(400);
-    expect((await ui.inject({ method: 'GET', url: '/api/activity/groups/unknown' })).statusCode).toBe(410);
-    const filteredSummary = (await ui.inject({ method: 'GET', url: '/api/activity?view=summary&eventType=job.completed' })).json();
-    expect(filteredSummary.entries).toEqual([]);
-    expect(filteredSummary.events).toBeUndefined();
-    const debugDetail = (await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(uiPage.entries[0].groupId)}?severity=debug` })).json();
-    expect(debugDetail.group.count).toBe(2);
-    expect(debugDetail.checks).toHaveLength(2);
+    const debugDetail = (await ui.inject({ method: 'GET', url: `/api/activity/groups/${encodeURIComponent(groupId)}?severity=debug` })).json();
     expect(debugDetail.checks.every((check: { events: Array<{ eventType: string }> }) => check.events.map((event) => event.eventType).join() === 'job.started')).toBe(true);
-    const rawAll = (await ui.inject({ method: 'GET', url: '/api/activity?limit=10' })).json();
-    expect(rawAll.events.map((event: { severity: string }) => event.severity)).toContain('debug');
-    const infoUp = (await ui.inject({ method: 'GET', url: '/api/activity?severity=info,warning,error&limit=10' })).json();
-    expect(infoUp.events.every((event: { severity: string }) => event.severity !== 'debug')).toBe(true);
+    expect((await ui.inject({ method: 'GET', url: '/api/activity/groups/unknown' })).statusCode).toBe(410);
   });
 
   it('names the shape of each activity page in view, including a summary query that names a job', async () => {
@@ -158,10 +147,10 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect((await notReady.inject({ method: 'GET', url: '/api/documents' })).statusCode).toBe(503);
     expect((await notReady.inject({ method: 'GET', url: '/api/activity' })).statusCode).toBe(200);
     const health = (await notReady.inject({ method: 'GET', url: '/api/health' })).json();
-    expect(health.activityLog).toMatchObject({ state: 'ok', pending: 0, dropped: 0 });
+    expect(health.activityLog).toMatchObject({ dropped: 0 });
   });
 
-  it('answers the activity, summary and retry contract, and rejects malformed queries', async () => {
+  it('answers the activity, job summary and retry routes for an authorized Agent, and rejects malformed queries', async () => {
     const { collector, jobs, activity } = services([new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。')]);
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, agentToken: 'agent-token-for-tests' });
     cleanups.push(() => app.close());
@@ -175,19 +164,12 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect(retry.statusCode).toBe(202);
     expect(retry.json()).toMatchObject({ deduplicated: false, job: { retryOf: failed.id } });
     await settled(app, retry.json().job.id, headers);
-    const again = await app.inject({ method: 'POST', url: `/api/jobs/${failed.id}/retry`, headers });
-    expect(again.statusCode).toBe(409);
-    expect(again.json().error.code).toBe('job_not_retryable');
+    const retriedDone = await app.inject({ method: 'POST', url: `/api/jobs/${retry.json().job.id}/retry`, headers });
+    expect([retriedDone.statusCode, retriedDone.json().error.code]).toEqual([409, 'job_not_retryable']);
     expect((await app.inject({ method: 'POST', url: '/api/jobs/nope/retry', headers })).statusCode).toBe(404);
 
     const page = (await app.inject({ method: 'GET', url: `/api/activity?jobId=${failed.id}&limit=2`, headers })).json();
-    expect(page.events).toHaveLength(2);
-    expect(page.nextCursor).toEqual(expect.any(String));
-    expect(page).toMatchObject({ retentionDays: 30, log: { state: 'ok' } });
-    const next = (await app.inject({ method: 'GET', url: `/api/activity?jobId=${failed.id}&limit=2&cursor=${page.nextCursor}`, headers })).json();
-    expect(next.events.map((event: { eventId: string }) => event.eventId)).not.toContain(page.events[0].eventId);
-    const errors = (await app.inject({ method: 'GET', url: '/api/activity?severity=warning,error', headers })).json();
-    expect(errors.events.map((event: { eventType: string }) => event.eventType)).toEqual(['job.failed']);
+    expect(page).toMatchObject({ view: 'raw', retentionDays: 30, nextCursor: expect.any(String) });
     const summary = (await app.inject({ method: 'GET', url: '/api/jobs/summary?since=2000-01-01T00:00:00Z', headers })).json();
     expect(summary.summary).toMatchObject({ active: 0, completed: 1, failed: 0 });
 

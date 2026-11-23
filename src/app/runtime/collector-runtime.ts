@@ -28,7 +28,7 @@ import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionScheduler, SubscriptionService } from '../../domain/subscriptions/index.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../../domain/notifications/index.js';
 import type { EventType } from '../../shared/activity/event-catalog.js';
-import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
+import type { CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
 
 
 export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'pause' | 'connectivity' | 'sources'>;
@@ -159,15 +159,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   /** The export or import of the Vault in use, as `GET /api/vault/status` answers it; null while no Vault is in use. */
   transferStatus(): TransferStatus | null { return this.workspaceValue?.operations.status() ?? null; }
 
-  /** A persisted old notification or an actionable row synthesized from the current Vault. */
-  async resolveNotification(id: string): Promise<AutoPauseNotification | null> {
-    const persisted = this.notifications.event(id);
-    if (persisted) return persisted;
-    const workspace = this.workspaceValue;
-    if (!workspace) return null;
-    return this.notifications.view(await workspace.notificationSubscriptions(), workspace.activeVaultId()).active.find((event) => event.id === id) ?? null;
-  }
-
   /** Records a device-wide desktop event; global events stay visible with any Vault selected. */
   recordDeviceEvent(severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string): void {
     recordDeviceEvent(this.records, severity, eventType, message, errorCode);
@@ -250,9 +241,10 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
         }
       },
     } : undefined;
+    const notificationState = async () => notifications.view(await currentWorkspace()?.notificationSubscriptions() ?? []);
     const notificationAccess: NotificationAccess = {
-      read: async () => { const workspace = currentWorkspace(); return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
-      update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); const workspace = currentWorkspace(); return notifications.view(await workspace?.notificationSubscriptions() ?? [], workspace?.activeVaultId() ?? null); },
+      read: notificationState,
+      update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); return notificationState(); },
     };
     const shared = { ...services, sources, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };

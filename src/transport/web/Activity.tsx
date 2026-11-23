@@ -20,8 +20,8 @@ import {
   RECORD_TYPE_OPTIONS,
   RECORD_TYPES,
   logTime,
-  logWarning,
   mergeNewest,
+  mergeSummary,
   parseActivityState,
   RANGE_OPTIONS,
   RANGES,
@@ -69,7 +69,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   const [logError, setLogError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
-  const summaryLocked = useRef(false);
   const logGeneration = useRef(0);
   const subscriptionChanges = useChanges(['subscriptions']);
   const logChanges = useChanges(['activity']);
@@ -86,7 +85,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   currentFilter.current = filter;
   const filterQuery = useRef<{ filter: string; query: ActivityQuery } | null>(null);
   useEffect(() => {
-    summaryLocked.current = false;
     logGeneration.current += 1;
     logFlight.current = null;
     setLog(null);
@@ -96,7 +94,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
 
   useEffect(() => {
     const requested = filter;
-    if (effectiveMode === 'summary' && summaryLocked.current) { logChanges.track(Promise.resolve()); return; }
     if (logFlight.current?.filter === requested) { logFlight.current.again = true; return; }
     if (filterQuery.current?.filter !== requested) filterQuery.current = { filter: requested, query: activityQuery(state, new Date()) };
     const query = filterQuery.current.query;
@@ -115,15 +112,18 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
       ? api.activitySummary({ ...query, limit: LOG_PAGE })
       : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
       if (currentFilter.current !== requested) return;
-      if (effectiveMode === 'summary' && summaryLocked.current) return;
-      const events = page.view === 'raw' ? page.events : [];
-      const entries = page.view === 'summary' ? page.entries : [];
-      setLog((previous) => previous && previous.filter === requested && effectiveMode === 'raw'
-        ? { ...previous, events: mergeNewest(previous.events, events), entries: [], health: page.log }
-        : { filter: requested, events, entries, nextCursor: page.nextCursor, health: page.log });
+      setLog((previous) => {
+        const loaded = previous?.filter === requested ? previous : null;
+        if (page.view === 'raw') {
+          return loaded ? { ...loaded, events: mergeNewest(loaded.events, page.events), health: page.log }
+            : { filter: requested, events: page.events, entries: [], nextCursor: page.nextCursor, health: page.log };
+        }
+        const merged = loaded ? mergeSummary(loaded, page) : page;
+        return { filter: requested, events: [], entries: merged.entries, nextCursor: merged.nextCursor, health: page.log };
+      });
       setLogError(null);
     }).catch((error: unknown) => {
-      if (currentFilter.current === requested && !(effectiveMode === 'summary' && summaryLocked.current)) {
+      if (currentFilter.current === requested) {
         setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
       }
       throw error;
@@ -150,7 +150,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     const requestedFilter = filter;
     const requestedCursor = log.nextCursor;
     const requestedGeneration = logGeneration.current;
-    if (effectiveMode === 'summary') summaryLocked.current = true;
     setLoadingOlder(true);
     try {
       const query = filterQuery.current?.filter === filter ? filterQuery.current.query : activityQuery(state, new Date());
@@ -189,7 +188,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     action();
   }
 
-  const warning = logWarning(log?.health ?? null);
+  const dropped = log?.health.dropped ?? 0;
   const unlistedSubscriptionId = state.subscriptionId !== null && !subscriptions.some((subscription) => subscription.id === state.subscriptionId)
     ? state.subscriptionId : null;
 
@@ -248,7 +247,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
           <button type="button" className="chip-clear" aria-label="清除工作篩選" onClick={() => change({ jobId: null })}>×</button></span>
         {filteredJob ? <button type="button" className="button small" onClick={() => void copyDiagnostics(filteredJob)} data-testid="copy-diagnostics">複製診斷資訊</button> : null}
       </div> : null}
-      {warning ? <p className="log-warning" role="alert" data-testid="log-warning">{warning}</p> : null}
+      {dropped > 0 ? <p className="log-warning" role="alert" data-testid="log-warning">有 {dropped} 筆記錄未能寫入而遺失。</p> : null}
       {logError ? <p className="load-error activity-pad" role="alert">{logError}</p> : null}
       {log === null ? <p className="job-empty activity-pad">正在讀取…</p>
         : (effectiveMode === 'summary' ? log.entries.length : log.events.length) === 0 ? <p className="job-empty activity-pad">這段期間沒有符合的記錄。</p>

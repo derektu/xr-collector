@@ -55,7 +55,7 @@ describe('secrets in system notifications (#254)', () => {
     const event: AutoPauseNotification = {
       id: 'n1', vaultId: 'vault-a', sourceType: 'rss', subscriptionId: 'feed', title: `Feed ${agentToken}`, failureCount: 5,
       error: { code: 'network_error', message: `GET https://feed.test/rss?token=feed-secret agent ${agentToken}` },
-      autoPausedAt: '2026-10-28T01:00:00.000Z', delivery: 'pending', deliveryMessage: null,
+      autoPausedAt: '2026-10-28T01:00:00.000Z',
     };
     await adapter.show(event);
     const shown = JSON.stringify([created.at(-1), observed.at(-1)]);

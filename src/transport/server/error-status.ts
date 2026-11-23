@@ -44,7 +44,6 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   network_error: 503,
   offline: 503,
   rate_limited: 503,
-  activity_snapshot_expired: 410,
   activity_group_expired: 410,
 };
 

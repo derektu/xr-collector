@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { eventSpec } from '../../shared/activity/event-catalog.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type {
@@ -15,25 +15,28 @@ import type {
 import { RETENTION_DAYS, type ActivityLog, type ActivityScope } from './activity-log.js';
 
 const DEFAULT_LIMIT = 50;
-const SNAPSHOT_TTL_MS = 30 * 60_000;
-const SNAPSHOT_LIMIT = 50;
+const HIDDEN_SKIPS: ReadonlySet<string> = new Set(['subscription_paused', 'subscription_removed']);
+const GROUP_SEPARATOR = '.';
 
 export interface ActivityViewsOptions {
   sourceTitle?: (jobId: string) => string | undefined;
 }
 
-interface SummarySnapshot {
-  createdAt: number;
-  oldestAt: string | null;
-  filter: string;
-  scope: string;
-  entries: ActivitySummaryEntry[];
-  groups: Map<string, { summary: ActivityCheckSummary; checks: ActivityCheckDetail[] }>;
+type CheckEvent = JobEvent & { check: NonNullable<JobEvent['check']> };
+
+interface CheckTerminal {
+  event: CheckEvent;
+  detail: ActivityCheckDetail;
+  hidden: boolean;
+}
+
+interface Positioned {
+  entry: ActivitySummaryEntry;
+  timestamp: string;
+  eventId: string;
 }
 
 export class ActivityViews {
-  private readonly snapshots = new Map<string, SummarySnapshot>();
-
   constructor(private readonly log: ActivityLog, private readonly options: ActivityViewsOptions = {}) {}
 
   health(): ActivityLogHealth {
@@ -74,62 +77,39 @@ export class ActivityViews {
       ...(request.until ? { until: new Date(request.until).toISOString() } : {}),
     };
     const limit = query.limit ?? DEFAULT_LIMIT;
-    const filter = filterHash(query);
-    let snapshotId: string;
-    let offset = 0;
-    let snapshot: SummarySnapshot | undefined;
-    if (query.cursor) {
-      ({ snapshotId, offset } = decodeSummaryCursor(query.cursor, filter));
-      snapshot = this.snapshots.get(snapshotId);
-      if (!snapshot || snapshot.filter !== filter || snapshot.scope !== scopeKey(scope)
-        || this.log.now().getTime() - snapshot.createdAt > SNAPSHOT_TTL_MS
-        || (snapshot.oldestAt !== null && snapshot.oldestAt < this.log.retentionStart().toISOString())) {
-        this.snapshots.delete(snapshotId);
-        throw new CollectorError('activity_snapshot_expired', '記錄摘要已更新，請重新讀取第一頁。');
-      }
-    } else {
-      snapshotId = randomUUID();
-      snapshot = await this.buildSummary(query, scope, snapshotId);
-      this.keepSnapshot(snapshotId, snapshot);
-    }
-    const entries = snapshot.entries.slice(offset, offset + limit);
-    const next = offset + entries.length;
+    const filterKey = filterHash(query);
+    const after = query.cursor ? decodeCursor(query.cursor, filterKey) : null;
+    const positioned = (await this.summaryEntries(query, scope)).filter((item) => !after || compareEvents(item, after) < 0);
+    const page = positioned.slice(0, limit);
+    const last = page[page.length - 1];
     return {
       view: 'summary',
-      entries,
-      nextCursor: next < snapshot.entries.length ? encodeSummaryCursor(snapshotId, next, filter) : null,
+      entries: page.map((item) => item.entry),
+      nextCursor: positioned.length > limit && last ? encodeCursor(last, filterKey) : null,
       retentionDays: RETENTION_DAYS,
       log: this.log.health(),
     };
   }
 
   async group(groupId: string, scope: ActivityScope, limit = DEFAULT_LIMIT, cursor?: string, severity?: ActivityQuery['severity']): Promise<ActivityGroupPage> {
-    const snapshotId = groupId.split(':')[0];
-    const snapshot = snapshotId ? this.snapshots.get(snapshotId) : undefined;
-    if (!snapshot || snapshot.scope !== scopeKey(scope)) {
-      if (snapshotId) this.snapshots.delete(snapshotId);
-      throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
-    }
-    const group = snapshot.groups.get(groupId);
-    if (!group) throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
-    const oldestDetailAt = group.checks.reduce((oldest, check) => check.events.reduce(
-      (value, event) => event.timestamp < value ? event.timestamp : value, oldest), group.summary.firstFinishedAt);
-    if (oldestDetailAt < this.log.retentionStart().toISOString()) {
-      throw new CollectorError('activity_group_expired', '檢查細節已超過 30 天保留期限。');
-    }
-    if (this.log.now().getTime() - snapshot.createdAt > SNAPSHOT_TTL_MS) {
-      this.snapshots.delete(snapshotId!);
-      throw new CollectorError('activity_group_expired', '此查詢連結已失效，請返回並重新整理。');
-    }
+    const [firstJobId, lastJobId = firstJobId] = groupId.split(GROUP_SEPARATOR);
+    const all = await this.events(scope);
+    const terminals = checkTerminals(eventsByRoot(all), all);
+    const first = terminals.get(firstJobId!)?.event;
+    const last = terminals.get(lastJobId!)?.event;
+    if (!first || !last) throw new CollectorError('activity_group_expired', '這組檢查的記錄已超過 30 天保留期限。');
+    const run = [...terminals.values()].filter(({ event, hidden }) => !hidden && event.sourceType === last.sourceType
+      && event.subscriptionId === last.subscriptionId && compareEvents(event, first) >= 0 && compareEvents(event, last) <= 0).sort(byFinish);
+    const details = run.map((terminal) => terminal.detail).reverse();
     const offset = cursor ? decodeGroupCursor(cursor, groupId) : 0;
-    const checks = group.checks.slice(offset, offset + limit).map((check) => ({
+    const checks = details.slice(offset, offset + limit).map((check) => ({
       ...check,
       events: severity ? check.events.filter((event) => severity.includes(event.severity)) : check.events,
     }));
     const next = offset + checks.length;
     return {
-      group: group.summary, checks,
-      nextCursor: next < group.checks.length ? encodeGroupCursor(groupId, next) : null,
+      group: runSummary(run), checks,
+      nextCursor: next < details.length ? encodeGroupCursor(groupId, next) : null,
       retentionDays: RETENTION_DAYS,
     };
   }
@@ -147,76 +127,35 @@ export class ActivityViews {
     });
   }
 
-  private async buildSummary(query: ActivityQuery, scope: ActivityScope, snapshotId: string): Promise<SummarySnapshot> {
+  private async summaryEntries(query: ActivityQuery, scope: ActivityScope): Promise<Positioned[]> {
     const all = await this.events(scope);
     const base = all.filter((event) => (!query.since || event.timestamp >= query.since)
       && (!query.until || event.timestamp < query.until)
       && (!query.subscriptionId || event.subscriptionId === query.subscriptionId)
       && (!query.sourceType || event.sourceType === query.sourceType));
-    const eventsByRoot = new Map<string, JobEvent[]>();
-    for (const event of all) {
-      const root = event.parentJobId ?? event.jobId;
-      if (!root) continue;
-      const list = eventsByRoot.get(root) ?? [];
-      list.push(event);
-      eventsByRoot.set(root, list);
-    }
-    const terminals = new Map<string, { event: JobEvent; detail: ActivityCheckDetail; hidden: boolean }>();
-    for (const event of base) {
-      if (!event.jobId || (event.eventType !== 'job.completed' && event.eventType !== 'job.failed')) continue;
-      const check = event.check;
-      if (!check || !event.subscriptionId || !event.sourceType) continue;
-      terminals.set(event.jobId, {
-        event: { ...event, check },
-        hidden: event.outcome === 'skipped' && event.skipReason !== undefined
-          && new Set(['subscription_paused', 'subscription_removed', 'superseded']).has(event.skipReason),
-        detail: {
-          jobId: event.jobId, finishedAt: event.timestamp, result: check.result,
-          created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
-          ...(event.errorCode ? { errorCode: event.errorCode } : {}), message: event.message,
-          events: (eventsByRoot.get(event.jobId) ?? [])
-            .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.eventId.localeCompare(b.eventId)),
-        },
-      });
-    }
-    const bySubscription = new Map<string, Array<{ event: JobEvent; detail: ActivityCheckDetail; hidden: boolean }>>();
+    const roots = eventsByRoot(all);
+    const terminals = checkTerminals(roots, base);
+    const bySubscription = new Map<string, CheckTerminal[]>();
     for (const terminal of terminals.values()) {
       const key = `${terminal.event.sourceType}\u0000${terminal.event.subscriptionId}`;
       const list = bySubscription.get(key) ?? [];
       list.push(terminal);
       bySubscription.set(key, list);
     }
-    const groups = new Map<string, { summary: ActivityCheckSummary; checks: ActivityCheckDetail[] }>();
-    const checkEntries: ActivityCheckSummary[] = [];
-    const checkEntryEventIds = new Map<string, string>();
-    let groupIndex = 0;
+    const checkEntries: Array<Positioned & { entry: ActivityCheckSummary }> = [];
     for (const checks of bySubscription.values()) {
-      checks.sort((a, b) => a.event.timestamp.localeCompare(b.event.timestamp) || a.event.eventId.localeCompare(b.event.eventId));
-      let run: typeof checks = [];
+      checks.sort(byFinish);
+      let run: CheckTerminal[] = [];
       const flush = () => {
         if (run.length === 0) return;
-        const first = run[0]!;
         const last = run[run.length - 1]!;
-        const check = last.event.check!;
-        const groupId = `${snapshotId}:${groupIndex++}`;
-        const summary: ActivityCheckSummary = {
-          kind: 'check', groupId, jobId: last.event.jobId!, sourceType: last.event.sourceType!, subscriptionId: last.event.subscriptionId!,
-          sourceTitle: last.event.sourceTitle ?? null, trigger: check.trigger, result: check.result,
-          created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
-          count: run.length, firstFinishedAt: first.event.timestamp, lastFinishedAt: last.event.timestamp,
-          severity: last.event.severity, ...(last.event.errorCode ? { errorCode: last.event.errorCode } : {}), message: last.event.message,
-        };
-        checkEntries.push(summary);
-        checkEntryEventIds.set(groupId, last.event.eventId);
-        groups.set(groupId, { summary, checks: run.map((entry) => entry.detail).reverse() });
+        checkEntries.push({ entry: runSummary(run), timestamp: last.event.timestamp, eventId: last.event.eventId });
         run = [];
       };
       for (const item of checks) {
         if (item.hidden) { flush(); continue; }
-        const check = item.event.check!;
-        const eligible = isUneventfulScheduledCheck(item.event);
-        if (!eligible) { flush(); run = [item]; flush(); continue; }
-        if (run.length > 0 && run[run.length - 1]!.event.check!.result !== check.result) flush();
+        if (!isUneventfulScheduledCheck(item.event)) { flush(); run = [item]; flush(); continue; }
+        if (run.length > 0 && run[run.length - 1]!.event.check.result !== item.event.check.result) flush();
         run.push(item);
       }
       flush();
@@ -236,33 +175,67 @@ export class ActivityViews {
       if (event.jobRole === 'check') return event.eventType === 'job.failed'
         || (event.eventType === 'job.started' && event.trigger !== undefined && event.trigger !== 'scheduled');
       if (event.jobRole === 'item' && event.eventType === 'job.completed' && event.outcome === 'created'
-        && event.jobId && eventsByRoot.get(event.jobId)?.some((related) => related.eventType === 'document.saved')) return false;
+        && event.jobId && roots.get(event.jobId)?.some((related) => related.eventType === 'document.saved')) return false;
       return true;
     })
       .filter((event) => !query.severity || query.severity.includes(event.severity))
       .filter((event) => !query.eventType || query.eventType.includes(event.eventType))
-      .map((event): ActivitySummaryEntry => ({ kind: 'event', event }));
-    const summaries = query.eventType ? [] : checkEntries.filter((entry) => !query.severity || query.severity.includes(entry.severity));
-    const entries: ActivitySummaryEntry[] = [...independent, ...summaries]
-      .sort((a, b) => summaryTime(b).localeCompare(summaryTime(a))
-        || summaryEventId(b, checkEntryEventIds).localeCompare(summaryEventId(a, checkEntryEventIds)));
-    const oldestAt = entries.reduce<string | null>((oldest, entry) => {
-      const value = entry.kind === 'event' ? entry.event.timestamp : entry.firstFinishedAt;
-      return oldest === null || value < oldest ? value : oldest;
-    }, null);
-    return { createdAt: this.log.now().getTime(), oldestAt, filter: filterHash(query), scope: scopeKey(scope), entries, groups };
-  }
-
-  private keepSnapshot(id: string, snapshot: SummarySnapshot): void {
-    const now = this.log.now().getTime();
-    for (const [key, value] of this.snapshots) if (now - value.createdAt > SNAPSHOT_TTL_MS) this.snapshots.delete(key);
-    this.snapshots.set(id, snapshot);
-    while (this.snapshots.size > SNAPSHOT_LIMIT) this.snapshots.delete(this.snapshots.keys().next().value!);
+      .map((event): Positioned => ({ entry: { kind: 'event', event }, timestamp: event.timestamp, eventId: event.eventId }));
+    const summaries = query.eventType ? [] : checkEntries.filter((item) => !query.severity || query.severity.includes(item.entry.severity));
+    return [...independent, ...summaries].sort((a, b) => compareEvents(b, a));
   }
 }
 
-function scopeKey(scope: ActivityScope): string {
-  return JSON.stringify({ vaultPath: scope.vaultPath, vaultId: scope.vaultId ?? null });
+function eventsByRoot(all: readonly JobEvent[]): Map<string, JobEvent[]> {
+  const roots = new Map<string, JobEvent[]>();
+  for (const event of all) {
+    const root = event.parentJobId ?? event.jobId;
+    if (!root) continue;
+    const list = roots.get(root) ?? [];
+    list.push(event);
+    roots.set(root, list);
+  }
+  return roots;
+}
+
+function checkTerminals(roots: ReadonlyMap<string, JobEvent[]>, base: readonly JobEvent[]): Map<string, CheckTerminal> {
+  const terminals = new Map<string, CheckTerminal>();
+  for (const event of base) {
+    if (!event.jobId || (event.eventType !== 'job.completed' && event.eventType !== 'job.failed')) continue;
+    const check = event.check;
+    if (!check || !event.subscriptionId || !event.sourceType) continue;
+    terminals.set(event.jobId, {
+      event: { ...event, check },
+      hidden: event.outcome === 'skipped' && event.skipReason !== undefined && HIDDEN_SKIPS.has(event.skipReason),
+      detail: {
+        jobId: event.jobId, finishedAt: event.timestamp, result: check.result,
+        created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
+        ...(event.errorCode ? { errorCode: event.errorCode } : {}), message: event.message,
+        events: [...roots.get(event.jobId) ?? []]
+          .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.eventId.localeCompare(b.eventId)),
+      },
+    });
+  }
+  return terminals;
+}
+
+function byFinish(a: CheckTerminal, b: CheckTerminal): number {
+  return compareEvents(a.event, b.event);
+}
+
+function runSummary(run: readonly CheckTerminal[]): ActivityCheckSummary {
+  const first = run[0]!.event;
+  const last = run[run.length - 1]!.event;
+  const { check } = last;
+  return {
+    kind: 'check',
+    groupId: first.jobId === last.jobId ? last.jobId! : `${first.jobId}${GROUP_SEPARATOR}${last.jobId}`,
+    jobId: last.jobId!, sourceType: last.sourceType!, subscriptionId: last.subscriptionId!,
+    sourceTitle: last.sourceTitle ?? null, trigger: check.trigger, result: check.result,
+    created: check.created, existing: check.existing, failed: check.failed, skipped: check.skipped,
+    count: run.length, firstFinishedAt: first.timestamp, lastFinishedAt: last.timestamp,
+    severity: last.severity, ...(last.errorCode ? { errorCode: last.errorCode } : {}), message: last.message,
+  };
 }
 
 function isUneventfulScheduledCheck(event: JobEvent): boolean {
@@ -305,30 +278,6 @@ function filterHash(query: ActivityQuery): string {
   return createHash('sha256').update(JSON.stringify(normalized)).digest('base64url').slice(0, 12);
 }
 
-function summaryTime(entry: ActivitySummaryEntry): string {
-  return entry.kind === 'event' ? entry.event.timestamp : entry.lastFinishedAt;
-}
-
-function summaryEventId(entry: ActivitySummaryEntry, checks: ReadonlyMap<string, string>): string {
-  return entry.kind === 'event' ? entry.event.eventId : checks.get(entry.groupId) ?? '';
-}
-
-function encodeSummaryCursor(snapshotId: string, offset: number, filter: string): string {
-  return Buffer.from(JSON.stringify({ s: snapshotId, o: offset, f: filter })).toString('base64url');
-}
-
-function decodeSummaryCursor(cursor: string, filter: string): { snapshotId: string; offset: number } {
-  const invalid = () => new CollectorError('invalid_request', '記錄摘要的分頁位置無效，請重新讀取第一頁。');
-  try {
-    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: unknown; o?: unknown; f?: unknown };
-    if (typeof value.s !== 'string' || !Number.isSafeInteger(value.o) || (value.o as number) < 0 || value.f !== filter) throw invalid();
-    return { snapshotId: value.s, offset: value.o as number };
-  } catch (error) {
-    if (error instanceof CollectorError) throw error;
-    throw invalid();
-  }
-}
-
 function encodeGroupCursor(groupId: string, offset: number): string {
   return Buffer.from(JSON.stringify({ g: groupId, o: offset })).toString('base64url');
 }
@@ -345,7 +294,7 @@ function decodeGroupCursor(cursor: string, groupId: string): number {
   }
 }
 
-function encodeCursor(event: JobEvent, filter: string): string {
+function encodeCursor(event: Pick<JobEvent, 'timestamp' | 'eventId'>, filter: string): string {
   return Buffer.from(JSON.stringify({ t: event.timestamp, id: event.eventId, f: filter })).toString('base64url');
 }
 

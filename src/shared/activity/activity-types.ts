@@ -142,10 +142,7 @@ export interface ActivityGroupPage {
 }
 
 export interface ActivityLogHealth {
-  state: 'ok' | 'failing';
-  /** Events waiting to be written after a failed write. */
-  pending: number;
-  /** Events lost because too many waited. */
+  /** Events dropped because their write failed. */
   dropped: number;
   lastFailureAt: string | null;
   lastError: string | null;

@@ -9,8 +9,6 @@ export const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 const PURGE_INTERVAL_MS = 3_600_000;
 const FLUSH_INTERVAL_MS = 1_000;
-const RETRY_WRITE_MS = 30_000;
-const PENDING_LIMIT = 1000;
 const MESSAGE_LIMIT = 500;
 const DETAIL_LIMIT = 2000;
 const TITLE_LIMIT = 300;
@@ -24,7 +22,6 @@ export interface ActivityLogOptions {
   now?: () => Date;
   setTimer?: (callback: () => void, ms: number) => () => void;
   append?: (file: string, data: string) => Promise<void>;
-  onDropped?: (event: JobEvent) => void;
   onRecorded?: (event: JobEvent) => void;
 }
 
@@ -57,11 +54,8 @@ export class ActivityLog implements EventRecorder {
   private readonly cache = new Map<string, CachedFile>();
   private cancelPurge: (() => void) | null = null;
   private cancelFlush: (() => void) | null = null;
-  private cancelRetry: (() => void) | null = null;
   private closed = false;
-  private healthValue: Omit<ActivityLogHealth, 'pending' | 'skippedLines'> = {
-    state: 'ok', dropped: 0, lastFailureAt: null, lastError: null,
-  };
+  private healthValue: Omit<ActivityLogHealth, 'skippedLines'> = { dropped: 0, lastFailureAt: null, lastError: null };
 
   private constructor(private readonly directory: string | null, private readonly options: ActivityLogOptions) {
     this.now = options.now ?? (() => new Date());
@@ -104,11 +98,6 @@ export class ActivityLog implements EventRecorder {
       return;
     }
     this.pending.push(event);
-    while (this.pending.length > PENDING_LIMIT) {
-      const dropped = this.pending.shift()!;
-      this.healthValue.dropped += 1;
-      this.options.onDropped?.(dropped);
-    }
     if (this.closed) this.kick();
     else this.scheduleFlush();
   }
@@ -121,7 +110,7 @@ export class ActivityLog implements EventRecorder {
   health(): ActivityLogHealth {
     let skippedLines = 0;
     for (const file of this.cache.values()) skippedLines += file.skipped;
-    return { ...this.healthValue, pending: this.pending.length, skippedLines };
+    return { ...this.healthValue, skippedLines };
   }
 
   retentionStart(): Date {
@@ -164,8 +153,6 @@ export class ActivityLog implements EventRecorder {
     this.cancelPurge?.();
     this.cancelFlush?.();
     this.cancelFlush = null;
-    this.cancelRetry?.();
-    this.cancelRetry = null;
     await this.flush();
   }
 
@@ -178,7 +165,7 @@ export class ActivityLog implements EventRecorder {
   }
 
   private scheduleFlush(): void {
-    if (this.cancelFlush || this.cancelRetry) return;
+    if (this.cancelFlush) return;
     this.cancelFlush = this.setTimer(() => {
       this.cancelFlush = null;
       this.kick();
@@ -190,7 +177,6 @@ export class ActivityLog implements EventRecorder {
   }
 
   private async drain(): Promise<void> {
-    if (this.cancelRetry) return;
     const directory = path.join(this.directory!, SEGMENT_DIRECTORY);
     while (this.pending.length > 0) {
       const day = this.pending[0]!.timestamp.slice(0, 10);
@@ -204,29 +190,14 @@ export class ActivityLog implements EventRecorder {
         await this.append(file, (await endsMidLine(file) ? '\n' : '') + lines);
       } catch (error) {
         this.healthValue = {
-          ...this.healthValue,
-          state: 'failing',
+          dropped: this.healthValue.dropped + batch.length,
           lastFailureAt: this.now().toISOString(),
           lastError: redact(error instanceof Error ? error.message : String(error)),
         };
-        console.error('Activity log write failed', error);
-        this.scheduleRetry();
-        return;
+        console.error('Activity log write failed; its events are dropped', error);
       }
-      const written = new Set(batch.map((event) => event.eventId));
-      this.pending = this.pending.filter((event) => !written.has(event.eventId));
+      this.pending.splice(0, count);
     }
-    this.healthValue = { ...this.healthValue, state: 'ok' };
-  }
-
-  private scheduleRetry(): void {
-    this.cancelFlush?.();
-    this.cancelFlush = null;
-    if (this.closed || this.cancelRetry) return;
-    this.cancelRetry = this.setTimer(() => {
-      this.cancelRetry = null;
-      this.kick();
-    }, RETRY_WRITE_MS);
   }
 
   private async readAll(): Promise<JobEvent[]> {

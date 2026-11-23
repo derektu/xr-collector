@@ -34,12 +34,11 @@ export type NotificationAvailability = 'available' | 'unavailable' | 'failed';
 export interface AutoPauseNotification {
   id: string; vaultId: string; sourceType: string; subscriptionId: string; title: string;
   failureCount: number; error: JobError; autoPausedAt: string;
-  delivery: 'pending' | 'attempted' | 'suppressed' | 'failed'; deliveryMessage: string | null;
 }
 
 export interface NotificationState {
   enabled: boolean; availability: NotificationAvailability; availabilityMessage: string | null;
-  active: AutoPauseNotification[]; events: AutoPauseNotification[];
+  active: AutoPauseNotification[];
 }
 
 /** How the Agent listener picks its port: the first free one of the preferred range, else any free port; or one fixed port. */

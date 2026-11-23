@@ -23,7 +23,7 @@ export type PortReport =
   | { kind: 'collected'; type: string; id: string; key: string }
   | { kind: 'failed'; type: string; id: string; key: string; title: string | null; errorCode: string; failureClass: FailureClass }
   | { kind: 'outOfRange'; type: string; id: string; key: string; before: string }
-  | { kind: 'subscribed'; type: string; id: string; outcome: 'created' | 'existing'; resumed: boolean }
+  | { kind: 'subscribed'; type: string; id: string; outcome: 'created' | 'existing' }
   | { kind: 'checkNow'; type: string; id: string };
 
 /**
@@ -120,22 +120,18 @@ export class SubscriptionRecorder implements SubscriptionPort {
     this.reports.push({ kind: 'outOfRange', type, id, key: itemKey, before });
   }
 
-  async subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings, options: { resumed: boolean; beforeCreate: () => Promise<void> }): Promise<SubscribeResult> {
+  async subscribe(type: string, target: SubscriptionTarget, settings: SubscriptionSettings): Promise<SubscribeResult> {
     const existing = this.get(type, target.id);
-    if (existing && !options.resumed) {
-      this.reports.push({ kind: 'subscribed', type, id: target.id, outcome: 'existing', resumed: false });
+    if (existing) {
+      this.reports.push({ kind: 'subscribed', type, id: target.id, outcome: 'existing' });
       return { subscription: existing, outcome: 'existing', check: null };
     }
-    let subscription = existing;
-    if (!subscription) {
-      await options.beforeCreate();
-      subscription = this.add(type, target, { settings });
-      if (this.hangAfterSubscribe) {
-        this.hangAfterSubscribe = false;
-        await never();
-      }
+    const subscription = this.add(type, target, { settings });
+    if (this.hangAfterSubscribe) {
+      this.hangAfterSubscribe = false;
+      await never();
     }
-    this.reports.push({ kind: 'subscribed', type, id: target.id, outcome: 'created', resumed: options.resumed });
+    this.reports.push({ kind: 'subscribed', type, id: target.id, outcome: 'created' });
     return { subscription, outcome: 'created', check: await this.requireJobs().submitCheck(type, subscription, 'subscribe') };
   }
 

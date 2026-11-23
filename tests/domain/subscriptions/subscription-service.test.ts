@@ -114,12 +114,12 @@ describe('SubscriptionService', () => {
 
     const enabled = await channels.startRun({ trigger: 'manual' });
     expect(enabled.map(({ job }) => job.source.id)).toEqual(['one', 'three']);
-    await Promise.all(enabled.map(({ job }) => channels.whenSettled(job.id)));
+    await Promise.all(enabled.map(({ job }) => jobs.whenSettled(job.id)));
     const requested = await channels.startRun({ trigger: 'manual', subscriptionIds: ['three', 'one', 'three'] });
     expect(requested.map(({ job }) => job.source.id)).toEqual(['three', 'one']);
     await expect(channels.startRun({ trigger: 'manual', subscriptionIds: ['missing'] })).rejects.toMatchObject({ code: 'subscription_not_found' });
     await expect(channels.startRun({ trigger: 'manual', subscriptionIds: ['two'] })).rejects.toMatchObject({ code: 'subscription_paused' });
-    await Promise.all([...enabled, ...requested].map(({ job }) => channels.whenSettled(job.id)));
+    await Promise.all([...enabled, ...requested].map(({ job }) => jobs.whenSettled(job.id)));
     await jobs.close();
   });
 

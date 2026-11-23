@@ -1,6 +1,6 @@
 import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
-import type { ActivityLogHealth, ActivityQuery, EventSeverity, JobEvent } from '../../shared/activity/activity-types.js';
+import type { ActivityQuery, ActivitySummaryEntry, EventSeverity, JobEvent } from '../../shared/activity/activity-types.js';
 import type { JobError, JobPhase, JobState, JobView } from '../../shared/jobs/job-types.js';
 import { jobKind, jobKindLabel, jobTitle } from './job-presentation.js';
 import { isOneOf } from './one-of.js';
@@ -186,24 +186,6 @@ export function summaryRange(first: string, last: string): string {
   return `${logTime(first)}–${logTime(last)}`;
 }
 
-export type LogProblem = { state: 'failing'; pending: number; dropped: number | null } | { state: 'lost'; dropped: number };
-
-export function logProblem(health: ActivityLogHealth | null): LogProblem | null {
-  if (!health) return null;
-  if (health.state === 'failing') return { state: 'failing', pending: health.pending, dropped: health.dropped > 0 ? health.dropped : null };
-  if (health.dropped > 0) return { state: 'lost', dropped: health.dropped };
-  return null;
-}
-
-export function logWarning(health: ActivityLogHealth | null): string | null {
-  const problem = logProblem(health);
-  if (!problem) return null;
-  if (problem.state === 'failing') {
-    return `記錄暫時無法寫入，${problem.pending} 筆記錄等待補寫${problem.dropped !== null ? `，${problem.dropped} 筆已遺失` : ''}。`;
-  }
-  return `有 ${problem.dropped} 筆記錄未能寫入而遺失。`;
-}
-
 export function jobBadge(declarations: SourceDeclarations, job: JobView): string {
   return jobKind(declarations, job).kind === 'item' ? '單篇' : jobKindLabel(declarations, job);
 }
@@ -280,4 +262,25 @@ export function diagnosticsText(declarations: SourceDeclarations, job: JobView, 
 export function mergeNewest(loaded: JobEvent[], fresh: JobEvent[]): JobEvent[] {
   const seen = new Set(fresh.map((event) => event.eventId));
   return [...fresh, ...loaded.filter((event) => !seen.has(event.eventId))];
+}
+
+export interface SummaryList {
+  entries: ActivitySummaryEntry[];
+  nextCursor: string | null;
+}
+
+export function mergeSummary(loaded: SummaryList, fresh: SummaryList): SummaryList {
+  const boundary = fresh.entries[fresh.entries.length - 1];
+  if (!fresh.nextCursor || !boundary) return fresh;
+  const shown = new Set(fresh.entries.map(summaryKey));
+  const older = loaded.entries.filter((entry) => summaryTime(entry) <= summaryTime(boundary) && !shown.has(summaryKey(entry)));
+  return older.length > 0 ? { entries: [...fresh.entries, ...older], nextCursor: loaded.nextCursor } : fresh;
+}
+
+function summaryKey(entry: ActivitySummaryEntry): string {
+  return entry.kind === 'event' ? entry.event.eventId : entry.groupId;
+}
+
+function summaryTime(entry: ActivitySummaryEntry): string {
+  return entry.kind === 'event' ? entry.event.timestamp : entry.lastFinishedAt;
 }
