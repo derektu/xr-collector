@@ -13,7 +13,7 @@ export interface JobEvent {
   message: string;
   /** Null for events that belong to no Vault. */
   vaultPath: string | null;
-  /** ID of the Vault the event belongs to; absent for events of a Vault without an ID. */
+  /** ID of the Vault the event belongs to; an event without it belongs by `vaultPath`. */
   vaultId?: string;
   jobId: string | null;
   phase?: JobPhase;
