@@ -30,7 +30,6 @@ export type CoreErrorCode =
   | 'queue_full'
   | 'file_exists'
   | 'vault_location_fixed'
-  | 'activity_snapshot_expired'
   | 'activity_group_expired'
   | 'login_startup_unavailable'
   | 'login_startup_requires_approval'

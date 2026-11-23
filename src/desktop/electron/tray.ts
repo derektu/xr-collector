@@ -6,6 +6,7 @@ import { API_ROUTES, type ApiRoute, type BodyOf, type ResponseOf } from '../../s
 import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
 import type { DesktopTarget } from './main-window.js';
+import type { NotificationTarget } from './notification-navigation.js';
 
 export const READ_GAP_MS = 1000;
 
@@ -14,7 +15,7 @@ export interface AppTrayOptions {
   serverUrl: string;
   iconFolder: string;
   changes: { subscribe(listener: (batch: ChangeBatch) => void): () => void };
-  show(page?: Extract<DesktopTarget, string> | { notificationId: string }): void;
+  show(page?: Extract<DesktopTarget, string> | { notification: NotificationTarget }): void;
   quit(): void;
 }
 
@@ -72,7 +73,12 @@ export class AppTray {
   }
 
   async run(action: TrayAction): Promise<void> {
-    if (action.startsWith('subscription:')) { this.options.show({ notificationId: action.slice('subscription:'.length) }); return; }
+    if (action.startsWith('subscription:')) {
+      const id = action.slice('subscription:'.length);
+      const notification = this.state?.actionable?.find((event) => event.id === id);
+      if (notification) this.options.show({ notification });
+      return;
+    }
     switch (action) {
       case 'open': this.options.show(); return;
       case 'jobs': this.options.show('jobs'); return;

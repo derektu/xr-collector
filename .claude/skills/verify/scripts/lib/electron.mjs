@@ -395,7 +395,7 @@ export function notifications(app) {
   return app.evaluate(() => globalThis.__xrCollectorValidation.notifications());
 }
 
-/** Activates one delivered notification by its durable id, through the same routing as an OS click. */
-export function activateNotification(app, id) {
-  return app.evaluate((_electron, notificationId) => globalThis.__xrCollectorValidation.activateNotification(notificationId), id);
+/** Activates the notification for `{ vaultId, sourceType, subscriptionId }`, through the same routing as an OS click. */
+export function activateNotification(app, target) {
+  return app.evaluate((_electron, notification) => globalThis.__xrCollectorValidation.activateNotification(notification), target);
 }

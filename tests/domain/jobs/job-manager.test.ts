@@ -268,7 +268,7 @@ describe('JobManager', () => {
     const job = await manager.whenSettled(added.job.id);
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     const [subscribed] = subs.of('subscribed');
-    expect(subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: 'UCsamplexxxxxxxxxxxxxxxx', outcome: 'created', resumed: false }]);
+    expect(subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: 'UCsamplexxxxxxxxxxxxxxxx', outcome: 'created' }]);
     expect(subs.get('youtube', subscribed!.id)?.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 });
     const followUp = await manager.whenSettled(job.result!.followUpJobId!);
     expect(followUp).toMatchObject({ kind: 'youtube.channel', source: { id: subscribed!.id }, result: { outcome: 'empty' } });

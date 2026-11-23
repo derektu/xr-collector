@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,17 +12,14 @@ import { readEventFiles } from '../../support/event-files.js';
 import { eventually } from '../../support/wait.js';
 
 // The device activity log: day files written once a second with a 30-day retention, newest-first
-// cursor pages, filters, masking and write failures that are reported, not lost.
+// cursor pages, filters, masking, and a failed write that drops its events without corrupting the file.
 
 const DAY = 86_400_000;
 const VAULT = '/vaults/a';
 const directories: string[] = [];
 
 afterEach(async () => {
-  for (const directory of directories.splice(0)) {
-    await chmod(path.join(directory, 'events'), 0o700).catch(() => undefined);
-    await rm(directory, { recursive: true, force: true });
-  }
+  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
 async function tempDirectory(): Promise<string> {
@@ -311,67 +308,30 @@ describe('masking (A-T6)', () => {
 });
 
 describe('write failures (A-T7)', () => {
-  it('reports a failing log, keeps events waiting and writes them in order once writing works again', async () => {
+  it('drops a batch whose write fails, counts what it dropped, and writes the events after it', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    const timers = new Timers();
-    let failing = true;
-    const log = await ActivityLog.open(directory, {
-      now: () => clock.now, setTimer: timers.set,
-      append: async (file, data) => {
-        if (failing) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-        const { appendFile } = await import('node:fs/promises');
-        await appendFile(file, data);
-      },
-    });
-    log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
-    log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
-    await log.flush();
-    expect(log.health()).toMatchObject({ state: 'failing', pending: 2, dropped: 0, lastError: 'EACCES: permission denied' });
-    expect(log.health().lastFailureAt).toBe(clock.now.toISOString());
-    // Waiting events still show in answers.
-    expect((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
-
-    failing = false;
-    timers.fire(30_000);
-    await log.flush();
-    expect(log.health()).toMatchObject({ state: 'ok', pending: 0, dropped: 0 });
-    expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第一筆', '第二筆']);
-    await log.close();
-  });
-
-  it('tries no write and logs no error until the retry 30 seconds after a failure', async () => {
-    const directory = await tempDirectory();
-    const timers = new Timers();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let failing = true;
-    let appends = 0;
     const log = await ActivityLog.open(directory, {
-      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      now: () => clock.now, setTimer: () => () => undefined,
       append: async (file, data) => {
-        appends += 1;
-        if (failing) throw new Error('ENOSPC: no space left on device');
+        if (failing) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
         await appendFile(file, data);
       },
     });
     try {
-      log.record(event('2026-10-15T05:00:00.000Z'));
-      timers.fire(1_000);
+      log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
+      log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
       await log.flush();
-      for (let index = 0; index < 20; index += 1) log.record(event('2026-10-15T05:00:01.000Z'));
-      await log.flush();
-      expect(timers.waiting.map((entry) => entry.ms)).not.toContain(1_000);
-      expect(appends).toBe(1);
+      expect(log.health()).toMatchObject({ dropped: 2, lastFailureAt: clock.now.toISOString(), lastError: 'EACCES: permission denied' });
       expect(errors).toHaveBeenCalledTimes(1);
-      expect(log.health()).toMatchObject({ state: 'failing', pending: 21 });
 
       failing = false;
-      timers.fire(30_000);
+      log.record(event('2026-10-15T05:00:02.000Z', { message: '第三筆' }));
       await log.flush();
-      expect(appends).toBe(2);
-      expect(errors).toHaveBeenCalledTimes(1);
-      expect(log.health()).toMatchObject({ state: 'ok', pending: 0 });
-      expect(await readEventFiles(directory)).toHaveLength(21);
+      expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第三筆']);
+      expect(log.health()).toMatchObject({ dropped: 2 });
       await log.close();
     } finally {
       errors.mockRestore();
@@ -380,10 +340,10 @@ describe('write failures (A-T7)', () => {
 
   it('keeps a half-written batch from joining the events written after it', async () => {
     const directory = await tempDirectory();
-    const timers = new Timers();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let partial = true;
     const log = await ActivityLog.open(directory, {
-      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined,
       append: async (file, data) => {
         if (partial) {
           partial = false;
@@ -395,50 +355,16 @@ describe('write failures (A-T7)', () => {
     });
     log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
     await log.flush();
-    expect(log.health()).toMatchObject({ state: 'failing', pending: 1 });
-    timers.fire(30_000);
-    await log.flush();
     log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
     await log.close();
+    errors.mockRestore();
 
     const lines = (await readFile(path.join(directory, 'events', '2026-10-15.jsonl'), 'utf8')).split('\n').filter(Boolean);
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(2);
     const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined });
-    expect((await new ActivityViews(reopened).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆', '第一筆']);
+    expect((await new ActivityViews(reopened).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆']);
     expect(reopened.health().skippedLines).toBe(1);
     await reopened.close();
-  });
-
-  it('drops the oldest waiting events beyond the limit and names their jobs', async () => {
-    const directory = await tempDirectory();
-    const dropped: JobEvent[] = [];
-    const log = await ActivityLog.open(directory, {
-      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined,
-      append: async () => { throw new Error('disk full'); },
-      onDropped: (entry) => dropped.push(entry),
-    });
-    for (let index = 0; index < 1005; index += 1) log.record(event('2026-10-15T05:00:00.000Z', { jobId: `job-${index}` }));
-    await log.flush();
-    expect(log.health()).toMatchObject({ state: 'failing', pending: 1000, dropped: 5 });
-    expect(dropped.map((entry) => entry.jobId)).toEqual(['job-0', 'job-1', 'job-2', 'job-3', 'job-4']);
-    await log.close();
-  });
-
-  it('recovers when the events directory becomes writable again', async () => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) return;
-    const directory = await tempDirectory();
-    const timers = new Timers();
-    await mkdir(path.join(directory, 'events'), { mode: 0o500 });
-    const log = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set });
-    log.record(event('2026-10-15T05:01:00.000Z', { message: '暫時無法寫入' }));
-    await log.flush();
-    expect(log.health()).toMatchObject({ state: 'failing', pending: 1 });
-    await chmod(path.join(directory, 'events'), 0o700);
-    timers.fire(30_000);
-    await log.flush();
-    expect(log.health()).toMatchObject({ state: 'ok', pending: 0 });
-    expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['暫時無法寫入']);
-    await log.close();
   });
 });
 

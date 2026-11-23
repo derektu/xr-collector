@@ -255,23 +255,7 @@ describe('dispatch times', () => {
     });
   });
 
-  it('keeps them and the check time when the failed items of a check are collected again', async () => {
-    const w = await world();
-    const [failing] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
-    w.sources.fake.fail(failing!, new CollectorError('capture_failed', '收集失敗。'));
-    const first = await w.subscribe('fake', 'f');
-    expect(first.result).toMatchObject({ outcome: 'partial' });
-    const before = dispatchTimes(await w.record('fake', 'f'));
-
-    w.advance(10 * MINUTE);
-    const retry = await w.jobs.whenSettled((await w.jobs.retry(first.id)).job.id);
-    expect(retry.result).toMatchObject({ outcome: 'created' });
-    const after = await w.record('fake', 'f');
-    expect(dispatchTimes(after)).toEqual(before);
-    expect(after.failures).toBeUndefined();
-  });
-
-  it('keeps them when a check interrupted by a restart continues, and records the check time when it ends', async () => {
+  it('keeps them when a check interrupted by a restart starts over, and records the check time when it ends', async () => {
     const w = await world();
     const [held, queued] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
     w.sources.fake.held.add(held!);
@@ -436,12 +420,12 @@ describe('failed checks in a row', () => {
     });
   });
 
-  it('pauses itself despite a notification profile write failure, then resumes and checks', async () => {
+  it('pauses itself despite a notification that fails to send, then resumes and checks', async () => {
     const autoPauses: Array<{ type: FakeType; subscription: SubscriptionRecord }> = [];
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const w = await world(async (type, subscription) => {
       autoPauses.push({ type, subscription });
-      throw new Error('notification profile is read-only');
+      throw new Error('system notification failed');
     });
     w.sources.fake.addFeed('f', w.clock.now, [1]);
     await w.subscribe('fake', 'f');
@@ -464,7 +448,7 @@ describe('failed checks in a row', () => {
     expect(autoPauses).toEqual([{ type: 'fake', subscription: expect.objectContaining({
       id: 'f', enabled: false, autoPausedAt: fifth.finishedAt, checkFailures: expect.objectContaining({ count: 5 }),
     }) }]);
-    expect(warning).toHaveBeenCalledWith('Unable to record auto-pause notification', expect.objectContaining({ message: 'notification profile is read-only' }));
+    expect(warning).toHaveBeenCalledWith('Unable to send auto-pause notification', expect.objectContaining({ message: 'system notification failed' }));
     warning.mockRestore();
     await expect(service.checkNow('f')).rejects.toMatchObject({ code: 'subscription_paused' });
 

@@ -7,7 +7,7 @@ import type { NotificationState } from '../../../../src/shared/api/device-types.
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 
 const state = (enabled: boolean): NotificationState => ({
-  enabled, availability: 'unavailable', availabilityMessage: 'desktop only', active: [], events: [],
+  enabled, availability: 'unavailable', availabilityMessage: 'desktop only', active: [],
 });
 
 describe('device notification API (#136)', () => {
@@ -28,17 +28,5 @@ describe('device notification API (#136)', () => {
     }
     await ui.close();
     await app.close();
-  });
-
-  it('remains readable and writable as device data when no Vault is selected', async () => {
-    let enabled = true;
-    const uiWithoutVault = await createHttpApp({ sources: PRODUCT_SOURCES, notifications: {
-      read: async () => state(enabled),
-      update: async (value: boolean) => state(enabled = value),
-    } });
-    expect((await uiWithoutVault.inject('/api/device/notifications')).json()).toEqual({ notifications: state(true) });
-    expect((await uiWithoutVault.inject({ method: 'PUT', url: '/api/device/notifications', payload: { enabled: false } })).json())
-      .toEqual({ notifications: state(false) });
-    await uiWithoutVault.close();
   });
 });

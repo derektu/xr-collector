@@ -308,7 +308,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const job = await p.manager.submitItem('youtube', watchUrl('fffffffffff'));
     await w.advance(0);
     await eventually(() => expect(p.manager.get(job.job.id).wait).toBeDefined());
-    const release = await p.manager.hold(1_000);
+    const release = await p.manager.hold();
     release();
     await p.manager.close();
     await p.store.flush();
@@ -327,7 +327,7 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     await eventually(() => expect(p.gate.status().state).toBe('waiting'));
     // The info request ended; the subtitle request now waits 8 seconds for its turn.
     expect(p.source.requests).toEqual(['info:ggggggggggg']);
-    const release = await p.manager.hold(1_000);
+    const release = await p.manager.hold();
     expect(p.manager.get(first.job.id)).toMatchObject({ state: 'queued' });
     expect(p.manager.get(first.job.id).retry).toBeUndefined();
     release();

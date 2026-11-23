@@ -24,7 +24,7 @@ interface OperationRun<T> {
 }
 
 interface LockDependencies {
-  hold(signal?: AbortSignal): Promise<() => void>;
+  hold(): Promise<() => void>;
   idle(): Promise<void>;
   suspend(value: boolean): void;
   changed?: () => void;
@@ -79,9 +79,8 @@ export class VaultOperationLock {
     this.updateContext = context;
     this.dependencies.suspend(true);
     try {
-      const release = await this.dependencies.hold(signal);
-      if (signal.aborted) { release(); throw signal.reason; }
-      context.releaseHold = release;
+      context.releaseHold = await this.dependencies.hold();
+      if (signal.aborted) throw signal.reason;
       if (this.writes > 0) await abortable(new Promise<void>((resolve) => this.writeWaiters.add(resolve)), signal);
       await abortable(this.dependencies.idle(), signal);
       if (signal.aborted) throw signal.reason;

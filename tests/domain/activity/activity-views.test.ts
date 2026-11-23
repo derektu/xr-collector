@@ -1,7 +1,7 @@
 // The activity summary folds a run of scheduled checks with the same result into one row per
 // subscription, so a quiet channel shows one row instead of a page of "no new videos". Manual
-// checks, new content and skipped items end a run; raw events stay complete, and groups survive a
-// restart until retention expires them.
+// checks, new content and skipped items end a run; raw events stay complete, summary pages continue
+// by time, and groups survive a restart until retention expires them.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -189,19 +189,25 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 });
 
-describe('durable summary retention (#96 A6)', () => {
-  it('expires cached detail when an early event crosses retention before its completed check', async () => {
-    let now = new Date('2026-10-31T08:00:00.000Z');
-    const log = ActivityLog.memory({ now: () => now });
+describe('summary pages', () => {
+  it('continues after the last row of the previous page by time, unmoved by newer checks', async () => {
+    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
-    log.record({ ...checkless(terminal('edge', '2026-10-01T09:30:00.000Z')), eventId: 'edge-start', timestamp: '2026-10-01T08:30:00.000Z', eventType: 'job.started' });
-    log.record(terminal('edge', '2026-10-01T09:30:00.000Z'));
-    const group = (await views.summary({ view: 'summary' }, scope)).entries.find((entry) => entry.kind === 'check')!;
-    expect((await views.group(group.groupId, scope)).checks[0]!.events).toHaveLength(2);
-    now = new Date('2026-10-31T09:00:00.000Z');
-    await expect(views.group(group.groupId, scope)).rejects.toMatchObject({ code: 'activity_group_expired' });
-  });
+    for (const [index, subscription] of ['sub-a', 'sub-b', 'sub-c'].entries()) {
+      log.record(terminal(`manual-${subscription}`, at(index), { subscription, trigger: 'manual', created: 1, result: 'other' }));
+    }
+    const first = await views.summary({ view: 'summary', limit: 2 }, scope);
+    expect(first.entries.map((entry) => entry.kind === 'check' && entry.subscriptionId)).toEqual(['sub-c', 'sub-b']);
 
+    log.record(terminal('manual-sub-d', at(10), { subscription: 'sub-d', trigger: 'manual', created: 1, result: 'other' }));
+    const second = await views.summary({ view: 'summary', limit: 2, cursor: first.nextCursor! }, scope);
+    expect(second.entries.map((entry) => entry.kind === 'check' && entry.subscriptionId)).toEqual(['sub-a']);
+    expect(second.nextCursor).toBeNull();
+    await expect(views.summary({ view: 'summary', severity: ['error'], cursor: first.nextCursor! }, scope)).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+});
+
+describe('durable summary retention (#96 A6)', () => {
   it('takes the subscription detail limit after grouping', () => {
     const subscription = { id: 'sub-a', title: 'A', url: 'https://example.test/a', enabled: true, addedAt: at(0), settings: {} } as Subscription;
     const summaries: ActivityCheckSummary[] = Array.from({ length: 35 }, (_, index) => ({

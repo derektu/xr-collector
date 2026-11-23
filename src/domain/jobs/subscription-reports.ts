@@ -7,7 +7,7 @@ import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { INTERRUPTED_REPEATEDLY } from './job-recovery.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
 
-const STOP_REASONS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed', 'superseded']);
+const STOP_REASONS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed']);
 
 export interface ReportHost {
   sources: SourceDeclarations;
@@ -62,7 +62,7 @@ export class SubscriptionReports {
   }
 
   checkEnd(job: CollectionJob): CheckEnd | null {
-    if (roleOf(this.host.sources, job) !== 'check' || !job.source.id || !job.finishedAt || job.checkpoint?.retryItems) return null;
+    if (roleOf(this.host.sources, job) !== 'check' || !job.source.id || !job.finishedAt) return null;
     if (job.state !== 'completed' && job.state !== 'failed') return null;
     if (job.result?.skipReason && STOP_REASONS.has(job.result.skipReason)) return null;
     const error = job.state === 'failed' ? job.error ?? null : null;

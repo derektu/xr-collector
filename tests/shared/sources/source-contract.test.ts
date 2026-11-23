@@ -105,9 +105,8 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
       documents: () => collector.list(),
       deleteDocument: (id) => collector.delete(id),
-      recordDeletion: (entry) => collector.recordDeletion(entry),
       loginRequired: () => !sources[type].signedIn,
-      now, removalSettleMs: 5_000,
+      now,
     });
     services = { fake: service('fake'), fake2: service('fake2') };
     scheduler = new CollectionScheduler([services.fake, services.fake2], schedule, { now, pollIntervalMs: 24 * 60 * MINUTE });
@@ -283,7 +282,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     await w.close();
   });
 
-  it('removes a subscription with its documents, also one still capturing', async () => {
+  it('removes a subscription with its documents; an item still capturing saves nothing and leaves no deletion record', async () => {
     const w = await world();
     const keys = w.sources.fake.addFeed('leaving', w.clock.now, [1]);
     await w.subscribe('fake', 'leaving');
@@ -293,15 +292,14 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const [check] = await w.service('fake').startRun({ trigger: 'manual', subscriptionIds: ['leaving'] });
     await w.sources.fake.holds.reach(['leaving-late']);
 
-    const removal = w.service('fake').remove('leaving', { documents: 'delete' });
-    await eventually(async () => expect(await w.collector.isDeletedFor({ sourceType: 'fake', sourceId: 'leaving-late' }, { explicitAt: null })).toBe(true));
+    expect(await w.service('fake').remove('leaving', { documents: 'delete' })).toEqual({ documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
     w.sources.fake.release('leaving-late');
-    expect(await removal).toEqual({ documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 });
-    await w.jobs.whenSettled(check!.job.id);
+    const done = await w.jobs.whenSettled(check!.job.id);
+    expect(done.items).toEqual([expect.objectContaining({ sourceId: 'leaving-late', skipReason: 'subscription_removed' })]);
     expect(await w.collector.list()).toEqual([]);
     expect(await w.stores.fake.list()).toEqual([]);
     const ledger = JSON.parse(await readFile(path.join(w.root, DELETIONS_FILE), 'utf8')) as { deleted: Array<{ sourceType: string; sourceId: string }> };
-    expect(ledger.deleted.map((entry) => `${entry.sourceType}:${entry.sourceId}`).sort()).toEqual([`fake:${keys[0]}`, 'fake:leaving-late']);
+    expect(ledger.deleted.map((entry) => `${entry.sourceType}:${entry.sourceId}`)).toEqual([`fake:${keys[0]}`]);
     await w.close();
   });
 
@@ -318,24 +316,6 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const explicit = await w.jobs.whenSettled((await w.jobs.submitItem('fake', itemUrl('fake', key!))).job.id);
     expect(explicit).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     expect(await w.collector.read(`fake:${key}`)).toMatchObject({ sourceType: 'fake', sourceId: key });
-    await w.close();
-  });
-
-  it('resumes the work of a stopped manager without capturing saved items again', async () => {
-    const w = await world({ capture: 1 });
-    const keys = w.sources.fake.addFeed('resume', w.clock.now, [1, 2]);
-    w.sources.fake.held.add(keys[0]!);
-    const added = await w.jobs.whenSettled((await w.service('fake').add(feedUrl('fake', 'resume'))).job.id);
-    await w.sources.fake.holds.reach([keys[0]!]);
-
-    // The manager stops while the first capture runs: it finishes and saves, the second never starts.
-    const restarting = w.restart();
-    w.sources.fake.release(keys[0]!);
-    await restarting;
-    const resumed = await w.jobs.whenSettled(added.result!.followUpJobId!);
-    expect(resumed).toMatchObject({ state: 'completed', recovery: { resumedCount: 1 } });
-    expect(itemsOf(resumed)).toEqual([[keys[0], 'created'], [keys[1], 'created']]);
-    expect(w.sources.fake.captures.filter((key) => key === keys[0])).toHaveLength(1);
     await w.close();
   });
 

@@ -16,26 +16,18 @@ export interface JobRecordsOptions extends Pick<ActivityLogOptions, 'setTimer' |
 }
 
 export async function openJobRecords(directory: string, sources: SourceDeclarations, options: JobRecordsOptions = {}): Promise<JobRecords> {
-  let jobs: JobStore | null = null;
-  const activity = await ActivityLog.open(directory, activityOptions(options, () => jobs));
-  jobs = await JobStore.open(directory, sources, activity, options.now, options.noteChange);
-  return records(jobs, activity);
+  const activity = await ActivityLog.open(directory, activityOptions(options));
+  return records(await JobStore.open(directory, sources, activity, options.now, options.noteChange), activity);
 }
 
 export function memoryJobRecords(sources: SourceDeclarations, options: Pick<JobRecordsOptions, 'now' | 'noteChange'> = {}): JobRecords {
-  let jobs: JobStore | null = null;
-  const activity = ActivityLog.memory(activityOptions(options, () => jobs));
-  jobs = JobStore.memory(sources, activity, options.now, options.noteChange);
-  return records(jobs, activity);
+  const activity = ActivityLog.memory(activityOptions(options));
+  return records(JobStore.memory(sources, activity, options.now, options.noteChange), activity);
 }
 
-function activityOptions(options: JobRecordsOptions, jobs: () => JobStore | null): ActivityLogOptions {
+function activityOptions(options: JobRecordsOptions): ActivityLogOptions {
   const { noteChange, ...log } = options;
-  return {
-    ...log,
-    onDropped: (event) => { if (event.jobId) jobs()?.noteActivityLost(event.jobId); },
-    onRecorded: () => noteChange?.({ kind: 'activity' }),
-  };
+  return { ...log, onRecorded: () => noteChange?.({ kind: 'activity' }) };
 }
 
 function records(jobs: JobStore, activity: ActivityLog): JobRecords {

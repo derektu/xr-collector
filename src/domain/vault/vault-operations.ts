@@ -39,7 +39,7 @@ export interface ReplacedVault {
 
 export interface OperationsHost {
   current(): { vault: OpenedVault; search: TranscriptSearch };
-  hold(signal?: AbortSignal): Promise<() => void>;
+  hold(): Promise<() => void>;
   idle(): Promise<void>;
   suspend(value: boolean): void;
   event(entry: NewJobEvent): void;
@@ -87,7 +87,7 @@ export class VaultOperations {
   constructor(private readonly options: VaultOperationsOptions, private readonly host: OperationsHost) {
     this.machine = options.machineName ?? machineName();
     this.lock = new VaultOperationLock({
-      hold: (signal) => host.hold(signal),
+      hold: () => host.hold(),
       idle: () => host.idle(),
       suspend: (value) => host.suspend(value),
       changed: () => {

@@ -2,7 +2,7 @@
 // newest uncollected videos within its range and limit, the same at every kind of check, failed
 // videos tried again, unstarted work skipped on a pause while a running capture finishes, and
 // paused and removed subscriptions kept as they are after a restart.
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -467,32 +467,7 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect(check.items!.map((item) => item.sourceId)).toEqual(fresh);
   });
 
-  it('still collects a queued video the user also submitted directly, past a pause and the range bound', async () => {
-    const w = await world({ capture: 1 });
-    const id = w.source.addChannel('claimed');
-    const ids = w.source.publish(id, 'c', w.clock.now, [1, 2, 45]);
-    // Listed as 25 days old, published 45 days ago: the range bound alone would skip it.
-    w.source.channels.get(id)!.videos[2]!.listedAt = new Date(w.clock.now.getTime() - 25 * DAY).toISOString();
-    w.source.holdCaptures = true;
-    const added = await w.jobs.whenSettled((await w.channels.add('@claimed')).job.id);
-    const jobId = added.result!.followUpJobId!;
-    await w.source.holds.reach([ids[0]!]);
-
-    const manual = await w.jobs.submitItem('youtube', `https://www.youtube.com/watch?v=${ids[2]}`);
-    expect(manual.deduplicated).toBe(true);
-    await w.channels.setEnabled(id, false);
-    w.source.holdCaptures = false;
-    w.source.release(ids[0]!);
-    const job = await w.jobs.whenSettled(jobId);
-    expect(job.items!.map((item) => [item.sourceId, item.outcome, item.skipReason])).toEqual([
-      [ids[0], 'created', undefined],
-      [ids[1], 'skipped', 'subscription_paused'],
-      [ids[2], 'created', undefined],
-    ]);
-    expect(collectedIds(w)).toEqual([ids[0], ids[2]].sort());
-  });
-
-  it('removes a subscription, keeps its documents and refuses checks of a paused one', async () => {
+  it('removes a subscription, keeps its documents, saves nothing a capture still running brings back, and refuses checks of a paused one', async () => {
     const w = await world({ capture: 1 });
     const id = w.source.addChannel('leaving');
     const ids = w.source.publish(id, 'l', w.clock.now, [1, 2, 3]);
@@ -505,8 +480,8 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect(await w.channels.remove(id)).toEqual({ documentsKept: 1, documentsDeleted: 0, documentsFailed: 0 });
     w.source.release(ids[1]!);
     const removed = await w.jobs.whenSettled(added.result!.followUpJobId!);
-    expect(removed.items!.map((item) => item.skipReason ?? item.outcome)).toEqual(['created', 'created', 'subscription_removed']);
-    expect(collectedIds(w)).toEqual([ids[0], ids[1]].sort());
+    expect(removed.items!.map((item) => item.skipReason ?? item.outcome)).toEqual(['created', 'subscription_removed', 'subscription_removed']);
+    expect(collectedIds(w)).toEqual([ids[0]]);
     expect(await w.channelStore.list()).toEqual([]);
     await expect(w.channels.remove(id)).rejects.toMatchObject({ code: 'subscription_not_found' });
 

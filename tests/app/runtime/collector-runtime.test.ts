@@ -327,53 +327,6 @@ describe('CollectorRuntime', () => {
     expect(setup.closeSearch).toHaveBeenCalledOnce();
   });
 
-  it('waits for running captures on close and resumes queued work after restart', async () => {
-    const releases: Array<() => void> = [];
-    const capture = vi.fn(async (video: { videoId: string; canonicalUrl: string }) => {
-      await new Promise<void>((resolve) => releases.push(resolve));
-      return {
-        videoId: video.videoId, sourceUrl: video.canonicalUrl, title: `Video ${video.videoId}`, channelId: null,
-        channelTitle: 'Runtime', publishedAt: null, languageCode: 'en', languageName: 'English',
-        subtitleKind: 'manual' as const, bodyMarkdown: 'Body.',
-      };
-    });
-    const setup = await options({ capture });
-    const first = await startCollectorServer(setup.value);
-    const submit = async (id: string) => (await (await fetch(`${first.listeners.ui.url}/api/submissions`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${id}` }),
-    })).json()).job.id as string;
-    const ids = [await submit('restart0001'), await submit('restart0002'), await submit('restart0003')];
-    // One capture runs at a time; the other two wait in the queue.
-    await eventually(() => expect(capture).toHaveBeenCalledTimes(1));
-
-    const closing = first.close();
-    for (const release of releases.splice(0)) release();
-    await closing;
-    expect(capture).toHaveBeenCalledTimes(1);
-
-    const second = await startCollectorServer(setup.value);
-    cleanups.push(() => second.close());
-    await eventually(async () => {
-      for (const release of releases.splice(0)) release();
-      expect(capture).toHaveBeenCalledTimes(3);
-      const page = await (await fetch(`${second.listeners.ui.url}/api/jobs?state=all`)).json() as { jobs: Array<{ id: string; state: string }> };
-      expect(Object.fromEntries(page.jobs.map((job) => [job.id, job.state]))).toEqual({
-        [ids[0]!]: 'completed', [ids[1]!]: 'completed', [ids[2]!]: 'completed',
-      });
-    });
-    const resumed = (await (await fetch(`${second.listeners.ui.url}/api/jobs/${ids[2]!}`)).json()).job;
-    expect(resumed).toMatchObject({ result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
-    expect(resumed).not.toHaveProperty('checkpoint');
-    expect((await (await fetch(`${second.listeners.ui.url}/api/documents`)).json()).documents).toHaveLength(3);
-    await eventually(async () => {
-      const events = (await readEventFiles(path.join(setup.value.profilePath, 'jobs')))
-        .filter((event) => event.jobId === ids[2]).map((event) => event.eventType);
-      expect(events.indexOf('job.interrupted')).toBeLessThan(events.indexOf('job.resumed'));
-      expect(events.at(-1)).toBe('job.completed');
-    });
-  });
-
   it('resumes the work of a killed process without capturing saved videos again', async () => {
     const profile = await mkdtemp(path.join(tmpdir(), 'xr-runtime-kill-'));
     cleanups.push(() => rm(profile, { recursive: true, force: true }));

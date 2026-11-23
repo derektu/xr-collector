@@ -1,17 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyYtDlpError } from '../../../src/domain/sources/youtube/ytdlp-capture.js';
-import {
-  type CollectionPolicy,
-  DEFAULT_POLICY,
-} from '../../../src/domain/sources/youtube/settings.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
-import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../../src/domain/jobs/job-manager.js';
 import type { JobStore } from '../../../src/domain/jobs/job-store.js';
@@ -257,54 +251,6 @@ function listed(count: number, prefix: string): DiscoveredYouTubeVideo[] {
   });
 }
 
-describe('jobs on file from a stopped process (R-T1)', () => {
-  it('resumes the stopped jobs on file, except work a later job took over', async () => {
-    const w = await world();
-    const base = {
-      vaultPath: VAULT, vaultId: VAULT_ID, parentId: null, startedAt: T0.toISOString(), finishedAt: null, updatedAt: T0.toISOString(),
-      progress: null, items: null, result: null, error: null,
-    };
-    const stopped = {
-      state: 'interrupted' as const, error: { code: 'interrupted', message: '服務停止。' },
-      recovery: { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: T0.toISOString(), lastResumedAt: null, lastStop: 'shutdown' as const },
-    };
-    const onFile: CollectionJob[] = [
-      { ...base, ...stopped, id: 'old-channel', kind: 'youtube.channel', phase: 'discover',
-        source: { type: 'youtube', id: 'UC-earlier', url: 'https://www.youtube.com/channel/UC-earlier/videos', title: '舊頻道' },
-        createdAt: '2026-10-01T00:00:00.000Z', scope: { trigger: 'manual' } },
-      { ...base, id: 'new-channel', kind: 'youtube.channel', state: 'completed', phase: 'capture',
-        source: { type: 'youtube', id: 'UC-earlier', url: 'https://www.youtube.com/channel/UC-earlier/videos', title: '舊頻道' },
-        createdAt: '2026-10-02T00:00:00.000Z', scope: { trigger: 'manual' }, result: { outcome: 'empty' } },
-      { ...base, id: 'running-video', kind: 'youtube.video', state: 'running', phase: 'capture',
-        source: { type: 'youtube', id: videoId(1), url: watchUrl(videoId(1)), title: null }, createdAt: '2026-10-03T00:00:00.000Z' },
-      { ...base, ...stopped, id: 'interrupted-video', kind: 'youtube.video', phase: null,
-        source: { type: 'youtube', id: videoId(2), url: watchUrl(videoId(2)), title: null }, createdAt: '2026-10-03T00:00:01.000Z' },
-    ];
-    subscribe(w.subs, 'UC-earlier');
-    await writeFile(path.join(w.directory, 'jobs.json'), `${JSON.stringify({ version: 1, jobs: onFile })}\n`);
-
-    const g = await w.boot();
-    await g.manager.resume();
-    const [running, interrupted] = await Promise.all([
-      g.manager.whenSettled('running-video'), g.manager.whenSettled('interrupted-video'),
-    ]);
-
-    expect(running).toMatchObject({ state: 'completed', result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 1 } });
-    expect(interrupted).toMatchObject({ state: 'completed', result: { outcome: 'created' }, recovery: { resumedCount: 1, uncleanStops: 0 } });
-    expect(g.manager.get('old-channel')).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: 'superseded' } });
-    expect(w.script.discoveries).toBe(0);
-    expect(running).not.toHaveProperty('checkpoint');
-    const resumed = (await w.events()).filter((event) => event.eventType === 'job.resumed');
-    expect(Object.fromEntries(resumed.map((event) => [event.jobId, event.stopReason]))).toEqual({
-      'running-video': 'crash', 'interrupted-video': 'shutdown',
-    });
-    await g.store.flush();
-    const onDisk = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
-    expect(onDisk.version).toBe(1);
-    expect(onDisk.jobs.find((job: CollectionJob) => job.id === 'running-video').checkpoint).toMatchObject({ savedDocumentId: `youtube:${videoId(1)}` });
-  });
-});
-
 describe('video jobs across restarts (R-T2)', () => {
   it('captures again only the video whose capture was cut short, and keeps queue order', async () => {
     const w = await world();
@@ -346,45 +292,26 @@ describe('video jobs across restarts (R-T2)', () => {
   });
 });
 
-describe('channel-add jobs across restarts (R-T3)', () => {
-  it('resolves again when stopped while resolving', async () => {
+describe('subscription requests across restarts start over (R-T3)', () => {
+  it.each([
+    ['stopped while resolving, subscribes once it resolves again', false, 'created'],
+    ['stopped after it subscribed, finds the subscription already listed', true, 'existing'],
+  ] as const)('a request %s', async (_name, afterSubscribe, outcome) => {
     const w = await world();
-    const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@resume');
-    await eventually(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
+    w.subs.hangAfterSubscribe = afterSubscribe;
+    const g1 = await w.boot((source) => { source.holdResolve = !afterSubscribe; });
+    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@restart');
+    await eventually(() => expect(w.script.resolves + w.subs.subscriptions.size).toBe(afterSubscribe ? 2 : 1));
 
     const g2 = await w.crash(g1);
     const done = await g2.manager.whenSettled(adding.job.id);
 
-    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created', followUpJobId: expect.any(String) } });
-    expect(w.subs.of('subscribed')).toEqual([expect.objectContaining({ outcome: 'created', resumed: false })]);
+    expect(done).toMatchObject({ state: 'completed', result: { outcome } });
+    expect(w.script.resolves).toBe(2);
     expect(w.subs.subscriptions.size).toBe(1);
   });
 
-  it('starts the first collection of a subscription it added just before the restart', async () => {
-    const w = await world();
-    w.subs.hangAfterSubscribe = true;
-    const g1 = await w.boot();
-    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@halfway');
-    await eventually(() => expect(w.subs.subscriptions.size).toBe(1));
-    const subscribed = onlySubscription(w.subs);
-    w.script.channelVideos.set(subscribed.id, listed(2, 'h'));
-
-    const g2 = await w.crash(g1);
-    const done = await g2.manager.whenSettled(adding.job.id);
-    const followUp = await g2.manager.whenSettled(done.result!.followUpJobId!);
-
-    expect(done.result).toMatchObject({ outcome: 'created', subscriptionId: subscribed.id });
-    expect(followUp).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { created: 2 } });
-    // The request hands its subscription over again as resumed, so the subscription found is its own.
-    expect(w.subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: subscribed.id, outcome: 'created', resumed: true }]);
-    expect(w.subs.subscriptions.size).toBe(1);
-    expect(w.script.resolves).toBe(1);
-  });
-});
-
-describe('channel-add jobs with chosen settings across restarts (A3)', () => {
-  it('subscribes with the settings chosen when the job was accepted after a stop while resolving', async () => {
+  it('subscribes with the settings chosen when the job was accepted', async () => {
     const w = await world();
     const chosen = { intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
@@ -404,103 +331,33 @@ describe('channel-add jobs with chosen settings across restarts (A3)', () => {
   });
 });
 
-describe('channel-add jobs whose record carries no settings (A3)', () => {
-  it('subscribes with the default settings', async () => {
-    const w = await world();
-    const g1 = await w.boot((source) => { source.holdResolve = true; });
-    const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@nosettings', { intervalMinutes: 180, backfillDays: 45, backfillMaxItems: 20 });
-    await eventually(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
-    await g1.store.flush();
-    const file = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
-    for (const job of file.jobs) delete job.checkpoint;
-    await writeFile(path.join(w.directory, 'jobs.json'), `${JSON.stringify(file)}\n`);
-    const g2 = await w.boot();
-    await g2.manager.resume();
-    const done = await g2.manager.whenSettled(adding.job.id);
-    await g2.manager.whenSettled(done.result!.followUpJobId!);
-    expect(onlySubscription(w.subs).settings).toEqual(DEFAULT_POLICY);
-  });
-});
-
-describe('channel-add jobs and the first scheduled check (R-T3)', () => {
-  it('queues the first collection before the scheduler, so a check that is due at once joins it', async () => {
-    const w = await world();
-    w.subs.hangAfterSubscribe = true;
-    const g1 = await w.boot();
-    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@duenow');
-    await eventually(() => expect(w.subs.subscriptions.size).toBe(1));
-    const subscribed = onlySubscription(w.subs);
-    w.script.channelVideos.set(subscribed.id, listed(3, 'q'));
-
-    await g1.store.flush();
-    const g2 = await w.boot((source) => { source.holdDiscovery = true; });
-    await g2.manager.resume();
-    // The scheduler starts right after resume; its first check is due at once.
-    const scheduled = await g2.manager.submitCheck('youtube', subscribed, 'scheduled');
-    const added = g2.manager.get(adding.job.id);
-
-    expect(added).toMatchObject({ state: 'completed', result: { outcome: 'created', followUpJobId: scheduled.job.id } });
-    expect(scheduled).toMatchObject({ deduplicated: true, job: { scope: { trigger: 'subscribe' } } });
-    expect(w.script.resolves).toBe(1);
-  });
-});
-
-describe('channel jobs across restarts (R-T4)', () => {
-  it('continues the recorded videos without discovering again, untruncated, and records its check (R-06)', async () => {
+describe('checks across restarts start over (R-T4)', () => {
+  it('lists again, saves each video once whether the restart caught it saved, capturing or queued, and ends once', async () => {
     const w = await world();
     const subscribed = subscribe(w.subs, 'UC-resume-channel');
-    w.script.channelVideos.set(subscribed.id, listed(6, 'c'));
+    w.script.channelVideos.set(subscribed.id, listed(4, 'c'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
     const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await g1.source.holds.started(videoId(0, 'c'));
     g1.source.release(videoId(0, 'c'));
     await g1.source.holds.started(videoId(1, 'c'));
-    g1.source.release(videoId(1, 'c'));
-    await eventually(() => expect(g1.manager.get(accepted.job.id).progress?.done).toBe(2));
-    const childIds = g1.manager.get(accepted.job.id).items!.map((item) => item.jobId);
 
     const g2 = await w.crash(g1);
-    // The scheduler's first check after a restart joins the resumed job, even after the limit was lowered.
-    subscribed.settings = { ...subscribed.settings, backfillMaxItems: 5 };
-    const scheduled = await g2.manager.submitCheck('youtube', subscribed, 'scheduled');
     const done = await g2.manager.whenSettled(accepted.job.id);
 
-    expect(scheduled).toMatchObject({ deduplicated: true, job: { id: accepted.job.id } });
-    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'created' }, progress: { total: 6, done: 6, created: 6 }, recovery: { resumedCount: 1 } });
-    expect(done.items!.map((item) => item.jobId)).toEqual(childIds);
-    expect(w.script.discoveries).toBe(1);
+    await Promise.all(g1.manager.get(accepted.job.id).items!.map((item) => g2.manager.whenSettled(item.jobId!)));
+
+    expect(done).toMatchObject({ state: 'completed', recovery: { resumedCount: 1 } });
+    expect(w.script.discoveries).toBe(2);
     expect(w.script.captures.filter((id) => id === videoId(0, 'c'))).toHaveLength(1);
-    expect(w.script.captures.filter((id) => id === videoId(1, 'c'))).toHaveLength(1);
-    // The listing is reported once; the check ends once, when its last video ends after the restart.
-    const keys = listed(6, 'c').map((video) => video.id);
-    expect(w.subs.of('checked')).toEqual([{ kind: 'checked', type: 'youtube', id: subscribed.id, candidates: keys, collecting: keys }]);
+    expect([...w.vault.documents.keys()].sort()).toEqual(listed(4, 'c').map((video) => video.id).sort());
+    expect(w.vault.saves).toBe(4);
     expect(w.subs.of('ended')).toEqual([
       { kind: 'ended', type: 'youtube', id: subscribed.id, at: done.finishedAt, errorCode: null, failureClass: null, counted: true },
     ]);
   });
 
-  it('records the end of a check a restart cut short, at the time it ends', async () => {
-    const w = await world();
-    const subscribed = subscribe(w.subs, 'UC-owed-check');
-    w.script.channelVideos.set(subscribed.id, listed(2, 'o'));
-    w.subs.hangOnChecked = true;
-    const g1 = await w.boot();
-    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
-    await eventually(() => expect(g1.manager.get(accepted.job.id).phase).toBe('capture'));
-    expect(w.subs.of('checked')).toEqual([]);
-    w.clock.now = new Date('2026-10-15T07:00:00.000Z');
-
-    const g2 = await w.crash(g1);
-    const done = await g2.manager.whenSettled(accepted.job.id);
-
-    expect(done).toMatchObject({ state: 'completed', progress: { total: 2, created: 2 } });
-    expect(w.script.discoveries).toBe(1);
-    expect(w.subs.of('ended')).toEqual([
-      { kind: 'ended', type: 'youtube', id: subscribed.id, at: '2026-10-15T07:00:00.000Z', errorCode: null, failureClass: null, counted: true },
-    ]);
-  });
-
-  it('discovers with the settings and time of the restart when stopped before recording videos (R-06)', async () => {
+  it('discovers with the settings and time of the restart (R-06)', async () => {
     const w = await world();
     const subscribed = subscribe(w.subs, 'UC-rediscover');
     const videos = listed(3, 'd').map((video, index) => ({ ...video, publishedAt: new Date(T0.getTime() + index * 60_000).toISOString() }));
@@ -520,52 +377,57 @@ describe('channel jobs across restarts (R-T4)', () => {
     expect(done.items!.map((item) => item.sourceId)).toEqual(listed(5, 'e').map((video) => video.id));
     const child = g2.manager.get(done.items![0]!.jobId!);
     expect(child.publishedNotBefore).toBe(new Date(w.clock.now.getTime() - 7 * 24 * 60 * 60_000).toISOString());
-    expect(w.subs.of('checked')).toHaveLength(1);
     expect(w.subs.of('ended')).toEqual([expect.objectContaining({ at: w.clock.now.toISOString(), errorCode: null })]);
   });
 });
 
-describe('subscriptions that stopped (R-T5)', () => {
-  it('keeps a paused subscription paused and skips its unfinished videos', async () => {
+describe('subscriptions that stopped before a restart (R-T5)', () => {
+  it.each([
+    ['paused', 'subscription_paused', (subs: SubscriptionRecorder, subscribed: RecordedSubscription) => { subscribed.enabled = false; }],
+    ['removed', 'subscription_removed', (subs: SubscriptionRecorder, subscribed: RecordedSubscription) => subs.remove('youtube', subscribed.id)],
+  ] as const)('a %s subscription skips its interrupted check and the videos it queued, also one the user submitted', async (_name, reason, stop) => {
     const w = await world();
-    const subscribed = subscribe(w.subs, 'UC-paused');
+    const subscribed = subscribe(w.subs, `UC-${reason}`);
     w.script.channelVideos.set(subscribed.id, listed(3, 'p'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
     const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await g1.source.holds.started(videoId(0, 'p'));
-    await eventually(() => expect(w.subs.of('checked')).toHaveLength(1));
-    subscribed.enabled = false;
-    g1.manager.stopSubscription('youtube', subscribed.id, 'subscription_paused');
+    const submitted = await g1.manager.submitItem('youtube', watchUrl(videoId(2, 'p')));
+    expect(submitted.deduplicated).toBe(true);
+    stop(w.subs, subscribed);
 
     const g2 = await w.crash(g1);
-    const done = g2.manager.get(accepted.job.id);
 
-    expect(done).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: 'subscription_paused' } });
-    expect(done.items!.map((item) => item.skipReason)).toEqual(['subscription_paused', 'subscription_paused', 'subscription_paused']);
+    expect(g2.manager.get(accepted.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: reason } });
+    for (const item of g1.manager.get(accepted.job.id).items!) {
+      expect(g2.manager.get(item.jobId!)).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: reason } });
+    }
     expect(g2.manager.isBusy()).toBe(false);
-    // A check skipped on resume reports nothing more to its subscription.
-    expect(w.subs.of('checked')).toHaveLength(1);
     expect(w.script.captures).toEqual([videoId(0, 'p')]);
   });
 
-  it('skips a removed subscription but finishes a video the user also submitted', async () => {
+  it.each([
+    ['paused', 'subscription_paused', 1, (subs: SubscriptionRecorder, subscribed: RecordedSubscription) => { subscribed.enabled = false; }],
+    ['removed', 'subscription_removed', 0, (subs: SubscriptionRecorder, subscribed: RecordedSubscription) => subs.remove('youtube', subscribed.id)],
+  ] as const)('a subscription %s while its restarted check lists again skips the videos restored from before the restart', async (_name, reason, saves, stop) => {
     const w = await world();
-    const subscribed = subscribe(w.subs, 'UC-removed');
-    w.script.channelVideos.set(subscribed.id, listed(3, 'x'));
+    const subscribed = subscribe(w.subs, `UC-relist-${reason}`);
+    w.script.channelVideos.set(subscribed.id, listed(3, 'q'));
     const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
     const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
-    await g1.source.holds.started(videoId(0, 'x'));
-    const claimed = await g1.manager.submitItem('youtube', watchUrl(videoId(2, 'x')));
-    expect(claimed.deduplicated).toBe(true);
-    w.subs.remove('youtube', subscribed.id);
+    await g1.source.holds.started(videoId(0, 'q'));
+    const restored = g1.manager.get(accepted.job.id).items!.map((item) => item.jobId!);
 
-    const g2 = await w.crash(g1);
-    const video = await g2.manager.whenSettled(claimed.job.id);
+    const g2 = await w.crash(g1, (source) => { source.holdAllCaptures = true; source.holdDiscovery = true; });
+    await eventually(() => expect(g2.manager.get(accepted.job.id).phase).toBe('discover'));
+    await g2.source.holds.started(videoId(0, 'q'));
+    stop(w.subs, subscribed);
+    g2.manager.stopSubscription('youtube', subscribed.id, reason);
+    g2.source.release(videoId(0, 'q'));
 
-    expect(g2.manager.get(accepted.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'skipped', skipReason: 'subscription_removed' } });
-    expect(video).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
-    expect(video).not.toHaveProperty('claimedByUser');
-    expect(g2.store.get(claimed.job.id)).toMatchObject({ claimedByUser: true });
+    const ended = await Promise.all(restored.map((id) => g2.manager.whenSettled(id)));
+    expect(ended.filter((job) => job.result?.outcome === 'skipped' && job.result.skipReason === reason)).toHaveLength(3 - saves);
+    expect(w.vault.saves).toBe(saves);
   });
 });
 
@@ -620,37 +482,6 @@ describe('system sleep (#97)', () => {
     expect(w.script.captures.sort()).toEqual([retried, retried, queued].sort());
   });
 
-  it('puts a step the sleep stopped back at the head of its lane while a sibling waits for its retry', async () => {
-    const pause = new CollectionPause();
-    const w = await world({ pause });
-    const a = subscribe(w.subs, 'UC-A');
-    const b = subscribe(w.subs, 'UC-B');
-    w.script.channelVideos.set(a.id, listed(2, 'a'));
-    w.script.channelVideos.set(b.id, listed(2, 'b'));
-    const [a0, a1] = [videoId(0, 'a'), videoId(1, 'a')];
-    w.script.captureFailures.set(a0, [network()]);
-    w.script.captureFailures.set(a1, [network()]);
-    const g = await w.boot((source) => { source.holdCaptures = new Set([a0]); });
-    await g.manager.submitCheck('youtube', a, 'manual');
-    await g.source.holds.started(a0);
-    const checkB = await g.manager.submitCheck('youtube', b, 'manual');
-    await eventually(() => expect(g.manager.get(checkB.job.id).items).toHaveLength(2));
-
-    // a0 fails and waits for its retry; a1 starts and is stopped by the sleep.
-    g.source.holdCaptures = new Set([a1]);
-    g.source.release(a0);
-    await g.source.holds.started(a1);
-    pause.set('sleep', true);
-    g.source.holdCaptures = new Set();
-    g.source.release(a1);
-    await eventually(() => expect(g.manager.get(checkB.job.id).items?.every((item) => item.state === 'queued')).toBe(true));
-    await eventually(() => expect(g.manager.list().jobs.find((job) => job.source.id === a.id)?.items?.[1]?.state).toBe('queued'));
-
-    g.source.holdAllCaptures = true;
-    pause.set('sleep', false);
-    await eventually(() => expect(w.script.captures).toHaveLength(3));
-    expect(w.script.captures).toEqual([a0, a1, a1]);
-  });
 });
 
 describe('lost network (#128)', () => {
@@ -726,47 +557,6 @@ describe('lost network (#128)', () => {
   });
 });
 
-describe('lost network while collection is paused or closing (#128)', () => {
-  it('returns a late failure while collection is already paused without confirming the network again', async () => {
-    const pause = new CollectionPause();
-    const state = { probes: 0 };
-    const connectivity = new Connectivity({ pause, probe: async () => { state.probes += 1; return false; } });
-    const w = await world({ pause, connectivity });
-    const id = videoId(12, 'o');
-    w.script.captureFailures.set(id, [network()]);
-    const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
-    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
-    await g.source.holds.started(id);
-    pause.set('sleep', true);
-    g.source.holdCaptures.clear();
-    g.source.release(id);
-    await eventually(() => expect(g.manager.get(accepted.job.id).state).toBe('queued'));
-    expect(state.probes).toBe(0);
-    expect(pause.has('offline')).toBe(false);
-    connectivity.close();
-  });
-
-  it('leaves a step that was confirming the network when the manager closed for close() to record as interrupted', async () => {
-    const pause = new CollectionPause();
-    let open!: () => void;
-    const gate = new Promise<void>((resolve) => { open = resolve; });
-    const connectivity = new Connectivity({ pause, probe: async () => { await gate; return true; } });
-    const w = await world({ pause, connectivity });
-    const id = videoId(13, 'o');
-    w.script.captureFailures.set(id, [network()]);
-    const g = await w.boot();
-    const accepted = await g.manager.submitItem('youtube', watchUrl(id));
-    await eventually(() => expect(w.script.captures).toEqual([id]));
-    const closing = g.manager.close();
-    open();
-    await closing;
-    expect(g.manager.get(accepted.job.id)).toMatchObject({ state: 'interrupted' });
-    expect(g.manager.get(accepted.job.id)).not.toHaveProperty('retry');
-    expect((await w.events()).map((event) => event.eventType)).not.toContain('job.retry_scheduled');
-    connectivity.close();
-  });
-});
-
 describe('system sleep and Vault holds together (#97)', () => {
   it('starts queued work only once both the hold and the sleep pause are over, whichever ends first', async () => {
     const pause = new CollectionPause();
@@ -816,25 +606,6 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(retried).toMatchObject({ jobId: accepted.job.id, errorCode: 'network_error', attempt: 1, nextAttemptAt: '2026-10-15T06:00:30.000Z' });
   });
 
-  it('clears the wait from a channel item once its next attempt starts', async () => {
-    const w = await world();
-    const subscribed = subscribe(w.subs, 'UC-item-retry');
-    w.script.channelVideos.set(subscribed.id, listed(1, 'i'));
-    const id = videoId(0, 'i');
-    w.script.captureFailures.set(id, [network()]);
-    const g = await w.boot((source) => { source.holdCaptures = new Set([id]); });
-    const accepted = await g.manager.submitCheck('youtube', subscribed, 'manual');
-    await g.source.holds.started(id);
-    g.source.release(id);
-    await eventually(() => expect(g.manager.get(accepted.job.id).items![0]!.retry?.nextAttemptAt).toBe('2026-10-15T06:00:30.000Z'));
-
-    g.fireTimers();
-    await g.source.holds.started(id);
-    expect(g.manager.get(accepted.job.id).items![0]).toMatchObject({ state: 'queued', retry: { attempts: 1, nextAttemptAt: null } });
-    g.source.release(id);
-    expect(await g.manager.whenSettled(accepted.job.id)).toMatchObject({ state: 'completed', progress: { created: 1 } });
-  });
-
   it.each([
     ['no_subtitles', '這支影片沒有可取得的既有字幕。'],
     ['video_unavailable', '這支影片目前無法存取。'],
@@ -848,11 +619,6 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(done).toMatchObject({ state: 'failed', error: { code, message } });
     expect(done.retry).toBeUndefined();
     expect(w.script.captures).toEqual([videoId(5)]);
-  });
-
-  it('classifies rate limiting as its own code, not a failed network attempt', () => {
-    const error = classifyYtDlpError(new Error('Command failed'), 'ERROR: [youtube] abc: HTTP Error 429: Too Many Requests');
-    expect(error.code).toBe('rate_limited');
   });
 
   it('retries channel discovery and channel resolution', async () => {
@@ -905,17 +671,6 @@ describe('automatic retries (R-T6, R-T7)', () => {
     expect(w.script.captures.filter((id) => id === videoId(6))).toHaveLength(3);
   });
 
-  it('does not count a job waiting for its next attempt toward the queue limit', async () => {
-    const w = await world({ limits: { maxQueued: 1 } });
-    w.script.captureFailures.set(videoId(8), [network()]);
-    const g = await w.boot();
-    const failing = await g.manager.submitItem('youtube', watchUrl(videoId(8)));
-    await eventually(() => expect(g.manager.get(failing.job.id).retry?.attempts).toBe(1));
-    const other = await g.manager.submitItem('youtube', watchUrl(videoId(9)));
-    expect(await g.manager.whenSettled(other.job.id)).toMatchObject({ state: 'completed' });
-    g.fireTimers();
-    expect(await g.manager.whenSettled(failing.job.id)).toMatchObject({ state: 'completed', retry: { attempts: 1 } });
-  });
 });
 
 describe('repeated unclean stops (R-T8)', () => {
@@ -963,22 +718,6 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
     const page = await records.views.query({ subscriptionId, limit: 500 }, { vaultPath: VAULT });
     return page.events.filter((event) => event.jobId === jobId).map((event) => event.eventType);
   }
-
-  it('files the interruption of a subscription request that stopped while subscribing under the subscription', async () => {
-    const w = await world();
-    w.subs.hangAfterSubscribe = true;
-    const g1 = await w.boot();
-    const adding = await g1.manager.submit('youtube', 'https://www.youtube.com/@interrupted');
-    await eventually(() => expect(w.subs.subscriptions.size).toBe(1));
-    const subscribed = onlySubscription(w.subs);
-
-    // The next process records the interruption; until the job resumes and ends it has no result.
-    await g1.store.flush();
-    const g2 = await w.boot();
-    expect(g2.manager.get(adding.job.id)).toMatchObject({ state: 'interrupted', result: null });
-
-    expect(await subscriptionEvents(g2.records, subscribed.id, adding.job.id)).toContain('job.interrupted');
-  });
 
   it('files the interruption of a check\'s item under the subscription after the job records are gone', async () => {
     const w = await world();
