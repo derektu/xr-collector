@@ -1,123 +1,78 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CollectorError } from '../../shared/lib/collector-error.js';
-import { checkImportFolder, checkPackageFile, clearImportJournal, markerDigest, stagingFolder, writeImportJournal, type ImportJournal } from './transfer-files.js';
+import { checkImportFolder, checkPackageFile } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { VaultFileWriter } from './vault-files.js';
-import { formatBytes, nearestExisting, spaceMargin, type StatFs } from './disk-space.js';
-import { checkPackageContent, IMPORT_STAGING_PREFIX, openPackage, packagePath, unpackedBytes, unpackPackage, type PackageReader } from './vault-package.js';
+import { checkPackageContent, openPackage, unpackPackage, type PackageReader } from './vault-package.js';
 import type { FileChanges } from './vault-merge.js';
 
-/**
- * Points of an in-place import a test can stop at: `staged` once every new file sits in the
- * working folder and before the journal is written, and `renaming` after each file is put in place
- * (with its count).
- */
-export type ImportFault = 'staged' | 'renaming';
+const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
-export async function checkFreeSpace(folder: string, bytes: number, statfsOf: StatFs = statfs): Promise<void> {
-  const required = bytes + spaceMargin(bytes);
-  const space = await statfsOf(await nearestExisting(folder));
-  const available = Number(space.bavail) * Number(space.bsize);
-  if (available < required) {
-    throw new CollectorError('insufficient_space', `磁碟空間不足：需要 ${formatBytes(required)}，只有 ${formatBytes(available)} 可用。`);
-  }
+interface StagedImport {
+  place(progress: (done: number, total: number) => void): Promise<void>;
 }
 
-interface InPlaceJournal { version: 1; entries: { path: string; staged: string | null }[] }
-
-const STAGED = /^files\/\d+$/u;
-
-export async function applyInPlace(
-  root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges,
-  progress: (done: number, total: number) => void,
-  faults?: (phase: ImportFault, count?: number) => void | Promise<void>,
-): Promise<void> {
-  const work = path.join(root, `${IMPORT_STAGING_PREFIX}${randomUUID()}`);
-  await mkdir(path.join(work, 'files'), { recursive: true, mode: 0o700 });
-  const entries: InPlaceJournal['entries'] = [];
+export async function stageImport(root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges): Promise<StagedImport> {
+  const staging = path.join(root, `${IMPORT_STAGING_PREFIX}${randomUUID()}`);
+  await mkdir(staging, { mode: 0o700 });
+  const entries: { path: string; staged: string | null }[] = [];
   try {
     for (const [index, [file, change]] of [...changes].entries()) {
       if (!change) { entries.push({ path: file, staged: null }); continue; }
-      const staged = `files/${index}`;
-      const target = path.join(work, staged);
-      if ('incoming' in change) await reader.extract(change.incoming, target);
-      else await writeFile(target, change.bytes, { flag: 'wx', mode: 0o600 });
+      const staged = path.join(staging, String(index));
+      if ('incoming' in change) await reader.extract(change.incoming, staged);
+      else await writeFile(staged, change.bytes, { flag: 'wx', mode: 0o600 });
       entries.push({ path: file, staged });
     }
-    await faults?.('staged');
-    const journal = path.join(work, 'journal.json');
-    await writeFile(`${journal}.tmp`, JSON.stringify({ version: 1, entries } satisfies InPlaceJournal), { mode: 0o600 });
-    await rename(`${journal}.tmp`, journal);
   } catch (error) {
-    await rm(work, { recursive: true, force: true }).catch(() => undefined);
+    await removeStaging(staging);
     throw error;
   }
-  const files = new VaultFileWriter(root, sources);
-  await files.admit(entries.map((entry) => entry.path));
-  for (const [index, entry] of entries.entries()) {
-    await placeEntry(files, work, entry);
-    progress(index + 1, entries.length);
-    await faults?.('renaming', index + 1);
-  }
-  await rm(work, { recursive: true, force: true });
-}
-
-async function placeEntry(files: VaultFileWriter, work: string, entry: InPlaceJournal['entries'][number]): Promise<void> {
-  if (!entry.staged) await files.remove(entry.path);
-  else await files.place(entry.path, path.join(work, entry.staged));
-}
-
-export async function finishInPlaceImports(root: string, sources: SourceRegistry): Promise<boolean> {
-  let names: string[];
-  try { names = await readdir(root); } catch { return false; }
-  let finished = false;
-  for (const name of names.filter((entry) => entry.startsWith(IMPORT_STAGING_PREFIX))) {
-    const work = path.join(root, name);
-    let journal: InPlaceJournal | null = null;
-    try { journal = JSON.parse(await readFile(path.join(work, 'journal.json'), 'utf8')) as InPlaceJournal; } catch { journal = null; }
-    const valid = journal?.version === 1 && Array.isArray(journal.entries) && journal.entries.every((entry) =>
-      typeof entry?.path === 'string' && packagePath(sources, entry.path)
-      && (entry.staged === null || (typeof entry.staged === 'string' && STAGED.test(entry.staged))));
-    if (journal && valid) {
+  return {
+    async place(progress) {
       const files = new VaultFileWriter(root, sources);
-      await files.admit(journal.entries.map((entry) => entry.path));
-      for (const entry of journal.entries) await placeEntry(files, work, entry);
-      finished = true;
-    }
-    await rm(work, { recursive: true, force: true });
+      try {
+        for (const [index, entry] of entries.entries()) {
+          if (entry.staged) await files.place(entry.path, entry.staged);
+          else await files.remove(entry.path);
+          progress(index + 1, entries.length);
+        }
+      } finally {
+        await removeStaging(staging);
+      }
+    },
+  };
+}
+
+export async function removeImportStaging(root: string): Promise<void> {
+  for (const name of await readdir(root)) {
+    if (name.startsWith(IMPORT_STAGING_PREFIX)) await rm(path.join(root, name), { recursive: true, force: true });
   }
-  return finished;
 }
 
 export async function importNewVault(options: {
-  packageFile: unknown; folder: unknown; profilePath: string; createdBy: string; sources: SourceRegistry; statfs?: StatFs;
+  packageFile: unknown; folder: unknown; createdBy: string; sources: SourceRegistry;
 }): Promise<string> {
   const target = await checkImportFolder(options.folder);
   const reader = await openPackage(await checkPackageFile(options.packageFile), options.sources);
-  let journal: ImportJournal | null = null;
+  const staging = `${target}.importing-${randomUUID()}`;
   try {
     await checkPackageContent(reader, options.sources);
-    await checkFreeSpace(path.dirname(target), unpackedBytes(reader), options.statfs);
-    journal = { staging: stagingFolder(target), target, placed: false, marker: null };
-    await writeImportJournal(options.profilePath, journal);
-    await mkdir(journal.staging, { mode: 0o700 });
-    await unpackPackage(reader, journal.staging, () => undefined);
-    reader.close();
-    await writeVaultMarker(journal.staging, options.createdBy, options.sources);
-    await checkImportFolder(target);
-    journal = { ...journal, placed: true, marker: await markerDigest(journal.staging) };
-    await writeImportJournal(options.profilePath, journal);
-    await rename(journal.staging, target);
+    await mkdir(staging, { mode: 0o700 });
+    await unpackPackage(reader, staging, () => undefined);
+    await writeVaultMarker(staging, options.createdBy);
+    await rename(staging, target);
     return target;
   } catch (error) {
-    reader.close();
-    if (journal) {
-      await rm(journal.staging, { recursive: true, force: true }).catch(() => undefined);
-      await clearImportJournal(options.profilePath).catch(() => undefined);
-    }
+    await removeStaging(staging);
     throw error;
+  } finally {
+    reader.close();
   }
+}
+
+async function removeStaging(staging: string): Promise<void> {
+  await rm(staging, { recursive: true, force: true }).catch((error: unknown) => console.error('Removing an import staging folder failed', error));
 }

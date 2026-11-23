@@ -20,7 +20,6 @@ export function registerVaultTransferRoutes(app: FastifyInstance, transfer: Vaul
     transfer.cancelImport(String(request.body?.id ?? ''));
     return { cancelled: true as const };
   });
-  serve(app, API_ROUTES.cancelVaultWait, async () => transfer.cancelWait());
   serve(app, API_ROUTES.openVault, async (request: FastifyRequest<{ Body: { path?: unknown } | undefined }>) => transfer.openOther(request.body?.path));
   serve(app, API_ROUTES.createVault, async (request: FastifyRequest<{ Body: { location?: unknown; name?: unknown } | undefined }>) => transfer.createNew(request.body?.location, request.body?.name));
 }

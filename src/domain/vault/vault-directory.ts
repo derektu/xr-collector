@@ -6,11 +6,11 @@ import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { VaultInspection } from '../../shared/vault/vault-types.js';
 import { DELETIONS_FILE, deletionsFromJson } from './deleted-documents.js';
-import { replaceFile } from '../../shared/lib/json-file.js';
 import { errorCode } from './errno.js';
 
 export const VAULT_MARKER = 'xr-collector-vault.json';
 export const VAULT_FORMAT = 'xr-collector-vault';
+export const FORMAT_VERSION = 1;
 
 export interface VaultMarker {
   format: typeof VAULT_FORMAT;
@@ -51,13 +51,13 @@ function localTimestamp(date: Date): string {
     + `${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(offset / 60)}:${pad(offset % 60)}`;
 }
 
-function markerProblem(value: unknown, sources: SourceRegistry): string | null {
+function markerProblem(value: unknown): string | null {
   if (!value || typeof value !== 'object') return '知識庫標記檔格式錯誤。';
   const marker = value as Partial<VaultMarker>;
   if (marker.format !== VAULT_FORMAT || !Number.isInteger(marker.formatVersion) || (marker.formatVersion ?? 0) < 1) {
     return '知識庫標記檔格式錯誤。';
   }
-  if ((marker.formatVersion ?? 0) > vaultFormatVersion(sources)) {
+  if ((marker.formatVersion ?? 0) > FORMAT_VERSION) {
     return `此知識庫由較新版本的 XR Collector 建立（格式版本 ${marker.formatVersion}），請更新程式後再開啟。`;
   }
   if (typeof marker.id !== 'string' || !VAULT_ID.test(marker.id)) {
@@ -116,7 +116,7 @@ export async function inspectVaultDirectory(input: string, sources: SourceRegist
   } catch (error) {
     return { kind: 'invalid', path: root, reason: error instanceof SyntaxError ? '知識庫標記檔格式錯誤。' : unreadableReason(error, '知識庫標記檔') };
   }
-  const problem = markerProblem(marker, sources);
+  const problem = markerProblem(marker);
   if (problem) return { kind: 'invalid', path: root, reason: problem };
 
   for (const { file, check } of settingsFiles(sources)) {
@@ -147,30 +147,11 @@ export function notAVault(inspection: Exclude<VaultInspection, { kind: 'existing
   return inspection.kind === 'empty' ? notAVaultReason(inspection.path) : inspection.reason;
 }
 
-export async function writeVaultMarker(root: string, createdBy: string, sources: SourceRegistry, now = new Date()): Promise<void> {
+export async function writeVaultMarker(root: string, createdBy: string, now = new Date()): Promise<void> {
   const marker: VaultMarker = {
-    format: VAULT_FORMAT, formatVersion: vaultFormatVersion(sources), createdAt: localTimestamp(now), createdBy, id: randomUUID(),
+    format: VAULT_FORMAT, formatVersion: FORMAT_VERSION, createdAt: localTimestamp(now), createdBy, id: randomUUID(),
   };
   await writeFile(path.join(root, VAULT_MARKER), `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
-}
-
-export function vaultFormatVersion(sources: SourceRegistry): number {
-  return Math.max(1, ...sources.definitions.map((definition) => definition.vaultFormatVersion));
-}
-
-export async function ensureVaultFormat(root: string, sources: SourceRegistry): Promise<void> {
-  const file = path.join(root, VAULT_MARKER);
-  let marker: VaultMarker;
-  try {
-    marker = JSON.parse(await readFile(file, 'utf8')) as VaultMarker;
-  } catch {
-    return;
-  }
-  const version = vaultFormatVersion(sources);
-  if (markerProblem(marker, sources) || marker.formatVersion >= version) return;
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify({ ...marker, formatVersion: version }, null, 2)}\n`, { flag: 'wx' });
-  await replaceFile(temporary, file);
 }
 
 export async function createVaultDirectory(input: string, createdBy: string, sources: SourceRegistry): Promise<string> {
@@ -179,7 +160,7 @@ export async function createVaultDirectory(input: string, createdBy: string, sou
   if (inspection.kind === 'invalid') throw new CollectorError('vault_invalid', inspection.reason);
   try {
     await mkdir(inspection.path, { recursive: true });
-    await writeVaultMarker(inspection.path, createdBy, sources);
+    await writeVaultMarker(inspection.path, createdBy);
   } catch (error) {
     if (errorCode(error) === 'EEXIST') throw new CollectorError('vault_invalid', '目錄內容在建立時有變更，請重新選擇。');
     const code = errorCode(error);

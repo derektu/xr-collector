@@ -41,7 +41,8 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
  * How a route meets the Vault. `device-data` reads or changes state outside the Vault, so it answers
  * before a Vault is ready and during Vault operations; `vault-operation` is an export, import, open or
  * create, which takes the Vault lock as an operation. A route without one answers `vault_not_ready`
- * until a Vault is ready and takes the Vault lock: a GET to read, others to write.
+ * until a Vault is ready; unless it is a GET, it writes, and a write is refused with `vault_busy`
+ * while an operation runs.
  */
 export type RouteVaultAccess = 'device-data' | 'vault-operation';
 
@@ -144,7 +145,6 @@ export const API_ROUTES = {
   previewImport: json<ImportPreview, PathRequest>()({ method: 'POST', path: '/api/vault/import/preview', access: 'vault-operation' }),
   applyImport: json<TransferStatus, { id: string; mode: ImportMode }>()({ method: 'POST', path: '/api/vault/import/apply', access: 'vault-operation', status: 202 }),
   cancelImport: json<{ cancelled: true }, { id: string }>()({ method: 'POST', path: '/api/vault/import/cancel', access: 'vault-operation' }),
-  cancelVaultWait: json<TransferStatus>()({ method: 'POST', path: '/api/vault/cancel', access: 'vault-operation' }),
   openVault: json<TransferStatus, PathRequest>()({ method: 'POST', path: '/api/vault/open', access: 'vault-operation', status: 202 }),
   createVault: json<TransferStatus, NewVaultRequest>()({ method: 'POST', path: '/api/vault/create', access: 'vault-operation', status: 202 }),
 

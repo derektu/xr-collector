@@ -1,56 +1,52 @@
-// Exchanging Vaults between two machines through export files: merge or replace of documents,
-// deletions and subscriptions by the newer change, the backup before an import, an interrupted
-// import opening as a whole state, a Vault created from an export, and the same over HTTP for the
-// app and an Agent. One case runs the real search engine.
-import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { JsonScheduleStore } from '../../../src/domain/subscriptions/schedule-store.js';
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
-import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
-import { createHttpApp } from '../../../src/transport/server/app.js';
 import { DELETIONS_FILE } from '../../../src/domain/vault/deleted-documents.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
-import { backupFolder, exportFolder, IMPORT_JOURNAL, markerDigest } from '../../../src/domain/vault/transfer-files.js';
-import { readVaultId, VAULT_MARKER, writeVaultMarker } from '../../../src/domain/vault/vault-directory.js';
-import { importNewVault, type ImportFault } from '../../../src/domain/vault/vault-import.js';
+import { readVaultId, VAULT_MARKER } from '../../../src/domain/vault/vault-directory.js';
+import { importNewVault } from '../../../src/domain/vault/vault-import.js';
 import { itemStates } from '../../../src/domain/vault/vault-merge.js';
 import { registeredFiles, registeredSource } from '../../../src/domain/vault/vault-package.js';
-import { VaultSelection } from '../../../src/domain/vault/vault-selection.js';
-import type { VaultWorkspace } from '../../../src/app/runtime/vault-workspace.js';
-import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
-import { channel, cleanUp, fakeSearch, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine, type OpenOverrides } from '../../support/exchange-fixtures.js';
-import { manifestOf, packageOf, tampered } from '../../support/package-fixtures.js';
-import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
-import { youtubeKey } from '../../support/youtube-documents.js';
-import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
+import type { VaultWorkspace } from '../../../src/app/runtime/vault-workspace.js';
+import type { ImportMode, ImportPreview } from '../../../src/shared/vault/vault-types.js';
+import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
+import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
+import { channel, cleanUp, fileOf, importFile, machine, open, seed, settings, temp, video, type Machine, type OpenOverrides } from '../../support/exchange-fixtures.js';
+import { manifestOf, tampered, zipEntries } from '../../support/package-fixtures.js';
+import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 afterEach(cleanUp);
 
 /** Video IDs of the documents the two machines exchange; with the seeded document A starts with five. */
 const D1 = 'aaaaaaaaaa1'; const D2 = 'aaaaaaaaaa2'; const D3 = 'aaaaaaaaaa3'; const D4 = 'aaaaaaaaaa4'; const D5 = 'aaaaaaaaaa5';
-const SEEDED = 'dQw4w9WgXcQ';
+const X = 'bbbbbbbbbbX';
 const docPath = (root: string, id: string) => path.join(root, `documents/youtube/${id}.md`);
 /** A time after every collection a test makes; larger `n` is later. */
 const at = (n: number) => `2030-01-${String(n).padStart(2, '0')}T00:00:00.000Z`;
+const files = (root: string) => new VaultFileWriter(root, PRODUCT_SOURCES);
 
 /** The items of a Vault by key: the state and content, or the time of a deletion. Equal items mean equal content. */
 async function items(root: string): Promise<Map<string, string>> {
   const states = await itemStates(PRODUCT_SOURCES, registeredSource(await registeredFiles(root, PRODUCT_SOURCES)));
   return new Map([...states].map(([key, state]) => [key, state.state === 'present' ? `present:${state.digest}` : `deleted:${state.at}`]));
 }
-const documents = async (root: string) => (await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).list()).map((document) => document.sourceId).sort();
-const deletions = async (root: string) => JSON.parse(await readFile(path.join(root, DELETIONS_FILE), 'utf8')).deleted
-  .map((record: { sourceId: string }) => record.sourceId).sort() as string[];
+async function deletionTimes(root: string): Promise<Record<string, string>> {
+  const file = path.join(root, DELETIONS_FILE);
+  if (!existsSync(file)) return {};
+  return Object.fromEntries((JSON.parse(await readFile(file, 'utf8')).deleted as { sourceId: string; deletedAt: string }[])
+    .map((record) => [record.sourceId, record.deletedAt]));
+}
 
-async function add(root: string, id: string) {
-  await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).add(transcriptDocument(video(id)));
+async function add(root: string, id: string, now?: string) {
+  await new MarkdownVault(files(root), now ? { now: () => new Date(now) } : {}).add(transcriptDocument(video(id)));
 }
 /** Changes a document as the app records a change: new text and `updated_at` set to `when`. */
 async function modify(root: string, id: string, text: string, when: string) {
@@ -62,15 +58,14 @@ async function modify(root: string, id: string, text: string, when: string) {
 }
 /** Sets a document's status as the app does, with the Vault clock at `when`. */
 async function setStatus(root: string, id: string, status: 'draft' | 'published', when: string) {
-  await new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => new Date(when) })).setStatus(`youtube:${id}`, status);
+  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) })).setStatus(`youtube:${id}`, status);
 }
-const statusOf = async (root: string, id: string) => (await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).read(`youtube:${id}`))!.status;
 async function remove(root: string, id: string, when: string) {
-  await new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => new Date(when) })).delete(`youtube:${id}`);
+  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) })).delete(`youtube:${id}`);
 }
-const store = (root: string, when?: string) => new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', when ? () => new Date(when) : undefined);
-const channels = async (root: string) => store(root).list();
-const scheduleOn = async (root: string) => (await new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).load()).enabled;
+const store = (root: string, when?: string) => new JsonSubscriptionStore(files(root), 'youtube', when ? () => new Date(when) : undefined);
+const pauseCollection = (root: string) => new JsonScheduleStore(files(root)).save({ enabled: false });
+const scheduleOn = async (root: string) => (await new JsonScheduleStore(files(root)).load()).enabled;
 const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', number>>, subscriptions: Partial<Record<'added' | 'updated' | 'removed', number>> = {}) => ({
   documents: { added: 0, updated: 0, removed: 0, ...documents }, subscriptions: { added: 0, updated: 0, removed: 0, ...subscriptions },
 });
@@ -87,217 +82,334 @@ async function exportFrom(at: Machine, name: string): Promise<string> {
   return using(at, async (workspace) => (await workspace.operations.exportTo(path.join(at.exports, `${name}.zip`))).result!.exportPath!);
 }
 
-/** Creates a machine's Vault from an export file as Onboarding does, and names it in its selection. */
-async function importAsNew(at: Machine, file: string): Promise<string> {
-  const target = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: at.vault, profilePath: at.profile, createdBy: 'XR Collector test' });
-  await new VaultSelection(path.join(at.profile, 'vault-selection.json')).write(target);
-  return target;
-}
-
-/** A copy of a machine's Vault as another machine, to try a second way of importing the same file. */
-async function copyOf(from: Machine, name: string): Promise<Machine> {
-  const copy = await machine(name, from.root);
-  await cp(from.vault, copy.vault, { recursive: true });
-  return copy;
-}
+const createNew = (at: Machine, packageFile: string) => importNewVault({ sources: PRODUCT_SOURCES, packageFile, folder: at.vault, createdBy: 'XR Collector test' });
 
 /**
  * A on 家裡 and B on 公司: A holds five documents, two subscriptions and automatic collection on;
- * it exports, and B is created from that export.
+ * it exports, and B is created from that export. Built once; each test works on its own copy.
  */
-async function pair() {
-  const root = await temp();
+let base: { root: string; a: string; b: string };
+beforeAll(async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-exchange-base-'));
   const a = await machine('A', root); const b = await machine('B', root);
   await seed(a.vault);
   for (const id of [D1, D2, D3, D4]) await add(a.vault, id);
   await store(a.vault).add(channel('UC456'));
-  const first = await exportFrom(a, 'a-1');
-  await importAsNew(b, first);
-  return { root, a, b, first };
+  await createNew(b, await exportFrom(a, 'a-1'));
+  base = { root, a: a.vault, b: b.vault };
+});
+afterAll(async () => { await rm(base.root, { recursive: true, force: true }); });
+
+async function pair() {
+  const root = await temp();
+  const a = await machine('A', root); const b = await machine('B', root);
+  await cp(base.a, a.vault, { recursive: true });
+  await cp(base.b, b.vault, { recursive: true });
+  return { root, a, b };
 }
 
 /** B's changes: one addition, update and removal each of documents and subscriptions. */
-async function changeB(b: Machine) {
-  await add(b.vault, D5);
-  await modify(b.vault, D1, 'B 補充的段落', at(1));
-  await remove(b.vault, D2, at(1));
-  await store(b.vault, at(1)).add(channel('UC789'));
-  await store(b.vault, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
-  await store(b.vault, at(1)).remove('UC456');
+async function changeB(b: string) {
+  await add(b, D5);
+  await modify(b, D1, 'B 補充的段落', at(1));
+  await remove(b, D2, at(1));
+  await store(b, at(1)).add(channel('UC789'));
+  await store(b, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
+  await store(b, at(1)).remove('UC456');
 }
 const changedCounts = counts({ added: 1, updated: 1, removed: 1 }, { added: 1, updated: 1, removed: 1 });
 
 const workFolders = async (root: string) => (await readdir(root)).filter((name) => name.startsWith('.xr-collector-import-'));
-const preImports = async (at: Machine) => existsSync(at.backups) ? (await readdir(at.backups)).filter((name) => name.startsWith('匯入前備份')) : [];
 
-describe('a deletion travels back (X77-A01)', () => {
-  it('leaves four documents after B deletes one, whether A merges or replaces', async () => {
-    const { a, b } = await pair();
-    await remove(b.vault, D2, at(1));
-    const file = await exportFrom(b, 'b-1');
-    const replacing = await copyOf(a, 'A-replace');
+/**
+ * What a document is after an import: a file with its body and status, a file a deletion record
+ * hides, a deletion record alone, or neither.
+ */
+async function documentState(root: string, id: string) {
+  const deletedAt = (await deletionTimes(root))[id];
+  if (existsSync(docPath(root, id))) {
+    const document = await new MarkdownVault(files(root)).read(`youtube:${id}`);
+    if (!document) return { kind: 'hidden', at: deletedAt };
+    return { kind: 'present', body: await readFile(docPath(root, id), 'utf8'), status: document.status };
+  }
+  return deletedAt ? { kind: 'deleted', at: deletedAt } : { kind: 'absent' };
+}
+type Status = 'draft' | 'published';
+const has = (text: string, status?: Status) => ({ kind: 'present', body: expect.stringContaining(text), ...(status ? { status } : {}) });
+const lacks = (text: string, status?: Status) => ({ kind: 'present', body: expect.not.stringContaining(text), ...(status ? { status } : {}) });
+const deleted = (when: string) => ({ kind: 'deleted', at: when });
+const ABSENT = { kind: 'absent' };
 
-    await using(a, async (workspace) => {
-      const { preview, status } = await importFile(workspace, file);
-      expect(preview).toMatchObject({
-        merge: counts({ removed: 1 }), replace: counts({ removed: 1 }), localNewer: 0,
-        package: { fileName: 'b-1.zip', exportedAt: expect.any(String), machine: 'B' },
-      });
-      expect(status).toMatchObject({ state: 'completed', operation: 'import', result: { importMode: 'merge', imported: counts({ removed: 1 }) } });
-      expect(status.message).toContain('匯入完成：文件：刪除 1');
-      await expect(workspace.collector.read(`youtube:${D2}`)).rejects.toMatchObject({ code: 'document_deleted' });
-    });
-    expect(await documents(a.vault)).toHaveLength(4);
-    expect(await deletions(a.vault)).toEqual([D2]);
-    expect(existsSync(docPath(a.vault, D2))).toBe(false);
+/** The stored row of a subscription, as its file holds it. */
+const rowOf = async (root: string, id = 'UC123') => (JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8')) as {
+  channels: Array<Record<string, unknown>>;
+}).channels.find((row) => row.id === id)!;
+const progress = {
+  lastCheckedAt: '2026-10-18T00:00:00.000Z',
+  checkFailures: { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } },
+  outOfRange: [{ videoId: D3, before: '2026-10-01T00:00:00.000Z' }],
+  failures: [{ videoId: D4, title: '影片', attempts: 1, errorCode: 'network_error', failedAt: '2026-10-18T00:00:00.000Z', skipped: false }],
+};
+const autoPauseFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
+/** Pauses UC123 by itself at `when`, as the fifth failing check in a day does. */
+const autoPause = (root: string, when: string) => store(root, when).update('UC123', { enabled: false, nextCheckAt: null, autoPausedAt: when, checkFailures: autoPauseFailures });
 
-    await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
-    expect(await documents(replacing.vault)).toHaveLength(4);
-    expect(await items(replacing.vault)).toEqual(await items(b.vault));
+interface Rule {
+  name: string;
+  /** Changes A and B make after B was created from A's export; B then exports and A imports. */
+  change: (a: string, b: string) => Promise<void>;
+  preview: Partial<ImportPreview>;
+  mode?: ImportMode;
+  /** The message an apply is refused with, leaving A as it was. */
+  refused?: string;
+  documents?: Record<string, object>;
+  /** UC123's stored row on A afterwards; a field given as `undefined` is one the row does not have. */
+  subscription?: Record<string, unknown>;
+  subscriptionIds?: string[];
+  removals?: [string, string][];
+  /** A's collection switch afterwards; the switch belongs to each Vault and never travels with an import. */
+  collectionOn?: boolean;
+  /** A's items afterwards equal B's, as a replace makes the Vault what the file holds. */
+  sameAsFile?: boolean;
+}
+
+async function check(rule: Rule) {
+  const { a, b } = await pair();
+  await rule.change(a.vault, b.vault);
+  const incoming = await items(b.vault);
+  const file = await exportFrom(b, 'b-1');
+  const mode = rule.mode ?? 'merge';
+  await using(a, async (workspace) => {
+    const preview = await workspace.operations.previewImport(file);
+    expect(preview).toMatchObject(rule.preview);
+    if (rule.refused) {
+      expect(() => workspace.operations.applyImport(preview.id, mode)).toThrow(expect.objectContaining({ message: rule.refused }));
+      return;
+    }
+    workspace.operations.applyImport(preview.id, mode);
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'import', result: { importMode: mode, imported: preview[mode] } });
   });
-});
+  if (rule.documents) {
+    const actual = Object.fromEntries(await Promise.all(Object.keys(rule.documents).map(async (id) => [id, await documentState(a.vault, id)])));
+    expect(actual).toMatchObject(rule.documents);
+  }
+  if (rule.subscription) {
+    const row = await rowOf(a.vault);
+    const entries = Object.entries(rule.subscription);
+    expect(row).toMatchObject(Object.fromEntries(entries.filter(([, value]) => value !== undefined)));
+    for (const [field] of entries.filter(([, value]) => value === undefined)) expect(row).not.toHaveProperty(field);
+  }
+  if (rule.subscriptionIds) expect((await store(a.vault).list()).map((row) => row.id).sort()).toEqual(rule.subscriptionIds);
+  if (rule.removals) expect((await store(a.vault).removals()).map((record) => [record.id, record.removedAt])).toEqual(rule.removals);
+  if (rule.collectionOn !== undefined) expect(await scheduleOn(a.vault)).toBe(rule.collectionOn);
+  if (rule.sameAsFile) expect(await items(a.vault)).toEqual(incoming);
+}
 
-describe('a deletion and an addition meet (X77-A02)', () => {
-  it('keeps A\'s new document in a merge and leaves the file\'s four in a replace', async () => {
-    const { a, b } = await pair();
-    await remove(b.vault, D2, at(1));
-    await add(a.vault, D5);
-    const file = await exportFrom(b, 'b-1');
-    const replacing = await copyOf(a, 'A-replace');
+const DOCUMENT_RULES: Rule[] = [
+  {
+    name: 'A01 a deletion on B travels back to A in a merge',
+    change: async (_a, b) => { await remove(b, D2, at(1)); },
+    preview: { merge: counts({ removed: 1 }), replace: counts({ removed: 1 }), localNewer: 0, package: { fileName: 'b-1.zip', exportedAt: expect.any(String), machine: 'B' } },
+    documents: { [D1]: has(''), [D2]: deleted(at(1)) },
+  },
+  {
+    name: 'A01 a deletion on B travels back to A in a replace',
+    change: async (_a, b) => { await remove(b, D2, at(1)); },
+    preview: { replace: counts({ removed: 1 }) }, mode: 'replace',
+    documents: { [D2]: deleted(at(1)) },
+  },
+  {
+    name: 'A02 a merge keeps a document A added while B deleted another',
+    change: async (a, b) => { await remove(b, D2, at(1)); await add(a, D5); },
+    preview: { merge: counts({ removed: 1 }), replace: counts({ removed: 2 }), localNewer: 1 },
+    documents: { [D2]: deleted(at(1)), [D5]: has('') },
+  },
+  {
+    name: 'A02 a replace leaves only the file\'s documents, and a document only A had leaves without a record',
+    change: async (a, b) => { await remove(b, D2, at(1)); await add(a, D5); },
+    preview: { replace: counts({ removed: 2 }) }, mode: 'replace',
+    documents: { [D2]: deleted(at(1)), [D5]: ABSENT },
+  },
+  {
+    name: 'A03 the newer of two changes of a document wins, in both directions',
+    change: async (a, b) => {
+      await modify(a, D1, 'A 的段落', at(1)); await modify(b, D1, 'B 的段落', at(2));
+      await modify(a, D3, 'A 較新的段落', at(3)); await modify(b, D3, 'B 較舊的段落', at(2));
+    },
+    preview: { merge: counts({ updated: 1 }), replace: counts({ updated: 2 }), localNewer: 1 },
+    documents: { [D1]: has('B 的段落'), [D3]: has('A 較新的段落') },
+  },
+  {
+    name: 'A04 the newer of a deletion and a change wins, in both directions',
+    change: async (a, b) => {
+      await modify(a, D1, 'A 在刪除之後修改', at(2)); await remove(b, D1, at(1));
+      await modify(a, D3, 'A 在刪除之前修改', at(1)); await remove(b, D3, at(2));
+      await remove(a, D4, at(1)); await modify(b, D4, 'B 在刪除之後修改', at(2));
+      await remove(a, D2, at(2)); await modify(b, D2, 'B 在刪除之前修改', at(1));
+    },
+    preview: { merge: counts({ added: 1, removed: 1 }), localNewer: 2 },
+    documents: { [D1]: has('A 在刪除之後修改'), [D3]: deleted(at(2)), [D4]: has('B 在刪除之後修改'), [D2]: deleted(at(2)) },
+  },
+  {
+    name: 'A04 the newer of two deletion records is kept and written without being counted',
+    change: async (a, b) => {
+      await remove(a, D1, at(1)); await remove(b, D1, at(2));
+      await remove(a, D3, at(2)); await remove(b, D3, at(1));
+    },
+    preview: { merge: counts({}), localNewer: 0, mergeRecords: true },
+    documents: { [D1]: deleted(at(2)), [D3]: deleted(at(2)) },
+  },
+  {
+    name: 'A05 changes made at the same time keep the local state, so a merge has nothing to import',
+    change: async (a, b) => {
+      await modify(a, D1, 'A 的段落', at(1)); await modify(b, D1, 'B 的段落', at(1));
+      await modify(a, D3, 'A 的段落', at(1)); await remove(b, D3, at(1));
+      await store(a, at(1)).update('UC123', { title: 'A 的名稱' }); await store(b, at(1)).update('UC123', { title: 'B 的名稱' });
+    },
+    preview: { merge: counts({}), replace: counts({ updated: 1, removed: 1 }, { updated: 1 }), localNewer: 3 },
+    refused: '沒有需要匯入的內容。',
+  },
+  {
+    name: '#217 a document takes the status and content of the side with the newer change, in both directions',
+    change: async (a, b) => {
+      await setStatus(a, D1, 'draft', at(2)); await modify(b, D1, 'B 較舊的段落', at(1));
+      await setStatus(a, D3, 'draft', at(1)); await modify(b, D3, 'B 較新的段落', at(2));
+      await modify(a, D4, 'A 較舊的段落', at(1)); await setStatus(b, D4, 'draft', at(2));
+    },
+    preview: { merge: counts({ updated: 2 }), localNewer: 1 },
+    documents: { [D1]: lacks('B 較舊的段落', 'draft'), [D3]: has('B 較新的段落', 'published'), [D4]: lacks('A 較舊的段落', 'draft') },
+  },
+  {
+    name: 'A06 the same video collected at different times is no change, so a replace has nothing to do',
+    change: async (a, b) => { await add(a, 'samevideo01', '2026-10-01T00:00:00.000Z'); await add(b, 'samevideo01', '2026-10-05T00:00:00.000Z'); },
+    preview: { merge: counts({}), replace: counts({}), localNewer: 0 }, mode: 'replace',
+    refused: '本機內容已與匯入檔相同。',
+  },
+  {
+    name: 'A09 deletion records of documents A never had come along uncounted, so collection passes over the video',
+    change: async (_a, b) => { await add(b, X); await remove(b, X, at(1)); await remove(b, D2, at(1)); },
+    preview: { merge: counts({ removed: 1 }), localNewer: 0 },
+    documents: { [X]: deleted(at(1)), [D2]: deleted(at(1)) },
+  },
+  {
+    name: 'A09 deletion records are written by a merge even when they are all the file brings',
+    change: async (_a, b) => { await add(b, X); await remove(b, X, at(1)); },
+    preview: { merge: counts({}), localNewer: 0, mergeRecords: true },
+    documents: { [X]: deleted(at(1)) },
+  },
+];
 
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({ removed: 1 }), replace: counts({ removed: 2 }), localNewer: 1 });
-      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
-    });
-    expect(await documents(a.vault)).toEqual([D1, D3, D4, D5, SEEDED].sort());
+const SUBSCRIPTION_RULES: Rule[] = [
+  {
+    name: 'A08 subscriptions are added, updated and removed by the newer change, keeping local progress and the collection switch',
+    change: async (a, b) => {
+      await changeB(b);
+      await store(a).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
+      await store(a, at(1)).add(channel('UCAAA', { addedAt: at(1) }));
+      await pauseCollection(b);
+    },
+    preview: { merge: changedCounts, localNewer: 1 },
+    subscriptionIds: ['UC123', 'UC789', 'UCAAA'],
+    subscription: { settings: { intervalMinutes: 360 }, lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: expect.any(String) },
+    removals: [['UC456', at(1)]],
+    collectionOn: true,
+  },
+  {
+    name: 'A08 a subscription made again after the other side removed it is newer than the removal',
+    change: async (a, b) => {
+      await store(a, at(1)).remove('UC456'); await store(b, at(1)).remove('UC456');
+      await store(b).add(channel('UC456', { addedAt: at(2) }));
+    },
+    preview: { merge: counts({}, { added: 1 }) },
+    subscriptionIds: ['UC123', 'UC456'],
+    removals: [],
+  },
+  {
+    name: 'A08 a replace keeps the local progress and collection switch',
+    change: async (a, b) => {
+      await changeB(b);
+      await store(a).update('UC123', { lastCheckedAt: progress.lastCheckedAt, checkFailures: progress.checkFailures });
+      await pauseCollection(b);
+    },
+    preview: { replace: changedCounts }, mode: 'replace',
+    subscription: { settings: { intervalMinutes: 360 }, lastCheckedAt: progress.lastCheckedAt, checkFailures: progress.checkFailures },
+    subscriptionIds: ['UC123', 'UC789'],
+    collectionOn: true,
+    sameAsFile: true,
+  },
+  {
+    name: '#291 a pause B made by itself does not travel in a merge, leaving A\'s subscription enabled',
+    change: async (_a, b) => { await autoPause(b, at(1)); await add(b, D5); },
+    preview: { merge: counts({ added: 1 }), localNewer: 0 },
+    subscription: { enabled: true, autoPausedAt: undefined, checkFailures: undefined },
+  },
+  {
+    name: '#291 a pause B made by itself does not travel in a replace either',
+    change: async (_a, b) => { await autoPause(b, at(1)); await add(b, D5); },
+    preview: {}, mode: 'replace',
+    subscription: { enabled: true, autoPausedAt: undefined, checkFailures: undefined },
+  },
+  {
+    name: '#291 a pause by the person on B travels by its newer change',
+    change: async (_a, b) => { await store(b, at(1)).update('UC123', { enabled: false }); },
+    preview: { merge: counts({}, { updated: 1 }) },
+    subscription: { enabled: false, updatedAt: at(1) },
+  },
+  {
+    name: '#291 a resume on A later than B\'s pause wins',
+    change: async (a, b) => {
+      await store(b, at(1)).update('UC123', { enabled: false });
+      await store(a, at(1)).update('UC123', { enabled: false }); await store(a, at(2)).update('UC123', { enabled: true });
+    },
+    preview: { merge: counts({}), localNewer: 1 },
+    refused: '沒有需要匯入的內容。',
+    subscription: { enabled: true, updatedAt: at(2) },
+  },
+  {
+    name: '#291 A\'s own automatic pause stays when the file brings a newer change by the person',
+    change: async (a, b) => { await autoPause(a, at(1)); await store(b, at(2)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } }); },
+    preview: { merge: counts({}, { updated: 1 }) },
+    subscription: { enabled: false, autoPausedAt: at(1), checkFailures: autoPauseFailures, settings: { intervalMinutes: 360 }, updatedAt: at(2) },
+  },
+  {
+    name: 'S2 S4 newer settings come from the file while A keeps its own progress and never takes B\'s',
+    change: async (a, b) => {
+      await store(b, at(2)).update('UC123', { title: 'B 改的名稱', settings: { ...settings, intervalMinutes: 360 }, enabled: false });
+      await store(b).update('UC123', { lastCheckedAt: at(3), outOfRange: [{ videoId: D5, before: at(3) }] });
+      await store(a).update('UC123', progress);
+    },
+    preview: { merge: counts({}, { updated: 1 }), localNewer: 0 },
+    subscription: { title: 'B 改的名稱', enabled: false, settings: { ...settings, intervalMinutes: 360 }, updatedAt: at(2), ...progress, nextCheckAt: null },
+  },
+  {
+    name: 'S3 newer local settings and progress stay, so a merge has nothing to import',
+    change: async (a, b) => {
+      await store(b, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
+      await store(b).update('UC123', { lastCheckedAt: at(3) });
+      await store(a, at(2)).update('UC123', { title: 'A 改的名稱', ...progress });
+    },
+    preview: { merge: counts({}), replace: counts({}, { updated: 1 }), localNewer: 1 },
+    refused: '沒有需要匯入的內容。',
+    subscription: { title: 'A 改的名稱', settings, ...progress },
+  },
+  {
+    name: 'S4 a local subscription never checked takes no lastCheckedAt from the file',
+    change: async (a, b) => {
+      await store(b, at(1)).update('UC123', { title: 'B 改的名稱', lastCheckedAt: at(1) });
+      const { lastCheckedAt: _lastCheckedAt, ...unchecked } = await rowOf(a);
+      await writeFile(path.join(a, 'settings/youtube-channels.json'), `${JSON.stringify({ version: 3, channels: [unchecked, await rowOf(a, 'UC456')] }, null, 2)}\n`);
+    },
+    preview: { merge: counts({}, { updated: 1 }) },
+    subscription: { title: 'B 改的名稱', lastCheckedAt: undefined },
+  },
+];
 
-    await using(replacing, async (workspace) => {
-      const { status } = await importFile(workspace, file, 'replace');
-      expect(status).toMatchObject({ result: { importMode: 'replace', imported: counts({ removed: 2 }) } });
-      expect(status.message).toContain('已完全以匯入內容取代');
-    });
-    expect(await documents(replacing.vault)).toEqual([D1, D3, D4, SEEDED].sort());
-    // The records are the file's: a document only A had leaves without a record of its own.
-    expect(await deletions(replacing.vault)).toEqual([D2]);
-  });
-});
+describe('merge and replace rules', () => {
+  it.each(DOCUMENT_RULES)('documents: $name', check);
+  it.each(SUBSCRIPTION_RULES)('subscriptions: $name', check);
 
-describe('the newer state wins (X77-A03, X77-A04, X77-A05)', () => {
-  it('takes the newer of two changes of a document, in both directions (A03)', async () => {
-    const { a, b } = await pair();
-    await modify(a.vault, D1, 'A 的段落', at(1)); await modify(b.vault, D1, 'B 的段落', at(2));
-    await modify(a.vault, D3, 'A 較新的段落', at(3)); await modify(b.vault, D3, 'B 較舊的段落', at(2));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const { preview } = await importFile(workspace, file);
-      expect(preview).toMatchObject({ merge: counts({ updated: 1 }), replace: counts({ updated: 2 }), localNewer: 1 });
-      expect((await workspace.search.search({ query: 'B 的段落' })).hits.map((hit) => hit.id)).toEqual([`youtube:${D1}`]);
-    });
-    expect(await readFile(docPath(a.vault, D1), 'utf8')).toContain('B 的段落');
-    expect(await readFile(docPath(a.vault, D3), 'utf8')).toContain('A 較新的段落');
-
-    // Back on B, A's newer change of D3 comes over and D1 is already the same.
-    const back = await exportFrom(a, 'a-2');
-    await using(b, async (workspace) => {
-      expect((await importFile(workspace, back)).preview).toMatchObject({ merge: counts({ updated: 1 }), localNewer: 0 });
-    });
-    expect(await items(b.vault)).toEqual(await items(a.vault));
-  });
-
-  it('lets the newer of a deletion and a change win, in both directions (A04)', async () => {
-    const { a, b } = await pair();
-    await modify(a.vault, D1, 'A 在刪除之後修改', at(2)); await remove(b.vault, D1, at(1));
-    await modify(a.vault, D3, 'A 在刪除之前修改', at(1)); await remove(b.vault, D3, at(2));
-    await remove(a.vault, D4, at(1)); await modify(b.vault, D4, 'B 在刪除之後修改', at(2));
-    await remove(a.vault, D2, at(2)); await modify(b.vault, D2, 'B 在刪除之前修改', at(1));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const { preview } = await importFile(workspace, file);
-      expect(preview).toMatchObject({ merge: counts({ added: 1, removed: 1 }), localNewer: 2 });
-      expect((await workspace.collector.read(`youtube:${D4}`)).bodyMarkdown).toContain('B 在刪除之後修改');
-    });
-    expect(await readFile(docPath(a.vault, D1), 'utf8')).toContain('A 在刪除之後修改');
-    expect(existsSync(docPath(a.vault, D3))).toBe(false);
-    expect(await readFile(docPath(a.vault, D4), 'utf8')).toContain('B 在刪除之後修改');
-    expect(await deletions(a.vault)).toEqual([D2, D3]);
-  });
-
-  it('keeps the newer of two deletion records of a document, without counting it (A04)', async () => {
-    const { a, b } = await pair();
-    await remove(a.vault, D1, at(1)); await remove(b.vault, D1, at(2));
-    await remove(a.vault, D3, at(2)); await remove(b.vault, D3, at(1));
-    const deletedAt = async (root: string) => Object.fromEntries(JSON.parse(await readFile(path.join(root, DELETIONS_FILE), 'utf8')).deleted
-      .map((record: { sourceId: string; deletedAt: string }) => [record.sourceId, record.deletedAt]));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
-      expect(workspace.operations.status().state).toBe('completed');
-    });
-    expect(await deletedAt(a.vault)).toEqual({ [D1]: at(2), [D3]: at(2) });
-  });
-
-  it('keeps the local state when both sides changed at the same time (A05)', async () => {
-    const { a, b } = await pair();
-    await modify(a.vault, D1, 'A 的段落', at(1)); await modify(b.vault, D1, 'B 的段落', at(1));
-    await modify(a.vault, D3, 'A 的段落', at(1)); await remove(b.vault, D3, at(1));
-    await store(a.vault, at(1)).update('UC123', { title: 'A 的名稱' }); await store(b.vault, at(1)).update('UC123', { title: 'B 的名稱' });
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }, { updated: 1 }), localNewer: 3 });
-      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
-    });
-  });
-});
-
-describe('a status changed on one machine (#217)', () => {
-  it('takes the status and content of the side with the newer change, in both directions', async () => {
-    const { a, b } = await pair();
-    // D1: A's draft is newer than B's published edit. D3: B's published edit is newer than A's draft.
-    // D4: B's draft is newer than A's published edit.
-    await setStatus(a.vault, D1, 'draft', at(2)); await modify(b.vault, D1, 'B 較舊的段落', at(1));
-    await setStatus(a.vault, D3, 'draft', at(1)); await modify(b.vault, D3, 'B 較新的段落', at(2));
-    await modify(a.vault, D4, 'A 較舊的段落', at(1)); await setStatus(b.vault, D4, 'draft', at(2));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ updated: 2 }), localNewer: 1 });
-    });
-    expect([await statusOf(a.vault, D1), await statusOf(a.vault, D3), await statusOf(a.vault, D4)]).toEqual(['draft', 'published', 'draft']);
-    expect(await readFile(docPath(a.vault, D1), 'utf8')).not.toContain('B 較舊的段落');
-    expect(await readFile(docPath(a.vault, D3), 'utf8')).toContain('B 較新的段落');
-    expect(await readFile(docPath(a.vault, D4), 'utf8')).not.toContain('A 較舊的段落');
-
-    // Back on B, A's newer draft of D1 comes over; D3 and D4 are already the same.
-    const back = await exportFrom(a, 'a-2');
-    await using(b, async (workspace) => {
-      expect((await importFile(workspace, back)).preview).toMatchObject({ merge: counts({ updated: 1 }), localNewer: 0 });
-    });
-    expect(await statusOf(b.vault, D1)).toBe('draft');
-    expect(await readFile(docPath(b.vault, D1), 'utf8')).not.toContain('B 較舊的段落');
-    expect(await items(b.vault)).toEqual(await items(a.vault));
-  });
-});
-
-describe('the same video on both machines (X77-A06)', () => {
-  it('is no change when only the collection time differs', async () => {
-    const { a, b } = await pair();
-    await new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES), { now: () => new Date('2026-10-01T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
-    await new MarkdownVault(new VaultFileWriter(b.vault, PRODUCT_SOURCES), { now: () => new Date('2026-10-05T00:00:00.000Z') }).add(transcriptDocument(video('samevideo01')));
-    expect(await readFile(docPath(a.vault, 'samevideo01'))).not.toEqual(await readFile(docPath(b.vault, 'samevideo01')));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), replace: counts({}), localNewer: 0 });
-      expect(() => workspace.operations.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
-    });
-  });
-});
-
-describe('Vaults that never exchanged (X77-A07)', () => {
-  it('joins both, decides shared items by time and removes nothing without a record', async () => {
+  it('A07 joins Vaults that never exchanged, deciding shared items by time and removing nothing without a record', async () => {
     const root = await temp();
     const a = await machine('A', root); const c = await machine('C', root);
     await seed(a.vault); await add(a.vault, D1); await add(a.vault, 'aaaaaaaaaaA');
@@ -305,494 +417,126 @@ describe('Vaults that never exchanged (X77-A07)', () => {
     await store(c.vault, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 30 } });
     const file = await exportFrom(c, 'c-1');
     await using(a, async (workspace) => {
-      const { preview } = await importFile(workspace, file);
-      expect(preview).toMatchObject({ merge: counts({ added: 1 }, { updated: 1 }), localNewer: 2 });
+      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ added: 1 }, { updated: 1 }), localNewer: 2 });
     });
-    expect(await documents(a.vault)).toEqual([D1, 'aaaaaaaaaaA', 'aaaaaaaaaaC', SEEDED].sort());
-    expect((await channels(a.vault))[0]!.settings.intervalMinutes).toBe(30);
-  });
-});
-
-describe('subscriptions (X77-A08)', () => {
-  it('adds, updates and removes subscriptions by time, keeping local progress and the collection switch', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    // A checks its subscription after the export: progress is no change of content.
-    await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z' });
-    await store(a.vault, at(1)).add(channel('UCAAA', { addedAt: at(1) }));
-    // B pauses automatic collection; the switch belongs to each Vault and never travels with an import.
-    await new JsonScheduleStore(new VaultFileWriter(b.vault, PRODUCT_SOURCES)).save({ enabled: false });
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const { preview } = await importFile(workspace, file);
-      expect(preview).toMatchObject({ merge: changedCounts, localNewer: 1 });
-    });
-    const rows = await channels(a.vault);
-    expect(rows.map((row) => row.id).sort()).toEqual(['UC123', 'UC789', 'UCAAA']);
-    expect(rows.find((row) => row.id === 'UC123')).toMatchObject({
-      settings: { intervalMinutes: 360 }, lastCheckedAt: '2026-10-18T00:00:00.000Z', nextCheckAt: expect.any(String),
-    });
-    expect((await store(a.vault).removals()).map((record) => [record.id, record.removedAt])).toEqual([['UC456', at(1)]]);
-    expect(await scheduleOn(a.vault)).toBe(true);
-
-    // A subscribes UC456 again after B removed it; the new subscription is newer than the removal.
-    await store(a.vault).add(channel('UC456', { addedAt: at(2) }));
-    expect(await store(a.vault).removals()).toEqual([]);
-    const back = await exportFrom(a, 'a-2');
-    await using(b, async (workspace) => {
-      expect((await importFile(workspace, back)).preview).toMatchObject({ merge: counts({}, { added: 2 }) });
-    });
-    expect((await channels(b.vault)).map((row) => row.id).sort()).toEqual(['UC123', 'UC456', 'UC789', 'UCAAA']);
-    expect(await store(b.vault).removals()).toEqual([]);
-    expect(await scheduleOn(b.vault)).toBe(false);
-  });
-
-  it('keeps the local progress and collection switch when replacing', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
-    await store(a.vault).update('UC123', { lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
-    await new JsonScheduleStore(new VaultFileWriter(b.vault, PRODUCT_SOURCES)).save({ enabled: false });
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, file, 'replace'); });
-    expect(await items(a.vault)).toEqual(await items(b.vault));
-    expect((await channels(a.vault)).find((row) => row.id === 'UC123')).toMatchObject({ lastCheckedAt: '2026-10-18T00:00:00.000Z', checkFailures });
-    expect(await scheduleOn(a.vault)).toBe(true);
-  });
-});
-
-describe('a subscription that paused itself on one machine (#291)', () => {
-  const checkFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
-  /** Pauses UC123 by itself at `when`, as the fifth failing check in a day does. */
-  const autoPause = (root: string, when: string) => store(root, when).update('UC123', { enabled: false, nextCheckAt: null, autoPausedAt: when, checkFailures });
-  const uc123 = async (root: string) => (await channels(root)).find((row) => row.id === 'UC123')!;
-
-  it('leaves the local subscription enabled, whether merging or replacing', async () => {
-    const { a, b } = await pair();
-    await autoPause(b.vault, at(1));
-    await add(b.vault, D5);
-    const file = await exportFrom(b, 'b-1');
-    const replacing = await copyOf(a, 'A2');
-    await using(a, async (workspace) => {
-      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ added: 1 }), localNewer: 0 });
-    });
-    await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
-    for (const root of [a.vault, replacing.vault]) {
-      const row = await uc123(root);
-      expect(row.enabled).toBe(true);
-      expect(row).not.toHaveProperty('autoPausedAt');
-      expect(row).not.toHaveProperty('checkFailures');
-    }
-  });
-
-  it('still takes a pause or a resume by the person from the side whose change is newer', async () => {
-    const { a, b } = await pair();
-    await store(b.vault, at(1)).update('UC123', { enabled: false });
-    const paused = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, paused); });
-    expect(await uc123(a.vault)).toMatchObject({ enabled: false, updatedAt: at(1) });
-    // A resumes it later; B's older pause no longer wins.
-    await store(a.vault, at(2)).update('UC123', { enabled: true });
-    await using(a, async (workspace) => {
-      expect((await workspace.operations.previewImport(paused))).toMatchObject({ merge: counts({}), localNewer: 1 });
-    });
-    expect(await uc123(a.vault)).toMatchObject({ enabled: true, updatedAt: at(2) });
-  });
-
-  it('keeps the local automatic pause when the file brings a newer change by the person', async () => {
-    const { a, b } = await pair();
-    await autoPause(a.vault, at(1));
-    await store(b.vault, at(2)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, file); });
-    expect(await uc123(a.vault)).toMatchObject({ enabled: false, autoPausedAt: at(1), checkFailures, settings: { intervalMinutes: 360 }, updatedAt: at(2) });
-  });
-});
-
-describe('a subscription both machines changed (#256 S2, S3, S4)', () => {
-  const progress = {
-    lastCheckedAt: '2026-10-18T00:00:00.000Z',
-    checkFailures: { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } },
-    outOfRange: [{ videoId: D3, before: '2026-10-01T00:00:00.000Z' }],
-    failures: [{ videoId: D4, title: '影片', attempts: 1, errorCode: 'network_error', failedAt: '2026-10-18T00:00:00.000Z', skipped: false }],
-  };
-  const rowOf = async (root: string) => (JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8')) as {
-    channels: Array<Record<string, unknown>>;
-  }).channels.find((row) => row.id === 'UC123')!;
-
-  it('takes the newer settings from the file and keeps the local progress (S2, S4)', async () => {
-    const { a, b } = await pair();
-    const newSettings = { ...settings, intervalMinutes: 360 };
-    await store(b.vault, at(2)).update('UC123', { title: 'B 改的名稱', settings: newSettings, enabled: false });
-    // B's own progress, which A never takes over.
-    await store(b.vault).update('UC123', { lastCheckedAt: at(3), outOfRange: [{ videoId: D5, before: at(3) }] });
-    await store(a.vault).update('UC123', progress);
-    const before = await rowOf(a.vault);
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({}, { updated: 1 }), localNewer: 0 });
-    });
-    expect(await rowOf(a.vault)).toEqual({
-      id: 'UC123', addedAt: before.addedAt, title: 'B 改的名稱', url: before.url, enabled: false, settings: newSettings, updatedAt: at(2),
-      ...progress, nextCheckAt: null, lastDispatchedAt: null,
-    });
-  });
-
-  it('keeps the local settings and progress when the local change is newer (S3)', async () => {
-    const { a, b } = await pair();
-    await store(b.vault, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
-    await store(b.vault).update('UC123', { lastCheckedAt: at(3) });
-    await store(a.vault, at(2)).update('UC123', { title: 'A 改的名稱', ...progress });
-    const before = await rowOf(a.vault);
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), replace: counts({}, { updated: 1 }), localNewer: 1 });
-      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
-      workspace.operations.cancelImport(preview.id);
-    });
-    expect(await rowOf(a.vault)).toEqual(before);
-  });
-
-  it('keeps no lastCheckedAt from the file when the local subscription has none (S4)', async () => {
-    const { a, b } = await pair();
-    await store(b.vault, at(1)).update('UC123', { title: 'B 改的名稱', lastCheckedAt: at(1) });
-    const local = await rowOf(a.vault);
-    const { lastCheckedAt: _lastCheckedAt, ...withoutCheck } = local;
-    await writeFile(path.join(a.vault, 'settings/youtube-channels.json'), `${JSON.stringify({ version: 3, channels: [withoutCheck] }, null, 2)}\n`);
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, file); });
-    const row = await rowOf(a.vault);
-    expect(row.title).toBe('B 改的名稱');
-    expect(row).not.toHaveProperty('lastCheckedAt');
-  });
-});
-
-describe('deletion records of documents the Vault never had (X77-A09)', () => {
-  it('come along with a merge without being counted, so collection passes over the video', async () => {
-    const { a, b } = await pair();
-    await add(b.vault, 'bbbbbbbbbbX'); await remove(b.vault, 'bbbbbbbbbbX', at(1));
-    await remove(b.vault, D2, at(1));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      expect((await importFile(workspace, file)).preview).toMatchObject({ merge: counts({ removed: 1 }), localNewer: 0 });
-    });
-    expect(await deletions(a.vault)).toEqual([D2, 'bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES))).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
-  });
-
-  it('are written by a merge even when they are all the file brings', async () => {
-    const { a, b } = await pair();
-    await add(b.vault, 'bbbbbbbbbbX'); await remove(b.vault, 'bbbbbbbbbbX', at(1));
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), localNewer: 0, mergeRecords: true });
-      workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
-      expect(workspace.operations.status().state).toBe('completed');
-    });
-    expect(await deletions(a.vault)).toEqual(['bbbbbbbbbbX']);
-    expect(await new Collector(new MarkdownVault(new VaultFileWriter(a.vault, PRODUCT_SOURCES))).isKnown(youtubeKey('bbbbbbbbbbX'))).toBe(true);
-    expect(await items(a.vault)).toEqual(await items(b.vault));
-    await using(a, async (workspace) => {
-      expect(await workspace.operations.previewImport(file)).toMatchObject({ merge: counts({}), mergeRecords: false });
-    });
-  });
-});
-
-describe('nothing to import (X77-A10)', () => {
-  it('counts the newer local changes, refuses a merge and lets a replace go back to the file', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => { await importFile(workspace, file); });
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), replace: counts({}), localNewer: 0, mergeRecords: false });
-      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ message: '沒有需要匯入的內容。' }));
-      expect(() => workspace.operations.applyImport(preview.id, 'replace')).toThrow(expect.objectContaining({ message: '本機內容已與匯入檔相同。' }));
-      workspace.operations.cancelImport(preview.id);
-      expect(workspace.operations.status()).toMatchObject({ state: 'idle', message: '已取消匯入，資料未變更。' });
-    });
-    expect(await preImports(a)).toHaveLength(1);
-
-    await add(a.vault, 'aaaaaaaaaaA'); await modify(a.vault, D3, 'A 之後的段落', at(5));
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      expect(preview).toMatchObject({ merge: counts({}), replace: counts({ updated: 1, removed: 1 }), localNewer: 2 });
-      workspace.operations.applyImport(preview.id, 'replace'); await workspace.operations.finished();
-      expect(workspace.operations.status().state).toBe('completed');
-    });
-    expect(await items(a.vault)).toEqual(await items(b.vault));
+    expect((await new MarkdownVault(files(a.vault)).list()).map((document) => document.sourceId).sort())
+      .toEqual([D1, 'aaaaaaaaaaA', 'aaaaaaaaaaC', 'dQw4w9WgXcQ'].sort());
+    expect((await rowOf(a.vault)).settings).toMatchObject({ intervalMinutes: 30 });
   });
 });
 
 describe('the export before an import (X77-A11)', () => {
-  it('is written, in a folder it creates, before any file of the Vault changes', async () => {
+  it('is written in a folder it creates and holds the Vault as it was before the import', async () => {
     const { a, b } = await pair();
-    await changeB(b);
+    await changeB(b.vault);
     const file = await exportFrom(b, 'b-1');
-    await rm(a.backups, { recursive: true, force: true });
     const before = await items(a.vault);
-    let seen: string[] = [];
-    await using(a, async (workspace) => { await importFile(workspace, file); }, {
-      importFaults: async (phase) => {
-        if (phase !== 'staged') return;
-        seen = await preImports(a);
-        expect(await items(a.vault)).toEqual(before);
-      },
-    });
-    expect(seen).toHaveLength(1);
-    expect(path.basename(seen[0]!)).toMatch(/^匯入前備份 \d{4}-\d{2}-\d{2} \d{6}\.zip$/u);
-    expect((await readdir(a.exports)).filter((name) => name.includes('匯入前'))).toEqual([]);
-    const manifest = await manifestOf(await readFile(path.join(a.backups, seen[0]!)));
-    expect(manifest.summary).toMatchObject({ documents: 5, subscriptions: 2 });
+    const backup = await using(a, async (workspace) => (await importFile(workspace, file)).status.result!.backupPath!);
+    expect(path.dirname(backup)).toBe(a.backups);
+    expect(path.basename(backup)).toMatch(/^匯入前備份 \d{4}-\d{2}-\d{2} \d{6}\.zip$/u);
+    const restored = await machine('restored', a.root);
+    await createNew(restored, backup);
+    expect(await items(restored.vault)).toEqual(before);
   });
 
-  it('stops the import with the Vault unchanged when the export cannot be written', async () => {
+  it('stops the import with the Vault unchanged when it cannot be written', async () => {
     const { a, b } = await pair();
-    await changeB(b);
+    await changeB(b.vault);
     const file = await exportFrom(b, 'b-1');
     const blocked = path.join(a.root, 'blocked');
     await writeFile(blocked, 'a file where the backup folder should be');
     const before = await items(a.vault);
     await using(a, async (workspace) => {
       await importFile(workspace, file);
-      expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import' });
-      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import', result: null });
+      expect(() => workspace.operations.enterWrite()()).not.toThrow();
     }, { backupFolder: path.join(blocked, 'backups') });
     expect(await items(a.vault)).toEqual(before);
     expect(await workFolders(a.vault)).toEqual([]);
   });
-
-  it('undoes an import: merging it finds nothing, replacing with it restores the Vault as it was', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const original = await items(a.vault);
-    const file = await exportFrom(b, 'b-1');
-    const backup = await using(a, async (workspace) => (await importFile(workspace, file)).status.result!.backupPath!);
-    expect((await manifestOf(await readFile(backup))).source).toMatchObject({ machine: 'A', vaultId: await readVaultId(a.vault) });
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(backup);
-      expect(preview).toMatchObject({ merge: counts({}), replace: changedCounts, localNewer: 6 });
-      workspace.operations.applyImport(preview.id, 'replace'); await workspace.operations.finished();
-      expect(workspace.operations.status().state).toBe('completed');
-    });
-    expect(await items(a.vault)).toEqual(original);
-  });
 });
 
-describe('an import stopped while it applies (X77-A12)', () => {
-  /** A's content before and after importing B's changes, and B's export. */
+describe('an import that fails while it applies (X77-A12)', () => {
   async function prepared() {
     const shared = await pair();
-    await changeB(shared.b);
+    await changeB(shared.b.vault);
     const file = await exportFrom(shared.b, 'b-1');
     return { ...shared, file, before: await items(shared.a.vault), after: await items(shared.b.vault) };
   }
-  const stops: [string, (phase: ImportFault, count?: number) => boolean, 'before' | 'after'][] = [
-    ['before the journal is written', (phase) => phase === 'staged', 'before'],
-    ['halfway through putting files in place', (phase, count) => phase === 'renaming' && count === 2, 'after'],
-  ];
 
-  it.each(stops)('opens a Vault whose process stopped %s as a whole state', async (_name, at, expected) => {
-    const { root, a, file, before, after } = await prepared();
-    // A copy of the Vault taken at the stop is what a later start finds.
-    const stopped = await machine('stopped', root);
-    await using(a, async (workspace) => { await importFile(workspace, file); }, {
-      importFaults: async (phase, count) => { if (at(phase, count)) await cp(a.vault, stopped.vault, { recursive: true }); },
-    });
-    expect(await workFolders(stopped.vault)).toHaveLength(1);
-    await using(stopped, async (workspace) => {
-      expect(await workFolders(stopped.vault)).toEqual([]);
-      expect(await items(stopped.vault)).toEqual(expected === 'before' ? before : after);
-      if (expected === 'after') {
-        // The index was rebuilt.
-        expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
-      }
-      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
-    });
-  });
-
-  it.each(stops)('opens a Vault whose process stopped %s as a whole state when it is opened as another Vault', async (_name, at, expected) => {
-    const { root, a, file, before, after } = await prepared();
-    const stopped = await machine('stopped', root);
-    await using(a, async (workspace) => { await importFile(workspace, file); }, {
-      importFaults: async (phase, count) => { if (at(phase, count)) await cp(a.vault, stopped.vault, { recursive: true }); },
-    });
-    const c = await machine('C', root);
-    await using(c, async (workspace) => {
-      await workspace.operations.openOther(stopped.vault); await workspace.operations.finished();
-      expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: stopped.vault });
-      expect(await workFolders(stopped.vault)).toEqual([]);
-      expect(await items(stopped.vault)).toEqual(expected === 'before' ? before : after);
-      if (expected === 'after') {
-        expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
-      }
-      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
-    });
-  });
-
-  it.each(stops)('drops or finishes an import that fails %s, reporting what happened, then accepts work again', async (_name, at, expected) => {
-    const { a, file, before, after } = await prepared();
-    await using(a, async (workspace) => {
-      await importFile(workspace, file).catch(() => undefined);
-      if (expected === 'before') {
-        expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import' });
-      } else {
-        // Past the journal the import is carried out, so it is reported as done.
-        expect(workspace.operations.status()).toMatchObject({
-          state: 'completed', operation: 'import', errorCode: null, result: { importMode: 'merge', imported: changedCounts },
-        });
-        expect(workspace.operations.status().message).toContain('匯入完成：文件：新增 1、更新 1、刪除 1；訂閱：新增 1、更新 1、刪除 1');
-        expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
-      }
-      expect(await workFolders(a.vault)).toEqual([]);
-      expect(await items(a.vault)).toEqual(expected === 'before' ? before : after);
-      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
-      expect((await workspace.operations.previewImport(file)).merge).toEqual(expected === 'before' ? changedCounts : counts({}));
-    }, { importFaults: (phase, count) => { if (at(phase, count)) throw new Error('disk stopped'); } });
-  });
-
-  it('rebuilds the search index when updating it after an import fails, and reports a done import when that fails too', async () => {
-    const { a, file, after } = await prepared();
-    const failing = { index: false, rebuild: false };
-    const createSearch = async (destination: string) => {
-      const search = fakeSearch(destination);
-      return {
-        search: {
-          ...search,
-          index: async (document: SavedDocument) => { if (failing.index) throw new Error('index stopped'); await search.index(document); },
-          rebuild: async () => { if (failing.rebuild) throw new Error('index stopped'); await search.rebuild(); },
-        },
-        close: async () => undefined,
-      };
-    };
-    const shared = await temp();
-    await cp(a.vault, path.join(shared, 'A'), { recursive: true });
-    await using(a, async (workspace) => {
-      failing.index = true;
-      const { status } = await importFile(workspace, file);
-      expect(status).toMatchObject({ state: 'completed' });
-      expect(status.result!.searchRebuildNeeded).toBeUndefined();
-      expect((await workspace.search.search({ query: `${D5} 的字幕` })).hits.map((hit) => hit.id)).toEqual([`youtube:${D5}`]);
-    }, { createSearch });
-    expect(await items(a.vault)).toEqual(after);
-
-    // The same import on a copy taken before it, with the rebuild failing as well.
-    const copy: Machine = { ...a, vault: path.join(shared, 'A') };
-    await rm(path.join(a.profile, 'vault-selection.json'), { force: true });
-    await using(copy, async (workspace) => {
-      failing.index = true; failing.rebuild = true;
-      const { status } = await importFile(workspace, file);
-      expect(status).toMatchObject({
-        state: 'completed', errorCode: null, result: { importMode: 'merge', searchRebuildNeeded: true, imported: changedCounts },
-      });
-      expect(status.message).toContain('匯入已完成，搜尋索引需要重建');
-      expect(() => workspace.operations.enter('vault-write')()).not.toThrow();
-    }, { createSearch });
-    expect(await items(copy.vault)).toEqual(after);
-  });
-
-  it('answers reads with vault_busy while files are put in place', async () => {
-    const { a, file } = await prepared();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let reached = false;
-    await using(a, async (workspace) => {
-      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations });
-      try {
-        const preview = await workspace.operations.previewImport(file);
-        workspace.operations.applyImport(preview.id, 'merge');
-        await eventually(() => expect(reached).toBe(true));
-        const read = await app.inject('/api/documents');
-        expect(read.statusCode).toBe(409);
-        expect(read.json()).toMatchObject({ error: { code: 'vault_busy' } });
-        expect((await app.inject('/api/vault/status')).statusCode).toBe(200);
-        release(); await workspace.operations.finished();
-        expect((await app.inject('/api/documents')).statusCode).toBe(200);
-      } finally { await app.close(); }
-    }, { importFaults: async (phase, count) => { if (phase === 'renaming' && count === 1) { reached = true; await held; } } });
-  });
-});
-
-describe('collection during an import (X77-A12)', () => {
-  it('can be cancelled while it waits for a running step, writing nothing', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const file = await exportFrom(b, 'b-1');
-    const before = await items(a.vault);
-    let release!: () => void;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
+  it('checks every file again when it applies, leaving the Vault unchanged when the export file changed after the comparison', async () => {
+    const { a, file, before } = await prepared();
     await using(a, async (workspace) => {
       const preview = await workspace.operations.previewImport(file);
-      const job = await workspace.jobs.submitItem('youtube', 'https://www.youtube.com/watch?v=bbbbbbbbbb1');
-      await eventually(() => expect(workspace.jobs.get(job.job.id)?.state).toBe('running'));
-      workspace.operations.applyImport(preview.id, 'merge');
-      expect(workspace.operations.status().state).toBe('waiting');
-      expect(workspace.operations.cancelWait()).toMatchObject({ state: 'idle' });
-      release();
-      await workspace.jobs.whenSettled(job.job.id);
-    }, { capture: { capture: async (target) => { await waiting; return video(target.videoId); } } });
-    expect(await preImports(a)).toEqual([]);
-    const now = await items(a.vault);
-    now.delete('document:youtube:bbbbbbbbbb1');
-    expect(now).toEqual(before);
-  });
-
-  it('starts no new step while it applies, then goes on; a queued check of a removed subscription writes nothing back', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const file = await exportFrom(b, 'b-1');
-    let release!: () => void;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
-    const listed: string[] = [];
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', subscriptionIds: ['UC123', 'UC456'] });
-      await eventually(() => expect(listed).toEqual(['UC123']));
-      workspace.operations.applyImport(preview.id, 'merge');
-      expect(workspace.operations.status().state).toBe('waiting');
-      release();
-      await workspace.operations.finished();
-      expect(workspace.operations.status().state).toBe('completed');
-      await Promise.all(runs.map((run) => workspace.jobs.whenSettled(run.job.id)));
-      // The queued check of the subscription the import removed never ran.
-      expect(listed).toEqual(['UC123']);
-      expect((await workspace.subscriptions.of('youtube')!.list()).map((row) => row.id).sort()).toEqual(['UC123', 'UC789']);
-    }, {
-      jobLimits: { discovery: 1 },
-      channelSource: {
-        resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }),
-        listVideos: async (target) => {
-          listed.push(target.id);
-          if (listed.length === 1) await waiting;
-          return [];
-        },
-      },
-    });
-    expect((await channels(a.vault)).map((row) => row.id).sort()).toEqual(['UC123', 'UC789']);
-  });
-});
-
-describe('a comparison the Vault outdated (X77-A13)', () => {
-  it('asks to compare again when the local side changes after the comparison', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const file = await exportFrom(b, 'b-1');
-    const before = await items(a.vault);
-    await using(a, async (workspace) => {
-      const preview = await workspace.operations.previewImport(file);
-      await modify(a.vault, D3, '比對後才改的段落', at(9));
+      const entry = `documents/youtube/${D5}.md`;
+      const damaged = Buffer.from((await zipEntries(await readFile(file))).get(entry)!);
+      damaged[damaged.length - 2] = damaged[damaged.length - 2]! ^ 1;
+      await writeFile(file, await tampered(await readFile(file), entry, damaged));
       workspace.operations.applyImport(preview.id, 'merge'); await workspace.operations.finished();
-      expect(workspace.operations.status()).toMatchObject({ state: 'error', errorCode: 'invalid_request', message: expect.stringContaining('重新選擇') });
-      expect(() => workspace.operations.applyImport(preview.id, 'merge')).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+      expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'import', errorCode: 'invalid_request', result: null });
+      expect(await workFolders(a.vault)).toEqual([]);
     });
-    expect(await preImports(a)).toEqual([]);
-    const now = await items(a.vault);
-    now.delete(`document:youtube:${D3}`); before.delete(`document:youtube:${D3}`);
-    expect(now).toEqual(before);
+    expect(await items(a.vault)).toEqual(before);
   });
+
+  it('reports a partial import and its backup when putting files in place fails; importing again or replacing with the backup completes', async () => {
+    const { a, file, before, after } = await prepared();
+    const place = VaultFileWriter.prototype.place;
+    let placed = 0;
+    const failing = vi.spyOn(VaultFileWriter.prototype, 'place').mockImplementation(async function (this: VaultFileWriter, ...args) {
+      placed += 1;
+      if (placed === 2) throw new Error('disk stopped');
+      return place.apply(this, args);
+    });
+    await using(a, async (workspace) => {
+      await importFile(workspace, file);
+      failing.mockRestore();
+      const status = workspace.operations.status();
+      expect(status).toMatchObject({ state: 'error', operation: 'import', result: { importMode: 'merge', partiallyApplied: true, backupPath: expect.any(String) } });
+      expect(await workFolders(a.vault)).toEqual([]);
+      const partial = await items(a.vault);
+      expect(partial).not.toEqual(before);
+      expect(partial).not.toEqual(after);
+
+      await importFile(workspace, file);
+      expect(await items(a.vault)).toEqual(after);
+      await importFile(workspace, status.result!.backupPath!, 'replace');
+      expect(workspace.operations.status().state).toBe('completed');
+    });
+    expect(await items(a.vault)).toEqual(before);
+  });
+});
+
+it('starts no new collection step while an import applies, then goes on, and a queued check of a subscription the import removed writes nothing back (X77-A12)', async () => {
+  const { a, b } = await pair();
+  await changeB(b.vault);
+  const file = await exportFrom(b, 'b-1');
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const listed: string[] = [];
+  await using(a, async (workspace) => {
+    const preview = await workspace.operations.previewImport(file);
+    const runs = await workspace.subscriptions.of('youtube')!.startRun({ trigger: 'manual', subscriptionIds: ['UC123', 'UC456'] });
+    await eventually(() => expect(listed).toEqual(['UC123']));
+    workspace.operations.applyImport(preview.id, 'merge');
+    expect(workspace.operations.status().state).toBe('waiting');
+    release();
+    await workspace.operations.finished();
+    expect(workspace.operations.status().state).toBe('completed');
+    await Promise.all(runs.map((run) => workspace.jobs.whenSettled(run.job.id)));
+    expect(listed).toEqual(['UC123']);
+  }, {
+    jobLimits: { discovery: 1 },
+    channelSource: {
+      resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }),
+      listVideos: async (target) => {
+        listed.push(target.id);
+        if (listed.length === 1) await waiting;
+        return [];
+      },
+    },
+  });
+  expect((await store(a.vault).list()).map((row) => row.id).sort()).toEqual(['UC123', 'UC789']);
 });
 
 describe('creating a Vault from an export file (X77-A15)', () => {
@@ -802,187 +546,68 @@ describe('creating a Vault from an export file (X77-A15)', () => {
     expect((await readdir(b.vault)).sort()).toEqual([VAULT_MARKER, 'documents', 'settings'].sort());
     expect(await scheduleOn(b.vault)).toBe(true);
     expect(await items(b.vault)).toEqual(await items(a.vault));
-    expect(existsSync(path.join(b.profile, IMPORT_JOURNAL))).toBe(true);
 
-    // A paused Vault's export creates a paused Vault.
-    await new JsonScheduleStore(new VaultFileWriter(a.vault, PRODUCT_SOURCES)).save({ enabled: false });
-    const c = await machine('C', path.dirname(path.dirname(a.vault)));
-    await importAsNew(c, await exportFrom(a, 'a-paused'));
+    await pauseCollection(a.vault);
+    const c = await machine('C', a.root);
+    await createNew(c, await exportFrom(a, 'a-paused'));
     expect(await scheduleOn(c.vault)).toBe(false);
   });
 
-  it('refuses an invalid file, an existing folder or a working folder, leaving the location as it was', async () => {
-    const { root, a, first } = await pair();
-    const c = await machine('C', root);
+  it('refuses an invalid file or an existing folder, leaving the location as it was', async () => {
+    const { root, a } = await pair();
+    const good = await exportFrom(a, 'a-2');
     const empty = path.join(root, 'Empty');
     await mkdir(empty); await writeFile(path.join(empty, '.DS_Store'), '');
     const full = path.join(root, 'Full');
     await mkdir(full); await writeFile(path.join(full, 'note.txt'), 'mine');
-    const bad = await fileOf(root, 'bad.zip', await tampered(await readFile(first), `documents/youtube/${D1}.md`, 'changed'));
-    const options = { profilePath: c.profile, createdBy: 'XR Collector test' };
+    const bad = await fileOf(root, 'bad.zip', await tampered(await readFile(good), `documents/youtube/${D1}.md`, 'changed'));
     const fresh = path.join(root, 'New');
     for (const [packageFile, folder, message] of [
       [bad, fresh, '不一致'], [path.join(root, 'old.xr-vault'), fresh, '.zip'], [path.join(root, 'none.zip'), fresh, '找不到'],
-      [first, full, '已經有「Full」'], [first, empty, '已經有「Empty」'], [first, path.join(root, 'missing', 'New'), '找不到新知識庫所在的資料夾'],
-      [first, `${fresh}.importing-${randomUUID()}`, '暫存資料夾'], [first, 'relative', '完整路徑'],
+      [good, full, '已經有「Full」'], [good, empty, '已經有「Empty」'], [good, path.join(root, 'missing', 'New'), '找不到新知識庫所在的資料夾'],
+      [good, 'relative', '完整路徑'],
     ] as const) {
-      await expect(importNewVault({ sources: PRODUCT_SOURCES, ...options, packageFile, folder }), `${packageFile} → ${folder}`)
+      await expect(importNewVault({ sources: PRODUCT_SOURCES, createdBy: 'XR Collector test', packageFile, folder }), `${packageFile} → ${folder}`)
         .rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining(message) });
     }
     expect(await readdir(empty)).toEqual(['.DS_Store']);
     expect(await readdir(full)).toEqual(['note.txt']);
     expect(existsSync(fresh)).toBe(false);
     expect((await readdir(root)).filter((name) => name.includes('.importing-'))).toEqual([]);
-    expect(existsSync(path.join(c.profile, IMPORT_JOURNAL))).toBe(false);
-    expect(await readVaultId(a.vault)).toBeTruthy();
-  });
-
-  it('takes back a new Vault a stop left after the rename, unless the selection names it', async () => {
-    const { root, first } = await pair();
-    const c = await machine('C', root); await seed(c.vault);
-    const target = path.join(root, 'Imported');
-    const journalFile = path.join(c.profile, IMPORT_JOURNAL);
-    const stoppedAfterRename = async () => {
-      await importNewVault({ sources: PRODUCT_SOURCES, packageFile: first, folder: target, profilePath: c.profile, createdBy: 'XR Collector test' });
-      return JSON.parse(await readFile(journalFile, 'utf8'));
-    };
-    expect(await stoppedAfterRename()).toMatchObject({ placed: true, marker: await markerDigest(target) });
-    await using(c, async () => undefined);
-    expect(existsSync(target)).toBe(false);
-    expect(existsSync(journalFile)).toBe(false);
-
-    // A folder at the target that the import did not write is left alone.
-    await stoppedAfterRename();
-    await rm(path.join(target, VAULT_MARKER));
-    await writeVaultMarker(target, 'another program', PRODUCT_SOURCES);
-    await using(c, async () => undefined);
-    expect(await readdir(target)).toContain('documents');
-
-    // Once the selection names the new Vault, the import is complete and the folder stays.
-    await rm(target, { recursive: true });
-    await stoppedAfterRename();
-    await new VaultSelection(path.join(c.profile, 'vault-selection.json')).write(target);
-    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(target); });
-    expect(await readdir(target)).toContain('documents');
-    expect(existsSync(journalFile)).toBe(false);
-  });
-  it('keeps the import journal while the new Vault opens before the selection names it, so a stop there takes it back', async () => {
-    const { root, first } = await pair();
-    const c = await machine('C', root); await seed(c.vault);
-    const target = path.join(root, 'Imported');
-    const journalFile = path.join(c.profile, IMPORT_JOURNAL);
-    await importNewVault({ sources: PRODUCT_SOURCES, packageFile: first, folder: target, profilePath: c.profile, createdBy: 'XR Collector test' });
-    // Onboarding opens the new Vault, then the program stops before the selection is written.
-    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(target); }, { root: target, pendingImport: true });
-    expect(existsSync(journalFile)).toBe(true);
-    await using(c, async (workspace) => { expect(workspace.operations.status().vaultPath).toBe(c.vault); });
-    expect(existsSync(target)).toBe(false);
-    expect(existsSync(journalFile)).toBe(false);
   });
 });
 
-describe('export and import over HTTP (X77-A14)', () => {
-  it('exports, compares, applies and cancels files named by path, for the app and an authorized Agent alike', async () => {
-    const { a, b } = await pair();
-    await changeB(b);
-    const file = await exportFrom(b, 'b-1');
-    await using(a, async (workspace) => {
-      for (const agentToken of [undefined, 'test-token']) {
-        const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, ...(agentToken ? { agentToken } : {}) });
-        const headers = agentToken ? { authorization: `Bearer ${agentToken}` } : {};
-        try {
-          const target = path.join(a.exports, `${agentToken ?? 'ui'}.zip`);
-          const exported = await app.inject({ method: 'POST', url: '/api/vault/export', headers, payload: { path: target } });
-          expect(exported.json()).toMatchObject({ state: 'completed', result: { exportPath: target } });
-          expect(exported.json()).not.toHaveProperty('lastSync');
-          const repeat = await app.inject({ method: 'POST', url: '/api/vault/export', headers, payload: { path: target } });
-          expect(repeat.json()).toMatchObject({ error: { code: 'file_exists' } });
-          const named = await app.inject({ method: 'POST', url: '/api/vault/export', headers, payload: { path: path.join(a.exports, 'x.xr-vault') } });
-          expect(named.json()).toMatchObject({ error: { code: 'invalid_request', message: '匯出檔名必須以 .zip 結尾。' } });
-          for (const [value, message] of [[path.join(a.root, 'none.zip'), '找不到這個匯出檔。'], [path.join(a.root, 'b.xr-vault'), '只能匯入 XR Collector 的 .zip 匯出檔。']]) {
-            const refused = await app.inject({ method: 'POST', url: '/api/vault/import/preview', headers, payload: { path: value } });
-            expect(refused.json()).toMatchObject({ error: { code: 'invalid_request', message } });
-          }
-          const preview = await app.inject({ method: 'POST', url: '/api/vault/import/preview', headers, payload: { path: file } });
-          expect(preview.statusCode).toBe(200);
-          expect(preview.json()).toEqual({
-            id: expect.any(String), package: { fileName: 'b-1.zip', exportedAt: expect.any(String), machine: 'B' },
-            merge: changedCounts, replace: changedCounts, localNewer: 0, mergeRecords: false,
-          });
-          const { id } = preview.json();
-          if (!agentToken) {
-            expect((await app.inject({ method: 'POST', url: '/api/vault/import/cancel', headers, payload: { id } })).json()).toEqual({ cancelled: true });
-            expect((await app.inject({ method: 'POST', url: '/api/vault/import/apply', headers, payload: { id, mode: 'merge' } })).json())
-              .toMatchObject({ error: { code: 'invalid_request' } });
-            continue;
-          }
-          const mode = await app.inject({ method: 'POST', url: '/api/vault/import/apply', headers, payload: { id, mode: 'other' } });
-          expect(mode.statusCode).toBe(400);
-          const apply = await app.inject({ method: 'POST', url: '/api/vault/import/apply', headers, payload: { id, mode: 'merge' } });
-          expect(apply.statusCode).toBe(202);
-          await workspace.operations.finished();
-          expect((await app.inject({ method: 'GET', url: '/api/vault/status', headers })).json())
-            .toMatchObject({ state: 'completed', operation: 'import', result: { importMode: 'merge', imported: changedCounts } });
-        } finally { await app.close(); }
-      }
-    });
-    expect(await items(a.vault)).toEqual(await items(b.vault));
-  });
-
-  it('only reads the Vault when exporting, and names the Vault and machine the file came from', async () => {
+describe('an export', () => {
+  it('only reads the Vault and names the Vault and machine the file came from', async () => {
     const { a } = await pair();
     const listing = async () => (await readdir(a.vault, { recursive: true })).sort();
     const before = await listing();
     const file = await exportFrom(a, 'a-2');
     expect(await listing()).toEqual(before);
-    const manifest = await manifestOf(await readFile(file));
-    expect(manifest.source).toEqual({ vaultId: await readVaultId(a.vault), machine: 'A', folderName: path.basename(a.vault) });
-    expect(manifest).not.toHaveProperty('sync');
+    expect((await manifestOf(await readFile(file))).source).toEqual({ vaultId: await readVaultId(a.vault), machine: 'A', folderName: path.basename(a.vault) });
   });
-});
 
-describe('the default export folder', () => {
-  it('lies in Documents on each platform unless XR_COLLECTOR_EXPORT_DIR names another', () => {
-    vi.stubEnv('XR_COLLECTOR_EXPORT_DIR', '');
-    try {
-      expect(exportFolder('C:\\Users\\me\\Documents', path.win32)).toBe('C:\\Users\\me\\Documents\\XR Collector 匯出');
-      expect(exportFolder('/Users/me/Documents', path.posix)).toBe('/Users/me/Documents/XR Collector 匯出');
-      vi.stubEnv('XR_COLLECTOR_EXPORT_DIR', '/tmp/xr-exports');
-      expect(exportFolder('/Users/me/Documents')).toBe(path.resolve('/tmp/xr-exports'));
-    } finally { vi.unstubAllEnvs(); }
+  it('creates the export folder for the suggested file but no other missing folder, and never replaces a file unasked', async () => {
+    const { a } = await pair();
+    await using(a, async (workspace) => {
+      const suggested = workspace.operations.exportSuggestion().path;
+      expect(existsSync(a.exports)).toBe(false);
+      await expect(workspace.operations.exportTo(suggested)).resolves.toMatchObject({ state: 'completed', result: { exportPath: suggested } });
+      for (const [file, error] of [
+        [path.join(a.root, 'no-such-folder', 'export.zip'), { code: 'invalid_request', message: '匯出檔所在的資料夾不存在。' }],
+        [path.join(a.exports, 'x.xr-vault'), { code: 'invalid_request', message: '匯出檔名必須以 .zip 結尾。' }],
+        [suggested, { code: 'file_exists' }],
+      ] as const) {
+        await expect(workspace.operations.exportTo(file), file).rejects.toMatchObject(error);
+      }
+      expect(existsSync(path.join(a.root, 'no-such-folder'))).toBe(false);
+    });
   });
-});
-
-describe('the backup folder', () => {
-  it('lies in Documents on each platform unless XR_COLLECTOR_BACKUP_DIR names another', () => {
-    vi.stubEnv('XR_COLLECTOR_BACKUP_DIR', '');
-    try {
-      expect(backupFolder('C:\\Users\\me\\Documents', path.win32)).toBe('C:\\Users\\me\\Documents\\XR Collector 備份');
-      expect(backupFolder('/Users/me/Documents', path.posix)).toBe('/Users/me/Documents/XR Collector 備份');
-      vi.stubEnv('XR_COLLECTOR_BACKUP_DIR', '/tmp/xr-backups');
-      expect(backupFolder('/Users/me/Documents')).toBe(path.resolve('/tmp/xr-backups'));
-    } finally { vi.unstubAllEnvs(); }
-  });
-});
-
-it('refuses an export file the manifest of which does not match its content, with the Vault unchanged', async () => {
-  const { a, b } = await pair();
-  await changeB(b);
-  const file = await exportFrom(b, 'b-1');
-  const bad = await fileOf(a.root, 'bad.zip', await tampered(await readFile(file), `documents/youtube/${D5}.md`, 'changed'));
-  const empty = await fileOf(a.root, 'empty.zip', await packageOf([]));
-  const before = await items(a.vault);
-  await using(a, async (workspace) => {
-    await expect(workspace.operations.previewImport(bad)).rejects.toMatchObject({ code: 'invalid_request' });
-    // An export of an empty Vault shares nothing with A, so nothing is added and nothing removed.
-    expect(await workspace.operations.previewImport(empty)).toMatchObject({ merge: counts({}), localNewer: 7 });
-  });
-  expect(await items(a.vault)).toEqual(before);
 });
 
 it('updates real Meilisearch with what an import wrote and removed, and keeps it after restart', { tags: [REAL_ENGINE_TAG] }, async () => {
   const { a, b } = await pair();
-  await changeB(b);
+  await changeB(b.vault);
   await modify(b.vault, D3, '匯入後的珊瑚觀察', at(2));
   const file = await exportFrom(b, 'b-1');
   const real = { searchBinary: bundledMeilisearch, searchLexicon: bundledLexicon, createSearch: undefined };

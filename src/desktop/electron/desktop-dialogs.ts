@@ -73,11 +73,16 @@ export function registerDesktopDialogs(options: DesktopDialogOptions): void {
     const vaultPath = options.vaultStatus()?.vaultPath;
     if (vaultPath) options.showItemInFolder(vaultPath);
   });
-  ipc.handle('xrCollector:desktop:revealExport', () => {
-    const status = options.vaultStatus();
-    const exportPath = status?.operation === 'export' && status.state === 'completed' ? status.result?.exportPath : undefined;
-    if (exportPath) options.showItemInFolder(exportPath);
+  ipc.handle('xrCollector:desktop:revealTransferFile', () => {
+    const file = transferFile(options.vaultStatus());
+    if (file) options.showItemInFolder(file);
   });
+}
+
+function transferFile(status: TransferStatus | undefined): string | undefined {
+  if (status?.operation === 'export' && status.state === 'completed') return status.result?.exportPath;
+  if (status?.operation === 'import' && status.state === 'error' && status.result?.partiallyApplied) return status.result.backupPath;
+  return undefined;
 }
 
 // The Windows folder dialog asks whether to create its default path when that folder does not exist, as soon as it opens.

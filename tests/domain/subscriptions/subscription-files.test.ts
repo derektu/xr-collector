@@ -37,9 +37,9 @@ function row(id: string, enabled = true) {
   };
 }
 
-/** A subscription row as it was stored while discovery kept a cursor. */
-function rowWithCursor(id: string, enabled = true) {
-  return { ...row(id, enabled), cursor: { videoId: 'cursor00001', publishedAt: null, recentIds: ['cursor00001'] }, backlog: false };
+/** A subscription row with fields the store does not know. */
+function rowWithUnknownFields(id: string, enabled = true) {
+  return { ...row(id, enabled), extraObject: { name: 'extra', items: ['one'] }, extraFlag: false };
 }
 
 describe('subscription file versions', () => {
@@ -99,14 +99,14 @@ describe('JsonSubscriptionStore', () => {
     expect((await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).map((channel) => channel.id)).toEqual(['UCb']);
   });
 
-  it('keeps fields a subscription no longer uses, such as a discovery cursor, through reads and saves (R-10)', async () => {
+  it('keeps fields the store does not know through reads and saves (R-10)', async () => {
     const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
-    const root = await vault({ channels: { version: 3, channels: [{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }] } });
+    const root = await vault({ channels: { version: 3, channels: [{ ...rowWithUnknownFields('UCa'), settings }, { ...row('UCb'), settings }] } });
     const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
-    expect(await store.list()).toEqual([{ ...rowWithCursor('UCa'), settings }, { ...row('UCb'), settings }]);
+    expect(await store.list()).toEqual([{ ...rowWithUnknownFields('UCa'), settings }, { ...row('UCb'), settings }]);
     await store.update('UCa', { enabled: false });
     const saved = await read(root, 'youtube-channels.json') as { channels: Array<Record<string, unknown>> };
-    expect(saved.channels[0]).toMatchObject({ enabled: false, cursor: rowWithCursor('UCa').cursor, backlog: false });
+    expect(saved.channels[0]).toMatchObject({ enabled: false, extraObject: rowWithUnknownFields('UCa').extraObject, extraFlag: false });
   });
 
   it('reads and writes failed items with a subscription, as collection progress that is not a change of it (N69-T1)', async () => {

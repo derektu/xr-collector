@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
@@ -13,25 +13,16 @@ import { DELETIONS_FILE, deletionsFromJson, deletionsToJson } from './deleted-do
 import { documentId } from '../../shared/documents/document-id.js';
 import { documentKeyFromPath, documentPath, documentPathFromId } from './document-paths.js';
 import { MarkdownVault, parseDocument } from './markdown-vault.js';
-import { VAULT_MARKER } from './vault-directory.js';
+import { FORMAT_VERSION } from './vault-directory.js';
 import { VaultFileWriter } from './vault-files.js';
 import type { FileSource } from './vault-merge.js';
 import { errorCode } from './errno.js';
 
 export const PACKAGE_FORMAT = 'xr-collector-package';
 export const MANIFEST = 'manifest.json';
-export const FILE_LIMIT = 64 * 1024 * 1024;
-export const MANIFEST_LIMIT = 64 * 1024 * 1024;
-const ENTRY_LIMIT = MANIFEST_LIMIT / 64;
-const SYSTEM_FILES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
-export const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
 function settingsFiles(sources: SourceRegistry): string[] {
   return [...sources.subscriptionDefinitions.map((definition) => definition.storage!.subscriptionsFile), sources.schedule.file, DELETIONS_FILE];
-}
-
-export function packageFormatVersion(sources: SourceRegistry): number {
-  return Math.max(1, ...sources.definitions.map((definition) => definition.packageFormatVersion));
 }
 
 export interface PackageSummary { documents: number; subscriptions: number; deletions: number }
@@ -51,8 +42,6 @@ function invalid(message: string): never {
   throw new CollectorError('invalid_request', message);
 }
 
-const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
-
 export function machineName(): string {
   const configured = process.env.XR_COLLECTOR_MACHINE_NAME?.trim();
   return configured || hostname().replace(/\.local$/iu, '') || '這台電腦';
@@ -66,7 +55,6 @@ export type RegisteredFile = { path: string; absolute: string } | { path: string
 
 export interface RegisteredFiles {
   files: RegisteredFile[];
-  unregisteredFiles: number;
   summary: PackageSummary;
 }
 
@@ -87,19 +75,17 @@ export async function registeredFiles(root: string, sources: SourceRegistry): Pr
     if (!absolute) continue;
     if (file === DELETIONS_FILE) {
       const stored = deletionsFromJson(JSON.parse(await readFile(absolute, 'utf8')), sources);
-      files.push(stored.length === portable.records.length ? { path: file, absolute }
-        : { path: file, bytes: Buffer.from(`${JSON.stringify(deletionsToJson(portable.records), null, 2)}\n`) });
+      files.push(stored.length === portable.length ? { path: file, absolute }
+        : { path: file, bytes: Buffer.from(`${JSON.stringify(deletionsToJson(portable), null, 2)}\n`) });
     } else {
       const exchange = subscriptionFiles.get(file);
       if (exchange) subscriptions = (subscriptions ?? 0) + exchange.read(JSON.parse(await readFile(absolute, 'utf8'))).subscriptions.length;
       files.push({ path: file, absolute });
     }
   }
-  const owned = new Set([...files.map((file) => file.path), ...[...portable.hidden].flatMap((id) => documentPathFromId(sources, id) ?? [])]);
   return {
     files,
-    unregisteredFiles: await countOthers(root, '', owned),
-    summary: { documents: documents.length, subscriptions: subscriptions ?? 0, deletions: portable.records.length },
+    summary: { documents: documents.length, subscriptions: subscriptions ?? 0, deletions: portable.length },
   };
 }
 
@@ -114,41 +100,19 @@ async function regularFile(root: string, relative: string): Promise<string | nul
   return absolute;
 }
 
-async function countOthers(root: string, relative: string, owned: ReadonlySet<string>): Promise<number> {
-  let entries;
-  try {
-    entries = await readdir(path.join(root, relative), { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-  let count = 0;
-  for (const entry of entries) {
-    if (SYSTEM_FILES.has(entry.name)) continue;
-    const child = relative ? `${relative}/${entry.name}` : entry.name;
-    if (!relative && entry.isDirectory() && entry.name.startsWith(IMPORT_STAGING_PREFIX)) continue;
-    if (entry.isDirectory()) count += await countOthers(root, child, owned);
-    else if (!owned.has(child) && child !== VAULT_MARKER) count += 1;
-  }
-  return count;
-}
-
 class Measure extends Transform {
   readonly hash = createHash('sha256');
   size = 0;
-  constructor(private readonly limit: number, private readonly onLimit: () => Error) { super(); }
   override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
     this.size += chunk.length;
-    if (this.size > this.limit) { done(this.onLimit()); return; }
     this.hash.update(chunk);
     done(null, chunk);
   }
 }
 
-export interface WrittenPackage { unregisteredFiles: number; summary: PackageSummary }
-
 export async function writePackage(
   root: string, sources: SourceRegistry, file: string, info: { createdBy?: string; exportedAt?: Date; source?: PackageSource } = {},
-): Promise<WrittenPackage> {
+): Promise<void> {
   const registered = await registeredFiles(root, sources);
   const handle = await open(file, 'wx', 0o600);
   const zip = new yazl.ZipFile();
@@ -158,7 +122,7 @@ export async function writePackage(
   const rows: ManifestFile[] = [];
   for (const entry of registered.files) {
     zip.addReadStreamLazy(entry.path, { mtime }, (done) => {
-      const measure = new Measure(FILE_LIMIT, () => new CollectorError('invalid_request', `知識庫檔案超過 64 MiB，無法匯出：${entry.path}`));
+      const measure = new Measure();
       measure.on('end', () => rows.push({ path: entry.path, size: measure.size, sha256: measure.hash.digest('hex') }));
       const source = 'bytes' in entry ? Readable.from([entry.bytes]) : createReadStream(entry.absolute);
       source.on('error', (error: Error) => measure.destroy(
@@ -171,7 +135,7 @@ export async function writePackage(
   }
   zip.addReadStreamLazy(MANIFEST, { mtime }, (done) => {
     const manifest: PackageManifest = {
-      format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(sources),
+      format: PACKAGE_FORMAT, formatVersion: FORMAT_VERSION,
       ...(info.exportedAt ? { exportedAt: info.exportedAt.toISOString() } : {}), ...(info.createdBy ? { createdBy: info.createdBy } : {}),
       ...(info.source ? { source: info.source } : {}),
       summary: registered.summary, files: rows,
@@ -186,12 +150,10 @@ export async function writePackage(
     await rm(file, { force: true }).catch(() => undefined);
     throw error;
   }
-  return { unregisteredFiles: registered.unregisteredFiles, summary: registered.summary };
 }
 
 export interface PackageReader {
   manifest: PackageManifest;
-  identity: string;
   has(file: string): boolean;
   paths(): string[];
   read(file: string): Promise<Buffer>;
@@ -207,16 +169,11 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
     invalid('這不是 XR Collector 的匯出檔（無法以 zip 讀取）。');
   }
   try {
-    if (zip.entryCount > ENTRY_LIMIT + 1) invalid('匯出檔的項目數量超出可處理的範圍。');
     const entries = new Map<string, yauzl.Entry>();
-    const folded = new Set<string>();
     try {
       for await (const entry of zip.eachEntry()) {
         const name = entry.fileName;
         if (name.endsWith('/') || entry.isEncrypted() || !entry.canDecodeFileData()) invalid('匯出檔含有無法處理的項目。');
-        const key = name.toLocaleLowerCase('en-US');
-        if (folded.has(key)) invalid('匯出檔含有重複或只差大小寫的路徑。');
-        folded.add(key);
         entries.set(name, entry);
       }
     } catch (error) {
@@ -225,9 +182,7 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
     }
     const manifestEntry = entries.get(MANIFEST);
     if (!manifestEntry) invalid('這不是 XR Collector 的匯出檔（缺少 manifest.json）。');
-    if (manifestEntry.uncompressedSize > MANIFEST_LIMIT) invalid('匯出檔的 manifest.json 超過 64 MiB。');
-    const manifestBytes = await readEntry(zip, manifestEntry, MANIFEST_LIMIT);
-    const manifest = parseManifest(manifestBytes, sources);
+    const manifest = parseManifest(await readEntry(zip, manifestEntry), sources);
     const rows = new Map<string, { row: ManifestFile; entry: yauzl.Entry }>();
     for (const row of manifest.files) {
       const entry = entries.get(row.path);
@@ -243,7 +198,7 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
       if (!listed) throw new Error(`Not in the package: ${name}`);
       const { row, entry } = listed;
       const stream = await zip.openReadStreamPromise(entry);
-      const measure = new Measure(row.size, () => new CollectorError('invalid_request', `匯出檔的內容與 manifest 不一致：${name}`));
+      const measure = new Measure();
       return { stream, measure, row };
     };
     const verify = (measure: Measure, row: ManifestFile) => {
@@ -251,7 +206,6 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
     };
     return {
       manifest,
-      identity: digest(manifestBytes),
       has: (name) => rows.has(name),
       paths: () => [...rows.keys()],
       async read(name) {
@@ -285,17 +239,11 @@ export async function openPackage(file: string, sources: SourceRegistry): Promis
   }
 }
 
-async function readEntry(zip: yauzl.ZipFile, entry: yauzl.Entry, limit: number): Promise<Buffer> {
+async function readEntry(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  let size = 0;
   try {
-    for await (const chunk of await zip.openReadStreamPromise(entry) as AsyncIterable<Buffer>) {
-      size += chunk.length;
-      if (size > limit) invalid('匯出檔的 manifest.json 超過 64 MiB。');
-      chunks.push(chunk);
-    }
-  } catch (error) {
-    if (error instanceof CollectorError) throw error;
+    for await (const chunk of await zip.openReadStreamPromise(entry) as AsyncIterable<Buffer>) chunks.push(chunk);
+  } catch {
     invalid('匯出檔已損壞。');
   }
   return Buffer.concat(chunks);
@@ -310,19 +258,15 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
   try { value = JSON.parse(bytes.toString('utf8')) as Partial<PackageManifest>; } catch { invalid('匯出檔的 manifest.json 格式無效。'); }
   if (!value || value.format !== PACKAGE_FORMAT) invalid('這不是 XR Collector 的匯出檔。');
   const formatVersion = value.formatVersion;
-  if (!isSafeInteger(formatVersion) || formatVersion < 1 || formatVersion > packageFormatVersion(sources)) invalid('不支援這個匯出檔的格式版本。');
+  if (!isSafeInteger(formatVersion) || formatVersion < 1 || formatVersion > FORMAT_VERSION) invalid('不支援這個匯出檔的格式版本。');
   if (!Array.isArray(value.files)) invalid('匯出檔的 manifest.json 格式無效。');
-  const seen = new Set<string>();
   for (const row of value.files as unknown[]) {
     const file = row as Partial<ManifestFile> | null;
     if (!file || typeof file.path !== 'string' || !packagePath(sources, file.path)) {
       invalid(`匯出檔含有不支援的路徑：${typeof file?.path === 'string' ? file.path : '(無效)'}`);
     }
-    if (!isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT) invalid(`匯出檔中的檔案大小無效或超過 64 MiB：${file.path}`);
+    if (!isSafeInteger(file.size) || file.size < 0) invalid(`匯出檔中的檔案大小無效：${file.path}`);
     if (typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(file.sha256)) invalid(`匯出檔中的校驗碼無效：${file.path}`);
-    const key = file.path.toLocaleLowerCase('en-US');
-    if (seen.has(key)) invalid('匯出檔含有重複或只差大小寫的路徑。');
-    seen.add(key);
   }
   const summary = value.summary;
   const source = value.source as Partial<PackageSource> | undefined;
@@ -338,10 +282,6 @@ function parseManifest(bytes: Buffer, sources: SourceRegistry): PackageManifest 
       ? { summary: { documents: summary.documents, subscriptions: summary.subscriptions, deletions: summary.deletions } } : {}),
     files: (value.files as ManifestFile[]).map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })),
   };
-}
-
-export function unpackedBytes(reader: PackageReader): number {
-  return reader.manifest.files.reduce((sum, row) => sum + row.size, 0);
 }
 
 export async function checkPackageContent(reader: PackageReader, sources: SourceRegistry): Promise<void> {

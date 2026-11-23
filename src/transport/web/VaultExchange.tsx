@@ -62,33 +62,17 @@ export function Modal({ title, width, busy, onDismiss, children, testId }: {
   </dialog>;
 }
 
-export interface TransferProgress {
-  text: string;
-  waiting: boolean;
-}
-
-export function useTransferProgress(active: boolean): TransferProgress {
+export function useTransferProgress(active: boolean): string {
   const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: active });
-  return active && status && transferRunning(status) ? { text: progressText(status), waiting: status.state === 'waiting' } : { text: '', waiting: false };
+  return active && status && transferRunning(status) ? progressText(status) : '';
 }
 
 export function followTransfer(): Promise<TransferStatus> {
   return readUntil(changeHub, () => api.vaultTransferStatus(), (status) => !transferRunning(status), (change) => change.kind === 'vault');
 }
 
-export function Progress({ progress, fallback }: { progress: TransferProgress; fallback: string }) {
-  const [problem, setProblem] = useState<string | null>(null);
-  async function cancel(): Promise<void> {
-    setProblem(null);
-    try { await api.cancelVaultWait(); } catch (error) { setProblem(errorText(error, '無法取消。')); }
-  }
-  return <>
-    <div className="transfer-progress-line">
-      <p className="transfer-progress" role="status" data-testid="transfer-progress"><span className="spinner" aria-hidden="true" />{progress.text || fallback}</p>
-      {progress.waiting ? <button type="button" className="button small" onClick={() => void cancel()} data-testid="transfer-cancel">取消</button> : null}
-    </div>
-    {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
-  </>;
+export function Progress({ progress, fallback }: { progress: string; fallback: string }) {
+  return <p className="transfer-progress" role="status" data-testid="transfer-progress"><span className="spinner" aria-hidden="true" />{progress || fallback}</p>;
 }
 
 export function PathField({ label, value, onChange, testId, hint }: {
@@ -125,7 +109,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwriteConfir
 
   async function reveal(): Promise<void> {
     setFailure(null);
-    try { await desktop?.revealExport(); } catch (error) { setFailure(errorText(error, '無法開啟資料夾。')); }
+    try { await desktop?.revealTransferFile(); } catch (error) { setFailure(errorText(error, '無法開啟資料夾。')); }
   }
 
   async function run(path: string, overwrite: boolean): Promise<void> {
@@ -176,20 +160,25 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwriteConfir
   </Modal>;
 }
 
-type FailedApply = { outcome: Exclude<ImportApplyOutcome, 'imported'>; message: string };
+type FailedApply = Exclude<ImportApplyOutcome, { kind: 'imported' }> | { kind: 'unfollowed'; reason: string };
 
-async function applyAndFollow(id: string, how: ImportMode): Promise<{ outcome: 'imported'; status: TransferStatus } | FailedApply> {
+async function applyAndFollow(id: string, how: ImportMode): Promise<{ kind: 'imported'; status: TransferStatus } | FailedApply> {
   try {
     await api.applyImport(id, how);
-    const status = await followTransfer();
-    const outcome = importApplyOutcome(status);
-    return outcome === 'imported' ? { outcome, status } : { outcome, message: status.message };
   } catch (error) {
-    return { outcome: 'discardComparison', message: errorText(error, '匯入失敗。') };
+    return { kind: 'unchanged', reason: errorText(error, '') };
   }
+  let status: TransferStatus;
+  try {
+    status = await followTransfer();
+  } catch (error) {
+    return { kind: 'unfollowed', reason: errorText(error, '無法讀取匯入進度。') };
+  }
+  const outcome = importApplyOutcome(status);
+  return outcome.kind === 'imported' ? { kind: 'imported', status } : outcome;
 }
 
-type ImportPhase = 'input' | 'comparing' | 'preview' | 'replace' | 'applying' | 'done';
+type ImportPhase = 'input' | 'comparing' | 'preview' | 'replace' | 'applying' | 'done' | 'partial';
 
 function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (imported: boolean) => void }) {
   const [source, setSource] = useSuggestedPath(file, (suggestion) => `${suggestion.folder}/`);
@@ -198,9 +187,11 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const [mode, setMode] = useState<ImportMode>('merge');
   const [result, setResult] = useState<TransferStatus | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [backupPath, setBackupPath] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const progress = useTransferProgress(phase === 'comparing' || phase === 'applying');
   const started = useRef(false);
+  const desktop = window.xrCollectorDesktop;
 
   async function compare(path: string): Promise<void> {
     setPhase('comparing');
@@ -220,10 +211,15 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   }, [file]);
 
   function showFailedApply(failed: FailedApply): void {
-    setFailure(failed.message);
-    if (failed.outcome === 'keepComparison') { setPhase('preview'); return; }
     setPreview(null);
+    if (failed.kind === 'partial') { setBackupPath(failed.backupPath); setPhase('partial'); return; }
+    setFailure(failed.kind === 'unchanged' ? `匯入失敗，知識庫未變更。${failed.reason}` : failed.reason);
     setPhase('input');
+  }
+
+  async function reveal(): Promise<void> {
+    setFailure(null);
+    try { await desktop?.revealTransferFile(); } catch (error) { setFailure(errorText(error, '無法開啟資料夾。')); }
   }
 
   async function apply(how: ImportMode): Promise<void> {
@@ -231,7 +227,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     setPhase('applying');
     setFailure(null);
     const applied = await applyAndFollow(preview.id, how);
-    if (applied.outcome !== 'imported') { showFailedApply(applied); return; }
+    if (applied.kind !== 'imported') { showFailedApply(applied); return; }
     setResult(applied.status);
     setPhase('done');
   }
@@ -242,7 +238,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     setFailure(null);
     const applied = await applyAndFollow(preview.id, 'merge');
     setRecording(false);
-    if (applied.outcome !== 'imported') { showFailedApply(applied); return; }
+    if (applied.kind !== 'imported') { showFailedApply(applied); return; }
     onClose(true);
   }
 
@@ -261,7 +257,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const done = result?.result;
 
   return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying' || recording}
-    onDismiss={() => { if (phase === 'done') onClose(true); else void cancel(); }} testId="import-dialog">
+    onDismiss={() => { if (phase === 'done') onClose(true); else if (phase === 'partial') onClose(false); else void cancel(); }} testId="import-dialog">
     {phase === 'input' && source.loaded ? <>
       <PathField label="匯出檔" value={source.path} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
     </> : null}
@@ -294,8 +290,10 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     {phase === 'done' && result && done ? <div data-testid="import-done">
       <p className="transfer-done" role="status">匯入完成。</p>
       {done.imported ? <p className="merge-counts">{changeText(done.imported)}</p> : null}
-      {done.searchRebuildNeeded ? <p className="add-problem" role="alert" data-testid="import-search-stale">
-        搜尋索引需要重建：到設定按「重建索引」。</p> : null}
+    </div> : null}
+    {phase === 'partial' && backupPath ? <div data-testid="import-partial">
+      <p className="add-problem" role="alert">匯入未完成，部分內容已更新。用匯入前的備份以「完全取代」匯入即可還原。</p>
+      <code className="setting-path" data-testid="import-backup-path">{backupPath}</code>
     </div> : null}
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
     <div className="dialog-actions">
@@ -320,6 +318,10 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
         <button type="button" className="button danger" onClick={() => void apply('replace')} data-testid="import-replace-confirm-button">取代</button>
       </> : null}
       {phase === 'done' ? <button type="button" className="button primary" onClick={() => onClose(true)} data-testid="transfer-close">完成</button> : null}
+      {phase === 'partial' ? <>
+        {desktop ? <button type="button" className="button" onClick={() => void reveal()} data-testid="import-backup-reveal">顯示位置</button> : null}
+        <button type="button" className="button primary" onClick={() => onClose(false)} data-testid="transfer-close">完成</button>
+      </> : null}
     </div>
   </Modal>;
 }

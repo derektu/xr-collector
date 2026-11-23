@@ -1,6 +1,6 @@
 // The native dialogs the page asks for over IPC: a folder picker starts at the nearest existing
 // folder, the export dialog adds `.zip` and then asks before replacing, a canceled dialog returns
-// null, and revealing shows only the folder or export file the runtime reports.
+// null, and revealing shows only the folder, export file or backup the runtime reports.
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,7 +49,7 @@ describe('desktop dialogs', () => {
   it('registers every dialog channel the preload exposes', () => {
     expect([...dialogs().handlers.keys()].sort()).toEqual([
       'xrCollector:desktop:chooseExportFile', 'xrCollector:desktop:chooseImportFile', 'xrCollector:desktop:chooseVault',
-      'xrCollector:desktop:chooseVaultLocation', 'xrCollector:desktop:revealExport', 'xrCollector:desktop:revealVault',
+      'xrCollector:desktop:chooseVaultLocation', 'xrCollector:desktop:revealTransferFile', 'xrCollector:desktop:revealVault',
     ]);
   });
 
@@ -74,18 +74,26 @@ describe('desktop dialogs', () => {
     expect(await dialogs().invoke('xrCollector:desktop:chooseImportFile')).toBeNull();
   });
 
-  it('reveals only the Vault and the finished export the runtime reports', async () => {
+  it('reveals only the Vault, the finished export and the backup of a partial import the runtime reports', async () => {
     const exported = { vaultPath: '/vault', operation: 'export', state: 'completed', result: { exportPath: '/exports/a.zip' } } as unknown as TransferStatus;
     const subject = dialogs({ status: exported });
     await subject.invoke('xrCollector:desktop:revealVault', '/somewhere/else');
-    await subject.invoke('xrCollector:desktop:revealExport', '/somewhere/else.zip');
+    await subject.invoke('xrCollector:desktop:revealTransferFile', '/somewhere/else.zip');
     expect(subject.revealed).toEqual(['/vault', '/exports/a.zip']);
 
     const running = dialogs({ status: { ...exported, state: 'exporting' } as TransferStatus });
-    await running.invoke('xrCollector:desktop:revealExport');
+    await running.invoke('xrCollector:desktop:revealTransferFile');
     expect(running.revealed).toEqual([]);
     const closed = dialogs();
     await closed.invoke('xrCollector:desktop:revealVault');
     expect(closed.revealed).toEqual([]);
+
+    const imported = { vaultPath: '/vault', operation: 'import', state: 'error', result: { backupPath: '/backups/b.zip' } } as unknown as TransferStatus;
+    const unchanged = dialogs({ status: imported });
+    await unchanged.invoke('xrCollector:desktop:revealTransferFile');
+    expect(unchanged.revealed).toEqual([]);
+    const partial = dialogs({ status: { ...imported, result: { backupPath: '/backups/b.zip', partiallyApplied: true } } as TransferStatus });
+    await partial.invoke('xrCollector:desktop:revealTransferFile');
+    expect(partial.revealed).toEqual(['/backups/b.zip']);
   });
 });

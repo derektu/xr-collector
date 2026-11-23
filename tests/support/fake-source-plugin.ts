@@ -69,8 +69,8 @@ function isFakeSettings(value: unknown): value is FakeSettings {
     && ['intervalMinutes', 'windowDays', 'maxItems'].every((key) => Number.isInteger(settings[key]) && (settings[key] as number) > 0);
 }
 
-/** The server definition of a fake type; `group` names its pacing group, `formats` the Vault and package format versions that introduce it (1 by default). */
-export function fakeDefinition(type: string, group: string, formats: { vault?: number; package?: number } = {}): SourceDefinition<FakeSettings> {
+/** The server definition of a fake type; `group` names its pacing group. */
+export function fakeDefinition(type: string, group: string): SourceDefinition<FakeSettings> {
   const host = `${type}.example`;
   const itemUrl = (key: string) => `https://${host}/item/${key}`;
   const parse = (input: string): URL | null => {
@@ -130,8 +130,6 @@ export function fakeDefinition(type: string, group: string, formats: { vault?: n
       return { key, url: itemUrl(key), title: null };
     },
     classifyFailure: (error) => FAILURES[error.code] ?? 'skip',
-    vaultFormatVersion: formats.vault ?? 1,
-    packageFormatVersion: formats.package ?? 1,
     errorStatus: { feed_gone: 410 },
     pacing: { group, label: `Fake ${group}`, waitRangeMs: { min: 0, max: 0 } },
     storage: {

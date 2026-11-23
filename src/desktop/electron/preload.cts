@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('xrCollectorDesktop', {
   chooseExportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseExportFile'),
   chooseImportFile: () => ipcRenderer.invoke('xrCollector:desktop:chooseImportFile'),
   revealVault: () => ipcRenderer.invoke('xrCollector:desktop:revealVault'),
-  revealExport: () => ipcRenderer.invoke('xrCollector:desktop:revealExport'),
+  revealTransferFile: () => ipcRenderer.invoke('xrCollector:desktop:revealTransferFile'),
   platform: (process.platform === 'darwin' || process.platform === 'win32' ? process.platform : 'other') satisfies DesktopPlatform,
   navigationReady: () => ipcRenderer.send('xrCollector:navigation:ready'),
   onNavigate: (listener: (target: unknown) => void) => {

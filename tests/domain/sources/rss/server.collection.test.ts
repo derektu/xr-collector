@@ -10,7 +10,6 @@ import { createRssPlugin, FEED_CACHE_MS, rssDefinition, rssPlugin, subscriptionI
 import type { PluginRuntime } from '../../../../src/shared/sources/source-contract.js';
 import type { SourcePlugin } from '../../../../src/shared/sources/source-contract.js';
 import { MarkdownVault } from '../../../../src/domain/vault/markdown-vault.js';
-import { VAULT_MARKER } from '../../../../src/domain/vault/vault-directory.js';
 import { importNewVault } from '../../../../src/domain/vault/vault-import.js';
 import { openPackage } from '../../../../src/domain/vault/vault-package.js';
 import { VaultSelection } from '../../../../src/domain/vault/vault-selection.js';
@@ -95,7 +94,6 @@ describe('subscribing to a feed through the core (R11-T5)', () => {
     });
     expect(byTitle.get('【合成】只有摘要')!.front.collector.content_extent).toBe('summary');
     expect(byTitle.get('【合成】缺 guid')!.front.resource).toBe(feeds.url('/posts/1'));
-    expect(JSON.parse(await readFile(path.join(a.vault, VAULT_MARKER), 'utf8')).formatVersion).toBe(2);
 
     const read = await workspace.collector.read(byTitle.get('【合成】只有摘要')!.front.collector.id);
     expect(read).toMatchObject({ sourceType: 'rss', type: 'Article', contentExtent: 'summary', publisher: { id, name: '【合成】部落格' } });
@@ -251,7 +249,7 @@ describe('a site that limits requests', () => {
 });
 
 describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
-  it('exports at the program\'s package version with or without RSS, and imports, merges and replaces both types', async () => {
+  it('exports, imports, merges and replaces a Vault holding both types', async () => {
     feeds.set('/feed.xml', { body: rss2('【合成】部落格', BLOG.slice(0, 2)) });
     const root = await temp();
     const a = await machine('A', root);
@@ -259,26 +257,19 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     const c = await machine('C', root);
 
     const youtubeOnly = await workspaceOf(c);
-    await mkdir(c.exports, { recursive: true });
-    const plain = (await youtubeOnly.operations.exportTo(path.join(c.exports, 'youtube.zip'))).result!.exportPath!;
-    const plainReader = await openPackage(plain, PRODUCT_SOURCES);
-    expect(plainReader.manifest.formatVersion).toBe(2);
-    plainReader.close();
 
     const workspace = await workspaceOf(a);
     await subscribe(workspace, feeds.url('/feed.xml'));
     await mkdir(a.exports, { recursive: true });
     const file = (await workspace.operations.exportTo(path.join(a.exports, 'both.zip'))).result!.exportPath!;
     const reader = await openPackage(file, PRODUCT_SOURCES);
-    expect(reader.manifest.formatVersion).toBe(2);
     expect(reader.manifest.files.map((entry: { path: string }) => entry.path)).toEqual(expect.arrayContaining(['settings/rss-subscriptions.json', 'settings/youtube-channels.json']));
     reader.close();
     const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault, PRODUCT_SOURCES)).list()).map((document) => document.id).sort();
 
-    const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     expect(await ids(created)).toEqual(await ids(a.vault));
-    expect(JSON.parse(await readFile(path.join(created, VAULT_MARKER), 'utf8')).formatVersion).toBe(2);
 
     const { preview } = await importFile(youtubeOnly, file);
     expect(preview).toMatchObject({ merge: { documents: { added: 2 }, subscriptions: { added: 1 } } });

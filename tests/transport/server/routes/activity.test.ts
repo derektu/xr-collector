@@ -12,7 +12,7 @@ import { JobManager } from '../../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../../src/app/runtime/job-records.js';
 import { startCollectorServer } from '../../../../src/transport/server/collector-server.js';
 import { UnavailableTranscriptSearch } from '../../../../src/domain/search/managed-transcript-search.js';
-import { createHttpApp, type ActivityAccess, type HttpAppOptions } from '../../../../src/transport/server/app.js';
+import { createHttpApp, type ActivityAccess } from '../../../../src/transport/server/app.js';
 import type { CapturedTranscript } from '../../../../src/domain/sources/youtube/adapter.js';
 import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../../support/youtube-documents.js';
@@ -151,21 +151,8 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     expect(forJob.entries).toBeUndefined();
   });
 
-  it('stays readable while an import holds the Vault, and before a Vault is chosen', async () => {
+  it('stays readable before a Vault is chosen', async () => {
     const { collector, jobs, activity } = services();
-    const transfer = {
-      enter: (access: string) => {
-        if (access === 'vault-read') throw new CollectorError('vault_busy', '正在合併或復原資料，請稍後再讀取。');
-        return () => undefined;
-      },
-    } as unknown as HttpAppOptions['transfer'];
-    const merging = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, ...(transfer ? { transfer } : {}) });
-    cleanups.push(() => merging.close());
-    expect((await merging.inject({ method: 'GET', url: '/api/documents' })).statusCode).toBe(409);
-    for (const url of ['/api/activity', '/api/jobs', '/api/jobs/summary?since=2026-10-15T00:00:00%2B08:00']) {
-      expect((await merging.inject({ method: 'GET', url })).statusCode, url).toBe(200);
-    }
-
     const notReady = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, notReady: () => '尚未設定 Vault。' });
     cleanups.push(() => notReady.close());
     expect((await notReady.inject({ method: 'GET', url: '/api/documents' })).statusCode).toBe(503);

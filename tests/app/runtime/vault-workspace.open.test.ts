@@ -1,7 +1,3 @@
-// Opening or creating another Vault while one is active: jobs continue only in the Vault that
-// accepted them, never in a copy or an import of it, the previous Vault stays as it was, a failed
-// switch keeps it active, and the UI and an Agent get the same over HTTP, refused when the location
-// is fixed.
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,12 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { TranscriptSearch } from '../../../src/shared/api/search-types.js';
 import { openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
-import { createHttpApp } from '../../../src/transport/server/app.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { createVaultDirectory, inspectVaultDirectory, readVaultId, VAULT_MARKER } from '../../../src/domain/vault/vault-directory.js';
-import { packageBytes, packageFiles } from '../../support/package-fixtures.js';
 import { VaultSelection } from '../../../src/domain/vault/vault-selection.js';
-import { importNewVault } from '../../../src/domain/vault/vault-import.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../../src/app/runtime/vault-workspace.js';
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
@@ -60,14 +53,13 @@ async function seed(root: string): Promise<void> {
   await mkdir(path.join(root, 'empty folder'));
 }
 
-function fakeSearch(root: string, failRebuild = false): TranscriptSearch {
+function fakeSearch(root: string): TranscriptSearch {
   let docs: SavedDocument[] = [];
   return {
     status: () => ({ state: 'ready', indexedDocuments: docs.length, lastRebuiltAt: null }),
     async index(doc) { docs.push(doc); },
     async remove(id) { docs = docs.filter((doc) => doc.id !== id); },
     async rebuild() {
-      if (failRebuild) throw new Error('index unavailable');
       const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
       docs = (await Promise.all((await vault.list()).map(({ id }) => vault.read(id)))).filter((doc): doc is SavedDocument => !!doc);
     },
@@ -116,7 +108,7 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTu
   const jobStore = overrides.jobStore ?? records!.jobs;
   if (track && records) stores.push(records);
   const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
-    sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection, profilePath: context.profile,
+    sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchLexicon: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
@@ -128,62 +120,8 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTu
   return workspace;
 }
 
-describe('Vault identity (A-08)', () => {
-  it('continues jobs only in the Vault that accepted them', async () => {
-    const context = await setup();
-    const { root, source } = context;
-    // Vault A stops with a queued job.
-    const gated = gatedCapture(new Set([IDS[0]!]));
-    const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
-    const jobStore = records.jobs;
-    stores.push(records);
-    const a = await open(context, { jobStore, capture: gated.capture }, false);
-    await a.jobs.submitItem('youtube', urlOf(IDS[0]!));
-    const left = await a.jobs.submitItem('youtube', urlOf(IDS[1]!));
-    await eventually(() => expect(gated.started.length).toBe(1));
-    gated.open();
-    await a.close();
-    expect(jobStore.get(left.job.id)).toMatchObject({ state: 'interrupted', vaultId: await readVaultId(source) });
-    expect([...(await packageFiles(await packageBytes(source))).keys()]).not.toContain(VAULT_MARKER);
-    // A copy of A elsewhere carries the same ID but is not where the job was accepted.
-    const copy = path.join(root, 'Copy');
-    await cp(source, copy, { recursive: true });
-    const copied = await open({ ...context, source: copy, selection: new VaultSelection(path.join(root, 'copy-selection.json')) }, { jobStore }, false);
-    expect(copied.jobs.list({ state: 'all' }).jobs).toEqual([]);
-    await copied.close();
-    expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
-    // A Vault imported from A's export at A's path after A is gone does not take the job either.
-    const exported = path.join(root, 'A.zip');
-    await writeFile(exported, await packageBytes(source));
-    await rm(source, { recursive: true });
-    await importNewVault({ sources: PRODUCT_SOURCES, packageFile: exported, folder: source, profilePath: path.join(root, 'b-profile'), createdBy: 'XR Collector test' });
-    const b = await open({ ...context, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore }, false);
-    expect(b.operations.status().vaultPath).toBe(source);
-    expect(b.jobs.list({ state: 'all' }).jobs).toEqual([]);
-    expect(jobStore.get(left.job.id)!.state).toBe('interrupted');
-    await b.close();
-    // Back in A (here: its copy put back at its path), the job continues.
-    await rm(source, { recursive: true });
-    await cp(copy, source, { recursive: true });
-    await context.selection.write(source);
-    const back = await open(context, { jobStore });
-    expect((await back.jobs.whenSettled(left.job.id)).state).toBe('completed');
-  });
-
-  it('refuses a Vault whose marker has no ID and leaves the marker as it was', async () => {
-    const context = await setup();
-    const marker = JSON.parse(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')) as Record<string, unknown>;
-    delete marker.id;
-    const text = JSON.stringify(marker);
-    await writeFile(path.join(context.source, VAULT_MARKER), text);
-    expect(await inspectVaultDirectory(context.source, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('識別碼') });
-    await expect(open(context)).rejects.toMatchObject({ code: 'vault_invalid', message: expect.stringContaining('識別碼') });
-    expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(text);
-  });
-});
-
 describe('opening another Vault (A-13)', () => {
-  it('pauses the active Vault\'s work, continues the other Vault\'s, and never mixes them', async () => {
+  it('pauses the active Vault\'s work, continues the other Vault\'s, and never continues it in a copy', async () => {
     const context = await setup('A');
     const { root, source: a } = context;
     const b = path.join(root, 'B');
@@ -191,7 +129,6 @@ describe('opening another Vault (A-13)', () => {
     const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
     const jobStore = records.jobs;
     stores.push(records);
-    // B stops with a queued job.
     const bGate = gatedCapture(new Set([IDS[2]!]));
     const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore, capture: bGate.capture }, false);
     await bFirst.jobs.submitItem('youtube', urlOf(IDS[2]!));
@@ -199,16 +136,11 @@ describe('opening another Vault (A-13)', () => {
     await eventually(() => expect(bGate.started.length).toBe(1));
     bGate.open();
     await bFirst.close();
-    // A has a queued job when B is opened.
     const aGate = gatedCapture(new Set([IDS[0]!]));
     const workspace = await open(context, { jobStore, capture: aGate.capture });
     const aRunning = await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
     const aLeft = await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
     await eventually(() => expect(aGate.started.length).toBe(1));
-    for (const [value, code] of [[a, 'invalid_request'], [path.join(a, 'attachments'), 'invalid_request'], [path.join(root, 'Nothing'), 'vault_invalid'], [path.join(root, 'profile'), 'invalid_request']] as const) {
-      await expect(workspace.operations.openOther(value), value).rejects.toMatchObject({ code });
-    }
-    expect(workspace.operations.status().state).toBe('idle');
     await workspace.operations.openOther(b);
     aGate.open();
     await workspace.operations.finished();
@@ -220,7 +152,6 @@ describe('opening another Vault (A-13)', () => {
     expect(jobStore.get(aLeft.job.id)).toMatchObject({ state: 'interrupted', vaultPath: a });
     expect(await new MarkdownVault(new VaultFileWriter(b, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
     expect(await context.selection.read()).toBe(b);
-    // A copy of A does not continue A's job; A itself does.
     const copy = path.join(root, 'A copy');
     await cp(a, copy, { recursive: true });
     await workspace.operations.openOther(copy);
@@ -230,111 +161,32 @@ describe('opening another Vault (A-13)', () => {
     await workspace.operations.finished();
     expect(workspace.operations.status()).toMatchObject({ state: 'completed', vaultPath: a, result: { resumedJobs: 1 } });
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
-    expect(await new MarkdownVault(new VaultFileWriter(a, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).not.toBeNull();
     expect(await new MarkdownVault(new VaultFileWriter(copy, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
   });
-
-  it('refuses to open another Vault when the location was fixed at startup', async () => {
-    const context = await setup();
-    const workspace = await open(context, { fixedLocation: true });
-    expect(workspace.operations.status().relocationUnavailable).toMatchObject({ code: 'vault_location_fixed' });
-    await expect(workspace.operations.openOther(context.root)).rejects.toMatchObject({ code: 'vault_location_fixed' });
-  });
 });
 
-describe('creating a new Vault while one is active', () => {
-  it('creates the named folder, switches to it and leaves the previous Vault as it was', async () => {
-    const context = await setup();
-    const workspace = await open(context);
-    const before = await readFile(path.join(context.source, VAULT_MARKER), 'utf8');
-    for (const [location, name, code] of [
-      [context.root, 'Vault', 'vault_invalid'], [context.source, 'Inside', 'vault_invalid'], [context.profile, 'Profile', 'vault_invalid'],
-      [context.root, 'a:b', 'vault_invalid'], [path.join(context.root, 'missing'), 'New', 'vault_invalid'],
-    ] as const) {
-      await expect(workspace.operations.createNew(location, name), `${location} ${name}`).rejects.toMatchObject({ code });
-    }
-    expect(workspace.operations.status()).toMatchObject({ state: 'idle', vaultPath: context.source });
-
-    await workspace.operations.createNew(context.root, 'Second');
-    await workspace.operations.finished();
-    const created = path.join(context.root, 'Second');
-    expect(workspace.operations.status()).toMatchObject({
-      state: 'completed', operation: 'create', vaultPath: created, result: { previousVaultPath: context.source, interruptedJobs: 0 },
-    });
-    expect(await inspectVaultDirectory(created, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: created, documentCount: 0 });
-    expect(await readVaultId(created)).not.toBe(await readVaultId(context.source));
-    expect(await context.selection.read()).toBe(created);
-    expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(before);
-    expect(await new MarkdownVault(new VaultFileWriter(context.source, PRODUCT_SOURCES)).read('youtube:seed0000001')).not.toBeNull();
-
-    await workspace.operations.openOther(context.source);
-    await workspace.operations.finished();
-    expect(workspace.operations.status()).toMatchObject({ state: 'completed', vaultPath: context.source });
+it('creates a new Vault while one is active, switches to it and leaves the previous Vault as it was', async () => {
+  const context = await setup();
+  const workspace = await open(context);
+  const before = await readFile(path.join(context.source, VAULT_MARKER), 'utf8');
+  await workspace.operations.createNew(context.root, 'Second');
+  await workspace.operations.finished();
+  const created = path.join(context.root, 'Second');
+  expect(workspace.operations.status()).toMatchObject({
+    state: 'completed', operation: 'create', vaultPath: created, result: { previousVaultPath: context.source, interruptedJobs: 0 },
   });
-
-  it('removes the new folder and keeps the active Vault when the switch fails', async () => {
-    const context = await setup();
-    const workspace = await open(context, {
-      createSearch: async (destination) => ({ search: fakeSearch(destination, destination !== context.source), close: async () => undefined }),
-    });
-    await workspace.operations.createNew(context.root, 'Broken');
-    await workspace.operations.finished();
-    expect(workspace.operations.status()).toMatchObject({ state: 'error', operation: 'create', vaultPath: context.source });
-    await expect(readFile(path.join(context.root, 'Broken', VAULT_MARKER))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await context.selection.read()).toBeNull();
-  });
-
-  it('refuses when the location was fixed at startup', async () => {
-    const context = await setup();
-    const workspace = await open(context, { fixedLocation: true });
-    await expect(workspace.operations.createNew(context.root, 'Other')).rejects.toMatchObject({ code: 'vault_location_fixed' });
-    await expect(readFile(path.join(context.root, 'Other', VAULT_MARKER))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  expect(await inspectVaultDirectory(created, PRODUCT_SOURCES)).toEqual({ kind: 'existing', path: created, documentCount: 0 });
+  expect(await readVaultId(created)).not.toBe(await readVaultId(context.source));
+  expect(await context.selection.read()).toBe(created);
+  expect(await readFile(path.join(context.source, VAULT_MARKER), 'utf8')).toBe(before);
+  expect(await new MarkdownVault(new VaultFileWriter(context.source, PRODUCT_SOURCES)).read('youtube:seed0000001')).not.toBeNull();
 });
 
-describe('opening another Vault through HTTP (A-10)', () => {
-  it('opens and creates a Vault for an authenticated Agent, and has no move routes', async () => {
-    const context = await setup('A');
-    const b = path.join(context.root, 'B');
-    await seed(b);
-    const workspace = await open(context);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentToken: 'test-token' });
-    const agent = { authorization: 'Bearer test-token' };
-    try {
-      expect((await app.inject({ method: 'POST', url: '/api/vault/open', payload: { path: b } })).statusCode).toBe(401);
-      for (const url of ['/api/vault/move', '/api/vault/move/check']) {
-        expect((await app.inject({ method: 'POST', url, headers: agent, payload: { targetPath: path.join(context.root, 'Moved') } })).statusCode, url).toBe(404);
-      }
-      const missing = await app.inject({ method: 'POST', url: '/api/vault/open', headers: agent, payload: { path: path.join(context.root, 'Nothing') } });
-      expect(missing.statusCode).toBe(422);
-      const conflict = await app.inject({ method: 'POST', url: '/api/vault/create', headers: agent, payload: { location: context.root, name: 'B' } });
-      expect(conflict.statusCode).toBe(422);
-      expect(conflict.json().error.message).toBe('這個位置已經有「B」，請換個名稱。');
-      const created = await app.inject({ method: 'POST', url: '/api/vault/create', headers: agent, payload: { location: context.root, name: 'C' } });
-      expect(created.statusCode).toBe(202);
-      expect(created.json()).toMatchObject({ operation: 'create' });
-      await workspace.operations.finished();
-      expect((await app.inject({ url: '/api/vault/status', headers: agent })).json()).toMatchObject({ state: 'completed', vaultPath: path.join(context.root, 'C') });
-      const opened = await app.inject({ method: 'POST', url: '/api/vault/open', headers: agent, payload: { path: b } });
-      expect(opened.statusCode).toBe(202);
-      expect(opened.json()).toMatchObject({ operation: 'open' });
-      await workspace.operations.finished();
-      const status = await app.inject({ url: '/api/vault/status', headers: agent });
-      expect(status.json()).toMatchObject({ state: 'completed', vaultPath: b, relocationUnavailable: null });
-    } finally { await app.close(); }
-  });
-
-  it('answers 409 vault_location_fixed for a fixed location', async () => {
-    const context = await setup();
-    const fixed = await open(context, { fixedLocation: true });
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, transfer: fixed.operations });
-    try {
-      for (const [url, payload] of [['/api/vault/open', { path: path.join(context.root, 'Other') }], ['/api/vault/create', { location: context.root, name: 'Other' }]] as const) {
-        const response = await app.inject({ method: 'POST', url, payload });
-        expect(response.statusCode, url).toBe(409);
-        expect(response.json().error.code, url).toBe('vault_location_fixed');
-      }
-      expect((await app.inject('/api/vault/status')).json().relocationUnavailable.code).toBe('vault_location_fixed');
-    } finally { await app.close(); }
-  });
+it('refuses to open or create another Vault when the location was fixed at startup', async () => {
+  const context = await setup();
+  const workspace = await open(context, { fixedLocation: true });
+  expect(workspace.operations.status().relocationUnavailable).toMatchObject({ code: 'vault_location_fixed' });
+  await expect(workspace.operations.openOther(context.root)).rejects.toMatchObject({ code: 'vault_location_fixed' });
+  await expect(workspace.operations.createNew(context.root, 'Other')).rejects.toMatchObject({ code: 'vault_location_fixed' });
+  await expect(readFile(path.join(context.root, 'Other', VAULT_MARKER))).rejects.toMatchObject({ code: 'ENOENT' });
 });

@@ -50,17 +50,16 @@ describe('export and import presentation', () => {
     expect(switchesVault({ operation: 'import' })).toBe(false);
   });
 
-  it('keeps the comparison after an apply cancelled while waiting for collection, because nothing was written', () => {
-    expect(importApplyOutcome({ state: 'idle' })).toBe('keepComparison');
-    expect(importApplyOutcome({ state: 'completed' })).toBe('imported');
+  it('tells an import that left the Vault unchanged from one that stopped after putting some files in place, which the backup or importing again settles', () => {
+    const result = { importMode: 'merge' as const, backupPath: '/backups/b.zip' };
+    expect(importApplyOutcome({ state: 'completed', message: '', result })).toEqual({ kind: 'imported' });
+    const reason = '找不到檔案。';
+    expect(importApplyOutcome({ state: 'error', message: reason, result: null })).toEqual({ kind: 'unchanged', reason });
+    expect(importApplyOutcome({ state: 'error', message: '', result: { ...result, partiallyApplied: true } }))
+      .toEqual({ kind: 'partial', backupPath: '/backups/b.zip' });
   });
 
-  it('discards the comparison after a failed apply, so the file is compared again before another try', () => {
-    expect(importApplyOutcome({ state: 'error' })).toBe('discardComparison');
-  });
-
-  it('returns a cancelled switch to its form so it can be started again, while a failed one stays failed', () => {
-    expect(relocationPhase({ state: 'idle' })).toBe('input');
+  it('shows a switch as done only when it completed', () => {
     expect(relocationPhase({ state: 'error' })).toBe('failed');
     expect(relocationPhase({ state: 'completed' })).toBe('done');
   });

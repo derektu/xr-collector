@@ -158,8 +158,6 @@ export interface SourceDefinition<S extends SubscriptionSettings = SubscriptionS
   pacing: PacingDeclaration | null;
   storage: SubscriptionStorage | null;
   frontmatter: FrontmatterCodec;
-  vaultFormatVersion: number;
-  packageFormatVersion: number;
   errorStatus?: Readonly<Record<string, number>>;
 }
 

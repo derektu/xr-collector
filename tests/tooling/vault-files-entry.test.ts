@@ -2,16 +2,6 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { productFiles } from '../support/source-imports.js';
 
-// Guards the developer, not the user: the Vault marker is raised by the one way into a Vault's files
-// (`src/domain/vault/vault-files.ts`), so no store can write a file of a newer format into a Vault an older
-// program still opens. A store that raised the marker itself, or wrote its file without the entry,
-// would make that safety depend on each store remembering it. The version the entry raises the
-// marker to is in tests/domain/vault/vault-files.format-versions.test.ts.
-
-/** The file that defines the marker hook, and the entry, the only file that calls it. */
-const DEFINES = 'src/domain/vault/vault-directory.ts';
-const ENTRY = 'src/domain/vault/vault-files.ts';
-
 /** The stores of Vault files: each writes only through the entry it is given. */
 const STORES = [
   'src/domain/subscriptions/subscription-store.ts',
@@ -49,13 +39,7 @@ function writerImports(file: string): string[] {
 }
 
 describe('the one way into a Vault\'s files', () => {
-  it('raises the Vault marker only from the entry', () => {
-    const callers = productFiles().filter((file) => /\bensureVaultFormat\b/u.test(readFileSync(file, 'utf8')));
-    expect(callers).toContain(ENTRY);
-    expect(callers.filter((file) => file !== ENTRY && file !== DEFINES)).toEqual([]);
-  });
-
-  it('keeps the stores of Vault files from writing without the entry', () => {
+  it('keeps the stores of Vault files writing only through the entry', () => {
     expect(productFiles()).toEqual(expect.arrayContaining(STORES));
     expect(STORES.flatMap((file) => writerImports(file).map((name) => `${file}: ${name}`))).toEqual([]);
   });
