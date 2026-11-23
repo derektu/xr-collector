@@ -77,6 +77,7 @@ export class AppTray {
       const id = action.slice('subscription:'.length);
       const notification = this.state?.actionable?.find((event) => event.id === id);
       if (notification) this.options.show({ notification });
+      else this.options.show();
       return;
     }
     switch (action) {

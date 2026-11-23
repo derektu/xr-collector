@@ -426,24 +426,14 @@ export class JobManager {
   }
 
   /**
-   * Converges a paused or removed subscription: its queued check job and the items it queued that
-   * have not started end as skipped. A discovery in progress sees the change before accepting any
-   * item. An item already capturing finishes and is saved when the subscription is paused; when it
-   * is removed, the item ends as skipped once its capture returns and saves nothing.
+   * Converges a paused or removed subscription: its queued check job and its items that have not
+   * started end as skipped. A discovery in progress sees the change before accepting any item. An
+   * item already capturing finishes and is saved when the subscription is paused; when it is
+   * removed, the item ends as skipped once its capture returns and saves nothing.
    */
   stopSubscription(type: string, id: string, reason: SkipReason): void {
-    this.releaseEndingCheckKeys(type, id);
     for (const job of [...this.jobs.values()]) {
       if (!isRole(this.options.sources, job, type, 'check') || job.source.id !== id) continue;
-      for (const child of [...this.jobs.values()]) {
-        if (child.parentId !== job.id) continue;
-        if (child.state === 'queued') {
-          this.queue.remove(child.id, this.placeOf(child));
-          this.finish(child, 'completed', { outcome: 'skipped', skipReason: reason }, null);
-        } else if (reason === 'subscription_removed') {
-          this.stoppedRunning.set(child.id, reason);
-        }
-      }
       if (job.state === 'queued') {
         this.queue.remove(job.id, this.placeOf(job));
         this.finish(job, 'completed', { outcome: 'skipped', skipReason: reason }, null);
@@ -453,6 +443,16 @@ export class JobManager {
       const key = this.keys.get(job.id);
       if (key && this.activeByKey.get(key) === job.id) this.activeByKey.delete(key);
     }
+    for (const item of [...this.jobs.values()]) {
+      if (!isRole(this.options.sources, item, type, 'item') || subscriptionOf(this.options.sources, item, this.parentOf) !== id) continue;
+      if (item.state === 'queued') {
+        this.queue.remove(item.id, this.placeOf(item));
+        this.finish(item, 'completed', { outcome: 'skipped', skipReason: reason }, null);
+      } else if (reason === 'subscription_removed') {
+        this.stoppedRunning.set(item.id, reason);
+      }
+    }
+    this.releaseEndingCheckKeys(type, id);
     void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
   }
 
@@ -856,6 +856,10 @@ export class JobManager {
     const job = this.jobs.get(id);
     if (!job) return;
     const savedEarlier = job.checkpoint?.savedDocumentId !== undefined || job.phase === 'save';
+    if (this.stoppedRunning.get(job.id) === 'subscription_removed') {
+      this.finish(job, 'completed', { outcome: 'skipped', skipReason: 'subscription_removed' }, null);
+      return;
+    }
     const { signal } = this.waitingStepsAbort;
     this.start(job, 'capture');
     try {
