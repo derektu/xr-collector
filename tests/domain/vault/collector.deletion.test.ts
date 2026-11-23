@@ -232,19 +232,24 @@ describe('visibility and re-collection (A2)', () => {
     expect(await exists(file)).toBe(true);
   });
 
-  it('refuses an explicit request made at the deletion time and stamps a later one after the deletion', async () => {
+  it.each([
+    ['removed with the deletion', true],
+    ['left on disk beside the deletion record', false],
+  ])('refuses an explicit request made at the deletion time and saves a later one anew, with the file %s', async (_case, removeFile) => {
     const w = await world();
     const a = vid('alpha');
     await w.vault.add(transcriptDocument(captured(a)));
-    await w.collector.delete(`youtube:${a}`);
+    if (removeFile) await w.collector.delete(`youtube:${a}`);
+    else await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
 
     await expect(w.collector.save(transcriptDocument(captured(a)), { explicitAt: T0.toISOString() })).rejects.toMatchObject({ code: 'document_deleted' });
     await expect(w.collector.save(transcriptDocument(captured(a)))).rejects.toMatchObject({ code: 'document_deleted' });
 
     // The clock still reads the deletion time; the document is stamped one millisecond later.
     const later = new Date(T0.getTime() + 1).toISOString();
-    const result = await w.collector.save(transcriptDocument(captured(a)), { explicitAt: later });
+    const result = await w.collector.save(transcriptDocument({ ...captured(a), bodyMarkdown: '重新收集的正文' }), { explicitAt: later });
     expect(result.document.collectedAt).toBe(later);
+    expect(await readFile(path.join(w.root, 'documents/youtube', `${a}.md`), 'utf8')).toContain('重新收集的正文');
     expect(await w.vault.deletions.list()).toEqual([]);
   });
 
