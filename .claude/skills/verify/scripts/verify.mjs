@@ -58,13 +58,18 @@ const { values: o, positionals } = parseArgs({ allowPositionals: true, options: 
 const print = (value) => console.log(JSON.stringify(value, null, 2));
 const need = (name) => { if (!o[name]) throw new Error(`Missing --${name}\n${USAGE}`); return o[name]; };
 
+function screenSettled() {
+  const loadFailed = document.querySelector('.app-load-error, .load-error, .documents-error');
+  const loaded = document.querySelector('.shell, .onboarding-screen') && !document.querySelector('.loading, [data-loading="true"]');
+  return Boolean(loadFailed || loaded);
+}
+
 async function snapshot() {
   const { openPage, painted } = await import('./lib/drive.mjs');
   const instance = attach(need('run'));
   const name = need('name');
   const { page, close } = await openPage(instance, { route: o.route, colorScheme: o.theme });
-  // The App or Onboarding shows with no loading indicator left, its fonts are loaded and its styles drawn.
-  await waitFor(() => page.evaluate(() => Boolean(document.querySelector('.shell, .onboarding-screen') && !document.querySelector('.loading, [data-loading="true"]'))), 'the screen shows its data');
+  await waitFor(() => page.evaluate(screenSettled), 'the screen shows its data or a load failure');
   await page.evaluate(() => document.fonts.ready);
   await painted(page);
   await mkdir(instance.evidence, { recursive: true });

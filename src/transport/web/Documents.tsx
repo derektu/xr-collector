@@ -208,7 +208,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
     <div className="status-row">
       {results ? <StatusFilter status={state.status} counts={results.statusCounts} onChange={(status) => onState({ ...state, status, page: 1 })} /> : null}
       <div className="documents-summary" aria-live="polite" data-testid="documents-summary"
-        data-mode={results?.mode} data-total={results?.total} data-loading={loading || !results ? 'true' : 'false'}>
+        data-mode={results?.mode} data-total={results?.total} data-loading={loading ? 'true' : 'false'}>
         {loadError ? <span className="documents-error">{loadError}</span>
           : results ? results.mode === 'search' ? `找到 ${results.total} 份` : `共 ${results.total} 份文件`
             : '正在載入…'}
