@@ -160,7 +160,7 @@ export async function run({ instance, page, record, waitFor }) {
       let readyCalled = false;
       window.xrCollectorDesktop = {
         chooseVaultLocation: async () => null, chooseVault: async () => null, chooseExportFile: async () => null, chooseImportFile: async () => null,
-        revealVault: async () => undefined, revealExport: async () => undefined, platform: 'darwin',
+        revealVault: async () => undefined, revealTransferFile: async () => undefined, platform: 'darwin',
         onNavigate: (listener) => { navigate = listener; },
         navigationReady: () => { readyCalled = true; },
       };

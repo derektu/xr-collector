@@ -44,8 +44,6 @@ export const rssDefinition: SourceDefinition<RssSettings> = {
     outOfRangeKeyField: 'articleKey',
     description: 'RSS subscription',
   },
-  vaultFormatVersion: 2,
-  packageFormatVersion: 2,
   errorStatus: { feed_not_found: 422, feed_invalid: 422, feed_unavailable: 502, article_missing: 422 },
   frontmatter: {
     write: () => ({}),

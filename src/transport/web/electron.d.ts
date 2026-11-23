@@ -7,7 +7,7 @@ export interface DesktopBridge {
   chooseExportFile(): Promise<{ path: string; overwriteConfirmed: boolean } | null>;
   chooseImportFile(): Promise<string | null>;
   revealVault(): Promise<void>;
-  revealExport(): Promise<void>;
+  revealTransferFile(): Promise<void>;
   platform: DesktopPlatform;
   navigationReady(): void;
   onNavigate(listener: (target: DesktopNavigationTarget | 'settings' | 'update') => void): void;

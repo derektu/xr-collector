@@ -7,7 +7,6 @@ import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { VaultFiles } from '../../shared/vault/vault-files.js';
 import { DELETIONS_FILE } from './deleted-documents.js';
 import { documentKeyFromPath } from './document-paths.js';
-import { ensureVaultFormat } from './vault-directory.js';
 import { errorCode } from './errno.js';
 
 function checkVaultFile(sources: SourceRegistry, relative: string): void {
@@ -21,12 +20,12 @@ export class VaultFileWriter implements VaultFiles {
   constructor(readonly root: string, readonly sources: SourceRegistry) {}
 
   async writeJson(relative: string, value: unknown): Promise<void> {
-    await this.admitFile(relative);
+    checkVaultFile(this.sources, relative);
     await writeJsonFile(this.absolute(relative), value);
   }
 
   async writeText(relative: string, text: string): Promise<void> {
-    await this.admitFile(relative);
+    checkVaultFile(this.sources, relative);
     const target = this.absolute(relative);
     await mkdir(path.dirname(target), { recursive: true });
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -39,7 +38,7 @@ export class VaultFileWriter implements VaultFiles {
   }
 
   async create(relative: string, text: string): Promise<boolean> {
-    await this.admitFile(relative);
+    checkVaultFile(this.sources, relative);
     const target = this.absolute(relative);
     await mkdir(path.dirname(target), { recursive: true });
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -71,7 +70,7 @@ export class VaultFileWriter implements VaultFiles {
       if (errorCode(error) === 'ENOENT') return false;
       throw error;
     }
-    await this.admitFile(relative);
+    checkVaultFile(this.sources, relative);
     const target = this.absolute(relative);
     await mkdir(path.dirname(target), { recursive: true });
     try {
@@ -81,16 +80,6 @@ export class VaultFileWriter implements VaultFiles {
       if (errorCode(error) === 'ENOENT') return false;
       throw error;
     }
-  }
-
-  async admit(relative: Iterable<string>): Promise<void> {
-    for (const file of relative) checkVaultFile(this.sources, file);
-    await ensureVaultFormat(this.root, this.sources);
-  }
-
-  private async admitFile(relative: string): Promise<void> {
-    checkVaultFile(this.sources, relative);
-    await ensureVaultFormat(this.root, this.sources);
   }
 
   private absolute(relative: string): string {

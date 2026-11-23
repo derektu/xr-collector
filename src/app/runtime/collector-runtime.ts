@@ -31,7 +31,7 @@ import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { AutoPauseNotification, CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
 
 
-export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'profilePath' | 'pause' | 'connectivity' | 'sources'>;
+export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'pause' | 'connectivity' | 'sources'>;
 
 export interface CollectorRuntimeOptions {
   buildInfo?: BuildInfo;
@@ -183,7 +183,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     const instanceId = randomUUID();
     const vaults = new DeviceVaults({
       profilePath: options.profilePath, sources, createdBy: options.createdBy ?? 'XR Collector',
-      ...(options.workspace?.statfs ? { statfs: options.workspace.statfs } : {}),
     });
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
     let agentConnection: AgentConnectionService | null = null;
@@ -305,13 +304,13 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     return {
       workspace: await VaultWorkspace.open({
         ...services, root: initial.root, selection: vaults.selection, createdBy: options.createdBy ?? 'XR Collector',
-        profilePath: path.resolve(options.profilePath), fixedLocation: Boolean(options.explicitVaultPath),
+        fixedLocation: Boolean(options.explicitVaultPath),
       }), failure: null, message: '',
     };
   }
 
   checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
-    return this.vaults.checkNew(location, name, this.workspaceValue?.operations.status().vaultPath);
+    return this.vaults.checkNew(location, name);
   }
 
   vaultStatus(): VaultSetupStatus {
@@ -344,9 +343,8 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     this.settingUp = true;
     try {
       const services = this.services;
-      const { workspace, documentCount } = await this.vaults.setUp(request, (root, pendingImport) => VaultWorkspace.open({
+      const { workspace, documentCount } = await this.vaults.setUp(request, (root) => VaultWorkspace.open({
         ...services, root, selection: this.vaults.selection, createdBy: this.options.createdBy ?? 'XR Collector',
-        profilePath: this.profilePath, pendingImport,
       }));
       this.workspaceValue = workspace;
       this.failure = null;

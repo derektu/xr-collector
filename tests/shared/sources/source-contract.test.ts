@@ -453,7 +453,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     await new MarkdownVault(new VaultFileWriter(a.vault, SOURCES)).add(document('fake2', 'shared-2'));
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add(feed('fake', 'news'));
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     expect(await items(b.vault)).toEqual(await items(a.vault));
 
@@ -492,7 +492,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     const failed = (key: string, attempts: number) => ({ itemKey: key, title: key, attempts, errorCode: 'no_subtitles', failedAt: at(1), skipped: attempts >= 3 });
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, profilePath: b.profile, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
     const failuresIn = async (vault: string, type: string, id: string) =>
       (await new JsonSubscriptionStore(new VaultFileWriter(vault, SOURCES), type).list()).find((row) => row.id === id)?.failures;

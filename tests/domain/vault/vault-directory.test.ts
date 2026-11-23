@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createVaultDirectory, inspectVaultDirectory, VAULT_MARKER, writeVaultMarker } from '../../../src/domain/vault/vault-directory.js';
+import { createVaultDirectory, FORMAT_VERSION, inspectVaultDirectory, VAULT_MARKER, writeVaultMarker } from '../../../src/domain/vault/vault-directory.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const roots: string[] = [];
@@ -22,11 +22,26 @@ async function temp(): Promise<string> {
 }
 async function vault(root: string, documents = 0): Promise<string> {
   await mkdir(path.join(root, 'documents', 'youtube'), { recursive: true });
-  await writeVaultMarker(root, 'XR Collector test', PRODUCT_SOURCES);
+  await writeVaultMarker(root, 'XR Collector test');
   for (let index = 0; index < documents; index += 1) {
     await writeFile(path.join(root, 'documents', 'youtube', `video${index}.md`), '---\n---\n');
   }
   return root;
+}
+
+/** Every path under `root` with its bytes, so a rejection that rewrote a file shows. */
+async function snapshot(root: string): Promise<Record<string, string>> {
+  const entries = (await readdir(root, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile());
+  return Object.fromEntries(await Promise.all(entries.map(async (entry) => {
+    const file = path.join(entry.parentPath, entry.name);
+    return [path.relative(root, file), await readFile(file, 'utf8')];
+  })));
+}
+
+async function settingsFile(root: string, name: string, content: unknown): Promise<void> {
+  await vault(root);
+  await mkdir(path.join(root, 'settings'), { recursive: true });
+  await writeFile(path.join(root, 'settings', name), JSON.stringify(content));
 }
 
 describe('inspectVaultDirectory', () => {
@@ -52,14 +67,29 @@ describe('inspectVaultDirectory', () => {
     ['a directory with only the first-round layout', async (root: string) => { await mkdir(path.join(root, 'documents', 'youtube'), { recursive: true }); return root; }, '不是 XR Collector 知識庫'],
     ['a malformed marker', async (root: string) => { await writeFile(path.join(root, VAULT_MARKER), '{'); return root; }, '標記檔格式錯誤'],
     ['a foreign marker', async (root: string) => { await writeFile(path.join(root, VAULT_MARKER), '{"format":"other","formatVersion":1}'); return root; }, '標記檔格式錯誤'],
-    ['a newer format', async (root: string) => { await writeFile(path.join(root, VAULT_MARKER), '{"format":"xr-collector-vault","formatVersion":3}'); return root; }, '較新版本'],
+    ['a newer format', async (root: string) => { await writeFile(path.join(root, VAULT_MARKER), JSON.stringify({ format: 'xr-collector-vault', formatVersion: FORMAT_VERSION + 1 })); return root; }, '較新版本'],
     ['broken settings', async (root: string) => { await vault(root); await mkdir(path.join(root, 'settings')); await writeFile(path.join(root, 'settings', 'youtube-channels.json'), '{'); return root; }, 'youtube-channels.json 格式錯誤'],
+    ['a marker without an ID', async (root: string) => {
+      await vault(root);
+      const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8')) as Record<string, unknown>;
+      delete marker.id;
+      await writeFile(path.join(root, VAULT_MARKER), JSON.stringify(marker));
+      return root;
+    }, '識別碼'],
+    ['a subscription file of an earlier version', async (root: string) => {
+      await settingsFile(root, 'youtube-channels.json', [{ id: 'UC123', title: '頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-01-01' }]);
+      return root;
+    }, 'youtube-channels.json'],
+    ['a schedule file of an earlier version', async (root: string) => {
+      await settingsFile(root, 'youtube-schedule.json', { version: 1, enabled: true, intervalMinutes: 60 });
+      return root;
+    }, 'youtube-schedule.json'],
   ])('rejects %s without changing it', async (_label, prepare, reason) => {
     const root = await temp();
     const target = await prepare(root);
-    const before = await readdir(root, { recursive: true });
+    const before = await snapshot(root);
     expect(await inspectVaultDirectory(target, PRODUCT_SOURCES)).toMatchObject({ kind: 'invalid', reason: expect.stringContaining(reason) });
-    expect(await readdir(root, { recursive: true })).toEqual(before);
+    expect(await snapshot(root)).toEqual(before);
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports an unreadable directory', async () => {
@@ -75,7 +105,7 @@ describe('createVaultDirectory', () => {
     expect(await createVaultDirectory(root, 'XR Collector 9.9.9', PRODUCT_SOURCES)).toBe(root);
     const marker = JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'));
     expect(marker).toEqual({
-      format: 'xr-collector-vault', formatVersion: 2, createdBy: 'XR Collector 9.9.9',
+      format: 'xr-collector-vault', formatVersion: 1, createdBy: 'XR Collector 9.9.9',
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/u),
       id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     });

@@ -51,8 +51,6 @@ export const youtubeDefinition: SourceDefinition<CollectionPolicy> = {
     outOfRangeKeyField: 'videoId',
     description: 'YouTube channel',
   },
-  vaultFormatVersion: 1,
-  packageFormatVersion: 1,
   errorStatus: { no_subtitles: 422, video_unavailable: 422 },
   frontmatter: {
     write(details) {

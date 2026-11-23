@@ -109,12 +109,6 @@ export async function itemStates(sources: SourceRegistry, files: FileSource): Pr
       if (!states.has(key)) states.set(key, { state: 'deleted', digest: null, at });
     }
   }
-  const lower = new Map<string, string>();
-  for (const file of files.paths()) {
-    const key = file.toLowerCase();
-    if (lower.has(key) && lower.get(key) !== file) throw new CollectorError('invalid_request', `路徑只差大小寫：${file}`);
-    lower.set(key, file);
-  }
   return states;
 }
 

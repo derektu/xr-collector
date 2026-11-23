@@ -1,12 +1,9 @@
 // GET /api/device/build-info: the UI and an authorized Agent read the same build identity before a
-// Vault is set up and while a Vault operation blocks reads, through the real UI and Agent listeners
-// with their Host and key checks.
+// Vault is set up, through the real UI and Agent listeners with their Host and key checks.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { startCollectorServer } from '../../../../src/transport/server/collector-server.js';
-import { VaultOperationLock, type VaultAccess } from '../../../../src/domain/vault/operation-lock.js';
-import type { VaultOperations } from '../../../../src/domain/vault/vault-operations.js';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BuildInfo } from '../../../../src/shared/api/update-types.js';
@@ -38,26 +35,6 @@ describe('build information HTTP contract', () => {
     expect(authorized.statusCode).toBe(200);
     expect(authorized.json()).toEqual(response.json());
     expect((await ui.inject('/api/documents')).statusCode).toBe(503);
-  });
-  it('does not acquire the Vault lock for device identity', async () => {
-    const lock = new VaultOperationLock({ hold: async () => () => undefined, idle: async () => undefined, suspend: () => undefined });
-    let release!: () => void;
-    let entered!: () => void;
-    const bodyEntered = new Promise<void>((resolve) => { entered = resolve; });
-    const work = lock.start({ operation: 'import', body: async (reporter) => {
-      reporter.blockReads(); entered(); await new Promise<void>((resolve) => { release = resolve; });
-      return { value: undefined, message: 'done' };
-    }, failed: () => ({ message: 'failed' }) });
-    await bodyEntered;
-    try {
-      const app = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: info,
-        transfer: { enter: (access: VaultAccess) => lock.enter(access) } as unknown as VaultOperations,
-        collector: { listDocuments: async () => ({ documents: [], total: 0, nextOffset: null }) } as never,
-      });
-      apps.push(app);
-      expect((await app.inject('/api/documents')).statusCode).toBe(409);
-      expect((await app.inject('/api/device/build-info')).json()).toEqual({ buildInfo: info });
-    } finally { release(); await work; }
   });
 
   it('forwards one identity through the real UI and Agent listeners with existing Host and token guards', async () => {

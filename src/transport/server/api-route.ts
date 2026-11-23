@@ -1,10 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteGenericInterface } from 'fastify';
-import type { ApiRoute, ResponseOf } from '../../shared/api/api-routes.js';
-import type { VaultAccess } from '../../domain/vault/index.js';
+import type { ApiRoute, ResponseOf, RouteVaultAccess } from '../../shared/api/api-routes.js';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
-    vaultAccess?: VaultAccess;
+    vaultAccess?: RouteVaultAccess;
   }
 }
 

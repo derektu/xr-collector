@@ -35,16 +35,19 @@ export function transferRunning(status: Pick<TransferStatus, 'state'> | null): b
   return !!status && !['idle', 'completed', 'error'].includes(status.state);
 }
 
-export function relocationPhase(status: Pick<TransferStatus, 'state'>): 'done' | 'input' | 'failed' {
-  if (status.state === 'completed') return 'done';
-  return status.state === 'idle' ? 'input' : 'failed';
+export function relocationPhase(status: Pick<TransferStatus, 'state'>): 'done' | 'failed' {
+  return status.state === 'completed' ? 'done' : 'failed';
 }
 
-export type ImportApplyOutcome = 'imported' | 'keepComparison' | 'discardComparison';
+export type ImportApplyOutcome =
+  | { kind: 'imported' }
+  | { kind: 'unchanged'; reason: string }
+  | { kind: 'partial'; backupPath: string };
 
-export function importApplyOutcome(status: Pick<TransferStatus, 'state'>): ImportApplyOutcome {
-  if (status.state === 'error') return 'discardComparison';
-  return status.state === 'idle' ? 'keepComparison' : 'imported';
+export function importApplyOutcome(status: Pick<TransferStatus, 'state' | 'message' | 'result'>): ImportApplyOutcome {
+  if (status.state !== 'error') return { kind: 'imported' };
+  const backupPath = status.result?.partiallyApplied ? status.result.backupPath : undefined;
+  return backupPath ? { kind: 'partial', backupPath } : { kind: 'unchanged', reason: status.message };
 }
 
 export function fileProgress(status: Pick<TransferStatus, 'state' | 'completedFiles' | 'totalFiles'>): { completed: number; total: number } | null {

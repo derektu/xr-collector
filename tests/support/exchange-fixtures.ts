@@ -111,7 +111,7 @@ export async function open(at: Machine, overrides: OpenOverrides = {}, track = t
     ...overrides,
   };
   const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
-    sources, root: selected ?? at.vault, selection, profilePath: at.profile, createdBy: 'XR Collector test', machineName: at.name,
+    sources, root: selected ?? at.vault, selection, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchLexicon: '', searchData: path.join(at.profile, 'search'),

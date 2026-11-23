@@ -219,19 +219,11 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       await button('import-path').fill(exportPath);
       await click('import-compare');
       await waitFor(async () => (await instance.api('/api/vault/status')).state === 'waiting', 'import waiting');
-      await visible('transfer-cancel');
       const jobs = await instance.api('/api/jobs/overview');
       const activity = await instance.api('/api/activity');
       const summary = await instance.api('/api/activity?view=summary');
       expect(!!jobs.overview && Array.isArray(activity.events) && Array.isArray(summary.entries), '等待期間工作、原始活動與摘要 API 可讀');
       await shot('waiting');
-      await click('transfer-cancel');
-      await waitFor(async () => (await instance.api('/api/vault/status')).state === 'idle', 'cancel waiting releases operation lock');
-      expect((await instance.api('/api/vault/status')).state === 'idle', '取消等待後立即釋放操作鎖');
-      await visible('import-compare');
-      await shot('cancelled-wait');
-      await click('import-compare');
-      await waitFor(async () => (await instance.api('/api/vault/status')).state === 'waiting', 'import waiting again');
       const jobsPage = await openPage('/jobs');
       expect(await jobsPage.getByTestId('page-jobs').count() === 1, '等待期間工作頁可讀');
       await shot('jobs-during-wait', jobsPage);
@@ -239,11 +231,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
       // without delay and the comparison goes ahead when the running capture ends.
       await instance.updateCatalog((catalog) => { catalog.youtube.holdCaptures = false; });
       await visible('import-preview');
-      // Collection resumes after comparison and changes the local items. Compare those finished
-      // items again before applying, as required by the import's stale-comparison contract.
       await idle(instance);
-      await click('import-cancel');
-      await compareThroughUI(exportPath);
       await click('import-confirm');
       await visible('import-done');
       await shot('import-done');

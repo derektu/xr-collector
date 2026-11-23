@@ -312,9 +312,6 @@ export const api = {
     return call(API_ROUTES.createVault, { body: { location, name } });
   },
 
-  cancelVaultWait(): Promise<TransferStatus> {
-    return call(API_ROUTES.cancelVaultWait);
-  },
 };
 
 function filterParameters(filter: DocumentFilter): { sourceType: string | undefined; publisherId: string | undefined; status: DocumentStatus | undefined } {

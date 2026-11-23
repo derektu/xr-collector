@@ -6,9 +6,9 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { VAULT_MARKER, writeVaultMarker } from '../../src/domain/vault/vault-directory.js';
+import { FORMAT_VERSION, VAULT_MARKER, writeVaultMarker } from '../../src/domain/vault/vault-directory.js';
 import {
-  checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, packageFormatVersion, unpackPackage, writePackage, type PackageReader,
+  checkPackageContent, MANIFEST, openPackage, PACKAGE_FORMAT, unpackPackage, writePackage, type PackageReader,
 } from '../../src/domain/vault/vault-package.js';
 import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
@@ -89,7 +89,7 @@ export async function packageOf(
   return zipOf([
     ...files.map((file) => ({ name: file.path, data: file.data })),
     ...extra,
-    { name: MANIFEST, data: JSON.stringify({ format: PACKAGE_FORMAT, formatVersion: packageFormatVersion(PRODUCT_SOURCES), files: rows, ...manifest }) },
+    { name: MANIFEST, data: JSON.stringify({ format: PACKAGE_FORMAT, formatVersion: FORMAT_VERSION, files: rows, ...manifest }) },
   ]);
 }
 
@@ -100,7 +100,7 @@ export async function tampered(bytes: Buffer, file: string, data: string | Buffe
   return zipOf([...entries].map(([name, value]) => ({ name, data: value })));
 }
 
-export async function streamBytes(stream: Readable): Promise<Buffer> {
+async function streamBytes(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream as AsyncIterable<Buffer>) chunks.push(chunk);
   return Buffer.concat(chunks);
@@ -109,11 +109,11 @@ export async function streamBytes(stream: Readable): Promise<Buffer> {
 /** Gives a folder the marker of a current Vault unless it has one, so a workspace opens it. */
 export async function ensureMarker(root: string): Promise<void> {
   await mkdir(root, { recursive: true });
-  if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test', PRODUCT_SOURCES);
+  if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test');
 }
 
 /** Runs `use` on package bytes opened as a package file of the types of `sources`. */
-export async function withPackage<T>(
+async function withPackage<T>(
   bytes: Buffer, use: (reader: PackageReader) => Promise<T>, sources: SourceRegistry = PRODUCT_SOURCES,
 ): Promise<T> {
   const folder = await mkdtemp(path.join(tmpdir(), 'xr-package-'));

@@ -1,7 +1,6 @@
 import { CollectorError, type CollectorErrorCode } from '../../shared/lib/collector-error.js';
 import type { TransferOperation, TransferResult, TransferStatus } from '../../shared/vault/vault-types.js';
 
-export type VaultAccess = 'vault-read' | 'vault-write' | 'device-data' | 'vault-operation';
 export type OperationStatus = Omit<TransferStatus, 'vaultPath' | 'relocationUnavailable'>;
 type ProgressState = Exclude<OperationStatus['state'], 'idle' | 'completed' | 'error'>;
 
@@ -16,32 +15,19 @@ export interface OperationCompletion<T> extends OperationTerminal { value: T }
 export interface OperationReporter {
   progress(state: ProgressState, message: string, files?: { completed: number; total: number }): void;
   files(completed: number, total?: number): void;
-  blockReads(): void;
-  holdClosesWithReplacedBundle(): void;
-  stop(error: CollectorError): never;
 }
 
 interface OperationRun<T> {
   operation: TransferOperation;
   body: (reporter: OperationReporter) => Promise<OperationCompletion<T>>;
   failed: (error: unknown) => OperationTerminal;
-  cancelled?: () => void;
 }
 
 interface LockDependencies {
-  hold(signal: AbortSignal): Promise<() => void>;
+  hold(signal?: AbortSignal): Promise<() => void>;
   idle(): Promise<void>;
   suspend(value: boolean): void;
   changed?: () => void;
-}
-
-interface RunContext {
-  abort: AbortController | null;
-  releaseHold: (() => void) | null;
-  blockReading: boolean;
-  cancelled: boolean;
-  cancellation: CollectorError | null;
-  cancelledEvent: (() => void) | null;
 }
 
 interface UpdateContext { releaseHold: (() => void) | null; transferred: boolean; signal: AbortSignal }
@@ -50,12 +36,6 @@ export interface UpdateLease {
   cancel(): void;
   /** Keeps the gate held while the runtime destructively closes; it must never be resumed afterwards. */
   transferToShutdown(): void;
-}
-
-type Lifecycle = { kind: 'idle' } | { kind: 'running'; context: RunContext } | { kind: 'stopped'; context: RunContext };
-
-class StoppedOperation extends Error {
-  constructor(readonly problem: CollectorError) { super(problem.message, { cause: problem }); }
 }
 
 export class VaultOperationLock {
@@ -67,7 +47,8 @@ export class VaultOperationLock {
     this.current = next;
     this.dependencies.changed?.();
   }
-  private lifecycle: Lifecycle = { kind: 'idle' };
+  private running = false;
+  private releaseHold: (() => void) | null = null;
   private writes = 0;
   private readonly writeWaiters = new Set<() => void>();
   private updateContext: UpdateContext | null = null;
@@ -77,17 +58,10 @@ export class VaultOperationLock {
 
   status(): OperationStatus { return { ...this.value }; }
   finished(): Promise<void> { return this.active; }
-  isLocked(): boolean { return this.lifecycle.kind !== 'idle'; }
+  isLocked(): boolean { return this.running; }
 
-  enter(access: VaultAccess): () => void {
-    if (access === 'device-data' || access === 'vault-operation') return () => undefined;
-    if (access === 'vault-read') {
-      if (this.lifecycle.kind !== 'idle' && this.lifecycle.context.blockReading) {
-        throw new CollectorError('vault_busy', '正在套用匯入的內容，請稍後再讀取。');
-      }
-      return () => undefined;
-    }
-    if (this.lifecycle.kind !== 'idle') throw this.busyWrite();
+  enterWrite(): () => void {
+    if (this.running) throw this.busyWrite();
     if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能寫入知識庫。');
     this.writes += 1;
     let released = false;
@@ -100,7 +74,7 @@ export class VaultOperationLock {
   }
 
   async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
-    if (this.lifecycle.kind !== 'idle' || this.updateContext) throw this.busyWrite();
+    if (this.running || this.updateContext) throw this.busyWrite();
     const context: UpdateContext = { releaseHold: null, transferred: false, signal };
     this.updateContext = context;
     this.dependencies.suspend(true);
@@ -127,136 +101,64 @@ export class VaultOperationLock {
   }
 
   start<T>(run: OperationRun<T>): Promise<T> {
-    const context = this.acquire(run.operation, run.cancelled);
+    this.acquire(run.operation);
     let resolveFinished!: () => void;
     this.active = new Promise<void>((resolve) => { resolveFinished = resolve; });
-    const task = this.perform(run, context).finally(resolveFinished);
+    const task = this.perform(run).finally(resolveFinished);
     void task.catch(() => undefined);
     return task;
   }
 
-  cancelWait(): OperationStatus {
-    const context = this.lifecycle.kind === 'running' ? this.lifecycle.context : null;
-    const abort = context?.abort;
-    if (!context || !abort) {
-      throw new CollectorError('invalid_request', '目前沒有等待中的知識庫操作；已開始的處理無法取消。');
-    }
-    const cancellation = new CollectorError('transfer_cancelled', '已取消，資料未變更。');
-    context.cancelled = true;
-    context.cancellation = cancellation;
-    abort.abort(cancellation);
-    context.abort = null;
-    this.release(context);
-    this.value = {
-      state: 'idle', operation: null, message: '已取消，資料未變更。', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
-    };
-    const cancelledEvent = context.cancelledEvent;
-    context.cancelledEvent = null;
-    try { cancelledEvent?.(); } catch (error) { console.error('Recording a cancelled Vault operation failed', error); }
-    return this.status();
-  }
-
   setIdle(message: string): void {
-    if (this.lifecycle.kind !== 'idle') throw this.busyWrite();
+    if (this.running) throw this.busyWrite();
     this.value = { state: 'idle', operation: null, message, completedFiles: 0, totalFiles: 0, result: null, errorCode: null };
   }
 
-  private acquire(operation: TransferOperation, cancelledEvent?: () => void): RunContext {
+  private acquire(operation: TransferOperation): void {
     if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
-    if (this.lifecycle.kind !== 'idle' || this.writes) {
+    if (this.running || this.writes) {
       throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
     }
-    const context: RunContext = {
-      abort: null, releaseHold: null, blockReading: false, cancelled: false, cancellation: null,
-      cancelledEvent: cancelledEvent ?? null,
-    };
-    this.lifecycle = { kind: 'running', context };
+    this.running = true;
     this.dependencies.suspend(true);
     this.value = {
       state: 'waiting', operation, message: '正在等待目前的收集步驟完成…', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
     };
-    return context;
   }
 
-  private async perform<T>(run: OperationRun<T>, context: RunContext): Promise<T> {
-    const ownsLock = () => this.lifecycle.kind !== 'idle' && this.lifecycle.context === context;
+  private async perform<T>(run: OperationRun<T>): Promise<T> {
     const reporter: OperationReporter = {
       progress: (state, message, files) => {
-        if (!ownsLock()) return;
         this.value = { ...this.value, state, message, ...(files ? { completedFiles: files.completed, totalFiles: files.total } : {}) };
       },
       files: (completed, total) => {
-        if (!ownsLock()) return;
         this.value = { ...this.value, completedFiles: completed, ...(total === undefined ? {} : { totalFiles: total }) };
       },
-      blockReads: () => { if (ownsLock()) context.blockReading = true; },
-      holdClosesWithReplacedBundle: () => { context.releaseHold = null; },
-      stop: (error) => { throw new StoppedOperation(error); },
     };
     try {
-      await this.settle(context);
-      if (context.cancelled) throw context.cancellation;
+      this.releaseHold = await this.dependencies.hold();
+      await this.dependencies.idle();
       const completed = await run.body(reporter);
-      this.release(context);
-      if (this.lifecycle.kind !== 'idle') return completed.value;
+      this.release();
       this.value = {
         ...this.value, state: 'completed', message: completed.message, result: completed.result ?? null, errorCode: completed.errorCode ?? null,
       };
       return completed.value;
     } catch (error) {
-      if (context.cancelled || error instanceof CollectorError && error.code === 'transfer_cancelled') {
-        this.release(context);
-        throw error;
-      }
-      const stopped = error instanceof StoppedOperation;
-      const problem = stopped ? error.problem : error;
-      const failed = this.mapFailure(run, problem);
-      if (stopped && ownsLock()) this.lifecycle = { kind: 'stopped', context };
-      else this.release(context);
-      if (!stopped && this.lifecycle.kind !== 'idle') throw problem;
+      this.release();
+      const failed = run.failed(error);
       this.value = {
         ...this.value, state: 'error', message: failed.message, result: failed.result ?? null,
-        errorCode: failed.errorCode ?? (problem instanceof CollectorError ? problem.code : null),
+        errorCode: failed.errorCode ?? (error instanceof CollectorError ? error.code : null),
       };
-      throw problem;
+      throw error;
     }
   }
 
-  private mapFailure<T>(run: OperationRun<T>, problem: unknown): OperationTerminal {
-    try { return run.failed(problem); } catch (mappingError) {
-      console.error('Mapping a Vault operation failure failed', mappingError);
-      return {
-        message: problem instanceof CollectorError ? problem.message : '操作失敗，請確認匯出檔、磁碟空間與搜尋服務後重試。',
-        result: null, errorCode: problem instanceof CollectorError ? problem.code : null,
-      };
-    }
-  }
-
-  private async settle(context: RunContext): Promise<void> {
-    const abort = new AbortController();
-    context.abort = abort;
-    try {
-      const release = await this.dependencies.hold(abort.signal);
-      if (abort.signal.aborted) {
-        release();
-        throw abort.signal.reason;
-      }
-      context.releaseHold = release;
-      await abortable(this.dependencies.idle(), abort.signal);
-    } finally {
-      if (context.abort === abort) context.abort = null;
-    }
-  }
-
-  private release(context: RunContext): void {
-    const releaseHold = context.releaseHold;
-    context.releaseHold = null;
-    context.blockReading = false;
-    if (this.lifecycle.kind === 'idle' || this.lifecycle.context !== context) {
-      releaseHold?.();
-      return;
-    }
-    this.lifecycle = { kind: 'idle' };
+  private release(): void {
+    const releaseHold = this.releaseHold;
+    this.releaseHold = null;
+    this.running = false;
     this.dependencies.suspend(false);
     releaseHold?.();
   }

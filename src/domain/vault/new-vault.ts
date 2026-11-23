@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { NewVaultCheck, PackageDescription } from '../../shared/vault/vault-types.js';
-import { checkPackageFile, isWithin, isWorkFolder } from './transfer-files.js';
+import { checkPackageFile } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import { openPackage } from './vault-package.js';
 import { errorCode } from './errno.js';
@@ -28,9 +28,7 @@ export function nameProblem(name: string): string | null {
   return null;
 }
 
-export interface AppFolders { vaultRoot?: string | undefined; profilePath: string }
-
-export async function checkNewVault(location: unknown, name: unknown, folders?: AppFolders): Promise<NewVaultCheck> {
+export async function checkNewVault(location: unknown, name: unknown): Promise<NewVaultCheck> {
   if (typeof location !== 'string' || !location.trim()) return { path: null, problem: '請選擇位置。' };
   if (!path.isAbsolute(location)) return { path: null, problem: '位置必須是完整的絕對路徑。' };
   if (typeof name !== 'string') return { path: null, problem: '請輸入名稱。' };
@@ -38,7 +36,6 @@ export async function checkNewVault(location: unknown, name: unknown, folders?: 
   const problem = nameProblem(name);
   if (problem) return { path: null, problem };
   const target = path.join(parent, name);
-  if (isWorkFolder(target)) return { path: target, problem: '這是匯入使用的暫存資料夾名稱，請換個名稱。' };
   try {
     if (!(await stat(parent)).isDirectory()) return { path: target, problem: '位置不是資料夾。' };
   } catch (error) {
@@ -50,8 +47,6 @@ export async function checkNewVault(location: unknown, name: unknown, folders?: 
   } catch (error) {
     if (errorCode(error) !== 'ENOENT') return { path: target, problem: '無法讀取這個位置。' };
   }
-  if (folders?.vaultRoot && await isWithin(target, folders.vaultRoot)) return { path: target, problem: '不能建立在目前的知識庫裡。' };
-  if (folders && await isWithin(target, folders.profilePath)) return { path: target, problem: '不能建立在程式資料目錄裡。' };
   try {
     await access(parent, constants.W_OK);
   } catch {
@@ -60,14 +55,14 @@ export async function checkNewVault(location: unknown, name: unknown, folders?: 
   return { path: target, problem: null };
 }
 
-export async function newVaultFolder(location: unknown, name: unknown, folders?: AppFolders): Promise<string> {
-  const checked = await checkNewVault(location, name, folders);
+export async function newVaultFolder(location: unknown, name: unknown): Promise<string> {
+  const checked = await checkNewVault(location, name);
   if (checked.problem || !checked.path) throw new CollectorError('vault_invalid', checked.problem ?? '請選擇位置並輸入名稱。');
   return checked.path;
 }
 
-export async function createNewVault(location: unknown, name: unknown, createdBy: string, sources: SourceRegistry, folders?: AppFolders): Promise<string> {
-  const target = await newVaultFolder(location, name, folders);
+export async function createNewVault(location: unknown, name: unknown, createdBy: string): Promise<string> {
+  const target = await newVaultFolder(location, name);
   try {
     await mkdir(target);
   } catch (error) {
@@ -75,7 +70,7 @@ export async function createNewVault(location: unknown, name: unknown, createdBy
     throw new CollectorError('vault_invalid', `無法建立資料夾（${errorCode(error) ?? '未知錯誤'}）。`);
   }
   try {
-    await writeVaultMarker(target, createdBy, sources);
+    await writeVaultMarker(target, createdBy);
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);
     throw new CollectorError('vault_invalid', `無法建立知識庫（${errorCode(error) ?? '未知錯誤'}）。`, { cause: error });

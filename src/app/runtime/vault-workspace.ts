@@ -3,9 +3,7 @@ import {
   openVault,
   VaultOperations,
   type Collector,
-  type ImportFault,
   type OpenedVault,
-  type StatFs,
   type VaultSelection,
 } from '../../domain/vault/index.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
@@ -38,7 +36,6 @@ interface Bundle {
 export interface WorkspaceOptions {
   root: string;
   selection: VaultSelection;
-  profilePath: string;
   exportFolder: string;
   backupFolder: string;
   machineName?: string;
@@ -60,9 +57,6 @@ export interface WorkspaceOptions {
   jobTimer?: (callback: () => void, ms: number) => () => void;
   scheduleTimer?: SchedulerOptions['setTimer'];
   fixedLocation?: boolean;
-  statfs?: StatFs;
-  importFaults?: (phase: ImportFault, count?: number) => void | Promise<void>;
-  pendingImport?: boolean;
   noteChange?: NoteChange;
   onAutoPaused?: (vaultId: string, sourceType: string, subscription: SubscriptionRecord) => void | Promise<void>;
 }
@@ -104,12 +98,10 @@ export class VaultWorkspace {
     this.jobStore = options.jobStore ?? JobStore.memory(options.sources, ActivityLog.memory());
     this.holdTimeoutMs = options.holdTimeoutMs;
     this.operations = new VaultOperations({
-      sources: options.sources, selection: options.selection, profilePath: options.profilePath,
+      sources: options.sources, selection: options.selection,
       exportFolder: options.exportFolder, backupFolder: options.backupFolder, createdBy: options.createdBy,
       noteChange: this.noteChange,
       ...(options.machineName ? { machineName: options.machineName } : {}),
-      ...(options.statfs ? { statfs: options.statfs } : {}),
-      ...(options.importFaults ? { importFaults: options.importFaults } : {}),
       ...(options.fixedLocation ? { fixedLocation: options.fixedLocation } : {}),
     }, {
       current: () => ({ vault: this.current.vault, search: this.current.runtime.search }),
@@ -136,11 +128,8 @@ export class VaultWorkspace {
 
   static async open(options: WorkspaceOptions): Promise<VaultWorkspace> {
     const workspace = new VaultWorkspace(options);
-    const root = options.root;
-    const finished = await workspace.operations.recover(root, options.pendingImport);
-    workspace.current = await workspace.makeBundle(root, options.searchPort);
+    workspace.current = await workspace.makeBundle(options.root, options.searchPort);
     try {
-      if (finished) await workspace.current.runtime.search.rebuild();
       await workspace.current.jobs.resume();
       await workspace.current.schedule.start();
     } catch (error) {

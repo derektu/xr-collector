@@ -23,64 +23,43 @@ async function temp(): Promise<string> {
   return root;
 }
 
+const RESERVED = '系統保留';
 describe('nameProblem', () => {
-  it('accepts names that both desktop platforms keep', () => {
-    for (const name of ['XR Collector', '研究資料', 'Vault.v2', 'a']) expect(nameProblem(name), name).toBeNull();
-  });
-
-  it('refuses names that are empty or cannot name a folder on macOS or Windows', () => {
-    expect(nameProblem('')).toBe('請輸入名稱。');
-    expect(nameProblem('   ')).toBe('請輸入名稱。');
-    for (const name of ['a/b', 'a\\b', 'a:b', 'a*b', 'a?b', 'a"b', 'a<b', 'a>b', 'a|b', 'a\u0001b']) {
-      expect(nameProblem(name), name).toContain('不能包含');
-    }
-    expect(nameProblem(' XR')).toBe('名稱的開頭和結尾不能是空白。');
-    expect(nameProblem('XR ')).toBe('名稱的開頭和結尾不能是空白。');
-    expect(nameProblem('.hidden')).toBe('名稱不能以句點開頭。');
-    expect(nameProblem('..')).toBe('名稱不能以句點開頭。');
-    expect(nameProblem('Vault.')).toBe('名稱不能以句點結尾。');
-    expect(nameProblem('con')).toBe('「con」是系統保留的名稱，請換個名稱。');
-    expect(nameProblem('LPT1.txt')).toContain('系統保留');
-    expect(nameProblem('知'.repeat(86))).toBe('名稱太長。');
-  });
-
-  it('refuses COM and LPT with a superscript 1, 2 or 3, which Windows reserves like COM1 to COM9', () => {
-    for (const name of ['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³', 'com²', 'Lpt³', 'COM¹.txt', 'lpt².tar.gz']) {
-      expect(nameProblem(name), name).toContain('系統保留');
-    }
-    for (const name of ['COM4', 'lpt9.log']) expect(nameProblem(name), name).toContain('系統保留');
-    for (const name of ['COM⁴', 'COM0', 'COM¹0', 'XCOM¹']) expect(nameProblem(name), name).toBeNull();
+  it.each<[string, string | null]>([
+    ['XR Collector', null], ['研究資料', null], ['Vault.v2', null], ['a', null],
+    ['', '請輸入名稱。'], ['   ', '請輸入名稱。'],
+    ...['a/b', 'a\\b', 'a:b', 'a*b', 'a?b', 'a"b', 'a<b', 'a>b', 'a|b', 'a\u0001b'].map((name) => [name, '不能包含'] as [string, string]),
+    [' XR', '名稱的開頭和結尾不能是空白。'], ['XR ', '名稱的開頭和結尾不能是空白。'],
+    ['.hidden', '名稱不能以句點開頭。'], ['..', '名稱不能以句點開頭。'], ['Vault.', '名稱不能以句點結尾。'],
+    ['con', '「con」是系統保留的名稱，請換個名稱。'], ['LPT1.txt', RESERVED], ['COM4', RESERVED], ['lpt9.log', RESERVED],
+    // Windows reserves COM and LPT with a superscript 1, 2 or 3 like COM1 to COM9.
+    ...['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³', 'com²', 'Lpt³', 'COM¹.txt', 'lpt².tar.gz'].map((name) => [name, RESERVED] as [string, string]),
+    ['COM⁴', null], ['COM0', null], ['COM¹0', null], ['XCOM¹', null],
+    ['知'.repeat(86), '名稱太長。'],
+  ])('answers %j with %j, so the folder can exist on both macOS and Windows', (name, problem) => {
+    if (problem === null) expect(nameProblem(name)).toBeNull();
+    else expect(nameProblem(name)).toContain(problem);
   });
 });
 
 describe('checkNewVault', () => {
-  it('names the folder it would create when the location exists and the name is free', async () => {
+  it.each<[string, (parent: string) => Promise<[unknown, unknown]>, (parent: string) => { path: string | null; problem: string | null }]>([
+    ['a free name in an existing location', async (parent) => [parent, 'XR Collector'], (parent) => ({ path: path.join(parent, 'XR Collector'), problem: null })],
+    ['a name a folder in the location has', async (parent) => { await mkdir(path.join(parent, 'XR Collector')); return [parent, 'XR Collector']; },
+      (parent) => ({ path: path.join(parent, 'XR Collector'), problem: '這個位置已經有「XR Collector」，請換個名稱。' })],
+    ['a name a file in the location has', async (parent) => { await writeFile(path.join(parent, 'notes'), ''); return [parent, 'notes']; },
+      (parent) => ({ path: path.join(parent, 'notes'), problem: '這個位置已經有「notes」，請換個名稱。' })],
+    ['a missing location', async (parent) => [path.join(parent, 'missing'), 'XR'], (parent) => ({ path: path.join(parent, 'missing', 'XR'), problem: '找不到這個位置。' })],
+    ['a file as location', async (parent) => { await writeFile(path.join(parent, 'file'), ''); return [path.join(parent, 'file'), 'XR']; },
+      (parent) => ({ path: path.join(parent, 'file', 'XR'), problem: '位置不是資料夾。' })],
+    ['a relative location', async () => ['relative/folder', 'XR'], () => ({ path: null, problem: '位置必須是完整的絕對路徑。' })],
+    ['no location', async () => ['', 'XR'], () => ({ path: null, problem: '請選擇位置。' })],
+    ['an invalid name', async (parent) => [parent, 'a/b'], () => ({ path: null, problem: '名稱不能包含 \\ / : * ? " < > | 等字元。' })],
+    ['a name that is no text', async (parent) => [parent, 42], () => ({ path: null, problem: '請輸入名稱。' })],
+  ])('checks %s', async (_label, prepare, expected) => {
     const parent = await temp();
-    expect(await checkNewVault(parent, 'XR Collector')).toEqual({ path: path.join(parent, 'XR Collector'), problem: null });
-  });
-
-  it('refuses a name a file or folder in the location already has', async () => {
-    const parent = await temp();
-    await mkdir(path.join(parent, 'XR Collector'));
-    await writeFile(path.join(parent, 'notes'), '');
-    expect(await checkNewVault(parent, 'XR Collector')).toEqual({
-      path: path.join(parent, 'XR Collector'), problem: '這個位置已經有「XR Collector」，請換個名稱。',
-    });
-    expect((await checkNewVault(parent, 'notes')).problem).toBe('這個位置已經有「notes」，請換個名稱。');
-    expect((await checkNewVault(parent, 'Other')).problem).toBeNull();
-  });
-
-  it('refuses a missing, relative or file location and an invalid name', async () => {
-    const parent = await temp();
-    await writeFile(path.join(parent, 'file'), '');
-    expect((await checkNewVault(path.join(parent, 'missing'), 'XR')).problem).toBe('找不到這個位置。');
-    expect((await checkNewVault(path.join(parent, 'file'), 'XR')).problem).toBe('位置不是資料夾。');
-    expect(await checkNewVault('relative/folder', 'XR')).toEqual({ path: null, problem: '位置必須是完整的絕對路徑。' });
-    expect(await checkNewVault('', 'XR')).toEqual({ path: null, problem: '請選擇位置。' });
-    expect(await checkNewVault(parent, 'a/b')).toEqual({ path: null, problem: '名稱不能包含 \\ / : * ? " < > | 等字元。' });
-    expect(await checkNewVault(parent, 42)).toEqual({ path: null, problem: '請輸入名稱。' });
-    const work = 'XR.importing-00000000-0000-4000-8000-000000000000';
-    expect(await checkNewVault(parent, work)).toEqual({ path: path.join(parent, work), problem: '這是匯入使用的暫存資料夾名稱，請換個名稱。' });
+    const [location, name] = await prepare(parent);
+    expect(await checkNewVault(location, name)).toEqual(expected(parent));
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a location it cannot write', async () => {
@@ -94,7 +73,7 @@ describe('createNewVault', () => {
   it('creates the named folder as an empty Vault and leaves the location otherwise as it was', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'Other'));
-    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test', PRODUCT_SOURCES);
+    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test');
     expect(root).toBe(path.join(parent, 'XR Collector'));
     expect(await readdir(root)).toEqual([VAULT_MARKER]);
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toMatchObject({ createdBy: 'XR Collector test' });
@@ -105,7 +84,7 @@ describe('createNewVault', () => {
   it('never creates a Vault in an existing folder, even an empty one', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'XR Collector'));
-    await expect(createNewVault(parent, 'XR Collector', 'test', PRODUCT_SOURCES)).rejects.toMatchObject({
+    await expect(createNewVault(parent, 'XR Collector', 'test')).rejects.toMatchObject({
       code: 'vault_invalid', message: '這個位置已經有「XR Collector」，請換個名稱。',
     });
     expect(await readdir(path.join(parent, 'XR Collector'))).toEqual([]);

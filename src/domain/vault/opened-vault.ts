@@ -7,6 +7,7 @@ import { Collector, type CollectorOptions } from './collector.js';
 import { MarkdownVault } from './markdown-vault.js';
 import { readVaultId } from './vault-directory.js';
 import { VaultFileWriter } from './vault-files.js';
+import { removeImportStaging } from './vault-import.js';
 
 export type VaultEvent = Omit<NewJobEvent, 'vaultPath' | 'jobId'>;
 
@@ -25,12 +26,14 @@ export interface OpenedVault {
 }
 
 /**
- * Opens the Vault at `root`, which holds the types of `sources`: reads its ID from the marker and
- * settles deletions a stop left unfinished, before any search index is compared with the Vault.
+ * Opens the Vault at `root`, which holds the types of `sources`: reads its ID from the marker,
+ * removes the staging folders of imports a stop interrupted and settles deletions a stop left
+ * unfinished, before any search index is compared with the Vault.
  */
 export async function openVault(root: string, sources: SourceRegistry): Promise<OpenedVault> {
   const vaultId = await readVaultId(root);
   if (!vaultId) throw new CollectorError('vault_invalid', '知識庫標記檔沒有識別碼，不是目前支援的知識庫格式，無法開啟。');
+  await removeImportStaging(root);
   const files = new VaultFileWriter(root, sources);
   const documents = new MarkdownVault(files);
   const recovery = await documents.recoverDeletions();

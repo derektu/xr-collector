@@ -57,7 +57,6 @@ const NAMED_EVENTS = {
   'vault.exported': shown('info'),
   'vault.imported': shown('info'),
   'vault.transfer_failed': shown('error'),
-  'vault.transfer_cancelled': shown('info'),
   'device.login_startup_launched': shown('info'),
   'device.login_startup_enabled': shown('info'),
   'device.login_startup_disabled': shown('info'),

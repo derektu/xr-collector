@@ -36,23 +36,23 @@ Preconditions:
 - **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 只在可以建立時可按。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
 - **開啟其他。** Web：`vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-confirm` 先檢查該資料夾是知識庫再切換（不是知識庫時顯示 `open-vault-failure`），`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
 - **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「建立新的知識庫…」「開啟既有知識庫…」disabled。
-- **等待與取消。** 以慢速收集製造進行中的工作，再開始匯入比對。等待時 `transfer-cancel` 可取消並立即釋放鎖：比對階段取消回到可重新比對的輸入階段，套用階段取消回到比對結果，比對仍有效；工作頁、原始活動與摘要 API 仍可讀。再比對並完成後，確認收集繼續。
+- **等待。** 以慢速收集製造進行中的工作，再開始匯入比對。等待期間工作頁、原始活動與摘要 API 仍可讀；收集步驟結束後比對完成，套用後確認收集繼續。
 - **Desktop 對話框。** Electron 中 `stubDialogs(instance.app, { save: <zip 路徑>, open: <zip 或資料夾> })` 後按同樣的按鈕；`globalThis.__dialogCalls` 記錄對話框參數，流程直接進入執行階段。
 
 ## Gotchas
 
 - 預設的 `selected` Vault 才能開啟其他知識庫；`fixed` 是刻意的限制，不是 bug。
-- 匯出、匯入比對／套用與切換都取得操作鎖並暫停派工；已開始的收集步驟先完成。比對完成會釋放鎖，收集可能改變基準；套用前若基準已改變，取消預覽並重新比對。
+- 匯出、匯入比對／套用與切換都取得操作鎖並暫停派工；已開始的收集步驟先完成。比對完成會釋放鎖，之後的收集可能改變本機內容；套用依當下的內容重新計算，數量可能與比對結果不同。
 - 匯出只帶知識庫文件、訂閱、排程與刪除紀錄。登入自啟、Agent port 與金鑰屬於裝置 profile，不隨 zip 搬到另一台電腦；匯入及切換 Vault 也不替換此 profile 的 Agent 連線設定。
 - 匯出檔與其他知識庫都放在 run 目錄內；指向 run 目錄外會把資料留在受測範圍之外，`stop` 不會清掉。
-- Web 模式沒有 `xrCollectorDesktop` bridge，「在 Finder 顯示」類按鈕（`export-reveal`、`vault-reveal`）只在 Desktop 驗證。
+- Web 模式沒有 `xrCollectorDesktop` bridge，「在 Finder 顯示」類按鈕（`export-reveal`、`vault-reveal`、匯入放到位失敗時的 `import-backup-reveal`）只在 Desktop 驗證。
 - 兩個 instance 同時跑會占兩個 slot；結束時兩個都要 stop。
 
 ## Regression flows
 
 - `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的操作順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫與起始位置。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。視窗隱藏即可執行。
 
-- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、取消等待後再比對、等待時的工作頁及原始／摘要 API 可讀。兩邊都訂閱沒有影片的頻道 E：另一邊的 E 自動暫停後改了收集設定，合併取得設定且這邊的 E 仍啟用；這邊之後再改 E 的設定並匯出；切換到另一邊的 Vault 後匯入它，那邊的 E 取用較新的設定、維持自動暫停。Web 模式，合成 YouTube；不涵蓋原生對話框。
+- `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代、切換 Vault、收集中匯入比對、等待時的工作頁及原始／摘要 API 可讀。兩邊都訂閱沒有影片的頻道 E：另一邊的 E 自動暫停後改了收集設定，合併取得設定且這邊的 E 仍啟用；這邊之後再改 E 的設定並匯出；切換到另一邊的 Vault 後匯入它，那邊的 E 取用較新的設定、維持自動暫停。Web 模式，合成 YouTube；不涵蓋原生對話框。
 - `onboarding`：斷言 `vault-create`；設定頁以改過的名稱與位置建立並切換，預設值與目前的知識庫同名時停用「建立」，原知識庫資料夾內容不變，再以開啟既有知識庫切回。Web 模式。
 - `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，不離開設定，知識庫的文件與訂閱數與 API 相同。
 

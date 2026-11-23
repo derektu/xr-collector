@@ -104,11 +104,6 @@ export interface DeletionRecovery {
   unresolved: DeletionRecord[];
 }
 
-export interface PortableDeletions {
-  hidden: Set<string>;
-  records: DeletionRecord[];
-}
-
 export class MarkdownVault implements DocumentVault {
   readonly deletions: DeletionLedger;
   readonly now: () => Date;
@@ -253,20 +248,14 @@ export class MarkdownVault implements DocumentVault {
     return recovery;
   }
 
-  async portableDeletions(): Promise<PortableDeletions> {
-    const hidden = new Set<string>();
+  async portableDeletions(): Promise<DeletionRecord[]> {
     const records: DeletionRecord[] = [];
     for (const record of await this.deletions.list()) {
-      const id = documentId(record);
       let document: SavedDocument | null;
-      try { document = await this.readStored(id); } catch { document = null; hidden.add(id); }
-      if (!document) { records.push(record); continue; }
-      if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
-        hidden.add(id);
-        records.push(record);
-      }
+      try { document = await this.readStored(documentId(record)); } catch { document = null; }
+      if (!document || collectedBeforeDeletion(document.collectedAt, record.deletedAt)) records.push(record);
     }
-    return { hidden, records };
+    return records;
   }
 
   private async readStored(id: string): Promise<SavedDocument | null> {

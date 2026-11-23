@@ -1,14 +1,7 @@
-// Which routes a Vault operation such as an import blocks, and which answer before a Vault is ready:
-// each route declares its Vault access. The UI and Agent listeners share the route code, so one
-// listener stands for both. During an import, documents, search and rebuild answer 409 vault_busy
-// while jobs, activity, Vault status and device settings stay available. The device routes listed
-// below answer both before a Vault is ready and during an import; every other route answers
-// vault_not_ready until a Vault is ready. A device route that loses its declaration leaves the UI
-// and Agents unable to finish setup, or blocks device settings and job progress during an import.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../../src/transport/server/app.js';
-import { VaultOperationLock, type VaultAccess } from '../../../src/domain/vault/operation-lock.js';
+import { VaultOperationLock } from '../../../src/domain/vault/operation-lock.js';
 import type { VaultOperations } from '../../../src/domain/vault/vault-operations.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { anyService, apiRoutes, appWithEveryRoute, type ApiRoute } from '../../support/api-routes.js';
@@ -17,14 +10,14 @@ const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
 describe('Vault access declared by routes', () => {
-  it('blocks document reads and writes during an import while device routes stay available', async () => {
+  it('refuses Vault writes during an import while reads and device routes stay available, so the import never applies over a write', async () => {
     const lock = new VaultOperationLock({
       hold: async () => () => undefined,
       idle: async () => undefined,
       suspend: () => undefined,
     });
     const transfer = {
-      enter: (access: VaultAccess) => lock.enter(access),
+      enterWrite: () => lock.enterWrite(),
       status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
     } as unknown as VaultOperations;
     const app = await createHttpApp({
@@ -65,8 +58,7 @@ describe('Vault access declared by routes', () => {
     const bodyEntered = new Promise<void>((resolve) => { entered = resolve; });
     const work = lock.start({
       operation: 'import',
-      body: async (reporter) => {
-        reporter.blockReads();
+      body: async () => {
         entered();
         await new Promise<void>((resolve) => { release = resolve; });
         return { value: undefined, message: 'done' };
@@ -75,12 +67,7 @@ describe('Vault access declared by routes', () => {
     });
     await bodyEntered;
 
-    for (const url of ['/api/documents', '/api/search']) {
-      const response = await app.inject({ method: 'GET', url, headers });
-      expect(response.statusCode, url).toBe(409);
-      expect(response.json().error.code, url).toBe('vault_busy');
-    }
-    for (const url of ['/api/jobs', '/api/activity', '/api/activity?view=summary', '/api/activity/groups/locked-group', '/api/vault/status', '/api/health', '/api/device/login-startup',
+    for (const url of ['/api/documents', '/api/search', '/api/jobs', '/api/activity', '/api/activity?view=summary', '/api/activity/groups/locked-group', '/api/vault/status', '/api/health', '/api/device/login-startup',
       '/api/device/agent', '/api/device/agent/connection', '/api/device/agent/skill']) {
       expect((await app.inject({ method: 'GET', url, headers })).statusCode, url).toBe(200);
     }
@@ -89,7 +76,9 @@ describe('Vault access declared by routes', () => {
     expect(loginStartup.json()).toMatchObject({ loginStartup: { enabled: true } });
     expect((await app.inject({ method: 'PUT', url: '/api/device/agent/port', headers, payload: { mode: 'auto' } })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/api/device/agent/key/reset', headers })).statusCode).toBe(200);
-    expect((await app.inject({ method: 'POST', url: '/api/search/rebuild', headers })).statusCode).toBe(409);
+    const rebuild = await app.inject({ method: 'POST', url: '/api/search/rebuild', headers });
+    expect(rebuild.statusCode).toBe(409);
+    expect(rebuild.json().error.code).toBe('vault_busy');
 
     release();
     await work;
@@ -106,7 +95,7 @@ describe('Vault access declared by routes', () => {
     const app = await appWithEveryRoute({
       notReady: () => notReady,
       transfer: anyService({
-        enter: (access: VaultAccess) => lock.enter(access),
+        enterWrite: () => lock.enterWrite(),
         status: () => ({ ...lock.status(), vaultPath: '/vault', relocationUnavailable: false }),
       }),
     });
@@ -147,8 +136,7 @@ describe('Vault access declared by routes', () => {
     const bodyEntered = new Promise<void>((resolve) => { entered = resolve; });
     const work = lock.start({
       operation: 'import',
-      body: async (reporter) => {
-        reporter.blockReads();
+      body: async () => {
         entered();
         await new Promise<void>((resolve) => { release = resolve; });
         return { value: undefined, message: 'done' };
@@ -156,7 +144,7 @@ describe('Vault access declared by routes', () => {
       failed: () => ({ message: 'failed' }),
     });
     await bodyEntered;
-    expect(await send({ method: 'GET', url: '/api/documents' })).toEqual({ status: 409, code: 'vault_busy' });
+    expect(await send({ method: 'POST', url: '/api/search/rebuild' })).toEqual({ status: 409, code: 'vault_busy' });
     for (const route of device) expect((await send(route)).code, `${route.method} ${route.url}`).not.toBe('vault_busy');
     release();
     await work;

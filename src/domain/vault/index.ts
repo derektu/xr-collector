@@ -6,10 +6,8 @@
  */
 export type { Collector } from './collector.js';
 export { DeviceVaults } from './device-vaults.js';
-export type { StatFs } from './disk-space.js';
 export { openVault, type OpenedVault } from './opened-vault.js';
-export type { UpdateLease, VaultAccess } from './operation-lock.js';
+export type { UpdateLease } from './operation-lock.js';
 export { backupFolder, exportFileName, exportFolder } from './transfer-files.js';
-export type { ImportFault } from './vault-import.js';
 export { VaultOperations } from './vault-operations.js';
 export type { VaultSelection } from './vault-selection.js';

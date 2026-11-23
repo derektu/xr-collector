@@ -55,12 +55,12 @@ export interface TransferStatus {
 export interface TransferResult {
   exportPath?: string;
   exportBytes?: number;
-  unregisteredFiles?: number;
   importMode?: ImportMode;
   imported?: ChangeCounts;
   writtenFiles?: number;
   backupPath?: string;
-  searchRebuildNeeded?: boolean;
+  /** Set on an import that failed after it had put some files of the export file in place. */
+  partiallyApplied?: true;
   previousVaultPath?: string;
   interruptedJobs?: number;
   resumedJobs?: number;
