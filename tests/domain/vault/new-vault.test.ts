@@ -43,6 +43,14 @@ describe('nameProblem', () => {
     expect(nameProblem('LPT1.txt')).toContain('系統保留');
     expect(nameProblem('知'.repeat(86))).toBe('名稱太長。');
   });
+
+  it('refuses COM and LPT with a superscript 1, 2 or 3, which Windows reserves like COM1 to COM9', () => {
+    for (const name of ['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³', 'com²', 'Lpt³', 'COM¹.txt', 'lpt².tar.gz']) {
+      expect(nameProblem(name), name).toContain('系統保留');
+    }
+    for (const name of ['COM4', 'lpt9.log']) expect(nameProblem(name), name).toContain('系統保留');
+    for (const name of ['COM⁴', 'COM0', 'COM¹0', 'XCOM¹']) expect(nameProblem(name), name).toBeNull();
+  });
 });
 
 describe('checkNewVault', () => {
