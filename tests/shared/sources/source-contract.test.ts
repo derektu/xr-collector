@@ -93,7 +93,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     let services!: Record<'fake' | 'fake2', SubscriptionService>;
     const jobs: JobManager = new JobManager({
       sources: SOURCES,
-      vaultPath: root, store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, setTimer,
+      vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, setTimer,
       pacing: [gates.fake, gates.fake2],
       limits: { discovery: 1, capture: options.capture ?? 2 },
       retry: options.retry ?? { maxAttempts: 1, delaysMs: [MINUTE] },
@@ -356,7 +356,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const remaining = new FakeSource('fake');
     const manager = new JobManager({
       sources: SOURCES,
-      vaultPath: w.root, store: reopened, plugins: [createFakePlugin(FAKE, remaining)],
+      vaultPath: w.root, vaultId: 'vault-id', store: reopened, plugins: [createFakePlugin(FAKE, remaining)],
       documents: new Collector(new MarkdownVault(new VaultFileWriter(w.root, SOURCES))),
     });
     await manager.resume();

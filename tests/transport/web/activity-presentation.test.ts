@@ -23,7 +23,7 @@ const base = { eventId: 'e1', timestamp: '2026-10-15T06:00:00.000Z', vaultPath: 
 
 function job(overrides: Partial<CollectionJob>): CollectionJob {
   return {
-    id: 'job-1', kind: 'youtube.video', state: 'completed', phase: null, vaultPath: '/v', parentId: null,
+    id: 'job-1', kind: 'youtube.video', state: 'completed', phase: null, vaultPath: '/v', vaultId: 'vault-id', parentId: null,
     source: { type: 'youtube', id: 'abc', url: 'https://www.youtube.com/watch?v=abc', title: 'Me at the zoo' },
     createdAt: '2026-10-15T05:00:00.000Z', startedAt: '2026-10-15T05:00:01.000Z', finishedAt: '2026-10-15T05:00:09.000Z',
     updatedAt: '2026-10-15T05:00:09.000Z', progress: null, items: null, result: null, error: null, ...overrides,
@@ -127,7 +127,7 @@ describe('activity presentation', () => {
       { timestamp: '2026-10-15T05:00:00.000Z', level: 'INFO', eventType: 'job.accepted', errorCode: null, message: 'accepted', detail: [] },
       { timestamp: '2026-10-15T05:00:09.000Z', level: 'ERROR', eventType: 'job.failed', errorCode: 'network_error', message: 'unreachable', detail: ['ERROR: timed out', 'Cookie: [masked]'] },
     ]);
-    const resumed = { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: '2026-10-15T04:00:00.000Z', lastResumedAt: null };
+    const resumed = { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: '2026-10-15T04:00:00.000Z', lastResumedAt: null, lastStop: 'shutdown' as const };
     expect(diagnostics(job({ recovery: resumed, retryOf: 'job-0', retriedBy: 'job-2' }), [])).toMatchObject({ resumedCount: 0, retryOf: 'job-0', retriedBy: 'job-2' });
   });
 

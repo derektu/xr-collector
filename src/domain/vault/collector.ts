@@ -59,12 +59,12 @@ export class Collector implements DocumentCollector {
   /** Whether discovery should pass over this item: it is in the Vault or the user deleted it. */
   async isKnown(key: DocumentKey): Promise<boolean> {
     if (await this.vault.getByKey(key)) return true;
-    return (await this.vault.deletions?.get(documentId(key))) != null;
+    return (await this.vault.deletions.get(documentId(key))) != null;
   }
 
   /** Whether a deletion keeps this request from collecting the item: a record exists and the request does not postdate it. */
   async isDeletedFor(key: DocumentKey, intent: SaveIntent): Promise<boolean> {
-    const deletion = await this.vault.deletions?.get(documentId(key));
+    const deletion = await this.vault.deletions.get(documentId(key));
     return deletion != null && !explicitAfter(intent, deletion.deletedAt);
   }
 
@@ -77,7 +77,7 @@ export class Collector implements DocumentCollector {
   save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<SaveResult> {
     const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
-      const deletion = await this.vault.deletions?.get(id);
+      const deletion = await this.vault.deletions.get(id);
       if (!deletion) {
         const document = await this.vault.add(captured);
         this.noted(id);
@@ -87,10 +87,10 @@ export class Collector implements DocumentCollector {
         const target = this.vault.sources.get(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
         throw new CollectorError('document_deleted', `這份文件已刪除，自動與${target}收集會略過。`);
       }
-      const now = (this.vault.now ?? (() => new Date()))();
+      const now = this.vault.now();
       const after = new Date(Date.parse(deletion.deletedAt) + 1);
       const document = await this.vault.add(captured, { collectedAt: now > after ? now : after });
-      await this.vault.deletions!.clear(id);
+      await this.vault.deletions.clear(id);
       this.noted(id);
       this.options.recordEvent?.({
         eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
@@ -129,8 +129,7 @@ export class Collector implements DocumentCollector {
    */
   delete(id: string): Promise<DocumentDeletion> {
     return this.exclusive(id, async () => {
-      const { deletions, remove } = this.vault;
-      if (!deletions || !remove) throw new CollectorError('invalid_request', '這個知識庫不支援刪除文件。');
+      const { deletions } = this.vault;
       const document = await this.vault.read(id);
       if (!document) {
         if (await deletions.get(id)) throw new CollectorError('document_deleted', '這份文件已刪除。');
@@ -142,7 +141,7 @@ export class Collector implements DocumentCollector {
       });
       const event = { documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true as const };
       try {
-        await remove.call(this.vault, id);
+        await this.vault.remove(id);
       } catch (error) {
         console.error('Document file removal failed', error);
         this.options.recordEvent?.({
@@ -184,7 +183,6 @@ export class Collector implements DocumentCollector {
     return this.exclusive(id, async () => {
       const current = await this.read(id);
       if (current.status === status) return current;
-      if (!this.vault.writeStatus) throw new CollectorError('invalid_request', '這個知識庫不支援變更文件狀態。');
       const document = await this.vault.writeStatus(id, status);
       const event = { documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true as const };
       if (this.search) {
@@ -216,7 +214,6 @@ export class Collector implements DocumentCollector {
     const id = documentId(entry);
     return this.exclusive(id, async () => {
       const { deletions } = this.vault;
-      if (!deletions) throw new CollectorError('invalid_request', '這個知識庫不支援刪除文件。');
       if (await this.vault.read(id) || await deletions.get(id)) return;
       await deletions.record(entry);
     });
@@ -307,7 +304,7 @@ export class Collector implements DocumentCollector {
   async read(id: string): Promise<SavedDocument> {
     const document = await this.vault.read(id);
     if (!document) {
-      if (await this.vault.deletions?.get(id)) throw new CollectorError('document_deleted', '這份文件已刪除。');
+      if (await this.vault.deletions.get(id)) throw new CollectorError('document_deleted', '這份文件已刪除。');
       throw new CollectorError('document_not_found', '找不到這份文件。');
     }
     return document;

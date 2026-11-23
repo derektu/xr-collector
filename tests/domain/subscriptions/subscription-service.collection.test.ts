@@ -54,7 +54,7 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
     const collector = new Collector(documents);
     const jobs: JobManager = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+      vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
       // Failed checks here drive the catch-up rules; automatic retries have their own cases.
       retry: { maxAttempts: 1 },

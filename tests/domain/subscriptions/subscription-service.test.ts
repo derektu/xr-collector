@@ -8,6 +8,7 @@ import type { SubscriptionPatch, SubscriptionStore } from '../../../src/domain/s
 import { DEFAULT_POLICY } from '../../../src/domain/sources/youtube/settings.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { withoutDocumentChanges } from '../../support/document-vault-stubs.js';
 import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subscription-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
@@ -67,13 +68,14 @@ const emptyVault: DocumentVault = {
   add: async () => { throw new Error('not used'); },
   list: async () => [],
   read: async () => null,
+  ...withoutDocumentChanges(),
 };
 
 function setup(source: Partial<YouTubeSource> = {}) {
   const store = new MemoryChannelStore();
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: '/vault',
+    vaultPath: '/vault', vaultId: 'vault-id',
     store: memoryJobRecords(PRODUCT_SOURCES).jobs,
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new Error('not used'); },

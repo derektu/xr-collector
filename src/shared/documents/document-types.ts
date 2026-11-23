@@ -1,7 +1,5 @@
-/** ID of a source type whose documents the Vault can hold: the ID of a registered source plugin. */
 export type DocumentSourceType = string;
 
-/** A document's source type and source ID; together they form its ID, `<source type>:<source ID>`. */
 export interface DocumentKey {
   sourceType: DocumentSourceType;
   sourceId: string;
@@ -25,19 +23,13 @@ export interface DocumentDetails {}
  */
 export type ContentExtent = 'full' | 'summary';
 
-/**
- * Whether a document is a `draft` still to be reviewed or `published`, ready to use. Stored as the
- * top-level frontmatter `status`; a file without one is published.
- */
 export type DocumentStatus = 'draft' | 'published';
 
-/** How many documents have each status. */
 export interface DocumentStatusCounts {
   draft: number;
   published: number;
 }
 
-/** Source-independent document fields shared by browse, search and read. */
 export interface DocumentMetadata extends DocumentDetails {
   id: string;
   /** The frontmatter `type` its source type gives its documents. */
@@ -50,7 +42,6 @@ export interface DocumentMetadata extends DocumentDetails {
   publishedAt: string | null;
   collectedAt: string;
   status: DocumentStatus;
-  /** Set on a document read from the Vault; browse and search results leave it out. */
   contentExtent?: ContentExtent;
 }
 
@@ -63,10 +54,9 @@ export interface DocumentSummary extends DocumentMetadata {
   excerpt: string;
 }
 
-/** Narrows browse and search to one source type, optionally one publisher within it. */
 export interface DocumentFilter {
   sourceType?: DocumentSourceType;
-  /** A publisher ID, or `none` for documents without one; requires `sourceType`. */
+  /** A publisher ID, or `none` for documents without one. */
   publisherId?: string;
   status?: DocumentStatus;
 }
@@ -108,28 +98,20 @@ export interface DocumentSources {
   groups: DocumentSourceGroup[];
 }
 
-/** The result of deleting a document. */
 export interface DocumentDeletion {
   deleted: { id: string; sourceType: DocumentSourceType; sourceId: string; title: string; deletedAt: string };
   /**
-   * True when the search service excludes the document from results; its index entry is removed in
-   * the background, and a failed removal is recorded as `document.index_remove_failed`. False when
-   * no search service runs; the next search start compares the index with the Vault and leaves the
-   * document out.
+   * True when search already excludes the document and its index entry is removed in the background;
+   * false when no search service runs, and the next search start leaves the document out.
    */
   indexed: boolean;
   indexMessage?: string;
 }
 
-/**
- * A deleted item, kept so automatic and subscription collection do not bring it back. The title and
- * publisher let an import or a deleted-document page still name the item.
- */
 export interface DeletionRecord extends DocumentKey {
   sourceUrl: string;
   title: string;
   publisherId: string | null;
   publisherName: string;
-  /** When the deletion intent was recorded, from the same clock that stamps `collected_at`. */
   deletedAt: string;
 }

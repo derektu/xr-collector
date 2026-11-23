@@ -5,21 +5,18 @@ import type { CapturedDocument } from '../sources/source-contract.js';
 /** Filter value that selects documents saved without a publisher ID. */
 export const NO_PUBLISHER_ID = 'none';
 
-/** Documents of one Vault; `read`, `list` and `getByKey` return only visible documents. */
+/** `read`, `list` and `getByKey` return only visible documents. */
 export interface DocumentVault {
-  /** The source types whose documents the Vault holds. */
   readonly sources: SourceDeclarations;
   getByKey(key: DocumentKey): Promise<SavedDocument | null>;
   add(document: CapturedDocument, options?: { collectedAt?: Date }): Promise<SavedDocument>;
   list(): Promise<DocumentMetadata[]>;
   read(id: string): Promise<SavedDocument | null>;
-  /** Removes a document file. Vaults without deletion records cannot delete. */
-  remove?(id: string): Promise<void>;
-  /** Sets a visible document's status and stamps its change time. Vaults without it cannot change status. */
-  writeStatus?(id: string, status: DocumentStatus): Promise<SavedDocument>;
-  deletions?: DeletionRecords;
-  /** The clock behind collection and deletion times. */
-  now?: () => Date;
+  remove(id: string): Promise<void>;
+  /** Sets a visible document's status and stamps its change time. */
+  writeStatus(id: string, status: DocumentStatus): Promise<SavedDocument>;
+  deletions: DeletionRecords;
+  now: () => Date;
 }
 
 /** The deletion records of one Vault, keyed by document ID. */

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { withoutDocumentChanges } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
@@ -61,10 +62,11 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
     },
     list: async () => [],
     read: async () => saved,
+    ...withoutDocumentChanges(),
   };
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
-    vaultPath: '/vault',
+    vaultPath: '/vault', vaultId: 'vault-id',
     store: memoryJobRecords(PRODUCT_SOURCES).jobs,
     sources: PRODUCT_SOURCES,
     plugins: [youtubePlugin({
@@ -151,7 +153,7 @@ describe('HTTP app', () => {
       completedAt: null,
     };
     const job = (id: string): CollectionJob => ({
-      id, kind: 'youtube.channel', state: 'queued', phase: null, vaultPath: '/vault', parentId: null,
+      id, kind: 'youtube.channel', state: 'queued', phase: null, vaultPath: '/vault', vaultId: 'vault-id', parentId: null,
       source: { type: 'youtube', id: savedChannel.id, url: savedChannel.url, title: savedChannel.title },
       createdAt: '2026-09-17T00:00:00.000Z', startedAt: null, finishedAt: null, updatedAt: '2026-09-17T00:00:00.000Z',
       progress: null, items: null, result: null, error: null,

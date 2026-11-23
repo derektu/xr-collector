@@ -42,7 +42,7 @@ async function world(options: { removalSettleMs?: number; failDeleting?: (id: st
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', now);
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {

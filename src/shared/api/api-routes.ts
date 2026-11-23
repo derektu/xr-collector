@@ -1,7 +1,3 @@
-// The HTTP API as one table the server registers from and the clients call through: each route's
-// method, path, Vault access and the types of its request and response. A response key the server
-// renames no longer matches the type its clients read, so the change fails the typecheck instead of
-// reaching a screen as `undefined`.
 import type { ChangeBatch } from './changes.js';
 import type { ActivityLogHealth, ActivityGroupPage, ActivityPage, ActivitySummaryPage } from '../activity/activity-types.js';
 import type {
@@ -63,10 +59,6 @@ export interface ApiRoute<Response = unknown, Body = undefined, Query = undefine
    * an error answer of the route stays masked.
    */
   readonly revealsSecret?: true;
-  /**
-   * Types only, never present at run time. A route that answers an event stream or a file has the
-   * response type `never`.
-   */
   readonly [shapes]?: { response: Response; body: Body; query: Query };
 }
 
@@ -74,7 +66,6 @@ export type ResponseOf<R> = R extends ApiRoute<infer Response, unknown, unknown>
 export type BodyOf<R> = R extends ApiRoute<unknown, infer Body, unknown> ? Body : never;
 export type QueryOf<R> = R extends ApiRoute<unknown, unknown, infer Query> ? Query : never;
 
-/** The names of a path's `:name` parameters. */
 export type PathParams<Path extends string> =
   Path extends `${string}:${infer Name}/${infer Rest}` ? Name | PathParams<`/${Rest}`>
     : Path extends `${string}:${infer Name}` ? Name : never;
@@ -83,15 +74,13 @@ interface RouteFields<Method extends HttpMethod, Path extends string> {
   method: Method; path: Path; access?: RouteVaultAccess; status?: number; revealsSecret?: true;
 }
 
-/** A JSON route answering `Response`, taking a JSON `Body` and a `Query` when given. */
 function json<Response, Body = undefined, Query = undefined>() {
   return <const Method extends HttpMethod, const Path extends string>(fields: RouteFields<Method, Path>)
     : ApiRoute<Response, Body, Query> & { readonly method: Method; readonly path: Path } =>
     Object.freeze({ ...fields });
 }
 
-/** A route answering an event stream or a file instead of JSON. */
-function unformatted<const Method extends HttpMethod, const Path extends string>(fields: RouteFields<Method, Path>)
+function streamOrFileRoute<const Method extends HttpMethod, const Path extends string>(fields: RouteFields<Method, Path>)
   : ApiRoute<never> & { readonly method: Method; readonly path: Path } {
   return Object.freeze({ ...fields });
 }
@@ -114,7 +103,6 @@ export interface UrlRequest { url: string }
 export interface DocumentQuery { sourceType?: string; publisherId?: string; status?: DocumentStatus; offset?: number; limit?: number }
 export interface SearchParameters extends DocumentQuery { q: string; publishedFrom?: string; publishedTo?: string }
 export interface JobListQuery { state?: 'active' | 'all'; limit?: number; cursor?: string }
-/** Severities and event types are comma separated. */
 export interface ActivityParameters {
   view?: 'raw' | 'summary'; severity?: string; eventType?: string; jobId?: string; subscriptionId?: string;
   sourceType?: string; since?: string; until?: string; cursor?: string; limit?: number;
@@ -123,12 +111,8 @@ export interface ActivityGroupQuery { limit?: number; cursor?: string; severity?
 export interface SubscriptionChange { enabled?: boolean; settings?: Partial<SubscriptionSettings> }
 export interface SubscriptionRemoval { removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }
 
-/**
- * Every route the table declares. The server registers each one with its access and status; the web
- * client and the system tray call them by name.
- */
 export const API_ROUTES = {
-  events: unformatted({ method: 'GET', path: '/api/events', access: 'device-data' }),
+  events: streamOrFileRoute({ method: 'GET', path: '/api/events', access: 'device-data' }),
   changes: json<ChangesResponse, undefined, ChangesQuery>()({ method: 'GET', path: '/api/changes', access: 'device-data' }),
   health: json<HealthResponse>()({ method: 'GET', path: '/api/health', access: 'device-data' }),
   pacing: json<{ groups: PacingGroupStatus[] }>()({ method: 'GET', path: '/api/pacing', access: 'device-data' }),
@@ -147,7 +131,7 @@ export const API_ROUTES = {
   agentConnection: json<{ connection: AgentConnection }>()({ method: 'GET', path: '/api/device/agent/connection', access: 'device-data', revealsSecret: true }),
   setAgentPort: json<{ agent: AgentConnectionStatus }, AgentPortSetting>()({ method: 'PUT', path: '/api/device/agent/port', access: 'device-data' }),
   resetAgentKey: json<{ connection: AgentConnection; agent: AgentConnectionStatus }>()({ method: 'POST', path: '/api/device/agent/key/reset', access: 'device-data', revealsSecret: true }),
-  agentSkill: unformatted({ method: 'GET', path: '/api/device/agent/skill', access: 'device-data' }),
+  agentSkill: streamOrFileRoute({ method: 'GET', path: '/api/device/agent/skill', access: 'device-data' }),
 
   vaultSetup: json<{ vault: VaultSetupStatus }>()({ method: 'GET', path: '/api/vault/setup', access: 'device-data' }),
   setupVault: json<VaultSetupResult, VaultSetupRequest>()({ method: 'POST', path: '/api/vault/setup', access: 'device-data' }),
@@ -185,10 +169,6 @@ export const API_ROUTES = {
   job: json<{ job: JobView }>()({ method: 'GET', path: '/api/jobs/:id', access: 'device-data' }),
   retryJob: json<JobSubmission>()({ method: 'POST', path: '/api/jobs/:id/retry', status: 202 }),
   dismissJob: json<{ job: JobView }>()({ method: 'POST', path: '/api/jobs/:id/dismiss' }),
-  /**
-   * The response's `view` names what it holds: `summary` for an `ActivitySummaryPage`, `raw` for an
-   * `ActivityPage`. A `summary` query answers raw events when it names a job.
-   */
   activity: json<ActivityPage | ActivitySummaryPage, undefined, ActivityParameters>()({ method: 'GET', path: '/api/activity', access: 'device-data' }),
   activityGroup: json<ActivityGroupPage, undefined, ActivityGroupQuery>()({ method: 'GET', path: '/api/activity/groups/:groupId', access: 'device-data' }),
 

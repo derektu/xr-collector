@@ -7,6 +7,7 @@ import { DEFAULT_POLICY } from '../../../src/domain/sources/youtube/settings.js'
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
@@ -33,6 +34,7 @@ import { PRODUCT_DECLARATIONS, PRODUCT_SOURCES } from '../../support/product-sou
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
 
 const VAULT = '/vaults/activity';
+const VAULT_ID = 'vault-id';
 const T0 = new Date('2026-10-15T06:00:00.000Z');
 const directories: string[] = [];
 
@@ -71,6 +73,10 @@ class MemoryVault implements DocumentVault {
   }
   async list(): Promise<DocumentSummary[]> { return []; }
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
+  readonly now = () => new Date();
 }
 
 /** Failures queued per call kind; captures can wait until released. */
@@ -120,7 +126,7 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
   let sequence = 0;
   const manager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions,
+    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions,
     now: clock, createId: () => `job-${++sequence}`, limits,
     setTimer: (callback) => { timers.push(callback); return () => undefined; },
   });
@@ -497,7 +503,7 @@ describe('retention leaves job records alone (A-T3)', () => {
 
     const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: clock });
     const reopened = reopenedRecords.jobs;
-    expect(reopened.list(VAULT).some((job) => job.kind === 'youtube.channel')).toBe(false);
+    expect(reopened.list(VAULT, VAULT_ID).some((job) => job.kind === 'youtube.channel')).toBe(false);
     const summary = await reopenedRecords.views.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-summary' }, { vaultPath: VAULT });
     const group = summary.entries.find((entry) => entry.kind === 'check')!;
     expect(group).toMatchObject({ count: 12, result: 'empty' });
@@ -536,7 +542,7 @@ describe('retention leaves job records alone (A-T3)', () => {
 
 function finished(id: string, timestamp: string): CollectionJob {
   return {
-    id, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, parentId: null,
+    id, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
     source: { type: 'youtube', id, url: watchUrl(id), title: id }, createdAt: timestamp, startedAt: timestamp,
     finishedAt: timestamp, updatedAt: timestamp, progress: null, items: null, result: { outcome: 'existing' }, error: null,
   };

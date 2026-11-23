@@ -1,4 +1,5 @@
 import type { DocumentVault } from '../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from './document-vault-stubs.js';
 import type { CapturedDocument } from '../../src/shared/sources/source-contract.js';
 import type { DocumentKey } from '../../src/shared/documents/document-types.js';
 import { CollectorError } from '../../src/shared/lib/collector-error.js';
@@ -151,4 +152,8 @@ export class MemoryDocuments implements DocumentVault {
   async read(id: string): Promise<SavedDocument | null> {
     return [...this.documents.values()].find((document) => document.id === id) ?? null;
   }
+
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
 }

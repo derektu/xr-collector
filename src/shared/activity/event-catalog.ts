@@ -1,15 +1,11 @@
 import type { EventSeverity } from './activity-types.js';
 
 /**
- * What the activity log knows about one kind of event.
- *
  * - `severity`: the severity an event of this kind is recorded with when its emitter gives none, and
- *   the one a stored line without a valid severity is read with. Emitters whose severity depends on
- *   the outcome give their own.
- * - `summary`: whether the summary view lists the event at all. Hidden kinds are process steps, such
- *   as accepting a job, that a later row already stands for.
+ *   the one a stored line without a valid severity is read with.
+ * - `summary`: whether the summary view lists the event at all.
  * - `child`: whether the summary view lists the event when it belongs to an item a subscription check
- *   queued; only the item's results and failures say something about the check.
+ *   queued.
  */
 export interface EventSpec {
   severity: EventSeverity;
@@ -21,7 +17,6 @@ const shown = (severity: EventSeverity): EventSpec => ({ severity, summary: true
 const itemResult = (severity: EventSeverity): EventSpec => ({ severity, summary: true, child: true });
 const hidden = (severity: EventSeverity): EventSpec => ({ severity, summary: false, child: false });
 
-/** Every named kind of event the product records. An `eventType` outside this list does not typecheck. */
 const NAMED_EVENTS = {
   'job.accepted': hidden('debug'),
   'job.started': shown('info'),
@@ -83,24 +78,30 @@ const NAMED_EVENTS = {
 
 export type NamedEventType = keyof typeof NAMED_EVENTS;
 
-/**
- * A pacing group's cooldown, named after the group (`<group>.rate_limited`). Plugins declare their
- * groups, so these kinds share one entry per suffix.
- */
 export type PacingEventType = `${string}.rate_limited` | `${string}.cooldown_ended`;
 
 export type EventType = NamedEventType | PacingEventType;
 
-const PACING_EVENTS: Record<'rate_limited' | 'cooldown_ended', EventSpec> = {
+type PacingSuffix = 'rate_limited' | 'cooldown_ended';
+
+const PACING_EVENTS: Record<PacingSuffix, EventSpec> = {
   rate_limited: shown('warning'),
   cooldown_ended: shown('info'),
 };
 
-/** The catalog entry of an event kind; null for a text that names no kind, such as a stored line of another build. */
+function isNamedEvent(type: string): type is NamedEventType {
+  return Object.hasOwn(NAMED_EVENTS, type);
+}
+
+function isPacingSuffix(suffix: string): suffix is PacingSuffix {
+  return Object.hasOwn(PACING_EVENTS, suffix);
+}
+
+/** The catalog entry of an event kind; null for a text that names no kind. */
 export function eventSpec(type: string): EventSpec | null {
-  if (Object.hasOwn(NAMED_EVENTS, type)) return NAMED_EVENTS[type as NamedEventType];
+  if (isNamedEvent(type)) return NAMED_EVENTS[type];
   const dot = type.lastIndexOf('.');
   const suffix = type.slice(dot + 1);
-  if (dot > 0 && Object.hasOwn(PACING_EVENTS, suffix)) return PACING_EVENTS[suffix as keyof typeof PACING_EVENTS];
+  if (dot > 0 && isPacingSuffix(suffix)) return PACING_EVENTS[suffix];
   return null;
 }

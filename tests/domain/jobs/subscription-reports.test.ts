@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { withoutDocumentChanges } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
@@ -21,10 +22,11 @@ function setup() {
     add: async () => { throw new Error('nothing is collected'); },
     list: async () => [],
     read: async () => null,
+    ...withoutDocumentChanges(),
   };
   const subs = new SubscriptionRecorder(SOURCES);
   const manager = new JobManager({
-    sources: SOURCES, vaultPath: '/vaults/reports', store: memoryJobRecords(SOURCES).jobs, subscriptions: subs,
+    sources: SOURCES, vaultPath: '/vaults/reports', vaultId: 'vault-id', store: memoryJobRecords(SOURCES).jobs, subscriptions: subs,
     documents: new Collector(vault), plugins: [createFakePlugin(FAKE, source)], retry: { maxAttempts: 1 },
   });
   subs.attach(manager);

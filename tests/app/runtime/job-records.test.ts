@@ -12,13 +12,14 @@ import { memoryJobRecords, openJobRecords } from '../../../src/app/runtime/job-r
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const VAULT = '/vaults/records';
+const VAULT_ID = 'vault-id';
 const NOW = new Date('2026-10-15T06:00:00.000Z');
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
 function job(id: string, title: string | null): CollectionJob {
   return {
-    id, kind: 'youtube.video', state: 'running', phase: 'capture', vaultPath: VAULT, parentId: null,
+    id, kind: 'youtube.video', state: 'running', phase: 'capture', vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
     source: { type: 'youtube', id, url: `https://example.test/${id}`, title }, createdAt: NOW.toISOString(), startedAt: NOW.toISOString(),
     finishedAt: null, updatedAt: NOW.toISOString(), progress: null, items: null, result: null, error: null,
   };

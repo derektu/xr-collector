@@ -9,6 +9,7 @@ import {
 } from '../../../src/domain/sources/youtube/settings.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
@@ -38,6 +39,7 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 // never finishes.
 
 const VAULT = '/vaults/recovery';
+const VAULT_ID = 'vault-id';
 const T0 = new Date('2026-10-15T06:00:00.000Z');
 
 const videoId = (index: number, prefix = 'r') => `${prefix}${String(index).padStart(10, '0')}`.slice(0, 11);
@@ -70,6 +72,10 @@ class MemoryVault implements DocumentVault {
   }
   async list(): Promise<DocumentSummary[]> { return []; }
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
+  readonly now = () => new Date();
 }
 
 function never(): Promise<never> {
@@ -180,7 +186,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     const timers: Timer[] = [];
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
+      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
       ...(options.pause ? { pause: options.pause } : {}),
@@ -251,28 +257,31 @@ function listed(count: number, prefix: string): DiscoveredYouTubeVideo[] {
   });
 }
 
-describe('jobs that never stopped before (R-T1)', () => {
-  it('resumes jobs with no stop on record, except work a later job took over', async () => {
+describe('jobs on file from a stopped process (R-T1)', () => {
+  it('resumes the stopped jobs on file, except work a later job took over', async () => {
     const w = await world();
     const base = {
-      vaultPath: VAULT, parentId: null, startedAt: T0.toISOString(), finishedAt: null, updatedAt: T0.toISOString(),
+      vaultPath: VAULT, vaultId: VAULT_ID, parentId: null, startedAt: T0.toISOString(), finishedAt: null, updatedAt: T0.toISOString(),
       progress: null, items: null, result: null, error: null,
     };
-    const legacy: CollectionJob[] = [
-      { ...base, id: 'old-channel', kind: 'youtube.channel', state: 'interrupted', phase: 'discover',
-        source: { type: 'youtube', id: 'UC-legacy', url: 'https://www.youtube.com/channel/UC-legacy/videos', title: '舊頻道' },
-        createdAt: '2026-10-01T00:00:00.000Z', scope: { trigger: 'manual' }, error: { code: 'interrupted', message: '服務停止。' } },
+    const stopped = {
+      state: 'interrupted' as const, error: { code: 'interrupted', message: '服務停止。' },
+      recovery: { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: T0.toISOString(), lastResumedAt: null, lastStop: 'shutdown' as const },
+    };
+    const onFile: CollectionJob[] = [
+      { ...base, ...stopped, id: 'old-channel', kind: 'youtube.channel', phase: 'discover',
+        source: { type: 'youtube', id: 'UC-earlier', url: 'https://www.youtube.com/channel/UC-earlier/videos', title: '舊頻道' },
+        createdAt: '2026-10-01T00:00:00.000Z', scope: { trigger: 'manual' } },
       { ...base, id: 'new-channel', kind: 'youtube.channel', state: 'completed', phase: 'capture',
-        source: { type: 'youtube', id: 'UC-legacy', url: 'https://www.youtube.com/channel/UC-legacy/videos', title: '舊頻道' },
+        source: { type: 'youtube', id: 'UC-earlier', url: 'https://www.youtube.com/channel/UC-earlier/videos', title: '舊頻道' },
         createdAt: '2026-10-02T00:00:00.000Z', scope: { trigger: 'manual' }, result: { outcome: 'empty' } },
       { ...base, id: 'running-video', kind: 'youtube.video', state: 'running', phase: 'capture',
         source: { type: 'youtube', id: videoId(1), url: watchUrl(videoId(1)), title: null }, createdAt: '2026-10-03T00:00:00.000Z' },
-      { ...base, id: 'interrupted-video', kind: 'youtube.video', state: 'interrupted', phase: null,
-        source: { type: 'youtube', id: videoId(2), url: watchUrl(videoId(2)), title: null }, createdAt: '2026-10-03T00:00:01.000Z',
-        error: { code: 'interrupted', message: '服務停止。' } },
+      { ...base, ...stopped, id: 'interrupted-video', kind: 'youtube.video', phase: null,
+        source: { type: 'youtube', id: videoId(2), url: watchUrl(videoId(2)), title: null }, createdAt: '2026-10-03T00:00:01.000Z' },
     ];
-    subscribe(w.subs, 'UC-legacy');
-    await writeFile(path.join(w.directory, 'jobs.json'), `${JSON.stringify({ version: 1, jobs: legacy })}\n`);
+    subscribe(w.subs, 'UC-earlier');
+    await writeFile(path.join(w.directory, 'jobs.json'), `${JSON.stringify({ version: 1, jobs: onFile })}\n`);
 
     const g = await w.boot();
     await g.manager.resume();
@@ -287,7 +296,7 @@ describe('jobs that never stopped before (R-T1)', () => {
     expect(running).not.toHaveProperty('checkpoint');
     const resumed = (await w.events()).filter((event) => event.eventType === 'job.resumed');
     expect(Object.fromEntries(resumed.map((event) => [event.jobId, event.stopReason]))).toEqual({
-      'running-video': 'crash', 'interrupted-video': 'unknown',
+      'running-video': 'crash', 'interrupted-video': 'shutdown',
     });
     await g.store.flush();
     const onDisk = JSON.parse(await readFile(path.join(w.directory, 'jobs.json'), 'utf8'));
@@ -986,7 +995,7 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
     for (let index = 0; index < 1001; index += 1) {
       const at = new Date(T0.getTime() + 86_400_000 + index).toISOString();
       g2.store.put({
-        id: `later-${index}`, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, parentId: null,
+        id: `later-${index}`, kind: 'youtube.video', state: 'completed', phase: null, vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
         source: { type: 'youtube', id: `later-${index}`, url: watchUrl(`later-${index}`), title: null },
         createdAt: at, startedAt: at, finishedAt: at, updatedAt: at, progress: null, items: null, result: { outcome: 'existing' }, error: null,
       });

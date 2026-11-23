@@ -61,7 +61,7 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   let autoCheck = true;
   const jobs: JobManager = new JobManager({
     sources: PRODUCT_SOURCES,
-    vaultPath: root, store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector,
     subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },
@@ -223,7 +223,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
   it('keeps a started job that waits in line again, such as after a restart, out of queued, and reads its own wait as retrying', () => {
     const at = '2026-10-15T04:00:00.000Z';
     const requeued: CollectionJob = {
-      id: 'j', kind: 'youtube.channel', state: 'queued', phase: 'discover', vaultPath: '/vault', parentId: null,
+      id: 'j', kind: 'youtube.channel', state: 'queued', phase: 'discover', vaultPath: '/vault', vaultId: 'vault-id', parentId: null,
       source: { type: 'youtube', id: 'UC1', url: 'https://www.youtube.com/channel/UC1', title: 'A' },
       createdAt: at, startedAt: at, finishedAt: null, updatedAt: at, progress: null, items: null, result: null, error: null,
     };

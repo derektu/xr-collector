@@ -6,6 +6,7 @@ import { PacingGate } from '../../../src/domain/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../../src/domain/sources/youtube/server.js';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
+import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
@@ -38,6 +39,7 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 // through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
 
 const VAULT = '/vaults/pacing';
+const VAULT_ID = 'vault-id';
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 const MINUTE = 60_000;
 const watchUrl = (id: string) => `https://www.youtube.com/watch?v=${id}`;
@@ -61,6 +63,10 @@ class MemoryVault implements DocumentVault {
   }
   async list(): Promise<DocumentSummary[]> { return []; }
   async read(id: string) { return [...this.documents.values()].find((document) => document.id === id) ?? null; }
+  readonly remove = unusedVaultWrite;
+  readonly writeStatus = unusedVaultWrite;
+  readonly deletions = NO_DELETIONS;
+  readonly now = () => new Date();
 }
 
 interface Timer { at: number; callback: () => void; cancelled: boolean }
@@ -163,7 +169,7 @@ async function world(options: { waitMs?: number } = {}) {
     const source = new GatedSource(gate);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
+      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
       now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
     });
     subs.attach(manager);
