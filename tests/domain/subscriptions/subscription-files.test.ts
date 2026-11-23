@@ -33,7 +33,7 @@ const read = async (root: string, name: string) => JSON.parse(await readFile(pat
 function row(id: string, enabled = true) {
   return {
     id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled, addedAt: '2026-09-01T00:00:00.000Z',
-    lastCheckedAt: '2026-10-15T03:30:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z', lastCheckedAt: '2026-10-15T03:30:00.000Z',
   };
 }
 

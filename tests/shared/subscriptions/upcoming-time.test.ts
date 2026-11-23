@@ -2,7 +2,7 @@
 // and the tray's next check say it: a wrong day sends the user to look for a check that already ran
 // or is a day away.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { upcomingTime } from '../../../src/shared/subscriptions/upcoming-time.js';
+import { upcomingTime, upcomingTimeText } from '../../../src/shared/subscriptions/upcoming-time.js';
 
 describe('upcoming time', () => {
   const originalZone = process.env.TZ;
@@ -27,5 +27,11 @@ describe('upcoming time', () => {
     const endOfYear = new Date('2026-12-31T14:00:00.000Z');
     expect(upcomingTime('2026-12-31T23:00:00.000Z', endOfYear)).toEqual({ day: 'tomorrow', time: '07:00' });
     expect(upcomingTime('2027-01-01T16:00:00.000Z', endOfYear)).toEqual({ day: 'later', date: '01-02', time: '00:00' });
+  });
+
+  it("writes today's time alone, tomorrow with 明天 and a later day with its month and day", () => {
+    expect(upcomingTimeText({ day: 'today', time: '18:52' })).toBe('18:52');
+    expect(upcomingTimeText({ day: 'tomorrow', time: '08:00' })).toBe('明天 08:00');
+    expect(upcomingTimeText({ day: 'later', date: '10-24', time: '08:00' })).toBe('10-24 08:00');
   });
 });

@@ -413,7 +413,30 @@ describe('failed checks in a row', () => {
     expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: at(30), checkFailures: { count: 2, since: at(10) } });
   });
 
-  it('pauses after five failures despite a notification profile write failure, then resumes and checks', async () => {
+  it('pauses itself only after five failed checks in a row that span at least a day, so neither a burst of failures nor a rare long outage pauses it', async () => {
+    const w = await world();
+    w.sources.fake.addFeed('f', w.clock.now, [1]);
+    const first = await w.subscribe('fake', 'f');
+    const at = (minutes: number) => new Date(new Date(first.finishedAt!).getTime() + minutes * MINUTE).toISOString();
+    const end = (minutes: number, failed: boolean) => w.services.checkEnded('fake', 'f', {
+      at: at(minutes), error: failed ? { code: 'feed_gone', message: '這個動態已不存在。' } : null, failureClass: 'skip', counted: true,
+    });
+    const day = DAY / MINUTE;
+
+    for (const minutes of [10, 20, 30, 40, 50]) await end(minutes, true);
+    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 5 } });
+
+    await end(60, false);
+    for (const minutes of [70, 70 + day, 70 + 2 * day, 70 + 3 * day]) await end(minutes, true);
+    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 4, since: at(70) } });
+
+    await end(70 + 3 * day + 10, true);
+    expect(await w.record('fake', 'f')).toMatchObject({
+      enabled: false, nextCheckAt: null, autoPausedAt: at(70 + 3 * day + 10), checkFailures: { count: 5 },
+    });
+  });
+
+  it('pauses itself despite a notification profile write failure, then resumes and checks', async () => {
     const autoPauses: Array<{ type: FakeType; subscription: SubscriptionRecord }> = [];
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const w = await world(async (type, subscription) => {
@@ -429,18 +452,7 @@ describe('failed checks in a row', () => {
       return w.checkNow('fake', 'f');
     };
 
-    // Five in an hour: too short a span.
-    const first = await failNext();
-    for (let attempt = 0; attempt < 4; attempt += 1) await failNext();
-    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 5, since: first.finishedAt } });
-
-    // A day of failures, but only four of them.
-    await w.patch('fake', 'f', { checkFailures: { count: 3, since: new Date(w.clock.now.getTime() - DAY).toISOString(), error: { code: 'feed_gone', message: '這個動態已不存在。' } } });
-    await failNext();
-    expect(await w.record('fake', 'f')).toMatchObject({ enabled: true, checkFailures: { count: 4 } });
-    expect((await w.record('fake', 'f')).autoPausedAt).toBeUndefined();
-
-    // The fifth, a day after the first.
+    await w.patch('fake', 'f', { checkFailures: { count: 4, since: new Date(w.clock.now.getTime() - DAY).toISOString(), error: { code: 'feed_gone', message: '這個動態已不存在。' } } });
     const fifth = await failNext();
     const paused = await w.record('fake', 'f');
     expect(paused).toMatchObject({ enabled: false, nextCheckAt: null, autoPausedAt: fifth.finishedAt, checkFailures: { count: 5 } });

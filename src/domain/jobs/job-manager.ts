@@ -321,7 +321,7 @@ export class JobManager {
     const input = plugin.classify(url);
     const kind = this.options.sources.jobKind(type, 'add');
     if (input.kind !== 'subscription' || !kind || !plugin.subscription) {
-      throw new CollectorError('invalid_subscription', plugin.prompts.subscriptionInput);
+      throw new CollectorError('invalid_subscription', plugin.prompts.subscriptionInputHint);
     }
     const accepted = settings ?? plugin.subscription.defaults;
     const target = this.options.recentTarget?.(type, input.url);
@@ -762,7 +762,7 @@ export class JobManager {
 
   private itemName(type: string): string {
     const declaration = this.plugin(type)?.item;
-    return declaration ? `這${declaration.measure}${declaration.noun}` : '這個項目';
+    return declaration ? `這${declaration.measureWord}${declaration.noun}` : '這個項目';
   }
 
   private updateStored(job: CollectionJob, patch: Partial<CollectionJob>): void {
@@ -1144,7 +1144,7 @@ export class JobManager {
       return;
     }
     this.event(job, {
-      eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measure}${plugin.item.noun}。`, phase: 'discover',
+      eventType: 'channel.discovered', message: `發現 ${discovery.items.length} ${plugin.item.measureWord}${plugin.item.noun}。`, phase: 'discover',
     });
     const items: JobItem[] = discovery.items.map((found) => {
       const title = found.title ?? '';
@@ -1321,7 +1321,7 @@ export class JobManager {
     if (result.outcome === 'empty') return `收集完成，沒有新${plugin?.item.noun ?? '項目'}。`;
     const progress = job.progress;
     if (!progress) return '收集完成。';
-    const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measure}${plugin.item.noun}` : ''}`;
+    const count = (value: number) => `${value}${plugin ? ` ${plugin.item.measureWord}${plugin.item.noun}` : ''}`;
     const parts = progress.created ? [`新增 ${count(progress.created)}`] : [];
     if (progress.existing) parts.push(`已存在 ${count(progress.existing)}`);
     if (progress.skipped) parts.push(`略過 ${count(progress.skipped)}`);

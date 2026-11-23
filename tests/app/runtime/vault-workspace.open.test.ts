@@ -50,7 +50,7 @@ async function seed(root: string): Promise<void> {
   await createVaultDirectory(root, 'XR Collector test', PRODUCT_SOURCES);
   await new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES)).add(transcriptDocument(video('seed0000001')));
   await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').add({
-    id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+    id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
   await mkdir(path.join(root, 'attachments'), { recursive: true });

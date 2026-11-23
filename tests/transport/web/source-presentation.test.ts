@@ -39,7 +39,7 @@ afterEach(() => { process.env.TZ = originalZone; });
 
 function source(overrides: Partial<SubscriptionEntry>): SubscriptionEntry {
   return {
-    id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
+    id: 'UC1', title: '頻道', url: 'https://www.youtube.com/channel/UC1/videos', enabled: true, addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
     settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, status: 'tracking', checkStatus: { state: 'scheduled', nextCheckAt: '2026-10-15T07:00:00.000Z' }, capturing: false, lastError: null, checkFailures: null, autoPausedAt: null, activeJob: null, documentCount: 0, lastCollectedAt: null,
     type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', ...overrides,
   };

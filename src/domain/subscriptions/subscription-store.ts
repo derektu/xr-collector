@@ -54,11 +54,10 @@ export class JsonSubscriptionStore implements SubscriptionStore {
       const subscriptions = await this.readSubscriptions();
       const existing = subscriptions.find((candidate) => candidate.id === subscription.id);
       if (existing) return existing;
-      const added = { ...subscription, updatedAt: subscription.updatedAt ?? subscription.addedAt };
-      subscriptions.push(added);
+      subscriptions.push(subscription);
       const removed = removalsFromJson(this.spec, await this.readFile()).filter((record) => record.id !== subscription.id);
-      await this.write([added.id], subscriptions, removed);
-      return added;
+      await this.write([subscription.id], subscriptions, removed);
+      return subscription;
     });
   }
 

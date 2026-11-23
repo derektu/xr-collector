@@ -1,7 +1,5 @@
-/** A coming local time: today (or already past), tomorrow, or a later day with its month and day. */
 export type UpcomingTime = { day: 'today' | 'tomorrow'; time: string } | { day: 'later'; date: string; time: string };
 
-/** When `value` comes, by local day from `now`; a time already past counts as today. */
 export function upcomingTime(value: string, now: Date): UpcomingTime {
   const date = new Date(value);
   const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -11,7 +9,6 @@ export function upcomingTime(value: string, now: Date): UpcomingTime {
   return { day: 'later', date: `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`, time };
 }
 
-/** "18:52" today, "明天 08:00" tomorrow, "10-24 08:00" on a later day. */
 export function upcomingTimeText(at: UpcomingTime): string {
   switch (at.day) {
     case 'today': return at.time;

@@ -21,7 +21,7 @@ export function itemNoun(declarations: SourceDeclarations, type: string | null |
 
 export function itemCount(declarations: SourceDeclarations, type: string | null | undefined, count: number): string {
   const item = type ? declarations.get(type)?.item : undefined;
-  return `${count}${item ? ` ${item.measure}${item.noun}` : ''}`;
+  return `${count}${item ? ` ${item.measureWord}${item.noun}` : ''}`;
 }
 
 export function backfillPhrase(declarations: SourceDeclarations, settings: Partial<SubscriptionSettings>, type: string | null | undefined): string {

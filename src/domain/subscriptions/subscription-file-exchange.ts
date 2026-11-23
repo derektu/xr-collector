@@ -12,7 +12,7 @@ function fileExchange(definition: SourceDefinition): SubscriptionFileExchange {
       const removals = removalsFromJson(definition, value);
       return {
         subscriptions: subscriptionsFromJson(definition, value).map((row) => ({
-          id: row.id, content: subscriptionContent(row), at: row.updatedAt ?? row.addedAt,
+          id: row.id, content: subscriptionContent(row), at: row.updatedAt,
         })),
         removals: removals.map((record) => ({ id: record.id, at: record.removedAt })),
       };

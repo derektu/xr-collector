@@ -67,7 +67,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     const awaitRecollectOutcome = (jobId: string) => readUntil(changeHub, () => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
       (change) => change.kind === 'job' && change.id === jobId, following.signal).then((job) => {
       if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' });
-      else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measure ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });
+      else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measureWord ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });
     });
     if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' });
     else api.collect(url).then((submission) => awaitRecollectOutcome(submission.job.id))

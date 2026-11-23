@@ -54,7 +54,7 @@ function captured(id: string): CapturedTranscript {
 }
 
 const SUBSCRIPTION: SubscriptionRecord = {
-  id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(),
+  id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(), updatedAt: T0.toISOString(),
   settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
 };
 

@@ -133,6 +133,7 @@ describe('HTTP app', () => {
       url: 'https://www.youtube.com/channel/UC-channel-one/videos',
       enabled: true,
       addedAt: '2026-09-17T00:00:00.000Z',
+      updatedAt: '2026-09-17T00:00:00.000Z',
       settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
     };
     const run = {
@@ -263,7 +264,7 @@ describe('HTTP app', () => {
   it('changes settings before resuming in one request, so the check the resume starts collects the new range', async () => {
     let record = {
       id: 'UC-paused', title: '暫停頻道', url: 'https://www.youtube.com/channel/UC-paused/videos', enabled: false,
-      addedAt: '2026-09-17T00:00:00.000Z', settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
+      addedAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z', settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
     };
     const resumedWithRange: number[] = [];
     const channels = subscriptionCollection('youtube', {

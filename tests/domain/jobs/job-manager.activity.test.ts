@@ -158,7 +158,7 @@ async function setupWithService() {
 
 function subscription(id: string): SubscriptionRecord {
   return {
-    id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(),
+    id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: T0.toISOString(), updatedAt: T0.toISOString(),
     settings: { ...DEFAULT_POLICY },
   };
 }

@@ -49,8 +49,9 @@ export const video = (videoId: string, overrides: Partial<CapturedTranscript> = 
 export const settings = { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 };
 
 export function channel(id: string, overrides: Partial<SubscriptionRecord> = {}): SubscriptionRecord {
+  const addedAt = overrides.addedAt ?? '2026-09-18T00:00:00.000Z';
   return {
-    id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}`, enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+    id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}`, enabled: true, addedAt, updatedAt: addedAt,
     settings, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null, ...overrides,
   };
 }

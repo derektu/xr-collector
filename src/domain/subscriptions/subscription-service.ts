@@ -147,7 +147,7 @@ export class SubscriptionService {
 
   async preview(url: string): Promise<SubscriptionPreview> {
     const input = this.definition.classify(url);
-    if (input.kind !== 'subscription') throw new CollectorError('invalid_subscription', this.definition.prompts.subscriptionInput);
+    if (input.kind !== 'subscription') throw new CollectorError('invalid_subscription', this.definition.prompts.subscriptionInputHint);
     const target = await withTimeout(
       (signal) => this.options.resolveTarget(input.url, signal),
       this.options.previewTimeoutMs ?? PREVIEW_TIMEOUT_MS,
@@ -468,7 +468,7 @@ export class SubscriptionService {
       await options.beforeCreate();
       const now = this.now();
       subscription = await this.store.add({
-        id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), lastCheckedAt: null,
+        id: target.id, title: target.title, url: target.url, enabled: true, addedAt: now.toISOString(), updatedAt: now.toISOString(), lastCheckedAt: null,
         settings: { ...settings }, lastDispatchedAt: now.toISOString(), nextCheckAt: addMinutes(now, settings.intervalMinutes).toISOString(),
       });
       this.jobs.recordEvent({ eventType: 'subscription.added', message: `已訂閱「${subscription.title}」。`, ...this.subject(subscription.id, subscription.title) });
