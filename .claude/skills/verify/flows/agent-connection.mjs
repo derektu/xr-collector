@@ -1,7 +1,7 @@
 // Compact Agent setup, explicit connection export and restart-bound port configuration.
 import { readFile } from 'node:fs/promises';
 import yauzl from 'yauzl';
-import { recordRequests } from './lib/revision.mjs';
+import { recordRequests } from './lib/requests.mjs';
 
 export const name = 'agent-connection';
 export const title = 'AI 助理連線、Skill 與連線設定';

@@ -4,16 +4,14 @@ import { readUntil, type ChangeListener, type ChangeSource } from '../../../src/
 
 function fakeHub() {
   const listeners = new Set<ChangeListener>();
-  const reachable = new Set<() => void>();
   const hub: ChangeSource = {
     listen(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    onReachableAgain(listener) { reachable.add(listener); return () => { reachable.delete(listener); }; },
   };
   return {
     hub,
     change(change: Change) { for (const listener of [...listeners]) listener({ kind: 'changes', changes: [change] }); },
-    reachableAgain() { for (const listener of [...reachable]) listener(); },
-    listening: () => listeners.size + reachable.size,
+    reconnect() { for (const listener of [...listeners]) listener({ kind: 'all' }); },
+    listening: () => listeners.size,
   };
 }
 
@@ -59,8 +57,7 @@ describe('readUntil', () => {
     feed.change({ kind: 'schedule' });
     await flush();
     expect(reads).toBe(1);
-    feed.reachableAgain();
-    feed.reachableAgain();
+    feed.reconnect();
     answers[1]!.reject(new Error('offline'));
     await flush();
     expect(reads).toBe(2);
@@ -82,7 +79,7 @@ describe('readUntil', () => {
     const result = readUntil(feed.hub, () => Promise.reject(new Error('offline')), () => true, isJob, controller.signal);
     void result.then(() => { settled = true; }, () => { settled = true; });
     await flush();
-    feed.reachableAgain();
+    feed.reconnect();
     await flush();
     expect(settled).toBe(false);
     controller.abort(new Error('closed'));

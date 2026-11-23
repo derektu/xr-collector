@@ -36,7 +36,7 @@ Preconditions:
 - **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停的列顯示「自動檢查已關閉」，已暫停的維持「已暫停」。再點一次恢復「下次 HH:MM」。
 - **移除並保留。** `getByRole('button', { name: '<頻道標題> 的更多動作' })` → `getByRole('menuitem', { name: '移除' })`。`confirm-remove` 中 `remove-keep` 預設勾選；點 `confirm-remove-button`。列消失，`GET /api/documents` 仍有該頻道的文件；文件頁 `documents-source` 選項顯示「<標題>・已移除（n）」。
 - **移除並刪除。** 同上但勾 `remove-delete`。文件從列表與搜尋消失，記錄頁 `activity-log` 有「已移除「<標題>」，並刪除 n 份文件。」，`vault/settings/deleted-documents.json` 有 n 筆該頻道的紀錄。
-- **詳情。** `getByRole('link', { name: /<標題>/ })` → `source-detail`。內容含「新增時間」「下次檢查」（`detail-next-check`）。`detail-settings` 內檢查頻率是下拉 `detail-settings-intervalMinutes`，選了立即儲存；時間範圍與數量上限是數字輸入框 `detail-settings-backfillDays`、`detail-settings-backfillMaxItems`，停止輸入約 0.6 秒後儲存。儲存後出現 `settings-saved`。不合法的值（超出 1–60 天、1–100 則或不是整數）在欄位下方顯示 `detail-settings-<key>-error`，輸入框 `aria-invalid`，不儲存，`apply-settings`（「套用到所有」）停用。新增訂閱卡片的欄位相同，前綴是 `add-settings-`，不合法時 `add-confirm` 停用。
+- **詳情。** `getByRole('link', { name: /<標題>/ })` → `source-detail`。內容含「新增時間」「下次檢查」（`detail-next-check`）。`detail-settings` 內檢查頻率是下拉 `detail-settings-intervalMinutes`，選了立即儲存；時間範圍與數量上限是數字輸入框 `detail-settings-backfillDays`、`detail-settings-backfillMaxItems`，離開欄位或按 Enter 時儲存（`fill` 之後按 Enter）。儲存後出現 `settings-saved`。不合法的值（超出 1–60 天、1–100 則或不是整數）在欄位下方顯示 `detail-settings-<key>-error`，輸入框 `aria-invalid`，不儲存，`apply-settings`（「套用到所有」）停用。新增訂閱卡片的欄位相同，前綴是 `add-settings-`，不合法時 `add-confirm` 停用。
 - **收集紀錄。** 詳情中的單次檢查是 `collection-check`；連續定時無新內容或網路錯誤達兩次時是 `collection-check-group`，顯示結果、次數與起訖。例如「完成檢查：沒有新影片・12 次」「發生錯誤：網路錯誤・2 次」。恢復後的一次檢查獨立列出，不加「1 次」。合併列「查看細節」進入 [記錄的群組細節](activity.md)，「返回」回到同一訂閱。現有的 `detail-status`／`detail-problem` 仍獨立反映目前狀態。
 - **檢查時間。** 訂閱清單頁尾 `check-times` 顯示上次與下次檢查及所屬訂閱；完成後比對上次檢查對應的訂閱名稱與 `lastCheckedAt`，不要把最靠近的文件新增時間當成檢查完成時間。
 - **斷網與恢復。** `updateCatalog(c => { c.network = 'offline'; })` 讓合成 YouTube、feed 與 runtime 的網路確認都連不上。下一個連網的收集請求失敗後，`offline-banner` 出現，`GET /api/health` 的 `connectivity.state` 為 `offline`；`add-subscription`、`add-document`、`job-retry` disabled，title 為「沒有網路時無法使用」，`check-all` 仍可按，按下後 `notice` 為「目前沒有網路，恢復後再試。」。改回 `c.network = 'online'` 後 2 秒內確認成功，訊息消失，記錄有一筆 `collection.resumed`（`pauseReason: offline`），到期的訂閱各檢查一次。
@@ -64,7 +64,7 @@ Preconditions:
 - `youtube-cooldown`：斷言 `sub-status`。A 下載中時 YouTube 限流：通道冷卻、A 的列與 API 為等冷卻結束的重試、影片帶冷卻的等待且嘗試次數未用掉、冷卻期間送出的單支影片排隊等待；冷卻結束後自動完成，限流、延後與冷卻結束的事件各一次，沒有重試與失敗。
 - `subscribe-a-b`：斷言 `sub-add`、`sub-status`。A 經 API 訂閱，A 下載中時經畫面訂閱 B；A、B 的狀態序列、完成後的文件數，以及 Vault、API 與索引的文件一一對應。不斷言 pending-row、頁尾的上次檢查與失敗的檢查。
 - `workspace-content`：斷言 `sub-detail`。RSS 訂閱詳情頁的檢查頻率、時間範圍與數量上限儲存後，API 與重新整理後的欄位一致。
-- `live-updates`：斷言 `sub-status`、`sub-pause`、`sub-detail`、`sub-remove`。訂閱頁與詳情開著時由 Agent 埠訂閱、暫停、恢復與移除，畫面等到根元素的 data-revision 跟上後與 API 相同；閒置 10 秒沒有請求；網路中斷時重讀失敗的畫面維持落後並在恢復後補讀；伺服器重啟後未重新載入的畫面跟上。
+- `live-updates`：斷言 `sub-status`、`sub-pause`、`sub-detail`、`sub-remove`。訂閱頁與詳情開著時由 Agent 埠訂閱、暫停、恢復與移除，每一步等畫面顯示的狀態與 API 相同；閒置 10 秒沒有請求；網路中斷期間的變動在恢復連線後顯示；伺服器重啟後未重新載入的畫面跟上。
 
 ## Backlog
 

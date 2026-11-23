@@ -1,4 +1,4 @@
-import { parseCursor, type Change, type ChangeBatch } from '../../shared/api/changes.js';
+import type { Change, ChangeBatch } from '../../shared/api/changes.js';
 
 export type { Change, ChangeBatch };
 
@@ -28,29 +28,4 @@ export function staleAfter(resources: readonly Resource[]): (change: Change) => 
   return (change) => replacesEverything(change) || kinds.has(change.kind);
 }
 
-export type StreamMessage =
-  | { type: 'hello'; revision: string }
-  | { type: 'reset'; revision: string }
-  | { type: 'change'; batch: ChangeBatch };
-
-export type Refresh = { kind: 'none' } | { kind: 'all' } | { kind: 'changes'; changes: Change[] };
-
-export function caughtUp(shown: string | null, target: string): boolean {
-  const a = shown ? parseCursor(shown) : null;
-  const b = parseCursor(target);
-  return !!a && !!b && a.epoch === b.epoch && a.number >= b.number;
-}
-
-export function receive(revision: string | null, message: StreamMessage): { revision: string | null; refresh: Refresh } {
-  if (message.type === 'reset') return { revision: message.revision, refresh: { kind: 'all' } };
-  if (message.type === 'hello') {
-    if (revision === null) return { revision: message.revision, refresh: { kind: 'none' } };
-    const known = parseCursor(revision);
-    const next = parseCursor(message.revision);
-    return known && next && known.epoch === next.epoch
-      ? { revision, refresh: { kind: 'none' } }
-      : { revision: message.revision, refresh: { kind: 'all' } };
-  }
-  if (revision !== null && caughtUp(revision, message.batch.revision)) return { revision, refresh: { kind: 'none' } };
-  return { revision: message.batch.revision, refresh: { kind: 'changes', changes: message.batch.changes } };
-}
+export type Refresh = { kind: 'all' } | { kind: 'changes'; changes: Change[] };

@@ -30,7 +30,6 @@ import { targetNoun } from './subscription-presentation.js';
 import { useChangeStream, useLiveRead } from './use-changes.js';
 import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
-import { useDay } from './use-day.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 const NOTICE_MS = 5000;
@@ -51,7 +50,7 @@ function useSystemDark(): boolean {
 export default function App() {
   const declarations = useSourceDeclarations();
 
-  const today = useDay();
+  const today = new Date();
   const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
   const page = routeForPath(location.pathname);
   const readerId = page === 'documents' ? readerIdForPath(location.pathname) : null;

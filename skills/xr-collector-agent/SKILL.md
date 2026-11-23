@@ -235,7 +235,7 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 - `reset: true` 表示服務已重新啟動（`epoch` 不同）或 `after` 之後的變動已不再保留（保留最近 1000 批、10 分鐘內）：期間的變動無法逐一取得，重新讀取需要的資料，再以回應的 `revision` 繼續等待。
 - 變動的 `kind`：`job`（`id`、`parentId`、`state`）、`document`（`id`，新增、更新索引或刪除）、`subscription`（`type`、`id`，新增、修改、移除或記錄檢查）、`schedule`（自動檢查開關）、`connectivity`（網路與收集暫停）、`pacing`（`group`，冷卻開始或結束）、`search`（索引狀態）、`vault`（`scope` 為 `transfer` 表示資料交換進度，`contents` 表示匯入、建立或開啟其他知識庫，或初次設定後資料整個換過）、`update`（App 更新狀態）、`notifications`（通知設定與自動暫停通知）、`activity`（有新記錄）。
 - 例：送出收集後，以提交回應的 `XR-Revision` 為 `after`，帶 `kind=job&id=<job-id>&wait=30` 等待，收到 `state` 為 `completed` 或 `failed` 時讀取工作；沒有收到就以回應的 `revision` 再等一次。
-- `GET /api/events` 以 Server-Sent Events 提供同一串變動，供能長時間讀取回應的用戶端使用：開頭的 `hello` 事件帶目前 revision，之後每批一個 `change` 事件，事件 `id` 為該批 revision；重新連線時帶 `Last-Event-ID`（或 query `after`）補上期間的變動，無法補上時送 `reset`。同時開啟的事件連線最多 16 條，超過回 503 `too_many_streams`。
+- `GET /api/events` 以 Server-Sent Events 提供同一串變動，供能長時間讀取回應的用戶端使用：開頭的 `hello` 事件帶目前 revision，之後每批一個 `change` 事件。重新連線不補期間的變動：以斷線前最後的 revision 呼叫 `GET /api/changes?after=<revision>` 取得期間的變動，或直接重新讀取需要的資料。同時開啟的事件連線最多 16 條，超過回 503 `too_many_streams`。
 
 ## HTTP 契約
 
@@ -263,7 +263,7 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 | `POST /api/submissions` | `{"url":"..."}`，依網址收集單篇或新增訂閱；202 回傳 `job`、`deduplicated` |
 | `POST /api/items` | `{"url":"..."}`，只接受單篇網址；202 回傳 `job`、`deduplicated` |
 | `GET /api/changes` | query `after`、`wait`、`kind`、`id`；回傳 `revision`、`reset`、`batches`，見「等待變動」 |
-| `GET /api/events` | Server-Sent Events：`hello`、`change`、`reset`，見「等待變動」 |
+| `GET /api/events` | Server-Sent Events：`hello`、`change`，見「等待變動」 |
 | `GET /api/jobs` | query `state`、`limit`、`cursor`；回傳 `jobs`、`nextCursor` |
 | `GET /api/jobs/summary` | query `since`（帶時區的 ISO 時間）；回傳 `summary` |
 | `GET /api/jobs/overview` | 工作頁：`overview` 的 `running`、`queued`、`failed` |

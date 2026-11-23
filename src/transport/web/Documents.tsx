@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
@@ -28,8 +28,7 @@ import {
   type DocumentListState,
 } from './document-presentation.js';
 import { isAppHistoryState, type AppHistoryState } from './history-navigation.js';
-import { createLatestRequest } from './latest-request.js';
-import { useChanges } from './use-changes.js';
+import { useChangeRead, useChanges } from './use-changes.js';
 import { useFloatingMenu } from './floating-menu.js';
 import { Icon } from './icons.js';
 import { useSourceDeclarations } from './source-declarations.js';
@@ -75,7 +74,6 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [edits, setEdits] = useState(0);
-  const requests = useMemo(createLatestRequest, []);
   const sourceChanges = useChanges(['documents']);
   const listChanges = useChanges(['documents', 'search']);
   const sourceKey = sourceParam(state.source);
@@ -83,14 +81,10 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
 
   useEffect(() => { setDraft((current) => draftForQuery(current, state.query)); }, [state.query]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    sourceChanges.track(api.documentSources(controller.signal).then(setSources, (error: unknown) => {
-      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : '無法讀取頻道清單。');
-      throw error;
-    }));
-    return () => controller.abort();
-  }, [sourceChanges.tick, edits]);
+  useChangeRead(sourceChanges, [edits], (signal) => api.documentSources(signal), (outcome) => {
+    if ('value' in outcome) setSources(outcome.value);
+    else setLoadError(outcome.error instanceof Error ? outcome.error.message : '無法讀取頻道清單。');
+  });
 
   useEffect(() => {
     const query = trimSearchQueryWhitespace(draft);
@@ -99,48 +93,41 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
     return () => clearTimeout(timer);
   }, [draft, state.query, sourceKey, state.status, onState]);
 
-  useEffect(() => {
+  useChangeRead(listChanges, [state.query, sourceKey, state.status, state.page, edits], async (signal) => {
     const filter = { ...sourceFilter(parseSourceParam(sourceKey)), ...(state.status ? { status: state.status } : {}) };
     const offset = (state.page - 1) * DOCUMENTS_PAGE_SIZE;
-    const browse = (signal: AbortSignal) => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
+    const browse = () => api.listDocuments({ ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal)
       .then((page): Results => ({
         mode: 'browse', rows: page.documents.map((document) => ({ document, excerpt: document.excerpt })), total: page.total, statusCounts: page.statusCounts,
       }));
     setLoading(true);
-    listChanges.track(requests.run(async (signal) => {
-      if (!state.query) return { results: await browse(signal), problem: null };
-      try {
-        const found = await api.searchDocuments({ query: state.query, ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal);
-        return {
-          results: {
-            mode: 'search', rows: found.hits.map((hit) => ({ document: hit, snippet: hit.snippet })), total: found.total, statusCounts: found.statusCounts,
-          } satisfies Results,
-          problem: null,
-        };
-      } catch (error) {
-        if (error instanceof ApiError && error.code === 'search_unavailable') {
-          return { results: await browse(signal), problem: error.message };
-        }
-        throw error;
-      }
-    }).then((outcome) => {
-      if (!outcome.current) return;
-      const { rows, total } = outcome.value.results;
-      const page = pageWithRows(state.page, rows.length, total);
-      if (page !== state.page) { onState({ ...state, page }); return; }
-      setResults(outcome.value.results);
-      setSearchProblem(outcome.value.problem);
-      setLoadError(null);
-      setLoading(false);
-    }).catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === 'AbortError') return;
-      setLoadError(error instanceof Error ? error.message : '無法讀取文件。');
-      setLoading(false);
+    if (!state.query) return { results: await browse(), problem: null };
+    try {
+      const found = await api.searchDocuments({ query: state.query, ...filter, offset, limit: DOCUMENTS_PAGE_SIZE }, signal);
+      return {
+        results: {
+          mode: 'search', rows: found.hits.map((hit) => ({ document: hit, snippet: hit.snippet })), total: found.total, statusCounts: found.statusCounts,
+        } satisfies Results,
+        problem: null,
+      };
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'search_unavailable') return { results: await browse(), problem: error.message };
       throw error;
-    }));
-  }, [state.query, sourceKey, state.status, state.page, requests, listChanges.tick, edits]);
-
-  useEffect(() => () => requests.cancel(), [requests]);
+    }
+  }, (outcome) => {
+    if (!('value' in outcome)) {
+      setLoadError(outcome.error instanceof Error ? outcome.error.message : '無法讀取文件。');
+      setLoading(false);
+      return;
+    }
+    const { rows, total } = outcome.value.results;
+    const page = pageWithRows(state.page, rows.length, total);
+    if (page !== state.page) { onState({ ...state, page }); return; }
+    setResults(outcome.value.results);
+    setSearchProblem(outcome.value.problem);
+    setLoadError(null);
+    setLoading(false);
+  });
 
   useLayoutEffect(() => {
     if (!results || restoreScroll.current === null) return;

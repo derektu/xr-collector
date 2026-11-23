@@ -3,7 +3,6 @@
 // the document counts once both finish, and the documents in the Vault and the search index.
 import { subscribe } from '../scripts/lib/seed.mjs';
 import { distinct, jobSectionChecks, subscriptionSequenceChecks, subscriptionStatuses } from './lib/status-sequence.mjs';
-import { screenAt } from './lib/revision.mjs';
 import { watch, watched } from './lib/watch.mjs';
 
 export const name = 'subscribe-a-b';
@@ -124,9 +123,7 @@ export async function run({ instance, page, openPage, record, waitFor }) {
     }
     await shot('jobs-empty', jobsPage);
 
-    // The jobs page shows no work at the revision it reached; once the main window has read that
-    // revision too, its badge counts the same jobs.
-    await screenAt(page, instance, await screenAt(jobsPage, instance));
+    await waitFor(async () => (await badgeText(page)) === '', 'the main window badge counts no jobs', { timeout: 15_000 }).catch(() => undefined);
     const badge = await badgeText(page);
     expect(badge === '', '工作全部結束後側欄沒有工作徽章', { id: 'jobs.badge.none', expected: '', actual: badge });
   });

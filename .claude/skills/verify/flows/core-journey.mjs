@@ -6,7 +6,7 @@
 // subscription made in the dialog filling the list, the Documents page and the Reader, and pausing
 // and deleting from the screen reaching the data.
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
-import { recordRequests } from './lib/revision.mjs';
+import { recordRequests } from './lib/requests.mjs';
 
 export const name = 'core-journey';
 export const title = '核心旅程：訂閱、新增、查詢、閱讀、暫停恢復與刪除確認';

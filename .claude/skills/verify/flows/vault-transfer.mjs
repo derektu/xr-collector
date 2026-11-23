@@ -11,7 +11,7 @@ import { cp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { channel, channelUrl, collect, idle, launchWeb, subscribe, waitFor as settle } from '../scripts/lib/index.mjs';
 import { editJson } from './lib/files.mjs';
-import { recordRequests } from './lib/revision.mjs';
+import { recordRequests } from './lib/requests.mjs';
 
 export const name = 'vault-transfer';
 export const title = '知識庫匯出、匯入與切換';

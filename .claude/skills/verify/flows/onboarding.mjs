@@ -60,21 +60,28 @@ export async function run({ instance, page, record, waitFor }) {
     expect(await name.inputValue() === 'XR Collector', '名稱預設 XR Collector', { id: 'ob.create.default-name', actual: await name.inputValue() });
     expect(await location.inputValue() === documents, '位置預設為文件資料夾', { id: 'ob.create.default-location', expected: documents, actual: await location.inputValue() });
     await preview(at(first));
-    const ready = { ...(await previewState()), enabled: await button('onboarding-create-confirm').isEnabled() };
-    expect(ready.path === first && ready.enabled, '預設值預覽 文件/XR Collector 且可以建立', { id: 'ob.create.default-enabled', expected: { path: first, enabled: true }, actual: ready });
+    const ready = await previewState();
+    expect(ready.path === first && !ready.problem, '預設值預覽 文件/XR Collector', { id: 'ob.create.default-preview', expected: at(first), actual: ready });
     await themed('create');
 
     // The wording of each refusal is in tests/domain/vault/new-vault.test.ts and tests/app/runtime/collector-runtime.test.ts.
     for (const [value, id] of [['Taken', 'conflict'], ['a/b', 'invalid-char'], ['', 'empty']]) {
       await name.fill(value);
       await preview(refused);
-      const state = { ...(await previewState()), disabled: await button('onboarding-create-confirm').isDisabled() };
-      expect(state.problem && state.disabled, `「${value}」：說明原因且建立停用`, { id: `ob.create.${id}`, expected: { problem: true, disabled: true }, actual: state });
-      if (id === 'conflict') await shot('create-conflict');
+      const state = await previewState();
+      expect(state.problem, `「${value}」：預覽說明原因`, { id: `ob.create.${id}`, expected: refused, actual: state });
+      if (id === 'conflict') {
+        await shot('create-conflict');
+        await button('onboarding-create-confirm').click();
+        await button('onboarding-error').waitFor({ timeout: 15_000 }).catch(() => undefined);
+        const refusedCreate = { error: await button('onboarding-error').count(), vaultState: (await instance.api('/api/vault/setup')).vault.state };
+        expect(refusedCreate.error === 1 && refusedCreate.vaultState !== 'ready', '按下建立時伺服器拒絕同名的資料夾並顯示原因', {
+          id: 'ob.create.server-refuses', expected: { error: 1, vaultState: '不是 ready' }, actual: refusedCreate,
+        });
+      }
     }
     await name.fill('XR Collector');
     await preview(at(first));
-    expect(await button('onboarding-create-confirm').isEnabled(), '改回可用的名稱後恢復可建立', { id: 'ob.create.recovered' });
 
     await button('onboarding-back').click();
     await home();
@@ -109,8 +116,12 @@ export async function run({ instance, page, record, waitFor }) {
     await waitFor(async () => await location.inputValue() === documents, 'location defaults to the parent of the active Vault');
     expect(await name.inputValue() === 'XR Collector', '名稱預設 XR Collector，位置預設目前知識庫的上一層', { id: 'settings.create.defaults' });
     await preview(refused);
-    const conflict = { ...(await previewState()), disabled: await button('create-vault-confirm').isDisabled() };
-    expect(conflict.problem && conflict.disabled, '預設值與目前的知識庫同名時不能建立', { id: 'settings.create.conflict', expected: { problem: true, disabled: true }, actual: conflict });
+    await button('create-vault-confirm').click();
+    await button('create-vault-failure').waitFor({ timeout: 15_000 }).catch(() => undefined);
+    const conflict = { ...(await previewState()), failure: await button('create-vault-failure').count(), vaultPath: await vaultPath() };
+    expect(conflict.problem && conflict.failure === 1 && conflict.vaultPath === first, '預設值與目前的知識庫同名時，預覽說明原因，按下建立被伺服器拒絕', {
+      id: 'settings.create.conflict', expected: { problem: true, failure: 1, vaultPath: first }, actual: conflict,
+    });
     await name.fill('My Vault');
     await location.fill(path.dirname(other));
     await preview(at(other));
